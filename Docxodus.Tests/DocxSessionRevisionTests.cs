@@ -1333,22 +1333,31 @@ public class DocxSessionRevisionTests
     /// rule unguarded in both directions because an editor is authoring a document rather than
     /// inverting a comparison; this test pins that the two contracts stay distinct.
     /// </summary>
-    [Fact]
-    public void DS430_StatelessAccept_PreservesACounterpartsOwnOrphanedNote()
+    /// <summary>The husk fixture pair DS430 and DS434 share: one document cites footnote 7, the
+    /// other owns the identical definition uncited. The mirror property the two tests pin depends
+    /// on these staying byte-identical, so there is exactly one builder.</summary>
+    private static (byte[] Citing, byte[] Husk) HuskFixturePair()
     {
-        var baseline = BuildWithBody(
+        var citing = BuildWithBody(
             new XElement(W.p,
                 new XElement(W.r,
                     new XElement(W.t, "Cited here."),
                     new XElement(W.footnoteReference, new XAttribute(W.id, "7")))),
             new XElement(W.p, new XElement(W.r, new XElement(W.t, "Sentinel."))));
-        baseline = AddDanglingFootnote(baseline, noteId: 7, text: "Kept as a husk.");
+        citing = AddDanglingFootnote(citing, noteId: 7, text: "Kept as a husk.");
 
+        var husk = BuildWithBody(
+            new XElement(W.p, new XElement(W.r, new XElement(W.t, "Sentinel."))));
+        husk = AddDanglingFootnote(husk, noteId: 7, text: "Kept as a husk.");
+        return (citing, husk);
+    }
+
+    [Fact]
+    public void DS430_StatelessAccept_PreservesACounterpartsOwnOrphanedNote()
+    {
         // The counterpart drops the citing paragraph but keeps the definition — the husk shape a
         // naive edit leaves behind, and exactly what accept has to reproduce.
-        var counterpart = BuildWithBody(
-            new XElement(W.p, new XElement(W.r, new XElement(W.t, "Sentinel."))));
-        counterpart = AddDanglingFootnote(counterpart, noteId: 7, text: "Kept as a husk.");
+        var (baseline, counterpart) = HuskFixturePair();
 
         var redline = DocxDiff.Compare(
             new WmlDocument("baseline.docx", baseline),
@@ -1445,17 +1454,7 @@ public class DocxSessionRevisionTests
     [Fact]
     public void DS434_StatelessReject_PreservesABaselinesOwnHuskThatTheCounterpartCites()
     {
-        var baseline = BuildWithBody(
-            new XElement(W.p, new XElement(W.r, new XElement(W.t, "Sentinel."))));
-        baseline = AddDanglingFootnote(baseline, noteId: 7, text: "Kept as a husk.");
-
-        var counterpart = BuildWithBody(
-            new XElement(W.p,
-                new XElement(W.r,
-                    new XElement(W.t, "Cited here."),
-                    new XElement(W.footnoteReference, new XAttribute(W.id, "7")))),
-            new XElement(W.p, new XElement(W.r, new XElement(W.t, "Sentinel."))));
-        counterpart = AddDanglingFootnote(counterpart, noteId: 7, text: "Kept as a husk.");
+        var (counterpart, baseline) = HuskFixturePair();
 
         var redline = DocxDiff.Compare(
             new WmlDocument("baseline.docx", baseline),
@@ -1497,6 +1496,90 @@ public class DocxSessionRevisionTests
         Assert.Equal(1, UserNoteCount(accepted, "footnote"));
         Assert.Empty(DocxDiff.GetRevisions(
             new WmlDocument("counterpart.docx", counterpart), new WmlDocument("accepted.docx", accepted)));
+
+        // The reject-side twin of DS430-vs-DS418: the session's editorial reject still applies the
+        // UNGUARDED rule and strips the husk. The two contracts are deliberately distinct in this
+        // direction too, and this assert is what says so on purpose rather than by accident.
+        using var editorial = new DocxSession(redline);
+        Assert.True(editorial.RejectAllRevisions().Success);
+        Assert.Equal(0, UserNoteCount(editorial.Save(), "footnote"));
+    }
+
+    /// <summary>
+    /// The guarded prune must also read the LEGACY engine's dialect (issue #636's review round).
+    /// <see cref="WmlComparer"/> re-synthesizes an UNMARKED <c>w:footnoteRef</c> marker run into
+    /// every inserted definition it renders, so rejecting one of its redlines strips the
+    /// definition to a marker-only paragraph rather than to nothing — a purely-blockless guard
+    /// shipped an orphaned marker-husk here where the unguarded pre-#636 prune removed the note.
+    /// The scaffolding-aware predicate treats the marker run as emptiness.
+    /// </summary>
+    [Fact]
+    public void DS435_StatelessReject_ReadsWmlComparersMarkerScaffoldingAsEmptied()
+    {
+        var left = File.ReadAllBytes(Path.Combine("../../../../TestFiles/WC", "WC035-Footnote-Before.docx"));
+        var right = File.ReadAllBytes(Path.Combine("../../../../TestFiles/WC", "WC035-Footnote-After.docx"));
+        var inserting = UserNoteCount(left, "footnote") < UserNoteCount(right, "footnote")
+            ? (Baseline: left, Counterpart: right)
+            : (Baseline: right, Counterpart: left);
+
+        var redline = WmlComparer.Compare(
+            new WmlDocument("baseline.docx", inserting.Baseline),
+            new WmlDocument("counterpart.docx", inserting.Counterpart),
+            new WmlComparerSettings());
+
+        var rejected = RevisionProcessor.RejectRevisions(redline);
+        Assert.Equal(UserNoteCount(inserting.Baseline, "footnote"),
+            UserNoteCount(rejected.DocumentByteArray, "footnote"));
+
+        var accepted = RevisionProcessor.AcceptRevisions(redline);
+        Assert.Equal(UserNoteCount(inserting.Counterpart, "footnote"),
+            UserNoteCount(accepted.DocumentByteArray, "footnote"));
+    }
+
+    /// <summary>
+    /// A partial resolution never deletes a note out from under its citation. Record a note,
+    /// accept only the CITATION's revision, then run the stateless reject over what remains: the
+    /// reject empties the ins-marked definition, but the orphan-scoped prune must not touch a
+    /// note the body still cites — the reference must keep resolving. The emptied definition is
+    /// left bare rather than "repaired" with a filler paragraph, because a cited childless note
+    /// is a shape the corpus genuinely contains (WC064-Footnote ships one) and faithful
+    /// reproduction of exactly that shape is what the round-trip contracts require.
+    /// </summary>
+    [Fact]
+    public void DS436_StatelessReject_KeepsACitedNoteItStrippedBare()
+    {
+        var baseline = BuildWithBody(
+            new XElement(W.p, new XElement(W.r, new XElement(W.t, "First paragraph here."))),
+            new XElement(W.p, new XElement(W.r, new XElement(W.t, "Sentinel."))));
+
+        byte[] partiallyResolved;
+        using (var author = new DocxSession(baseline, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Note Author",
+        }))
+        {
+            var anchor = author.Project().AnchorIndex.Values
+                .First(t => t.Anchor.Scope == "body"
+                    && (t.TextPreview ?? string.Empty).StartsWith("First")).Anchor.Id;
+            Assert.True(author.InsertFootnote(anchor, 5, "Recorded note body.").Success);
+            var redline = author.Save();
+
+            using var review = new DocxSession(redline);
+            var citation = review.ListRevisions()
+                .Single(r => r.AnchorId is { } a && a.Contains(":body:", StringComparison.Ordinal));
+            Assert.True(review.AcceptRevision(citation.Id).Success);
+            partiallyResolved = review.Save();
+        }
+
+        var rejected = Docxodus.Internal.DocxDiffOps.RejectRevisions(partiallyResolved);
+
+        using var stream = new MemoryStream(rejected, writable: false);
+        using var document = WordprocessingDocument.Open(stream, false);
+        Assert.Single(document.MainDocumentPart!.Document!.Descendants<FootnoteReference>());
+        var note = Assert.Single(document.MainDocumentPart.FootnotesPart!.Footnotes!
+            .Elements<Footnote>(), n => n.Type is null);
+        Assert.Empty(note.InnerText);
     }
 
     /// <summary>

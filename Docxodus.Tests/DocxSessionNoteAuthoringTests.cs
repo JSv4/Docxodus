@@ -827,10 +827,20 @@ public class DocxSessionNoteAuthoringTests
         var (baseline, redline) = AuthorNoteUnderRecording(footnote);
 
         var note = Assert.Single(UserNotes(redline, footnote));
-        Assert.All(note.Descendants(W + "r").Where(r => r.Parent!.Name != W + "rPr"),
+        Assert.All(note.Descendants(W + "r"),
             run => Assert.Contains(run.Ancestors(), a => a.Name == W + "ins"));
         Assert.All(note.Elements(W + "p"),
             p => Assert.NotNull(p.Element(W + "pPr")?.Element(W + "rPr")?.Element(W + "ins")));
+
+        // One user action, one revision identity: the citation envelope and every definition
+        // envelope carry a single w:date, or exact-date grouping splinters one insert into
+        // per-paragraph revisions in every reviewing pane.
+        var dates = BodyXml(redline).Descendants(W + "ins")
+            .Concat(note.DescendantsAndSelf(W + "ins"))
+            .Select(i => (string?)i.Attribute(W + "date"))
+            .Distinct()
+            .ToList();
+        Assert.Single(dates);
 
         var rejected = Docxodus.Internal.DocxDiffOps.RejectRevisions(redline);
         Assert.Empty(UserNotes(rejected, footnote));

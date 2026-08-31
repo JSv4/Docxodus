@@ -429,16 +429,19 @@ divergence — RP050 is pinned `acceptEquivalent: false` there, so the sweep ass
 through the coarser story-text check rather than modeled-semantic equivalence, and neither a
 childless shell nor its absence contributes story text.
 
-#### A residual degenerate shape (known, deliberately unhandled)
+#### The cited-but-stripped shape is preserved, not repaired
 
-If a definition's content is wholly deletion-marked while its citation is NOT deleted — a shape
-Word's UI cannot author (deleting all of a note's text tracked leaves the final paragraph mark
-unmarked, so accept correctly keeps an empty-paragraph note) — accepting empties the definition
-but the citation survives, and the orphan-scoped prune correctly cannot touch a cited note. The
-accepted package then carries a cited childless `<w:footnote/>`. This arises only from hand- or
-tool-built markup; the principled fix (leave a minimal empty paragraph when emptying a still-cited
-note) is deferred until there is Word-side evidence of what it ships for an equivalent state.
-Tracked to conclusion in #636's review record.
+A definition can end up bare while its citation survives: hand-built markup (content wholly
+deletion-marked, citation kept), an ordinary partial resolution (record a note, accept only the
+citation's revision, then run the stateless reject over what remains), or simply the input — the
+corpus genuinely contains cited childless notes (`WC064-Footnote` ships one, and
+`WC063-Footnote-Mod`'s note is childless). A cited `<w:footnote/>` with no block child is
+schema-degenerate under `CT_FtnEdn`, but faithful reproduction of exactly that shape is what
+`Accept(Compare(l, r)) ≡ r` means for those fixtures: inserting a "repair" paragraph was tried
+during #636's review round and broke the WC063/WC064 round-trips in both directions. The
+orphan-scoped prune never touches a cited note, so the shape flows through resolution unchanged;
+whether Word repairs it on open is Word's business, and the engine will not manufacture content
+the counterpart does not have.
 
 #### Relevant code
 

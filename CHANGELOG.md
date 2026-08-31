@@ -49,8 +49,8 @@ All notable changes to this project will be documented in this file.
   candidate that fails carries its error instead of products rather than failing the batch.
 
 ### Fixed
-- **Rejecting a redline no longer eats a baseline-owned note the counterpart merely cited, and a
-  session-recorded note's definition now carries insertion markup (#636).** The stateless reject
+- **The stateless reject no longer eats a baseline-owned note the counterpart merely cited, and
+  a session-recorded note's definition now carries insertion markup (#636).** The stateless reject
   pruned every definition its resolution orphaned, unconditionally. That was cover for #614's
   deliberately unmarked definitions — and it made the redline ambiguous: a `w:ins` citation next
   to an unmarked definition is also what a comparison produces when the counterpart cites a husk
@@ -60,9 +60,16 @@ All notable changes to this project will be documented in this file.
   content inserted — what Word writes, and what the diff engine's own redline already carried for
   a wholly-inserted note — and the stateless reject applies the same blockless guard as the
   accept side: a definition the resolution both orphaned and emptied goes, an unmarked husk
-  stays. One compatibility note: a redline saved from a #614-era session (its definition
-  unmarked) now rejects to an orphaned husk through the stateless path instead of losing the
-  note; re-authoring the redline with the current version restores full reversibility.
+  stays. The guard is scaffolding-aware — `WmlComparer`'s renderer re-synthesizes an unmarked
+  `w:footnoteRef` marker run into inserted definitions, and a marker-only paragraph must not
+  shield a rejected note from the prune — and a still-cited note a resolution strips bare stays both cited
+  and bare — the corpus genuinely contains that shape (`WC064-Footnote`), and reproducing it is
+  what the round-trip contracts require. Scope: this is the *stateless* reject; the session's editorial resolves (and
+  delivery-bundle revision policies, which route through them) deliberately keep the unguarded
+  rule, exactly as on the accept side. One compatibility note: a redline saved from a #614-era
+  session (its definition's text unmarked) now rejects to an orphaned husk through the stateless
+  path instead of losing the note; re-authoring the redline with the current version restores
+  full reversibility.
 - **Accepting a redline through the stateless path now takes a wholly-deleted note's definition
   with it (#631).** The redline itself distinguishes the two reference-less-husk cases: a note
   definition the counterpart *kept* passes through the comparison unmarked, while one the
@@ -85,16 +92,17 @@ All notable changes to this project will be documented in this file.
   rejected it — potentially long after the document had left the building. The citation is now
   wrapped in `w:ins`, and the definition follows it: rejecting removes the reference, which leaves
   the note uncited, and the note-lifecycle rule deletes it in the same resolve. Accepting keeps
-  both. The definition carries no revision markup of its own on purpose — a `w:ins` inside it
-  would be a revision with no independently meaningful resolution.
+  both. The definition carried no revision markup of its own at first — a choice #636 (below)
+  revisits: the definition's content now records too, which is what lets the stateless
+  resolutions read the redline instead of compensating with an unconditional prune.
 
   That rule — *a note definition exists exactly as long as something still cites it* — now has one
   owner, `Internal/NoteReferenceOps.cs`, shared by the session's resolve paths (#516, #591) and by
   the stateless `RevisionProcessor` **reject** path, which is what every non-.NET transport reaches
   through `DocxDiffOps.RejectRevisions`; without that the same redline was reversible in-session
-  and not reversible through npm/python/MCP. The stateless **accept** path deliberately does not
-  apply it, because `Accept(Compare(l, r)) ≡ r` is the comparison engine's contract and a
-  counterpart document that carries a reference-less note definition is entitled to keep it.
+  and not reversible through npm/python/MCP. (Since revised: #631 and #636, below, apply the rule on BOTH
+  stateless resolutions with a guard that keeps `Accept(Compare(l, r)) ≡ r` true — a counterpart
+  document's own reference-less note definition still keeps its content and stays.)
   Consolidating the rule also fixed its scope: it asks the whole package who cites a note rather
   than only the body, so a note cited from a running header as well no longer disappears when its
   body citation goes away.

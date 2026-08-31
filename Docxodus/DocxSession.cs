@@ -9626,10 +9626,15 @@ public sealed partial class DocxSession : IDisposable
             // definition it both orphaned and emptied — without eating a baseline-owned husk whose
             // citation the redline merely inserted, which is the mirror of the #631 accept bug
             // that the old unguarded reject prune had.
+            // One user action, one revision identity: the citation envelope and every definition
+            // paragraph share a single author/date pair, or RevisionOps.BuildGroups (exact-date
+            // equality) splinters one insert into per-paragraph revision groups.
+            var recording = _trackedChanges == TrackedChangeMode.RenderInline;
+            var recordingAuthor = _revisionAuthor ?? "docxodus";
+            var recordingDate = recording ? NextTrackedFormatRevisionDate() : string.Empty;
             InsertInlineAtOffset(element, characterOffset,
-                _trackedChanges == TrackedChangeMode.RenderInline
-                    ? CreateRevisionEnvelope(W.ins, _revisionAuthor ?? "docxodus",
-                        NextTrackedFormatRevisionDate(), refRun)
+                recording
+                    ? CreateRevisionEnvelope(W.ins, recordingAuthor, recordingDate, refRun)
                     : refRun);
 
             var id = NextNoteIdInReferenceOrder(main, root, noteName);
@@ -9637,10 +9642,9 @@ public sealed partial class DocxSession : IDisposable
                 .SetAttributeValue(W.id, id.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
             ApplyNoteBodyStyle(paras, isFootnote);
-            if (_trackedChanges == TrackedChangeMode.RenderInline)
+            if (recording)
                 foreach (var p in paras)
-                    MarkParagraphContentAndMark(p, W.ins,
-                        _revisionAuthor ?? "docxodus", NextTrackedFormatRevisionDate());
+                    MarkParagraphContentAndMark(p, W.ins, recordingAuthor, recordingDate);
             var note = new XElement(noteName,
                 new XAttribute(W.id, id.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                 paras);

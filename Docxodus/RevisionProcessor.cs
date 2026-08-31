@@ -33,11 +33,9 @@ namespace Docxodus
 
         public static void RejectRevisions(WordprocessingDocument doc)
         {
-            // Word's note-lifecycle rule, reject side (issues #614, #636): a note the redline
-            // introduced (w:ins citation, definition blocks in w:ins) has no place in the rejected
-            // baseline, so rejecting empties the definition and the guarded prune takes it — while
-            // a baseline-owned husk whose citation the redline merely inserted keeps its unmarked
-            // content and stays. Rationale and scoping live with the rule's owner,
+            // Word's note-lifecycle rule, reject side (issues #614, #636): a definition this
+            // reject both orphaned and emptied goes with its citation. Rationale, the emptied
+            // guard, and its interlocks live with the rule's owner:
             // Internal.NoteReferenceOps.PruneNotesEmptiedByResolution.
             var citedBefore = Internal.NoteReferenceOps.ReferencedNoteIds(doc.MainDocumentPart);
             RejectRevisionsForPart(doc.MainDocumentPart);

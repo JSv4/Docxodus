@@ -83,7 +83,7 @@ internal static class NoteReferenceOps
     /// <returns>The removed note elements with their part uri, for removed-anchor reporting.</returns>
     internal static List<(XElement Note, string PartUri)> PruneOrphanedNotes(
         MainDocumentPart? main, (HashSet<int> Footnotes, HashSet<int> Endnotes) before) =>
-        Prune(main, before, onlyBlockless: false);
+        Prune(main, before, onlyEmptied: false);
 
     /// <summary>
     /// The guarded variant of the rule for the stateless resolutions (issues #631, #636): remove a
@@ -92,41 +92,78 @@ internal static class NoteReferenceOps
     /// bare when every block was revision-marked in its direction — an unmarked paragraph survives
     /// its runs — so a bare, newly-uncited definition is the redline saying "this whole note goes
     /// with its citation": a wholly-deleted note on accept (every block in <c>w:del</c>), a
-    /// wholly-inserted note on reject (every block in <c>w:ins</c>). The blockless guard is what
+    /// wholly-inserted note on reject (every block in <c>w:ins</c>). The emptied guard is what
     /// distinguishes both from a document's own reference-less husk, which arrives with its
     /// content unmarked, keeps it through the resolution, and stays — so
     /// <c>Accept(Compare(l, r)) ≡ r</c> and <c>Reject(Compare(l, r)) ≡ l</c> both hold for the
-    /// note stores. (Redlines whose producer left an inserted definition unmarked — sessions from
-    /// the brief #614-era — reject to an orphaned husk instead; see CHANGELOG.)
+    /// note stores. (Redlines whose producer left an inserted definition's TEXT unmarked —
+    /// sessions from the brief #614-era — reject to an orphaned husk instead; see CHANGELOG.)
+    /// <para>"Emptied" is scaffolding-aware, not merely blockless: <see cref="WmlComparer"/>
+    /// re-synthesizes an UNMARKED <c>w:footnoteRef</c> marker run into every inserted definition
+    /// it renders, so rejecting one of its redlines strips the definition to a marker-only
+    /// paragraph rather than to nothing. A definition left with no text, tables, SDTs or other
+    /// run content beyond note-reference-mark scaffolding is emptied.</para>
+    /// <para>Two interlocks worth knowing. A still-CITED note a resolution strips bare is left
+    /// bare on purpose: a cited <c>w:footnote</c> with no block child is schema-degenerate, but it
+    /// is a shape the corpus genuinely contains (<c>WC064-Footnote</c> ships one, and
+    /// <c>WC063-Footnote-Mod</c>'s counterpart note is childless), so reproducing it is what
+    /// <c>Accept(Compare(l, r)) ≡ r</c> means — any "repair" here broke those round-trips when it
+    /// was tried. And the session's editorial resolves stay on the UNGUARDED
+    /// <see cref="PruneOrphanedNotes"/> deliberately: the session resolver keeps the last block
+    /// of a note alive (<c>RevisionOps</c>' surviving-block guard), so a session-emptied
+    /// definition can never satisfy this predicate — unifying the session onto the guarded prune
+    /// would silently stop pruning session-rejected recorded notes.</para>
     /// </summary>
     internal static List<(XElement Note, string PartUri)> PruneNotesEmptiedByResolution(
         MainDocumentPart? main, (HashSet<int> Footnotes, HashSet<int> Endnotes) before) =>
-        Prune(main, before, onlyBlockless: true);
+        Prune(main, before, onlyEmptied: true);
 
     private static List<(XElement Note, string PartUri)> Prune(
         MainDocumentPart? main, (HashSet<int> Footnotes, HashSet<int> Endnotes) before,
-        bool onlyBlockless)
+        bool onlyEmptied)
     {
         var removed = new List<(XElement, string)>();
         if (main is null) return removed;
         var after = ReferencedNoteIds(main);
-        PruneStory(main.FootnotesPart, W + "footnote", before.Footnotes, after.Footnotes, removed, onlyBlockless);
-        PruneStory(main.EndnotesPart, W + "endnote", before.Endnotes, after.Endnotes, removed, onlyBlockless);
+        PruneStory(main.FootnotesPart, W + "footnote", before.Footnotes, after.Footnotes, removed, onlyEmptied);
+        PruneStory(main.EndnotesPart, W + "endnote", before.Endnotes, after.Endnotes, removed, onlyEmptied);
         return removed;
     }
 
-    /// <summary>Whether a note definition has no block-level content left (no <c>w:p</c>,
-    /// <c>w:tbl</c> or <c>w:sdt</c> children). A direct-children check is sufficient HERE — and
-    /// only here — because this runs after <see cref="RevisionProcessor"/>'s accept, whose
-    /// block-content coalescing pass (<c>AcceptDeletedAndMoveFromParagraphMarksTransform</c>,
-    /// applied to every note via <c>BlockLevelContentContainers</c>) promotes block content out of
-    /// wrappers like <c>mc:AlternateContent</c> to direct children. It is deliberately narrower
-    /// than <c>RevisionProcessor.BlockLevelElements</c> and <c>IsBlockContentElement</c>, which
-    /// classify pre-accept trees that still carry revision wrappers; if the accept pipeline ever
+    /// <summary>Whether a note definition was stripped to scaffolding: no block children at all,
+    /// or only paragraphs whose remaining run content is note-reference-mark scaffolding
+    /// (<c>w:footnoteRef</c>/<c>w:endnoteRef</c>) — the marker run <see cref="WmlComparer"/>
+    /// re-synthesizes UNMARKED into inserted definitions, which would otherwise shield them from
+    /// the guarded prune. Tables, SDTs, any text, and any other run content mean real content
+    /// survived. A direct-children walk is sufficient HERE — and only here — because this runs
+    /// after <see cref="RevisionProcessor"/>'s resolution, whose block-content coalescing pass
+    /// (<c>AcceptDeletedAndMoveFromParagraphMarksTransform</c>, applied to every note via
+    /// <c>BlockLevelContentContainers</c>) promotes block content out of wrappers like
+    /// <c>mc:AlternateContent</c> to direct children. It is deliberately narrower than
+    /// <c>RevisionProcessor.BlockLevelElements</c> and <c>IsBlockContentElement</c>, which
+    /// classify pre-resolution trees that still carry revision wrappers; if the pipeline ever
     /// starts leaving a new wrapper shape inside notes, this predicate must learn it too.</summary>
-    private static bool IsBlockless(XElement note) =>
-        !note.Elements().Any(e =>
-            e.Name == W + "p" || e.Name == W + "tbl" || e.Name == W + "sdt");
+    private static bool IsEmptiedToScaffolding(XElement note)
+    {
+        foreach (var block in note.Elements())
+        {
+            if (block.Name == W + "tbl" || block.Name == W + "sdt") return false;
+            if (block.Name != W + "p") continue;
+            foreach (var child in block.Elements())
+            {
+                if (child.Name == W + "pPr"
+                    || child.Name == W + "bookmarkStart" || child.Name == W + "bookmarkEnd"
+                    || child.Name == W + "proofErr") continue;
+                if (child.Name != W + "r") return false;
+                if (child.Elements().Any(rc =>
+                        rc.Name != W + "rPr"
+                        && rc.Name != W + "footnoteRef" && rc.Name != W + "endnoteRef"))
+                    return false;
+            }
+        }
+
+        return true;
+    }
 
     /// <summary>Word's reserved scaffolding notes, which are never citation targets and are never
     /// pruned.</summary>
@@ -139,7 +176,7 @@ internal static class NoteReferenceOps
         HashSet<int> referencedBefore,
         HashSet<int> referencedAfter,
         List<(XElement, string)> removed,
-        bool onlyBlockless)
+        bool onlyEmptied)
     {
         var root = part?.GetXDocument().Root;
         if (part is null || root is null) return;
@@ -153,7 +190,7 @@ internal static class NoteReferenceOps
             if (!int.TryParse((string?)note.Attribute(W + "id"), out var id)
                 || !orphaned.Contains(id) || IsSeparatorNote(note))
                 continue;
-            if (onlyBlockless && !IsBlockless(note))
+            if (onlyEmptied && !IsEmptiedToScaffolding(note))
                 continue;
             note.Remove();
             removed.Add((note, partUri));
