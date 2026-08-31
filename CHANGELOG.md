@@ -7,7 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Changed
 - **The diff engine stops giving 13,000 elements an identity nothing asks for.** The
   deterministic Unid pass assigns to every element in a part at two SHA-256 hashes each — 30,720
-  hashes on a 15,360-element legal document, about 40% of an `IrReader.Read`. The IR reads one back
+  hashes on a 15,360-element legal document. The IR reads one back
   from a small fraction of them: block elements, table structure, section breaks, content controls,
   notes, comments and `w:drawing`. The rest — `w:rPr`, `w:sz`, `w:color`, `w:t` and their kin — get
   an identity no consumer can address, and the markup renderer strips the attribute on the way out
@@ -17,10 +17,27 @@ All notable changes to this project will be documented in this file.
   contract `DocxSession`, the markdown projection and the package change detector own. The assigned
   **values are identical** either way: a Unid derives from its ancestors, never its descendants, and
   the skip predicate is keyed on element names, so it removes whole tag-groups at once and no
-  surviving element's duplicate index can shift. Both reads of a comparison: 294 → 201 ms. Proven
-  by reading every one of the 678 fixtures in `TestFiles/` both ways and comparing the IR's
-  diagnostic JSON — identical on all of them — and by the corpus differential's 14,916 output
-  digests.
+  surviving element's duplicate index can shift. On that document the skip covers **64% of the
+  elements** (`w:rPr` and its children, `w:t`, paragraph properties, `w:instrText`); alternating the
+  two modes inside one process, the cold assignment pass runs 33–42 ms under `All` against 22–24 ms
+  under `IdentityBearing`. Proven by reading every one of the 678 fixtures in `TestFiles/` both ways
+  and comparing the IR's diagnostic JSON — identical on all of them — and by the corpus
+  differential's 14,916 output digests.
+- **The compatibility normalizer stops full-parsing every part to prove it has nothing to do.**
+  Deciding whether a part needed either of its two repairs meant building the whole `XDocument`,
+  gated on a literal substring test for `AlternateContent` or `pPr` — and every real
+  `word/document.xml` contains `pPr`, so the gate never closed. `PreAccept` runs the normalizer
+  once per side of every comparison, so that was a DOM build plus two descendant sweeps per side,
+  spent almost entirely on documents where neither repair fires (the NVCA model certificate of
+  incorporation has zero paragraphs with two direct `w:pPr`). A streaming `XmlReader` pass now
+  answers the same two questions — any `mc:AlternateContent`, any paragraph with two or more
+  direct `pPr` children — without building a tree, and the archive is opened read-only for it, so
+  a package that needs no repair never pays `ZipArchiveMode.Update`'s entry buffering either. Only
+  a package with a candidate part reaches the rewrite pass, and only its candidate parts are
+  parsed. The gate stays a superset of what the repairs act on: it matches on local names, where
+  the repairs are namespace-exact, so a false positive costs one parse of one part and a false
+  negative — which would be a correctness bug — cannot happen. Measured on the same document:
+  `Normalize` for both sides of a comparison 31.6 → 10.2 ms.
 - **`DocxDiff` no longer reads each document four times per comparison.** On a heavyweight
   legal document (the NVCA model certificate of incorporation: 574 KB of `document.xml`,
   15,360 elements, 97 footnotes) about 72% of a `Compare` was spent inside `IrReader`,

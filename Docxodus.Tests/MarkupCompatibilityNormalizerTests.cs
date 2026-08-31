@@ -34,15 +34,24 @@ public class MarkupCompatibilityNormalizerTests
             "<w:r><w:t>" + anchorText + "</w:t></w:r>");
     }
 
-    private static byte[] DocWithParagraphXml(string paragraphInnerXml)
+    private static byte[] DocWithParagraphXml(string paragraphInnerXml) =>
+        DocWithBodyChildrenXml("<w:p>" + paragraphInnerXml + "</w:p>");
+
+    private static byte[] DocWithBodyChildrenXml(
+        string bodyChildrenXml, params (string Name, string Xml)[] extraParts)
     {
         var documentXml =
             "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
             "<w:document xmlns:w=\"" + WNs + "\"" +
             " xmlns:mc=\"" + McNs + "\"" +
             " xmlns:v=\"" + VNs + "\">" +
-            "<w:body><w:p>" + paragraphInnerXml + "</w:p>" +
+            "<w:body>" + bodyChildrenXml +
             "<w:sectPr/></w:body></w:document>";
+        return Package(documentXml, extraParts);
+    }
+
+    private static byte[] Package(string documentXml, params (string Name, string Xml)[] extraParts)
+    {
         var relsXml =
             "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
             "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">" +
@@ -67,8 +76,18 @@ public class MarkupCompatibilityNormalizerTests
             Add("[Content_Types].xml", contentTypes);
             Add("_rels/.rels", relsXml);
             Add("word/document.xml", documentXml);
+            foreach (var (name, xml) in extraParts)
+                Add(name, xml);
         }
         return ms.ToArray();
+    }
+
+    private static XDocument PartOf(WmlDocument doc, string entryName)
+    {
+        using var ms = new MemoryStream(doc.DocumentByteArray);
+        using var zip = new ZipArchive(ms, ZipArchiveMode.Read);
+        using var reader = new StreamReader(zip.GetEntry(entryName)!.Open());
+        return XDocument.Parse(reader.ReadToEnd());
     }
 
     private static XDocument MainPart(WmlDocument doc)
@@ -202,6 +221,126 @@ public class MarkupCompatibilityNormalizerTests
         var normalized = MarkupCompatibilityNormalizer.Normalize(doc);
 
         Assert.Same(doc, normalized);
+    }
+
+    // ─── The detection gate (issue #619) ────────────────────────────────
+    //
+    // Deciding whether a part needs either repair used to mean building its whole XDocument, and
+    // the literal that gated it ("pPr") is in every real word/document.xml, so the gate never
+    // closed. A streaming pass answers the same two questions without a DOM. The tests below are
+    // about that gate specifically: it must stay a SUPERSET of what the repairs act on, because a
+    // part that needs repair and is skipped is a correctness bug where an over-broad gate is only
+    // a performance one.
+
+    /// <summary>
+    /// The two duplicates are separated by a whole nested subtree — the shape a comparer produces
+    /// when it inserts revision runs between the original malformed property elements. A detector
+    /// tracking the open-element stack has to still pair them across that depth excursion.
+    /// </summary>
+    [Fact]
+    public void Gate_FindsDuplicateParagraphPropertiesSeparatedByNestedContent()
+    {
+        var doc = new WmlDocument("d.docx", DocWithParagraphXml(
+            "<w:pPr><w:spacing w:after=\"0\"/></w:pPr>" +
+            "<w:ins w:id=\"9\" w:author=\"a\" w:date=\"2026-01-01T00:00:00Z\">" +
+            "<w:r><w:rPr><w:b/></w:rPr><w:t>inserted</w:t></w:r></w:ins>" +
+            "<w:pPr><w:numPr><w:numId w:val=\"42\"/></w:numPr></w:pPr>"));
+
+        var normalized = MarkupCompatibilityNormalizer.Normalize(doc);
+
+        XNamespace w = WNs;
+        Assert.NotSame(doc, normalized);
+        Assert.Single(MainPart(normalized).Descendants(w + "p").First().Elements(w + "pPr"));
+    }
+
+    /// <summary>
+    /// The duplicate is inside a text-box paragraph nested in another paragraph, while the OUTER
+    /// paragraph is well formed. Counting per paragraph rather than per part is what makes this
+    /// visible; the repair walks every descendant paragraph, so the gate has to as well.
+    /// </summary>
+    [Fact]
+    public void Gate_FindsDuplicateParagraphPropertiesInsideANestedParagraph()
+    {
+        var doc = new WmlDocument("d.docx", DocWithParagraphXml(
+            "<w:pPr><w:spacing w:after=\"0\"/></w:pPr>" +
+            "<w:r><w:pict><v:shape><v:textbox><w:txbxContent><w:p>" +
+            "<w:pPr><w:spacing w:before=\"120\"/></w:pPr>" +
+            "<w:r><w:t>boxed</w:t></w:r>" +
+            "<w:pPr><w:numPr><w:numId w:val=\"7\"/></w:numPr></w:pPr>" +
+            "</w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r>"));
+
+        var normalized = MarkupCompatibilityNormalizer.Normalize(doc);
+
+        XNamespace w = WNs;
+        Assert.NotSame(doc, normalized);
+        var nested = MainPart(normalized).Descendants(w + "p")
+            .Single(p => !p.Descendants(w + "p").Any());
+        Assert.Single(nested.Elements(w + "pPr"));
+        Assert.Contains("boxed", nested.Descendants(w + "t").Select(t => (string)t));
+    }
+
+    /// <summary>The counterpart: three well-formed sibling paragraphs carry three
+    /// <c>w:pPr</c> between them, and none of them is a duplicate. Counting per part rather than
+    /// per paragraph would read that as a repair candidate.</summary>
+    [Fact]
+    public void Gate_DoesNotMistakeOnePPrPerSiblingParagraphForADuplicate()
+    {
+        var doc = new WmlDocument("d.docx", DocWithBodyChildrenXml(
+            "<w:p><w:pPr><w:spacing w:after=\"0\"/></w:pPr><w:r><w:t>one</w:t></w:r></w:p>" +
+            "<w:p><w:pPr><w:spacing w:after=\"1\"/></w:pPr><w:r><w:t>two</w:t></w:r></w:p>" +
+            "<w:p><w:pPr><w:spacing w:after=\"2\"/></w:pPr><w:r><w:t>three</w:t></w:r></w:p>"));
+
+        Assert.Same(doc, MarkupCompatibilityNormalizer.Normalize(doc));
+    }
+
+    /// <summary>Every <c>.xml</c> part is a candidate, not just <c>word/document.xml</c>.</summary>
+    [Fact]
+    public void Gate_ResolvesAlternateContentInAPartOtherThanTheMainDocument()
+    {
+        var headerXml =
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
+            "<w:hdr xmlns:w=\"" + WNs + "\" xmlns:mc=\"" + McNs + "\" xmlns:v=\"" + VNs + "\">" +
+            "<w:p><w:r>" +
+            "<mc:AlternateContent><mc:Choice Requires=\"v\">" +
+            "<w:pict><v:shape id=\"wm\"/></w:pict>" +
+            "</mc:Choice></mc:AlternateContent>" +
+            "</w:r></w:p></w:hdr>";
+        var doc = new WmlDocument("d.docx", DocWithBodyChildrenXml(
+            "<w:p><w:r><w:t>body</w:t></w:r></w:p>", ("word/header1.xml", headerXml)));
+
+        var normalized = MarkupCompatibilityNormalizer.Normalize(doc);
+
+        XNamespace mc = McNs;
+        XNamespace w = WNs;
+        Assert.NotSame(doc, normalized);
+        var header = PartOf(normalized, "word/header1.xml");
+        Assert.Empty(header.Descendants(mc + "AlternateContent"));
+        Assert.Single(header.Descendants(w + "pict"));
+    }
+
+    /// <summary>
+    /// The repairs are namespace-exact and prefix-agnostic, so the gate matches on local names.
+    /// A part that binds the WordprocessingML namespace to some prefix other than <c>w</c> is
+    /// still repaired — which the literal substring gate this replaced also managed, and which is
+    /// the property that must not regress.
+    /// </summary>
+    [Fact]
+    public void Gate_FindsDuplicatesUnderANonstandardNamespacePrefix()
+    {
+        var documentXml =
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
+            "<x:document xmlns:x=\"" + WNs + "\"><x:body><x:p>" +
+            "<x:pPr><x:spacing x:after=\"0\"/></x:pPr>" +
+            "<x:r><x:t>anchor text</x:t></x:r>" +
+            "<x:pPr><x:numPr><x:numId x:val=\"42\"/></x:numPr></x:pPr>" +
+            "</x:p><x:sectPr/></x:body></x:document>";
+        var doc = new WmlDocument("d.docx", Package(documentXml));
+
+        var normalized = MarkupCompatibilityNormalizer.Normalize(doc);
+
+        XNamespace w = WNs;
+        Assert.NotSame(doc, normalized);
+        Assert.Single(MainPart(normalized).Descendants(w + "p").Single().Elements(w + "pPr"));
     }
 
     [Fact]
