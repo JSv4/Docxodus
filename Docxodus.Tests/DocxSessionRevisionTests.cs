@@ -1461,14 +1461,42 @@ public class DocxSessionRevisionTests
             new WmlDocument("baseline.docx", baseline),
             new WmlDocument("counterpart.docx", counterpart)).DocumentByteArray;
 
+        // The load-bearing premise: the citation arrives as a revision while the reconciled
+        // definition passes through UNMARKED — the shape the blockless guard must read as "keep".
+        using (var stream = new MemoryStream(redline, writable: false))
+        using (var document = WordprocessingDocument.Open(stream, false))
+        {
+            var reference = Assert.Single(
+                document.MainDocumentPart!.Document!.Descendants<FootnoteReference>());
+            Assert.NotNull(reference.Ancestors<InsertedRun>().FirstOrDefault());
+            var note = Assert.Single(document.MainDocumentPart.FootnotesPart!.Footnotes!
+                .Elements<Footnote>(), n => n.Type is null);
+            Assert.Empty(note.Descendants<InsertedRun>());
+            Assert.Empty(note.Descendants<DeletedRun>());
+        }
+
         var rejected = Docxodus.Internal.DocxDiffOps.RejectRevisions(redline);
 
         Assert.Equal(1, UserNoteCount(baseline, "footnote"));
         Assert.Equal(1, UserNoteCount(rejected, "footnote"));
+        // Content-level equivalence, not GetRevisions: the redline pipeline renumbers note ids in
+        // body-reference order, and an UNREFERENCED husk can only pair by id, so the differ reads
+        // the same husk at a shifted id as a delete+insert of identical text. The husk's identity
+        // to a reader is its content.
+        using (var stream = new MemoryStream(rejected, writable: false))
+        using (var document = WordprocessingDocument.Open(stream, false))
+        {
+            var husk = Assert.Single(document.MainDocumentPart!.FootnotesPart!.Footnotes!
+                .Elements<Footnote>(), n => n.Type is null);
+            Assert.Contains("Kept as a husk.", husk.InnerText);
+            Assert.Empty(document.MainDocumentPart.Document!.Descendants<FootnoteReference>());
+        }
 
         // And accepting still reproduces the counterpart, citation and all.
         var accepted = Docxodus.Internal.DocxDiffOps.AcceptRevisions(redline);
         Assert.Equal(1, UserNoteCount(accepted, "footnote"));
+        Assert.Empty(DocxDiff.GetRevisions(
+            new WmlDocument("counterpart.docx", counterpart), new WmlDocument("accepted.docx", accepted)));
     }
 
     /// <summary>

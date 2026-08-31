@@ -842,6 +842,10 @@ public class DocxSessionNoteAuthoringTests
         Assert.Contains("Negotiated on March 11.",
             acceptedNote.Descendants(W + "t").Select(t => (string)t));
         Assert.Empty(acceptedNote.Descendants(W + "ins"));
+        // The body citation survived the accept — without this, an accepted document could ship
+        // an uncited, invisible note and every count-based assert above would still pass.
+        Assert.Single(BodyXml(accepted)
+            .Descendants(W + (footnote ? "footnoteReference" : "endnoteReference")));
     }
 
     /// <summary>

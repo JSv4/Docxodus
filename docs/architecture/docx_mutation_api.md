@@ -1157,6 +1157,13 @@ baseline-owned husk (`Reject(Compare(l, r)) ≠ l`, the mirror of #631). With th
 marked, rejecting empties it and the guarded prune — the same blockless guard the accept side
 uses — takes exactly the notes the redline introduced and nothing else.
 
+One granularity consequence, shared with the diff engine's own redlines (which carry the
+identical shape): the definition's insertions are individually resolvable revisions, so a
+reviewer who rejects *only* the definition's content while keeping the citation ends up with an
+empty but still-cited note — the note-lifecycle rule correctly leaves a cited note alone. That is
+the ordinary meaning of partially resolving a compound change, the same state Word can reach, and
+resolve-all in either direction never produces it.
+
 `Internal/NoteReferenceOps.cs` is the single owner of that rule — *a note definition exists
 exactly as long as something still cites it* — and it asks the whole package who cites a note,
 not just the body, so a note cited from a running header as well outlives losing its body
