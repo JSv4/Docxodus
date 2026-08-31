@@ -3669,6 +3669,21 @@ class DocxDiffProducts:
     semantic_changes: "SemanticChangeSet | None" = None
 
 
+@dataclass(frozen=True)
+class DocxDiffBatchResult:
+    """One candidate of a ``docx_diff_compare_batch`` run (issue #617): the products of
+    comparing the shared baseline against it, or the error comparing it produced.
+
+    ``error`` is set only when that candidate failed, and its products are then ``None``.
+    The rest of the batch is unaffected — one malformed counterparty markup must not cost
+    the caller the other ninety-nine comparisons.
+    """
+
+    name: str
+    products: "DocxDiffProducts | None" = None
+    error: str | None = None
+
+
 class SemanticChangeOperation(str, Enum):
     """Stable v1 operation names in a :class:`SemanticChangeSet`."""
 

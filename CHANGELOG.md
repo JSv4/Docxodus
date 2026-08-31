@@ -4,6 +4,63 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **`DocxDiff.CreateSnapshot` — read a document once, compare it many times (#617).** After #594 and
+  #616 the redundancy left in the engine is *across* comparisons: nothing let a caller say "I already
+  read this document", so one baseline against many counterparties re-read the baseline once per
+  counterparty, a version chain A→B→C→D read every interior version twice, and `GetConflicts`
+  followed by `Consolidate` read everything twice. A snapshot is that statement, and
+  `CreateComparison(leftSnapshot, rightSnapshot, settings)` produces exactly the same products as the
+  document overload without reading either side again. Only the input-revision policy reaches a read,
+  so one snapshot serves comparisons differing in author, granularity, move detection or format
+  comparison; a snapshot read under a *different* input-revision policy is **rejected** rather than
+  silently reused. Creation is free — nothing is read until a comparison needs it — but a
+  materialized snapshot roots the parsed XML of every story, so hold only the ones a run is reusing.
+  The compatibility pre-flight remains a property of the comparison, so a reused snapshot never makes
+  an `OnCompatibilityWarning` subscription go quiet.
+- **`DocxDiff.CreateConsolidation` — the N-way twin (#617).** The four consolidate statics each read
+  the full reviewer set independently, so inspecting conflicts before merging read all `N+1`
+  documents twice. They now delegate to one memoized pass that a caller can also hold directly.
+- **The batch compare, on every surface (#617).** A snapshot holds parsed XML and cannot cross a
+  process boundary, so the transports get the workload it exists for instead of a handle:
+  `docxDiffCompareBatch` (npm), `docx_diff_compare_batch` (python), `CompareBatchJson` (WASM), and
+  `docxodus_compare` with `mode: "fan_out"` (MCP) each take one baseline and many candidates, read
+  the baseline once, and return per-candidate products identical to comparing that pair alone. A
+  candidate that fails carries its error instead of products rather than failing the batch.
+
+### Fixed
+- **Authoring a footnote or endnote while recording tracked changes now produces a redline that
+  can actually be rejected (#614).** `InsertFootnote`/`InsertEndnote` ignored
+  `TrackedChangeMode.RenderInline` entirely: the citation and the note definition were both
+  written as ordinary content, so a reviewer had nothing to accept or reject, and reject-all left
+  the note in the document. The redline looked complete and only failed when somebody actually
+  rejected it — potentially long after the document had left the building. The citation is now
+  wrapped in `w:ins`, and the definition follows it: rejecting removes the reference, which leaves
+  the note uncited, and the note-lifecycle rule deletes it in the same resolve. Accepting keeps
+  both. The definition carries no revision markup of its own on purpose — a `w:ins` inside it
+  would be a revision with no independently meaningful resolution.
+
+  That rule — *a note definition exists exactly as long as something still cites it* — now has one
+  owner, `Internal/NoteReferenceOps.cs`, shared by the session's resolve paths (#516, #591) and by
+  the stateless `RevisionProcessor` **reject** path, which is what every non-.NET transport reaches
+  through `DocxDiffOps.RejectRevisions`; without that the same redline was reversible in-session
+  and not reversible through npm/python/MCP. The stateless **accept** path deliberately does not
+  apply it, because `Accept(Compare(l, r)) ≡ r` is the comparison engine's contract and a
+  counterpart document that carries a reference-less note definition is entitled to keep it.
+  Consolidating the rule also fixed its scope: it asks the whole package who cites a note rather
+  than only the body, so a note cited from a running header as well no longer disappears when its
+  body citation goes away.
+- **`InsertHorizontalRule` records under tracked-change recording too (#614).** Same defect,
+  smaller blast radius: the rule paragraph was written untracked, so rejecting the redline left it
+  behind. It now takes the same paragraph marking `InsertParagraph` applies. `docx_mutation_api.md`
+  gains the full table of which mutations record, which refuse with `TrackedOperationUnsupported`,
+  and which apply untracked by design.
+- **Three of the four N-way entry points ignored the compatibility subscription (#617).** Only
+  `Consolidate` ran the pre-flight, so a caller who set `OnCompatibilityWarning` or
+  `ThrowOnCompatibilityWarning` and asked for conflicts, consolidated revisions or the consolidated
+  edit script was silently never told — the N-way half of the gap #622 closed on the pairwise side.
+  All four now run the same gate.
+
 ### Changed
 - **The diff engine stops giving 13,000 elements an identity nothing asks for.** The
   deterministic Unid pass assigns to every element in a part at two SHA-256 hashes each — 30,720
@@ -227,32 +284,6 @@ All notable changes to this project will be documented in this file.
   `action` gets an error that spells out the nested shape.
 
 ### Fixed
-- **Authoring a footnote or endnote while recording tracked changes now produces a redline that
-  can actually be rejected (#614).** `InsertFootnote`/`InsertEndnote` ignored
-  `TrackedChangeMode.RenderInline` entirely: the citation and the note definition were both
-  written as ordinary content, so a reviewer had nothing to accept or reject, and reject-all left
-  the note in the document. The redline looked complete and only failed when somebody actually
-  rejected it — potentially long after the document had left the building. The citation is now
-  wrapped in `w:ins`, and the definition follows it: rejecting removes the reference, which leaves
-  the note uncited, and the note-lifecycle rule deletes it in the same resolve. Accepting keeps
-  both. The definition carries no revision markup of its own on purpose — a `w:ins` inside it
-  would be a revision with no independently meaningful resolution.
-
-  That rule — *a note definition exists exactly as long as something still cites it* — now has one
-  owner, `Internal/NoteReferenceOps.cs`, shared by the session's resolve paths (#516, #591) and by
-  the stateless `RevisionProcessor` **reject** path, which is what every non-.NET transport reaches
-  through `DocxDiffOps.RejectRevisions`; without that the same redline was reversible in-session
-  and not reversible through npm/python/MCP. The stateless **accept** path deliberately does not
-  apply it, because `Accept(Compare(l, r)) ≡ r` is the comparison engine's contract and a
-  counterpart document that carries a reference-less note definition is entitled to keep it.
-  Consolidating the rule also fixed its scope: it asks the whole package who cites a note rather
-  than only the body, so a note cited from a running header as well no longer disappears when its
-  body citation goes away.
-- **`InsertHorizontalRule` records under tracked-change recording too (#614).** Same defect,
-  smaller blast radius: the rule paragraph was written untracked, so rejecting the redline left it
-  behind. It now takes the same paragraph marking `InsertParagraph` applies. `docx_mutation_api.md`
-  gains the full table of which mutations record, which refuse with `TrackedOperationUnsupported`,
-  and which apply untracked by design.
 - **`DocxDiff.Compare` is byte-reproducible again once a redline creates or imports a part
   (#621).** `Deterministic` promises that two comparisons of the same inputs are byte-identical,
   and that only held for text-only documents. Two generators were reseeded on every run: parts

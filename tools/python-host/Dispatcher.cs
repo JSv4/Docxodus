@@ -57,6 +57,7 @@ internal static class Dispatcher
 
         "docx_diff_compare" => DocxDiffCompare(args),
         "docx_diff_compare_products" => DocxDiffCompareProducts(args),
+        "docx_diff_compare_batch" => DocxDiffCompareBatch(args),
         "docx_diff_get_revisions" => DocxDiffGetRevisions(args),
         "docx_diff_get_edit_script" => JsonString(DocxDiffGetEditScript(args)),
         "docx_diff_get_semantic_changes" => DocxDiffGetSemanticChanges(args),
@@ -522,6 +523,24 @@ internal static class Dispatcher
         // One memoized comparison pass serving every requested product (issue #594);
         // already the complete JSON envelope — embed verbatim as the result.
         return DocxDiffOps.CompareProductsJson(left, right, DiffSettingsJson(args), products);
+    }
+
+    /// <summary>
+    /// One baseline against many candidates, reading the baseline once (issue #617). The candidates
+    /// arrive as <c>[{"name":…,"docB64":…}]</c>, and the reply is already the complete envelope.
+    /// </summary>
+    private static string DocxDiffCompareBatch(JsonElement args)
+    {
+        var baseline = Convert.FromBase64String(Str(args, "baselineB64"));
+        var candidates = args.TryGetProperty("candidates", out var list)
+            && list.ValueKind == JsonValueKind.Array
+            ? list.GetRawText()
+            : "[]";
+        var products = args.TryGetProperty("products", out var selected)
+            && selected.ValueKind == JsonValueKind.Array
+            ? selected.GetRawText()
+            : null;
+        return DocxDiffOps.CompareBatchJson(baseline, candidates, DiffSettingsJson(args), products);
     }
 
     private static string DocxDiffGetEditScript(JsonElement args)
