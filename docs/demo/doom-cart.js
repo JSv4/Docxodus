@@ -1066,7 +1066,7 @@ function mergeBezelIntoPicture(g) {
       '[doomgeneric](https://github.com/grubbyplaya/doomgenericjs) — running on Freedoom’s ' +
       'BSD-licensed game data. Its 320×200 framebuffer is redrawn into this Word paragraph every ' +
       'frame, and what it costs is *colored runs*: a run breaks when the ink or the `w:shd` ' +
-      'shading changes, never when the glyph does, and the measured frame is `45 ms + 0.61 ms × ' +
+      'shading changes, never when the glyph does, and the measured frame is `31 ms + 0.61 ms × ' +
       'runs`. So the default **8-bit** projection treats that as a budget and spends it — it ' +
       'squeezes the frame to a fixed ~64 runs by repeatedly merging whichever two neighbouring ' +
       'runs cost the least picture to lose, then gives each surviving run *two* colors to be the ' +
@@ -1076,14 +1076,14 @@ function mergeBezelIntoPicture(g) {
       'cells are spent on it, and the extra resolution costs nothing at all: a run breaks on a ' +
       'color change, never on a glyph. Doom draws on its own denser grid for exactly that ' +
       'reason — 5.5pt cells in the same 462 × 261 points of page — because cells carry ' +
-      'resolution while runs carry cost. Flat cost, whatever you are looking at, and between ' +
-      'eight and nine repaints a second. ' +
+      'resolution while runs carry cost. Flat cost, whatever you are looking at, and about ten ' +
+      'repaints a second. ' +
       '**P** switches to the faithful **bitmap**: every color the framebuffer had, two pixels per ' +
-      'cell, seven times the runs and a quarter of the rate. Move **W/S** · strafe ' +
+      'cell, six times the runs and a quarter of the rate. Move **W/S** · strafe ' +
       '**A/D** · turn **←/→** · **Space** ' +
       'fires · **E** opens · **Q** is Doom’s own menu. **Esc** pauses — and then it is only a ' +
       'document again: put your caret in the frame, Undo rewinds it, Save downloads it as .docx.',
-    hint: '<b>WASD</b> move · <b>←/→</b> turn · <b>Space</b> fire · <b>E</b> open · <b>Q</b> Doom’s menu · <b>P</b> switches projection — 8-bit samples 194×68 on a fixed run budget and plays at ~8.5 fps, bitmap is faithful at ~2.',
+    hint: '<b>WASD</b> move · <b>←/→</b> turn · <b>Space</b> fire · <b>E</b> open · <b>Q</b> Doom’s menu · <b>P</b> switches projection — 8-bit samples 194×68 on a fixed run budget and plays at ~10 fps, bitmap is faithful at ~2.4.',
     reset() {
       // Doom's own state lives inside the WebAssembly heap and the engine is
       // a page singleton, so a cartridge reset cannot restart the game. Q

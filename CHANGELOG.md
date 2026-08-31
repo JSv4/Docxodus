@@ -86,18 +86,21 @@ All notable changes to this project will be documented in this file.
   lands near 113 spans and the cartridge at ~10.4 repaints a second, against ~2.9 for the
   faithful bitmap projection.
   Demo-content change (`docs/demo/`), not npm surface.
-- **The Doom cartridge draws on its own, denser character grid — 2.2× the picture samples for
-  8.5 repaints a second instead of 10.** Cells carry resolution; runs carry cost; those are
+- **The Doom cartridge draws on its own, denser character grid — 2.2× the picture samples.** Cells carry resolution; runs carry cost; those are
   different quantities, and this spends only the first. Doom left the arcade's shared 92 × 26
   grid of 8pt cells for 140 × 37 cells of 5.5pt text on a 7.05pt line, which occupies the same
   462 × 261 points of page — the same screen, made of more and smaller characters, and still
   every cell a real character with a real colour in a real paragraph. The picture went from
   64 × 23 cells to 97 × 34, and with the quadrant blocks on top of that from 128 × 46 samples
-  to **194 × 68**. The price is a floor rather than a slope: a run cannot cross a line break,
-  so the run count can never fall below the row count, and eleven more rows is eleven more runs
-  the merge cannot reclaim. `frameXml` now takes the frame's shape from the grid it is given and
-  the cell metrics from the cartridge, so the other two cartridges and the Observatory emit
-  exactly the XML they did before.
+  to **194 × 68**. It cost frame rate at first, and the cost was a floor rather than a slope: a
+  run cannot cross a line break, so the run count can never fall below the row count, and eleven
+  more rows is eleven more runs the merge cannot reclaim — 8.6 repaints a second where the
+  cartridge had been at 10. Rearranging the colour budget did not buy that back (spending the
+  entire budget down to 46 runs reached 9.97 and flattened the picture); making a run cheaper to
+  convert did, and the cartridge now runs at 10.3–10.4 at the full resolution and the full
+  budget. See the conversion entry below. `frameXml` now takes the frame's shape from the grid
+  it is given and the cell metrics from the cartridge, so the other two cartridges and the
+  Observatory emit exactly the XML they did before.
   What did have to change is how a run picks its two endpoint colours. They were the span's
   darkest and brightest cell halves, which is fine while a run covers a handful of samples and
   catastrophic once it covers a hundred: extremes are outliers, one specular highlight and one
@@ -118,6 +121,25 @@ All notable changes to this project will be documented in this file.
   anchor, so a copy of the game screen keeps the grid. Any other copy or paste in the document is
   the browser's, untouched.
   Demo-content change (`docs/demo/`), not npm surface.
+- **Preparing a document for HTML conversion is substantially cheaper: run coalescing no longer
+  serializes every run's properties to a string, and three of `MarkupSimplifier`'s five passes
+  are skipped when nothing in the part can trigger them.** Profiling one conversion put 45% of
+  the time in `MarkupSimplifier` and 25% in `FormattingAssembler`, and inside the simplifier the
+  most expensive single step was the rule deciding which adjacent runs may merge: it built a
+  string per run — the run's kind plus its run properties through `XElement.ToString` — and
+  grouped by string equality. On a part whose runs mostly differ, every one of those strings was
+  built only to be found unequal. The rule is now a pairwise predicate comparing run properties
+  as trees. The three skippable passes (the settings-driven element removal, empty-run removal,
+  and `w:instrText` merging) are pure structural rebuilds outside the elements they target, so a
+  read-only scan that finds none of those elements proves the pass is an identity; the other two
+  keep running unconditionally, because coalescing renormalizes a run's `w:t` and separating run
+  children drops run attributes, which makes them non-identities even when they merge and split
+  nothing — a guard there would change output rather than only cost. Measured through the
+  editor's incremental block render: `refresh()` 88 ms → 73 ms on the same 101-run paragraph.
+  Output is unchanged, and the grouping rule that was replaced is kept as an executable oracle
+  (`CoalesceGroupingTests`) requiring the two to agree on every adjacent pair in the committed
+  corpus — a grouping rule that changes quietly merges a little more or a little less and still
+  emits well-formed markup.
 - **A single-block render no longer builds the session's anchor index when it will not use it.**
   `BlockSourceIdentity.For` already declines the index walk for a render that does not stamp
   anchors — the editor's incremental swap path — but C# evaluates arguments eagerly, so passing

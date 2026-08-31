@@ -627,8 +627,10 @@ namespace Docxodus
             //
             // The other two are NOT identities even when they merge and split nothing --
             // coalescing renormalizes a run's `w:t` (its `xml:space`, its non-status attributes)
-            // and separating drops run attributes -- so they keep running unconditionally. Making
-            // them cheap was a different job: see WordprocessingMLUtil.CanCoalesceAdjacent.
+            // and separating drops run attributes -- so they keep running unconditionally, and a
+            // guard that skipped them would change output rather than only cost. Making the
+            // expensive one cheap was a separate job, done inside the rule it groups by: see
+            // WordprocessingMLUtil.CanCoalesceAdjacent.
             HashSet<XName> simplifyTargets = SimplifyTransformTargets(settings);
             var prevNewRoot = new XDocument(newRoot);
             while (true)

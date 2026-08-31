@@ -946,19 +946,21 @@ namespace Docxodus
         /// Whether two ADJACENT children of a run container may be merged into one run.
         /// </summary>
         /// <remarks>
-        /// This is the one rule; <see cref="CoalesceAdjacentRunsWithIdenticalFormatting"/> groups by
-        /// it, and callers that want to know whether coalescing would change anything before paying
-        /// for the rebuild ask the same question with it (see MarkupSimplifier). Keeping both on one
-        /// predicate is the point: a cheaper-but-separate approximation would eventually disagree
-        /// with the transform it is guarding, and the disagreement would be silent.
+        /// The whole rule, in one place: <see cref="CoalesceAdjacentRunsWithIdenticalFormatting"/>
+        /// groups by it, and nothing else decides what merges.
         ///
         /// Run properties are compared as TREES rather than as serialized strings. The strings were
         /// what this cost: building one per run, per conversion, made the grouping the single most
         /// expensive step of preparing a document for rendering, and on a paragraph whose runs all
         /// differ (a picture drawn as coloured runs, say) every one of those strings was built only
         /// to be found unequal.
+        ///
+        /// The rule it replaced is kept as an executable oracle in CoalesceGroupingTests, which
+        /// requires the two to agree on every adjacent pair in the committed corpus — a grouping
+        /// rule that changes quietly merges a little more or a little less and still emits
+        /// well-formed markup, so the equivalence is worth pinning rather than reasoning about.
         /// </remarks>
-        public static bool CanCoalesceAdjacent(XElement first, XElement second)
+        internal static bool CanCoalesceAdjacent(XElement first, XElement second)
         {
             int kind = CoalesceKind(first);
             if (kind == 0 || kind != CoalesceKind(second)) return false;
@@ -982,18 +984,6 @@ namespace Docxodus
                            && SameRunProperties(first.Elements(W.r).Elements(W.rPr),
                                second.Elements(W.r).Elements(W.rPr));
             }
-        }
-
-        /// <summary>Whether coalescing this container would merge anything at all.</summary>
-        public static bool HasCoalescableRuns(XElement runContainer)
-        {
-            XElement prev = null;
-            foreach (XElement ce in runContainer.Elements())
-            {
-                if (prev != null && CanCoalesceAdjacent(prev, ce)) return true;
-                prev = ce;
-            }
-            return false;
         }
 
         public static XElement CoalesceAdjacentRunsWithIdenticalFormatting(XElement runContainer)
