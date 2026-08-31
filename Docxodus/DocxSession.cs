@@ -3010,75 +3010,24 @@ public sealed partial class DocxSession : IDisposable
         else part.PutXDocument();
     }
 
-    /// <summary>Footnote/endnote ids currently referenced from the main document story —
-    /// the only story OOXML lets a note reference live in.</summary>
-    private (HashSet<int> Footnotes, HashSet<int> Endnotes) ReferencedNoteIds()
-    {
-        var footnotes = new HashSet<int>();
-        var endnotes = new HashSet<int>();
-        var root = _doc?.MainDocumentPart?.GetXDocument().Root;
-        if (root is null) return (footnotes, endnotes);
-        foreach (var reference in root.Descendants(W.footnoteReference))
-            if (int.TryParse((string?)reference.Attribute(W.id), out var id)) footnotes.Add(id);
-        foreach (var reference in root.Descendants(W.endnoteReference))
-            if (int.TryParse((string?)reference.Attribute(W.id), out var id)) endnotes.Add(id);
-        return (footnotes, endnotes);
-    }
+    /// <summary>Footnote/endnote ids cited anywhere in the package, captured before an op that
+    /// can carry a citation away. See <see cref="Internal.NoteReferenceOps"/> for the rule.</summary>
+    private (HashSet<int> Footnotes, HashSet<int> Endnotes) ReferencedNoteIds() =>
+        Internal.NoteReferenceOps.ReferencedNoteIds(_doc?.MainDocumentPart);
 
     /// <summary>
-    /// Word-faithful note cleanup after an op that removes body content (issues #516, #591).
-    /// A note whose LAST reference was removed — by revision resolution carrying the reference
-    /// away, or by a structural delete removing the block that held it — is deleted from its
-    /// part; without this the note survived as a reference-less husk still shipping its full
-    /// text inside the package. The PART itself always stays: Word never prunes a notes part
-    /// (the RP050-Deleted-Footnote oracle keeps its separator-only footnotes.xml after
-    /// accepting the only note's deletion), and a separator-only part is exactly what Word
-    /// ships in every fresh document. Scoped strictly to ids referenced before and
-    /// unreferenced after THIS op: a note that was already dangling is pre-existing
-    /// document state and stays untouched.
+    /// Word-faithful note cleanup after an op that removes body content (issues #516, #591): a note
+    /// whose LAST citation this op carried away is deleted from its part. The rule and the reasons
+    /// live in <see cref="Internal.NoteReferenceOps"/>, which the stateless
+    /// <see cref="RevisionProcessor"/> path shares so a redline is reversible on every transport.
     /// </summary>
     /// <returns>The removed note elements with their part uri, for removed-anchor reporting.</returns>
     private List<(XElement Note, string PartUri)> PruneOrphanedNotes(
-        (HashSet<int> Footnotes, HashSet<int> Endnotes) before)
-    {
-        var removed = new List<(XElement, string)>();
-        var main = _doc?.MainDocumentPart;
-        if (main is null) return removed;
-        var after = ReferencedNoteIds();
-        PruneNoteStory(main.FootnotesPart, W.footnote, before.Footnotes, after.Footnotes, removed);
-        PruneNoteStory(main.EndnotesPart, W.endnote, before.Endnotes, after.Endnotes, removed);
-        return removed;
-    }
-
-    private static void PruneNoteStory(
-        OpenXmlPart? part,
-        XName noteName,
-        HashSet<int> referencedBefore,
-        HashSet<int> referencedAfter,
-        List<(XElement, string)> removed)
-    {
-        var root = part?.GetXDocument().Root;
-        if (part is null || root is null) return;
-        var orphaned = referencedBefore.Except(referencedAfter).ToHashSet();
-        if (orphaned.Count == 0) return;
-
-        var partUri = part.Uri.ToString();
-        bool changed = false;
-        foreach (var note in root.Elements(noteName).ToList())
-        {
-            if (!int.TryParse((string?)note.Attribute(W.id), out var id)
-                || !orphaned.Contains(id) || IsSeparatorNote(note))
-                continue;
-            note.Remove();
-            removed.Add((note, partUri));
-            changed = true;
-        }
-
-        if (changed) part.PutXDocument();
-    }
+        (HashSet<int> Footnotes, HashSet<int> Endnotes) before) =>
+        Internal.NoteReferenceOps.PruneOrphanedNotes(_doc?.MainDocumentPart, before);
 
     private static bool IsSeparatorNote(XElement note) =>
-        (string?)note.Attribute(W.type) is "separator" or "continuationSeparator";
+        Internal.NoteReferenceOps.IsSeparatorNote(note);
 
     /// <summary>Appends the anchors of pruned note definitions (with their descendants) to
     /// <paramref name="removed"/>, deduplicated through <paramref name="seenRemoved"/> — the
@@ -8770,6 +8719,12 @@ public sealed partial class DocxSession : IDisposable
             if (pos == Position.Before) element.AddBeforeSelf(p);
             else element.AddAfterSelf(p);
 
+            // A rule is a paragraph, so it records as one — same marking InsertParagraph applies,
+            // so rejecting the revision takes the rule back out instead of leaving it behind.
+            if (_trackedChanges == TrackedChangeMode.RenderInline)
+                MarkParagraphContentAndMark(p, W.ins, _revisionAuthor ?? "docxodus",
+                    NextTrackedFormatRevisionDate());
+
             var unid = (string)p.Attribute(PtOpenXml.Unid)!;
             InvalidateProjectionCache();
             var created = AnchorForUnid(unid, target.PartUri)
@@ -9388,7 +9343,19 @@ public sealed partial class DocxSession : IDisposable
             SplitInlineContainersAtOffset(element, characterOffset);
             var refRun = BuildNoteReferenceRun(isFootnote, NoteIdPlaceholder);
             UnidHelper.AssignToSelfAndDescendants(refRun);
-            InsertInlineAtOffset(element, characterOffset, refRun);
+
+            // Under recording, the CITATION is the reversible unit and the definition follows it.
+            // Rejecting the w:ins carries the reference away, which leaves the definition
+            // unreferenced, and PruneOrphanedNotes — the single owner of "a note exists iff it is
+            // cited" (#516/#591) — removes it in the same resolve. A second w:ins inside the
+            // definition would be a revision with no independently meaningful resolution: rejecting
+            // it while keeping the citation yields an empty note, and keeping it while rejecting the
+            // citation yields a note that is pruned anyway.
+            InsertInlineAtOffset(element, characterOffset,
+                _trackedChanges == TrackedChangeMode.RenderInline
+                    ? CreateRevisionEnvelope(W.ins, _revisionAuthor ?? "docxodus",
+                        NextTrackedFormatRevisionDate(), refRun)
+                    : refRun);
 
             var id = NextNoteIdInReferenceOrder(main, root, noteName);
             refRun.Descendants(isFootnote ? W.footnoteReference : W.endnoteReference).First()
@@ -9595,14 +9562,8 @@ public sealed partial class DocxSession : IDisposable
     }
 
     /// <summary>Every part whose XML can carry a note reference, for id-collision scanning.</summary>
-    private static IEnumerable<OpenXmlPart> NoteReferenceHostParts(MainDocumentPart main)
-    {
-        yield return main;
-        foreach (var h in main.HeaderParts) yield return h;
-        foreach (var f in main.FooterParts) yield return f;
-        if (main.FootnotesPart is not null) yield return main.FootnotesPart;
-        if (main.EndnotesPart is not null) yield return main.EndnotesPart;
-    }
+    private static IEnumerable<OpenXmlPart> NoteReferenceHostParts(MainDocumentPart main) =>
+        Internal.NoteReferenceOps.ReferenceHostParts(main);
 
     /// <summary>
     /// Shape the note body the way Word does: every paragraph gets the note-text style (unless the
