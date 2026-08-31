@@ -1391,8 +1391,10 @@ public class DocxSessionRevisionTests
         Assert.True(HasNotesPart(accepted, "footnote"), "the notes part itself must survive");
         Assert.Equal(UserNoteCount(deleting.Counterpart, "footnote"), UserNoteCount(accepted, "footnote"));
 
-        // The two transports must agree about the same redline: the session resolves it to the
-        // same note store the stateless path now produces.
+        // The two transports must agree about a wholly-deleted note: the session resolves this
+        // redline to the same note store the stateless path now produces. (On the OTHER husk
+        // shape they stay deliberately distinct — DS430's counterpart-kept husk survives the
+        // stateless accept but not the session's unguarded editorial rule, DS418.)
         using var session = new DocxSession(redline);
         session.AcceptAllRevisions();
         Assert.Equal(UserNoteCount(accepted, "footnote"), UserNoteCount(session.Save(), "footnote"));
@@ -1401,6 +1403,35 @@ public class DocxSessionRevisionTests
         // definition was never orphaned and stays.
         var rejected = Docxodus.Internal.DocxDiffOps.RejectRevisions(redline);
         Assert.Equal(UserNoteCount(deleting.Baseline, "footnote"), UserNoteCount(rejected, "footnote"));
+    }
+
+    /// <summary>
+    /// The same rule through the shared accept funnel every other caller reaches too —
+    /// <see cref="RevisionProcessor.AcceptRevisions(WmlDocument)"/> is the single core behind the
+    /// stateless facade, the <c>PreAcceptInputRevisions</c> flatten, <c>IrReader</c>'s revision
+    /// view, <c>WmlComparer</c>'s input flatten and <c>WmlToHtmlConverter</c>'s accept — pinned on
+    /// the Word-authored RP050 fixture. Word marks a tracked note deletion exactly as the engine
+    /// does (every run in <c>w:del</c>, paragraph mark deleted), so accepting strips the
+    /// definition bare and the prune takes it. Word's own accepted oracle keeps a childless
+    /// <c>&lt;w:footnote/&gt;</c> shell instead (see <c>docs/ooxml_corner_cases.md</c>); the shell
+    /// and its absence are the same note store, and removal is the schema-valid form.
+    /// </summary>
+    [Fact]
+    public void DS433_AcceptFunnel_TakesAWordAuthoredNoteDeletionsDefinition()
+    {
+        var source = new WmlDocument(
+            Path.Combine("../../../../TestFiles/RP", "RP050-Deleted-Footnote.docx"));
+        Assert.Equal(1, UserNoteCount(source.DocumentByteArray, "footnote"));
+
+        var accepted = RevisionProcessor.AcceptRevisions(source);
+
+        Assert.True(HasNotesPart(accepted.DocumentByteArray, "footnote"),
+            "the notes part itself must survive");
+        Assert.Equal(0, UserNoteCount(accepted.DocumentByteArray, "footnote"));
+
+        // Rejecting the same document restores the baseline: citation back, definition kept.
+        var rejected = RevisionProcessor.RejectRevisions(source);
+        Assert.Equal(1, UserNoteCount(rejected.DocumentByteArray, "footnote"));
     }
 
     /// <summary>

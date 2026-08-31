@@ -1168,9 +1168,12 @@ Word's tracked deletions carry the same fully-marked shape (`RP050-Deleted-Footn
 exactly like this), though Word's own accept leaves a childless `<w:footnote/>` shell where we
 remove the definition — the schema-valid form, and what the session has done since #516. Without
 the accept-side
-prune the two transports disagreed about the same redline: `DocxSession.AcceptAllRevisions`
-removed the note (its resolve paths apply the rule in both directions, because an editor is
+prune the two paths disagreed about a wholly-deleted note: `DocxSession.AcceptAllRevisions`
+removed it (its resolve paths apply the rule unguarded in both directions, because an editor is
 authoring a document) while the stateless path shipped a definition the counterpart had deleted.
+On the counterpart-kept husk shape the two contracts remain deliberately distinct — the stateless
+accept preserves the husk to reproduce the counterpart, the session's editorial rule still strips
+it (DS430 vs DS418).
 
 ### Which mutations record, and which refuse
 

@@ -386,14 +386,37 @@ This means a body that references footnote id `2` ("See Section 1.2…") with an
 
 #### The corner case
 
-Word represents a tracked footnote deletion by marking the citation **and the whole definition**:
-every run in the definition sits inside `w:del`, and the paragraph mark carries `w:pPr/w:rPr/w:del`
-(see `RP050-Deleted-Footnote.docx`). But Word's own *accept* of that deletion does not remove the
-definition element — the Word-produced `RP050-Deleted-Footnote-Accepted.docx` oracle keeps a
-childless `<w:footnote w:id="1"/>` next to the separator notes. `CT_FtnEdn` requires at least one
-block-level child, so the shape Word writes is schema-questionable, invisible in Word (nothing
-references it), and — per the positional-re-association entry above — actively dangerous in
-LibreOffice, where a leftover definition shifts every subsequent reference→definition pairing.
+Word represents a tracked footnote deletion by marking the citation **and the whole definition**.
+Minimal reproducer (the shape `RP050-Deleted-Footnote.docx` carries, trimmed):
+
+```xml
+<!-- word/document.xml: the citation is deleted -->
+<w:del w:author="Eric White"><w:r><w:footnoteReference w:id="1"/></w:r></w:del>
+
+<!-- word/footnotes.xml: every run is deleted AND the paragraph mark is deleted -->
+<w:footnote w:id="1">
+  <w:p>
+    <w:pPr><w:rPr><w:del w:author="Eric White"/></w:rPr></w:pPr>
+    <w:del w:author="Eric White">
+      <w:r><w:footnoteRef/></w:r>
+      <w:r><w:delText>This is a test.</w:delText></w:r>
+    </w:del>
+  </w:p>
+</w:footnote>
+```
+
+Accepting that deletion, per renderer:
+
+| | Accepted `word/footnotes.xml` |
+|---|---|
+| Word (the `RP050-…-Accepted.docx` oracle) | separators + a **childless `<w:footnote w:id="1"/>` shell** |
+| LibreOffice | removes the definition; a leftover shell would shift its positional reference→definition pairing (entry above) |
+| Docxodus (since #631) | separators only — the definition is **removed** |
+| Docxodus (before #631) | separators + the childless shell, matching Word byte-shape but shipping debris |
+
+`CT_FtnEdn` requires at least one block-level child, so the shell Word writes is
+schema-questionable, invisible in Word (nothing references it), and — per the
+positional-re-association entry above — actively dangerous in LibreOffice.
 
 #### What Docxodus does
 
@@ -401,9 +424,10 @@ LibreOffice, where a leftover definition shifts every subsequent reference→def
 (cited before, uncited after) and **blockless** (which can only happen when every block was
 deletion-marked — an unmarked paragraph always survives). That is what `DocxSession`'s resolve
 paths have done since #516, it is the schema-valid form, and it makes `Accept(Compare(l, r)) ≡ r`
-hold for the counterpart's note store. The redline-reversibility sweep (`RRS001`) compares the
-result to Word's oracle semantically, where a childless definition and an absent one are the same
-note store.
+hold for the counterpart's note store. The reversibility sweep (`RRS001`) stays green across the
+divergence — RP050 is pinned `acceptEquivalent: false` there, so the sweep asserts recovery
+through the coarser story-text check rather than modeled-semantic equivalence, and neither a
+childless shell nor its absence contributes story text.
 
 #### Relevant code
 

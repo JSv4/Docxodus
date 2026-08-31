@@ -55,7 +55,12 @@ internal static class NoteReferenceOps
     {
         var footnotes = new HashSet<int>();
         var endnotes = new HashSet<int>();
-        if (main is null) return (footnotes, endnotes);
+
+        // No notes parts means nothing a prune could ever remove, and every caller captures these
+        // ids only to prune against them afterwards — skip the package-wide scans instead of
+        // walking the body and every header/footer twice per resolution on note-free documents.
+        if (main is null || (main.FootnotesPart is null && main.EndnotesPart is null))
+            return (footnotes, endnotes);
         foreach (var part in ReferenceHostParts(main))
         {
             var root = part.GetXDocument().Root;
@@ -108,7 +113,14 @@ internal static class NoteReferenceOps
     }
 
     /// <summary>Whether a note definition has no block-level content left (no <c>w:p</c>,
-    /// <c>w:tbl</c> or <c>w:sdt</c> children).</summary>
+    /// <c>w:tbl</c> or <c>w:sdt</c> children). A direct-children check is sufficient HERE — and
+    /// only here — because this runs after <see cref="RevisionProcessor"/>'s accept, whose
+    /// block-content coalescing pass (<c>AcceptDeletedAndMoveFromParagraphMarksTransform</c>,
+    /// applied to every note via <c>BlockLevelContentContainers</c>) promotes block content out of
+    /// wrappers like <c>mc:AlternateContent</c> to direct children. It is deliberately narrower
+    /// than <c>RevisionProcessor.BlockLevelElements</c> and <c>IsBlockContentElement</c>, which
+    /// classify pre-accept trees that still carry revision wrappers; if the accept pipeline ever
+    /// starts leaving a new wrapper shape inside notes, this predicate must learn it too.</summary>
     private static bool IsBlockless(XElement note) =>
         !note.Elements().Any(e =>
             e.Name == W + "p" || e.Name == W + "tbl" || e.Name == W + "sdt");
