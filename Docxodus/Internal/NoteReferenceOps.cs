@@ -17,10 +17,10 @@ namespace Docxodus.Internal;
 /// Two callers, one rule. <see cref="DocxSession"/> applies it after a structural delete or a
 /// revision resolution (issues #516, #591); <see cref="RevisionProcessor"/> applies it after a
 /// stateless accept/reject, which is the path every non-.NET transport reaches through
-/// <c>DocxDiffOps</c> (issues #614, #631). Every caller captures <see cref="ReferencedNoteIds"/>
-/// before the mutation and prunes after it — via <see cref="PruneOrphanedNotes"/>, except the
-/// stateless accept, whose <see cref="PruneNotesEmptiedByAccept"/> adds a guard the comparison
-/// contract needs.
+/// <c>DocxDiffOps</c> (issues #614, #631, #636). Every caller captures
+/// <see cref="ReferencedNoteIds"/> before the mutation and prunes after it — the session's
+/// editorial resolves via <see cref="PruneOrphanedNotes"/>, both stateless resolutions via
+/// <see cref="PruneNotesEmptiedByResolution"/>, whose guard the comparison contracts need.
 ///
 /// The PART itself always stays. Word never prunes a notes part — the RP050-Deleted-Footnote
 /// oracle keeps its separator-only <c>footnotes.xml</c> after accepting the only note's deletion,
@@ -86,17 +86,20 @@ internal static class NoteReferenceOps
         Prune(main, before, onlyBlockless: false);
 
     /// <summary>
-    /// The accept-side variant of the rule (issue #631): remove a note definition whose last
-    /// citation disappeared between <paramref name="before"/> and now AND which is left without
-    /// block content. Accepting can only strip a note bare when every block was deletion-marked —
-    /// an unmarked paragraph survives its runs — so a bare, newly-uncited definition is the
-    /// redline saying "this whole note is deleted", and accepting must take the definition with
-    /// it or the accepted package ships a note the counterpart deleted. The blockless guard is
-    /// what distinguishes that from a counterpart's own reference-less husk: a definition the
-    /// counterpart kept arrives with its content unmarked, keeps that content through the accept,
-    /// and stays — so <c>Accept(Compare(l, r)) ≡ r</c> holds for both note stores.
+    /// The guarded variant of the rule for the stateless resolutions (issues #631, #636): remove a
+    /// note definition whose last citation disappeared between <paramref name="before"/> and now
+    /// AND which the resolution left without block content. A resolution can only strip a note
+    /// bare when every block was revision-marked in its direction — an unmarked paragraph survives
+    /// its runs — so a bare, newly-uncited definition is the redline saying "this whole note goes
+    /// with its citation": a wholly-deleted note on accept (every block in <c>w:del</c>), a
+    /// wholly-inserted note on reject (every block in <c>w:ins</c>). The blockless guard is what
+    /// distinguishes both from a document's own reference-less husk, which arrives with its
+    /// content unmarked, keeps it through the resolution, and stays — so
+    /// <c>Accept(Compare(l, r)) ≡ r</c> and <c>Reject(Compare(l, r)) ≡ l</c> both hold for the
+    /// note stores. (Redlines whose producer left an inserted definition unmarked — sessions from
+    /// the brief #614-era — reject to an orphaned husk instead; see CHANGELOG.)
     /// </summary>
-    internal static List<(XElement Note, string PartUri)> PruneNotesEmptiedByAccept(
+    internal static List<(XElement Note, string PartUri)> PruneNotesEmptiedByResolution(
         MainDocumentPart? main, (HashSet<int> Footnotes, HashSet<int> Endnotes) before) =>
         Prune(main, before, onlyBlockless: true);
 

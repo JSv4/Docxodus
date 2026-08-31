@@ -49,6 +49,20 @@ All notable changes to this project will be documented in this file.
   candidate that fails carries its error instead of products rather than failing the batch.
 
 ### Fixed
+- **Rejecting a redline no longer eats a baseline-owned note the counterpart merely cited, and a
+  session-recorded note's definition now carries insertion markup (#636).** The stateless reject
+  pruned every definition its resolution orphaned, unconditionally. That was cover for #614's
+  deliberately unmarked definitions — and it made the redline ambiguous: a `w:ins` citation next
+  to an unmarked definition is also what a comparison produces when the counterpart cites a husk
+  the baseline already owned, and rejecting such a redline deleted the content-bearing definition
+  the baseline was entitled to keep (`Reject(Compare(l, r)) ≠ l`, the exact mirror of #631).
+  `InsertFootnote`/`InsertEndnote` under tracked-change recording now mark the definition's
+  content inserted — what Word writes, and what the diff engine's own redline already carried for
+  a wholly-inserted note — and the stateless reject applies the same blockless guard as the
+  accept side: a definition the resolution both orphaned and emptied goes, an unmarked husk
+  stays. One compatibility note: a redline saved from a #614-era session (its definition
+  unmarked) now rejects to an orphaned husk through the stateless path instead of losing the
+  note; re-authoring the redline with the current version restores full reversibility.
 - **Accepting a redline through the stateless path now takes a wholly-deleted note's definition
   with it (#631).** The redline itself distinguishes the two reference-less-husk cases: a note
   definition the counterpart *kept* passes through the comparison unmarked, while one the

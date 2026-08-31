@@ -1435,6 +1435,43 @@ public class DocxSessionRevisionTests
     }
 
     /// <summary>
+    /// The reject-side mirror of DS430 (issue #636). A baseline that owns an uncited,
+    /// content-bearing definition which the counterpart merely CITES: the comparison reconciles
+    /// the two equal definitions, so the redline carries a <c>w:ins</c> citation and an unmarked
+    /// definition. Rejecting reproduces the baseline — the citation goes, the husk stays. Before
+    /// the guard, the stateless reject's unconditional prune ate the content-bearing definition
+    /// the baseline was entitled to keep, so <c>Reject(Compare(l, r)) != l</c>.
+    /// </summary>
+    [Fact]
+    public void DS434_StatelessReject_PreservesABaselinesOwnHuskThatTheCounterpartCites()
+    {
+        var baseline = BuildWithBody(
+            new XElement(W.p, new XElement(W.r, new XElement(W.t, "Sentinel."))));
+        baseline = AddDanglingFootnote(baseline, noteId: 7, text: "Kept as a husk.");
+
+        var counterpart = BuildWithBody(
+            new XElement(W.p,
+                new XElement(W.r,
+                    new XElement(W.t, "Cited here."),
+                    new XElement(W.footnoteReference, new XAttribute(W.id, "7")))),
+            new XElement(W.p, new XElement(W.r, new XElement(W.t, "Sentinel."))));
+        counterpart = AddDanglingFootnote(counterpart, noteId: 7, text: "Kept as a husk.");
+
+        var redline = DocxDiff.Compare(
+            new WmlDocument("baseline.docx", baseline),
+            new WmlDocument("counterpart.docx", counterpart)).DocumentByteArray;
+
+        var rejected = Docxodus.Internal.DocxDiffOps.RejectRevisions(redline);
+
+        Assert.Equal(1, UserNoteCount(baseline, "footnote"));
+        Assert.Equal(1, UserNoteCount(rejected, "footnote"));
+
+        // And accepting still reproduces the counterpart, citation and all.
+        var accepted = Docxodus.Internal.DocxDiffOps.AcceptRevisions(redline);
+        Assert.Equal(1, UserNoteCount(accepted, "footnote"));
+    }
+
+    /// <summary>
     /// The prune asks the whole package who still cites a note, not just the body. A note cited
     /// from the body AND a running header outlives the body citation; a body-only scan would read
     /// "referenced before, unreferenced after" and delete a note the header still points at.

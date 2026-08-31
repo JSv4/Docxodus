@@ -431,7 +431,7 @@ childless shell nor its absence contributes story text.
 
 #### Relevant code
 
-- `Docxodus/Internal/NoteReferenceOps.cs` (`PruneNotesEmptiedByAccept`, the blockless guard)
+- `Docxodus/Internal/NoteReferenceOps.cs` (`PruneNotesEmptiedByResolution`, the blockless guard)
 - `Docxodus/RevisionProcessor.cs` (accept-side capture/prune)
 - `DS430`/`DS432` in `DocxSessionRevisionTests.cs` — the two husk shapes and their opposite fates
 

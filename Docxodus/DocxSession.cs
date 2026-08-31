@@ -9617,13 +9617,15 @@ public sealed partial class DocxSession : IDisposable
             var refRun = BuildNoteReferenceRun(isFootnote, NoteIdPlaceholder);
             UnidHelper.AssignToSelfAndDescendants(refRun);
 
-            // Under recording, the CITATION is the reversible unit and the definition follows it.
-            // Rejecting the w:ins carries the reference away, which leaves the definition
-            // unreferenced, and PruneOrphanedNotes — the single owner of "a note exists iff it is
-            // cited" (#516/#591) — removes it in the same resolve. A second w:ins inside the
-            // definition would be a revision with no independently meaningful resolution: rejecting
-            // it while keeping the citation yields an empty note, and keeping it while rejecting the
-            // citation yields a note that is pruned anyway.
+            // Under recording, the CITATION is the reversible unit and the definition follows it —
+            // and the definition's content is marked inserted too (issue #636, revisiting #614's
+            // unmarked-definition choice). Marking is what Word writes, what the diff engine's own
+            // redline carries for a wholly-inserted note, and what lets the STATELESS reject read
+            // its way to the right answer: rejecting empties the definition, and the guarded
+            // note-lifecycle prune (NoteReferenceOps.PruneNotesEmptiedByResolution) takes a
+            // definition it both orphaned and emptied — without eating a baseline-owned husk whose
+            // citation the redline merely inserted, which is the mirror of the #631 accept bug
+            // that the old unguarded reject prune had.
             InsertInlineAtOffset(element, characterOffset,
                 _trackedChanges == TrackedChangeMode.RenderInline
                     ? CreateRevisionEnvelope(W.ins, _revisionAuthor ?? "docxodus",
@@ -9635,6 +9637,10 @@ public sealed partial class DocxSession : IDisposable
                 .SetAttributeValue(W.id, id.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
             ApplyNoteBodyStyle(paras, isFootnote);
+            if (_trackedChanges == TrackedChangeMode.RenderInline)
+                foreach (var p in paras)
+                    MarkParagraphContentAndMark(p, W.ins,
+                        _revisionAuthor ?? "docxodus", NextTrackedFormatRevisionDate());
             var note = new XElement(noteName,
                 new XAttribute(W.id, id.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                 paras);

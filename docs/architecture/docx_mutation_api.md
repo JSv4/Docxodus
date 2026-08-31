@@ -1146,10 +1146,16 @@ definition follows it**: the body-side reference run is wrapped in `w:ins`, and 
 revision removes the reference, which leaves the definition uncited — at which point the
 note-lifecycle rule deletes it. Accepting unwraps the `w:ins` and both survive.
 
-The definition itself carries no revision markup of its own, deliberately. A second `w:ins`
-inside it would be a revision with no independently meaningful resolution: rejecting it while
-keeping the citation yields an empty note, and keeping it while rejecting the citation yields a
-note that is pruned anyway.
+The definition's content records too (issue #636): every run sits in `w:ins` and the paragraph
+marks are insertion-marked, matching both what Word writes and what the diff engine's redline
+carries for a wholly-inserted note. #614 had deliberately left the definition unmarked ("a
+revision with no independently meaningful resolution"), but that omission made the redline
+ambiguous to a stateless consumer — a `w:ins` citation next to an *unmarked* definition is also
+exactly what a comparison produces when the counterpart merely cites a husk the baseline already
+owned, and the unguarded reject prune that compensated for the missing markup ate that
+baseline-owned husk (`Reject(Compare(l, r)) ≠ l`, the mirror of #631). With the definition
+marked, rejecting empties it and the guarded prune — the same blockless guard the accept side
+uses — takes exactly the notes the redline introduced and nothing else.
 
 `Internal/NoteReferenceOps.cs` is the single owner of that rule — *a note definition exists
 exactly as long as something still cites it* — and it asks the whole package who cites a note,
