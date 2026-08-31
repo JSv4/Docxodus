@@ -96,7 +96,16 @@ internal static class Corpus
             // markup renderer, and NONE of the three products above touches any of them. Two
             // reviewers off the same base is the smallest shape that exercises reviewer ordering and
             // conflict competitor order.
-            RecordConsolidate(digests, name, left, right, alt);
+            RecordConsolidate(digests, name, "consolidate", left, right, alt,
+                new DocxDiffConsolidateSettings());
+
+            // And the N-way rotation (issue #632): the same one-non-default-setting argument as the
+            // fifth pairwise comparison, applied to the composed settings surface — the pairwise
+            // variations wrapped in a consolidate settings object, plus the conflict-resolution
+            // policies that exist only there.
+            var consolidateRotation = SettingsRotation.ForConsolidate(index);
+            RecordConsolidate(digests, name, $"consolidate-rot-{consolidateRotation.Name}",
+                left, right, alt, consolidateRotation.Settings);
 
             var n = Interlocked.Increment(ref done);
             if (n % 50 == 0) Console.WriteLine($"  {n,5}/{files.Count} ...");
@@ -225,47 +234,52 @@ internal static class Corpus
 
     // Every consolidate product, over two reviewers off one base. Reviewer order is significant to
     // conflict reporting, so the digest carries the authors and the per-revision order as emitted.
+    //
+    // This is a structural mirror of Record. It used to record Warnings and OrderVariance as "n/a"
+    // on two premises that were both false by the time they were written down (issue #632): the
+    // consolidate settings type COMPOSES DocxDiffSettings rather than inheriting it, so
+    // settings.Diff carries the compatibility subscription like any other; and since #617 the four
+    // statics each delegate to a single-use DocxDiffConsolidation, whose caller-held form shares
+    // one memoized read/merge across every product in whatever order the caller asks. The first
+    // false premise is what let the #629 gap — three of the four N-way entry points never ran the
+    // pre-flight — hide behind thousands of rows that looked as though the question had been asked
+    // and answered.
     private static void RecordConsolidate(
-        ConcurrentDictionary<string, Observation> sink, string name,
-        WmlDocument baseDoc, WmlDocument reviewerA, WmlDocument reviewerB)
+        ConcurrentDictionary<string, Observation> sink, string name, string mode,
+        WmlDocument baseDoc, WmlDocument reviewerA, WmlDocument reviewerB,
+        DocxDiffConsolidateSettings settings)
     {
         var reviewers = new List<DocxDiffReviewer>
         {
             new() { Author = "Reviewer A", Document = reviewerA },
             new() { Author = "Reviewer B", Document = reviewerB },
         };
-        var settings = new DocxDiffConsolidateSettings();
 
         var products = new (string Key, Func<string> Run)[]
         {
             ("redline", () =>
                 StableRedlineDigest(DocxDiff.Consolidate(baseDoc, reviewers, settings).DocumentByteArray)),
             ("revisions", () =>
-            {
-                var revs = DocxDiff.GetConsolidatedRevisions(baseDoc, reviewers, settings);
-                var sb = new StringBuilder().Append(revs.Count).Append('\n');
-                foreach (var r in revs)
-                    sb.Append(r.Type).Append('|').Append(r.Author).Append('|').Append(r.Text).Append('|')
-                      .Append(r.LeftAnchor).Append('|').Append(r.RightAnchor).Append('|')
-                      .Append(r.ConflictId).Append('\n');
-                return Sha(Encoding.UTF8.GetBytes(sb.ToString()));
-            }),
-            ("conflicts", () =>
-            {
-                var conflicts = DocxDiff.GetConflicts(baseDoc, reviewers, settings);
-                var sb = new StringBuilder().Append(conflicts.Count).Append('\n');
-                foreach (var c in conflicts)
-                    sb.Append(c.Id).Append('|').Append(c.BaseAnchor).Append('|')
-                      .Append(c.TokenStart).Append('-').Append(c.TokenEnd).Append('|')
-                      .Append(string.Join(",", c.Competitors.Select(x => x.Author + "=" + x.ResultText))).Append('\n');
-                return Sha(Encoding.UTF8.GetBytes(sb.ToString()));
-            }),
+                ConsolidatedRevisionsDigest(DocxDiff.GetConsolidatedRevisions(baseDoc, reviewers, settings))),
+            ("conflicts", () => ConflictsDigest(DocxDiff.GetConflicts(baseDoc, reviewers, settings))),
             ("editscript", () =>
                 Sha(Encoding.UTF8.GetBytes(DocxDiff.GetConsolidatedEditScriptJson(baseDoc, reviewers, settings)))),
         };
 
+        var reported = new List<string>();
+        var callerCallback = settings.Diff.OnCompatibilityWarning;
+        settings.Diff.OnCompatibilityWarning = report =>
+        {
+            foreach (var w in report.Warnings.OrderBy(w => w.Feature.Id, StringComparer.Ordinal))
+                reported.Add(w.Feature.Id);
+            callerCallback?.Invoke(report);
+        };
+
+        var observed = new Dictionary<string, (string Result, string Warnings, string Mutation)>(
+            StringComparer.Ordinal);
         foreach (var (key, run) in products)
         {
+            reported.Clear();
             var beforeBase = Sha(baseDoc.DocumentByteArray);
             var beforeA = Sha(reviewerA.DocumentByteArray);
             var beforeB = Sha(reviewerB.DocumentByteArray);
@@ -274,19 +288,54 @@ internal static class Corpus
             if (Sha(baseDoc.DocumentByteArray) != beforeBase) moved.Add("base");
             if (Sha(reviewerA.DocumentByteArray) != beforeA) moved.Add("reviewerA");
             if (Sha(reviewerB.DocumentByteArray) != beforeB) moved.Add("reviewerB");
-
-            sink[$"{name}#consolidate/{key}"] = new Observation
-            {
-                Result = result,
-                // The consolidate settings type carries no compatibility callback, so this channel
-                // is not observable here. Recorded honestly rather than as a misleading "none".
-                Warnings = "n/a",
-                InputMutation = moved.Count == 0 ? "clean" : "MUTATED " + string.Join("+", moved),
-                // GetConflicts / GetConsolidatedRevisions / Consolidate are independent statics with
-                // no shared memoized snapshot between them, so there is no request order to vary.
-                OrderVariance = "n/a",
-            };
+            observed[key] = (result, reported.Count == 0 ? "none" : string.Join(",", reported),
+                moved.Count == 0 ? "clean" : "MUTATED " + string.Join("+", moved));
         }
+
+        // Order independence, N-way: ask a single caller-held consolidation for all four products in
+        // REVERSE order and require each to match what its static produced — which also pins
+        // CreateConsolidation against the statics, a class corpus mode otherwise never reaches.
+        DocxDiffConsolidation? consolidation = null;
+        string? createFailure = null;
+        try { consolidation = DocxDiff.CreateConsolidation(baseDoc, reviewers, settings); }
+        catch (Exception ex) { createFailure = $"FAIL {ex.GetType().Name}: {Truncate(ex.Message)}"; }
+
+        string ViaConsolidation(Func<string> run) => createFailure ?? Try(run);
+        var reorderedScript = ViaConsolidation(() =>
+            Sha(Encoding.UTF8.GetBytes(consolidation!.GetConsolidatedEditScriptJson())));
+        var reorderedConflicts = ViaConsolidation(() => ConflictsDigest(consolidation!.GetConflicts()));
+        var reorderedRevisions = ViaConsolidation(() =>
+            ConsolidatedRevisionsDigest(consolidation!.GetConsolidatedRevisions()));
+        var reorderedRedline = ViaConsolidation(() =>
+            StableRedlineDigest(consolidation!.Consolidate().DocumentByteArray));
+
+        string Variance(string key, string reordered) =>
+            observed[key].Result == reordered ? "stable" : $"reordered {reordered}";
+
+        Store(sink, name, mode, "redline", observed["redline"], Variance("redline", reorderedRedline));
+        Store(sink, name, mode, "revisions", observed["revisions"], Variance("revisions", reorderedRevisions));
+        Store(sink, name, mode, "conflicts", observed["conflicts"], Variance("conflicts", reorderedConflicts));
+        Store(sink, name, mode, "editscript", observed["editscript"], Variance("editscript", reorderedScript));
+    }
+
+    private static string ConsolidatedRevisionsDigest(IReadOnlyList<DocxDiffConsolidatedRevision> revs)
+    {
+        var sb = new StringBuilder().Append(revs.Count).Append('\n');
+        foreach (var r in revs)
+            sb.Append(r.Type).Append('|').Append(r.Author).Append('|').Append(r.Text).Append('|')
+              .Append(r.LeftAnchor).Append('|').Append(r.RightAnchor).Append('|')
+              .Append(r.ConflictId).Append('\n');
+        return Sha(Encoding.UTF8.GetBytes(sb.ToString()));
+    }
+
+    private static string ConflictsDigest(IReadOnlyList<DocxDiffConflict> conflicts)
+    {
+        var sb = new StringBuilder().Append(conflicts.Count).Append('\n');
+        foreach (var c in conflicts)
+            sb.Append(c.Id).Append('|').Append(c.BaseAnchor).Append('|')
+              .Append(c.TokenStart).Append('-').Append(c.TokenEnd).Append('|')
+              .Append(string.Join(",", c.Competitors.Select(x => x.Author + "=" + x.ResultText))).Append('\n');
+        return Sha(Encoding.UTF8.GetBytes(sb.ToString()));
     }
 
     /// <summary><c>clean</c>, or which side's bytes the call moved. <c>IrReader.Read</c> promises

@@ -378,6 +378,77 @@ This means a body that references footnote id `2` ("See Section 1.2…") with an
 - `tools/diffharness/lo/lo_footnote_check.py` — headless-LibreOffice load + footnote-count/text report (the independent validity backstop).
 - `DocxDiffScenarioTests.Scenario_PreservesFootnoteStructure` — the in-process id↔reference↔text round-trip oracle (asserts at the OOXML id level, immune to LibreOffice's positional quirk).
 
+### Word's Accept of a Tracked Note Deletion Leaves a CHILDLESS `<w:footnote/>` Shell
+
+**Status:** Documented behavior; Docxodus deliberately differs (issue #631)
+**Discovered:** 2026-08-31 (while making the stateless accept reproduce the counterpart's note store)
+**Test File:** `TestFiles/RP/RP050-Deleted-Footnote.docx` + its `-Accepted.docx` oracle
+
+#### The corner case
+
+Word represents a tracked footnote deletion by marking the citation **and the whole definition**.
+Minimal reproducer (the shape `RP050-Deleted-Footnote.docx` carries, trimmed):
+
+```xml
+<!-- word/document.xml: the citation is deleted -->
+<w:del w:author="Eric White"><w:r><w:footnoteReference w:id="1"/></w:r></w:del>
+
+<!-- word/footnotes.xml: every run is deleted AND the paragraph mark is deleted -->
+<w:footnote w:id="1">
+  <w:p>
+    <w:pPr><w:rPr><w:del w:author="Eric White"/></w:rPr></w:pPr>
+    <w:del w:author="Eric White">
+      <w:r><w:footnoteRef/></w:r>
+      <w:r><w:delText>This is a test.</w:delText></w:r>
+    </w:del>
+  </w:p>
+</w:footnote>
+```
+
+Accepting that deletion, per renderer:
+
+| | Accepted `word/footnotes.xml` |
+|---|---|
+| Word (the `RP050-…-Accepted.docx` oracle) | separators + a **childless `<w:footnote w:id="1"/>` shell** |
+| LibreOffice | removes the definition; a leftover shell would shift its positional reference→definition pairing (entry above) |
+| Docxodus (since #631) | separators only — the definition is **removed** |
+| Docxodus (before #631) | separators + the childless shell, matching Word byte-shape but shipping debris |
+
+`CT_FtnEdn` requires at least one block-level child, so the shell Word writes is
+schema-questionable, invisible in Word (nothing references it), and — per the
+positional-re-association entry above — actively dangerous in LibreOffice.
+
+#### What Docxodus does
+
+`RevisionProcessor.AcceptRevisions` removes a definition that the accept left both **orphaned**
+(cited before, uncited after) and **blockless** (which can only happen when every block was
+deletion-marked — an unmarked paragraph always survives). That is what `DocxSession`'s resolve
+paths have done since #516, it is the schema-valid form, and it makes `Accept(Compare(l, r)) ≡ r`
+hold for the counterpart's note store. The reversibility sweep (`RRS001`) stays green across the
+divergence — RP050 is pinned `acceptEquivalent: false` there, so the sweep asserts recovery
+through the coarser story-text check rather than modeled-semantic equivalence, and neither a
+childless shell nor its absence contributes story text.
+
+#### The cited-but-stripped shape is preserved, not repaired
+
+A definition can end up bare while its citation survives: hand-built markup (content wholly
+deletion-marked, citation kept), an ordinary partial resolution (record a note, accept only the
+citation's revision, then run the stateless reject over what remains), or simply the input — the
+corpus genuinely contains cited childless notes (`WC064-Footnote` ships one, and
+`WC063-Footnote-Mod`'s note is childless). A cited `<w:footnote/>` with no block child is
+schema-degenerate under `CT_FtnEdn`, but faithful reproduction of exactly that shape is what
+`Accept(Compare(l, r)) ≡ r` means for those fixtures: inserting a "repair" paragraph was tried
+during #636's review round and broke the WC063/WC064 round-trips in both directions. The
+orphan-scoped prune never touches a cited note, so the shape flows through resolution unchanged;
+whether Word repairs it on open is Word's business, and the engine will not manufacture content
+the counterpart does not have.
+
+#### Relevant code
+
+- `Docxodus/Internal/NoteReferenceOps.cs` (`PruneNotesEmptiedByResolution`, the blockless guard)
+- `Docxodus/RevisionProcessor.cs` (accept-side capture/prune)
+- `DS430`/`DS432`/`DS434` in `DocxSessionRevisionTests.cs` — the husk shapes and their fates
+
 ### `OpenXmlValidator` Does NOT Resolve Note-Body (note-in-note) References — a validation blind spot
 
 **Status:** Documented gotcha

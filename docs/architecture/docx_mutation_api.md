@@ -1146,22 +1146,55 @@ definition follows it**: the body-side reference run is wrapped in `w:ins`, and 
 revision removes the reference, which leaves the definition uncited — at which point the
 note-lifecycle rule deletes it. Accepting unwraps the `w:ins` and both survive.
 
-The definition itself carries no revision markup of its own, deliberately. A second `w:ins`
-inside it would be a revision with no independently meaningful resolution: rejecting it while
-keeping the citation yields an empty note, and keeping it while rejecting the citation yields a
-note that is pruned anyway.
+The definition's content records too (issue #636): every run sits in `w:ins` and the paragraph
+marks are insertion-marked — the shape the diff engine's redline carries for a wholly-inserted
+note, and consistent with Word presenting an inserted footnote's text as a revision in the note
+pane (a Word-authored tracked-*insert* fixture is still wanted; `TestFiles` has only the
+delete-side `RP050`). #614 had deliberately left the definition unmarked ("a
+revision with no independently meaningful resolution"), but that omission made the redline
+ambiguous to a stateless consumer — a `w:ins` citation next to an *unmarked* definition is also
+exactly what a comparison produces when the counterpart merely cites a husk the baseline already
+owned, and the unguarded reject prune that compensated for the missing markup ate that
+baseline-owned husk (`Reject(Compare(l, r)) ≠ l`, the mirror of #631). With the definition
+marked, rejecting empties it and the guarded prune — the same blockless guard the accept side
+uses — takes exactly the notes the redline introduced and nothing else.
+
+One granularity consequence, shared with the diff engine's own redlines (which carry the
+identical shape): the definition's insertions are individually resolvable revisions, so a
+reviewer who rejects *only* the definition's content while keeping the citation ends up with an
+empty but still-cited note — the note-lifecycle rule correctly leaves a cited note alone. That is
+the ordinary meaning of partially resolving a compound change, the same state Word can reach, and
+resolve-all in either direction never produces it.
 
 `Internal/NoteReferenceOps.cs` is the single owner of that rule — *a note definition exists
 exactly as long as something still cites it* — and it asks the whole package who cites a note,
 not just the body, so a note cited from a running header as well outlives losing its body
-citation. `DocxSession` applies it after a structural delete or a revision resolution
-(issues #516, #591); `RevisionProcessor` applies it on the stateless **reject** path, which is
-what every non-.NET transport reaches through `DocxDiffOps.RejectRevisions`.
+citation. `DocxSession` applies it unguarded after a structural delete or a revision resolution
+(issues #516, #591); both stateless resolutions — what every non-.NET transport reaches through
+`DocxDiffOps.AcceptRevisions`/`RejectRevisions` — apply it with the emptied guard (issues #631,
+#636): only a definition the resolution also left without real content goes.
 
-The stateless **accept** path deliberately does not apply it. `Accept(Compare(l, r)) ≡ r` is the
-comparison engine's contract, and a counterpart document that carries a reference-less note
-definition is entitled to keep it. `DocxSession`'s own resolve paths apply the rule in both
-directions because an editor is authoring a document rather than inverting a comparison.
+The guard exists because `Accept(Compare(l, r)) ≡ r` and `Reject(Compare(l, r)) ≡ l` are the
+comparison engine's contracts and the redline itself distinguishes the husk shapes — a
+reference-less definition the counterpart *kept* passes through the comparison with its content
+unmarked, survives the resolution intact, and stays, while a definition the redline wholly
+deletes (or introduces) arrives with every block revision-marked, so resolving against it strips
+the definition bare and the prune takes it. The guard is scaffolding-aware, because
+`WmlComparer`'s renderer re-synthesizes an unmarked `w:footnoteRef` marker run into inserted
+definitions; and a still-cited note a resolution strips bare stays bare — a cited childless note
+is a shape the corpus genuinely contains (`WC064-Footnote`), and reproducing it is what the
+round-trip contracts require. Word's tracked deletions carry the same fully-marked shape
+(`RP050-Deleted-Footnote` is authored exactly like this), though Word's own accept leaves a
+childless `<w:footnote/>` shell where we remove the definition — the schema-valid form, and what
+the session has done since #516. Without the accept-side
+prune the two paths disagreed about a wholly-deleted note: `DocxSession.AcceptAllRevisions`
+removed it (its resolve paths apply the rule unguarded in both directions, because an editor is
+authoring a document) while the stateless path shipped a definition the counterpart had deleted.
+On the counterpart-kept husk shape the two contracts remain deliberately distinct in BOTH
+directions — the stateless resolutions preserve the husk to reproduce the comparison input, while
+the session's editorial rule (and everything routed through it: `RejectAllRevisions`,
+per-revision resolves, delivery-bundle revision policies, and the reversibility prover's
+resolution replay) still strips it (DS430/DS434 vs DS418).
 
 ### Which mutations record, and which refuse
 
