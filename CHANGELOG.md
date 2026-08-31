@@ -40,6 +40,21 @@ All notable changes to this project will be documented in this file.
   proof and a latency budget. Demo content only — not shipped in the npm package.
 
 ### Changed
+- **The compatibility normalizer stops full-parsing every part to prove it has nothing to do.**
+  Deciding whether a part needed either of its two repairs meant building the whole `XDocument`,
+  gated on a literal substring test for `AlternateContent` or `pPr` — and every real
+  `word/document.xml` contains `pPr`, so the gate never closed. `PreAccept` runs the normalizer
+  once per side of every comparison, so that was a DOM build plus two descendant sweeps per side,
+  spent almost entirely on documents where neither repair fires (the NVCA model certificate of
+  incorporation has zero paragraphs with two direct `w:pPr`). A streaming `XmlReader` pass now
+  answers the same two questions — any `mc:AlternateContent`, any paragraph with two or more
+  direct `pPr` children — without building a tree, and the archive is opened read-only for it, so
+  a package that needs no repair never pays `ZipArchiveMode.Update`'s entry buffering either. Only
+  a package with a candidate part reaches the rewrite pass, and only its candidate parts are
+  parsed. The gate stays a superset of what the repairs act on: it matches on local names, where
+  the repairs are namespace-exact, so a false positive costs one parse of one part and a false
+  negative — which would be a correctness bug — cannot happen. Measured on the same document:
+  `Normalize` for both sides of a comparison 31.6 → 10.2 ms.
 - **`DocxDiff` no longer reads each document four times per comparison.** On a heavyweight
   legal document (the NVCA model certificate of incorporation: 574 KB of `document.xml`,
   15,360 elements, 97 footnotes) about 72% of a `Compare` was spent inside `IrReader`,
@@ -229,6 +244,32 @@ All notable changes to this project will be documented in this file.
   `action` gets an error that spells out the nested shape.
 
 ### Fixed
+- **Authoring a footnote or endnote while recording tracked changes now produces a redline that
+  can actually be rejected (#614).** `InsertFootnote`/`InsertEndnote` ignored
+  `TrackedChangeMode.RenderInline` entirely: the citation and the note definition were both
+  written as ordinary content, so a reviewer had nothing to accept or reject, and reject-all left
+  the note in the document. The redline looked complete and only failed when somebody actually
+  rejected it — potentially long after the document had left the building. The citation is now
+  wrapped in `w:ins`, and the definition follows it: rejecting removes the reference, which leaves
+  the note uncited, and the note-lifecycle rule deletes it in the same resolve. Accepting keeps
+  both. The definition carries no revision markup of its own on purpose — a `w:ins` inside it
+  would be a revision with no independently meaningful resolution.
+
+  That rule — *a note definition exists exactly as long as something still cites it* — now has one
+  owner, `Internal/NoteReferenceOps.cs`, shared by the session's resolve paths (#516, #591) and by
+  the stateless `RevisionProcessor` **reject** path, which is what every non-.NET transport reaches
+  through `DocxDiffOps.RejectRevisions`; without that the same redline was reversible in-session
+  and not reversible through npm/python/MCP. The stateless **accept** path deliberately does not
+  apply it, because `Accept(Compare(l, r)) ≡ r` is the comparison engine's contract and a
+  counterpart document that carries a reference-less note definition is entitled to keep it.
+  Consolidating the rule also fixed its scope: it asks the whole package who cites a note rather
+  than only the body, so a note cited from a running header as well no longer disappears when its
+  body citation goes away.
+- **`InsertHorizontalRule` records under tracked-change recording too (#614).** Same defect,
+  smaller blast radius: the rule paragraph was written untracked, so rejecting the redline left it
+  behind. It now takes the same paragraph marking `InsertParagraph` applies. `docx_mutation_api.md`
+  gains the full table of which mutations record, which refuse with `TrackedOperationUnsupported`,
+  and which apply untracked by design.
 - **`DocxDiff.Compare` is byte-reproducible again once a redline creates or imports a part
   (#621).** `Deterministic` promises that two comparisons of the same inputs are byte-identical,
   and that only held for text-only documents. Two generators were reseeded on every run: parts
