@@ -235,6 +235,12 @@ test.describe('Arcade on a phone-shaped viewport', () => {
     // The games draw a box-drawing bezel on every row, the raycaster shades its
     // walls with ▒ █ and Doom's framebuffer is a solid field of █ and ▀, so the
     // tilt is not an attract-screen-only property.
+    //
+    // The claim is ONE AUTHORED ROW IS ONE RENDERED LINE, so each cartridge is
+    // measured against the number of rows it actually drew rather than against
+    // a shared constant. Two of them draw 26; Doom draws 37, because it buys
+    // resolution in cells and authors a denser grid at a smaller cell. A
+    // hardcoded 26 here was reading that difference as a fold.
     await emulateAndroidFontCoverage(page);
     await page.goto(`/demo-arcade.html?${OVERRIDE}&boot=tap&intro=0&cart=quest`);
     await page.locator('#boot').click();
@@ -250,8 +256,14 @@ test.describe('Arcade on a phone-shaped viewport', () => {
         (n) => (window as any).__arcade.frames() >= n, from + 20, { timeout: 60000 });
       await page.evaluate(() => (window as any).__arcade.pause());
 
+      // The rows the cartridge authored: one `w:br` between each pair, so the
+      // element carries one <br> per row boundary.
+      const rows = await page.evaluate(() =>
+        ((window as any).__arcade.canvasElement() as HTMLElement)
+          .querySelectorAll('br').length + 1);
+      expect.soft(rows, `${cart} authored rows`).toBeGreaterThan(20);
       expect.soft(await rowWidthSpreadInCells(page), `${cart} row widths`).toBeLessThan(0.1);
-      expect.soft(await canvasLineBoxes(page), `${cart} line boxes`).toBe(26);
+      expect.soft(await canvasLineBoxes(page), `${cart} line boxes`).toBe(rows);
     }
     expect(test.info().errors).toHaveLength(0);
   });
