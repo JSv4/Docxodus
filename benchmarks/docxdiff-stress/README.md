@@ -78,7 +78,11 @@ Against `TestFiles/` each document contributes:
 - **one rotated comparison** — the edited variant again with exactly ONE `DocxDiffSettings`
   property moved off its default, chosen by `document index mod N`. The surface is twenty
   properties and a cross-product of them explodes, so each is exercised on roughly `678/N`
-  documents for one extra comparison per document rather than twenty.
+  documents for one extra comparison per document rather than twenty;
+- **one rotated consolidate** (issue #632) — the same argument applied to the N-way surface:
+  the pairwise variations wrapped in a `DocxDiffConsolidateSettings` (which COMPOSES
+  `DocxDiffSettings`, so every wrapped variation is reachable on this path too), extended with
+  the two conflict-resolution policies that exist only there.
 
 A thrown exception is recorded too, as `FAIL <Type>: <message>`. Malformed and unsupported
 fixtures are expected to throw; a change in **which** exception they throw is still a regression.
@@ -154,6 +158,20 @@ The same applies to the two newer channels, and both were verified the same way:
 inside a product call moves `InputMutation` on 200 of 760 observations, and making one comparison
 product disagree with its static moves `OrderVariance` on 400 of 600. A channel that has never been
 seen to fire is a channel nobody should trust.
+
+The consolidate rows are the cautionary tale (issue #632). They recorded `Warnings` and
+`OrderVariance` as `n/a` on two premises that were both false when written down — the consolidate
+settings type COMPOSES `DocxDiffSettings`, so `settings.Diff` carries the compatibility
+subscription like any other, and since #617 the four statics each delegate to a single-use
+`DocxDiffConsolidation` whose caller-held form shares one memoized read/merge across products.
+That inert channel is what let the #629 gap — three of the four N-way entry points never running
+the pre-flight — hide behind thousands of rows that looked as though the question had been asked
+and answered. Both channels are wired now, and the fire drill was repeated for the N-way half:
+disabling the consolidate pre-flight moves 1,832 of 15,594 observations — every consolidate row
+that records a real warning (916 default-mode + 916 rotated) — where the pre-change harness
+recorded zero. 56 of those also move on the RESULT channel: the rotated `throw-on-compat`
+consolidate stops throwing, so the rotation catches the same defect a second, independent way,
+exactly as it would have caught #629.
 
 The split is not an accident, and it is worth understanding before trusting any column.
 Unids feed block anchors, so corrupting a content signature shows up all over the edit script and

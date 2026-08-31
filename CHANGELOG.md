@@ -82,6 +82,24 @@ All notable changes to this project will be documented in this file.
   All four now run the same gate.
 
 ### Changed
+- **The corpus differential's consolidate rows now observe their calls (#632).** The N-way half of
+  the differential recorded its warnings and order-variance channels as `n/a` on two premises that
+  were both false when they were written down: that the consolidate settings type carries no
+  compatibility callback (it composes `DocxDiffSettings`, so `settings.Diff` carries the
+  subscription like any other), and that the four consolidate statics share no memoized state (since
+  `DocxDiff.CreateConsolidation` they each delegate to a single-use consolidation whose caller-held
+  form shares one read/merge across every product). The first false premise is what let the #629 gap
+  — three of the four N-way entry points never running the compatibility pre-flight — hide behind
+  thousands of rows that looked as though the question had been asked and answered.
+  `RecordConsolidate` is now a structural mirror of the pairwise recorder: warnings captured from
+  the same call that produced each result, and every product re-asked of one caller-held
+  consolidation in reverse order — which also pins `CreateConsolidation` against the statics, a
+  class corpus mode otherwise never reached. The settings rotation extends to the N-way path: each
+  document also consolidates with one non-default setting, the pairwise variations wrapped in a
+  consolidate settings object plus the two conflict-resolution policies that exist only there. The
+  audit the issue asked for found no third silent gap: every in-process entry point taking a
+  `DocxDiffSettings` (directly or composed) runs the pre-flight, and the wire transports uniformly
+  do not expose the gate at all rather than dropping it silently.
 - **The corpus differential observes a product call, not just what it returned.** The #616
   regression — a fast path that skipped the compatibility pre-flight — passed all 8,136 digests
   correctly, because for two byte-identical documents "no revisions" is the right answer before and
