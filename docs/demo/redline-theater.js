@@ -418,11 +418,18 @@ export const SCRIPT = [
         // A footnote is the beat this act wants, and until #625 it was the one
         // beat the demo could not have: `insert_footnote` under `render_inline`
         // wrote a definition into /word/footnotes.xml that reject-all left
-        // behind, so the finale's reversibility proof failed on it (#614). The
-        // citation is now the reversible unit — rejecting removes the reference
-        // run, that leaves the note uncited, and the note-lifecycle rule prunes
-        // the definition in the same resolve. The proof at the end of this run
-        // is what re-checks that on every load.
+        // behind, so the finale's reversibility proof failed on it (#614).
+        //
+        // Both halves of the note record now. The citation is wrapped in w:ins,
+        // and since #638 the definition's own content is insertion-marked too —
+        // rejecting empties it, and a guarded prune takes a definition that the
+        // resolution both orphaned AND emptied. The guard is the point: #625
+        // left the definition unmarked and compensated with an unconditional
+        // prune, which made the redline ambiguous to a stateless consumer,
+        // because a w:ins citation beside an unmarked definition is also what a
+        // comparison emits when the counterpart merely cites a husk the baseline
+        // already owned — and the prune ate that. The proof at the end of this
+        // run re-checks the whole round trip on every load.
         note: 'Footnote the trade that produced this number',
         tool: 'docxodus_create',
         args: {

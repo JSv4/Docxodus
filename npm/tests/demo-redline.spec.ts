@@ -175,30 +175,45 @@ test.describe('REDLINE THEATER', () => {
     await runToFinale(page);
 
     // Guard against the reversibility proof passing vacuously: it would come back
-    // clean if the note were never written at all. So read the citing paragraph's
-    // own XML out of the redline and check the reference run sits INSIDE a w:ins.
-    // That wrapping is the whole of the #625 fix — it is what makes the citation
-    // rejectable, and the note-lifecycle rule prunes the definition behind it.
-    const cited = await page.evaluate(() => {
+    // clean if the note were never written at all. So read the XML out of the
+    // redline and check BOTH halves of the note record, which is what makes the
+    // round trip work — the citation run inside a w:ins (#625), and the
+    // definition's own content insertion-marked (#638). The second half is not
+    // decoration: #625 left the definition unmarked and compensated with an
+    // unconditional prune on reject, which ate baseline-owned note husks. With
+    // both marked, the prune is guarded on the definition being emptied too.
+    const note = await page.evaluate(() => {
       const engine = (window as any).__theaterEngine;
       const shadow = engine.openDocxSession((window as any).__theater.redline());
       try {
         const match = shadow.grep('months preceding the claim')[0];
+        const defs = shadow.findByKind('p', 'fn');
         return {
           anchor: match?.enclosingAnchor?.id ?? null,
-          xml: match ? shadow.raw.getXml(match.enclosingAnchor.id) : '',
+          citingXml: match ? shadow.raw.getXml(match.enclosingAnchor.id) : '',
+          defXml: defs.map((a: { id: string }) => shadow.raw.getXml(a.id)),
         };
       } finally {
         shadow.close();
       }
     });
-    expect(cited.anchor, 'the cap clause is still findable').not.toBeNull();
-    expect(cited.xml).toContain('footnoteReference');
-    const insBlocks = cited.xml.match(/<w:ins\b[\s\S]*?<\/w:ins>/g) ?? [];
+    expect(note.anchor, 'the cap clause is still findable').not.toBeNull();
+    expect(note.citingXml).toContain('footnoteReference');
+    const insBlocks = note.citingXml.match(/<w:ins\b[\s\S]*?<\/w:ins>/g) ?? [];
     expect(
       insBlocks.some((block: string) => block.includes('footnoteReference')),
       'the footnote reference must be wrapped in w:ins, not written as plain content',
     ).toBe(true);
+
+    // The definition Act II authored — identified by its text, since the part also
+    // holds Word's two reserved separator notes, which carry no markup and must not.
+    const authored = note.defXml.filter((xml: string) => xml.includes('side letter of even date'));
+    expect(authored.length, 'the side-letter note definition is in the redline').toBe(1);
+    expect(
+      authored[0],
+      'the definition content must record too, or a stateless reject cannot tell '
+      + 'this note from a baseline-owned husk the counterpart merely cites',
+    ).toContain('<w:ins');
   });
 
   test('accepting the redline lands the negotiated terms', async ({ page }) => {
