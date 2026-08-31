@@ -239,8 +239,8 @@ test.describe('Arcade on a phone-shaped viewport', () => {
     //
     // The claim is ONE AUTHORED ROW IS ONE RENDERED LINE, so each cartridge is
     // measured against the number of rows it actually drew rather than against
-    // a shared constant. Two of them draw 26; Doom draws 53, because it buys
-    // resolution in cells at a smaller cell size. A
+    // a shared constant. Two of them draw 26; Doom draws 32 on its own
+    // full-width framebuffer grid. A
     // hardcoded 26 here was reading that deliberate difference as a fold.
     await emulateAndroidFontCoverage(page);
     await page.goto(`/demo-arcade.html?${OVERRIDE}&boot=tap&intro=0&cart=quest`);

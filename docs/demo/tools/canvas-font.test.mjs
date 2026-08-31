@@ -100,9 +100,9 @@ function drawnCharacters() {
   paintFramebuffer(doomGrid, fb);
   collect(doomGrid, 'cart:doom framebuffer');
 
-  // The ASCII projection draws from a ramp the bitmap painter never touches
-  // (`·` and the shade blocks) plus both half blocks, so it needs its own
-  // pass — the pinned subset has to cover every glyph EITHER can emit.
+  // The playable projection can emit all sixteen quadrant patterns, so it
+  // needs its own pass — the pinned subset has to cover every glyph either
+  // projection can emit.
   const eightBitGrid = doom.render().grid;
   paintFramebuffer8Bit(eightBitGrid, fb);
   collect(eightBitGrid, 'cart:doom 8-bit projection');
@@ -125,6 +125,46 @@ function drawnCharacters() {
 
   return seen;
 }
+
+test('the bitmap run budget preserves near-colour texture through free glyphs', () => {
+  // This is the failure mode from the shipped GIF in executable form. Every
+  // adjacent sample differs by only 30 grey levels: the old 13% pair-snap
+  // tolerance swallowed the entire row into one flat bar. A colour run does
+  // not break on glyphs, so the budgeted painter can keep one ink/bg pair and
+  // alternate solid/empty cells to retain nearly every boundary for free.
+  const fb = new Uint8Array(320 * 200 * 4);
+  for (let y = 0; y < 200; y++) {
+    for (let x = 0; x < 320; x++) {
+      const projectedX = Math.min(93, Math.floor(x * 94 / 320));
+      const grey = projectedX % 2 ? 110 : 80;
+      const i = (y * 320 + x) * 4;
+      fb[i] = grey; fb[i + 1] = grey; fb[i + 2] = grey;
+    }
+  }
+
+  const doom = doomCart({ engineUrl: 'about:blank', wadUrl: 'about:blank' });
+  const grid = doom.render().grid;
+  paintFramebuffer(grid, fb);
+  const row = grid.chars[2].slice(1, -1);
+  const expectedBoundaries = row.length - 1;
+  const glyphTransitions = row.slice(1).reduce(
+    (n, ch, i) => n + Number(ch !== row[i]), 0);
+  assert.ok(glyphTransitions >= expectedBoundaries - 6,
+    `near-colour texture smeared into bands: only ${glyphTransitions}/${expectedBoundaries} glyph boundaries survived`);
+  assert.ok(row.includes(' ') && row.includes('█'),
+    'both bitmap endpoints must be selectable through the free glyph channel');
+
+  let propertyRuns = 0;
+  for (let y = 2; y < grid.chars.length - 1; y++) {
+    let prior = null;
+    for (let x = 1; x < grid.chars[y].length - 1; x++) {
+      const pair = `${grid.colors[y][x]}/${grid.bgs[y][x]}`;
+      if (pair !== prior) { propertyRuns++; prior = pair; }
+    }
+  }
+  assert.ok(propertyRuns <= 900,
+    `bitmap exceeded its 900-run picture budget: ${propertyRuns}`);
+});
 
 test('the pinned canvas font covers every character the demos can draw', () => {
   const drawn = drawnCharacters();

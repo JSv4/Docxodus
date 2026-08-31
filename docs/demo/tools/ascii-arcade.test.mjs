@@ -4,11 +4,26 @@ import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { dungeonCart } from '../ascii-arcade.js';
+import { dungeonCart, rowsFromXml } from '../ascii-arcade.js';
+import { frameXml } from '../ascii-scenes.js';
 
 const DEMO_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
 
 const MAP_TOP = 4;
+
+test('frame XML coalesces matching formatting across line breaks', () => {
+  const grid = {
+    chars: [['A', 'A'], ['B', 'B']],
+    colors: [['FFFFFF', 'FFFFFF'], ['FFFFFF', 'FFFFFF']],
+    bgs: [['000000', '000000'], ['000000', '000000']],
+  };
+  const frame = frameXml('<w:p xmlns:w="urn:test">', grid, '000000');
+  assert.equal(frame.runs, 1, 'matching row properties must cross the break in one run');
+  assert.equal((frame.xml.match(/<w:r>/g) ?? []).length, 1,
+    'line breaks must not create standalone OOXML runs');
+  assert.doesNotMatch(frame.xml, /<w:r><w:br\s*\/><\/w:r>/);
+  assert.deepEqual(rowsFromXml(frame.xml), ['AA', 'BB']);
+});
 
 test('the checked-in Doom GIFs keep their native, tightly framed embed size', () => {
   const readGifSize = (name) => {
@@ -17,12 +32,13 @@ test('the checked-in Doom GIFs keep their native, tightly framed embed size', ()
     return [bytes.readUInt16LE(6), bytes.readUInt16LE(8)];
   };
 
-  assert.deepEqual(readGifSize('arcade-doom.gif'), [656, 699]);
-  assert.deepEqual(readGifSize('arcade-doom-bitmap.gif'), [656, 699]);
+  assert.deepEqual(readGifSize('arcade-doom.gif'), [656, 660]);
+  assert.deepEqual(readGifSize('arcade-doom-bitmap.gif'), [656, 660]);
   const readme = readFileSync(join(DEMO_DIR, 'README.md'), 'utf8');
   assert.match(readme, /arcade-doom\.gif[^>]+width="656"/);
-  assert.match(readme, /arcade-doom-bitmap\.gif[^>]+width="656"/);
-  assert.doesNotMatch(readme, /arcade-doom(?:-bitmap)?\.gif[^>]+width="(?:100%|60%)"/);
+  assert.doesNotMatch(readme, /arcade-doom-bitmap\.gif/,
+    'the slow bitmap inspection mode must not be showcased as playable');
+  assert.doesNotMatch(readme, /arcade-doom\.gif[^>]+width="(?:100%|60%)"/);
 });
 
 function renderedRows(cart) {

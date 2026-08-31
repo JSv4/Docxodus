@@ -327,26 +327,47 @@ export function frameXml(openTag, grid, bg, metrics) {
     `<w:spacing w:before="0" w:after="0" w:line="${lineTwips}" w:lineRule="exact"/>`,
     `<w:shd w:val="clear" w:color="auto" w:fill="${bg}"/>`,
     '</w:pPr>'];
-  let runs = 0;
+  // Treat the paragraph as one property stream, not as N unrelated rows. A
+  // line break is valid content inside a Word run, so when the last segment of
+  // one row and the first segment of the next share formatting they can be the
+  // SAME run with `<w:br/>` between their text nodes. Even when their
+  // formatting differs, the break belongs at the front of the next coloured
+  // run. A standalone `<w:r><w:br/></w:r>` inflated authored-run telemetry
+  // and discarded formatting continuity the converter can preserve.
+  const stream = [];
   for (let y = 0; y < grid.chars.length; y++) {
-    if (y > 0) parts.push('<w:r><w:br/></w:r>');
     const row = grid.bgs
       ? rowRunsShaded(grid.chars[y], grid.colors[y], grid.bgs[y])
       : rowRuns(grid.chars[y], grid.colors[y]);
-    for (const [text, color, cellBg] of row) {
-      runs++;
-      parts.push(
-        `<w:r><w:rPr><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/>` +
-        `<w:color w:val="${color}"/><w:sz w:val="${sz}"/><w:szCs w:val="${sz}"/>` +
-        // w:shd is last in CT_RPr's sequence among the properties we emit, so
-        // appending it here keeps the run properties schema-ordered.
-        (cellBg ? `<w:shd w:val="clear" w:color="auto" w:fill="${cellBg}"/>` : '') +
-        `</w:rPr>` +
-        `<w:t xml:space="preserve">${esc(text)}</w:t></w:r>`);
+    for (let i = 0; i < row.length; i++) {
+      const [text, color, rawBg] = row[i];
+      const cellBg = rawBg ?? null;
+      const br = y > 0 && i === 0;
+      const prior = stream[stream.length - 1];
+      // A line break is content inside the coloured run, not a standalone
+      // empty run. Matching row endpoints can therefore stay in the same run;
+      // the high-contrast Doom projection deliberately uses one stable pair
+      // so all 10,904 free quadrant bits cost one picture run.
+      if (prior && prior.color === color && prior.bg === cellBg) {
+        if (br) prior.body += '<w:br/>';
+        prior.body += `<w:t xml:space="preserve">${esc(text)}</w:t>`;
+      } else {
+        stream.push({ color, bg: cellBg,
+          body: (br ? '<w:br/>' : '') + `<w:t xml:space="preserve">${esc(text)}</w:t>` });
+      }
     }
   }
+  for (const run of stream) {
+    parts.push(
+      `<w:r><w:rPr><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/>` +
+      `<w:color w:val="${run.color}"/><w:sz w:val="${sz}"/><w:szCs w:val="${sz}"/>` +
+      // w:shd is last in CT_RPr's sequence among the properties we emit, so
+      // appending it here keeps the run properties schema-ordered.
+      (run.bg ? `<w:shd w:val="clear" w:color="auto" w:fill="${run.bg}"/>` : '') +
+      `</w:rPr>${run.body}</w:r>`);
+  }
   parts.push('</w:p>');
-  return { xml: parts.join(''), runs };
+  return { xml: parts.join(''), runs: stream.length };
 }
 
 // ─── The canvas grid pin ──────────────────────────────────────────────
@@ -434,11 +455,10 @@ export function createCanvasPin() {
       // the painted box WITHOUT touching line height (CSS 2.1 §10.6.1), so
       // this closes the seam and changes no metric the grid depends on.
       `[data-anchor="${unid}"] span, [data-anchor] ${CANVAS_RUN}` +
-      // The 5pt Doom grid has less leading in absolute pixels than the shared
-      // 8pt grid, but it is also much more sensitive to a one-device-pixel
-      // gap: that becomes a black scan line every six points. Slight overlap
-      // is harmless for unshaded text and closes the shaded line box on both
-      // grids without changing either grid's measured pitch.
+      // Doom's exact 11.45pt line has less leading than the shared 10pt grid
+      // relative to its 8pt text, and is especially sensitive to a one-device-
+      // pixel gap. Slight overlap is harmless for unshaded text and closes the
+      // shaded line box on both grids without changing either measured pitch.
       // Converter-authored spans carry an inline `padding: 0` shorthand, so
       // this pin needs the same `!important` strength as the grid properties
       // above. Without it the rule exists but computes to zero — exactly the
