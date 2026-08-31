@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **The corpus differential observes a product call, not just what it returned.** The #616
+  regression — a fast path that skipped the compatibility pre-flight — passed all 8,136 digests
+  correctly, because for two byte-identical documents "no revisions" is the right answer before and
+  after and the return value never moved. The recorded unit is now an `Observation` with one field
+  per channel (result, compatibility warnings, input mutation, product-order variance), so adding a
+  channel is one field on one type applied to every product and every document rather than a new
+  digest family per mode. Two channels are new: whether a call left its inputs byte-for-byte
+  unchanged, which `IrReader.Read` and `PreAccept` both promise in prose and nothing verified; and
+  whether the memoized `DocxDiffComparison` agrees with the statics when the products are requested
+  in the opposite order, which is a risk `DocxDiff.CreateComparison` created and nothing tested. The
+  pre-flight report is now captured from the same call that produced the result instead of from a
+  second run of every product — cheaper and stricter. Each run prints how many observations record a
+  non-default value per channel, because a channel that never fires is coverage nobody should count.
+  A fifth comparison per document varies exactly one `DocxDiffSettings` property, rotated by document
+  index, so all twenty get exercised across the corpus for one extra comparison rather than a
+  cross-product. And the redline digest's generated-part-name folding is gone: it existed because
+  `Compare` was not byte-reproducible, which #623 fixed, so it was only making the harness less
+  sensitive — confirmed by running the corpus twice on one build and getting all 12,882 observations
+  identical.
 - **The compatibility normalizer stops full-parsing every part to prove it has nothing to do.**
   Deciding whether a part needed either of its two repairs meant building the whole `XDocument`,
   gated on a literal substring test for `AlternateContent` or `pPr` — and every real
