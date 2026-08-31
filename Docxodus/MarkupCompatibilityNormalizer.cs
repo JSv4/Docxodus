@@ -6,6 +6,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Text;
+using System.Xml;
 using System.Xml.Linq;
 
 namespace Docxodus;
@@ -61,6 +62,15 @@ internal static class MarkupCompatibilityNormalizer
 
     internal static WmlDocument Normalize(WmlDocument doc)
     {
+        // Two passes, because almost every document needs no repair at all and the expensive work
+        // is proving that. The first pass streams each part looking for the two shapes the repairs
+        // react to; it builds no DOM and reads the archive read-only, so it never pays for
+        // ZipArchiveMode.Update's entry buffering either. Only a document that has a candidate part
+        // reaches the second pass, and only its candidate parts are parsed and rewritten.
+        var candidates = FindCandidateParts(doc.DocumentByteArray);
+        if (candidates is null)
+            return doc;
+
         using var ms = new MemoryStream();
         ms.Write(doc.DocumentByteArray, 0, doc.DocumentByteArray.Length);
         var anyChanged = false;
@@ -68,18 +78,12 @@ internal static class MarkupCompatibilityNormalizer
         {
             foreach (var entry in zip.Entries.ToList())
             {
-                if (!entry.FullName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
+                if (!candidates.Contains(entry.FullName))
                     continue;
 
                 string text;
                 using (var reader = new StreamReader(entry.Open(), Encoding.UTF8))
                     text = reader.ReadToEnd();
-                // Most parts need no XML parse. A literal pPr check is deliberately broad enough
-                // to cover nonstandard Word prefixes too; a harmless false positive only parses
-                // the part and still returns it unchanged.
-                if (!text.Contains("AlternateContent", StringComparison.Ordinal) &&
-                    !text.Contains("pPr", StringComparison.Ordinal))
-                    continue;
 
                 var rewritten = NormalizePart(text);
                 if (rewritten is null)
@@ -93,6 +97,86 @@ internal static class MarkupCompatibilityNormalizer
         }
         return anyChanged ? new WmlDocument(doc.FileName, ms.ToArray()) : doc;
     }
+
+    /// <summary>The <c>.xml</c> entries that carry a shape one of the repairs reacts to, or
+    /// <c>null</c> when the package carries none.</summary>
+    private static HashSet<string>? FindCandidateParts(byte[] package)
+    {
+        HashSet<string>? candidates = null;
+        using var probe = new MemoryStream(package, writable: false);
+        using var zip = new ZipArchive(probe, ZipArchiveMode.Read);
+        foreach (var entry in zip.Entries)
+        {
+            if (!entry.FullName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
+                continue;
+            using var stream = entry.Open();
+            if (!CarriesRepairableShape(stream))
+                continue;
+            (candidates ??= new HashSet<string>(StringComparer.Ordinal)).Add(entry.FullName);
+        }
+
+        return candidates;
+    }
+
+    /// <summary>
+    /// Stream one part and answer the only two questions the repairs ask: is there an
+    /// <c>mc:AlternateContent</c> anywhere, and is there a paragraph carrying two or more DIRECT
+    /// <c>pPr</c> children. Matching is by local name, which keeps the gate a superset of what the
+    /// repairs actually act on (they are namespace-exact) — a false positive costs one parse of one
+    /// part and still returns it unchanged, whereas a false negative would be a correctness bug.
+    /// Malformed XML answers "no", which is what <see cref="NormalizePart"/> concludes anyway.
+    /// </summary>
+    private static bool CarriesRepairableShape(Stream part)
+    {
+        // Per-depth view of the open element stack: what opened at each depth, and — for a depth
+        // holding a paragraph — how many direct pPr children it has seen so far. Opening a new
+        // element at a depth resets that depth's count, so sibling paragraphs never pool.
+        var nameAtDepth = new List<string>();
+        var pPrAtDepth = new List<int>();
+
+        try
+        {
+            using var reader = XmlReader.Create(part, StreamingProbeSettings);
+            while (reader.Read())
+            {
+                if (reader.NodeType != XmlNodeType.Element)
+                    continue;
+
+                var name = reader.LocalName;
+                if (name == "AlternateContent")
+                    return true;
+
+                var depth = reader.Depth;
+                while (nameAtDepth.Count <= depth)
+                {
+                    nameAtDepth.Add(string.Empty);
+                    pPrAtDepth.Add(0);
+                }
+
+                nameAtDepth[depth] = name;
+                pPrAtDepth[depth] = 0;
+
+                if (name == "pPr" && depth > 0 && nameAtDepth[depth - 1] == "p"
+                    && ++pPrAtDepth[depth - 1] > 1)
+                    return true;
+            }
+        }
+        catch (System.Xml.XmlException)
+        {
+            return false;
+        }
+
+        return false;
+    }
+
+    private static readonly XmlReaderSettings StreamingProbeSettings = new()
+    {
+        DtdProcessing = DtdProcessing.Prohibit,
+        IgnoreComments = true,
+        IgnoreProcessingInstructions = true,
+        IgnoreWhitespace = true,
+        CloseInput = false,
+    };
 
     /// <summary>Returns rewritten part XML, or null when no conservative repair was applicable.</summary>
     private static string? NormalizePart(string xml)

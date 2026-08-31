@@ -137,4 +137,87 @@ public class DocxDiffOpsRoundTripTests
         Assert.Throws<ArgumentException>(() =>
             DocxDiffOps.CompareProductsJson(left, right, null, "{\"redline\":true}"));
     }
+
+    // ─── One baseline, many candidates (issue #617) ──────────────────────
+
+    [Fact]
+    public void CompareBatch_EachResultMatchesTheSinglePairEnvelope()
+    {
+        var baseline = Wc("WC001-Digits.docx");
+        var candidates = new[] { Wc("WC001-Digits-Mod.docx"), Wc("WC002-DeleteAtEnd.docx") };
+        var candidatesJson = System.Text.Json.JsonSerializer.Serialize(
+            candidates.Select((bytes, i) => new { name = $"c{i}", docB64 = Convert.ToBase64String(bytes) }));
+
+        var batch = System.Text.Json.JsonDocument.Parse(
+            DocxDiffOps.CompareBatchJson(baseline, candidatesJson, null, null));
+        var results = batch.RootElement.GetProperty("results").EnumerateArray().ToList();
+
+        Assert.Equal(candidates.Length, results.Count);
+        for (var i = 0; i < candidates.Length; i++)
+        {
+            Assert.Equal($"c{i}", results[i].GetProperty("name").GetString());
+            // Every product byte-for-byte what the single-pair envelope carries, name aside.
+            var single = System.Text.Json.JsonDocument.Parse(
+                DocxDiffOps.CompareProductsJson(baseline, candidates[i], null, null));
+            foreach (var key in new[] { "redlineB64", "revisions", "editScript", "semanticChanges" })
+                Assert.Equal(
+                    single.RootElement.GetProperty(key).GetRawText(),
+                    results[i].GetProperty(key).GetRawText());
+        }
+    }
+
+    /// <summary>One malformed candidate must not cost the caller the rest of the batch.</summary>
+    [Fact]
+    public void CompareBatch_AFailingCandidateCarriesItsErrorAndTheRestStillCompare()
+    {
+        var baseline = Wc("WC001-Digits.docx");
+        var candidatesJson = System.Text.Json.JsonSerializer.Serialize(new[]
+        {
+            new { name = "good", docB64 = Convert.ToBase64String(Wc("WC001-Digits-Mod.docx")) },
+            new { name = "junk", docB64 = Convert.ToBase64String(new byte[] { 1, 2, 3, 4 }) },
+            new { name = "also-good", docB64 = Convert.ToBase64String(Wc("WC002-DeleteAtEnd.docx")) },
+        });
+
+        var results = System.Text.Json.JsonDocument
+            .Parse(DocxDiffOps.CompareBatchJson(baseline, candidatesJson, null, "[\"revisions\"]"))
+            .RootElement.GetProperty("results").EnumerateArray().ToList();
+
+        Assert.Equal(3, results.Count);
+        Assert.True(results[0].TryGetProperty("revisions", out _));
+        Assert.True(results[1].TryGetProperty("error", out _));
+        Assert.False(results[1].TryGetProperty("revisions", out _));
+        Assert.True(results[2].TryGetProperty("revisions", out _));
+    }
+
+    [Fact]
+    public void CompareBatch_RejectsACandidateWithoutBytesRatherThanSkippingIt()
+    {
+        var baseline = Wc("WC001-Digits.docx");
+        Assert.Throws<ArgumentException>(() =>
+            DocxDiffOps.CompareBatchJson(baseline, "[{\"name\":\"nameless\"}]", null, null));
+    }
+
+    [Fact]
+    public void ConsolidateProducts_EachProductMatchesItsStandaloneOp()
+    {
+        var baseDoc = Wc("WC001-Digits.docx");
+        var reviewersJson = System.Text.Json.JsonSerializer.Serialize(new[]
+        {
+            new { author = "A", docB64 = Convert.ToBase64String(Wc("WC001-Digits-Mod.docx")) },
+            new { author = "B", docB64 = Convert.ToBase64String(Wc("WC002-DeleteAtEnd.docx")) },
+        });
+
+        var products = DocxDiffOps.ConsolidateProducts(
+            baseDoc, reviewersJson, null,
+            redline: true, revisions: true, editScript: true, conflicts: true);
+
+        Assert.Equal(DocxDiffOps.Consolidate(baseDoc, reviewersJson, null), products.RedlineBytes);
+        Assert.Equal(
+            DocxDiffOps.GetConsolidatedRevisionsJson(baseDoc, reviewersJson, null),
+            products.RevisionsJson);
+        Assert.Equal(
+            DocxDiffOps.GetConsolidatedEditScriptJson(baseDoc, reviewersJson, null),
+            products.EditScriptJson);
+        Assert.Equal(DocxDiffOps.GetConflictsJson(baseDoc, reviewersJson, null), products.ConflictsJson);
+    }
 }

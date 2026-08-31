@@ -49,6 +49,8 @@ namespace Docxodus;
 /// </remarks>
 public sealed class DocxDiffComparison
 {
+    private readonly DocxDiffSnapshot _left;
+    private readonly DocxDiffSnapshot _right;
     private readonly WmlDocument _originalLeft;
     private readonly WmlDocument _originalRight;
     private readonly DocxDiffSettings _settings;
@@ -63,9 +65,19 @@ public sealed class DocxDiffComparison
     private readonly Lazy<string> _semanticChangesJson;
 
     internal DocxDiffComparison(WmlDocument left, WmlDocument right, DocxDiffSettings? settings)
+        : this(
+            new DocxDiffSnapshot(left, DocxDiffSnapshot.AcceptsInputRevisions(settings ?? new DocxDiffSettings())),
+            new DocxDiffSnapshot(right, DocxDiffSnapshot.AcceptsInputRevisions(settings ?? new DocxDiffSettings())),
+            settings)
     {
-        _originalLeft = left;
-        _originalRight = right;
+    }
+
+    internal DocxDiffComparison(DocxDiffSnapshot left, DocxDiffSnapshot right, DocxDiffSettings? settings)
+    {
+        _left = left;
+        _right = right;
+        _originalLeft = left.Document;
+        _originalRight = right.Document;
         _settings = settings ?? new DocxDiffSettings();
 
         // PreAccept re-reads and can rewrite the whole package (strict-namespace normalization,
@@ -75,8 +87,8 @@ public sealed class DocxDiffComparison
         _preflighted = new(() =>
         {
             var (preLeft, preRight) = ParallelWork.Pair(
-                () => DocxDiff.PreAccept(_settings, _originalLeft),
-                () => DocxDiff.PreAccept(_settings, _originalRight));
+                () => _left.PreAccepted,
+                () => _right.PreAccepted);
             DocxDiff.PreflightCompatibility(_settings, preLeft, preRight);
             return (preLeft, preRight);
         }, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -87,12 +99,13 @@ public sealed class DocxDiffComparison
         // retention-off one and the edit script built over it is unchanged; what it buys is the renderer's
         // two full re-reads of these same documents, which on a heavyweight document dominate the compare.
         // The two sides are independent pure reads, so they run concurrently.
+        // The joint preflight is forced first so it still fires on the first product call even when
+        // both sides arrive already read: a reused snapshot must not turn a caller's
+        // OnCompatibilityWarning subscription into silence.
         _ir = new(() =>
         {
-            var (preLeft, preRight) = _preflighted.Value;
-            return ParallelWork.Pair(
-                () => IrReader.Read(preLeft, DocxDiff.RenderReadOpts),
-                () => IrReader.Read(preRight, DocxDiff.RenderReadOpts));
+            _ = _preflighted.Value;
+            return ParallelWork.Pair(() => _left.Ir, () => _right.Ir);
         }, LazyThreadSafetyMode.ExecutionAndPublication);
 
         // The DATA script: CrossParagraphTokenDiff forced off, exactly as GetRevisions and

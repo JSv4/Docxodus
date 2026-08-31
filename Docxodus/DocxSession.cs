@@ -314,6 +314,87 @@ public sealed record TableInsertOptions
     public IReadOnlyList<int>? ColumnWidths { get; init; }
 }
 
+/// <summary>
+/// Options for <see cref="DocxSession.InsertTableOfContents"/>. Every field is a typed switch on
+/// the underlying <c>TOC</c> field, so a caller never writes <c>\o "1-3"</c> by hand — a malformed
+/// switch string renders as nothing in Word, silently, which is the failure this exists to prevent.
+/// </summary>
+public sealed record TableOfContentsOptions
+{
+    /// <summary>Heading levels to list (<c>\o</c>): a level or a range within 1-9, e.g. <c>"1-3"</c>
+    /// for a three-level contract table of contents. A single level such as <c>"2"</c> is accepted
+    /// and normalized to <c>"2-2"</c>.</summary>
+    public string Levels { get; init; } = "1-3";
+
+    /// <summary>Make each entry a hyperlink to its heading (<c>\h</c>). On by default: a table of
+    /// contents nobody can click is a table of contents nobody uses.</summary>
+    public bool Hyperlinks { get; init; } = true;
+
+    /// <summary>Hide the leader tab and page numbers in Word's web view (<c>\z</c>), where page
+    /// numbers are meaningless. On by default, matching what Word's own Insert &gt; Table of
+    /// Contents writes.</summary>
+    public bool HideTabAndPageNumbersInWeb { get; init; } = true;
+
+    /// <summary>Include paragraphs carrying an outline level but no heading style (<c>\u</c>).
+    /// On by default.</summary>
+    public bool UseOutlineLevels { get; init; } = true;
+
+    /// <summary>The heading above the table, in Word's <c>TOCHeading</c> style. <c>null</c> or empty
+    /// inserts the table with no heading.</summary>
+    public string? Title { get; init; } = "Contents";
+
+    /// <summary>Position of the right-aligned, dot-leadered page-number tab stop, in twips.
+    /// 9350 is Word's default for a US-Letter page with one-inch margins.</summary>
+    public int RightTabPos { get; init; } = 9350;
+}
+
+/// <summary>Options for <see cref="DocxSession.InsertTableOfFigures"/>.</summary>
+/// <remarks>A table of figures is a <c>TOC</c> field selecting by caption label rather than by
+/// outline level — Word's own encoding, not a separate field type.</remarks>
+public sealed record TableOfFiguresOptions
+{
+    /// <summary>The caption label whose captions the table lists (<c>\c</c>) — <c>"Figure"</c>,
+    /// <c>"Table"</c>, <c>"Exhibit"</c>, or whatever the document's <c>SEQ</c> captions use.</summary>
+    public string CaptionLabel { get; init; } = "Figure";
+
+    /// <summary>Make each entry a hyperlink to its caption (<c>\h</c>).</summary>
+    public bool Hyperlinks { get; init; } = true;
+
+    /// <inheritdoc cref="TableOfContentsOptions.RightTabPos"/>
+    public int RightTabPos { get; init; } = 9350;
+}
+
+/// <summary>Word's fixed table-of-authorities categories. The numbers are Word's, not ours: a TOA
+/// field's <c>\c</c> switch selects one by its position.</summary>
+public enum AuthorityCategory
+{
+    /// <summary>Cases — the default, and the one a brief's table of authorities usually leads with.</summary>
+    Cases = 1,
+    Statutes = 2,
+    OtherAuthorities = 3,
+    Rules = 4,
+    Treatises = 5,
+    Regulations = 6,
+    ConstitutionalProvisions = 7,
+}
+
+/// <summary>Options for <see cref="DocxSession.InsertTableOfAuthorities"/>.</summary>
+public sealed record TableOfAuthoritiesOptions
+{
+    /// <summary>Which category of authority the table lists (<c>\c</c>).</summary>
+    public AuthorityCategory Category { get; init; } = AuthorityCategory.Cases;
+
+    /// <summary>Make each entry a hyperlink to its citation (<c>\h</c>).</summary>
+    public bool Hyperlinks { get; init; } = true;
+
+    /// <summary>The separator between an entry and its page numbers (<c>\e</c>), e.g. <c>"\t"</c>
+    /// for a tab. <c>null</c> leaves Word's default.</summary>
+    public string? EntryPageSeparator { get; init; }
+
+    /// <inheritdoc cref="TableOfContentsOptions.RightTabPos"/>
+    public int RightTabPos { get; init; } = 9350;
+}
+
 /// <summary>Which table edges a <see cref="DocxSession.SetTableBorders"/> call targets:
 /// <see cref="Outside"/> = top/left/bottom/right, <see cref="Inside"/> = the inner grid lines
 /// (<c>w:insideH</c>/<c>w:insideV</c>), <see cref="All"/> = both.</summary>
@@ -1632,6 +1713,9 @@ public enum EditErrorCode
     /// <see cref="NumberFormat.Bullet"/> as a page-number format (neither <c>w:pgNumType/@w:fmt</c>
     /// nor the field <c>\*</c> switch has a bullet notion).</summary>
     InvalidPageNumbering,
+
+    /// <summary>A reference-field option is out of range or malformed (issue #607).</summary>
+    InvalidReferenceField,
 
     /// <summary>A <see cref="ParagraphFormatOp"/> that OOXML cannot express: both
     /// <c>FirstLineIndent</c> and <c>HangingIndent</c> in one op (<c>w:ind</c> holds one or the
@@ -3010,75 +3094,24 @@ public sealed partial class DocxSession : IDisposable
         else part.PutXDocument();
     }
 
-    /// <summary>Footnote/endnote ids currently referenced from the main document story —
-    /// the only story OOXML lets a note reference live in.</summary>
-    private (HashSet<int> Footnotes, HashSet<int> Endnotes) ReferencedNoteIds()
-    {
-        var footnotes = new HashSet<int>();
-        var endnotes = new HashSet<int>();
-        var root = _doc?.MainDocumentPart?.GetXDocument().Root;
-        if (root is null) return (footnotes, endnotes);
-        foreach (var reference in root.Descendants(W.footnoteReference))
-            if (int.TryParse((string?)reference.Attribute(W.id), out var id)) footnotes.Add(id);
-        foreach (var reference in root.Descendants(W.endnoteReference))
-            if (int.TryParse((string?)reference.Attribute(W.id), out var id)) endnotes.Add(id);
-        return (footnotes, endnotes);
-    }
+    /// <summary>Footnote/endnote ids cited anywhere in the package, captured before an op that
+    /// can carry a citation away. See <see cref="Internal.NoteReferenceOps"/> for the rule.</summary>
+    private (HashSet<int> Footnotes, HashSet<int> Endnotes) ReferencedNoteIds() =>
+        Internal.NoteReferenceOps.ReferencedNoteIds(_doc?.MainDocumentPart);
 
     /// <summary>
-    /// Word-faithful note cleanup after an op that removes body content (issues #516, #591).
-    /// A note whose LAST reference was removed — by revision resolution carrying the reference
-    /// away, or by a structural delete removing the block that held it — is deleted from its
-    /// part; without this the note survived as a reference-less husk still shipping its full
-    /// text inside the package. The PART itself always stays: Word never prunes a notes part
-    /// (the RP050-Deleted-Footnote oracle keeps its separator-only footnotes.xml after
-    /// accepting the only note's deletion), and a separator-only part is exactly what Word
-    /// ships in every fresh document. Scoped strictly to ids referenced before and
-    /// unreferenced after THIS op: a note that was already dangling is pre-existing
-    /// document state and stays untouched.
+    /// Word-faithful note cleanup after an op that removes body content (issues #516, #591): a note
+    /// whose LAST citation this op carried away is deleted from its part. The rule and the reasons
+    /// live in <see cref="Internal.NoteReferenceOps"/>, which the stateless
+    /// <see cref="RevisionProcessor"/> path shares so a redline is reversible on every transport.
     /// </summary>
     /// <returns>The removed note elements with their part uri, for removed-anchor reporting.</returns>
     private List<(XElement Note, string PartUri)> PruneOrphanedNotes(
-        (HashSet<int> Footnotes, HashSet<int> Endnotes) before)
-    {
-        var removed = new List<(XElement, string)>();
-        var main = _doc?.MainDocumentPart;
-        if (main is null) return removed;
-        var after = ReferencedNoteIds();
-        PruneNoteStory(main.FootnotesPart, W.footnote, before.Footnotes, after.Footnotes, removed);
-        PruneNoteStory(main.EndnotesPart, W.endnote, before.Endnotes, after.Endnotes, removed);
-        return removed;
-    }
-
-    private static void PruneNoteStory(
-        OpenXmlPart? part,
-        XName noteName,
-        HashSet<int> referencedBefore,
-        HashSet<int> referencedAfter,
-        List<(XElement, string)> removed)
-    {
-        var root = part?.GetXDocument().Root;
-        if (part is null || root is null) return;
-        var orphaned = referencedBefore.Except(referencedAfter).ToHashSet();
-        if (orphaned.Count == 0) return;
-
-        var partUri = part.Uri.ToString();
-        bool changed = false;
-        foreach (var note in root.Elements(noteName).ToList())
-        {
-            if (!int.TryParse((string?)note.Attribute(W.id), out var id)
-                || !orphaned.Contains(id) || IsSeparatorNote(note))
-                continue;
-            note.Remove();
-            removed.Add((note, partUri));
-            changed = true;
-        }
-
-        if (changed) part.PutXDocument();
-    }
+        (HashSet<int> Footnotes, HashSet<int> Endnotes) before) =>
+        Internal.NoteReferenceOps.PruneOrphanedNotes(_doc?.MainDocumentPart, before);
 
     private static bool IsSeparatorNote(XElement note) =>
-        (string?)note.Attribute(W.type) is "separator" or "continuationSeparator";
+        Internal.NoteReferenceOps.IsSeparatorNote(note);
 
     /// <summary>Appends the anchors of pruned note definitions (with their descendants) to
     /// <paramref name="removed"/>, deduplicated through <paramref name="seenRemoved"/> — the
@@ -8770,6 +8803,12 @@ public sealed partial class DocxSession : IDisposable
             if (pos == Position.Before) element.AddBeforeSelf(p);
             else element.AddAfterSelf(p);
 
+            // A rule is a paragraph, so it records as one — same marking InsertParagraph applies,
+            // so rejecting the revision takes the rule back out instead of leaving it behind.
+            if (_trackedChanges == TrackedChangeMode.RenderInline)
+                MarkParagraphContentAndMark(p, W.ins, _revisionAuthor ?? "docxodus",
+                    NextTrackedFormatRevisionDate());
+
             var unid = (string)p.Attribute(PtOpenXml.Unid)!;
             InvalidateProjectionCache();
             var created = AnchorForUnid(unid, target.PartUri)
@@ -9281,6 +9320,195 @@ public sealed partial class DocxSession : IDisposable
     private static void InsertSectPrTitlePg(XElement sectPr) =>
         WordprocessingMLUtil.InsertSectPrChildInOrder(sectPr, new XElement(W.titlePg));
 
+    // ─── Reference fields: TOC / TOF / TOA (issue #607) ───────────────────────
+    //
+    // Narrowing the library to the DOCX toolchain removed ReferenceAdder, and with it the only way
+    // Docxodus could CREATE a reference field. The CHANGELOG's workaround — hand-build the three
+    // fldChars and the switch string through Raw.InsertXml — is a genuine regression in the level of
+    // abstraction: the caller has to get w:instrText syntax right, nothing validates the result, and
+    // a malformed field renders as NOTHING in Word. Silently.
+    //
+    // These are session ops rather than a resurrected static: anchor-addressed, undoable, and
+    // consistent with the rest of the mutation API. The switches are modelled as typed options
+    // rather than taken verbatim, which is the whole point — the old API's switch string pushed the
+    // same OOXML knowledge back onto the caller.
+    //
+    // Marking ENTRIES (TC / TA fields) is deliberately not here; it is a larger job and a separate
+    // issue. What these produce is the table, which is what a document is missing when it has none.
+
+    /// <summary>
+    /// Insert a <b>table of contents</b> before or after the block named by <paramref name="anchorId"/>.
+    /// The field is written dirty and the document asks for a field update on open, so Word
+    /// paginates and fills the table itself — the library never ships a cached result that is stale
+    /// the moment anything above it moves.
+    /// </summary>
+    /// <remarks>
+    /// <para>The table is wrapped in the <c>w:sdt</c> content control Word puts around one (gallery
+    /// "Table of Contents"), which is what gives it the "Update Table" control in Word's UI. Word's
+    /// <c>TOCHeading</c> and <c>TOC1</c> styles are find-or-created; a document that already defines
+    /// them keeps its own.</para>
+    /// <para>Body blocks only. A reference field in a header/footer or note story is not a shape
+    /// Word produces, so a non-body anchor is rejected rather than silently written.</para>
+    /// </remarks>
+    /// <returns>The created block anchors — the content control and its paragraphs — in
+    /// <see cref="EditResult.Created"/>.</returns>
+    public EditResult InsertTableOfContents(
+        string anchorId, Position pos, TableOfContentsOptions? options = null)
+    {
+        var o = options ?? new TableOfContentsOptions();
+        var levels = Internal.ReferenceFieldOps.NormalizeLevels(o.Levels, out var levelError);
+        if (levels is null)
+            return EditResult.Fail(EditErrorCode.InvalidReferenceField, levelError!, anchorId);
+        if (o.RightTabPos <= 0)
+            return EditResult.Fail(EditErrorCode.InvalidReferenceField,
+                $"RightTabPos must be positive twips; got {o.RightTabPos}", anchorId);
+
+        return InsertReferenceField(anchorId, pos, "InsertTableOfContents",
+            entryStyleId: Internal.ReferenceFieldOps.TocEntryStyleId,
+            entryStyleName: "toc 1",
+            withHeadingStyle: true,
+            instruction: Internal.ReferenceFieldOps.TocInstruction(
+                levels, o.Hyperlinks, o.HideTabAndPageNumbersInWeb, o.UseOutlineLevels),
+            rightTabPos: o.RightTabPos,
+            title: string.IsNullOrEmpty(o.Title) ? null : o.Title,
+            wrapInContentControl: true);
+    }
+
+    /// <summary>
+    /// Insert a <b>table of figures</b> — the captions carrying <see cref="TableOfFiguresOptions.CaptionLabel"/>
+    /// and their page numbers. Behaves exactly like <see cref="InsertTableOfContents"/> otherwise,
+    /// except that Word writes a table of figures as a bare paragraph rather than inside a content
+    /// control, so this does too.
+    /// </summary>
+    public EditResult InsertTableOfFigures(
+        string anchorId, Position pos, TableOfFiguresOptions? options = null)
+    {
+        var o = options ?? new TableOfFiguresOptions();
+        if (string.IsNullOrWhiteSpace(o.CaptionLabel))
+            return EditResult.Fail(EditErrorCode.InvalidReferenceField,
+                "CaptionLabel must name the caption label to list (e.g. \"Figure\")", anchorId);
+        if (o.RightTabPos <= 0)
+            return EditResult.Fail(EditErrorCode.InvalidReferenceField,
+                $"RightTabPos must be positive twips; got {o.RightTabPos}", anchorId);
+
+        return InsertReferenceField(anchorId, pos, "InsertTableOfFigures",
+            entryStyleId: Internal.ReferenceFieldOps.TofEntryStyleId,
+            entryStyleName: "table of figures",
+            withHeadingStyle: false,
+            instruction: Internal.ReferenceFieldOps.TofInstruction(o.CaptionLabel.Trim(), o.Hyperlinks),
+            rightTabPos: o.RightTabPos,
+            title: null,
+            wrapInContentControl: false);
+    }
+
+    /// <summary>
+    /// Insert a <b>table of authorities</b> — the cases, statutes or other authorities marked in the
+    /// document, grouped by <see cref="TableOfAuthoritiesOptions.Category"/>. Table stakes for the
+    /// legal documents this library targets.
+    /// </summary>
+    /// <remarks>The table lists entries the document has MARKED with <c>TA</c> fields. A document
+    /// with no marked citations produces a table that is correct and empty; marking entries is a
+    /// separate capability.</remarks>
+    public EditResult InsertTableOfAuthorities(
+        string anchorId, Position pos, TableOfAuthoritiesOptions? options = null)
+    {
+        var o = options ?? new TableOfAuthoritiesOptions();
+        if (!Enum.IsDefined(typeof(AuthorityCategory), o.Category))
+            return EditResult.Fail(EditErrorCode.InvalidReferenceField,
+                $"unknown authority category {(int)o.Category}", anchorId);
+        if (o.RightTabPos <= 0)
+            return EditResult.Fail(EditErrorCode.InvalidReferenceField,
+                $"RightTabPos must be positive twips; got {o.RightTabPos}", anchorId);
+
+        return InsertReferenceField(anchorId, pos, "InsertTableOfAuthorities",
+            entryStyleId: Internal.ReferenceFieldOps.ToaEntryStyleId,
+            entryStyleName: "table of authorities",
+            withHeadingStyle: false,
+            instruction: Internal.ReferenceFieldOps.ToaInstruction(
+                (int)o.Category, o.Hyperlinks, o.EntryPageSeparator),
+            rightTabPos: o.RightTabPos,
+            title: null,
+            wrapInContentControl: false);
+    }
+
+    /// <summary>The one insertion path all three reference-field ops take.</summary>
+    private EditResult InsertReferenceField(
+        string anchorId, Position pos, string opName,
+        string entryStyleId, string entryStyleName, bool withHeadingStyle,
+        string instruction, int rightTabPos, string? title, bool wrapInContentControl)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+
+        var target = FindAnchor(anchorId);
+        if (target is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
+        if (target.Anchor.Scope != "body")
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                $"{opName} requires a body anchor; Word does not generate a reference table in the "
+                + $"'{target.Anchor.Scope}' story", anchorId);
+        var element = target.Resolve(_doc!);
+        if (element is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId);
+        var main = _doc!.MainDocumentPart;
+        if (main is null)
+            return EditResult.Fail(EditErrorCode.InternalError, "no main document part", anchorId);
+
+        // A generated table is regenerated wholesale by Word on every field update, so there is no
+        // reversible way to redline it: refuse under recording rather than write a mark that
+        // rejecting cannot take back (the shape #614 established).
+        if (_trackedChanges == TrackedChangeMode.RenderInline)
+            return TrackedStructureUnsupported(opName, anchorId);
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            Internal.StyleFactory.EnsureReferenceFieldStyles(
+                _doc!, entryStyleId, entryStyleName, withHeadingStyle);
+
+            var blocks = new List<XElement>();
+            if (title is not null) blocks.Add(Internal.ReferenceFieldOps.TitleParagraph(title));
+            blocks.Add(Internal.ReferenceFieldOps.FieldParagraph(entryStyleId, instruction, rightTabPos));
+
+            var inserted = wrapInContentControl
+                ? new[] { Internal.ReferenceFieldOps.TableOfContentsControl(blocks) }
+                : blocks.ToArray();
+            foreach (var block in inserted) UnidHelper.AssignToSelfAndDescendants(block);
+
+            if (pos == Position.Before)
+            {
+                foreach (var block in inserted) element.AddBeforeSelf(block);
+            }
+            else
+            {
+                XElement after = element;
+                foreach (var block in inserted) { after.AddAfterSelf(block); after = block; }
+            }
+
+            Internal.ReferenceFieldOps.RequestFieldUpdateOnOpen(main);
+            InvalidateProjectionCache();
+
+            var created = new List<Anchor>();
+            foreach (var block in inserted)
+                foreach (var node in block.DescendantsAndSelf())
+                    if ((string?)node.Attribute(PtOpenXml.Unid) is { } unid
+                        && AnchorForUnid(unid, target.PartUri) is { } anchor)
+                        created.Add(anchor);
+
+            return new EditResult
+            {
+                Success = true,
+                Created = created,
+                Patch = PatchFor(target),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            RollbackFailedOp();
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+        }
+    }
+
     // ─── Footnotes / endnotes ─────────────────────────────────────────────────
     //
     // Author a note: write the definition into the FootnotesPart/EndnotesPart (creating the part
@@ -9388,7 +9616,19 @@ public sealed partial class DocxSession : IDisposable
             SplitInlineContainersAtOffset(element, characterOffset);
             var refRun = BuildNoteReferenceRun(isFootnote, NoteIdPlaceholder);
             UnidHelper.AssignToSelfAndDescendants(refRun);
-            InsertInlineAtOffset(element, characterOffset, refRun);
+
+            // Under recording, the CITATION is the reversible unit and the definition follows it.
+            // Rejecting the w:ins carries the reference away, which leaves the definition
+            // unreferenced, and PruneOrphanedNotes — the single owner of "a note exists iff it is
+            // cited" (#516/#591) — removes it in the same resolve. A second w:ins inside the
+            // definition would be a revision with no independently meaningful resolution: rejecting
+            // it while keeping the citation yields an empty note, and keeping it while rejecting the
+            // citation yields a note that is pruned anyway.
+            InsertInlineAtOffset(element, characterOffset,
+                _trackedChanges == TrackedChangeMode.RenderInline
+                    ? CreateRevisionEnvelope(W.ins, _revisionAuthor ?? "docxodus",
+                        NextTrackedFormatRevisionDate(), refRun)
+                    : refRun);
 
             var id = NextNoteIdInReferenceOrder(main, root, noteName);
             refRun.Descendants(isFootnote ? W.footnoteReference : W.endnoteReference).First()
@@ -9595,14 +9835,8 @@ public sealed partial class DocxSession : IDisposable
     }
 
     /// <summary>Every part whose XML can carry a note reference, for id-collision scanning.</summary>
-    private static IEnumerable<OpenXmlPart> NoteReferenceHostParts(MainDocumentPart main)
-    {
-        yield return main;
-        foreach (var h in main.HeaderParts) yield return h;
-        foreach (var f in main.FooterParts) yield return f;
-        if (main.FootnotesPart is not null) yield return main.FootnotesPart;
-        if (main.EndnotesPart is not null) yield return main.EndnotesPart;
-    }
+    private static IEnumerable<OpenXmlPart> NoteReferenceHostParts(MainDocumentPart main) =>
+        Internal.NoteReferenceOps.ReferenceHostParts(main);
 
     /// <summary>
     /// Shape the note body the way Word does: every paragraph gets the note-text style (unless the

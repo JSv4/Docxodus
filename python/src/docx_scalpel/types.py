@@ -203,6 +203,19 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
+class AuthorityCategory(str, Enum):
+    """Word's fixed table-of-authorities categories (issue #607). The wire names hide Word's own
+    numbering, which is an OOXML detail a caller should not have to know."""
+
+    CASES = "cases"
+    STATUTES = "statutes"
+    OTHER_AUTHORITIES = "other_authorities"
+    RULES = "rules"
+    TREATISES = "treatises"
+    REGULATIONS = "regulations"
+    CONSTITUTIONAL_PROVISIONS = "constitutional_provisions"
+
+
 @dataclass(frozen=True, slots=True)
 class VerificationDigest:
     """Algorithm-labelled lower-case hexadecimal digest."""
@@ -3667,6 +3680,21 @@ class DocxDiffProducts:
     revisions: tuple["DocxDiffRevision", ...] | None = None
     edit_script: dict[str, Any] | None = None
     semantic_changes: "SemanticChangeSet | None" = None
+
+
+@dataclass(frozen=True)
+class DocxDiffBatchResult:
+    """One candidate of a ``docx_diff_compare_batch`` run (issue #617): the products of
+    comparing the shared baseline against it, or the error comparing it produced.
+
+    ``error`` is set only when that candidate failed, and its products are then ``None``.
+    The rest of the batch is unaffected — one malformed counterparty markup must not cost
+    the caller the other ninety-nine comparisons.
+    """
+
+    name: str
+    products: "DocxDiffProducts | None" = None
+    error: str | None = None
 
 
 class SemanticChangeOperation(str, Enum):

@@ -221,6 +221,41 @@ public class DocxSessionS1FeaturesTests
         Assert.Equal(string.Empty, rule.Value);
     }
 
+    /// <summary>
+    /// A rule is a paragraph, so under recording it records as one (issue #614). It used to be
+    /// written untracked, which made it the same silent defect note authoring had: the redline
+    /// looked complete, and rejecting it left the rule behind.
+    /// </summary>
+    [Fact]
+    public void DS224_InsertHorizontalRule_UnderRecording_IsRejectedBackOut()
+    {
+        var baseline = DocxSessionTests.BuildDS001_SimpleTwoParagraphs();
+        byte[] redline;
+        using (var session = new DocxSession(baseline, new DocxSessionSettings
+        {
+            PersistAnchorIds = false,
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Rule Author",
+        }))
+        {
+            var anchor = FirstBodyParagraph(session);
+            Assert.True(session.InsertHorizontalRule(anchor, Position.After).Success);
+            redline = session.Save(persistAnchorIds: false);
+        }
+
+        // The rule is visible as a revision rather than as plain new content.
+        using var review = new DocxSession(redline, new DocxSessionSettings { PersistAnchorIds = false });
+        Assert.NotEmpty(review.ListRevisions());
+        Assert.True(review.RejectAllRevisions().Success);
+        var rejected = review.Save(persistAnchorIds: false);
+
+        var root = DocumentXml(rejected);
+        Assert.Empty(root.Descendants(W + "pBdr"));
+        Assert.Equal(
+            DocumentXml(baseline).Descendants(W + "p").Count(),
+            root.Descendants(W + "p").Count());
+    }
+
     // ─── F3: table insertion ────────────────────────────────────────────
 
     [Fact]

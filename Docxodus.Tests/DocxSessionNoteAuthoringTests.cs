@@ -696,6 +696,119 @@ public class DocxSessionNoteAuthoringTests
         return ms.ToArray();
     }
 
+    // ─── Recording as a tracked change (issue #614) ──────────────────────
+    //
+    // Under TrackedChangeMode.RenderInline the CITATION is the reversible unit and the definition
+    // follows it: rejecting the w:ins takes the reference away, which leaves the definition
+    // unreferenced, and the note-lifecycle rule in Internal.NoteReferenceOps removes it in the same
+    // resolve. Before #614 the op ignored the recording mode entirely — it wrote an untracked
+    // citation and an untracked definition, so reject-all had nothing to reject and the "rejected"
+    // document still shipped the note text.
+
+    /// <summary>Insert one note under recording and return (baseline, redline).</summary>
+    private static (byte[] Baseline, byte[] Redline) AuthorNoteUnderRecording(bool footnote)
+    {
+        var baseline = DocxSessionTests.BuildDS001_SimpleTwoParagraphs();
+        using var session = new DocxSession(baseline, new DocxSessionSettings
+        {
+            PersistAnchorIds = false,
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Note Author",
+        });
+        var anchor = FirstBodyParagraph(session);
+        var result = footnote
+            ? session.InsertFootnote(anchor, 5, "Negotiated on March 11.")
+            : session.InsertEndnote(anchor, 5, "Negotiated on March 11.");
+        Assert.True(result.Success, result.Error?.Message);
+        return (baseline, session.Save(persistAnchorIds: false));
+    }
+
+    private static System.Collections.Generic.List<XElement> UserNotes(byte[] bytes, bool footnote) =>
+        PartXml(bytes, m => footnote ? m.FootnotesPart : (OpenXmlPart?)m.EndnotesPart)
+            .Elements(W + (footnote ? "footnote" : "endnote"))
+            .Where(n => n.Attribute(W + "type") is null)
+            .ToList();
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void DS366_NoteAuthoredUnderRecording_ResolvesBothWays(bool footnote)
+    {
+        var (baseline, redline) = AuthorNoteUnderRecording(footnote);
+        var referenceName = W + (footnote ? "footnoteReference" : "endnoteReference");
+
+        using (var review = new DocxSession(redline, new DocxSessionSettings { PersistAnchorIds = false }))
+        {
+            // The citation is a revision at all, which is what was missing.
+            Assert.NotEmpty(review.ListRevisions());
+            Assert.True(review.RejectAllRevisions().Success);
+            var rejected = review.Save(persistAnchorIds: false);
+
+            // The definition went with the citation: only Word's two reserved notes remain…
+            Assert.Empty(UserNotes(rejected, footnote));
+            Assert.Empty(BodyXml(rejected).Descendants(referenceName));
+
+            // …and the document as a whole is the baseline again, which is the property that matters.
+            Assert.Empty(DocxDiff.GetRevisions(
+                new WmlDocument("baseline.docx", baseline), new WmlDocument("rejected.docx", rejected)));
+        }
+
+        using (var review = new DocxSession(redline, new DocxSessionSettings { PersistAnchorIds = false }))
+        {
+            Assert.True(review.AcceptAllRevisions().Success);
+            var accepted = review.Save(persistAnchorIds: false);
+
+            var note = Assert.Single(UserNotes(accepted, footnote));
+            Assert.Contains("Negotiated on March 11.", note.Descendants(W + "t").Select(t => (string)t));
+            Assert.Single(BodyXml(accepted).Descendants(referenceName));
+            Assert.Empty(BodyXml(accepted).Descendants(W + "ins"));
+        }
+    }
+
+    /// <summary>The citation is a note reference nested inside <c>w:ins</c> — a shape this op had
+    /// never produced before — so pin that the diff engine still reports it.</summary>
+    [Fact]
+    public void DS367_RecordedNoteInsertion_IsReportedByTheDiffEngine()
+    {
+        var (baseline, redline) = AuthorNoteUnderRecording(footnote: true);
+
+        var revisions = DocxDiff.GetRevisions(
+            new WmlDocument("baseline.docx", baseline), new WmlDocument("redline.docx", redline));
+
+        Assert.Contains(revisions, r => r.Text.Contains("Negotiated on March 11."));
+    }
+
+    /// <summary>
+    /// What the reversibility proof reports, which is how #614 was found. The reject path keeps
+    /// divergences a generated redline legitimately explains — the run the citation split, the
+    /// <c>w:trackRevisions</c>/<c>w:footnotePr</c> declarations, the note styles — but the note
+    /// STORY must not be among them any more. Before the fix the residue included
+    /// <c>/word/footnotes.xml</c> carrying the whole note body.
+    /// </summary>
+    [Fact]
+    public void DS368_RecordedNoteInsertion_LeavesNoNoteResidueOnTheRejectPath()
+    {
+        var (baseline, redline) = AuthorNoteUnderRecording(footnote: true);
+        byte[] intendedFinal;
+        using (var accepting = new DocxSession(redline, new DocxSessionSettings { PersistAnchorIds = false }))
+        {
+            Assert.True(accepting.AcceptAllRevisions().Success);
+            intendedFinal = accepting.Save(persistAnchorIds: false);
+        }
+
+        var run = Docxodus.Verification.RedlineReversibilityVerifier.Prove(baseline, intendedFinal, redline);
+        var reject = run.Proof.RejectToBaseline;
+
+        Assert.True(reject?.Completed, run.Proof.ToJson());
+        // Non-vacuous: the redline-authoring residue IS still reported, so the filter below is
+        // reading a populated list rather than an empty one.
+        Assert.NotEmpty(reject!.Divergences);
+        Assert.DoesNotContain(reject.Divergences,
+            divergence => divergence.PartUri.Contains("notes.xml", StringComparison.Ordinal));
+        Assert.Contains(reject.Divergences,
+            divergence => divergence.PartUri == "/word/document.xml");
+    }
+
     /// <summary>
     /// Footnotes part whose user notes are ids 1, 5 and 9 (non-contiguous), so a "count + 1"
     /// id allocator would collide. Body cites all three.

@@ -75,28 +75,68 @@ Against `TestFiles/` each document contributes:
   (redline, consolidated revision list, conflicts, consolidated edit script). The consolidate path
   has its own reader fan-out, merger and markup renderer; not one of the pairwise products touches
   any of them, so without this the whole N-way half of the engine sits outside the differential;
-- **two pre-flight digests per pairwise product** (edited and identical), recording the
-  compatibility warnings each product reports. Output digests cannot see this: a product that stops
-  running the pre-flight and a product that runs it and finds nothing produce identical output. The
-  identical-bytes shortcuts are where that gap is most tempting, so they are digested too.
+- **one rotated comparison** — the edited variant again with exactly ONE `DocxDiffSettings`
+  property moved off its default, chosen by `document index mod N`. The surface is twenty
+  properties and a cross-product of them explodes, so each is exercised on roughly `678/N`
+  documents for one extra comparison per document rather than twenty.
 
-That is **678 documents → 22,374 digests**, roughly 15 minutes on four threads.
-
-A thrown exception is digested too, as `FAIL <Type>: <message>`. Malformed and unsupported
+A thrown exception is recorded too, as `FAIL <Type>: <message>`. Malformed and unsupported
 fixtures are expected to throw; a change in **which** exception they throw is still a regression.
 
-### The redline digest is rename-invariant, and why
+### The unit is an observation, not a digest
 
-Media and diagram parts imported into a redline are named `P` + a fresh GUID, and the
-relationships pointing at them get ids of `R` + a fresh GUID. **`DocxDiff.Compare` is therefore
-not byte-deterministic on any document whose redline imports media**, contradicting
-`DocxDiffSettings.Deterministic`. This is pre-existing — `origin/main` disagrees with itself on
-exactly those documents — and it affects 54 of the 678 fixtures here. Digesting raw package bytes
-reports 161 differences on every run and would drown a real regression in noise.
+A product call has more observable effects than its return value, and that is not a detail — it is
+where the #616 regression lived. That change added a fast path returning an empty revision list for
+byte-identical documents, and skipped the compatibility pre-flight on the way. For two identical
+documents "no revisions" is the correct answer before and after, so **the return value never moved
+and all 8,136 digests agreed, correctly**. The harness was not broken and it was not unlucky: it
+answered the question it was built to answer, and the defect was somewhere else.
 
-So the redline is digested with those generated names folded to a placeholder, in entry names and
-inside XML content, with entries hashed in canonical-name order. Content still has to match
-exactly: this hides the naming churn and nothing else. See #621.
+So the recorded unit is a record with one field per channel, and adding a channel is one field on
+one type applied to every product and every document at once:
+
+| Channel | Records | Default |
+|---|---|---|
+| `Result` | the return value's digest, or `FAIL <Type>: <message>` | — |
+| `Warnings` | the compatibility pre-flight's feature ids **for that same call** | `none` |
+| `InputMutation` | which side's bytes the call moved | `clean` |
+| `OrderVariance` | whether the memoized `DocxDiffComparison` agrees with the static | `stable` |
+
+`Warnings` closes the #616 hole directly: a product that stops running the pre-flight records
+`none` where it used to record a report, which no output digest can tell you because the output was
+already right. It is captured from the call under observation rather than from a second run of every
+product, which is both cheaper and stricter.
+
+`InputMutation` exists because `IrReader.Read` documents *"the caller's `DocumentByteArray` is left
+byte-for-byte unchanged"* and `PreAccept` promises *"the input is untouched"*, and nothing verified
+either — while the engine moves toward sharing one parsed snapshot across stages, which is exactly
+the direction that ends in mutating a caller's bytes.
+
+`OrderVariance` guards a risk #616 created. Each static used to recompute from scratch; now they
+delegate to a `DocxDiffComparison` that memoizes one provenance-bearing IR snapshot and shares it
+across every product, so `GetRevisions()` then `ToRedline()` traverses different shared state than
+the reverse order. Each observation asks a single comparison for all three products in **reverse**
+order and requires each to match what the static produced — which also pins
+`CreateComparison(l, r, s)` against `DocxDiff.Compare(l, r, s)`, a class corpus mode otherwise never
+reaches, since it only ever calls the statics.
+
+Every run prints how many observations record a **non-default** value per channel. A channel that
+is never anything but its default across the whole corpus is coverage nobody should count.
+
+### What a differential cannot do
+
+**It validates change, not correctness.** The baseline comes from `main`. A behaviour that was
+already wrong on `main` agrees with itself and prints `[parity] OK`. Digests catch drift; only
+assertions catch violation — which is why the unit tests matter more than any digest column.
+
+And one class is invisible to every harness: a **leaked resource**. `IrReader.Read` once
+constructed its `OpenXmlMemoryStreamDocument` before the `try`, so handing it an `.xlsx` leaked the
+open package that the previous `using` disposed. No digest, in any harness, can see that. Nor can
+tooling: `CA2000` was measured against the exact leak shape and **does not fire** at default
+`AnalysisMode`, at `Recommended`, at `All`, or with `dotnet_diagnostic.CA2000.severity = warning`
+set explicitly. Turning on broad CA analysis is separately a non-starter — `AllEnabledByDefault` on
+`Docxodus.csproj` produces thousands of warnings, almost entirely legacy noise. That class needs a
+targeted test per known throw path, and someone to notice the path exists.
 
 ### Confirm the harness can actually fail
 
@@ -104,18 +144,23 @@ An always-green check is worthless, so verify it detects a change before trustin
 perturbation is not enough**, because the three products are sensitive to different halves of the
 pipeline — a control that moves two of them can leave the third completely unexercised:
 
-| Perturbation | redline | revisions | editscript | preflight |
+| Perturbation | redline | revisions | editscript | `Warnings` |
 |---|---|---|---|---|
 | drop the `w:t` skip in `UnidHelper.ContentSignature` | **0%** | 82% | 84% | 0% |
 | swap the snapshots handed to `IrMarkupRenderer.Render` | **64%** | 0% | 0% | 0% |
 | skip the pre-flight on the identical-bytes shortcut | **0%** | **0%** | **0%** | fires |
+
+The same applies to the two newer channels, and both were verified the same way: mutating an input
+inside a product call moves `InputMutation` on 200 of 760 observations, and making one comparison
+product disagree with its static moves `OrderVariance` on 400 of 600. A channel that has never been
+seen to fire is a channel nobody should trust.
 
 The split is not an accident, and it is worth understanding before trusting any column.
 Unids feed block anchors, so corrupting a content signature shows up all over the edit script and
 the revision list — but the markup renderer strips `PtOpenXml.Unid` on the way out, so the
 rendered package is byte-identical and the redline digest never moves. Conversely the hand-off
 only affects rendering: the script and revisions were already computed, so they are untouched
-while the redline scrambles. And the third row is why the pre-flight column exists at all: a
+while the redline scrambles. And the third row is why the `Warnings` channel exists at all: a
 product that stops warning still returns the right answer, so **every output digest stays green**
 while a documented behaviour is gone. Run all of them, or you are validating part of the harness.
 

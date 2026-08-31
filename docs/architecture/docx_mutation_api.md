@@ -1131,13 +1131,111 @@ rendering notes, appeared as a stray empty footnote with no citation.
   Word's default (`1, 2, 3…`, continuous).
 - **Citing an existing note twice.** Each call creates a new definition; there is no
   "reference note N again" op.
-- **Tracked-changes mode.** `Settings.TrackedChanges = RenderInline` does not wrap the citation
-  in `w:ins` — consistent with every other insert op (`InsertParagraph`, `InsertTable`,
-  `InsertHorizontalRule`, `SetHeaderText`); only `ReplaceText`/`DeleteBlock`/`DeleteRange`/`DeleteSection` track.
+- **Note numbering under recording.** The citation records (see below), but Word renumbers notes
+  by position and does not track that renumbering; a redline that inserts a note ahead of existing
+  ones shifts their displayed numbers on both the accept and the reject side.
 - **Narrowed projection scopes.** A session opened with `ProjectionSettings.Scopes` excluding
   `Footnotes`/`Endnotes` still writes the note correctly, but `Created` comes back without the
   note anchors — they resolve against a projection that omits the part. Family behavior, identical
   to `SetHeaderText` with `Headers` excluded.
+
+### Recording a note as a tracked change (issue #614)
+
+Under `Settings.TrackedChanges = RenderInline` the **citation is the reversible unit and the
+definition follows it**: the body-side reference run is wrapped in `w:ins`, and rejecting that
+revision removes the reference, which leaves the definition uncited — at which point the
+note-lifecycle rule deletes it. Accepting unwraps the `w:ins` and both survive.
+
+The definition itself carries no revision markup of its own, deliberately. A second `w:ins`
+inside it would be a revision with no independently meaningful resolution: rejecting it while
+keeping the citation yields an empty note, and keeping it while rejecting the citation yields a
+note that is pruned anyway.
+
+`Internal/NoteReferenceOps.cs` is the single owner of that rule — *a note definition exists
+exactly as long as something still cites it* — and it asks the whole package who cites a note,
+not just the body, so a note cited from a running header as well outlives losing its body
+citation. `DocxSession` applies it after a structural delete or a revision resolution
+(issues #516, #591); `RevisionProcessor` applies it on the stateless **reject** path, which is
+what every non-.NET transport reaches through `DocxDiffOps.RejectRevisions`.
+
+The stateless **accept** path deliberately does not apply it. `Accept(Compare(l, r)) ≡ r` is the
+comparison engine's contract, and a counterpart document that carries a reference-less note
+definition is entitled to keep it. `DocxSession`'s own resolve paths apply the rule in both
+directions because an editor is authoring a document rather than inverting a comparison.
+
+### Which mutations record, and which refuse
+
+| Under `RenderInline` | Operations |
+|---|---|
+| Record as native revisions | `ReplaceText` (and `ReplaceMatch`/`ReplaceInner`/`ReplaceTextAtSpan`), `DeleteBlock`, `DeleteRange`, `DeleteSection`, `InsertParagraph`, `SplitParagraph`, `MergeParagraphs`, `MoveBlock`, `InsertHorizontalRule`, `InsertFootnote`, `InsertEndnote`, the formatting ops (`*PrChange`), and the table row/column ops |
+| Refuse with `TrackedOperationUnsupported` | `InsertTable`, `ApplyListFormatRange`, and every image mutation — no reversible native encoding exists, so nothing is written rather than something that cannot be taken back |
+| Apply untracked | The running-story and document-setup ops: `SetHeaderText`, `SetFooterText`, `EnsureHeaderFooterVisible`, `InsertPageNumberField`, `SetPageNumbering`, `ClearPageNumbering`. Word does not redline header/footer authoring either; a document opened for review shows the new running story, not a revision. Comments and annotations are likewise not revisions, by design |
+
+Anything that writes package state under recording belongs in exactly one of those three rows.
+The failure #614 fixed was a fourth, unwritten one — writing content that reject-all could not
+take back — which is the worst of the three, because the redline looks complete and only fails
+when somebody actually rejects it.
+
+## Reference fields: TOC / TOF / TOA (issue #607)
+
+Narrowing the library to the DOCX toolchain removed `ReferenceAdder`, and with it the only way
+Docxodus could **create** a reference field. It could read, render, diff and edit around a table of
+contents; it could not author one. The CHANGELOG's stopgap — hand-build the field through
+`Raw.InsertXml` — is a genuine regression in the level of abstraction, and a table of authorities in
+particular is table stakes for the legal documents this library targets.
+
+```csharp
+session.InsertTableOfContents(anchorId, Position.Before,
+    new TableOfContentsOptions { Levels = "1-3", Hyperlinks = true, Title = "Contents" });
+session.InsertTableOfFigures(anchorId, Position.Before,
+    new TableOfFiguresOptions { CaptionLabel = "Exhibit" });
+session.InsertTableOfAuthorities(anchorId, Position.Before,
+    new TableOfAuthoritiesOptions { Category = AuthorityCategory.Statutes });
+```
+
+**The switches are the point.** The old API took the switch string verbatim, which pushed exactly
+the OOXML knowledge this library exists to hide back onto the caller — and a malformed instruction
+renders as **nothing** in Word, silently, with no schema error to catch it. So every switch is a
+typed option, and the mapping lives in one place, `Internal/ReferenceFieldOps.cs`:
+
+| Option | Switch | |
+|---|---|---|
+| `Levels = "1-3"` | `\o "1-3"` | A level or range within 1-9. A single level normalizes (`"2"` → `2-2`); anything else is refused with `InvalidReferenceField` before anything is written. |
+| `Hyperlinks` | `\h` | On by default — a table of contents nobody can click is one nobody uses. |
+| `HideTabAndPageNumbersInWeb` | `\z` | On by default, matching Word's own Insert ▸ Table of Contents. |
+| `UseOutlineLevels` | `\u` | On by default. |
+| `CaptionLabel = "Figure"` | `\c "Figure"` | A table of figures is a `TOC` field selecting by caption label — Word's encoding, not a field of its own. |
+| `Category` | `\c "2"` | Word's fixed categories by name (`Cases`, `Statutes`, …); the number never reaches the caller. |
+| `EntryPageSeparator` | `\e "…"` | TOA only. |
+
+**The field is written dirty and the document asks for a field update on open**
+(`w:fldChar w:dirty="true"` plus `w:updateFields`), with **no cached result** between `separate` and
+`end`. Word paginates and fills the table itself. Shipping a cached result would mean shipping one
+that is wrong the moment anything above the table moves, and a reader would have no way to tell.
+
+A table of contents is wrapped in the `w:sdt` content control Word puts around one (gallery
+"Table of Contents"), which is what gives it the *Update Table* control in Word's UI. A table of
+figures or authorities is a bare paragraph, because that is what Word writes for those.
+
+Word's entry styles (`TOC1`, `TableofFigures`, `TableofAuthorities`, and `TOCHeading`) are
+find-or-created through `StyleFactory`, so a firm's house formatting survives.
+
+### What these refuse, and why
+
+- **A non-body anchor.** Word does not generate a reference table inside a running story or a note,
+  so writing one there produces a table Word will never fill. Rejected with `AnchorWrongKind`.
+- **Tracked-change recording.** A generated table is regenerated wholesale on every field update, so
+  there is no reversible way to redline it. Refused with `TrackedOperationUnsupported` rather than
+  writing a mark that rejection cannot take back — the shape #614 established for note insertion.
+- **A malformed level range.** Refused before the history snapshot, so a rejected call writes
+  nothing and burns no undo entry.
+
+### Not yet
+
+- **Marking entries.** `TC` and `TA` fields mark the *entries* a table lists. These ops produce the
+  table; a document with no marked citations gets a table of authorities that is correct and empty.
+  A larger job, deliberately scoped separately rather than blocking the table on it.
+- **Regenerating the table in-process.** Filling it requires pagination, which is Word's job here.
 
 ## Comments (issues #300, #317, and #341)
 

@@ -135,7 +135,7 @@ internal static class IrReader
         var mainXDoc = main.GetXDocument();
         var root = mainXDoc.Root
             ?? throw new DocxodusException("MainDocumentPart has no root element.");
-        UnidHelper.AssignToAllElementsDeterministic(root);
+        UnidHelper.AssignToAllElementsDeterministic(root, options.UnidAssignment);
 
         // Stash the owning part on the root so WmlToMarkdownConverter.KindFor → IsListItem can
         // reach the StyleDefinitionsPart and walk the pStyle → basedOn chain. Without it, a
@@ -197,10 +197,10 @@ internal static class IrReader
         {
             headers = ReadHeaderFooterScopes(main, body, styles, numbering, sources, anchorIndex,
                 main.HeaderParts.Cast<OpenXmlPart>(), "hdr", W + "headerReference", retain,
-                drawingGraphFallbackDocumentHash);
+                options.UnidAssignment, drawingGraphFallbackDocumentHash);
             footers = ReadHeaderFooterScopes(main, body, styles, numbering, sources, anchorIndex,
                 main.FooterParts.Cast<OpenXmlPart>(), "ftr", W + "footerReference", retain,
-                drawingGraphFallbackDocumentHash);
+                options.UnidAssignment, drawingGraphFallbackDocumentHash);
         }
 
         // --- footnote / endnote scopes (rule M1.3) ----------------------------------------------
@@ -209,16 +209,18 @@ internal static class IrReader
         if (options.Scopes.HasFlag(IrScopes.Notes))
         {
             footnotes = ReadNoteStore(main, main.FootnotesPart, styles, numbering, sources,
-                anchorIndex, "fn", W + "footnote", retain, drawingGraphFallbackDocumentHash);
+                anchorIndex, "fn", W + "footnote", retain, options.UnidAssignment,
+                drawingGraphFallbackDocumentHash);
             endnotes = ReadNoteStore(main, main.EndnotesPart, styles, numbering, sources,
-                anchorIndex, "en", W + "endnote", retain, drawingGraphFallbackDocumentHash);
+                anchorIndex, "en", W + "endnote", retain, options.UnidAssignment,
+                drawingGraphFallbackDocumentHash);
         }
 
         // --- comment scope (rule M1.3 + N15 record-half) ----------------------------------------
         var comments = IrCommentStore.Empty;
         if (options.Scopes.HasFlag(IrScopes.Comments))
             comments = ReadCommentStore(main, styles, numbering, sources, anchorIndex, commentTracker!,
-                retain, drawingGraphFallbackDocumentHash);
+                retain, options.UnidAssignment, drawingGraphFallbackDocumentHash);
 
         var projectionAnchors = CaptureProjectionAnchors(wdoc, options.Scopes);
 
@@ -2978,12 +2980,12 @@ internal static class IrReader
     /// main part's <c>StyleDefinitionsPart</c> through the part's package). Idempotent on the
     /// annotation. Returns the part's root, or null when the part has no readable root (tolerated).
     /// </summary>
-    private static XElement? PreparePartRoot(OpenXmlPart part)
+    private static XElement? PreparePartRoot(OpenXmlPart part, UnidAssignment unids)
     {
         var root = part.GetXDocument().Root;
         if (root is null)
             return null;
-        UnidHelper.AssignToAllElementsDeterministic(root);
+        UnidHelper.AssignToAllElementsDeterministic(root, unids);
         if (root.Annotation<OpenXmlPart>() == null)
             root.AddAnnotation(part);
         return root;
@@ -3006,7 +3008,7 @@ internal static class IrReader
         MainDocumentPart main, XElement body, IrStyleRegistry styles, IrNumberingRegistry numbering,
         Dictionary<Uri, XDocument> sources, Dictionary<string, IrBlock> anchorIndex,
         IEnumerable<OpenXmlPart> parts, string scopePrefix, XName referenceName, bool retain,
-        Lazy<IrHash> drawingGraphFallbackDocumentHash)
+        UnidAssignment unids, Lazy<IrHash> drawingGraphFallbackDocumentHash)
     {
         var result = new List<IrHeaderFooter>();
         int i = 1;
@@ -3015,7 +3017,7 @@ internal static class IrReader
             var scopeName = $"{scopePrefix}{i++}";
             try
             {
-                var root = PreparePartRoot(part);
+                var root = PreparePartRoot(part, unids);
                 if (root is null)
                     continue;
 
@@ -3089,14 +3091,15 @@ internal static class IrReader
     private static IrNoteStore ReadNoteStore(
         MainDocumentPart main, OpenXmlPart? part, IrStyleRegistry styles, IrNumberingRegistry numbering,
         Dictionary<Uri, XDocument> sources, Dictionary<string, IrBlock> anchorIndex,
-        string scopeName, XName noteName, bool retain, Lazy<IrHash> drawingGraphFallbackDocumentHash)
+        string scopeName, XName noteName, bool retain, UnidAssignment unids,
+        Lazy<IrHash> drawingGraphFallbackDocumentHash)
     {
         if (part is null)
             return IrNoteStore.Empty;
 
         try
         {
-            var root = PreparePartRoot(part);
+            var root = PreparePartRoot(part, unids);
             if (root is null)
                 return IrNoteStore.Empty;
 
@@ -3147,7 +3150,8 @@ internal static class IrReader
     private static IrCommentStore ReadCommentStore(
         MainDocumentPart main, IrStyleRegistry styles, IrNumberingRegistry numbering,
         Dictionary<Uri, XDocument> sources, Dictionary<string, IrBlock> anchorIndex,
-        CommentTracker tracker, bool retain, Lazy<IrHash> drawingGraphFallbackDocumentHash)
+        CommentTracker tracker, bool retain, UnidAssignment unids,
+        Lazy<IrHash> drawingGraphFallbackDocumentHash)
     {
         var part = main.WordprocessingCommentsPart;
         if (part is null)
@@ -3155,7 +3159,7 @@ internal static class IrReader
 
         try
         {
-            var root = PreparePartRoot(part);
+            var root = PreparePartRoot(part, unids);
             if (root is null)
                 return IrCommentStore.Empty;
 

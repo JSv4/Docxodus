@@ -57,6 +57,7 @@ internal static class Dispatcher
 
         "docx_diff_compare" => DocxDiffCompare(args),
         "docx_diff_compare_products" => DocxDiffCompareProducts(args),
+        "docx_diff_compare_batch" => DocxDiffCompareBatch(args),
         "docx_diff_get_revisions" => DocxDiffGetRevisions(args),
         "docx_diff_get_edit_script" => JsonString(DocxDiffGetEditScript(args)),
         "docx_diff_get_semantic_changes" => DocxDiffGetSemanticChanges(args),
@@ -127,6 +128,17 @@ internal static class Dispatcher
             Handle(args), Str(args, "anchorId"), ParsePageNumberingOp(args, "op")),
         "clear_page_numbering" => DocxSessionOps.ClearPageNumbering(
             Handle(args), Str(args, "anchorId")),
+
+        // Reference fields (issue #607): the switches never cross the wire — typed options only.
+        "insert_table_of_contents" => DocxSessionOps.InsertTableOfContents(
+            Handle(args), Str(args, "anchorId"), DocxSessionJson.ParsePos(OptStr(args, "position") ?? "before"),
+            OptionsOrNull(args, DocxSessionJson.ParseTableOfContentsOptions)),
+        "insert_table_of_figures" => DocxSessionOps.InsertTableOfFigures(
+            Handle(args), Str(args, "anchorId"), DocxSessionJson.ParsePos(OptStr(args, "position") ?? "before"),
+            OptionsOrNull(args, DocxSessionJson.ParseTableOfFiguresOptions)),
+        "insert_table_of_authorities" => DocxSessionOps.InsertTableOfAuthorities(
+            Handle(args), Str(args, "anchorId"), DocxSessionJson.ParsePos(OptStr(args, "position") ?? "before"),
+            OptionsOrNull(args, DocxSessionJson.ParseTableOfAuthoritiesOptions)),
 
         "insert_footnote" => DocxSessionOps.InsertFootnote(
             Handle(args), Str(args, "anchorId"), Int(args, "characterOffset"), Str(args, "markdown")),
@@ -522,6 +534,24 @@ internal static class Dispatcher
         // One memoized comparison pass serving every requested product (issue #594);
         // already the complete JSON envelope — embed verbatim as the result.
         return DocxDiffOps.CompareProductsJson(left, right, DiffSettingsJson(args), products);
+    }
+
+    /// <summary>
+    /// One baseline against many candidates, reading the baseline once (issue #617). The candidates
+    /// arrive as <c>[{"name":…,"docB64":…}]</c>, and the reply is already the complete envelope.
+    /// </summary>
+    private static string DocxDiffCompareBatch(JsonElement args)
+    {
+        var baseline = Convert.FromBase64String(Str(args, "baselineB64"));
+        var candidates = args.TryGetProperty("candidates", out var list)
+            && list.ValueKind == JsonValueKind.Array
+            ? list.GetRawText()
+            : "[]";
+        var products = args.TryGetProperty("products", out var selected)
+            && selected.ValueKind == JsonValueKind.Array
+            ? selected.GetRawText()
+            : null;
+        return DocxDiffOps.CompareBatchJson(baseline, candidates, DiffSettingsJson(args), products);
     }
 
     private static string DocxDiffGetEditScript(JsonElement args)
@@ -939,12 +969,20 @@ internal static class Dispatcher
         return parsed;
     }
 
+    /// <summary>The request's optional <c>options</c> object, or null for "all defaults".</summary>
+    private static T? OptionsOrNull<T>(JsonElement args, Func<JsonElement, T> parse)
+        where T : class =>
+        args.TryGetProperty("options", out var options) && options.ValueKind == JsonValueKind.Object
+            ? parse(options)
+            : null;
+
     private static bool IsMutation(string op) => op is
         "replace_text" or "delete_block" or "move_block" or "delete_range" or "delete_section"
         or "replace_text_range" or "replace_text_at_span" or "replace_inner"
         or "insert_paragraph" or "split_paragraph" or "merge_paragraphs"
         or "set_header_text" or "set_footer_text" or "insert_page_number_field"
         or "ensure_header_footer_visible" or "set_page_numbering" or "clear_page_numbering"
+        or "insert_table_of_contents" or "insert_table_of_figures" or "insert_table_of_authorities"
         or "insert_footnote" or "insert_endnote" or "insert_cross_reference"
         or "add_comment" or "add_comment_reply" or "update_comment"
         or "set_comment_resolved" or "remove_comment"

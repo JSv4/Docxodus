@@ -119,6 +119,27 @@ public static partial class DocxDiffBridge
     }
 
     /// <summary>
+    /// Compare ONE baseline against MANY candidates, reading the baseline once (issue #617).
+    /// <paramref name="candidatesJson"/> is <c>[{"name":…,"docB64":…}]</c>; returns
+    /// <c>{"results":[{"name":…, …products…}]}</c> in the order given, or a JSON error object.
+    /// A candidate that fails carries an <c>error</c> string instead of products rather than
+    /// failing the whole batch.
+    /// </summary>
+    [JSExport]
+    public static string CompareBatchJson(
+        byte[] baselineBytes, string candidatesJson, string settingsJson, string productsJson)
+    {
+        try
+        {
+            return DocxDiffOps.CompareBatchJson(baselineBytes, candidatesJson, settingsJson, productsJson);
+        }
+        catch (Exception ex)
+        {
+            return DocumentConverter.SerializeError(ex.Message, ex.GetType().Name);
+        }
+    }
+
+    /// <summary>
     /// Accept every tracked revision in a redlined DOCX and return the resulting
     /// bytes (materializes the "right"/revised side). The byte-in, byte-out
     /// counterpart of <see cref="Compare"/> — <c>AcceptRevisions(Compare(left, right))</c>

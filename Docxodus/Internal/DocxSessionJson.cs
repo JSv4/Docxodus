@@ -250,6 +250,82 @@ internal static class DocxSessionJson
         };
     }
 
+    // ─── Reference-field options (issue #607) ───────────────────────────
+    //
+    // Every wire field is optional and falls back to the .NET default, so a transport can send
+    // `{}` (or nothing) and get Word's own shape. The switch strings never appear on the wire —
+    // hiding them is the point of the op.
+
+    /// <summary>Parse <c>{ levels?, hyperlinks?, hideTabAndPageNumbersInWeb?, useOutlineLevels?,
+    /// title?, rightTabPos? }</c>. A <c>title</c> explicitly set to null or "" means no heading.</summary>
+    public static TableOfContentsOptions ParseTableOfContentsOptions(JsonElement root)
+    {
+        var defaults = new TableOfContentsOptions();
+        if (root.ValueKind != JsonValueKind.Object) return defaults;
+        return new TableOfContentsOptions
+        {
+            Levels = TryGetString(root, "levels", defaults.Levels)!,
+            Hyperlinks = TryGetBool(root, "hyperlinks", defaults.Hyperlinks),
+            HideTabAndPageNumbersInWeb =
+                TryGetBool(root, "hideTabAndPageNumbersInWeb", defaults.HideTabAndPageNumbersInWeb),
+            UseOutlineLevels = TryGetBool(root, "useOutlineLevels", defaults.UseOutlineLevels),
+            Title = root.TryGetProperty("title", out var t)
+                ? (t.ValueKind == JsonValueKind.String ? t.GetString() : null)
+                : defaults.Title,
+            RightTabPos = TryGetInt(root, "rightTabPos", defaults.RightTabPos),
+        };
+    }
+
+    /// <summary>Parse <c>{ captionLabel?, hyperlinks?, rightTabPos? }</c>.</summary>
+    public static TableOfFiguresOptions ParseTableOfFiguresOptions(JsonElement root)
+    {
+        var defaults = new TableOfFiguresOptions();
+        if (root.ValueKind != JsonValueKind.Object) return defaults;
+        return new TableOfFiguresOptions
+        {
+            CaptionLabel = TryGetString(root, "captionLabel", defaults.CaptionLabel)!,
+            Hyperlinks = TryGetBool(root, "hyperlinks", defaults.Hyperlinks),
+            RightTabPos = TryGetInt(root, "rightTabPos", defaults.RightTabPos),
+        };
+    }
+
+    /// <summary>Parse <c>{ category?, hyperlinks?, entryPageSeparator?, rightTabPos? }</c>.
+    /// <c>category</c> is the wire name (<c>cases</c>, <c>statutes</c>, …), not Word's number —
+    /// the number is an OOXML detail the caller should not have to know.</summary>
+    public static TableOfAuthoritiesOptions ParseTableOfAuthoritiesOptions(JsonElement root)
+    {
+        var defaults = new TableOfAuthoritiesOptions();
+        if (root.ValueKind != JsonValueKind.Object) return defaults;
+        return new TableOfAuthoritiesOptions
+        {
+            Category = ParseAuthorityCategory(TryGetString(root, "category", null)) ?? defaults.Category,
+            Hyperlinks = TryGetBool(root, "hyperlinks", defaults.Hyperlinks),
+            EntryPageSeparator = TryGetString(root, "entryPageSeparator", null),
+            RightTabPos = TryGetInt(root, "rightTabPos", defaults.RightTabPos),
+        };
+    }
+
+    /// <summary>Wire name → <see cref="AuthorityCategory"/>; null for absent or unknown.</summary>
+    public static AuthorityCategory? ParseAuthorityCategory(string? name) => name switch
+    {
+        "cases" => AuthorityCategory.Cases,
+        "statutes" => AuthorityCategory.Statutes,
+        "other_authorities" => AuthorityCategory.OtherAuthorities,
+        "rules" => AuthorityCategory.Rules,
+        "treatises" => AuthorityCategory.Treatises,
+        "regulations" => AuthorityCategory.Regulations,
+        "constitutional_provisions" => AuthorityCategory.ConstitutionalProvisions,
+        _ => null,
+    };
+
+    /// <summary>The wire names <see cref="ParseAuthorityCategory"/> accepts, in Word's order — the
+    /// single owner of the enum's transport spelling, so a schema and a client cannot drift.</summary>
+    public static readonly string[] AuthorityCategoryNames =
+    {
+        "cases", "statutes", "other_authorities", "rules", "treatises", "regulations",
+        "constitutional_provisions",
+    };
+
     /// <summary>Lenient wire-name → enum: unknown/absent falls back to Accept, mirroring
     /// ParseSettings' historical behavior. Strict callers (MCP set_mode) do their own switch.</summary>
     public static TrackedChangeMode ParseTrackedChangeMode(string? mode) => mode switch

@@ -303,14 +303,14 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_create",
-            "Insert new structural content: paragraphs, headings, tables, horizontal rules, footnotes/endnotes, running headers/footers, page-number fields.",
+            "Insert new structural content: paragraphs, headings, tables, horizontal rules, footnotes/endnotes, running headers/footers, page-number fields, and the generated reference tables (contents, figures, authorities).",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
                 "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
-                "action": { "type": "string", "enum": ["insert_paragraph", "insert_heading", "insert_table", "insert_horizontal_rule", "insert_footnote", "insert_endnote", "insert_page_number_field", "set_header_text", "set_footer_text", "ensure_header_footer_visible"] },
+                "action": { "type": "string", "enum": ["insert_paragraph", "insert_heading", "insert_table", "insert_horizontal_rule", "insert_footnote", "insert_endnote", "insert_page_number_field", "insert_table_of_contents", "insert_table_of_figures", "insert_table_of_authorities", "set_header_text", "set_footer_text", "ensure_header_footer_visible"] },
                 "anchorId": { "type": "string", "description": "Reference block for insert_paragraph/insert_heading/insert_table/insert_horizontal_rule (paired with position), or the citing paragraph for insert_footnote/insert_endnote, or the target paragraph for insert_page_number_field." },
                 "bodyAnchorId": { "type": "string", "description": "set_header_text/set_footer_text/ensure_header_footer_visible: a body block identifying the section whose running story or visibility flags should change." },
                 "position": { "type": "string", "enum": ["before", "after"] },
@@ -326,7 +326,14 @@ internal static class ToolCatalog
                 "characterOffset": { "type": "integer", "description": "insert_footnote/insert_endnote: character offset within the citing paragraph." },
                 "kind": { "type": "string", "enum": ["default", "first", "even"], "description": "set_header_text/set_footer_text/ensure_header_footer_visible: running-story kind. first/even authoring also enables the corresponding Word visibility setting; ensure_header_footer_visible enables it for an already-referenced story." },
                 "field": { "type": "string", "enum": ["current_page", "total_pages"], "description": "insert_page_number_field." },
-                "numberFormat": { "type": "string", "enum": ["decimal", "upperLetter", "lowerLetter", "upperRoman", "lowerRoman"], "description": "insert_page_number_field: optional explicit \\* switch format." }
+                "numberFormat": { "type": "string", "enum": ["decimal", "upperLetter", "lowerLetter", "upperRoman", "lowerRoman"], "description": "insert_page_number_field: optional explicit \\* switch format." },
+                "levels": { "type": "string", "description": "insert_table_of_contents: heading levels to list, a level or range within 1-9 (default \"1-3\")." },
+                "title": { "type": "string", "description": "insert_table_of_contents: heading above the table (default \"Contents\"); empty inserts none." },
+                "captionLabel": { "type": "string", "description": "insert_table_of_figures: the caption label to list, e.g. \"Figure\" or \"Exhibit\" (default \"Figure\")." },
+                "category": { "type": "string", "enum": ["cases", "statutes", "other_authorities", "rules", "treatises", "regulations", "constitutional_provisions"], "description": "insert_table_of_authorities: which category of marked authority to list (default cases)." },
+                "hyperlinks": { "type": "boolean", "description": "Reference tables: make each entry a hyperlink to its target (default true)." },
+                "entryPageSeparator": { "type": "string", "description": "insert_table_of_authorities: separator between an entry and its page numbers." },
+                "rightTabPos": { "type": "integer", "description": "Reference tables: right-aligned dot-leader tab stop in twips (default 9350)." }
               },
               "required": ["sessionId", "action"]
             }
@@ -511,19 +518,21 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_compare",
-            "Compare stored document versions into one native tracked-changes redline, without an open session: two-way (baselinePath vs revisedPath) or N-way consolidate (baselinePath vs revisedPaths, each reviewer's changes attributed to their author). Every path resolves inside the server's document scope exactly like docxodus_open's; the redline is written to outputPath. The result summarizes the generated revisions by author; open the output with docxodus_open to inspect, comment on, or resolve them.",
+            "Compare stored document versions into native tracked-changes redlines, without an open session: two-way (baselinePath vs revisedPath), N-way consolidate (baselinePath vs revisedPaths merged into one redline, each reviewer's changes attributed), or fan-out (mode=fan_out: one redline per revisedPaths entry, written to the matching outputPaths entry, with the baseline read once for the whole set). Every path resolves inside the server's document scope exactly like docxodus_open's. The result summarizes the generated revisions by author; open an output with docxodus_open to inspect, comment on, or resolve them.",
             """
             {
               "type": "object",
               "properties": {
                 "baselinePath": { "type": "string", "description": "The earlier version both forms diff against." },
                 "revisedPath": { "type": "string", "description": "Two-way: the later version. Exactly one of revisedPath / revisedPaths." },
-                "revisedPaths": { "type": "array", "items": { "type": "string" }, "minItems": 2, "description": "Consolidate: two or more revised versions merged into one redline over the baseline." },
+                "revisedPaths": { "type": "array", "items": { "type": "string" }, "minItems": 2, "description": "Two or more revised versions. Merged into ONE redline by default (consolidate); with mode=fan_out, compared separately into one redline each." },
+                "mode": { "type": "string", "enum": ["consolidate", "fan_out"], "default": "consolidate", "description": "How revisedPaths is interpreted. fan_out compares the baseline against each entry separately and needs outputPaths; the baseline is read once for the whole set rather than once per entry." },
+                "outputPaths": { "type": "array", "items": { "type": "string" }, "description": "fan_out: where each entry's redline is written, one per revisedPaths entry in the same order." },
                 "author": { "type": "string", "description": "Two-way: the author stamped on generated revisions; absent uses the engine default." },
                 "authors": { "type": "array", "items": { "type": "string" }, "description": "Consolidate: reviewer name per revisedPaths entry, same order and length. Absent uses each file's name without extension." },
-                "outputPath": { "type": "string", "description": "Where the redline is written, resolved in the document scope like docxodus_save's path." }
+                "outputPath": { "type": "string", "description": "Where the redline is written, resolved in the document scope like docxodus_save's path. Required except under mode=fan_out, which uses outputPaths." }
               },
-              "required": ["baselinePath", "outputPath"]
+              "required": ["baselinePath"]
             }
             """),
         new ToolDefinition(

@@ -20,6 +20,81 @@ All notable changes to this project will be documented in this file.
   one file in the repository that is not MIT. Upstream commits, digests, license texts and
   verification commands are in `docs/demo/vendor/NOTICE.md`.
   Demo-content change (`docs/demo/`), not npm surface.
+- **Reference-field authoring is back, as session ops (#607).** Narrowing the library to the DOCX
+  toolchain removed `ReferenceAdder`, and with it the only way Docxodus could *create* a table of
+  contents, figures or authorities — it could read, render, diff and edit around one, but not author
+  one, and the stopgap of hand-building the field through `Raw.InsertXml` pushed exactly the OOXML
+  detail this library exists to hide back onto the caller. `InsertTableOfContents`,
+  `InsertTableOfFigures` and `InsertTableOfAuthorities` are anchor-addressed, undoable session ops
+  with **typed options instead of a switch string**: `Levels = "1-3"` rather than `\o "1-3"`,
+  `Category = AuthorityCategory.Statutes` rather than `\c "2"`. That matters because a malformed
+  instruction renders as *nothing* in Word, silently, with no schema error to catch it; a malformed
+  level range is now refused before anything is written. The field is emitted dirty with no cached
+  result and the document asks Word to update fields on open, so Word paginates and fills the table
+  rather than the library shipping one that is stale the moment anything above it moves. A table of
+  contents is wrapped in the `w:sdt` content control Word puts around one, which is what gives it the
+  *Update Table* control. Word's entry styles are find-or-created, so a firm's house formatting
+  survives. Available on every surface: .NET, the facade, WASM, `insertTableOfContents` and its
+  siblings on the npm session, `insert_table_of_contents` on `docx-scalpel`, and three new
+  `docxodus_create` actions on the MCP server. Refused for a non-body anchor (Word does not generate
+  a reference table in a running story) and under tracked-change recording (a generated table is
+  regenerated wholesale on every field update, so there is no reversible way to redline it —
+  the shape #614 established). Marking entries with `TC`/`TA` fields remains a separate job.
+- **`DocxDiff.CreateSnapshot` — read a document once, compare it many times (#617).** After #594 and
+  #616 the redundancy left in the engine is *across* comparisons: nothing let a caller say "I already
+  read this document", so one baseline against many counterparties re-read the baseline once per
+  counterparty, a version chain A→B→C→D read every interior version twice, and `GetConflicts`
+  followed by `Consolidate` read everything twice. A snapshot is that statement, and
+  `CreateComparison(leftSnapshot, rightSnapshot, settings)` produces exactly the same products as the
+  document overload without reading either side again. Only the input-revision policy reaches a read,
+  so one snapshot serves comparisons differing in author, granularity, move detection or format
+  comparison; a snapshot read under a *different* input-revision policy is **rejected** rather than
+  silently reused. Creation is free — nothing is read until a comparison needs it — but a
+  materialized snapshot roots the parsed XML of every story, so hold only the ones a run is reusing.
+  The compatibility pre-flight remains a property of the comparison, so a reused snapshot never makes
+  an `OnCompatibilityWarning` subscription go quiet.
+- **`DocxDiff.CreateConsolidation` — the N-way twin (#617).** The four consolidate statics each read
+  the full reviewer set independently, so inspecting conflicts before merging read all `N+1`
+  documents twice. They now delegate to one memoized pass that a caller can also hold directly.
+- **The batch compare, on every surface (#617).** A snapshot holds parsed XML and cannot cross a
+  process boundary, so the transports get the workload it exists for instead of a handle:
+  `docxDiffCompareBatch` (npm), `docx_diff_compare_batch` (python), `CompareBatchJson` (WASM), and
+  `docxodus_compare` with `mode: "fan_out"` (MCP) each take one baseline and many candidates, read
+  the baseline once, and return per-candidate products identical to comparing that pair alone. A
+  candidate that fails carries its error instead of products rather than failing the batch.
+
+### Fixed
+- **Authoring a footnote or endnote while recording tracked changes now produces a redline that
+  can actually be rejected (#614).** `InsertFootnote`/`InsertEndnote` ignored
+  `TrackedChangeMode.RenderInline` entirely: the citation and the note definition were both
+  written as ordinary content, so a reviewer had nothing to accept or reject, and reject-all left
+  the note in the document. The redline looked complete and only failed when somebody actually
+  rejected it — potentially long after the document had left the building. The citation is now
+  wrapped in `w:ins`, and the definition follows it: rejecting removes the reference, which leaves
+  the note uncited, and the note-lifecycle rule deletes it in the same resolve. Accepting keeps
+  both. The definition carries no revision markup of its own on purpose — a `w:ins` inside it
+  would be a revision with no independently meaningful resolution.
+
+  That rule — *a note definition exists exactly as long as something still cites it* — now has one
+  owner, `Internal/NoteReferenceOps.cs`, shared by the session's resolve paths (#516, #591) and by
+  the stateless `RevisionProcessor` **reject** path, which is what every non-.NET transport reaches
+  through `DocxDiffOps.RejectRevisions`; without that the same redline was reversible in-session
+  and not reversible through npm/python/MCP. The stateless **accept** path deliberately does not
+  apply it, because `Accept(Compare(l, r)) ≡ r` is the comparison engine's contract and a
+  counterpart document that carries a reference-less note definition is entitled to keep it.
+  Consolidating the rule also fixed its scope: it asks the whole package who cites a note rather
+  than only the body, so a note cited from a running header as well no longer disappears when its
+  body citation goes away.
+- **`InsertHorizontalRule` records under tracked-change recording too (#614).** Same defect,
+  smaller blast radius: the rule paragraph was written untracked, so rejecting the redline left it
+  behind. It now takes the same paragraph marking `InsertParagraph` applies. `docx_mutation_api.md`
+  gains the full table of which mutations record, which refuse with `TrackedOperationUnsupported`,
+  and which apply untracked by design.
+- **Three of the four N-way entry points ignored the compatibility subscription (#617).** Only
+  `Consolidate` ran the pre-flight, so a caller who set `OnCompatibilityWarning` or
+  `ThrowOnCompatibilityWarning` and asked for conflicts, consolidated revisions or the consolidated
+  edit script was silently never told — the N-way half of the gap #622 closed on the pairwise side.
+  All four now run the same gate.
 
 ### Changed
 - **Doom's controls are actually legible, and the gameplay frame is now near-VGA
@@ -203,6 +278,58 @@ All notable changes to this project will be documented in this file.
   choice about how each degrades — the bitmap smears horizontally, the ASCII flattens into its
   21-ink palette — rather than about speed.
   Demo-content change (`docs/demo/`), not npm surface.
+- **The corpus differential observes a product call, not just what it returned.** The #616
+  regression — a fast path that skipped the compatibility pre-flight — passed all 8,136 digests
+  correctly, because for two byte-identical documents "no revisions" is the right answer before and
+  after and the return value never moved. The recorded unit is now an `Observation` with one field
+  per channel (result, compatibility warnings, input mutation, product-order variance), so adding a
+  channel is one field on one type applied to every product and every document rather than a new
+  digest family per mode. Two channels are new: whether a call left its inputs byte-for-byte
+  unchanged, which `IrReader.Read` and `PreAccept` both promise in prose and nothing verified; and
+  whether the memoized `DocxDiffComparison` agrees with the statics when the products are requested
+  in the opposite order, which is a risk `DocxDiff.CreateComparison` created and nothing tested. The
+  pre-flight report is now captured from the same call that produced the result instead of from a
+  second run of every product — cheaper and stricter. Each run prints how many observations record a
+  non-default value per channel, because a channel that never fires is coverage nobody should count.
+  A fifth comparison per document varies exactly one `DocxDiffSettings` property, rotated by document
+  index, so all twenty get exercised across the corpus for one extra comparison rather than a
+  cross-product. And the redline digest's generated-part-name folding is gone: it existed because
+  `Compare` was not byte-reproducible, which #623 fixed, so it was only making the harness less
+  sensitive — confirmed by running the corpus twice on one build and getting all 12,882 observations
+  identical.
+- **The diff engine stops giving 13,000 elements an identity nothing asks for.** The
+  deterministic Unid pass assigns to every element in a part at two SHA-256 hashes each — 30,720
+  hashes on a 15,360-element legal document. The IR reads one back
+  from a small fraction of them: block elements, table structure, section breaks, content controls,
+  notes, comments and `w:drawing`. The rest — `w:rPr`, `w:sz`, `w:color`, `w:t` and their kin — get
+  an identity no consumer can address, and the markup renderer strips the attribute on the way out
+  anyway. `IrReaderOptions.UnidAssignment` now lets a reader ask for only the identity-bearing
+  elements and their ancestors, and the diff engine's four read paths do. The default is unchanged
+  (`All`), because a Unid persists into a saved package and "which elements carry an identity" is a
+  contract `DocxSession`, the markdown projection and the package change detector own. The assigned
+  **values are identical** either way: a Unid derives from its ancestors, never its descendants, and
+  the skip predicate is keyed on element names, so it removes whole tag-groups at once and no
+  surviving element's duplicate index can shift. On that document the skip covers **64% of the
+  elements** (`w:rPr` and its children, `w:t`, paragraph properties, `w:instrText`); alternating the
+  two modes inside one process, the cold assignment pass runs 33–42 ms under `All` against 22–24 ms
+  under `IdentityBearing`. Proven by reading every one of the 678 fixtures in `TestFiles/` both ways
+  and comparing the IR's diagnostic JSON — identical on all of them — and by the corpus
+  differential's 14,916 output digests.
+- **The compatibility normalizer stops full-parsing every part to prove it has nothing to do.**
+  Deciding whether a part needed either of its two repairs meant building the whole `XDocument`,
+  gated on a literal substring test for `AlternateContent` or `pPr` — and every real
+  `word/document.xml` contains `pPr`, so the gate never closed. `PreAccept` runs the normalizer
+  once per side of every comparison, so that was a DOM build plus two descendant sweeps per side,
+  spent almost entirely on documents where neither repair fires (the NVCA model certificate of
+  incorporation has zero paragraphs with two direct `w:pPr`). A streaming `XmlReader` pass now
+  answers the same two questions — any `mc:AlternateContent`, any paragraph with two or more
+  direct `pPr` children — without building a tree, and the archive is opened read-only for it, so
+  a package that needs no repair never pays `ZipArchiveMode.Update`'s entry buffering either. Only
+  a package with a candidate part reaches the rewrite pass, and only its candidate parts are
+  parsed. The gate stays a superset of what the repairs act on: it matches on local names, where
+  the repairs are namespace-exact, so a false positive costs one parse of one part and a false
+  negative — which would be a correctness bug — cannot happen. Measured on the same document:
+  `Normalize` for both sides of a comparison 31.6 → 10.2 ms.
 - **`DocxDiff` no longer reads each document four times per comparison.** On a heavyweight
   legal document (the NVCA model certificate of incorporation: 574 KB of `document.xml`,
   15,360 elements, 97 footnotes) about 72% of a `Compare` was spent inside `IrReader`,

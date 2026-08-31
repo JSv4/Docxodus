@@ -502,6 +502,17 @@ internal static class Dispatcher
             session.Handle, Str(args, "anchorId"),
             OptStr(args, "field") == "total_pages" ? PageNumberField.TotalPages : PageNumberField.CurrentPage,
             DocxSessionJson.ParseNumberFormatOrNull(OptStr(args, "numberFormat"))),
+        // Reference fields (issue #607). The switches are typed options here too: an agent asks
+        // for "levels 1-3, hyperlinked", never for \o "1-3" \h.
+        "insert_table_of_contents" => DocxSessionOps.InsertTableOfContents(
+            session.Handle, Str(args, "anchorId"), ParsePos(args),
+            ReferenceFieldOptions(args, DocxSessionJson.ParseTableOfContentsOptions)),
+        "insert_table_of_figures" => DocxSessionOps.InsertTableOfFigures(
+            session.Handle, Str(args, "anchorId"), ParsePos(args),
+            ReferenceFieldOptions(args, DocxSessionJson.ParseTableOfFiguresOptions)),
+        "insert_table_of_authorities" => DocxSessionOps.InsertTableOfAuthorities(
+            session.Handle, Str(args, "anchorId"), ParsePos(args),
+            ReferenceFieldOptions(args, DocxSessionJson.ParseTableOfAuthoritiesOptions)),
         "set_header_text" => DocxSessionOps.SetHeaderText(
             session.Handle, Str(args, "bodyAnchorId"),
             DocxSessionJson.ParseHeaderFooterKind(Str(args, "kind")), Str(args, "markdown")),
@@ -868,6 +879,14 @@ internal static class Dispatcher
         return DeliveryOps.VerifyChangeReceiptJson(receiptJson, artifactsJson);
     }
 
+    /// <summary>
+    /// A reference field's options, read from the FLAT tool arguments rather than a nested object —
+    /// an agent writing a tool call should not have to nest, and the grouped-intent tools are flat
+    /// everywhere else. Absent keys fall back to the engine defaults.
+    /// </summary>
+    private static T ReferenceFieldOptions<T>(JsonElement args, Func<JsonElement, T> parse)
+        where T : class => parse(args);
+
     private static string Compare(SessionStore store, JsonElement args)
     {
         var baseline = store.Documents.Read(store.Documents.Resolve(Str(args, "baselinePath")));
@@ -876,7 +895,14 @@ internal static class Dispatcher
             && revisedPaths.ValueKind == JsonValueKind.Array;
         if ((revisedPath is not null) == hasMany)
             throw new McpToolException(
-                "pass exactly one of revisedPath (two-way compare) or revisedPaths (consolidate)");
+                "pass exactly one of revisedPath (two-way compare) or revisedPaths "
+                + "(consolidate, or fan_out with outputPaths)");
+
+        // fan_out: one redline PER revised version rather than one merged redline, with the
+        // baseline read once for the whole set (issue #617). The default stays consolidate, so an
+        // existing caller passing revisedPaths gets exactly what it always did.
+        if (hasMany && OptStr(args, "mode") is "fan_out")
+            return CompareFanOut(store, args, baseline, revisedPaths);
 
         byte[] redline;
         string revisionsJson;
@@ -922,8 +948,12 @@ internal static class Dispatcher
                 docB64 = Convert.ToBase64String(
                     store.Documents.Read(store.Documents.Resolve(path!))),
             }));
-            redline = DocxDiffOps.Consolidate(baseline, reviewersJson, null);
-            revisionsJson = DocxDiffOps.GetConsolidatedRevisionsJson(baseline, reviewersJson, null);
+            // One memoized consolidation pass serves both products (issue #617) — this used to
+            // read the base and every reviewer twice, once per product.
+            var consolidated = DocxDiffOps.ConsolidateProducts(baseline, reviewersJson, null,
+                redline: true, revisions: true, editScript: false, conflicts: false);
+            redline = consolidated.RedlineBytes!;
+            revisionsJson = consolidated.RevisionsJson!;
         }
 
         var destination = store.Documents.Resolve(Str(args, "outputPath"));
@@ -952,6 +982,69 @@ internal static class Dispatcher
         }
 
         summary.Append("}}}");
+        return summary.ToString();
+    }
+
+    /// <summary>
+    /// Compare the baseline against each revised version separately, writing one redline per pair.
+    /// The baseline is read ONCE for the whole set — the workload
+    /// <see cref="Docxodus.DocxDiff.CreateSnapshot"/> exists for, which a loop of two-way compares
+    /// pays for once per counterparty. A revised version that fails carries its error and the rest
+    /// of the fan-out still completes.
+    /// </summary>
+    private static string CompareFanOut(
+        SessionStore store, JsonElement args, byte[] baseline, JsonElement revisedPaths)
+    {
+        var paths = revisedPaths.EnumerateArray().Select(value => value.GetString()).ToList();
+        if (paths.Count < 2 || paths.Any(string.IsNullOrWhiteSpace))
+            throw new McpToolException(
+                "revisedPaths needs at least two non-empty entries; "
+                + "use revisedPath for a two-way compare");
+
+        if (!args.TryGetProperty("outputPaths", out var outputPaths)
+            || outputPaths.ValueKind != JsonValueKind.Array)
+            throw new McpToolException("mode=fan_out requires outputPaths");
+        var destinations = outputPaths.EnumerateArray().Select(value => value.GetString()).ToList();
+        if (destinations.Count != paths.Count || destinations.Any(string.IsNullOrWhiteSpace))
+            throw new McpToolException(
+                "outputPaths must have one non-empty entry per revisedPaths entry, in the same order");
+
+        var candidatesJson = JsonSerializer.Serialize(paths.Select(path => new
+        {
+            name = path!,
+            docB64 = Convert.ToBase64String(store.Documents.Read(store.Documents.Resolve(path!))),
+        }));
+
+        using var batch = JsonDocument.Parse(DocxDiffOps.CompareBatchJson(
+            baseline, candidatesJson, null, "[\"redline\",\"revisions\"]"));
+
+        var summary = new StringBuilder(256);
+        summary.Append("{\"results\":[");
+        var index = 0;
+        foreach (var entry in batch.RootElement.GetProperty("results").EnumerateArray())
+        {
+            if (index > 0) summary.Append(',');
+            summary.Append("{\"revisedPath\":").Append(JsonRpcIo.JsonString(paths[index]!));
+            if (entry.TryGetProperty("error", out var error))
+            {
+                summary.Append(",\"error\":").Append(JsonRpcIo.JsonString(error.GetString() ?? ""));
+            }
+            else
+            {
+                var bytes = Convert.FromBase64String(entry.GetProperty("redlineB64").GetString()!);
+                var destination = store.Documents.Resolve(destinations[index]!);
+                store.Documents.Write(destination, bytes);
+                summary.Append(",\"path\":").Append(JsonRpcIo.JsonString(destination));
+                summary.Append(",\"bytesWritten\":").Append(bytes.Length);
+                summary.Append(",\"revisions\":")
+                       .Append(entry.GetProperty("revisions").GetArrayLength());
+            }
+
+            summary.Append('}');
+            index++;
+        }
+
+        summary.Append("]}");
         return summary.ToString();
     }
 
@@ -1357,7 +1450,9 @@ internal static class Dispatcher
                 or "remove_list_membership" or "apply_list_format",
             "docxodus_create" => action is "insert_paragraph" or "insert_heading" or "insert_table"
                 or "insert_horizontal_rule" or "insert_footnote" or "insert_endnote"
-                or "insert_page_number_field" or "set_header_text" or "set_footer_text"
+                or "insert_page_number_field" or "insert_table_of_contents"
+                or "insert_table_of_figures" or "insert_table_of_authorities"
+                or "set_header_text" or "set_footer_text"
                 or "ensure_header_footer_visible",
             "docxodus_table" => action is "insert" or "insert_row" or "insert_column"
                 or "delete_row" or "delete_column" or "replace_cell_content" or "merge_cells"
@@ -1507,6 +1602,22 @@ internal static class Dispatcher
                 RequireStrings(args, "anchorId");
                 ValidateOptionalEnum(args, "position", "before", "after");
                 ValidateOptionalEnum(args, "ruleStyle", "single", "double", "thick");
+                break;
+            case ("docxodus_create", "insert_table_of_contents"):
+                RequireStrings(args, "anchorId");
+                ValidateOptionalEnum(args, "position", "before", "after");
+                ValidateOptionalBool(args, "hyperlinks");
+                break;
+            case ("docxodus_create", "insert_table_of_figures"):
+                RequireStrings(args, "anchorId");
+                ValidateOptionalEnum(args, "position", "before", "after");
+                ValidateOptionalBool(args, "hyperlinks");
+                break;
+            case ("docxodus_create", "insert_table_of_authorities"):
+                RequireStrings(args, "anchorId");
+                ValidateOptionalEnum(args, "position", "before", "after");
+                ValidateOptionalBool(args, "hyperlinks");
+                ValidateOptionalEnum(args, "category", DocxSessionJson.AuthorityCategoryNames);
                 break;
             case ("docxodus_create", "insert_footnote"):
             case ("docxodus_create", "insert_endnote"):

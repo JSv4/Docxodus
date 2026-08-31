@@ -49,8 +49,17 @@ public static class DocxDiff
     // The diff engine reads with provenance OFF (it never needs element-level provenance and the lower
     // footprint matters for bulk pipelines) and revisions ACCEPTED (the IR the script is built over is
     // the accepted view of each side). The markup renderer re-reads internally with its own options.
+    // …and with the Unid pass pruned to the elements an identity is read back FROM (issue #618).
+    // The engine addresses block elements, table structure, content controls, notes, comments and
+    // w:drawing; the renderer strips the attribute on the way out. The assigned values are identical
+    // either way — see UnidAssignment — so this is purely the work of not hashing 13k elements twice.
     internal static readonly IrReaderOptions ReadOpts =
-        new() { RetainSources = false, RevisionView = RevisionView.Accept };
+        new()
+        {
+            RetainSources = false,
+            RevisionView = RevisionView.Accept,
+            UnidAssignment = UnidAssignment.IdentityBearing,
+        };
 
     // The same read WITH provenance. DocxDiffComparison uses this one so a single pass per side feeds both
     // the edit-script build and the markup renderer's clone-from-provenance pass; provenance is
@@ -58,7 +67,12 @@ public static class DocxDiff
     // ReadOpts. ReadOpts stays for the paths that genuinely never clone source XML and want the lower
     // footprint (the consolidate scoreboard, compatibility probes).
     internal static readonly IrReaderOptions RenderReadOpts =
-        new() { RetainSources = true, RevisionView = RevisionView.Accept };
+        new()
+        {
+            RetainSources = true,
+            RevisionView = RevisionView.Accept,
+            UnidAssignment = UnidAssignment.IdentityBearing,
+        };
 
     /// <summary>
     /// Compare <paramref name="left"/> and <paramref name="right"/> and produce a tracked-changes
@@ -96,6 +110,60 @@ public static class DocxDiff
         ArgumentNullException.ThrowIfNull(left);
         ArgumentNullException.ThrowIfNull(right);
         return new DocxDiffComparison(left, right, settings);
+    }
+
+    /// <summary>
+    /// Read <paramref name="document"/> once into a <see cref="DocxDiffSnapshot"/> that can be
+    /// handed to any number of comparisons (issue #617). The read is the single largest stage of a
+    /// comparison, and a bulk workload — one baseline against many counterparties, or a version
+    /// chain — otherwise pays for it once per comparison the document appears in.
+    /// </summary>
+    /// <param name="document">The document to snapshot. Not modified.</param>
+    /// <param name="settings">
+    /// Only the input-revision policy is read from here (<c>PreAcceptInputRevisions</c> /
+    /// <c>PreserveInputRevisions</c>); everything else in <see cref="DocxDiffSettings"/> is applied
+    /// at diff or render time and does not reach the read. A comparison given a snapshot read under
+    /// a different policy is rejected, not silently served.
+    /// </param>
+    /// <remarks>Nothing is read until a comparison needs it, so preparing a batch of snapshots is
+    /// free. See <see cref="DocxDiffSnapshot"/> for what a materialized snapshot retains — it is
+    /// not small, and holding a hundred of them holds a hundred parsed documents.</remarks>
+    public static DocxDiffSnapshot CreateSnapshot(WmlDocument document, DocxDiffSettings? settings = null)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        return new DocxDiffSnapshot(
+            document, DocxDiffSnapshot.AcceptsInputRevisions(settings ?? new DocxDiffSettings()));
+    }
+
+    /// <summary>
+    /// A comparison over two already-read <see cref="DocxDiffSnapshot"/>s. Every product is exactly
+    /// what the corresponding static returns for the same documents and settings; the difference is
+    /// only that neither side is read again.
+    /// </summary>
+    /// <exception cref="ArgumentException">
+    /// A snapshot was read under a different input-revision policy than <paramref name="settings"/>
+    /// asks for. Reusing it would silently compare a different view of the document than the caller
+    /// requested, so the mismatch is refused — create the snapshot with the same policy instead.
+    /// </exception>
+    public static DocxDiffComparison CreateComparison(
+        DocxDiffSnapshot left, DocxDiffSnapshot right, DocxDiffSettings? settings = null)
+    {
+        ArgumentNullException.ThrowIfNull(left);
+        ArgumentNullException.ThrowIfNull(right);
+        var wanted = DocxDiffSnapshot.AcceptsInputRevisions(settings ?? new DocxDiffSettings());
+        RequirePolicy(left, wanted, nameof(left));
+        RequirePolicy(right, wanted, nameof(right));
+        return new DocxDiffComparison(left, right, settings);
+
+        static void RequirePolicy(DocxDiffSnapshot snapshot, bool wanted, string parameter)
+        {
+            if (snapshot.InputRevisionsAccepted == wanted) return;
+            throw new ArgumentException(
+                $"the {parameter} snapshot was read with InputRevisionsAccepted="
+                + $"{snapshot.InputRevisionsAccepted}, but these settings ask for {wanted}. "
+                + "Create the snapshot with the same input-revision policy as the comparison.",
+                parameter);
+        }
     }
 
     /// <summary>
@@ -234,22 +302,7 @@ public static class DocxDiff
         WmlDocument baseDocument, IReadOnlyList<DocxDiffReviewer> reviewers,
         DocxDiffConsolidateSettings? settings = null)
     {
-        var s = ValidateConsolidateArgs(baseDocument, reviewers, settings);
-        var diff = s.Diff.ToIrDiffSettings();
-        if (reviewers.Count == 0) return baseDocument;
-        // Opt-in accept-all pre-flatten (default off → no-op): consolidate the accepted view of the base and
-        // every reviewer so no pre-existing input revision survives into the consolidated result.
-        baseDocument = PreAccept(s.Diff, baseDocument);
-        reviewers = PreAccept(s.Diff, reviewers);
-        PreflightCompatibility(s.Diff, new[] { baseDocument }.Concat(reviewers.Select(r => r.Document)).ToArray());
-        // ONE read per document, with provenance, serving both the merge and the renderer's
-        // clone-from-provenance pass — the renderer used to re-read all of them, so an N-reviewer
-        // consolidate read 2*(N+1) packages to compare N+1.
-        var (baseIr, revIr) = ReadReviewerSet(baseDocument, reviewers, RenderReadOpts);
-        var script = IrCompositeMerger.Merge(baseIr, revIr, s.ConflictResolution, diff);
-        return IrCompositeMarkupRenderer.Render(
-            script, baseDocument, reviewers.Select(r => (r.Author, r.Document)).ToList(), diff,
-            baseIr, revIr.Select(x => x.Ir).ToList());
+        return CreateConsolidation(baseDocument, reviewers, settings).Consolidate();
     }
 
     /// <summary>
@@ -291,14 +344,7 @@ public static class DocxDiff
         WmlDocument baseDocument, IReadOnlyList<DocxDiffReviewer> reviewers,
         DocxDiffConsolidateSettings? settings = null)
     {
-        var s = ValidateConsolidateArgs(baseDocument, reviewers, settings);
-        var diff = s.Diff.ToIrDiffSettings();
-        if (reviewers.Count == 0) return System.Array.Empty<DocxDiffConflict>();
-        baseDocument = PreAccept(s.Diff, baseDocument);
-        reviewers = PreAccept(s.Diff, reviewers);
-        var (baseIr, revIr) = ReadReviewerSet(baseDocument, reviewers, ReadOpts);
-        var script = IrCompositeMerger.Merge(baseIr, revIr, s.ConflictResolution, diff);
-        return script.Conflicts.Select(DocxDiffConflict.FromIr).ToList();
+        return CreateConsolidation(baseDocument, reviewers, settings).GetConflicts();
     }
 
     /// <summary>
@@ -332,32 +378,7 @@ public static class DocxDiff
         WmlDocument baseDocument, IReadOnlyList<DocxDiffReviewer> reviewers,
         DocxDiffConsolidateSettings? settings = null)
     {
-        var s = ValidateConsolidateArgs(baseDocument, reviewers, settings);
-        var diff = s.Diff.ToIrDiffSettings();
-        if (reviewers.Count == 0) return System.Array.Empty<DocxDiffConsolidatedRevision>();
-        baseDocument = PreAccept(s.Diff, baseDocument);
-        reviewers = PreAccept(s.Diff, reviewers);
-        var (baseIr, revIr) = ReadReviewerSet(baseDocument, reviewers, ReadOpts);
-        var script = IrCompositeMerger.Merge(baseIr, revIr, s.ConflictResolution, diff);
-        var rendered = IrCompositeRevisionRenderer.Render(script, baseIr, revIr, diff);
-        return rendered.Select(x => new DocxDiffConsolidatedRevision(
-            type: x.Rev.Type switch
-            {
-                IrRevisionType.Inserted => DocxDiffRevisionType.Inserted,
-                IrRevisionType.Deleted => DocxDiffRevisionType.Deleted,
-                IrRevisionType.Moved => DocxDiffRevisionType.Moved,
-                IrRevisionType.FormatChanged => DocxDiffRevisionType.FormatChanged,
-                _ => throw new ArgumentOutOfRangeException(nameof(reviewers), x.Rev.Type, "Unknown IrRevisionType."),
-            },
-            text: x.Rev.Text,
-            author: x.Author,
-            date: x.Rev.Date,
-            moveGroupId: x.Rev.MoveGroupId,
-            isMoveSource: x.Rev.IsMoveSource,
-            formatChange: x.Rev.FormatChange is { } fc ? new DocxDiffFormatChange(fc) : null,
-            leftAnchor: x.Rev.LeftAnchor,
-            rightAnchor: x.Rev.RightAnchor,
-            conflictId: x.ConflictId)).ToList();
+        return CreateConsolidation(baseDocument, reviewers, settings).GetConsolidatedRevisions();
     }
 
     /// <summary>
@@ -385,17 +406,7 @@ public static class DocxDiff
         WmlDocument baseDocument, IReadOnlyList<DocxDiffReviewer> reviewers,
         DocxDiffConsolidateSettings? settings = null)
     {
-        var s = ValidateConsolidateArgs(baseDocument, reviewers, settings);
-        var diff = s.Diff.ToIrDiffSettings();
-        if (reviewers.Count == 0)
-            return IrCompositeScriptJson.Write(new IrCompositeScript(
-                IrNodeList.From(System.Array.Empty<IrCompositeOp>()),
-                IrNodeList.From(System.Array.Empty<IrConflict>())));
-        baseDocument = PreAccept(s.Diff, baseDocument);
-        reviewers = PreAccept(s.Diff, reviewers);
-        var (baseIr, revIr) = ReadReviewerSet(baseDocument, reviewers, ReadOpts);
-        var script = IrCompositeMerger.Merge(baseIr, revIr, s.ConflictResolution, diff);
-        return IrCompositeScriptJson.Write(script);
+        return CreateConsolidation(baseDocument, reviewers, settings).GetConsolidatedEditScriptJson();
     }
 
     /// <summary>
@@ -487,7 +498,7 @@ public static class DocxDiff
     /// functions of their inputs, so they run concurrently; reviewer order in the result matches
     /// <paramref name="reviewers"/>, which is significant for conflict competitor order.
     /// </summary>
-    private static (IrDocument BaseIr, List<(string Author, IrDocument Ir)> ReviewerIrs) ReadReviewerSet(
+    internal static (IrDocument BaseIr, List<(string Author, IrDocument Ir)> ReviewerIrs) ReadReviewerSet(
         WmlDocument baseDocument, IReadOnlyList<DocxDiffReviewer> reviewers, IrReaderOptions opts)
     {
         var reads = new Func<IrDocument>[reviewers.Count];
@@ -532,6 +543,50 @@ public static class DocxDiff
     /// <summary>Per-reviewer <see cref="PreAccept(DocxDiffSettings, WmlDocument)"/> for the N-way entry points
     /// (strict normalization always applies; the accept-flatten only when the flag is set and not
     /// overridden by Preserve).</summary>
+    /// <summary>
+    /// A memoized N-way consolidation the four static entry points delegate to, and which a caller
+    /// can hold directly to inspect conflicts and then consolidate without reading the reviewer set
+    /// twice (issue #617). An <c>N</c>-reviewer set is <c>N+1</c> documents; two independent statics
+    /// over the same inputs read <c>2(N+1)</c> packages to answer a question that needs <c>N+1</c>.
+    /// </summary>
+    /// <param name="baseDocument">The shared base document every reviewer revised.</param>
+    /// <param name="reviewers">The reviewers' revised copies and author names, in priority order.</param>
+    /// <param name="settings">Consolidate settings; <c>null</c> uses the defaults.</param>
+    /// <remarks>Nothing is computed at creation; each product materializes on first request. See
+    /// <see cref="DocxDiffConsolidation"/> for what the instance retains.</remarks>
+    public static DocxDiffConsolidation CreateConsolidation(
+        WmlDocument baseDocument, IReadOnlyList<DocxDiffReviewer> reviewers,
+        DocxDiffConsolidateSettings? settings = null)
+    {
+        var resolved = ValidateConsolidateArgs(baseDocument, reviewers, settings);
+        return new DocxDiffConsolidation(baseDocument, reviewers, resolved);
+    }
+
+    /// <summary>Project the composite revision renderer's output to the public consolidated-revision
+    /// shape. Shared so the memoized consolidation and this file cannot drift.</summary>
+    internal static IReadOnlyList<DocxDiffConsolidatedRevision> ProjectConsolidatedRevisions(
+        IReadOnlyList<(Ir.Diff.IrRevision Rev, string Author, int? ConflictId)> rendered)
+    {
+        return rendered.Select(x => new DocxDiffConsolidatedRevision(
+            type: x.Rev.Type switch
+            {
+                IrRevisionType.Inserted => DocxDiffRevisionType.Inserted,
+                IrRevisionType.Deleted => DocxDiffRevisionType.Deleted,
+                IrRevisionType.Moved => DocxDiffRevisionType.Moved,
+                IrRevisionType.FormatChanged => DocxDiffRevisionType.FormatChanged,
+                _ => throw new ArgumentOutOfRangeException(nameof(rendered), x.Rev.Type, "Unknown IrRevisionType."),
+            },
+            text: x.Rev.Text,
+            author: x.Author,
+            date: x.Rev.Date,
+            moveGroupId: x.Rev.MoveGroupId,
+            isMoveSource: x.Rev.IsMoveSource,
+            formatChange: x.Rev.FormatChange is { } fc ? new DocxDiffFormatChange(fc) : null,
+            leftAnchor: x.Rev.LeftAnchor,
+            rightAnchor: x.Rev.RightAnchor,
+            conflictId: x.ConflictId)).ToList();
+    }
+
     private static IReadOnlyList<DocxDiffReviewer> PreAccept(
         DocxDiffSettings settings, IReadOnlyList<DocxDiffReviewer> reviewers)
     {

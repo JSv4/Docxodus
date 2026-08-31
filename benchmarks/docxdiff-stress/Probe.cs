@@ -235,12 +235,22 @@ internal static class UnidProbe
             return len;
         });
 
-        Median("AssignToAllElementsDeterministic (cold, full)", n, () =>
+        // The two assignment modes, alternated inside ONE process so machine load cannot
+        // masquerade as the difference (issue #618). IdentityBearing skips the elements no
+        // consumer can address; the values it assigns are identical.
+        for (var round = 0; round < 2; round++)
         {
-            var fresh = FreshRoot();
-            UnidHelper.AssignToAllElementsDeterministic(fresh);
-            return 1;
-        });
+            Median("AssignToAllElementsDeterministic (cold, All)", n, () =>
+            {
+                UnidHelper.AssignToAllElementsDeterministic(FreshRoot(), UnidAssignment.All);
+                return 1;
+            });
+            Median("AssignToAllElementsDeterministic (cold, IdentityBearing)", n, () =>
+            {
+                UnidHelper.AssignToAllElementsDeterministic(FreshRoot(), UnidAssignment.IdentityBearing);
+                return 1;
+            });
+        }
     }
 
     private static void Median<T>(string label, int n, Func<T> act)

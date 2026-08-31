@@ -21,6 +21,7 @@ from docx_scalpel import (
     convert_docx_to_html,
     docx_diff_accept_revisions,
     docx_diff_compare,
+    docx_diff_compare_batch,
     docx_diff_compare_products,
     docx_diff_get_revisions,
     docx_diff_get_semantic_changes,
@@ -89,6 +90,46 @@ def test_compare_products_serves_every_product_from_one_pass(test_files_dir: Pat
     assert only_revisions.revisions == products.revisions
     assert only_revisions.edit_script is None
     assert only_revisions.semantic_changes is None
+
+
+def test_compare_batch_reads_the_baseline_once_for_every_candidate(test_files_dir: Path) -> None:
+    """``docx_diff_compare_batch`` (issue #617): one baseline, many candidates, and each
+    result identical to comparing that pair on its own."""
+    baseline = (test_files_dir / "WC" / "WC001-Digits.docx").read_bytes()
+    candidates = {
+        "modified": (test_files_dir / "WC" / "WC001-Digits-Mod.docx").read_bytes(),
+        "deleted": (test_files_dir / "WC" / "WC002-DeleteAtEnd.docx").read_bytes(),
+    }
+
+    results = docx_diff_compare_batch(baseline, candidates, products=["revisions"])
+
+    assert [r.name for r in results] == ["modified", "deleted"]
+    for result in results:
+        assert result.error is None
+        assert result.products is not None
+        assert result.products.revisions == docx_diff_get_revisions(
+            baseline, candidates[result.name]
+        )
+        assert result.products.redline is None, "unrequested products stay None"
+
+    # A sequence is named by index, matching the .NET and npm surfaces.
+    by_index = docx_diff_compare_batch(baseline, list(candidates.values()), products=["revisions"])
+    assert [r.name for r in by_index] == ["0", "1"]
+
+
+def test_compare_batch_isolates_a_failing_candidate(test_files_dir: Path) -> None:
+    """One malformed counterparty markup must not cost the caller the rest of the batch."""
+    baseline = (test_files_dir / "WC" / "WC001-Digits.docx").read_bytes()
+    good = (test_files_dir / "WC" / "WC001-Digits-Mod.docx").read_bytes()
+
+    results = docx_diff_compare_batch(
+        baseline, {"good": good, "junk": b"not a docx", "also_good": good}, products=["revisions"]
+    )
+
+    assert [r.name for r in results] == ["good", "junk", "also_good"]
+    assert results[0].error is None and results[0].products is not None
+    assert results[1].error and results[1].products is None
+    assert results[2].error is None and results[2].products is not None
 
 
 def test_accept_reject_are_distinct(test_files_dir: Path) -> None:
