@@ -64,6 +64,41 @@ All notable changes to this project will be documented in this file.
   candidate that fails carries its error instead of products rather than failing the batch.
 
 ### Fixed
+- **The stateless reject no longer eats a baseline-owned note the counterpart merely cited, and
+  a session-recorded note's definition now carries insertion markup (#636).** The stateless reject
+  pruned every definition its resolution orphaned, unconditionally. That was cover for #614's
+  deliberately unmarked definitions — and it made the redline ambiguous: a `w:ins` citation next
+  to an unmarked definition is also what a comparison produces when the counterpart cites a husk
+  the baseline already owned, and rejecting such a redline deleted the content-bearing definition
+  the baseline was entitled to keep (`Reject(Compare(l, r)) ≠ l`, the exact mirror of #631).
+  `InsertFootnote`/`InsertEndnote` under tracked-change recording now mark the definition's
+  content inserted — what Word writes, and what the diff engine's own redline already carried for
+  a wholly-inserted note — and the stateless reject applies the same blockless guard as the
+  accept side: a definition the resolution both orphaned and emptied goes, an unmarked husk
+  stays. The guard is scaffolding-aware — `WmlComparer`'s renderer re-synthesizes an unmarked
+  `w:footnoteRef` marker run into inserted definitions, and a marker-only paragraph must not
+  shield a rejected note from the prune — and a still-cited note a resolution strips bare stays both cited
+  and bare — the corpus genuinely contains that shape (`WC064-Footnote`), and reproducing it is
+  what the round-trip contracts require. Scope: this is the *stateless* reject; the session's editorial resolves (and
+  delivery-bundle revision policies, which route through them) deliberately keep the unguarded
+  rule, exactly as on the accept side. One compatibility note: a redline saved from a #614-era
+  session (its definition's text unmarked) now rejects to an orphaned husk through the stateless
+  path instead of losing the note; re-authoring the redline with the current version restores
+  full reversibility.
+- **Accepting a redline through the stateless path now takes a wholly-deleted note's definition
+  with it (#631).** The redline itself distinguishes the two reference-less-husk cases: a note
+  definition the counterpart *kept* passes through the comparison unmarked, while one the
+  counterpart *deleted* arrives with every block deletion-marked, so accepting strips it bare.
+  `RevisionProcessor.AcceptRevisions` — the path npm, python, MCP and WASM all reach through
+  `docxDiffAcceptRevisions` — kept such a stripped-bare definition anyway, shipping a note the
+  counterpart had deleted and disagreeing with `DocxSession.AcceptAllRevisions` about the same
+  redline. The note-lifecycle rule now runs on the accept side with a blockless guard: a
+  definition this accept both orphaned and emptied goes (Word's own tracked deletions carry the
+  same fully-deletion-marked shape — `RP050-Deleted-Footnote` is authored exactly like this),
+  while a counterpart's own husk keeps its unmarked content and stays — so `Accept(Compare(l, r)) ≡ r` holds for both note stores and no policy setting is
+  needed. The same rule now also applies wherever an accepted view of a document is computed (the
+  comparison engines' input flattens), where a husk emptied of its content was riding into
+  redlines as debris.
 - **Authoring a footnote or endnote while recording tracked changes now produces a redline that
   can actually be rejected (#614).** `InsertFootnote`/`InsertEndnote` ignored
   `TrackedChangeMode.RenderInline` entirely: the citation and the note definition were both
@@ -72,16 +107,17 @@ All notable changes to this project will be documented in this file.
   rejected it — potentially long after the document had left the building. The citation is now
   wrapped in `w:ins`, and the definition follows it: rejecting removes the reference, which leaves
   the note uncited, and the note-lifecycle rule deletes it in the same resolve. Accepting keeps
-  both. The definition carries no revision markup of its own on purpose — a `w:ins` inside it
-  would be a revision with no independently meaningful resolution.
+  both. The definition carried no revision markup of its own at first — a choice #636 (below)
+  revisits: the definition's content now records too, which is what lets the stateless
+  resolutions read the redline instead of compensating with an unconditional prune.
 
   That rule — *a note definition exists exactly as long as something still cites it* — now has one
   owner, `Internal/NoteReferenceOps.cs`, shared by the session's resolve paths (#516, #591) and by
   the stateless `RevisionProcessor` **reject** path, which is what every non-.NET transport reaches
   through `DocxDiffOps.RejectRevisions`; without that the same redline was reversible in-session
-  and not reversible through npm/python/MCP. The stateless **accept** path deliberately does not
-  apply it, because `Accept(Compare(l, r)) ≡ r` is the comparison engine's contract and a
-  counterpart document that carries a reference-less note definition is entitled to keep it.
+  and not reversible through npm/python/MCP. (Since revised: #631 and #636, below, apply the rule on BOTH
+  stateless resolutions with a guard that keeps `Accept(Compare(l, r)) ≡ r` true — a counterpart
+  document's own reference-less note definition still keeps its content and stays.)
   Consolidating the rule also fixed its scope: it asks the whole package who cites a note rather
   than only the body, so a note cited from a running header as well no longer disappears when its
   body citation goes away.
@@ -289,6 +325,24 @@ All notable changes to this project will be documented in this file.
   choice about how each degrades — the bitmap smears horizontally, the ASCII flattens into its
   21-ink palette — rather than about speed.
   Demo-content change (`docs/demo/`), not npm surface.
+- **The corpus differential's consolidate rows now observe their calls (#632).** The N-way half of
+  the differential recorded its warnings and order-variance channels as `n/a` on two premises that
+  were both false when they were written down: that the consolidate settings type carries no
+  compatibility callback (it composes `DocxDiffSettings`, so `settings.Diff` carries the
+  subscription like any other), and that the four consolidate statics share no memoized state (since
+  `DocxDiff.CreateConsolidation` they each delegate to a single-use consolidation whose caller-held
+  form shares one read/merge across every product). The first false premise is what let the #629 gap
+  — three of the four N-way entry points never running the compatibility pre-flight — hide behind
+  thousands of rows that looked as though the question had been asked and answered.
+  `RecordConsolidate` is now a structural mirror of the pairwise recorder: warnings captured from
+  the same call that produced each result, and every product re-asked of one caller-held
+  consolidation in reverse order — which also pins `CreateConsolidation` against the statics, a
+  class corpus mode otherwise never reached. The settings rotation extends to the N-way path: each
+  document also consolidates with one non-default setting, the pairwise variations wrapped in a
+  consolidate settings object plus the two conflict-resolution policies that exist only there. The
+  audit the issue asked for found no third silent gap: every in-process entry point taking a
+  `DocxDiffSettings` (directly or composed) runs the pre-flight, and the wire transports uniformly
+  do not expose the gate at all rather than dropping it silently.
 - **The corpus differential observes a product call, not just what it returned.** The #616
   regression — a fast path that skipped the compatibility pre-flight — passed all 8,136 digests
   correctly, because for two byte-identical documents "no revisions" is the right answer before and

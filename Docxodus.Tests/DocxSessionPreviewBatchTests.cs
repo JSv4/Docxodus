@@ -437,7 +437,13 @@ public class DocxSessionPreviewBatchTests
         Task<EditResult>? concurrentTask = null;
         try
         {
-            Assert.True(receiptInspectionEntered.Wait(TimeSpan.FromSeconds(10)),
+            // Reaching the hook needs a thread-pool thread to pick up the Task.Run and complete
+            // a full mutation; on a loaded 2-core CI runner with the suite's heavier comparison
+            // collections executing in parallel, that has been observed to exceed 10 s (issue
+            // #635). The window is not part of the claim — the claim is ORDERING, asserted by the
+            // Assert.False below — so it is generous: the event either fires or the batch is
+            // genuinely wedged, and a wedged batch fails at any timeout.
+            Assert.True(receiptInspectionEntered.Wait(TimeSpan.FromSeconds(60)),
                 "batch did not reach receipt enrichment");
             concurrentTask = Task.Run(() =>
             {
@@ -446,7 +452,7 @@ public class DocxSessionPreviewBatchTests
                     preconditions: null,
                     s => s.ReplaceText(anchors[1], "Concurrent mutation."));
             });
-            Assert.True(concurrentMutationStarted.Wait(TimeSpan.FromSeconds(10)),
+            Assert.True(concurrentMutationStarted.Wait(TimeSpan.FromSeconds(60)),
                 "concurrent mutation task did not start");
             Assert.False(concurrentTask.Wait(TimeSpan.FromSeconds(1)),
                 "concurrent mutation interleaved with batch receipt enrichment");
