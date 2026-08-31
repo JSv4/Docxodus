@@ -1294,6 +1294,141 @@ public class DocxSessionRevisionTests
         Assert.Contains("Orphan note body.", string.Concat(texts));
     }
 
+    /// <summary>
+    /// The same rule through the STATELESS resolver — the path every non-.NET transport reaches
+    /// through <c>DocxDiffOps</c>. Rejecting a redline reproduces the baseline, so a note the
+    /// redline introduced has to go with the citation it introduced; before #614 the citation
+    /// vanished and the definition stayed, and the "rejected" package still shipped the note.
+    /// </summary>
+    [Fact]
+    public void DS429_StatelessReject_TakesAnIntroducedNoteWithItsCitation()
+    {
+        var left = File.ReadAllBytes(Path.Combine("../../../../TestFiles/WC", "WC035-Footnote-Before.docx"));
+        var right = File.ReadAllBytes(Path.Combine("../../../../TestFiles/WC", "WC035-Footnote-After.docx"));
+
+        // Compare in the direction that INSERTS the note, so rejecting must take it back out.
+        var inserting = UserNoteCount(left, "footnote") < UserNoteCount(right, "footnote")
+            ? (Baseline: left, Counterpart: right)
+            : (Baseline: right, Counterpart: left);
+        Assert.True(UserNoteCount(inserting.Counterpart, "footnote")
+            > UserNoteCount(inserting.Baseline, "footnote"), "fixture no longer inserts a note");
+
+        var redline = DocxDiff.Compare(
+            new WmlDocument("baseline.docx", inserting.Baseline),
+            new WmlDocument("counterpart.docx", inserting.Counterpart)).DocumentByteArray;
+
+        var rejected = Docxodus.Internal.DocxDiffOps.RejectRevisions(redline);
+
+        Assert.True(HasNotesPart(rejected, "footnote"), "the notes part itself must survive");
+        Assert.Equal(UserNoteCount(inserting.Baseline, "footnote"), UserNoteCount(rejected, "footnote"));
+    }
+
+    /// <summary>
+    /// …and the accept side deliberately does NOT apply it. Accept reproduces the counterpart
+    /// document as the comparison saw it — <c>Accept(Compare(l, r)) == r</c> — so a counterpart that
+    /// carries a reference-less note definition keeps it. <see cref="DocxSession"/>'s own resolve
+    /// paths (DS418) apply the rule in both directions because an editor is authoring a document
+    /// rather than inverting a comparison; this test pins that the two contracts stay distinct.
+    /// </summary>
+    [Fact]
+    public void DS430_StatelessAccept_PreservesACounterpartsOwnOrphanedNote()
+    {
+        var baseline = BuildWithBody(
+            new XElement(W.p,
+                new XElement(W.r,
+                    new XElement(W.t, "Cited here."),
+                    new XElement(W.footnoteReference, new XAttribute(W.id, "7")))),
+            new XElement(W.p, new XElement(W.r, new XElement(W.t, "Sentinel."))));
+        baseline = AddDanglingFootnote(baseline, noteId: 7, text: "Kept as a husk.");
+
+        // The counterpart drops the citing paragraph but keeps the definition — the husk shape a
+        // naive edit leaves behind, and exactly what accept has to reproduce.
+        var counterpart = BuildWithBody(
+            new XElement(W.p, new XElement(W.r, new XElement(W.t, "Sentinel."))));
+        counterpart = AddDanglingFootnote(counterpart, noteId: 7, text: "Kept as a husk.");
+
+        var redline = DocxDiff.Compare(
+            new WmlDocument("baseline.docx", baseline),
+            new WmlDocument("counterpart.docx", counterpart)).DocumentByteArray;
+
+        var accepted = Docxodus.Internal.DocxDiffOps.AcceptRevisions(redline);
+
+        Assert.Equal(1, UserNoteCount(counterpart, "footnote"));
+        Assert.Equal(1, UserNoteCount(accepted, "footnote"));
+    }
+
+    /// <summary>
+    /// The prune asks the whole package who still cites a note, not just the body. A note cited
+    /// from the body AND a running header outlives the body citation; a body-only scan would read
+    /// "referenced before, unreferenced after" and delete a note the header still points at.
+    /// </summary>
+    [Fact]
+    public void DS431_NoteStillCitedFromAHeader_SurvivesLosingItsBodyCitation()
+    {
+        var bytes = BuildWithBody(
+            new XElement(W.p,
+                new XElement(W.r,
+                    new XElement(W.t, "Cited here."),
+                    new XElement(W.footnoteReference, new XAttribute(W.id, "7")))),
+            new XElement(W.p, new XElement(W.r, new XElement(W.t, "Sentinel."))));
+        bytes = AddDanglingFootnote(bytes, noteId: 7, text: "Cited twice.");
+        bytes = AddHeaderCiting(bytes, noteId: 7);
+
+        using var session = new DocxSession(bytes);
+        var citing = session.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Scope == "body" && (t.TextPreview ?? string.Empty).StartsWith("Cited"))
+            .Anchor.Id;
+        Assert.True(session.DeleteBlock(citing).Success);
+
+        var saved = session.Save();
+        Assert.Equal(1, UserNoteCount(saved, "footnote"));
+    }
+
+    private static int UserNoteCount(byte[] bytes, string kind)
+    {
+        using var stream = new MemoryStream(bytes, writable: false);
+        using var document = WordprocessingDocument.Open(stream, false);
+        var main = document.MainDocumentPart!;
+        return kind == "footnote"
+            ? main.FootnotesPart?.Footnotes?.Elements<Footnote>().Count(n => n.Type is null) ?? 0
+            : main.EndnotesPart?.Endnotes?.Elements<Endnote>().Count(n => n.Type is null) ?? 0;
+    }
+
+    /// <summary>Add a default running header that cites <paramref name="noteId"/>, so the note has a
+    /// second citation outside the body.</summary>
+    private static byte[] AddHeaderCiting(byte[] source, int noteId)
+    {
+        using var ms = new MemoryStream();
+        ms.Write(source);
+        ms.Position = 0;
+        using (var wDoc = WordprocessingDocument.Open(ms, true))
+        {
+            var main = wDoc.MainDocumentPart!;
+            var header = main.AddNewPart<HeaderPart>();
+            header.Header = new Header(
+                new Paragraph(new Run(
+                    new Text("Running head."),
+                    new FootnoteReference { Id = noteId })));
+            header.Header.Save();
+
+            var body = main.Document!.Body!;
+            var sectPr = body.Elements<SectionProperties>().FirstOrDefault();
+            if (sectPr is null)
+            {
+                sectPr = new SectionProperties();
+                body.Append(sectPr);
+            }
+
+            sectPr.PrependChild(new HeaderReference
+            {
+                Type = HeaderFooterValues.Default,
+                Id = main.GetIdOfPart(header),
+            });
+            main.Document.Save();
+        }
+        return ms.ToArray();
+    }
+
     private static bool HasNotesPart(byte[] bytes, string kind)
     {
         using var stream = new MemoryStream(bytes, writable: false);

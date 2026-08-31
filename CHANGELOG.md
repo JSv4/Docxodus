@@ -209,6 +209,32 @@ All notable changes to this project will be documented in this file.
   `action` gets an error that spells out the nested shape.
 
 ### Fixed
+- **Authoring a footnote or endnote while recording tracked changes now produces a redline that
+  can actually be rejected (#614).** `InsertFootnote`/`InsertEndnote` ignored
+  `TrackedChangeMode.RenderInline` entirely: the citation and the note definition were both
+  written as ordinary content, so a reviewer had nothing to accept or reject, and reject-all left
+  the note in the document. The redline looked complete and only failed when somebody actually
+  rejected it — potentially long after the document had left the building. The citation is now
+  wrapped in `w:ins`, and the definition follows it: rejecting removes the reference, which leaves
+  the note uncited, and the note-lifecycle rule deletes it in the same resolve. Accepting keeps
+  both. The definition carries no revision markup of its own on purpose — a `w:ins` inside it
+  would be a revision with no independently meaningful resolution.
+
+  That rule — *a note definition exists exactly as long as something still cites it* — now has one
+  owner, `Internal/NoteReferenceOps.cs`, shared by the session's resolve paths (#516, #591) and by
+  the stateless `RevisionProcessor` **reject** path, which is what every non-.NET transport reaches
+  through `DocxDiffOps.RejectRevisions`; without that the same redline was reversible in-session
+  and not reversible through npm/python/MCP. The stateless **accept** path deliberately does not
+  apply it, because `Accept(Compare(l, r)) ≡ r` is the comparison engine's contract and a
+  counterpart document that carries a reference-less note definition is entitled to keep it.
+  Consolidating the rule also fixed its scope: it asks the whole package who cites a note rather
+  than only the body, so a note cited from a running header as well no longer disappears when its
+  body citation goes away.
+- **`InsertHorizontalRule` records under tracked-change recording too (#614).** Same defect,
+  smaller blast radius: the rule paragraph was written untracked, so rejecting the redline left it
+  behind. It now takes the same paragraph marking `InsertParagraph` applies. `docx_mutation_api.md`
+  gains the full table of which mutations record, which refuse with `TrackedOperationUnsupported`,
+  and which apply untracked by design.
 - **`DocxDiff.Compare` is byte-reproducible again once a redline creates or imports a part
   (#621).** `Deterministic` promises that two comparisons of the same inputs are byte-identical,
   and that only held for text-only documents. Two generators were reseeded on every run: parts

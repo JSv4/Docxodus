@@ -33,6 +33,20 @@ namespace Docxodus
 
         public static void RejectRevisions(WordprocessingDocument doc)
         {
+            // Word's note-lifecycle rule, on the reject side only (issue #614). Rejecting a redline
+            // reproduces the BASELINE, and a note the redline itself introduced has no place there:
+            // its citation came in a w:ins and its definition came with the redline, so dropping the
+            // citation has to drop the definition or the "rejected" package still ships the note.
+            //
+            // Accepting deliberately does NOT do this. Accept reproduces the COUNTERPART document as
+            // the comparison saw it, husks included — Accept(Compare(l, r)) == r is the comparison
+            // engine's contract, and a counterpart that carries a reference-less note definition is
+            // entitled to keep it. DocxSession's own resolve paths apply the rule in both directions
+            // because an editor is authoring a document, not inverting a comparison.
+            //
+            // The rule and its scoping (only citations THIS operation removed) live in
+            // Internal.NoteReferenceOps, shared with those session paths.
+            var citedBefore = Internal.NoteReferenceOps.ReferencedNoteIds(doc.MainDocumentPart);
             RejectRevisionsForPart(doc.MainDocumentPart);
             foreach (var part in doc.MainDocumentPart.HeaderParts)
                 RejectRevisionsForPart(part);
@@ -57,6 +71,8 @@ namespace Docxodus
                 AcceptRevisionsForPart(doc.MainDocumentPart.FootnotesPart);
             if (doc.MainDocumentPart.StyleDefinitionsPart != null)
                 AcceptRevisionsForStylesDefinitionPart(doc.MainDocumentPart.StyleDefinitionsPart);
+
+            Internal.NoteReferenceOps.PruneOrphanedNotes(doc.MainDocumentPart, citedBefore);
         }
 
         // Reject revisions for those revisions that can't be rejected by inverting the sense of the revision, and then accepting.
