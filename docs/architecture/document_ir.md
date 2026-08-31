@@ -120,6 +120,30 @@ populated in BOTH modes; the markdown emitter prefers those over per-node proven
 Retention is a pure memory knob — anchors, `ContentHash`, and `FormatFingerprint` are
 byte-identical across modes.
 
+**Optional pruning — `IrReaderOptions.UnidAssignment` (default `All`).** The deterministic
+Unid pass assigns an identity to every element in a part, at two SHA-256 hashes each. The IR
+reads one back from a small fraction of them: block elements, table structure (`w:tbl`/`w:tr`/
+`w:tc`/`w:gridCol`), section breaks, content controls, notes, comments and `w:drawing`.
+Everything else — `w:rPr`, `w:sz`, `w:color`, `w:t` and their kin — gets an identity nothing
+queries during a diff, and the markup renderer strips the attribute on the way out. With
+`UnidAssignment.IdentityBearing` the pass neither assigns to nor descends into those subtrees.
+
+The default stays `All` because a Unid **persists into a saved package**: which elements carry
+an identity is a cross-cutting contract that `DocxSession`, the markdown projection and the
+package change detector own, so only the diff engine opts in.
+
+The assigned **values are identical** either way, and the reason is structural rather than
+empirical. A Unid derives from `parentUnid : tag : signature : dupIndex` — its *ancestors*,
+never its descendants — and `dupIndex` counts preceding siblings sharing `(tag, signature)`.
+The skip predicate is a pure function of an element's name and its parent's name, so it removes
+whole tag-groups at once: no surviving element ever shares a dup key with a skipped one, and no
+surviving element's index can shift. A predicate that looked at *content* could split a
+tag-group and move an index, which is why it does not. `IrCorpusTests.
+Read_PrunedUnidAssignment_ProducesAnIdenticalIr` asserts that against every fixture in
+`TestFiles/`, comparing the diagnostic JSON — the surface that carries every anchor the reader
+hands out plus the `w:drawing` Unid, which is deliberately equality-neutral on `IrInlineImage`
+and would otherwise slip through a structural comparison.
+
 ## Normalization
 
 The reader applies normalization rules **N1–N15** before any node is

@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **The diff engine stops giving 13,000 elements an identity nothing asks for.** The
+  deterministic Unid pass assigns to every element in a part at two SHA-256 hashes each — 30,720
+  hashes on a 15,360-element legal document, about 40% of an `IrReader.Read`. The IR reads one back
+  from a small fraction of them: block elements, table structure, section breaks, content controls,
+  notes, comments and `w:drawing`. The rest — `w:rPr`, `w:sz`, `w:color`, `w:t` and their kin — get
+  an identity no consumer can address, and the markup renderer strips the attribute on the way out
+  anyway. `IrReaderOptions.UnidAssignment` now lets a reader ask for only the identity-bearing
+  elements and their ancestors, and the diff engine's four read paths do. The default is unchanged
+  (`All`), because a Unid persists into a saved package and "which elements carry an identity" is a
+  contract `DocxSession`, the markdown projection and the package change detector own. The assigned
+  **values are identical** either way: a Unid derives from its ancestors, never its descendants, and
+  the skip predicate is keyed on element names, so it removes whole tag-groups at once and no
+  surviving element's duplicate index can shift. Both reads of a comparison: 294 → 201 ms. Proven
+  by reading every one of the 678 fixtures in `TestFiles/` both ways and comparing the IR's
+  diagnostic JSON — identical on all of them — and by the corpus differential's 14,916 output
+  digests.
 - **`DocxDiff` no longer reads each document four times per comparison.** On a heavyweight
   legal document (the NVCA model certificate of incorporation: 574 KB of `document.xml`,
   15,360 elements, 97 footnotes) about 72% of a `Compare` was spent inside `IrReader`,

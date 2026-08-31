@@ -49,8 +49,17 @@ public static class DocxDiff
     // The diff engine reads with provenance OFF (it never needs element-level provenance and the lower
     // footprint matters for bulk pipelines) and revisions ACCEPTED (the IR the script is built over is
     // the accepted view of each side). The markup renderer re-reads internally with its own options.
+    // …and with the Unid pass pruned to the elements an identity is read back FROM (issue #618).
+    // The engine addresses block elements, table structure, content controls, notes, comments and
+    // w:drawing; the renderer strips the attribute on the way out. The assigned values are identical
+    // either way — see UnidAssignment — so this is purely the work of not hashing 13k elements twice.
     internal static readonly IrReaderOptions ReadOpts =
-        new() { RetainSources = false, RevisionView = RevisionView.Accept };
+        new()
+        {
+            RetainSources = false,
+            RevisionView = RevisionView.Accept,
+            UnidAssignment = UnidAssignment.IdentityBearing,
+        };
 
     // The same read WITH provenance. DocxDiffComparison uses this one so a single pass per side feeds both
     // the edit-script build and the markup renderer's clone-from-provenance pass; provenance is
@@ -58,7 +67,12 @@ public static class DocxDiff
     // ReadOpts. ReadOpts stays for the paths that genuinely never clone source XML and want the lower
     // footprint (the consolidate scoreboard, compatibility probes).
     internal static readonly IrReaderOptions RenderReadOpts =
-        new() { RetainSources = true, RevisionView = RevisionView.Accept };
+        new()
+        {
+            RetainSources = true,
+            RevisionView = RevisionView.Accept,
+            UnidAssignment = UnidAssignment.IdentityBearing,
+        };
 
     /// <summary>
     /// Compare <paramref name="left"/> and <paramref name="right"/> and produce a tracked-changes

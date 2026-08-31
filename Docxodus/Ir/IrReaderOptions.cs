@@ -70,4 +70,16 @@ internal sealed class IrReaderOptions
     /// </para>
     /// </summary>
     public bool RetainSources { get; init; } = true;
+
+    /// <summary>
+    /// Which elements the deterministic Unid pass assigns to (default <see cref="UnidAssignment.All"/>
+    /// — today's behavior). The diff engine reads an identity back from block elements, table
+    /// structure, content controls, notes, comments and <c>w:drawing</c> and from nothing else, and
+    /// the markup renderer strips the attribute on the way out, so it reads with
+    /// <see cref="UnidAssignment.IdentityBearing"/>. The default stays <see cref="UnidAssignment.All"/>
+    /// because a Unid assigned on the <see cref="DocxSession"/> / markdown-projection paths persists
+    /// into a saved package, which makes "which elements carry an identity" a contract those paths own.
+    /// The assigned values are identical either way.
+    /// </summary>
+    public UnidAssignment UnidAssignment { get; init; } = UnidAssignment.All;
 }
