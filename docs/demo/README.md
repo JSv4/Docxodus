@@ -38,14 +38,14 @@ Three depths, because "how fast is the diff engine" has three honest answers:
 
 | depth | engine calls | measured |
 |---|---|---|
-| `revisions` | `docxDiffGetRevisions` | ~6.5 diffs/s, p50 **152 ms** |
-| `redline` | `docxDiffCompareProducts` → redline package + revisions | ~5.4 diffs/s, p50 **181 ms** |
-| `full + HTML` | the above, then `convertDocxToHtml` with tracked changes | ~2.8 diffs/s, p50 **352 ms** |
+| `revisions` | `docxDiffGetRevisions` | ~8.1 diffs/s, p50 **124 ms** |
+| `redline` | `docxDiffCompareProducts` → redline package + revisions | ~6.4 diffs/s, p50 **157 ms** |
+| `full + HTML` | the above, then `convertDocxToHtml` with tracked changes | ~3.2 diffs/s, p50 **307 ms** |
 
-Against a mutation costing ~2–3 ms through the same MCP endpoint, that is **60× to
-154×**, and the panel reports the ratio it just measured rather than the one
+Against a mutation costing ~2–3 ms through the same MCP endpoint, that is **64× to
+165×**, and the panel reports the ratio it just measured rather than the one
 written here. So the honest answer to "can we animate a diff per edit at 60fps"
-is no, and was never going to be: a redline-per-edit loop lives between 3 and 7
+is no, and was never going to be: a redline-per-edit loop lives between 3 and 8
 frames per second on a document this size. That gap is the entire argument for
 recording a redline when you are the one making the edits, and for computing one
 when somebody hands you a document they changed. Both emit the same native
@@ -53,19 +53,30 @@ markup; the meter shows what each costs to get there.
 
 The `redline` depth uses `docxDiffCompareProducts` rather than `docxDiffCompare`
 followed by `docxDiffGetRevisions`, because one memoized alignment pass yielding
-both products measured **126 ms against 196 ms** for the two calls separately —
+both products measured **106 ms against 170 ms** for the two calls separately —
 about a third saved, which is what that API is for. That pair is measured the
 controlled way described below, not read off the panel.
 
-These figures track the engine, and have moved twice without a line of demo code
-changing — which is the argument for a panel that measures rather than a page that
-quotes. #616 roughly halved `docxDiffCompare` on this document (278 ms → 153 ms)
-by removing a read amplification. #626 then gated the compatibility normalizer on
-a streaming scan instead of a full parse, and the two deeper rows above came down
-10–18% (`redline` 206 → 181, `full` 422 → 352) while `revisions` stayed put inside
-the noise band. The saving growing with pipeline depth is what you would expect
-from a load-path change — the deeper the pipeline, the more packages it opens —
-though the panel measures the total, not the attribution.
+These figures track the engine, and have now moved three times without a line of
+demo code changing — which is the argument for a panel that measures rather than a
+page that quotes:
+
+- **#616** roughly halved `docxDiffCompare` on this document (278 ms → 153 ms) by
+  removing a read amplification.
+- **#626** gated the compatibility normalizer on a streaming scan instead of a full
+  parse. The two deeper rows came down 10–18% (`redline` 206 → 181, `full`
+  422 → 352) while `revisions` held inside the noise band — the saving growing with
+  pipeline depth is what a load-path change looks like, since the deeper the
+  pipeline the more packages it opens.
+- **#627** stopped giving the diff engine's reads an identity nothing asks for, and
+  this time all three rows moved together, 13–18% (152 → 124, 181 → 157,
+  352 → 307). A saving that is uniform across depths is the signature of a change
+  on the path every depth shares. (#629 landed alongside it, but its snapshot reuse
+  is across comparisons and this loop makes one comparison per frame, so it has
+  nothing to reuse — the panel would not see it.)
+
+Those attributions are what the shape of the movement suggests, not what the panel
+proves; it measures the total, and the commit messages are the authority on cause.
 
 Read them as one machine's order of magnitude, not as a benchmark. Two things
 make the last digit meaningless. Repeated medians on the same container spread
