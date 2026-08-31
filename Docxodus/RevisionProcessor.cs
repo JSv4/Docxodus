@@ -33,19 +33,19 @@ namespace Docxodus
 
         public static void RejectRevisions(WordprocessingDocument doc)
         {
-            // Word's note-lifecycle rule, on the reject side only (issue #614). Rejecting a redline
-            // reproduces the BASELINE, and a note the redline itself introduced has no place there:
-            // its citation came in a w:ins and its definition came with the redline, so dropping the
+            // Word's note-lifecycle rule, reject side (issue #614). Rejecting a redline reproduces
+            // the BASELINE, and a note the redline itself introduced has no place there: its
+            // citation came in a w:ins and its definition came with the redline, so dropping the
             // citation has to drop the definition or the "rejected" package still ships the note.
             //
-            // Accepting deliberately does NOT do this. Accept reproduces the COUNTERPART document as
-            // the comparison saw it, husks included — Accept(Compare(l, r)) == r is the comparison
-            // engine's contract, and a counterpart that carries a reference-less note definition is
-            // entitled to keep it. DocxSession's own resolve paths apply the rule in both directions
-            // because an editor is authoring a document, not inverting a comparison.
+            // The accept side applies the rule with an extra guard — only a definition the accept
+            // also left without block content goes (issue #631, see AcceptRevisions). That guard is
+            // why Accept(Compare(l, r)) == r holds for BOTH husk shapes: a counterpart's own
+            // reference-less definition arrives unmarked, keeps its content, and stays; one the
+            // counterpart deleted arrives deletion-marked, is stripped bare, and goes.
             //
             // The rule and its scoping (only citations THIS operation removed) live in
-            // Internal.NoteReferenceOps, shared with those session paths.
+            // Internal.NoteReferenceOps, shared with DocxSession's resolve paths.
             var citedBefore = Internal.NoteReferenceOps.ReferencedNoteIds(doc.MainDocumentPart);
             RejectRevisionsForPart(doc.MainDocumentPart);
             foreach (var part in doc.MainDocumentPart.HeaderParts)
@@ -1480,6 +1480,20 @@ namespace Docxodus
 
         private static void AcceptRevisions(WordprocessingDocument doc, bool preservePreexistingCleanTableRuns)
         {
+            // Word's note-lifecycle rule, accept side (issue #631). The redline itself tells the two
+            // husk cases apart: a definition the counterpart kept passes through with its content
+            // unmarked and survives the accept intact, while a definition the counterpart deleted
+            // arrives with every block deletion-marked, so accepting strips it bare. A definition
+            // this accept both orphaned and emptied is the redline saying "this whole note is
+            // deleted", and the definition has to go with it or the accepted package ships a note
+            // the counterpart deleted and disagrees with DocxSession.AcceptAllRevisions about the
+            // same redline. (Word's own accepted oracle for RP050 leaves a childless <w:footnote/>
+            // shell behind instead; a childless definition is not a note, and the session's resolve
+            // paths have removed the definition outright since #516 — the stateless path now agrees
+            // with them, which is also the schema-valid form.) The blockless guard is what
+            // keeps Accept(Compare(l, r)) == r true for a counterpart's own reference-less husk
+            // (see NoteReferenceOps.PruneNotesEmptiedByAccept).
+            var citedBefore = Internal.NoteReferenceOps.ReferencedNoteIds(doc.MainDocumentPart);
             AcceptRevisionsForPart(doc.MainDocumentPart, preservePreexistingCleanTableRuns);
             foreach (var part in doc.MainDocumentPart.HeaderParts)
                 AcceptRevisionsForPart(part, preservePreexistingCleanTableRuns);
@@ -1491,6 +1505,8 @@ namespace Docxodus
                 AcceptRevisionsForPart(doc.MainDocumentPart.FootnotesPart, preservePreexistingCleanTableRuns);
             if (doc.MainDocumentPart.StyleDefinitionsPart != null)
                 AcceptRevisionsForStylesDefinitionPart(doc.MainDocumentPart.StyleDefinitionsPart);
+
+            Internal.NoteReferenceOps.PruneNotesEmptiedByAccept(doc.MainDocumentPart, citedBefore);
         }
 
         private static void AcceptRevisionsForStylesDefinitionPart(StyleDefinitionsPart stylesDefinitionsPart)

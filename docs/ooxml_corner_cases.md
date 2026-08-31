@@ -378,6 +378,39 @@ This means a body that references footnote id `2` ("See Section 1.2…") with an
 - `tools/diffharness/lo/lo_footnote_check.py` — headless-LibreOffice load + footnote-count/text report (the independent validity backstop).
 - `DocxDiffScenarioTests.Scenario_PreservesFootnoteStructure` — the in-process id↔reference↔text round-trip oracle (asserts at the OOXML id level, immune to LibreOffice's positional quirk).
 
+### Word's Accept of a Tracked Note Deletion Leaves a CHILDLESS `<w:footnote/>` Shell
+
+**Status:** Documented behavior; Docxodus deliberately differs (issue #631)
+**Discovered:** 2026-08-31 (while making the stateless accept reproduce the counterpart's note store)
+**Test File:** `TestFiles/RP/RP050-Deleted-Footnote.docx` + its `-Accepted.docx` oracle
+
+#### The corner case
+
+Word represents a tracked footnote deletion by marking the citation **and the whole definition**:
+every run in the definition sits inside `w:del`, and the paragraph mark carries `w:pPr/w:rPr/w:del`
+(see `RP050-Deleted-Footnote.docx`). But Word's own *accept* of that deletion does not remove the
+definition element — the Word-produced `RP050-Deleted-Footnote-Accepted.docx` oracle keeps a
+childless `<w:footnote w:id="1"/>` next to the separator notes. `CT_FtnEdn` requires at least one
+block-level child, so the shape Word writes is schema-questionable, invisible in Word (nothing
+references it), and — per the positional-re-association entry above — actively dangerous in
+LibreOffice, where a leftover definition shifts every subsequent reference→definition pairing.
+
+#### What Docxodus does
+
+`RevisionProcessor.AcceptRevisions` removes a definition that the accept left both **orphaned**
+(cited before, uncited after) and **blockless** (which can only happen when every block was
+deletion-marked — an unmarked paragraph always survives). That is what `DocxSession`'s resolve
+paths have done since #516, it is the schema-valid form, and it makes `Accept(Compare(l, r)) ≡ r`
+hold for the counterpart's note store. The redline-reversibility sweep (`RRS001`) compares the
+result to Word's oracle semantically, where a childless definition and an absent one are the same
+note store.
+
+#### Relevant code
+
+- `Docxodus/Internal/NoteReferenceOps.cs` (`PruneNotesEmptiedByAccept`, the blockless guard)
+- `Docxodus/RevisionProcessor.cs` (accept-side capture/prune)
+- `DS430`/`DS432` in `DocxSessionRevisionTests.cs` — the two husk shapes and their opposite fates
+
 ### `OpenXmlValidator` Does NOT Resolve Note-Body (note-in-note) References — a validation blind spot
 
 **Status:** Documented gotcha

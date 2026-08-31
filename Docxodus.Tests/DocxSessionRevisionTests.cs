@@ -1324,11 +1324,14 @@ public class DocxSessionRevisionTests
     }
 
     /// <summary>
-    /// …and the accept side deliberately does NOT apply it. Accept reproduces the counterpart
-    /// document as the comparison saw it — <c>Accept(Compare(l, r)) == r</c> — so a counterpart that
-    /// carries a reference-less note definition keeps it. <see cref="DocxSession"/>'s own resolve
-    /// paths (DS418) apply the rule in both directions because an editor is authoring a document
-    /// rather than inverting a comparison; this test pins that the two contracts stay distinct.
+    /// …and the accept side's blockless guard is what protects a counterpart's own husk. Accept
+    /// reproduces the counterpart document as the comparison saw it — <c>Accept(Compare(l, r)) == r</c>
+    /// — and a counterpart that carries a reference-less note definition keeps it: the comparison
+    /// reconciles the two equal definitions, so the redline's definition is unmarked, survives the
+    /// accept with its content, and is never pruned (issue #631 prunes only a definition the accept
+    /// itself emptied — see DS432). <see cref="DocxSession"/>'s own resolve paths (DS418) apply the
+    /// rule unguarded in both directions because an editor is authoring a document rather than
+    /// inverting a comparison; this test pins that the two contracts stay distinct.
     /// </summary>
     [Fact]
     public void DS430_StatelessAccept_PreservesACounterpartsOwnOrphanedNote()
@@ -1355,6 +1358,49 @@ public class DocxSessionRevisionTests
 
         Assert.Equal(1, UserNoteCount(counterpart, "footnote"));
         Assert.Equal(1, UserNoteCount(accepted, "footnote"));
+    }
+
+    /// <summary>
+    /// The accept-side completion of the rule (issue #631). The redline itself distinguishes the
+    /// two husk cases: a note the COUNTERPART kept (DS430) passes through with its content
+    /// unmarked, while a note the counterpart deleted arrives with every block deletion-marked —
+    /// so accepting empties it. A definition this accept both orphaned and emptied is the redline
+    /// saying "this whole note is deleted", and accepting must take the definition with it, or the
+    /// stateless path ships a note the counterpart deleted and disagrees with
+    /// <see cref="DocxSession.AcceptAllRevisions"/> on the same redline.
+    /// </summary>
+    [Fact]
+    public void DS432_StatelessAccept_TakesAWhollyDeletedNoteWithItsCitation()
+    {
+        var left = File.ReadAllBytes(Path.Combine("../../../../TestFiles/WC", "WC035-Footnote-Before.docx"));
+        var right = File.ReadAllBytes(Path.Combine("../../../../TestFiles/WC", "WC035-Footnote-After.docx"));
+
+        // Compare in the direction that DELETES the note, so accepting must take it out.
+        var deleting = UserNoteCount(left, "footnote") > UserNoteCount(right, "footnote")
+            ? (Baseline: left, Counterpart: right)
+            : (Baseline: right, Counterpart: left);
+        Assert.True(UserNoteCount(deleting.Counterpart, "footnote")
+            < UserNoteCount(deleting.Baseline, "footnote"), "fixture no longer deletes a note");
+
+        var redline = DocxDiff.Compare(
+            new WmlDocument("baseline.docx", deleting.Baseline),
+            new WmlDocument("counterpart.docx", deleting.Counterpart)).DocumentByteArray;
+
+        var accepted = Docxodus.Internal.DocxDiffOps.AcceptRevisions(redline);
+
+        Assert.True(HasNotesPart(accepted, "footnote"), "the notes part itself must survive");
+        Assert.Equal(UserNoteCount(deleting.Counterpart, "footnote"), UserNoteCount(accepted, "footnote"));
+
+        // The two transports must agree about the same redline: the session resolves it to the
+        // same note store the stateless path now produces.
+        using var session = new DocxSession(redline);
+        session.AcceptAllRevisions();
+        Assert.Equal(UserNoteCount(accepted, "footnote"), UserNoteCount(session.Save(), "footnote"));
+
+        // And the inverse still reproduces the baseline: rejecting restores the citation, so the
+        // definition was never orphaned and stays.
+        var rejected = Docxodus.Internal.DocxDiffOps.RejectRevisions(redline);
+        Assert.Equal(UserNoteCount(deleting.Baseline, "footnote"), UserNoteCount(rejected, "footnote"));
     }
 
     /// <summary>
