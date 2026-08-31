@@ -1,9 +1,29 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { dungeonCart } from '../ascii-arcade.js';
 
+const DEMO_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
+
 const MAP_TOP = 4;
+
+test('the checked-in Doom GIFs keep their native, tightly framed embed size', () => {
+  const readGifSize = (name) => {
+    const bytes = readFileSync(join(DEMO_DIR, '..', 'images', name));
+    assert.match(bytes.subarray(0, 6).toString('ascii'), /^GIF8[79]a$/);
+    return [bytes.readUInt16LE(6), bytes.readUInt16LE(8)];
+  };
+
+  assert.deepEqual(readGifSize('arcade-doom.gif'), [656, 699]);
+  assert.deepEqual(readGifSize('arcade-doom-bitmap.gif'), [656, 699]);
+  const readme = readFileSync(join(DEMO_DIR, 'README.md'), 'utf8');
+  assert.match(readme, /arcade-doom\.gif[^>]+width="656"/);
+  assert.match(readme, /arcade-doom-bitmap\.gif[^>]+width="656"/);
+  assert.doesNotMatch(readme, /arcade-doom(?:-bitmap)?\.gif[^>]+width="(?:100%|60%)"/);
+});
 
 function renderedRows(cart) {
   return cart.render().grid.chars.map((row) => row.join(''));

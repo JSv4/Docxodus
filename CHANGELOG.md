@@ -100,9 +100,11 @@ All notable changes to this project will be documented in this file.
 - **Doom's controls are actually legible, and the gameplay frame is now near-VGA
   width without giving up real-time play.** The 5pt framebuffer grid no longer
   tries to carry a keyboard reference at roughly seven rendered pixels high.
-  The complete map is ordinary bold 10pt document text above the screen
-  (14.7px in the captured desktop editor), isolated from the hot paragraph by
-  the existing one-character context fence. Removing the divider and side
+  The complete map is four short, bold 18pt document paragraphs above the
+  screen (24px in the fitted desktop editor and still at least 14px at the
+  tested 60% embed scale), isolated from the hot paragraph by the existing
+  one-character context fence. The four fixed lines avoid the clipping a
+  single oversized OOXML run can suffer. Removing the divider and side
   panel gives the viewport the full 462pt document column: 152 × 50 quadrant
   cells sample Doom at **304 × 100**, up from 194 × 68, in the same 4:3 shape.
   Both bezels borrow adjacent picture colours so they merge away; the 8-bit
@@ -115,8 +117,12 @@ All notable changes to this project will be documented in this file.
   Finally, the canvas shading overlap now carries `!important`: converter spans
   have an inline `padding: 0` shorthand, so the old rule computed to zero and
   left one-pixel black seams despite existing in the stylesheet. The Playwright
-  guard now asserts the 154 × 53 grid, 13px minimum control text, controls
-  outside the framebuffer, and the direct ≤70-run fast-path budget.
+  guard now asserts the 154 × 53 grid, all four non-overflowing control lines,
+  24px source / 14px scaled minimum control text, controls outside the
+  framebuffer, and the direct ≤70-run fast-path budget. The checked-in GIFs
+  are tightly framed at the document content's native 656px width, rather than
+  shrinking a 1,000px editor screenshot (and its empty margins) into the same
+  display slot.
   Demo-content change (`docs/demo/`), not npm surface.
 - **The Doom cartridge can project its framebuffer as ASCII, and `P` switches between the
   two.** The frame budget is one OOXML→HTML conversion of the screen paragraph and it is

@@ -156,7 +156,7 @@ test.describe('DOOM inside a Word document', () => {
         }
       };
       readRows(element);
-      const controls = arcade.controlsElement() as HTMLElement;
+      const controls = arcade.controlsElements() as HTMLElement[];
       return {
         text: arcade.canvasText() as string,
         rows,
@@ -164,9 +164,12 @@ test.describe('DOOM inside a Word document', () => {
         spans: spans.length,
         shaded: shaded.length,
         inks: new Set(spans.map((span) => getComputedStyle(span).color)).size,
-        controls: controls.innerText,
-        controlsFontPx: Number.parseFloat(getComputedStyle(controls).fontSize),
-        controlsInsideFrame: element.contains(controls),
+        controls: controls.map((line) => line.innerText).join(' '),
+        controlsCount: controls.length,
+        controlsFontPx: Math.min(...controls.map((line) =>
+          Number.parseFloat(getComputedStyle(line).fontSize))),
+        controlsOverflow: controls.some((line) => line.scrollWidth > line.clientWidth + 1),
+        controlsInsideFrame: controls.some((line) => element.contains(line)),
         fallback: arcade.editor.lastReconcileFallback as string | null,
       };
     });
@@ -181,13 +184,17 @@ test.describe('DOOM inside a Word document', () => {
     expect(screen.rows).toHaveLength(53);
     expect(screen.columns).toEqual(new Array(53).fill(154));
     for (const row of screen.rows) expect(row.trim()).not.toBe('');
-    // Controls are ordinary document text, not 5pt framebuffer cells. This is
-    // a visual legibility contract: at the page's fitted desktop size they
-    // render at 14.7px, with 13px as a conservative cross-platform floor.
-    expect(screen.controls).toContain('W/S move');
-    expect(screen.controls).toContain('SPACE fire');
-    expect(screen.controls).toContain('ESC pause/edit');
-    expect(screen.controlsFontPx).toBeGreaterThanOrEqual(13);
+    // Controls are large document text, not 5pt framebuffer cells. This is a
+    // display-size contract, not merely a source-format check: even if the
+    // captured editor is reduced to 60% in an embed, the keys must remain at
+    // least 14px. The normal fitted desktop page renders them at 24px.
+    expect(screen.controls).toContain('MOVE W/S');
+    expect(screen.controls).toContain('FIRE SPACE');
+    expect(screen.controls).toContain('PAUSE/EDIT ESC');
+    expect(screen.controlsFontPx).toBeGreaterThanOrEqual(23.5);
+    expect(screen.controlsFontPx * 0.6).toBeGreaterThanOrEqual(14);
+    expect(screen.controlsCount).toBe(4);
+    expect(screen.controlsOverflow).toBe(false);
     expect(screen.controlsInsideFrame).toBe(false);
     // Doom arriving as real run formatting: several inks, and run shading
     // actually rendered rather than silently dropped. The default projection's

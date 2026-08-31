@@ -10,25 +10,27 @@ jsDelivr — and differ only in how much of the page belongs to the editor:
 | `app.html` | The editor full-bleed, nothing around it. The useful thing to open on a phone. |
 | `player.html` | The compact iframe target, sized for ~480 × 480. Boots on tap so a feed iframe never streams a .NET runtime unasked, and pins the surface's compact layout. |
 | `observatory.html` | The DOCX Observatory inside the live editor: procedural ASCII phenomena animated onto a Word paragraph in the editor's own session (`raw.replaceXml` + `editor.refresh()`). Pause — or click the water — and it is only a document: edit with the ribbon, Undo rewinds frame by frame, Save downloads the caught wave. The phenomena and frame loop are demo content, not library machinery: they live in `ascii-scenes.js` **in this directory** (also imported, via the test-webroot copy, by the two `npm/examples/ascii-animation*` pages), so `?engine=` pins the library alone and the scenes version with the site. Needs `DocxEditor.refresh()`, which 9.5.0 predates — it was pinned to `docxodus@9.6.0` ahead of that release and healed on its own when it published; it now shares the pin with its siblings. |
-| `arcade.html` | THE DOCX ARCADE — the Observatory's interactive sequel: three playable games (a ¶-starring platformer, a Doom-style raycaster, and **DOOM** — id Software's own engine, GPL-2.0, compiled to JavaScript, running on Freedoom's BSD-licensed IWAD) whose screen is the same per-frame `raw.replaceXml` + `editor.refresh()` paragraph, plus keyboard input both ways. WASD/arrows are claimed only while playing. For the two ASCII cartridges the input goes both directions: on resume the driver re-parses the game world FROM the document, so terrain typed into the paused screen (or letters typed into the raycaster's MAP panel) becomes real. Doom cannot do that and does not pretend to — its world is BSP geometry in a WebAssembly heap and the paragraph holds a picture of it — so there the round trip is pause, edit, undo and save, without the level parse. Doom draws on its own denser grid — 154 × 53 cells of 5pt text — because cells carry resolution while runs carry cost. Its 152 × 50-cell viewport uses the full document width and the quadrant glyphs sample the 320×200 framebuffer at **304 × 100**. The controls no longer compete with that framebuffer: they are a separate, static **10pt document paragraph** above it, readable at normal size and outside the per-frame conversion. **P** switches the default 8-bit projection for a faithful bitmap one; the former holds the whole frame to at most 70 runs and plays at about 10 fps on the review machine. The games live in `ascii-arcade.js` in this directory (importing shared plumbing from `ascii-scenes.js`); Doom lives in `doom-cart.js` beside it, the one GPL file in the repository; its engine and IWAD are not in the repository at all but pinned on jsDelivr — see the licensing section below. Same `?engine=` split as the Observatory, plus `?cart=quest\|dungeon\|doom`, `?wad=`, `?sound=0` and `?intro=0` to skip the "OS LEGAL presents DOCXODUS" attract screen (the title card is drawn on the same canvas paragraph; Space drops the coin). Boots on tap when iframed. Its controls also come from `arcade-dock.js` (below), which the landing page mounts identically. Specs: `npm/tests/demo-arcade.spec.ts` and `npm/tests/demo-arcade-doom.spec.ts` (the latter proves real play, exact grid dimensions, readable controls, bounded runs, input, and save/reopen fidelity). |
+| `arcade.html` | THE DOCX ARCADE — the Observatory's interactive sequel: three playable games (a ¶-starring platformer, a Doom-style raycaster, and **DOOM** — id Software's own engine, GPL-2.0, compiled to JavaScript, running on Freedoom's BSD-licensed IWAD) whose screen is the same per-frame `raw.replaceXml` + `editor.refresh()` paragraph, plus keyboard input both ways. WASD/arrows are claimed only while playing. For the two ASCII cartridges the input goes both directions: on resume the driver re-parses the game world FROM the document, so terrain typed into the paused screen (or letters typed into the raycaster's MAP panel) becomes real. Doom cannot do that and does not pretend to — its world is BSP geometry in a WebAssembly heap and the paragraph holds a picture of it — so there the round trip is pause, edit, undo and save, without the level parse. Doom draws on its own denser grid — 154 × 53 cells of 5pt text — because cells carry resolution while runs carry cost. Its 152 × 50-cell viewport uses the full document width and the quadrant glyphs sample the 320×200 framebuffer at **304 × 100**. The controls no longer compete with that framebuffer: they are four separate, static **18pt document paragraphs** above it, short enough to fit without clipping and outside the per-frame conversion. **P** switches the default 8-bit projection for a faithful bitmap one; the former holds the whole frame to at most 70 runs and plays at about 8–10 fps on the review machines. The games live in `ascii-arcade.js` in this directory (importing shared plumbing from `ascii-scenes.js`); Doom lives in `doom-cart.js` beside it, the one GPL file in the repository; its engine and IWAD are not in the repository at all but pinned on jsDelivr — see the licensing section below. Same `?engine=` split as the Observatory, plus `?cart=quest\|dungeon\|doom`, `?wad=`, `?sound=0` and `?intro=0` to skip the "OS LEGAL presents DOCXODUS" attract screen (the title card is drawn on the same canvas paragraph; Space drops the coin). Boots on tap when iframed. Its controls also come from `arcade-dock.js` (below), which the landing page mounts identically. Specs: `npm/tests/demo-arcade.spec.ts` and `npm/tests/demo-arcade-doom.spec.ts` (the latter proves real play, exact grid dimensions, readable controls, bounded runs, input, and save/reopen fidelity). |
 | `golf.html` | DOCX GOLF — course play on the editing surface itself, the inverse bet from the arcade: where the arcade painted frames INTO one paragraph through `raw.replaceXml` (the escape hatch), golf makes the real clubs the game. Six holes, each a start document loaded into the live ribbon editor and a target document built beside it; the referee is the comparison engine — a hole is CLEARED when `docxDiffGetRevisions` between your document and the target returns **zero revisions**, and the caddie panel phrases whatever revisions remain as the work left (`remove "Purchasr"`, `move "Governing Law"`, `reformat "Duties" (style)`). Holes escalate across the surface: a one-word fix, clause reordering, scoped defined-term conformance, heading styles (the Style dropdown is the club — the diff cares about `w:pStyle`, not just words), and a table hole (fix a cell, delete a duplicated row from the table toolbar), plus a footnote hole played with Insert → Footnote (the referee reads note parts too). On a phone the caddie collapses to its head strip behind a toggle, and a stuck player can concede with "Show me" — the caddie plays the content-addressed reference line and the scorecard marks the hole assisted. Strokes are counted from the document, not the toolbar: the driver fingerprints `session.save()` on a poll, so one committed burst of editing is one swing, and undo counts. Par/birdie/bogey scoring, a Target view, and a live redline view (`docxDiffCompare` → `convertDocxToHtml`) round out the caddie. The game lives in `docx-golf.js` in this directory (same `?engine=` split as its siblings); its pure logic is tested by `tools/docx-golf.test.mjs`, and `npm/tests/demo-golf.spec.ts` keeps the course honest the way the engine's own evals are kept honest — no hole starts solved, and every hole's content-addressed reference solution reaches zero revisions within par. Boots on tap when iframed. |
 
 ### Both Doom projections, in the real editor
 
-Neither is a mockup: the ribbon, the anchor bar and the Save button in these are the shipped
-surface, and the game screen is one Word paragraph being rewritten and re-rendered in place.
+Neither is a mockup: both were captured from the shipped editor, and the game screen is one Word
+paragraph being rewritten and re-rendered in place. The crop deliberately keeps the document
+content at native size instead of spending the image width on surrounding editor chrome.
 
-<p>
-  <img src="../images/arcade-doom.gif" alt="Doom gameplay inside the shipped editor, with a readable control reference above the 304 by 100 text framebuffer" width="100%">
+<p align="center">
+  <img src="../images/arcade-doom.gif" alt="Doom gameplay inside the shipped editor, with four large control-reference lines above the 304 by 100 text framebuffer" width="656">
 </p>
 
-Live E1M1 play in the default 8-bit projection. The normal-size control paragraph stays fixed and
+Live E1M1 play in the default 8-bit projection. Four short 18pt control paragraphs stay fixed and
 readable while the 304 × 100 sampled framebuffer is the only block converted on each repaint. The
-ribbon, anchor rail and Save button are the shipped editor surface; **Esc** makes the frame an
-ordinary paragraph again, where Undo rewinds it and Save writes it to `.docx`.
+tight capture keeps that document content at its native size instead of shrinking it behind editor
+margins; **Esc** makes the frame an ordinary paragraph again, where Undo rewinds it and Save writes
+it to `.docx`.
 
-<p>
-  <img src="../images/arcade-doom-bitmap.gif" alt="The same level in the faithful bitmap projection" width="60%">
+<p align="center">
+  <img src="../images/arcade-doom-bitmap.gif" alt="The same level in the faithful bitmap projection, under the same four-line control reference" width="656">
 </p>
 
 The same level after **P**: the faithful bitmap projection, every colour the framebuffer had, at
@@ -53,10 +55,12 @@ in Doom, and the coin drop on the attract screen. The old touch row had no
 Space at all, so the shooters could be walked but never fought on a phone.
 
 Doom's complete keyboard map also appears immediately above the framebuffer as
-ordinary 10pt document text. That line is intentionally outside the 5pt canvas:
-the earlier side panel contained the right words but rendered them at roughly
-seven pixels high, which was not a usable control reference at normal size.
-The context fence keeps this static paragraph out of every frame conversion.
+four centered 18pt document paragraphs. Each line is deliberately short enough
+for the fixed document column; one oversized run can clip instead of reflowing
+in a fixed-layout viewer. At the fitted desktop page the controls compute to
+24px, and the browser guard still requires at least 14px after a 60% embed
+scale. The context fence keeps all four static paragraphs out of every frame
+conversion.
 
 The pad is deliberately not a descendant of the editor root: the driver pauses
 the game on any `pointerdown` inside the document ("the frame you clicked is now
@@ -294,7 +298,7 @@ The chrome turned out to matter as much as the picture. The old divider and
 side panel spent both page width and one extra run per picture row on text that
 was too small to read. The panel is gone: both bezels borrow their adjacent
 picture colours and merge away, the viewport takes the whole width, and the
-controls are real 10pt text in their own paragraph.
+controls are four real 18pt paragraphs.
 
 Both are the same Doom and the same document, and either one saves as a `.docx`
 the same way.

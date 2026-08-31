@@ -45,7 +45,7 @@
 // The rest of the arcade shares one 92 × 26 grid of 8pt cells. Doom does not:
 // it draws on 154 × 53 cells of 5pt text on a 6.9pt line. The picture occupies
 // 152 × 50 of them — almost the full 462pt document column, at Doom's 4:3
-// display shape — while the controls live in a normal 10pt document paragraph
+// display shape — while the controls live in a large 18pt document paragraph
 // above it. That separation is load-bearing: text small enough to carry the
 // framebuffer is not text a player can honestly read.
 //
@@ -80,7 +80,7 @@ const VIEW_W = COLS - 2;                  // full width between the two bezels
 const PIX_H = FIELD_ROWS * 2;             // 100
 
 // Chrome uses one colour. More importantly, the controls are not chrome at all
-// any more: they are a static, normal-size paragraph outside this per-frame
+// any more: they are four static, large paragraphs outside this per-frame
 // conversion. Both bezels borrow their adjacent picture cell's ink and shading
 // below, so neither creates one extra run on every picture row.
 const CHROME_INK = '8FA3B8';
@@ -1021,9 +1021,12 @@ function mergeBezelsIntoPicture(g) {
   return {
     name: 'doom',
     label: '☩ DOOM',
-    controls:
-      'CONTROLS · W/S move · A/D strafe · ←/→ turn · SPACE fire · E open/use · SHIFT run · ' +
-      'Q menu · M map · 1–7 weapon · P projection · ESC pause/edit',
+    controls: [
+      'CONTROLS · MOVE W/S · STRAFE A/D',
+      'TURN ←/→ · FIRE SPACE · USE E',
+      'RUN SHIFT · MENU Q · MAP M · WEAPON 1–7',
+      'PROJECTION P · PAUSE/EDIT ESC',
+    ],
     caption:
       'The **actual** game: id Software’s Doom engine — GPL-2.0, compiled to JavaScript by ' +
       '[doomgeneric](https://github.com/grubbyplaya/doomgenericjs) — running on Freedoom’s ' +
@@ -1039,7 +1042,7 @@ function mergeBezelsIntoPicture(g) {
       'cells are spent on it, and the extra resolution costs nothing at all: a run breaks on a ' +
       'color change, never on a glyph. Doom draws on its own denser grid for exactly that ' +
       'reason — 5pt cells across the full 462pt document column — because cells carry ' +
-      'resolution while runs carry cost. The controls are a separate 10pt document paragraph, ' +
+      'resolution while runs carry cost. The controls are four separate 18pt document paragraphs, ' +
       'so they stay genuinely readable without being converted on every frame. Flat cost, ' +
       'whatever you are looking at, and about ten repaints a second. ' +
       '**P** switches to the faithful **bitmap**: every color the framebuffer had, two pixels per ' +

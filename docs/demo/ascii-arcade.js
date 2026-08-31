@@ -417,8 +417,12 @@ export function platformerCart() {
   return {
     name: 'quest',
     label: '¶ Pilcrow’s Quest',
-    controls:
-      'CONTROLS · A/D or ←/→ run · W/↑/SPACE jump · R restart · ESC pause/edit',
+    controls: [
+      'CONTROLS · RUN A/D or ←/→',
+      'JUMP W/↑/SPACE',
+      'RESTART R',
+      'PAUSE/EDIT ESC',
+    ],
     caption:
       'Run **A/D** or **←/→** · jump **W/↑/Space** · stomp the & gremlins, collect every §, ' +
       'reach the > flag. Pause and TYPE terrain into the screen — # bricks, = platforms, ' +
@@ -575,8 +579,12 @@ const DUNGEON_MAP = [
 const DUNGEON_PACK = {
   name: 'dungeon',
   label: '▓ The Docx Dungeon',
-  controls:
-    'CONTROLS · W/S move · A/D strafe · ←/→ turn · SPACE fire · SHIFT run · R restart · ESC pause/edit',
+  controls: [
+    'CONTROLS · MOVE W/S · STRAFE A/D',
+    'TURN ←/→ · FIRE SPACE',
+    'RUN SHIFT · RESTART R',
+    'PAUSE/EDIT ESC',
+  ],
   hudTitle: 'THE DOCX DUNGEON',
   bg: '0A0F1A',
   caption:
@@ -1202,20 +1210,31 @@ export function seedArcade(session) {
   // Controls have to remain readable at the size the document is actually
   // shown. Doom uses a deliberately dense 5pt framebuffer grid; putting its
   // key list inside that grid made the words technically present but not
-  // honestly legible. Keep them as ordinary 10pt document text, outside the
+  // honestly legible. Keep them as large 18pt document text, outside the
   // frame's hot paragraph and behind the tiny context fence, so every repaint
   // still converts only the screen and its one-character neighbours.
-  const controlsResult = check(
-    session.insertParagraph(titleAnchor, 'after', 'CONTROLS · loading cartridge…'),
-    'controls insert');
-  const controlsAnchor = controlsResult.created[0].id;
-  check(session.setParagraphFormat(controlsAnchor,
-    { alignment: 'center', spacingBefore: 0, spacingAfter: 80 }), 'controls format');
-  check(session.applyFormat(controlsAnchor, null,
-    { bold: true, fontFamily: 'Courier New', fontSizePts: 10, color: '334155' }),
-  'controls run format');
+  // Four deliberately short paragraphs make the complete map fit at 18pt in
+  // fixed-layout renderers that do not reflow one long OOXML run. They stay
+  // outside the screen's conversion fence, so this costs nothing per frame.
+  const controlsAnchors = [];
+  let controlsAfter = titleAnchor;
+  for (let i = 0; i < 4; i++) {
+    const controlsResult = check(
+      session.insertParagraph(controlsAfter, 'after', i === 0 ? 'CONTROLS · loading cartridge…' : '\u00a0'),
+      `controls line ${i + 1} insert`);
+    const anchor = controlsResult.created[0].id;
+    controlsAnchors.push(anchor);
+    controlsAfter = anchor;
+    check(session.setParagraphFormat(anchor, {
+      alignment: 'center', spacingBefore: 0, spacingAfter: i === 3 ? 80 : 0,
+    }), `controls line ${i + 1} format`);
+    check(session.applyFormat(anchor, null,
+      { bold: true, fontFamily: 'Courier New', fontSizePts: 18, color: '25324A' }),
+    `controls line ${i + 1} run format`);
+  }
+  const controlsAnchor = controlsAnchors[0];
 
-  const fenceAbove = fence(controlsAnchor, 'screen fence above');
+  const fenceAbove = fence(controlsAnchors[3], 'screen fence above');
   const canvasResult = check(session.insertParagraph(fenceAbove, 'after', '(inserting coin…)'), 'screen insert');
   const canvasAnchor = canvasResult.created[0].id;
 
@@ -1236,7 +1255,7 @@ export function seedArcade(session) {
   const gt = seedXml.indexOf('>');
   let openTag = seedXml.slice(0, gt + 1);
   if (openTag.endsWith('/>')) openTag = openTag.slice(0, -2) + '>';
-  return { titleAnchor, controlsAnchor, canvasAnchor, captionAnchor, fenceBelow, openTag };
+  return { titleAnchor, controlsAnchor, controlsAnchors, canvasAnchor, captionAnchor, fenceBelow, openTag };
 }
 
 // ─── The attract screen ───────────────────────────────────────────────
@@ -1376,12 +1395,31 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
 
   const unidOf = (anchor) => anchor.split(':')[2];
   const canvasEl = () => editor.root.querySelector(`[data-anchor="${unidOf(canvasAnchor)}"]`);
-  const controlsEl = () => editor.root.querySelector(`[data-anchor="${unidOf(seeded.controlsAnchor)}"]`);
+  const controlsEls = () => seeded.controlsAnchors.map((anchor) =>
+    editor.root.querySelector(`[data-anchor="${unidOf(anchor)}"]`));
+  const controlsEl = () => controlsEls()[0];
+
+  // replaceText authors a fresh run, so re-assert the controls' presentation
+  // after each cartridge/intro label swap. Formatting only the initial
+  // "loading cartridge" run would leave the visible replacement at the
+  // document default despite the paragraph having been seeded at 18pt.
+  function setControls(lines) {
+    for (let i = 0; i < seeded.controlsAnchors.length; i++) {
+      const anchor = seeded.controlsAnchors[i];
+      session.replaceText(anchor, lines[i] ?? '\u00a0');
+      session.applyFormat(anchor, null,
+        { bold: true, fontFamily: 'Courier New', fontSizePts: 18, color: '25324A' });
+    }
+  }
 
   function setCaption() {
     if (mode === 'intro') {
-      session.replaceText(seeded.controlsAnchor,
-        'CONTROLS · SPACE starts · choose a cartridge below · ESC pauses/edits');
+      setControls([
+        'CONTROLS · START SPACE',
+        'CHOOSE A CARTRIDGE BELOW',
+        '\u00a0',
+        'PAUSE/EDIT ESC',
+      ]);
       session.replaceText(seeded.captionAnchor,
         'OS Legal presents **DOCXODUS** — press **Space** to start. ' +
         'This title card is a Word paragraph too: pause and put your caret in it.');
@@ -1390,7 +1428,7 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
         '<b>Esc</b> pauses — even the title screen is just a document';
       return;
     }
-    session.replaceText(seeded.controlsAnchor, cart.controls);
+    setControls(cart.controls);
     session.replaceText(seeded.captionAnchor, cart.caption);
     ui.hint.innerHTML = cart.hint +
       ' · <b>Esc</b> pauses/resumes · <b>Undo</b> rewinds frames · <b>Save</b> ships the frame as .docx';
@@ -1646,8 +1684,9 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
     canvasAnchor: () => canvasAnchor,
     canvasText: () => canvasEl()?.textContent ?? '',
     canvasElement: () => canvasEl(),
-    controlsText: () => controlsEl()?.textContent ?? '',
+    controlsText: () => controlsEls().map((line) => line?.textContent ?? '').join(' '),
     controlsElement: () => controlsEl(),
+    controlsElements: () => controlsEls(),
     frames: () => frames,
     fps: () => fps,
     timings: () => ({ ...timings, runs: lastRuns }),
