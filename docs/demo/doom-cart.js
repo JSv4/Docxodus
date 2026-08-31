@@ -43,61 +43,49 @@
 // THIS CARTRIDGE DRAWS ON ITS OWN GRID
 // ------------------------------------
 // The rest of the arcade shares one 92 × 26 grid of 8pt cells. Doom does not:
-// it draws on 140 × 37 cells of 5.5pt text on a 7.05pt line, which occupies
-// the very same 462pt × 261pt of page (the shared grid is 441pt × 260pt) and
-// therefore keeps the pinned canvas font, the markdown-safe bezel and the
-// saved .docx exactly as legible as before — every cell is still a real
-// character with a real color in a real paragraph.
+// it draws on 154 × 53 cells of 5pt text on a 6.9pt line. The picture occupies
+// 152 × 50 of them — almost the full 462pt document column, at Doom's 4:3
+// display shape — while the controls live in a normal 10pt document paragraph
+// above it. That separation is load-bearing: text small enough to carry the
+// framebuffer is not text a player can honestly read.
 //
 // The point of the denser grid is that CELLS are what carry resolution while
 // RUNS are what cost. A run cannot cross a line break, so the run floor is the
 // row count; everything above that floor is color the merge is free to spend.
-// Going from 23 picture rows to 34 raises the floor by eleven runs and buys
-// 2.2× the sub-pixels: 194 × 68 samples where there were 128 × 46.
+// With quadrant blocks, those 152 × 50 cells carry 304 × 100 samples. That is
+// one horizontal step short of Doom's 320-pixel framebuffer and 47% more
+// vertical information than the prior 194 × 68 layout, without putting the
+// controls through the downsampler.
 //
-// The viewport is 97 columns wide because that is 4:3 at this cell's aspect:
-// a cell advances 3.3pt and is 7.05pt tall, so the 97 × 34 cells are
-// 320pt × 240pt — Doom's own picture shape, not a stretched one. The
-// sub-pixels inside them are 1.65pt × 3.53pt, finer across than down, which
-// suits a game whose structure is mostly vertical edges.
+// The viewport is 152 columns wide because a 5pt DejaVu Sans Mono cell advances
+// almost exactly 3pt. On a 6.9pt line, 152 × 50 cells occupy about 456 × 345pt:
+// Doom's own 4:3 display shape, not a stretched strip.
 // ═══════════════════════════════════════════════════════════════════════
 
 // The cartridge's own grid, and the cell metrics that make it fit the page.
 // `METRICS` travels with the frame (see the object this module returns) so the
 // canvas paragraph is emitted at this cartridge's font size and line height
 // rather than the arcade's shared ones.
-const COLS = 140, ROWS = 37;
-export const METRICS = { sz: 11, lineTwips: 141 };  // 5.5pt text, 7.05pt line
+const COLS = 154, ROWS = 53;
+export const METRICS = { sz: 10, lineTwips: 138 };  // 5pt text, 6.9pt line
 
 // ─── Doom's framebuffer, and where it lands on the grid ───────────────
 const DOOM_W = 320, DOOM_H = 200;
 
 const FIELD_TOP = 2;                      // 0 = bezel, 1 = HUD
-const FIELD_ROWS = ROWS - FIELD_TOP - 1;  // 34 rows of picture
-const VIEW_W = 97;                        // 4:3 at this cell aspect
-const DIV_X = 1 + VIEW_W;                 // the │ divider column
-const PANEL_X = DIV_X + 1;                // first column of the side panel
-const PANEL_W = COLS - 1 - PANEL_X;       // 40 columns
+const FIELD_ROWS = ROWS - FIELD_TOP - 1;  // 50 rows of picture
+const VIEW_W = COLS - 2;                  // full width between the two bezels
 
 /** Two half-pixels per cell row. */
-const PIX_H = FIELD_ROWS * 2;             // 68
+const PIX_H = FIELD_ROWS * 2;             // 100
 
-// Chrome colours. There is exactly one, and that is a frame-budget decision
-// rather than a taste one: a run breaks when the ink changes, a null ink
-// inherits the previous cell's, and every row of this paragraph is redrawn
-// every frame. The bezel, the divider and the side panel were five colours,
-// which cost five runs on every picture row — more than half the frame, for a
-// column of static text. Sharing one ink makes the divider, the panel and the
-// right bezel a single run per row.
-//
-// Rows are independent (each is its own sequence of runs, joined by w:br), so
-// a row MAY use a second colour when it earns one — see PANEL_HI, spent on
-// the two lines that change.
+// Chrome uses one colour. More importantly, the controls are not chrome at all
+// any more: they are a static, normal-size paragraph outside this per-frame
+// conversion. Both bezels borrow their adjacent picture cell's ink and shading
+// below, so neither creates one extra run on every picture row.
 const CHROME_INK = '8FA3B8';
 const BEZEL_INK = CHROME_INK;
 const HUD_INK = CHROME_INK;
-const PANEL_INK = CHROME_INK;
-const PANEL_HI = CHROME_INK;
 const DEAD_INK = CHROME_INK;
 const BG = '000000';
 
@@ -186,14 +174,7 @@ function drawChrome(g, hud) {
   write(g, 1, 2, hud.slice(0, COLS - 4), HUD_INK);
 }
 
-function drawDivider(g) {
-  for (let y = FIELD_TOP; y < ROWS - 1; y++) {
-    g.chars[y][DIV_X] = '│';
-    g.colors[y][DIV_X] = BEZEL_INK;
-  }
-}
-
-/** Wrap text into the side panel's narrow column. */
+/** Wrap loading errors without letting them widen the grid. */
 function wrap(text, width) {
   const out = [];
   let line = '';
@@ -229,7 +210,13 @@ function wrap(text, width) {
 // compared against, not the previous cell's true colour, so the tolerance
 // bounds accumulated drift along a row rather than each step of it — a long
 // gradient still ends up the colour it should be.
-const PAIR_SNAP_TOLERANCE = 40 * 100;   // luma-weighted, summed over both halves
+// The full-width grid has 2.3× as many cells as the old side-panel layout.
+// Keep the faithful projection inside its established 1,200-run guard by
+// allowing a pair to absorb a visibly small (under 13% of the two-pixel luma
+// range) neighbour delta. It remains an open framebuffer palette, not the
+// fixed 18-colour 8-bit mode; this only stops near-identical pairs becoming
+// separate OOXML runs.
+const PAIR_SNAP_TOLERANCE = 65 * 100;   // luma-weighted, summed over both halves
 const LUMA_R = 30, LUMA_G = 59, LUMA_B = 11;
 
 /** Paint one 320×200 BGRA frame into the grid's viewport as half-block cells.
@@ -290,10 +277,10 @@ export function paintFramebuffer(g, fb) {
 // character in a span shares one w:t. So colour is scarce and glyphs are free,
 // and the measured frame cost is
 //
-//     frame_ms  ~=  63 + 0.67 * runs
+//     refresh_ms  ~=  31 + 0.61 * runs
 //
-// which makes five frames a second a budget of roughly 200 runs for the whole
-// paragraph. Two ideas get a Doom frame inside it.
+// which makes ten frames a second a budget of roughly 110 runs for the whole
+// paragraph. Two ideas get a Doom frame comfortably inside it.
 //
 // ENDPOINTS, NOT PIXELS. Both earlier projections used the ink and shading as
 // two independent samples — a top pixel and a bottom pixel. That wastes them.
@@ -312,9 +299,9 @@ export function paintFramebuffer(g, fb) {
 // allowance floats between rows — a blank ceiling keeps one run, the status
 // bar keeps twenty — and the frame cost becomes a constant you choose rather
 // than a property of the view. Measured: flat on every frame, whatever the view.
-// Measured: with the screen fenced from the caption (see seedDocument in
-// ascii-arcade.js) this lands the whole paragraph near 113 spans and the frame
-// near 10.4 repaints a second.
+// Measured: with the screen fenced from the caption (see seedArcade in
+// ascii-arcade.js), the 304 × 100 layout lands at 66 OOXML runs / 118 rendered
+// spans and about ten repaints a second on the review machine.
 const BUDGET = 64;
 
 /** A console palette: few entries, well separated, deliberately more saturated
@@ -339,12 +326,12 @@ const PAL_HEX = PAL.map((c) => HEX[c[0]] + HEX[c[1]] + HEX[c[2]]);
  *  samples is not what the frame costs — the run budget is, and the merge caps
  *  that regardless. A cell drawn with `▀` carries two sub-pixels; drawn with
  *  the quadrant blocks it carries FOUR, because all sixteen 2x2 patterns have
- *  a character. So the 97 x 34 cells sample the framebuffer at 194 x 68
- *  instead of 97 x 68, for no extra runs and no extra colours.
+ *  a character. So the 152 x 50 cells sample the framebuffer at 304 x 100
+ *  instead of 152 x 100, for no extra runs and no extra colours.
  *
  *  Still solid only — every quadrant is fully one endpoint or the other. The
  *  shade characters (░▒▓) are deliberately absent: they approximate TONE
- *  rather than carrying detail, and at the size this ships (a 3.3 x 7.05pt
+ *  rather than carrying detail, and at the size this ships (a 3 x 6.9pt
  *  cell) they read as dots, not as a blend. `▚` and `▞` appear here for the
  *  opposite reason to why they were dropped before — as two of the sixteen
  *  real 2x2 patterns, not as a 50% grey. */
@@ -427,7 +414,7 @@ const QUAD_X1 = Array.from({ length: QUAD_W }, (_, x) => Math.max(
   Math.floor(x * DOOM_W / QUAD_W) + 1, Math.floor((x + 1) * DOOM_W / QUAD_W)));
 
 /** Exposed mean colour of every QUADRANT, as flat RGB triples indexed
- *  [(row * 2 + half) * QUAD_W + qx] * 3. This is the 194 x 68 picture. */
+ *  [(row * 2 + half) * QUAD_W + qx] * 3. This is the 304 x 100 picture. */
 const quadRGB = new Float32Array(HALF_H * QUAD_W * 3);
 /** The same thing averaged to cell halves, [(row * 2 + half) * VIEW_W + x] * 3.
  *  The endpoint merge runs on this rather than on the quadrants: it only needs
@@ -570,14 +557,20 @@ export function paintFramebuffer8Bit(g, fb) {
     return { ink: inkIdx, bg: bgIdx, err };
   };
 
-  // Start from one run per cell, then merge down to the allowance.
+  // Start from one run per EIGHT cells, then merge down to the allowance. The
+  // glyph pass below still evaluates every one of the 304 horizontal samples;
+  // this only coarsens where a costly colour endpoint is allowed to change,
+  // to sixteen source pixels at a time. Starting every cell multiplied heap
+  // traffic at the denser grid without preserving any boundary the 64-run
+  // result kept: with 50 mandatory row runs, only fourteen splits survive.
   const rows = [];
   let total = 0;
   for (let row = 0; row < FIELD_ROWS; row++) {
     const seg = [];
-    for (let x = 0; x < VIEW_W; x++) {
-      const s = { row, x0: x, x1: x + 1, alive: true, ver: 0, prev: null, next: null };
-      s.fit = fit(row, x, x + 1);
+    for (let x = 0; x < VIEW_W; x += 8) {
+      const x1 = Math.min(VIEW_W, x + 8);
+      const s = { row, x0: x, x1, alive: true, ver: 0, prev: null, next: null };
+      s.fit = fit(row, x, x1);
       seg.push(s);
     }
     for (let i = 0; i < seg.length; i++) { seg[i].prev = seg[i - 1] ?? null; seg[i].next = seg[i + 1] ?? null; }
@@ -897,21 +890,6 @@ function createAudio() {
 // The cartridge
 // ═══════════════════════════════════════════════════════════════════════
 
-const CONTROLS = [
-  ['W / S', 'forward, back'],
-  ['A / D', 'strafe'],
-  ['← / →', 'turn'],
-  ['Space', 'fire'],
-  ['E', 'open, use'],
-  ['Shift', 'run'],
-  ['1…7', 'weapon'],
-  ['M', 'automap'],
-  ['Enter', 'confirm'],
-  ['Q', "Doom's menu"],
-  ['P', 'projection'],
-  ['Esc', 'pause & edit'],
-];
-
 /** The two ways this cartridge can put Doom on a Word paragraph.
  *
  *  `8bit` is the default because it is the one you can play: a fixed console
@@ -988,9 +966,9 @@ export function doomCart(options = {}) {
       : progress.phase === 'engine' ? `starting the Doom engine${dots}`
         : progress.phase === 'ready' ? 'entering the level' + dots
           : `downloading the IWAD${dots}`;
-    write(g, cy, cx, title, PANEL_HI);
+    write(g, cy, cx, title, HUD_INK);
     write(g, cy + 2, cx, phase, HUD_INK);
-    write(g, cy + 3, cx, '[' + '█'.repeat(bar) + '░'.repeat(40 - bar) + ']', PANEL_HI);
+    write(g, cy + 3, cx, '[' + '█'.repeat(bar) + '░'.repeat(40 - bar) + ']', HUD_INK);
     if (progress.total) {
       const mb = (n) => (n / 1048576).toFixed(1);
       write(g, cy + 4, cx, `${mb(progress.got ?? 0)} / ${mb(progress.total)} MB`, DEAD_INK);
@@ -1002,27 +980,7 @@ export function doomCart(options = {}) {
     }
   }
 
-  function drawPanel(g) {
-    let y = FIELD_TOP;
-    const x = PANEL_X + 1;
-    write(g, y, x, 'DOOM', PANEL_HI);
-    write(g, y + 1, x, handle?.title ? handle.title.trim().slice(0, PANEL_W - 2) : '', DEAD_INK);
-    y += 3;
-    for (const [key, what] of CONTROLS) {
-      if (y >= ROWS - 4) break;
-      write(g, y, x, key.padEnd(7), PANEL_HI);
-      write(g, y, x + 7, what.slice(0, PANEL_W - 9), PANEL_INK);
-      y++;
-    }
-    y = ROWS - 5;
-    write(g, y, x, projection === '8bit' ? '8-BIT · playable' : 'BITMAP · faithful', PANEL_HI);
-    y += 1;
-    write(g, y, x, `frame ${handle?.frames ?? 0}`, DEAD_INK);
-    write(g, y + 1, x, 'id Software engine,', DEAD_INK);
-    write(g, y + 2, x, 'GPL-2.0 · Freedoom data', DEAD_INK);
-  }
-
-/** Let the left bezel merge into the picture.
+/** Let both bezels merge into the picture.
  *
  *  Every row of this paragraph starts with a box-drawing character so the
  *  editor's markdown blur-commit can never read a row as a heading or a
@@ -1030,12 +988,16 @@ export function doomCart(options = {}) {
  *  giving the column its own ink cost it its own run on every picture row —
  *  one run per row of the frame, for a one-cell grey line. Painting the bezel in its
  *  neighbour's colours keeps the character exactly where it was and merges the
- *  run away. */
-function mergeBezelIntoPicture(g) {
+ *  run away. The same rule on the right replaced the tiny control panel: those
+ *  controls are now a legible paragraph above the screen, and the viewport gets
+ *  the whole document width. */
+function mergeBezelsIntoPicture(g) {
   for (let row = 0; row < FIELD_ROWS; row++) {
     const y = FIELD_TOP + row;
     g.colors[y][0] = g.colors[y][1];
     g.bgs[y][0] = g.bgs[y][1];
+    g.colors[y][COLS - 1] = g.colors[y][COLS - 2];
+    g.bgs[y][COLS - 1] = g.bgs[y][COLS - 2];
   }
 }
 
@@ -1045,12 +1007,10 @@ function mergeBezelIntoPicture(g) {
       if (projection === '8bit') paintFramebuffer8Bit(g, handle.framebuffer);
       else paintFramebuffer(g, handle.framebuffer);
       paintedFrames++;
-      drawDivider(g);
-      drawPanel(g);
       drawChrome(g, projection === '8bit'
-        ? 'DOOM — id Software’s own engine, projected to 8-bit in one Word paragraph'
-        : 'DOOM — id Software’s own engine, drawing into one Word paragraph');
-      mergeBezelIntoPicture(g);
+        ? `DOOM — ${handle.title?.trim() ?? 'id Software engine'} — 8-BIT · playable · frame ${handle.frames}`
+        : `DOOM — ${handle.title?.trim() ?? 'id Software engine'} — BITMAP · faithful · frame ${handle.frames}`);
+      mergeBezelsIntoPicture(g);
     } else {
       drawLoading(g);
       drawChrome(g, 'DOOM — the real engine, compiled to JavaScript');
@@ -1061,6 +1021,9 @@ function mergeBezelIntoPicture(g) {
   return {
     name: 'doom',
     label: '☩ DOOM',
+    controls:
+      'CONTROLS · W/S move · A/D strafe · ←/→ turn · SPACE fire · E open/use · SHIFT run · ' +
+      'Q menu · M map · 1–7 weapon · P projection · ESC pause/edit',
     caption:
       'The **actual** game: id Software’s Doom engine — GPL-2.0, compiled to JavaScript by ' +
       '[doomgeneric](https://github.com/grubbyplaya/doomgenericjs) — running on Freedoom’s ' +
@@ -1072,18 +1035,19 @@ function mergeBezelIntoPicture(g) {
       'runs cost the least picture to lose, then gives each surviving run *two* colors to be the ' +
       'endpoints of a ramp, fitted the way a GPU texture format fits one. Every cell then picks ' +
       'its own arrangement of those two colors with a quadrant block — all sixteen 2×2 patterns ' +
-      'have a character — so the picture is sampled at **194 × 68** even though only 97 × 34 ' +
+      'have a character — so the picture is sampled at **304 × 100** even though only 152 × 50 ' +
       'cells are spent on it, and the extra resolution costs nothing at all: a run breaks on a ' +
       'color change, never on a glyph. Doom draws on its own denser grid for exactly that ' +
-      'reason — 5.5pt cells in the same 462 × 261 points of page — because cells carry ' +
-      'resolution while runs carry cost. Flat cost, whatever you are looking at, and about ten ' +
-      'repaints a second. ' +
+      'reason — 5pt cells across the full 462pt document column — because cells carry ' +
+      'resolution while runs carry cost. The controls are a separate 10pt document paragraph, ' +
+      'so they stay genuinely readable without being converted on every frame. Flat cost, ' +
+      'whatever you are looking at, and about ten repaints a second. ' +
       '**P** switches to the faithful **bitmap**: every color the framebuffer had, two pixels per ' +
-      'cell, six times the runs and a quarter of the rate. Move **W/S** · strafe ' +
+      'cell, roughly eight times the rendered spans and a fifth of the rate. Move **W/S** · strafe ' +
       '**A/D** · turn **←/→** · **Space** ' +
       'fires · **E** opens · **Q** is Doom’s own menu. **Esc** pauses — and then it is only a ' +
       'document again: put your caret in the frame, Undo rewinds it, Save downloads it as .docx.',
-    hint: '<b>WASD</b> move · <b>←/→</b> turn · <b>Space</b> fire · <b>E</b> open · <b>Q</b> Doom’s menu · <b>P</b> switches projection — 8-bit samples 194×68 on a fixed run budget and plays at ~10 fps, bitmap is faithful at ~2.4.',
+    hint: '<b>WASD</b> move · <b>←/→</b> turn · <b>Space</b> fire · <b>E</b> open · <b>Q</b> Doom’s menu · <b>P</b> switches projection — 8-bit samples 304×100 on a fixed run budget and plays at ~10 fps, bitmap is faithful at ~2.',
     reset() {
       // Doom's own state lives inside the WebAssembly heap and the engine is
       // a page singleton, so a cartridge reset cannot restart the game. Q

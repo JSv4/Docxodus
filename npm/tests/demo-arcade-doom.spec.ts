@@ -143,12 +143,30 @@ test.describe('DOOM inside a Word document', () => {
         const fill = getComputedStyle(span).backgroundColor;
         return fill && fill !== 'transparent' && fill !== 'rgba(0, 0, 0, 0)';
       });
+      const rows = [''];
+      const readRows = (node: Node) => {
+        for (const child of Array.from(node.childNodes)) {
+          if (child.nodeName === 'BR') rows.push('');
+          else if (child.nodeType === Node.TEXT_NODE) {
+            // The HTML converter emits one zero-width bidi guard after each
+            // <br>; it is generated layout chrome, not a document grid cell.
+            rows[rows.length - 1] += (child.textContent ?? '').replace(/[\u200e\u200f]/g, '');
+          }
+          else readRows(child);
+        }
+      };
+      readRows(element);
+      const controls = arcade.controlsElement() as HTMLElement;
       return {
         text: arcade.canvasText() as string,
-        rows: (arcade.canvasText() as string).split('\n').length,
+        rows,
+        columns: rows.map((row) => row.length),
         spans: spans.length,
         shaded: shaded.length,
         inks: new Set(spans.map((span) => getComputedStyle(span).color)).size,
+        controls: controls.innerText,
+        controlsFontPx: Number.parseFloat(getComputedStyle(controls).fontSize),
+        controlsInsideFrame: element.contains(controls),
         fallback: arcade.editor.lastReconcileFallback as string | null,
       };
     });
@@ -160,7 +178,17 @@ test.describe('DOOM inside a Word document', () => {
     // Still the arcade's markdown-safe bezel — no row can open a heading or a
     // bullet, and no row is blank.
     expect(screen.text).toContain('┌');
-    for (const row of screen.text.split('\n')) expect(row.trim()).not.toBe('');
+    expect(screen.rows).toHaveLength(53);
+    expect(screen.columns).toEqual(new Array(53).fill(154));
+    for (const row of screen.rows) expect(row.trim()).not.toBe('');
+    // Controls are ordinary document text, not 5pt framebuffer cells. This is
+    // a visual legibility contract: at the page's fitted desktop size they
+    // render at 14.7px, with 13px as a conservative cross-platform floor.
+    expect(screen.controls).toContain('W/S move');
+    expect(screen.controls).toContain('SPACE fire');
+    expect(screen.controls).toContain('ESC pause/edit');
+    expect(screen.controlsFontPx).toBeGreaterThanOrEqual(13);
+    expect(screen.controlsInsideFrame).toBe(false);
     // Doom arriving as real run formatting: several inks, and run shading
     // actually rendered rather than silently dropped. The default projection's
     // palette is CLOSED at 18 entries plus one chrome colour, so this counts a
@@ -210,15 +238,28 @@ test.describe('DOOM inside a Word document', () => {
     const shape = () => page.evaluate(() => {
       const el = (window as any).__arcade.canvasElement() as HTMLElement;
       const spans = Array.from(el.querySelectorAll('span'));
+      const rows = [''];
+      const readRows = (node: Node) => {
+        for (const child of Array.from(node.childNodes)) {
+          if (child.nodeName === 'BR') rows.push('');
+          else if (child.nodeType === Node.TEXT_NODE) {
+            rows[rows.length - 1] += (child.textContent ?? '').replace(/[\u200e\u200f]/g, '');
+          }
+          else readRows(child);
+        }
+      };
+      readRows(el);
       const shaded = spans.filter((s) => {
         const f = getComputedStyle(s).backgroundColor;
         return f && f !== 'transparent' && f !== 'rgba(0, 0, 0, 0)';
       });
       return {
         spans: spans.length,
+        runs: (window as any).__arcade.timings().runs as number,
         shaded: shaded.length,
         inks: new Set(spans.map((s) => getComputedStyle(s).color)).size,
         text: (window as any).__arcade.canvasText() as string,
+        rows,
         projection: (window as any).__arcade.game().projection as string,
       };
     });
@@ -229,9 +270,10 @@ test.describe('DOOM inside a Word document', () => {
     // This projection does not merge runs to a tolerance, it ALLOCATES them:
     // the frame is squeezed to a fixed budget, so its cost is a constant the
     // cartridge chooses rather than a property of the view. Measured flat at
-    // ~137 spans across four very different views of E1M1, which is what buys
+    // ~118 spans across four very different views of E1M1, which is what buys
     // the frame rate; a scene-dependent number here means the budget broke.
-    expect(eight.spans).toBeLessThan(170);
+    expect(eight.spans).toBeLessThan(150);
+    expect(eight.runs).toBeLessThanOrEqual(70);
     // Every picture cell carries both an ink and a shading — they are the two
     // endpoints of the ramp its glyph picks quadrants from.
     expect(eight.shaded).toBeGreaterThan(50);
@@ -239,7 +281,7 @@ test.describe('DOOM inside a Word document', () => {
     expect(eight.inks).toBeLessThanOrEqual(40);
     // Quadrant blocks are where the resolution comes from: they carry four
     // sub-pixels per cell instead of two, for no extra runs. Seeing them is
-    // the evidence the picture is sampled at 194 x 68 rather than 97 x 68.
+    // the evidence the picture is sampled at 304 x 100 rather than 152 x 100.
     expect(eight.text).toMatch(/[▘▝▖▗▌▐▚▞▛▜▙▟]/);
     // Solid quadrants only. The shade characters approximate TONE rather than
     // carrying detail, and at the shipped cell size they read as dots.
@@ -260,15 +302,20 @@ test.describe('DOOM inside a Word document', () => {
     expect(bitmap.shaded).toBeGreaterThan(50);          // every picture cell shades
     // Pair-snapping is this projection's whole frame budget: without it a
     // photographic downsample gives nearly every cell its own run and a frame
-    // lands near every cell it draws. Measured ~690 walking and turning
-    // through E1M1, on 97 x 34 cells.
+    // lands near every cell it draws. Measured under 1,000 walking and turning
+    // through E1M1, on 152 x 50 cells. The denser grid uses a slightly wider
+    // pair tolerance so this established guard remains true.
     expect(bitmap.spans).toBeLessThan(1200);
     // The faithful projection's palette is the framebuffer's, so it is open
     // where the 8-bit one is closed. That, not speed, is what separates them.
     expect(bitmap.inks).toBeGreaterThan(eight.inks);
     // Still a document, still the markdown-safe bezel.
     expect(bitmap.text).toContain('┌');
-    for (const row of bitmap.text.split('\n')) expect(row.trim()).not.toBe('');
+    expect(bitmap.rows).toHaveLength(53);
+    for (const row of bitmap.rows) {
+      expect(row).toHaveLength(154);
+      expect(row.trim()).not.toBe('');
+    }
 
     // And back again.
     await page.keyboard.press('KeyP');

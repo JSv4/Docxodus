@@ -285,7 +285,7 @@ function rowRuns(chars, colors) {
  *  A background makes a space VISIBLE, so unlike rowRuns above, every cell
  *  counts here: a run breaks whenever either the ink or the shading changes.
  *  `null` shading means "no w:shd on this run" — the paragraph fill shows
- *  through, which is what the chrome and the side panel want. */
+ *  through, which is what the chrome around the picture wants. */
 function rowRunsShaded(chars, colors, bgs) {
   const runs = [];
   let text = '', color = null, bg;
@@ -434,7 +434,16 @@ export function createCanvasPin() {
       // the painted box WITHOUT touching line height (CSS 2.1 §10.6.1), so
       // this closes the seam and changes no metric the grid depends on.
       `[data-anchor="${unid}"] span, [data-anchor] ${CANVAS_RUN}` +
-      ' { padding-top: 0.06em; padding-bottom: 0.06em; }';
+      // The 5pt Doom grid has less leading in absolute pixels than the shared
+      // 8pt grid, but it is also much more sensitive to a one-device-pixel
+      // gap: that becomes a black scan line every six points. Slight overlap
+      // is harmless for unshaded text and closes the shaded line box on both
+      // grids without changing either grid's measured pitch.
+      // Converter-authored spans carry an inline `padding: 0` shorthand, so
+      // this pin needs the same `!important` strength as the grid properties
+      // above. Without it the rule exists but computes to zero — exactly the
+      // one-pixel black seams this rule is here to prevent.
+      ' { padding-top: 0.22em !important; padding-bottom: 0.22em !important; }';
   };
 }
 
