@@ -1158,10 +1158,22 @@ citation. `DocxSession` applies it after a structural delete or a revision resol
 (issues #516, #591); `RevisionProcessor` applies it on the stateless **reject** path, which is
 what every non-.NET transport reaches through `DocxDiffOps.RejectRevisions`.
 
-The stateless **accept** path deliberately does not apply it. `Accept(Compare(l, r)) ≡ r` is the
-comparison engine's contract, and a counterpart document that carries a reference-less note
-definition is entitled to keep it. `DocxSession`'s own resolve paths apply the rule in both
-directions because an editor is authoring a document rather than inverting a comparison.
+The stateless **accept** path applies it with an extra guard (issue #631): only a definition the
+accept also left without block content goes. The guard exists because `Accept(Compare(l, r)) ≡ r`
+is the comparison engine's contract and the redline itself distinguishes the two husk shapes — a
+reference-less definition the counterpart *kept* passes through the comparison with its content
+unmarked, survives the accept intact, and stays, while a definition the counterpart *deleted*
+arrives with every block deletion-marked, so accepting strips it bare and the prune takes it.
+Word's tracked deletions carry the same fully-marked shape (`RP050-Deleted-Footnote` is authored
+exactly like this), though Word's own accept leaves a childless `<w:footnote/>` shell where we
+remove the definition — the schema-valid form, and what the session has done since #516. Without
+the accept-side
+prune the two paths disagreed about a wholly-deleted note: `DocxSession.AcceptAllRevisions`
+removed it (its resolve paths apply the rule unguarded in both directions, because an editor is
+authoring a document) while the stateless path shipped a definition the counterpart had deleted.
+On the counterpart-kept husk shape the two contracts remain deliberately distinct — the stateless
+accept preserves the husk to reproduce the counterpart, the session's editorial rule still strips
+it (DS430 vs DS418).
 
 ### Which mutations record, and which refuse
 

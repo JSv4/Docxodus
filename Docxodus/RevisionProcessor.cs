@@ -33,19 +33,10 @@ namespace Docxodus
 
         public static void RejectRevisions(WordprocessingDocument doc)
         {
-            // Word's note-lifecycle rule, on the reject side only (issue #614). Rejecting a redline
-            // reproduces the BASELINE, and a note the redline itself introduced has no place there:
-            // its citation came in a w:ins and its definition came with the redline, so dropping the
-            // citation has to drop the definition or the "rejected" package still ships the note.
-            //
-            // Accepting deliberately does NOT do this. Accept reproduces the COUNTERPART document as
-            // the comparison saw it, husks included — Accept(Compare(l, r)) == r is the comparison
-            // engine's contract, and a counterpart that carries a reference-less note definition is
-            // entitled to keep it. DocxSession's own resolve paths apply the rule in both directions
-            // because an editor is authoring a document, not inverting a comparison.
-            //
-            // The rule and its scoping (only citations THIS operation removed) live in
-            // Internal.NoteReferenceOps, shared with those session paths.
+            // Word's note-lifecycle rule, reject side (issue #614): a note the redline introduced
+            // (w:ins citation) has no place in the rejected baseline, so its definition goes with
+            // the citation. Rationale and scoping live with the rule's owner,
+            // Internal.NoteReferenceOps; the accept side applies the guarded variant (issue #631).
             var citedBefore = Internal.NoteReferenceOps.ReferencedNoteIds(doc.MainDocumentPart);
             RejectRevisionsForPart(doc.MainDocumentPart);
             foreach (var part in doc.MainDocumentPart.HeaderParts)
@@ -1480,6 +1471,12 @@ namespace Docxodus
 
         private static void AcceptRevisions(WordprocessingDocument doc, bool preservePreexistingCleanTableRuns)
         {
+            // Word's note-lifecycle rule, accept side (issue #631): a definition this accept both
+            // orphaned and stripped of its blocks is a note the redline wholly deleted, and it goes
+            // with its citation. Why the blockless guard makes this safe for the other husk shape
+            // is documented once, on the rule's owner: Internal.NoteReferenceOps
+            // .PruneNotesEmptiedByAccept.
+            var citedBefore = Internal.NoteReferenceOps.ReferencedNoteIds(doc.MainDocumentPart);
             AcceptRevisionsForPart(doc.MainDocumentPart, preservePreexistingCleanTableRuns);
             foreach (var part in doc.MainDocumentPart.HeaderParts)
                 AcceptRevisionsForPart(part, preservePreexistingCleanTableRuns);
@@ -1491,6 +1488,8 @@ namespace Docxodus
                 AcceptRevisionsForPart(doc.MainDocumentPart.FootnotesPart, preservePreexistingCleanTableRuns);
             if (doc.MainDocumentPart.StyleDefinitionsPart != null)
                 AcceptRevisionsForStylesDefinitionPart(doc.MainDocumentPart.StyleDefinitionsPart);
+
+            Internal.NoteReferenceOps.PruneNotesEmptiedByAccept(doc.MainDocumentPart, citedBefore);
         }
 
         private static void AcceptRevisionsForStylesDefinitionPart(StyleDefinitionsPart stylesDefinitionsPart)

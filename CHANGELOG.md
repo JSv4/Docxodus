@@ -49,6 +49,20 @@ All notable changes to this project will be documented in this file.
   candidate that fails carries its error instead of products rather than failing the batch.
 
 ### Fixed
+- **Accepting a redline through the stateless path now takes a wholly-deleted note's definition
+  with it (#631).** The redline itself distinguishes the two reference-less-husk cases: a note
+  definition the counterpart *kept* passes through the comparison unmarked, while one the
+  counterpart *deleted* arrives with every block deletion-marked, so accepting strips it bare.
+  `RevisionProcessor.AcceptRevisions` — the path npm, python, MCP and WASM all reach through
+  `docxDiffAcceptRevisions` — kept such a stripped-bare definition anyway, shipping a note the
+  counterpart had deleted and disagreeing with `DocxSession.AcceptAllRevisions` about the same
+  redline. The note-lifecycle rule now runs on the accept side with a blockless guard: a
+  definition this accept both orphaned and emptied goes (Word's own tracked deletions carry the
+  same fully-deletion-marked shape — `RP050-Deleted-Footnote` is authored exactly like this),
+  while a counterpart's own husk keeps its unmarked content and stays — so `Accept(Compare(l, r)) ≡ r` holds for both note stores and no policy setting is
+  needed. The same rule now also applies wherever an accepted view of a document is computed (the
+  comparison engines' input flattens), where a husk emptied of its content was riding into
+  redlines as debris.
 - **Authoring a footnote or endnote while recording tracked changes now produces a redline that
   can actually be rejected (#614).** `InsertFootnote`/`InsertEndnote` ignored
   `TrackedChangeMode.RenderInline` entirely: the citation and the note definition were both
