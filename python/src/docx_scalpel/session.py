@@ -63,6 +63,7 @@ from .types import (
     DocxDiffConsolidatedRevision,
     DocxDiffConsolidateSettings,
     DocxDiffReviewer,
+    DocxDiffBatchResult,
     DocxDiffProducts,
     DocxDiffRevision,
     DocxDiffSettings,
@@ -123,6 +124,7 @@ __all__ = [
     "verify_deliverable",
     "prove_redline_reversibility",
     "docx_diff_compare",
+    "docx_diff_compare_batch",
     "docx_diff_compare_products",
     "docx_diff_get_revisions",
     "docx_diff_get_edit_script",
@@ -345,6 +347,80 @@ def docx_diff_compare_products(
         edit_script=dict(result["editScript"]) if "editScript" in result else None,
         semantic_changes=SemanticChangeSet._from_wire(semantic) if semantic is not None else None,
     )
+
+
+def docx_diff_compare_batch(
+    baseline: bytes,
+    candidates: Sequence[bytes] | Mapping[str, bytes],
+    settings: DocxDiffSettings | None = None,
+    products: Sequence[str] | None = None,
+) -> tuple[DocxDiffBatchResult, ...]:
+    """Compare ONE baseline against MANY candidates, reading the baseline once (issue #617).
+
+    The read is the single largest stage of a comparison, so a fan-out — one negotiated
+    draft against every counterparty's markup — otherwise re-reads the baseline for each
+    one. Mirrors .NET ``DocxDiff.CreateSnapshot``: the baseline is read once and every
+    candidate is compared against that snapshot. Each result is identical to what
+    :func:`docx_diff_compare_products` returns for the same pair.
+
+    ``candidates`` may be a sequence of blobs (named by index) or a mapping of name to
+    blob. ``products`` selects as in :func:`docx_diff_compare_products`.
+
+    A candidate that fails carries :attr:`DocxDiffBatchResult.error` instead of products;
+    the rest of the batch still comes back.
+    """
+    items = (
+        list(candidates.items())
+        if isinstance(candidates, Mapping)
+        else [(str(i), blob) for i, blob in enumerate(candidates)]
+    )
+    args: dict[str, Any] = {
+        "baselineB64": base64.b64encode(baseline).decode("ascii"),
+        "candidates": [
+            {"name": name, "docB64": base64.b64encode(blob).decode("ascii")}
+            for name, blob in items
+        ],
+    }
+    if settings is not None:
+        wire = settings.to_wire()
+        if wire:
+            args["settings"] = wire
+    if products is not None:
+        args["products"] = list(products)
+
+    result = _call("docx_diff_compare_batch", args)
+    if not isinstance(result, Mapping) or not isinstance(result.get("results"), list):
+        raise TypeError(
+            f"docx_diff_compare_batch: expected {{results: [...]}}, got {result!r}"
+        )
+
+    out: list[DocxDiffBatchResult] = []
+    for entry in result["results"]:
+        name = str(entry.get("name", ""))
+        if "error" in entry:
+            out.append(DocxDiffBatchResult(name=name, error=str(entry["error"])))
+            continue
+        semantic = entry.get("semanticChanges")
+        out.append(
+            DocxDiffBatchResult(
+                name=name,
+                products=DocxDiffProducts(
+                    redline=base64.b64decode(entry["redlineB64"])
+                    if "redlineB64" in entry
+                    else None,
+                    revisions=tuple(
+                        DocxDiffRevision._from_wire(r) for r in entry["revisions"]
+                    )
+                    if "revisions" in entry
+                    else None,
+                    edit_script=dict(entry["editScript"]) if "editScript" in entry else None,
+                    semantic_changes=SemanticChangeSet._from_wire(semantic)
+                    if semantic is not None
+                    else None,
+                ),
+            )
+        )
+    return tuple(out)
 
 
 def docx_diff_get_revisions(

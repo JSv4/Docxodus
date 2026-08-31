@@ -45,9 +45,12 @@ It is a sibling to `WmlComparer` in the comparison family. The differences that 
 | `GetEditScriptJson(left, right, settings?)` | `string` | The edit script as indented JSON — the diff-as-data differentiator. |
 | `GetSemanticChanges(left, right, options?)` | `SemanticChangeSet` | Stable, versioned verification schema covering content, formatting, structure, relationships, review data, media, and opaque package changes. |
 | `GetSemanticChangesJson(left, right, options?)` | `string` | Deterministic `docxodus.semantic-changes` JSON; use the returned change set's `ToCanonicalJson()` when compact bytes are required for hashing/signing. |
+| `CreateSnapshot(document, settings?)` | `DocxDiffSnapshot` | One document, read once, reusable across comparisons (issue #617). See "Reusing a read across comparisons" below. |
+| `CreateComparison(leftSnapshot, rightSnapshot, settings?)` | `DocxDiffComparison` | A comparison over two already-read snapshots. Products are identical to the document overload's; neither side is read again. Rejects a snapshot read under a different input-revision policy. |
+| `CreateConsolidation(base, reviewers, settings?)` | `DocxDiffConsolidation` | One memoized N-way pass serving all four consolidate products (issue #617). The four statics delegate to a single-use instance, so inspecting conflicts and then consolidating no longer reads the whole reviewer set twice. |
 | `CreateComparison(left, right, settings?)` | `DocxDiffComparison` | One memoized alignment pass serving every product above (issue #594): each product method is identical to its static, but normalization, the IR reads, and the edit-script build run at most once over one input snapshot. The statics delegate to a single-use instance, so this is also the single owner of their pipelines. Products are lazy and cached; the semantic pass keeps its own reader (it retains sources) but shares the snapshot. |
 
-Supporting public types: `DocxDiffSettings`, `DocxDiffRevision`, `DocxDiffRevisionType`, `DocxDiffFormatChange`, `DocxDiffRevisionGranularity`, `DocxDiffFormatComparison`, `DocxDiffComparison`. All `#nullable enable`, fully XML-documented, no static or process-global state (multi-author / consolidate-compatible — author flows per call via `DocxDiffSettings.AuthorForRevisions`).
+Supporting public types: `DocxDiffSettings`, `DocxDiffRevision`, `DocxDiffRevisionType`, `DocxDiffFormatChange`, `DocxDiffRevisionGranularity`, `DocxDiffFormatComparison`, `DocxDiffComparison`, `DocxDiffSnapshot`, `DocxDiffConsolidation`. All `#nullable enable`, fully XML-documented, no static or process-global state (multi-author / consolidate-compatible — author flows per call via `DocxDiffSettings.AuthorForRevisions`).
 
 On the bridges the memoized pass surfaces as a one-call multi-product compare —
 `DocxDiffOps.CompareProducts[Json]` → `DocxDiffBridge.CompareProductsJson` (WASM) /
@@ -146,6 +149,60 @@ a two-way `Compare` from ~820 ms to ~350 ms and a four-reviewer `Consolidate` fr
 the compatibility report — across all of `TestFiles/` to prove the output did not move; see its
 `FINDINGS.md` for the full stage attribution and for what still stands between the engine and 10
 comparisons per second.
+
+### Reusing a read across comparisons (issue #617)
+
+Reading each document once *per comparison* leaves the redundancy *across* comparisons. Every bulk
+workload pays it: one baseline against many counterparties re-reads the baseline N times; a version
+chain A→B→C→D reads every interior version twice; `GetConflicts` followed by `Consolidate` reads
+everything twice.
+
+`DocxDiff.CreateSnapshot` is the caller's way to say *"I already read this document."*
+
+```csharp
+var baseline = DocxDiff.CreateSnapshot(original);          // read once…
+foreach (var candidate in candidates)                      // …reused N times
+    yield return DocxDiff
+        .CreateComparison(baseline, DocxDiff.CreateSnapshot(candidate))
+        .GetRevisions();
+```
+
+Three things about it are worth knowing rather than assuming.
+
+**What it is valid for.** Only the input-revision policy reaches the read — `PreAcceptInputRevisions`
+and `PreserveInputRevisions`, which together decide whether the document's own tracked changes are
+flattened away first. Everything else in `DocxDiffSettings` is a diff-time or render-time policy, so
+one snapshot serves comparisons that differ in author, granularity, move detection, format
+comparison and the rest. A snapshot handed to a comparison with a *different* input-revision policy
+is **rejected with an `ArgumentException`**, not silently reused: serving it would compare a
+different view of the document than the caller asked for.
+
+**What it costs.** A materialized snapshot roots the parsed `XDocument` of every story, not merely
+the IR values, because the markup renderer clones source elements out of it. That is what makes the
+reuse possible and it is not small — reckon on several times the package's XML size resident per
+snapshot, and hold only the ones a run is reusing. Creation itself is free; nothing is read until a
+comparison needs it.
+
+**What it does not change.** The compatibility pre-flight is a property of the *comparison*, not of
+the read, so it fires on every comparison a snapshot takes part in. A reused snapshot must not make
+a caller's `OnCompatibilityWarning` subscription go quiet.
+
+`DocxDiffConsolidation` is the N-way counterpart, and closes a second gap on the way: of the four
+consolidate statics only `Consolidate` ran the compatibility pre-flight, so a caller who set
+`ThrowOnCompatibilityWarning` and asked for conflicts, consolidated revisions or the consolidated
+edit script was silently never told. All four now run the same gate — the N-way half of what #622
+fixed on the pairwise side.
+
+**On the bridges the snapshot becomes a batch.** A snapshot is an in-process object holding parsed
+XML; it cannot cross a process or language boundary, and exposing it as a handle would put a
+memory-pinning lifetime on transports with no good way to bound it. So the transports get the
+workload the snapshot exists for instead: `DocxDiffOps.CompareBatchJson` →
+`DocxDiffBridge.CompareBatchJson` (WASM) / `docxDiffCompareBatch` (npm) /
+`docx_diff_compare_batch` (python) / `docxodus_compare` with `mode: "fan_out"` (MCP), each taking one
+baseline and many candidates, reading the baseline once, and returning per-candidate products
+identical to comparing that pair alone. A candidate that fails carries its error instead of products
+rather than failing the batch — one malformed counterparty markup must not cost the caller the other
+ninety-nine.
 
 ## Edit script
 
