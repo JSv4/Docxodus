@@ -265,7 +265,7 @@ const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, 
 function rowRuns(chars, colors) {
   const runs = [];
   let text = '', color = null;
-  for (let x = 0; x < COLS; x++) {
+  for (let x = 0; x < chars.length; x++) {
     const ch = chars[x];
     if (ch !== ' ' && colors[x] !== color && color !== null) {
       runs.push([text, color]); text = '';
@@ -289,7 +289,7 @@ function rowRuns(chars, colors) {
 function rowRunsShaded(chars, colors, bgs) {
   const runs = [];
   let text = '', color = null, bg;
-  for (let x = 0; x < COLS; x++) {
+  for (let x = 0; x < chars.length; x++) {
     const cellBg = bgs[x] ?? null;
     if (text !== '' && (colors[x] !== color || cellBg !== bg)) {
       runs.push([text, color, bg]); text = '';
@@ -311,15 +311,24 @@ function rowRunsShaded(chars, colors, bgs) {
  *  run also carries `w:shd`, so a cell can paint an ink color and a background
  *  color independently. Grids without it (the Observatory's phenomena, the
  *  attract screen, the other two cartridges) emit exactly the XML they always
- *  did. */
-export function frameXml(openTag, grid, bg) {
+ *  did.
+ *
+ *  The grid's own shape is the frame's shape — rows from `grid.chars`, columns
+ *  from each row — so a cartridge may draw on a grid other than the shared
+ *  COLS×ROWS one. A denser grid needs a smaller cell to occupy the same page,
+ *  which is what `metrics` carries: `{ sz, lineTwips }`, the run font size in
+ *  half-points and the exact line height in twips. Omit it and the frame uses
+ *  the shared canvas metrics, unchanged. */
+export function frameXml(openTag, grid, bg, metrics) {
+  const sz = metrics?.sz ?? SZ;
+  const lineTwips = metrics?.lineTwips ?? LINE_TWIPS;
   const parts = [openTag,
     '<w:pPr>',
-    `<w:spacing w:before="0" w:after="0" w:line="${LINE_TWIPS}" w:lineRule="exact"/>`,
+    `<w:spacing w:before="0" w:after="0" w:line="${lineTwips}" w:lineRule="exact"/>`,
     `<w:shd w:val="clear" w:color="auto" w:fill="${bg}"/>`,
     '</w:pPr>'];
   let runs = 0;
-  for (let y = 0; y < ROWS; y++) {
+  for (let y = 0; y < grid.chars.length; y++) {
     if (y > 0) parts.push('<w:r><w:br/></w:r>');
     const row = grid.bgs
       ? rowRunsShaded(grid.chars[y], grid.colors[y], grid.bgs[y])
@@ -328,7 +337,7 @@ export function frameXml(openTag, grid, bg) {
       runs++;
       parts.push(
         `<w:r><w:rPr><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/>` +
-        `<w:color w:val="${color}"/><w:sz w:val="${SZ}"/><w:szCs w:val="${SZ}"/>` +
+        `<w:color w:val="${color}"/><w:sz w:val="${sz}"/><w:szCs w:val="${sz}"/>` +
         // w:shd is last in CT_RPr's sequence among the properties we emit, so
         // appending it here keeps the run properties schema-ordered.
         (cellBg ? `<w:shd w:val="clear" w:color="auto" w:fill="${cellBg}"/>` : '') +
@@ -382,6 +391,14 @@ const CANVAS_GRID_RULES =
   ' white-space: pre !important;' +
   ' -webkit-text-size-adjust: 100% !important; text-size-adjust: 100% !important;';
 
+/** A canvas run, wherever it ends up. The converter writes the run's own font
+ *  onto the span, so this matches the canvas paragraph's runs by what they ARE
+ *  rather than by which block currently holds them — which is what keeps a
+ *  COPY of the game screen looking like the game screen. Paste a paused frame
+ *  further down the document and it is a new block with a new anchor; the pin
+ *  below would not know it, and the paragraph would lose its grid. */
+const CANVAS_RUN = 'span[style*="Courier New"]';
+
 /** Returns a `pin(canvasAnchor)` the driver calls once per frame: the rules are
  *  keyed to the canvas paragraph's Unid (stable across frames, so this is a
  *  no-op except on first paint and after the canvas is rebuilt). The
@@ -405,6 +422,10 @@ export function createCanvasPin() {
     style.textContent =
       `[data-anchor="${unid}"], [data-anchor="${unid}"] span {${CANVAS_GRID_RULES} }\n` +
       `[data-anchor="${unid}"] { overflow-x: hidden; }\n` +
+      // Copies of the canvas paragraph, in their own rule so a browser without
+      // `:has()` simply drops this one and keeps the anchor pin above.
+      `[data-anchor] ${CANVAS_RUN} {${CANVAS_GRID_RULES} }\n` +
+      `[data-anchor]:has(> ${CANVAS_RUN}) { overflow-x: hidden;${CANVAS_GRID_RULES} }\n` +
       // Run shading (the Doom cartridge's half-block framebuffer) paints the
       // INLINE box, whose height is the font's content area — a shade under
       // the exact 10pt line box the canvas pins. Left alone that leaves a hair
@@ -412,7 +433,8 @@ export function createCanvasPin() {
       // lines across the picture. Vertical padding on an inline element grows
       // the painted box WITHOUT touching line height (CSS 2.1 §10.6.1), so
       // this closes the seam and changes no metric the grid depends on.
-      `[data-anchor="${unid}"] span { padding-top: 0.06em; padding-bottom: 0.06em; }`;
+      `[data-anchor="${unid}"] span, [data-anchor] ${CANVAS_RUN}` +
+      ' { padding-top: 0.06em; padding-bottom: 0.06em; }';
   };
 }
 

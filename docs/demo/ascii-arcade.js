@@ -1372,7 +1372,7 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
   }
 
   function paintGrid(frame, label) {
-    const { xml, runs } = frameXml(openTag, frame.grid, frame.bg);
+    const { xml, runs } = frameXml(openTag, frame.grid, frame.bg, frame.metrics);
     lastRuns = runs;
     const t0 = performance.now();
     const res = session.raw.replaceXml(canvasAnchor, xml);
@@ -1549,6 +1549,57 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
   // Click the game (or any block) while it plays: the frame freezes and the
   // caret lands in it. No mode switch — it was a document the whole time.
   editor.root.addEventListener('pointerdown', () => setPlaying(false), true);
+
+  // Copy and paste the screen paragraph.
+  //
+  // Selecting the paused frame and pressing Ctrl+C already works — it is
+  // ordinary document text, and the clipboard gets the picture. Pasting it back
+  // is where the cabinet has to help: the editor commits TEXT diffs (see its
+  // MVP scope), so a native paste would drop every colour the frame is made of
+  // and leave a grey wall of block characters. So the copy stashes what the
+  // frame actually IS — the paragraph's own OOXML — and the paste inserts that
+  // as a real block: same runs, same shading, undoable, and in the .docx.
+  //
+  // Both listeners are scoped to the screen paragraph. Any other copy or paste
+  // in the document is the browser's, untouched.
+  let copiedFrame = null;
+  editor.root.addEventListener('copy', () => {
+    const sel = window.getSelection();
+    const el = canvasEl();
+    copiedFrame = el && sel && !sel.isCollapsed && sel.containsNode(el, true)
+      ? session.raw.getXml(canvasAnchor)
+      : null;
+  });
+  editor.root.addEventListener('paste', (event) => {
+    if (!copiedFrame) return;
+    const unid = event.target?.closest?.('[data-anchor]')?.getAttribute('data-anchor');
+    if (!unid) return;
+    event.preventDefault();
+
+    // Where it lands. After the block holding the caret, unless that is the
+    // screen itself or one of the fence paragraphs around it — everything in
+    // that span is swept on resume (see the litter sweep), so a copy dropped
+    // there would vanish the moment the game restarts. Those go to the end of
+    // the body instead, where they keep.
+    const ids = session.findByKind('p', 'body').map((t) => t.id);
+    const fence = ids.indexOf(seeded.fenceBelow);
+    const screen = ids.indexOf(canvasAnchor);
+    let at = ids.findIndex((id) => id.endsWith(unid));
+    if (at < 0 || (screen >= 0 && at >= screen - 1 && at <= fence)) at = ids.length - 1;
+    if (at < 0) return;
+
+    // A block-level insert, then the copied body under the NEW paragraph's
+    // opening tag: the Unid in that tag is the block's identity, so reusing the
+    // source's would give two blocks one anchor.
+    const made = session.insertParagraph(ids[at], 'after', '\u00a0');
+    const created = made.created?.[0]?.id;
+    if (!created) return;
+    const seed = session.raw.getXml(created);
+    let open = seed.slice(0, seed.indexOf('>') + 1);
+    if (open.endsWith('/>')) open = `${open.slice(0, -2)}>`;
+    session.raw.replaceXml(created, open + copiedFrame.slice(copiedFrame.indexOf('>') + 1));
+    editor.refresh();
+  });
 
   // On-screen pad (touch): buttons carry data-code="ArrowLeft" etc.
   if (ui.pad) {

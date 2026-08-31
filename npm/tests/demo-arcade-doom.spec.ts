@@ -115,9 +115,9 @@ test.describe('DOOM inside a Word document', () => {
 
     // Doom's own counter, not the arcade's: it must keep climbing on its own.
     //
-    // The margin is small on purpose. Each painted frame is ~1,400 runs of
-    // OOXML through replaceXml + refresh, so the frame RATE is a property of
-    // how loaded the machine is — on a busy CI runner it lands near 1 fps,
+    // The margin is small on purpose. Each painted frame is a whole paragraph
+    // of coloured OOXML runs through replaceXml + refresh, so the frame RATE
+    // is a property of how loaded the machine is — on a busy CI runner it lands near 1 fps,
     // which made a +60 margin sit right on this timeout and flake. The claim
     // being made here is liveness, not throughput: a frozen or crashed engine
     // produces no further frames at all, so any sustained advance falsifies
@@ -229,9 +229,9 @@ test.describe('DOOM inside a Word document', () => {
     // This projection does not merge runs to a tolerance, it ALLOCATES them:
     // the frame is squeezed to a fixed budget, so its cost is a constant the
     // cartridge chooses rather than a property of the view. Measured flat at
-    // ~157 spans across four very different views of E1M1, which is what buys
+    // ~137 spans across four very different views of E1M1, which is what buys
     // the frame rate; a scene-dependent number here means the budget broke.
-    expect(eight.spans).toBeLessThan(160);
+    expect(eight.spans).toBeLessThan(170);
     // Every picture cell carries both an ink and a shading — they are the two
     // endpoints of the ramp its glyph picks quadrants from.
     expect(eight.shaded).toBeGreaterThan(50);
@@ -239,7 +239,7 @@ test.describe('DOOM inside a Word document', () => {
     expect(eight.inks).toBeLessThanOrEqual(40);
     // Quadrant blocks are where the resolution comes from: they carry four
     // sub-pixels per cell instead of two, for no extra runs. Seeing them is
-    // the evidence the picture is sampled at 128 x 46 rather than 64 x 46.
+    // the evidence the picture is sampled at 194 x 68 rather than 97 x 68.
     expect(eight.text).toMatch(/[▘▝▖▗▌▐▚▞▛▜▙▟]/);
     // Solid quadrants only. The shade characters approximate TONE rather than
     // carrying detail, and at the shipped cell size they read as dots.
@@ -260,8 +260,9 @@ test.describe('DOOM inside a Word document', () => {
     expect(bitmap.shaded).toBeGreaterThan(50);          // every picture cell shades
     // Pair-snapping is this projection's whole frame budget: without it a
     // photographic downsample gives nearly every cell its own run and a frame
-    // lands near 1,470 spans. Measured ~400 walking and turning through E1M1.
-    expect(bitmap.spans).toBeLessThan(900);
+    // lands near every cell it draws. Measured ~690 walking and turning
+    // through E1M1, on 97 x 34 cells.
+    expect(bitmap.spans).toBeLessThan(1200);
     // The faithful projection's palette is the framebuffer's, so it is open
     // where the 8-bit one is closed. That, not speed, is what separates them.
     expect(bitmap.inks).toBeGreaterThan(eight.inks);
@@ -273,6 +274,93 @@ test.describe('DOOM inside a Word document', () => {
     await page.keyboard.press('KeyP');
     await page.waitForFunction(
       () => (window as any).__arcade.game().projection === '8bit', null, { timeout: 60000 });
+  });
+
+  test('the paused frame copies and pastes as a real block, runs and shading intact', async ({ page }) => {
+    test.setTimeout(300000);
+    await bootDoom(page);
+    await startLevel(page);
+    await page.waitForFunction(() => (window as any).__arcade.frames() >= 4, null, { timeout: 60000 });
+
+    // Pause first: the frame has to stop moving before it can be selected, and
+    // pausing is the cabinet's whole claim — it was a document the whole time.
+    await page.evaluate(() => (window as any).__arcade.pause());
+    await page.waitForTimeout(500);
+
+    const before = await page.evaluate(() =>
+      (window as any).__arcade.editor.root.querySelectorAll('[data-anchor]').length as number);
+
+    // Select the screen paragraph and copy it, exactly as a reader would.
+    await page.evaluate(() => {
+      const element = (window as any).__arcade.canvasElement() as HTMLElement;
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const selection = getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+    });
+    await page.keyboard.press('Control+C');
+    await page.waitForTimeout(300);
+
+    // Paste with the caret in the last block. The editor commits TEXT diffs, so
+    // a native paste would drop the colour; the cabinet inserts the paragraph's
+    // own OOXML instead, which is what this is checking for.
+    await page.evaluate(() => {
+      const blocks = (window as any).__arcade.editor.root.querySelectorAll('[data-anchor]');
+      const last = blocks[blocks.length - 1] as HTMLElement;
+      const range = document.createRange();
+      range.selectNodeContents(last);
+      range.collapse(false);
+      const selection = getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+    });
+    await page.keyboard.press('Control+V');
+    await page.waitForFunction((n) =>
+      (window as any).__arcade.editor.root.querySelectorAll('[data-anchor]').length > n,
+    before, { timeout: 60000 });
+
+    const pasted = await page.evaluate(() => {
+      const arcade = (window as any).__arcade;
+      const screen = arcade.canvasElement() as HTMLElement;
+      const blocks = arcade.editor.root.querySelectorAll('[data-anchor]') as NodeListOf<HTMLElement>;
+      const copy = Array.from(blocks)
+        .filter((block) => block !== screen && block.querySelectorAll('span').length > 40)
+        .pop();
+      const spans = Array.from(copy?.querySelectorAll('span') ?? []) as HTMLElement[];
+      return {
+        text: copy?.textContent ?? '',
+        screenText: screen.textContent ?? '',
+        spans: spans.length,
+        shaded: spans.filter((span) => {
+          const fill = getComputedStyle(span).backgroundColor;
+          return fill && fill !== 'transparent' && fill !== 'rgba(0, 0, 0, 0)';
+        }).length,
+        inks: new Set(spans.map((span) => getComputedStyle(span).color)).size,
+      };
+    });
+
+    // The copy is the frame: same characters, and the runs came across as runs.
+    expect(pasted.text).toBe(pasted.screenText);
+    expect(pasted.shaded).toBeGreaterThan(50);
+    expect(pasted.inks).toBeGreaterThan(6);
+
+    // And it is in the document, not just in the DOM — it survives a save and
+    // reopen with its shading, which is the difference between a real block and
+    // a browser paste the next commit would flatten.
+    const saved = await page.evaluate(() => {
+      const arcade = (window as any).__arcade;
+      const bytes: Uint8Array = arcade.save();
+      const handle = arcade.bridge.OpenSession(bytes, '');
+      const html = arcade.bridge.RenderHtml(handle, 'doom-', false, false, 1) as string;
+      arcade.bridge.CloseSession(handle);
+      const parsed = new DOMParser().parseFromString(html, 'text/html');
+      const screens = Array.from(parsed.querySelectorAll<HTMLElement>('p[data-anchor]'))
+        .filter((paragraph) => (paragraph.textContent ?? '').includes('DOOM'));
+      return { count: screens.length, html: screens.map((s) => s.innerHTML).join('') };
+    });
+    expect(saved.count).toBeGreaterThanOrEqual(2);
+    expect(saved.html).toMatch(/background/i);
   });
 
   test('a cross-origin IWAD is refused rather than fetched', async ({ page }) => {

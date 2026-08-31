@@ -86,6 +86,38 @@ All notable changes to this project will be documented in this file.
   lands near 113 spans and the cartridge at ~10.4 repaints a second, against ~2.9 for the
   faithful bitmap projection.
   Demo-content change (`docs/demo/`), not npm surface.
+- **The Doom cartridge draws on its own, denser character grid — 2.2× the picture samples for
+  8.5 repaints a second instead of 10.** Cells carry resolution; runs carry cost; those are
+  different quantities, and this spends only the first. Doom left the arcade's shared 92 × 26
+  grid of 8pt cells for 140 × 37 cells of 5.5pt text on a 7.05pt line, which occupies the same
+  462 × 261 points of page — the same screen, made of more and smaller characters, and still
+  every cell a real character with a real colour in a real paragraph. The picture went from
+  64 × 23 cells to 97 × 34, and with the quadrant blocks on top of that from 128 × 46 samples
+  to **194 × 68**. The price is a floor rather than a slope: a run cannot cross a line break,
+  so the run count can never fall below the row count, and eleven more rows is eleven more runs
+  the merge cannot reclaim. `frameXml` now takes the frame's shape from the grid it is given and
+  the cell metrics from the cartridge, so the other two cartridges and the Observatory emit
+  exactly the XML they did before.
+  What did have to change is how a run picks its two endpoint colours. They were the span's
+  darkest and brightest cell halves, which is fine while a run covers a handful of samples and
+  catastrophic once it covers a hundred: extremes are outliers, one specular highlight and one
+  shadow define a ramp that nothing else in the span lies on, and every mid-tone then snaps to
+  whichever end is nearer — a black-and-white checkerboard where a wall should be, and worse at
+  every resolution increase. The endpoints are now the two group means either side of the span's
+  mean luminance, which is block truncation coding's rule (the one a GPU texture format uses),
+  costs the same two passes, and holds at any span length.
+  Demo-content change (`docs/demo/`), not npm surface.
+- **The paused Doom frame can be copied and pasted as a real block.** Selecting the screen
+  paragraph and pressing Ctrl+C always worked — it is ordinary document text. Pasting it back did
+  not: the editor commits *text* diffs by design, so a native paste dropped every colour the frame
+  is made of and left a wall of grey block characters. The cabinet now recognises a copy of its own
+  screen and inserts the paragraph's OOXML instead, so the pasted frame is a real block — same
+  runs, same shading, undoable, and in the saved `.docx`. It lands at the end of the body when the
+  caret is inside the screen or its fence, since everything in that span is swept on resume. The
+  demo's display pin also matches canvas runs by the font they carry rather than by one block's
+  anchor, so a copy of the game screen keeps the grid. Any other copy or paste in the document is
+  the browser's, untouched.
+  Demo-content change (`docs/demo/`), not npm surface.
 - **A single-block render no longer builds the session's anchor index when it will not use it.**
   `BlockSourceIdentity.For` already declines the index walk for a render that does not stamp
   anchors — the editor's incremental swap path — but C# evaluates arguments eagerly, so passing
