@@ -1131,13 +1131,50 @@ rendering notes, appeared as a stray empty footnote with no citation.
   Word's default (`1, 2, 3…`, continuous).
 - **Citing an existing note twice.** Each call creates a new definition; there is no
   "reference note N again" op.
-- **Tracked-changes mode.** `Settings.TrackedChanges = RenderInline` does not wrap the citation
-  in `w:ins` — consistent with every other insert op (`InsertParagraph`, `InsertTable`,
-  `InsertHorizontalRule`, `SetHeaderText`); only `ReplaceText`/`DeleteBlock`/`DeleteRange`/`DeleteSection` track.
+- **Note numbering under recording.** The citation records (see below), but Word renumbers notes
+  by position and does not track that renumbering; a redline that inserts a note ahead of existing
+  ones shifts their displayed numbers on both the accept and the reject side.
 - **Narrowed projection scopes.** A session opened with `ProjectionSettings.Scopes` excluding
   `Footnotes`/`Endnotes` still writes the note correctly, but `Created` comes back without the
   note anchors — they resolve against a projection that omits the part. Family behavior, identical
   to `SetHeaderText` with `Headers` excluded.
+
+### Recording a note as a tracked change (issue #614)
+
+Under `Settings.TrackedChanges = RenderInline` the **citation is the reversible unit and the
+definition follows it**: the body-side reference run is wrapped in `w:ins`, and rejecting that
+revision removes the reference, which leaves the definition uncited — at which point the
+note-lifecycle rule deletes it. Accepting unwraps the `w:ins` and both survive.
+
+The definition itself carries no revision markup of its own, deliberately. A second `w:ins`
+inside it would be a revision with no independently meaningful resolution: rejecting it while
+keeping the citation yields an empty note, and keeping it while rejecting the citation yields a
+note that is pruned anyway.
+
+`Internal/NoteReferenceOps.cs` is the single owner of that rule — *a note definition exists
+exactly as long as something still cites it* — and it asks the whole package who cites a note,
+not just the body, so a note cited from a running header as well outlives losing its body
+citation. `DocxSession` applies it after a structural delete or a revision resolution
+(issues #516, #591); `RevisionProcessor` applies it on the stateless **reject** path, which is
+what every non-.NET transport reaches through `DocxDiffOps.RejectRevisions`.
+
+The stateless **accept** path deliberately does not apply it. `Accept(Compare(l, r)) ≡ r` is the
+comparison engine's contract, and a counterpart document that carries a reference-less note
+definition is entitled to keep it. `DocxSession`'s own resolve paths apply the rule in both
+directions because an editor is authoring a document rather than inverting a comparison.
+
+### Which mutations record, and which refuse
+
+| Under `RenderInline` | Operations |
+|---|---|
+| Record as native revisions | `ReplaceText` (and `ReplaceMatch`/`ReplaceInner`/`ReplaceTextAtSpan`), `DeleteBlock`, `DeleteRange`, `DeleteSection`, `InsertParagraph`, `SplitParagraph`, `MergeParagraphs`, `MoveBlock`, `InsertHorizontalRule`, `InsertFootnote`, `InsertEndnote`, the formatting ops (`*PrChange`), and the table row/column ops |
+| Refuse with `TrackedOperationUnsupported` | `InsertTable`, `ApplyListFormatRange`, and every image mutation — no reversible native encoding exists, so nothing is written rather than something that cannot be taken back |
+| Apply untracked | The running-story and document-setup ops: `SetHeaderText`, `SetFooterText`, `EnsureHeaderFooterVisible`, `InsertPageNumberField`, `SetPageNumbering`, `ClearPageNumbering`. Word does not redline header/footer authoring either; a document opened for review shows the new running story, not a revision. Comments and annotations are likewise not revisions, by design |
+
+Anything that writes package state under recording belongs in exactly one of those three rows.
+The failure #614 fixed was a fourth, unwritten one — writing content that reject-all could not
+take back — which is the worst of the three, because the redline looks complete and only fails
+when somebody actually rejects it.
 
 ## Comments (issues #300, #317, and #341)
 
