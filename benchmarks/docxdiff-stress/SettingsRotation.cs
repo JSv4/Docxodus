@@ -55,11 +55,44 @@ internal static class SettingsRotation
         ("invariant-culture", () => new DocxDiffSettings { Culture = CultureInfo.InvariantCulture }),
     };
 
+    /// <summary>
+    /// The consolidate-only deviations: <see cref="DocxDiffConsolidateSettings.ConflictResolution"/>
+    /// is the one setting that exists on the composed type and not on the pairwise surface.
+    /// </summary>
+    private static readonly (string Name, ConflictResolution Policy)[] ConflictPolicies =
+    {
+        ("first-reviewer-wins", ConflictResolution.FirstReviewerWins),
+        ("stack-all", ConflictResolution.StackAll),
+    };
+
     public static int Count => Variations.Length;
 
     public static (string Name, DocxDiffSettings Settings) For(int documentIndex)
     {
         var (name, build) = Variations[((documentIndex % Count) + Count) % Count];
         return (name, build());
+    }
+
+    /// <summary>
+    /// The N-way rotation (issue #632). <see cref="DocxDiffConsolidateSettings"/> COMPOSES
+    /// <see cref="DocxDiffSettings"/> rather than inheriting it, so every pairwise variation is
+    /// reachable on the consolidate path by wrapping — the rotation that knows how to wrap is
+    /// shared rather than duplicated — and the wheel is extended with the conflict-resolution
+    /// policies that only exist there. The two lists have different lengths, so a document's
+    /// consolidate variation drifts against its pairwise one across the corpus instead of always
+    /// pairing the same two.
+    /// </summary>
+    public static (string Name, DocxDiffConsolidateSettings Settings) ForConsolidate(int documentIndex)
+    {
+        var total = Variations.Length + ConflictPolicies.Length;
+        var i = ((documentIndex % total) + total) % total;
+        if (i < Variations.Length)
+        {
+            var (name, build) = Variations[i];
+            return (name, new DocxDiffConsolidateSettings { Diff = build() });
+        }
+
+        var (policyName, policy) = ConflictPolicies[i - Variations.Length];
+        return (policyName, new DocxDiffConsolidateSettings { ConflictResolution = policy });
     }
 }
