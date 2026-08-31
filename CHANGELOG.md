@@ -97,33 +97,43 @@ All notable changes to this project will be documented in this file.
   All four now run the same gate.
 
 ### Changed
-- **Doom's controls are actually legible, and the gameplay frame is now near-VGA
-  width without giving up real-time play.** The 5pt framebuffer grid no longer
-  tries to carry a keyboard reference at roughly seven rendered pixels high.
-  The complete map is four short, bold 18pt document paragraphs above the
-  screen (24px in the fitted desktop editor and still at least 14px at the
-  tested 60% embed scale), isolated from the hot paragraph by the existing
-  one-character context fence. The four fixed lines avoid the clipping a
-  single oversized OOXML run can suffer. Removing the divider and side
-  panel gives the viewport the full 462pt document column: 152 × 50 quadrant
-  cells sample Doom at **304 × 100**, up from 194 × 68, in the same 4:3 shape.
-  Both bezels borrow adjacent picture colours so they merge away; the 8-bit
-  frame remains 64 picture runs / at most 70 OOXML runs total and measures about
-  **10 fps** unthrottled on the review machine (10.5 observed), with about 118 rendered
-  spans. The endpoint allocator starts on eight-cell colour regions while the
-  glyph pass still evaluates all 30,400 samples, avoiding heap work whose
-  boundaries never survived the final 64-run budget. The denser bitmap mode
-  uses a paired luma tolerance that keeps its existing `<1,200`-span guard.
-  Finally, the canvas shading overlap now carries `!important`: converter spans
-  have an inline `padding: 0` shorthand, so the old rule computed to zero and
-  left one-pixel black seams despite existing in the stylesheet. The Playwright
-  guard now asserts the 154 × 53 grid, all four non-overflowing control lines,
-  24px source / 14px scaled minimum control text, controls outside the
-  framebuffer, and the direct ≤70-run fast-path budget. The checked-in GIFs
-  are tightly framed at the document content's native 656px width, rather than
-  shrinking a 1,000px editor screenshot (and its empty margins) into the same
-  display slot.
-  Demo-content change (`docs/demo/`), not npm surface.
+- **Doom is legible at a playable frame rate, and its controls are ordinary document
+  text.** Two things had to stop competing for the same paragraph. The keyboard map
+  used to be a side panel drawn on the framebuffer grid, which rendered it about seven
+  pixels high — the right words at an unusable size. It is now four short, bold **18pt
+  document paragraphs** above the screen (24px in the fitted desktop page, and still at
+  least 14px at the tested 60% embed scale), kept out of every frame conversion by the
+  existing one-character context fence. Four fixed lines rather than one, because a
+  single oversized OOXML run can clip.
+  That freed the whole document column for the picture. Doom now draws on **96 × 32
+  cells of 8pt text on an 11.45pt exact line**; inside the bezel, 94 × 29 picture cells
+  cover roughly 451 × 332pt at Doom's 4:3 shape, and the quadrant blocks carry four
+  samples per cell, so the framebuffer reaches the document at **188 × 58**. A 5pt grid
+  sampling 304 × 100 was built and discarded: it was sharper in the abstract and not
+  legible at the size anyone actually views it, and it cost 21 extra rendered line spans
+  on every repaint.
+  The default projection changed with it. Rather than rationing a 64-run colour budget
+  across the frame — whose quantised ramps collapsed a room into horizontal bands — it
+  auto-exposes the framebuffer, thresholds it to **one** stable high-contrast
+  ink/shading pair, and spends the free glyph channel on literal local structure. The
+  whole frame is **three authored runs / 32 rendered spans**, measured at **10.68
+  completed document repaints a second** locally, and doorways, enemies, the weapon and
+  the HUD stay distinguishable. `bitmap` keeps unrestricted framebuffer colour for
+  paused-frame inspection: an edge-aware allocator merges the least-cost adjacent
+  segment until a 900-picture-run ceiling is met, under 1,000 rendered spans, and is
+  deliberately not described as playable.
+  Two rendering fixes went with it. The canvas shading overlap now carries `!important`,
+  because converter spans set an inline `padding: 0` shorthand that made the
+  seam-closing rule compute to zero and leave one-pixel black lines between rows. And
+  the converter no longer emits a zero-metric LTR marker span after every break in
+  exact-line-height content, where the paragraph's declared direction already supplies
+  that information — one fewer DOM span per line, with bidi exact-line paragraphs
+  keeping their marker and a focused regression covering both branches.
+  The Playwright guard asserts the 96 × 32 grid, all four non-overflowing control lines
+  at 24px source / 14px scaled, controls outside the framebuffer, the run and span
+  ceilings, and the ten-FPS design point. The checked-in GIFs are framed at the document
+  content's native 656px width rather than shrinking a 1,000px editor screenshot into
+  the same slot.
 - **The Doom cartridge can project its framebuffer as ASCII, and `P` switches between the
   two.** The frame budget is one OOXML→HTML conversion of the screen paragraph and it is
   linear in runs (~35 ms fixed + ~0.70 ms per run, measured across a 24× range) — and a run
@@ -188,21 +198,16 @@ All notable changes to this project will be documented in this file.
   lands near 113 spans and the cartridge at ~10.4 repaints a second, against ~2.9 for the
   faithful bitmap projection.
   Demo-content change (`docs/demo/`), not npm surface.
-- **The Doom cartridge draws on its own, denser character grid — 2.2× the picture samples.** Cells carry resolution; runs carry cost; those are
-  different quantities, and this spends only the first. Doom left the arcade's shared 92 × 26
-  grid of 8pt cells for 140 × 37 cells of 5.5pt text on a 7.05pt line, which occupies the same
-  462 × 261 points of page — the same screen, made of more and smaller characters, and still
-  every cell a real character with a real colour in a real paragraph. The picture went from
-  64 × 23 cells to 97 × 34, and with the quadrant blocks on top of that from 128 × 46 samples
-  to **194 × 68**. It cost frame rate at first, and the cost was a floor rather than a slope: a
-  run cannot cross a line break, so the run count can never fall below the row count, and eleven
-  more rows is eleven more runs the merge cannot reclaim — 8.6 repaints a second where the
-  cartridge had been at 10. Rearranging the colour budget did not buy that back (spending the
-  entire budget down to 46 runs reached 9.97 and flattened the picture); making a run cheaper to
-  convert did, and the cartridge now runs at 10.3–10.4 at the full resolution and the full
-  budget. See the conversion entry below. `frameXml` now takes the frame's shape from the grid
-  it is given and the cell metrics from the cartridge, so the other two cartridges and the
-  Observatory emit exactly the XML they did before.
+- **A cartridge can draw on its own character grid.** Cells carry resolution; runs carry cost;
+  those are different quantities, and a cartridge that wants more of the first without paying
+  the second needs a grid of its own. `frameXml` now takes the frame's shape from the grid it
+  is given and the cell metrics (`{ sz, lineTwips }`) from the cartridge, so a denser or
+  coarser screen is a cartridge decision — the other two cartridges and the Observatory emit
+  exactly the XML they did before. Doom is the caller that uses it; see the entry above for the
+  grid it settled on and why.
+  One limit is worth recording, because it bounds every such choice: a run cannot cross a line
+  break, so a frame can never use fewer runs than it has picture rows. More rows is more runs
+  the merge can never reclaim, whatever the colour budget does.
   What did have to change is how a run picks its two endpoint colours. They were the span's
   darkest and brightest cell halves, which is fine while a run covers a handful of samples and
   catastrophic once it covers a hundred: extremes are outliers, one specular highlight and one
