@@ -291,7 +291,10 @@ export function paintFramebuffer(g, fb) {
 // allowance floats between rows — a blank ceiling keeps one run, the status
 // bar keeps twenty — and the frame cost becomes a constant you choose rather
 // than a property of the view. Measured: flat on every frame, whatever the view.
-const BUDGET = 90;
+// Measured: with the screen fenced from the caption (see seedDocument in
+// ascii-arcade.js) this lands the whole paragraph near 113 spans and the frame
+// near 10.4 repaints a second.
+const BUDGET = 64;
 
 /** A console palette: few entries, well separated, deliberately more saturated
  *  than Doom's own. Every run's two endpoints are drawn from here, which is
@@ -1016,19 +1019,19 @@ function mergeBezelIntoPicture(g) {
       'frame, and what it costs is *colored runs*: a run breaks when the ink or the `w:shd` ' +
       'shading changes, never when the glyph does, and the measured frame is `63 ms + 0.67 ms × ' +
       'runs`. So the default **8-bit** projection treats that as a budget and spends it — it ' +
-      'squeezes the frame to a fixed ~90 runs by repeatedly merging whichever two neighbouring ' +
+      'squeezes the frame to a fixed ~64 runs by repeatedly merging whichever two neighbouring ' +
       'runs cost the least picture to lose, then gives each surviving run *two* colors to be the ' +
       'endpoints of a ramp. Every cell then picks its own arrangement of those two colors with a ' +
       'quadrant block — all sixteen 2×2 patterns have a character — so the picture is sampled at ' +
       '**128 × 46** even though only 64 × 23 cells are spent on it, and the extra resolution ' +
       'costs nothing at all: a run breaks on a color change, never on a glyph. Flat cost, ' +
-      'whatever you are looking at, and about five repaints a second. ' +
+      'whatever you are looking at, and about ten repaints a second. ' +
       '**P** switches to the faithful **bitmap**: every color the framebuffer had, two pixels per ' +
       'cell, three times the runs and a third of the rate. Move **W/S** · strafe ' +
       '**A/D** · turn **←/→** · **Space** ' +
       'fires · **E** opens · **Q** is Doom’s own menu. **Esc** pauses — and then it is only a ' +
       'document again: put your caret in the frame, Undo rewinds it, Save downloads it as .docx.',
-    hint: '<b>WASD</b> move · <b>←/→</b> turn · <b>Space</b> fire · <b>E</b> open · <b>Q</b> Doom’s menu · <b>P</b> switches projection — 8-bit samples 128×46 on a fixed run budget and plays at ~5 fps, bitmap is faithful at ~2.',
+    hint: '<b>WASD</b> move · <b>←/→</b> turn · <b>Space</b> fire · <b>E</b> open · <b>Q</b> Doom’s menu · <b>P</b> switches projection — 8-bit samples 128×46 on a fixed run budget and plays at ~10 fps, bitmap is faithful at ~3.',
     reset() {
       // Doom's own state lives inside the WebAssembly heap and the engine is
       // a page singleton, so a cartridge reset cannot restart the game. Q

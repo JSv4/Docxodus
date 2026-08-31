@@ -1173,10 +1173,34 @@ export function seedArcade(session) {
   check(session.setParagraphFormat(titleAnchor, { alignment: 'center', spacingAfter: 160 }), 'title format');
   check(session.applyFormat(titleAnchor, null, { bold: true, fontFamily: 'Courier New', fontSizePts: 13, color: '1F2937' }), 'title run format');
 
-  const canvasResult = check(session.insertParagraph(titleAnchor, 'after', '(inserting coin…)'), 'screen insert');
+  // ─── Why the screen is fenced by two near-empty paragraphs ──────────
+  // A single-block re-render does not render the block alone. The engine pads
+  // each target with ONE REAL NEIGHBOUR on each side before converting it, so
+  // that `w:contextualSpacing` resolves exactly as it would in a full render —
+  // and those context clones are thrown away once the target's HTML is
+  // extracted. That is correct, and it is cheap when the neighbours are small.
+  //
+  // The screen's neighbours were the title and the CAPTION, and the caption is
+  // a long formatted prose paragraph (36 runs, with a footnote reference). So
+  // every frame of every game converted it in full, purely as context, and
+  // discarded the result. Fencing the screen with two one-character paragraphs
+  // moves the caption out of that slot: measured 7.44 -> 9.25 fps on the Doom
+  // cartridge, a 24% gain that costs the document two hairlines.
+  const fence = (after, label) => {
+    const res = check(session.insertParagraph(after, 'after', '\u00a0'), label);
+    const id = res.created[0].id;
+    check(session.setParagraphFormat(id, { spacingBefore: 0, spacingAfter: 0 }), `${label} format`);
+    check(session.applyFormat(id, null, { fontFamily: 'Courier New', fontSizePts: 1 }), `${label} run format`);
+    return id;
+  };
+
+  const fenceAbove = fence(titleAnchor, 'screen fence above');
+  const canvasResult = check(session.insertParagraph(fenceAbove, 'after', '(inserting coin…)'), 'screen insert');
   const canvasAnchor = canvasResult.created[0].id;
 
-  const captionResult = check(session.insertParagraph(canvasAnchor, 'after', 'loading cartridge…'), 'caption insert');
+  const fenceBelow = fence(canvasAnchor, 'screen fence below');
+
+  const captionResult = check(session.insertParagraph(fenceBelow, 'after', 'loading cartridge…'), 'caption insert');
   const captionAnchor = captionResult.created[0].id;
   check(session.setParagraphFormat(captionAnchor, { alignment: 'center', spacingBefore: 160 }), 'caption format');
   check(session.applyFormat(captionAnchor, null, { fontFamily: 'Courier New', fontSizePts: 8, color: '6B7280' }), 'caption run format');
@@ -1191,7 +1215,7 @@ export function seedArcade(session) {
   const gt = seedXml.indexOf('>');
   let openTag = seedXml.slice(0, gt + 1);
   if (openTag.endsWith('/>')) openTag = openTag.slice(0, -2) + '>';
-  return { titleAnchor, canvasAnchor, captionAnchor, openTag };
+  return { titleAnchor, canvasAnchor, captionAnchor, fenceBelow, openTag };
 }
 
 // ─── The attract screen ───────────────────────────────────────────────
@@ -1441,10 +1465,16 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
     // The attract screen has no game world to parse back — whatever was typed
     // into the title card simply stays until the next frame repaints it.
     if (mode !== 'intro') cart.syncFromRows(rowsFromXml(xml));
-    // Sweep paragraphs an Enter-split stranded between screen and caption, so
-    // pausing to edit can never slowly litter the document.
+    // Sweep paragraphs an Enter-split stranded below the screen, so pausing to
+    // edit can never slowly litter the document. The boundary is the FENCE, not
+    // the caption: the fence is a deliberate near-empty paragraph that keeps the
+    // caption out of the screen's render context (see seedDocument), and sweeping
+    // up to the caption would delete it on the first pause — which is exactly
+    // what happened the first time this was tried.
     const ids = session.findByKind('p', 'body').map((r) => r.id);
-    const from = ids.indexOf(canvasAnchor), to = ids.indexOf(seeded.captionAnchor);
+    const fenceIdx = ids.indexOf(seeded.fenceBelow);
+    const from = ids.indexOf(canvasAnchor);
+    const to = fenceIdx >= 0 ? fenceIdx : ids.indexOf(seeded.captionAnchor);
     if (from >= 0 && to > from + 1) {
       for (const id of ids.slice(from + 1, to)) session.deleteBlock(id);
     }

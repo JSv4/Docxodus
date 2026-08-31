@@ -231,7 +231,7 @@ test.describe('DOOM inside a Word document', () => {
     // cartridge chooses rather than a property of the view. Measured flat at
     // ~157 spans across four very different views of E1M1, which is what buys
     // the frame rate; a scene-dependent number here means the budget broke.
-    expect(eight.spans).toBeLessThan(200);
+    expect(eight.spans).toBeLessThan(160);
     // Every picture cell carries both an ink and a shading — they are the two
     // endpoints of the ramp its glyph picks quadrants from.
     expect(eight.shaded).toBeGreaterThan(50);

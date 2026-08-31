@@ -70,6 +70,31 @@ All notable changes to this project will be documented in this file.
   size of 6.4 × 13.3 px they read as dots rather than tone. `P` still switches to the faithful
   bitmap; `?projection=bitmap` picks it as the starting mode.
   Demo-content change (`docs/demo/`), not npm surface.
+- **The arcade's game screen is fenced away from its caption, and the Doom cartridge now plays
+  at ~10 repaints a second.** A single-block re-render does not render that block alone: the
+  engine pads each target with one real neighbour on each side before converting it, so
+  `w:contextualSpacing` resolves as it would in a full render, and those context clones are
+  discarded once the target's HTML is extracted. The screen's lower neighbour was the caption —
+  a formatted prose paragraph of 36 runs carrying a footnote reference — converted in full on
+  every frame of every game purely as context. Two one-character paragraphs now fence the screen
+  from it, worth a measured 7.4 → 8.8 repaints a second, A/B'd inside a single browser process so
+  the container's ~30% speed drift could not be mistaken for the change. `syncFromDocument`'s
+  litter sweep (which deletes stray paragraphs between the screen and the caption, so pausing to
+  edit cannot fill the document with Enter-splits) now stops at the fence rather than deleting
+  it. With the colour budget also trimmed 90 → 64 runs — near-indistinguishable at this sample
+  density, since the quadrant glyphs carry the fine structure for free — the whole paragraph
+  lands near 113 spans and the cartridge at ~10.4 repaints a second, against ~2.9 for the
+  faithful bitmap projection.
+  Demo-content change (`docs/demo/`), not npm surface.
+- **A single-block render no longer builds the session's anchor index when it will not use it.**
+  `BlockSourceIdentity.For` already declines the index walk for a render that does not stamp
+  anchors — the editor's incremental swap path — but C# evaluates arguments eagerly, so passing
+  `session.AnchorIndex()` positionally built the index before `For` could refuse it, on a session
+  whose index the preceding mutation had just invalidated. The call is now made only when
+  stamping is on. This was found while chasing a per-frame cost it turned out not to explain (the
+  arcade's document is small enough that the difference is below measurement noise there), so it
+  is housekeeping rather than a fix — but the guard is no longer defeated by its own call site,
+  which matters on documents where the index is not small.
 - **The Doom cartridge's left bezel no longer costs a run per row.** Every row of the screen
   paragraph starts with a box-drawing character so the editor's markdown blur-commit can never read
   a row as a heading or a bullet. That safety is a property of the *character*, not of its colour —

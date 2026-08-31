@@ -439,9 +439,19 @@ internal static class HtmlConversionOps
             if ((string?)t.Attribute(PtOpenXml.Unid) is { } u) wantedUnids.Add(u);
         }
 
-        // The session's own anchor index IS the identity the caller addressed these blocks by,
-        // and it is cached, so repeated stamped renders do not rebuild it.
-        var identity = BlockSourceIdentity.For(options.StampAnchors, session.AnchorIndex(), liveDoc);
+        // The session's own anchor index IS the identity the caller addressed these blocks by.
+        //
+        // Only touch it when the caller asked for stamping. BlockSourceIdentity.For already
+        // declines the walk when it did not, but C# evaluates arguments eagerly, so passing
+        // session.AnchorIndex() positionally built the index before For could refuse it — and
+        // the editor's incremental swap path renders with StampAnchors off, on a session whose
+        // index the preceding mutation has just invalidated. Measured on the arcade's per-frame
+        // repaint this was not detectable above noise (the index is small on that document), so
+        // this is housekeeping rather than a fix: it stops the guard from being defeated by the
+        // call site, which is worth having on documents where the index is not small.
+        var identity = options.StampAnchors
+            ? BlockSourceIdentity.For(true, session.AnchorIndex(), liveDoc)
+            : null;
 
         // Per parent: order block-level children, merge each target's ±1 window into runs.
         var bodyContent = new List<XElement>();

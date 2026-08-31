@@ -154,7 +154,7 @@ colour variation is not.
 
 | projection | what it does | runs/frame | repaints |
 |---|---|---|---|
-| `8bit` (default) | A fixed 18-colour console palette and a hard run budget. Each frame is squeezed to its allowance by repeatedly merging the two adjacent runs whose merge adds the least error; each surviving run's ink and shading are then the two *endpoints* of a ramp. Every cell picks its own 2×2 arrangement of those two colours from the sixteen quadrant block characters, so the picture is sampled at **128 × 46** on 64 × 23 cells. | ~90 | ~5/s |
+| `8bit` (default) | A fixed 18-colour console palette and a hard run budget. Each frame is squeezed to its allowance by repeatedly merging the two adjacent runs whose merge adds the least error; each surviving run's ink and shading are then the two *endpoints* of a ramp. Every cell picks its own 2×2 arrangement of those two colours from the sixteen quadrant block characters, so the picture is sampled at **128 × 46** on 64 × 23 cells. | ~64 | ~10/s |
 | `bitmap` | Every cell is two pixels — `▀` with the top pixel as ink and the bottom as `w:shd` shading. Neighbouring cells within a luma-weighted tolerance are given the same pair of colours so they merge into one run. | ~400 | ~2.7/s |
 
 Getting there took being wrong twice, both times in the same way — treating a
@@ -191,6 +191,30 @@ and per-frame auto-exposure becomes free, because the merge returns the frame
 to its allowance no matter how much contrast is fed in. Exposure had been
 rejected earlier for costing runs; under a budget that objection disappears,
 and it is the single biggest legibility win available.
+
+### The screen is fenced away from the caption
+
+A single-block re-render does not render the block alone. The engine pads each
+target with **one real neighbour on each side** before converting it, so that
+`w:contextualSpacing` resolves exactly as it would in a full render; those
+context clones are discarded once the target's HTML is extracted. That is
+correct, and cheap — unless a neighbour is large.
+
+The screen's lower neighbour was the caption: a formatted prose paragraph of 36
+runs carrying a footnote reference, converted in full on every frame of every
+game purely as context, then thrown away. Fencing the screen with two
+one-character paragraphs moves it out of that slot, measured **7.4 → 8.8
+repaints a second** and A/B'd inside one browser process so the container's
+drift could not be mistaken for the change.
+
+The fence has to be the boundary of the litter sweep too. `syncFromDocument`
+deletes stray paragraphs between the screen and the caption, so that pausing to
+edit cannot slowly fill the document with Enter-splits — and on the first
+attempt it dutifully deleted the fence on the first pause. It now sweeps up to
+the fence rather than past it.
+
+That, plus trimming the colour budget to 64 runs, is what takes the cartridge to
+**~10.4 repaints a second**.
 
 The chrome turned out to matter as much as the picture. The bezel, divider and
 side panel were five colours, and a run breaks on a colour *change* — so those
