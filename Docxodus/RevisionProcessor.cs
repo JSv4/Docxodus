@@ -33,10 +33,10 @@ namespace Docxodus
 
         public static void RejectRevisions(WordprocessingDocument doc)
         {
-            // Word's note-lifecycle rule, reject side (issue #614): a note the redline introduced
-            // (w:ins citation) has no place in the rejected baseline, so its definition goes with
-            // the citation. Rationale and scoping live with the rule's owner,
-            // Internal.NoteReferenceOps; the accept side applies the guarded variant (issue #631).
+            // Word's note-lifecycle rule, reject side (issues #614, #636): a definition this
+            // reject both orphaned and emptied goes with its citation. Rationale, the emptied
+            // guard, and its interlocks live with the rule's owner:
+            // Internal.NoteReferenceOps.PruneNotesEmptiedByResolution.
             var citedBefore = Internal.NoteReferenceOps.ReferencedNoteIds(doc.MainDocumentPart);
             RejectRevisionsForPart(doc.MainDocumentPart);
             foreach (var part in doc.MainDocumentPart.HeaderParts)
@@ -63,7 +63,7 @@ namespace Docxodus
             if (doc.MainDocumentPart.StyleDefinitionsPart != null)
                 AcceptRevisionsForStylesDefinitionPart(doc.MainDocumentPart.StyleDefinitionsPart);
 
-            Internal.NoteReferenceOps.PruneOrphanedNotes(doc.MainDocumentPart, citedBefore);
+            Internal.NoteReferenceOps.PruneNotesEmptiedByResolution(doc.MainDocumentPart, citedBefore);
         }
 
         // Reject revisions for those revisions that can't be rejected by inverting the sense of the revision, and then accepting.
@@ -1475,7 +1475,7 @@ namespace Docxodus
             // orphaned and stripped of its blocks is a note the redline wholly deleted, and it goes
             // with its citation. Why the blockless guard makes this safe for the other husk shape
             // is documented once, on the rule's owner: Internal.NoteReferenceOps
-            // .PruneNotesEmptiedByAccept.
+            // .PruneNotesEmptiedByResolution.
             var citedBefore = Internal.NoteReferenceOps.ReferencedNoteIds(doc.MainDocumentPart);
             AcceptRevisionsForPart(doc.MainDocumentPart, preservePreexistingCleanTableRuns);
             foreach (var part in doc.MainDocumentPart.HeaderParts)
@@ -1489,7 +1489,7 @@ namespace Docxodus
             if (doc.MainDocumentPart.StyleDefinitionsPart != null)
                 AcceptRevisionsForStylesDefinitionPart(doc.MainDocumentPart.StyleDefinitionsPart);
 
-            Internal.NoteReferenceOps.PruneNotesEmptiedByAccept(doc.MainDocumentPart, citedBefore);
+            Internal.NoteReferenceOps.PruneNotesEmptiedByResolution(doc.MainDocumentPart, citedBefore);
         }
 
         private static void AcceptRevisionsForStylesDefinitionPart(StyleDefinitionsPart stylesDefinitionsPart)

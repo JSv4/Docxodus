@@ -810,6 +810,55 @@ public class DocxSessionNoteAuthoringTests
     }
 
     /// <summary>
+    /// The definition's content records too (issue #636, revisiting #614's unmarked-definition
+    /// choice): every run sits in <c>w:ins</c> and the paragraph mark is insertion-marked, which
+    /// is what Word writes and what the diff engine's own redline carries for a wholly-inserted
+    /// note. That marking is what lets the STATELESS resolutions read the redline: reject empties
+    /// the definition, so the guarded note-lifecycle prune takes it (before this, the stateless
+    /// reject needed an unguarded prune that also ate a baseline's own kept husk — the mirror of
+    /// the #631 accept bug); accept unwraps everything and keeps the note.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void DS369_RecordedNoteDefinition_IsInsertionMarked_AndStatelessResolutionsReadIt(
+        bool footnote)
+    {
+        var (baseline, redline) = AuthorNoteUnderRecording(footnote);
+
+        var note = Assert.Single(UserNotes(redline, footnote));
+        Assert.All(note.Descendants(W + "r"),
+            run => Assert.Contains(run.Ancestors(), a => a.Name == W + "ins"));
+        Assert.All(note.Elements(W + "p"),
+            p => Assert.NotNull(p.Element(W + "pPr")?.Element(W + "rPr")?.Element(W + "ins")));
+
+        // One user action, one revision identity: the citation envelope and every definition
+        // envelope carry a single w:date, or exact-date grouping splinters one insert into
+        // per-paragraph revisions in every reviewing pane.
+        var dates = BodyXml(redline).Descendants(W + "ins")
+            .Concat(note.DescendantsAndSelf(W + "ins"))
+            .Select(i => (string?)i.Attribute(W + "date"))
+            .Distinct()
+            .ToList();
+        Assert.Single(dates);
+
+        var rejected = Docxodus.Internal.DocxDiffOps.RejectRevisions(redline);
+        Assert.Empty(UserNotes(rejected, footnote));
+        Assert.Empty(DocxDiff.GetRevisions(
+            new WmlDocument("baseline.docx", baseline), new WmlDocument("rejected.docx", rejected)));
+
+        var accepted = Docxodus.Internal.DocxDiffOps.AcceptRevisions(redline);
+        var acceptedNote = Assert.Single(UserNotes(accepted, footnote));
+        Assert.Contains("Negotiated on March 11.",
+            acceptedNote.Descendants(W + "t").Select(t => (string)t));
+        Assert.Empty(acceptedNote.Descendants(W + "ins"));
+        // The body citation survived the accept — without this, an accepted document could ship
+        // an uncited, invisible note and every count-based assert above would still pass.
+        Assert.Single(BodyXml(accepted)
+            .Descendants(W + (footnote ? "footnoteReference" : "endnoteReference")));
+    }
+
+    /// <summary>
     /// Footnotes part whose user notes are ids 1, 5 and 9 (non-contiguous), so a "count + 1"
     /// id allocator would collide. Body cites all three.
     /// </summary>

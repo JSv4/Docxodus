@@ -429,11 +429,25 @@ divergence — RP050 is pinned `acceptEquivalent: false` there, so the sweep ass
 through the coarser story-text check rather than modeled-semantic equivalence, and neither a
 childless shell nor its absence contributes story text.
 
+#### The cited-but-stripped shape is preserved, not repaired
+
+A definition can end up bare while its citation survives: hand-built markup (content wholly
+deletion-marked, citation kept), an ordinary partial resolution (record a note, accept only the
+citation's revision, then run the stateless reject over what remains), or simply the input — the
+corpus genuinely contains cited childless notes (`WC064-Footnote` ships one, and
+`WC063-Footnote-Mod`'s note is childless). A cited `<w:footnote/>` with no block child is
+schema-degenerate under `CT_FtnEdn`, but faithful reproduction of exactly that shape is what
+`Accept(Compare(l, r)) ≡ r` means for those fixtures: inserting a "repair" paragraph was tried
+during #636's review round and broke the WC063/WC064 round-trips in both directions. The
+orphan-scoped prune never touches a cited note, so the shape flows through resolution unchanged;
+whether Word repairs it on open is Word's business, and the engine will not manufacture content
+the counterpart does not have.
+
 #### Relevant code
 
-- `Docxodus/Internal/NoteReferenceOps.cs` (`PruneNotesEmptiedByAccept`, the blockless guard)
+- `Docxodus/Internal/NoteReferenceOps.cs` (`PruneNotesEmptiedByResolution`, the blockless guard)
 - `Docxodus/RevisionProcessor.cs` (accept-side capture/prune)
-- `DS430`/`DS432` in `DocxSessionRevisionTests.cs` — the two husk shapes and their opposite fates
+- `DS430`/`DS432`/`DS434` in `DocxSessionRevisionTests.cs` — the husk shapes and their fates
 
 ### `OpenXmlValidator` Does NOT Resolve Note-Body (note-in-note) References — a validation blind spot
 
