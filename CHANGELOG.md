@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **The compatibility normalizer stops full-parsing every part to prove it has nothing to do.**
+  Deciding whether a part needed either of its two repairs meant building the whole `XDocument`,
+  gated on a literal substring test for `AlternateContent` or `pPr` — and every real
+  `word/document.xml` contains `pPr`, so the gate never closed. `PreAccept` runs the normalizer
+  once per side of every comparison, so that was a DOM build plus two descendant sweeps per side,
+  spent almost entirely on documents where neither repair fires (the NVCA model certificate of
+  incorporation has zero paragraphs with two direct `w:pPr`). A streaming `XmlReader` pass now
+  answers the same two questions — any `mc:AlternateContent`, any paragraph with two or more
+  direct `pPr` children — without building a tree, and the archive is opened read-only for it, so
+  a package that needs no repair never pays `ZipArchiveMode.Update`'s entry buffering either. Only
+  a package with a candidate part reaches the rewrite pass, and only its candidate parts are
+  parsed. The gate stays a superset of what the repairs act on: it matches on local names, where
+  the repairs are namespace-exact, so a false positive costs one parse of one part and a false
+  negative — which would be a correctness bug — cannot happen. Measured on the same document:
+  `Normalize` for both sides of a comparison 31.6 → 10.2 ms.
 - **`DocxDiff` no longer reads each document four times per comparison.** On a heavyweight
   legal document (the NVCA model certificate of incorporation: 574 KB of `document.xml`,
   15,360 elements, 97 footnotes) about 72% of a `Compare` was spent inside `IrReader`,
