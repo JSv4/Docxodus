@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Reference-field authoring is back, as session ops (#607).** Narrowing the library to the DOCX
+  toolchain removed `ReferenceAdder`, and with it the only way Docxodus could *create* a table of
+  contents, figures or authorities — it could read, render, diff and edit around one, but not author
+  one, and the stopgap of hand-building the field through `Raw.InsertXml` pushed exactly the OOXML
+  detail this library exists to hide back onto the caller. `InsertTableOfContents`,
+  `InsertTableOfFigures` and `InsertTableOfAuthorities` are anchor-addressed, undoable session ops
+  with **typed options instead of a switch string**: `Levels = "1-3"` rather than `\o "1-3"`,
+  `Category = AuthorityCategory.Statutes` rather than `\c "2"`. That matters because a malformed
+  instruction renders as *nothing* in Word, silently, with no schema error to catch it; a malformed
+  level range is now refused before anything is written. The field is emitted dirty with no cached
+  result and the document asks Word to update fields on open, so Word paginates and fills the table
+  rather than the library shipping one that is stale the moment anything above it moves. A table of
+  contents is wrapped in the `w:sdt` content control Word puts around one, which is what gives it the
+  *Update Table* control. Word's entry styles are find-or-created, so a firm's house formatting
+  survives. Available on every surface: .NET, the facade, WASM, `insertTableOfContents` and its
+  siblings on the npm session, `insert_table_of_contents` on `docx-scalpel`, and three new
+  `docxodus_create` actions on the MCP server. Refused for a non-body anchor (Word does not generate
+  a reference table in a running story) and under tracked-change recording (a generated table is
+  regenerated wholesale on every field update, so there is no reversible way to redline it —
+  the shape #614 established). Marking entries with `TC`/`TA` fields remains a separate job.
+
 ### Changed
 - **The diff engine stops giving 13,000 elements an identity nothing asks for.** The
   deterministic Unid pass assigns to every element in a part at two SHA-256 hashes each — 30,720

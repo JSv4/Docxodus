@@ -127,6 +127,63 @@ internal static class StyleFactory
         if (added) part.PutXDocument();
     }
 
+    /// <summary>
+    /// Ensure the paragraph styles a reference field's table wears exist (issue #607), with the
+    /// same find-or-create contract as <see cref="EnsureNoteStyles"/>: a style the document already
+    /// defines is left exactly as it is, so a firm's house TOC formatting survives.
+    /// </summary>
+    /// <remarks>
+    /// The shapes are Word's own, minus the theme-font references — a document with no theme part
+    /// would carry a dangling reference, and the entry styles are based on Normal anyway, so the
+    /// document's own defaults flow through.
+    /// </remarks>
+    public static void EnsureReferenceFieldStyles(
+        WordprocessingDocument doc, string entryStyleId, string entryStyleName, bool withHeading)
+    {
+        var main = doc.MainDocumentPart;
+        if (main is null) return;
+
+        var part = EnsureStylesPart(main);
+        var root = part.GetXDocument().Root!;
+        bool added = AddStyleIfMissing(root, entryStyleId, ReferenceEntryStyle(entryStyleId, entryStyleName));
+        if (withHeading)
+            added |= AddStyleIfMissing(root, "TOCHeading", TocHeadingStyle());
+
+        // Flush to the part stream — Save only persists the projected parts, not styles.
+        if (added) part.PutXDocument();
+    }
+
+    /// <summary>A reference table's entry style: Normal with the automatic-style marks Word sets on
+    /// generated content, so a user editing the table is told it will be regenerated.</summary>
+    private static XElement ReferenceEntryStyle(string styleId, string name) =>
+        new XElement(W + "style",
+            new XAttribute(W + "type", "paragraph"),
+            new XAttribute(W + "styleId", styleId),
+            new XElement(W + "name", new XAttribute(W + "val", name)),
+            new XElement(W + "basedOn", new XAttribute(W + "val", "Normal")),
+            new XElement(W + "next", new XAttribute(W + "val", "Normal")),
+            new XElement(W + "autoRedefine"),
+            new XElement(W + "uiPriority", new XAttribute(W + "val", "39")),
+            new XElement(W + "unhideWhenUsed"),
+            new XElement(W + "pPr",
+                new XElement(W + "spacing", new XAttribute(W + "after", "100"))));
+
+    /// <summary>The heading above a table of contents. Based on Heading1 but deliberately NOT an
+    /// outline level itself, or the table would list its own title.</summary>
+    private static XElement TocHeadingStyle() =>
+        new XElement(W + "style",
+            new XAttribute(W + "type", "paragraph"),
+            new XAttribute(W + "styleId", "TOCHeading"),
+            new XElement(W + "name", new XAttribute(W + "val", "TOC Heading")),
+            new XElement(W + "basedOn", new XAttribute(W + "val", "Heading1")),
+            new XElement(W + "next", new XAttribute(W + "val", "Normal")),
+            new XElement(W + "uiPriority", new XAttribute(W + "val", "39")),
+            new XElement(W + "semiHidden"),
+            new XElement(W + "unhideWhenUsed"),
+            new XElement(W + "qFormat"),
+            new XElement(W + "pPr",
+                new XElement(W + "outlineLvl", new XAttribute(W + "val", "9"))));
+
     /// <summary>Word's comment-body paragraph style ("annotation text"): Normal at 10pt.</summary>
     private static XElement CommentTextStyle() =>
         new XElement(W + "style",

@@ -502,6 +502,17 @@ internal static class Dispatcher
             session.Handle, Str(args, "anchorId"),
             OptStr(args, "field") == "total_pages" ? PageNumberField.TotalPages : PageNumberField.CurrentPage,
             DocxSessionJson.ParseNumberFormatOrNull(OptStr(args, "numberFormat"))),
+        // Reference fields (issue #607). The switches are typed options here too: an agent asks
+        // for "levels 1-3, hyperlinked", never for \o "1-3" \h.
+        "insert_table_of_contents" => DocxSessionOps.InsertTableOfContents(
+            session.Handle, Str(args, "anchorId"), ParsePos(args),
+            ReferenceFieldOptions(args, DocxSessionJson.ParseTableOfContentsOptions)),
+        "insert_table_of_figures" => DocxSessionOps.InsertTableOfFigures(
+            session.Handle, Str(args, "anchorId"), ParsePos(args),
+            ReferenceFieldOptions(args, DocxSessionJson.ParseTableOfFiguresOptions)),
+        "insert_table_of_authorities" => DocxSessionOps.InsertTableOfAuthorities(
+            session.Handle, Str(args, "anchorId"), ParsePos(args),
+            ReferenceFieldOptions(args, DocxSessionJson.ParseTableOfAuthoritiesOptions)),
         "set_header_text" => DocxSessionOps.SetHeaderText(
             session.Handle, Str(args, "bodyAnchorId"),
             DocxSessionJson.ParseHeaderFooterKind(Str(args, "kind")), Str(args, "markdown")),
@@ -867,6 +878,14 @@ internal static class Dispatcher
 
         return DeliveryOps.VerifyChangeReceiptJson(receiptJson, artifactsJson);
     }
+
+    /// <summary>
+    /// A reference field's options, read from the FLAT tool arguments rather than a nested object —
+    /// an agent writing a tool call should not have to nest, and the grouped-intent tools are flat
+    /// everywhere else. Absent keys fall back to the engine defaults.
+    /// </summary>
+    private static T ReferenceFieldOptions<T>(JsonElement args, Func<JsonElement, T> parse)
+        where T : class => parse(args);
 
     private static string Compare(SessionStore store, JsonElement args)
     {
@@ -1357,7 +1376,9 @@ internal static class Dispatcher
                 or "remove_list_membership" or "apply_list_format",
             "docxodus_create" => action is "insert_paragraph" or "insert_heading" or "insert_table"
                 or "insert_horizontal_rule" or "insert_footnote" or "insert_endnote"
-                or "insert_page_number_field" or "set_header_text" or "set_footer_text"
+                or "insert_page_number_field" or "insert_table_of_contents"
+                or "insert_table_of_figures" or "insert_table_of_authorities"
+                or "set_header_text" or "set_footer_text"
                 or "ensure_header_footer_visible",
             "docxodus_table" => action is "insert" or "insert_row" or "insert_column"
                 or "delete_row" or "delete_column" or "replace_cell_content" or "merge_cells"
@@ -1507,6 +1528,22 @@ internal static class Dispatcher
                 RequireStrings(args, "anchorId");
                 ValidateOptionalEnum(args, "position", "before", "after");
                 ValidateOptionalEnum(args, "ruleStyle", "single", "double", "thick");
+                break;
+            case ("docxodus_create", "insert_table_of_contents"):
+                RequireStrings(args, "anchorId");
+                ValidateOptionalEnum(args, "position", "before", "after");
+                ValidateOptionalBool(args, "hyperlinks");
+                break;
+            case ("docxodus_create", "insert_table_of_figures"):
+                RequireStrings(args, "anchorId");
+                ValidateOptionalEnum(args, "position", "before", "after");
+                ValidateOptionalBool(args, "hyperlinks");
+                break;
+            case ("docxodus_create", "insert_table_of_authorities"):
+                RequireStrings(args, "anchorId");
+                ValidateOptionalEnum(args, "position", "before", "after");
+                ValidateOptionalBool(args, "hyperlinks");
+                ValidateOptionalEnum(args, "category", DocxSessionJson.AuthorityCategoryNames);
                 break;
             case ("docxodus_create", "insert_footnote"):
             case ("docxodus_create", "insert_endnote"):

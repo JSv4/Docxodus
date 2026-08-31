@@ -1796,6 +1796,9 @@ export interface DocxodusWasmExports {
     SetFooterText: (handle: number, anchor: string, kind: string, markdown: string) => string;
     InsertPageNumberField: (handle: number, anchor: string, field: string, format: string) => string;
     SetPageNumbering: (handle: number, anchor: string, opJson: string) => string;
+    InsertTableOfContents: (handle: number, anchor: string, pos: string, optionsJson: string) => string;
+    InsertTableOfFigures: (handle: number, anchor: string, pos: string, optionsJson: string) => string;
+    InsertTableOfAuthorities: (handle: number, anchor: string, pos: string, optionsJson: string) => string;
     ClearPageNumbering: (handle: number, anchor: string) => string;
     EnsureHeaderFooterVisible: (handle: number, anchor: string, kind: string) => string;
     InsertFootnote: (handle: number, anchor: string, characterOffset: number, markdown: string) => string;
@@ -1984,6 +1987,7 @@ export type EditErrorCode =
   | "invalid_list_level"
   | "invalid_list_start_value"
   | "invalid_page_numbering"
+  | "invalid_reference_field"
   | "invalid_paragraph_format"
   | "invalid_table_styling"
   | "invalid_table_merge"
@@ -2520,6 +2524,60 @@ export interface ParagraphFormatOp {
  * `"even"` (even pages; sets `w:evenAndOddHeaders`).
  */
 export type HeaderFooterKind = "default" | "first" | "even";
+
+/**
+ * Options for {@link DocxSession.insertTableOfContents} (issue #607). Every field is a typed switch
+ * on the underlying `TOC` field, so a caller never writes `\o "1-3"` by hand — a malformed switch
+ * string renders as nothing in Word, silently, which is the failure these exist to prevent.
+ */
+export interface TableOfContentsOptions {
+  /** Heading levels to list (`\o`): a level or a range within 1-9, e.g. `"1-3"`. Default `"1-3"`. */
+  levels?: string;
+  /** Make each entry a hyperlink to its heading (`\h`). Default true. */
+  hyperlinks?: boolean;
+  /** Hide the leader tab and page numbers in Word's web view (`\z`). Default true. */
+  hideTabAndPageNumbersInWeb?: boolean;
+  /** Include paragraphs with an outline level but no heading style (`\u`). Default true. */
+  useOutlineLevels?: boolean;
+  /** Heading above the table, in Word's `TOCHeading` style. `null` or `""` inserts no heading.
+   *  Default `"Contents"`. */
+  title?: string | null;
+  /** Right-aligned dot-leader tab stop in twips. Default 9350 (US Letter, one-inch margins). */
+  rightTabPos?: number;
+}
+
+/** Options for {@link DocxSession.insertTableOfFigures}. A table of figures is a `TOC` field
+ *  selecting by caption label rather than outline level — Word's own encoding. */
+export interface TableOfFiguresOptions {
+  /** The caption label whose captions to list (`\c`) — `"Figure"`, `"Table"`, `"Exhibit"`. */
+  captionLabel?: string;
+  /** Make each entry a hyperlink to its caption (`\h`). Default true. */
+  hyperlinks?: boolean;
+  /** Right-aligned dot-leader tab stop in twips. Default 9350. */
+  rightTabPos?: number;
+}
+
+/** Word's fixed table-of-authorities categories. */
+export type AuthorityCategory =
+  | "cases"
+  | "statutes"
+  | "other_authorities"
+  | "rules"
+  | "treatises"
+  | "regulations"
+  | "constitutional_provisions";
+
+/** Options for {@link DocxSession.insertTableOfAuthorities}. */
+export interface TableOfAuthoritiesOptions {
+  /** Which category of authority to list (`\c`). Default `"cases"`. */
+  category?: AuthorityCategory;
+  /** Make each entry a hyperlink to its citation (`\h`). Default true. */
+  hyperlinks?: boolean;
+  /** Separator between an entry and its page numbers (`\e`), e.g. a tab. Default: Word's own. */
+  entryPageSeparator?: string;
+  /** Right-aligned dot-leader tab stop in twips. Default 9350. */
+  rightTabPos?: number;
+}
 
 /** Which page-number field `DocxSession.insertPageNumberField` emits: `"currentPage"` → PAGE,
  * `"totalPages"` → NUMPAGES. */

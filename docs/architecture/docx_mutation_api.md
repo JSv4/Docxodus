@@ -1176,6 +1176,67 @@ The failure #614 fixed was a fourth, unwritten one — writing content that reje
 take back — which is the worst of the three, because the redline looks complete and only fails
 when somebody actually rejects it.
 
+## Reference fields: TOC / TOF / TOA (issue #607)
+
+Narrowing the library to the DOCX toolchain removed `ReferenceAdder`, and with it the only way
+Docxodus could **create** a reference field. It could read, render, diff and edit around a table of
+contents; it could not author one. The CHANGELOG's stopgap — hand-build the field through
+`Raw.InsertXml` — is a genuine regression in the level of abstraction, and a table of authorities in
+particular is table stakes for the legal documents this library targets.
+
+```csharp
+session.InsertTableOfContents(anchorId, Position.Before,
+    new TableOfContentsOptions { Levels = "1-3", Hyperlinks = true, Title = "Contents" });
+session.InsertTableOfFigures(anchorId, Position.Before,
+    new TableOfFiguresOptions { CaptionLabel = "Exhibit" });
+session.InsertTableOfAuthorities(anchorId, Position.Before,
+    new TableOfAuthoritiesOptions { Category = AuthorityCategory.Statutes });
+```
+
+**The switches are the point.** The old API took the switch string verbatim, which pushed exactly
+the OOXML knowledge this library exists to hide back onto the caller — and a malformed instruction
+renders as **nothing** in Word, silently, with no schema error to catch it. So every switch is a
+typed option, and the mapping lives in one place, `Internal/ReferenceFieldOps.cs`:
+
+| Option | Switch | |
+|---|---|---|
+| `Levels = "1-3"` | `\o "1-3"` | A level or range within 1-9. A single level normalizes (`"2"` → `2-2`); anything else is refused with `InvalidReferenceField` before anything is written. |
+| `Hyperlinks` | `\h` | On by default — a table of contents nobody can click is one nobody uses. |
+| `HideTabAndPageNumbersInWeb` | `\z` | On by default, matching Word's own Insert ▸ Table of Contents. |
+| `UseOutlineLevels` | `\u` | On by default. |
+| `CaptionLabel = "Figure"` | `\c "Figure"` | A table of figures is a `TOC` field selecting by caption label — Word's encoding, not a field of its own. |
+| `Category` | `\c "2"` | Word's fixed categories by name (`Cases`, `Statutes`, …); the number never reaches the caller. |
+| `EntryPageSeparator` | `\e "…"` | TOA only. |
+
+**The field is written dirty and the document asks for a field update on open**
+(`w:fldChar w:dirty="true"` plus `w:updateFields`), with **no cached result** between `separate` and
+`end`. Word paginates and fills the table itself. Shipping a cached result would mean shipping one
+that is wrong the moment anything above the table moves, and a reader would have no way to tell.
+
+A table of contents is wrapped in the `w:sdt` content control Word puts around one (gallery
+"Table of Contents"), which is what gives it the *Update Table* control in Word's UI. A table of
+figures or authorities is a bare paragraph, because that is what Word writes for those.
+
+Word's entry styles (`TOC1`, `TableofFigures`, `TableofAuthorities`, and `TOCHeading`) are
+find-or-created through `StyleFactory`, so a firm's house formatting survives.
+
+### What these refuse, and why
+
+- **A non-body anchor.** Word does not generate a reference table inside a running story or a note,
+  so writing one there produces a table Word will never fill. Rejected with `AnchorWrongKind`.
+- **Tracked-change recording.** A generated table is regenerated wholesale on every field update, so
+  there is no reversible way to redline it. Refused with `TrackedOperationUnsupported` rather than
+  writing a mark that rejection cannot take back — the shape #614 established for note insertion.
+- **A malformed level range.** Refused before the history snapshot, so a rejected call writes
+  nothing and burns no undo entry.
+
+### Not yet
+
+- **Marking entries.** `TC` and `TA` fields mark the *entries* a table lists. These ops produce the
+  table; a document with no marked citations gets a table of authorities that is correct and empty.
+  A larger job, deliberately scoped separately rather than blocking the table on it.
+- **Regenerating the table in-process.** Filling it requires pagination, which is Word's job here.
+
 ## Comments (issues #300, #317, and #341)
 
 Native Word comment authoring — real `w:comment` markup the Reviewing pane shows, not the

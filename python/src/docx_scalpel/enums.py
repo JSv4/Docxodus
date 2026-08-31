@@ -354,6 +354,7 @@ class EditErrorCode(str, Enum):
     INVALID_LIST_LEVEL = "invalid_list_level"
     INVALID_LIST_START_VALUE = "invalid_list_start_value"
     INVALID_PAGE_NUMBERING = "invalid_page_numbering"
+    INVALID_REFERENCE_FIELD = "invalid_reference_field"
     INVALID_PARAGRAPH_FORMAT = "invalid_paragraph_format"
     INVALID_TABLE_STYLING = "invalid_table_styling"
     INVALID_TABLE_MERGE = "invalid_table_merge"

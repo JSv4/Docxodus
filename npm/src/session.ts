@@ -40,6 +40,9 @@ import type {
   NumberFormat,
   PageNumberField,
   PageNumberingOp,
+  TableOfAuthoritiesOptions,
+  TableOfContentsOptions,
+  TableOfFiguresOptions,
   PageCitation,
   PageCitationRequest,
   PageMapRegistrationResult,
@@ -849,6 +852,61 @@ export class DocxSession {
   setPageNumbering(anchorId: string, op: PageNumberingOp): EditResult {
     return JSON.parse(
       this.wasm.SetPageNumbering(this.handle, anchorId, JSON.stringify(op))
+    ) as EditResult;
+  }
+
+  /**
+   * Insert a **table of contents** before or after `anchorId` (issue #607). The field is written
+   * dirty and the document asks for a field update on open, so Word paginates and fills the table
+   * itself — nothing here ships a cached result that is stale the moment anything above it moves.
+   *
+   * The table is wrapped in the `w:sdt` content control Word puts around one, which is what gives
+   * it the *Update Table* control in Word's UI. Word's `TOCHeading` and `TOC1` styles are
+   * find-or-created; a document that already defines them keeps its own.
+   *
+   * Body anchors only, and refused under tracked-change recording: a generated table is regenerated
+   * wholesale on every field update, so there is no reversible way to redline it.
+   */
+  insertTableOfContents(
+    anchorId: string,
+    pos: "before" | "after" = "before",
+    options?: TableOfContentsOptions
+  ): EditResult {
+    return JSON.parse(
+      this.wasm.InsertTableOfContents(
+        this.handle, anchorId, pos, options ? JSON.stringify(options) : "")
+    ) as EditResult;
+  }
+
+  /**
+   * Insert a **table of figures** — the captions carrying `options.captionLabel` and their page
+   * numbers. Same field mechanics as {@link insertTableOfContents}; Word writes this one as a bare
+   * paragraph rather than inside a content control, so this does too.
+   */
+  insertTableOfFigures(
+    anchorId: string,
+    pos: "before" | "after" = "before",
+    options?: TableOfFiguresOptions
+  ): EditResult {
+    return JSON.parse(
+      this.wasm.InsertTableOfFigures(
+        this.handle, anchorId, pos, options ? JSON.stringify(options) : "")
+    ) as EditResult;
+  }
+
+  /**
+   * Insert a **table of authorities** — the cases, statutes or other authorities marked in the
+   * document, grouped by `options.category`. The table lists entries the document has MARKED with
+   * `TA` fields; a document with no marked citations produces a table that is correct and empty.
+   */
+  insertTableOfAuthorities(
+    anchorId: string,
+    pos: "before" | "after" = "before",
+    options?: TableOfAuthoritiesOptions
+  ): EditResult {
+    return JSON.parse(
+      this.wasm.InsertTableOfAuthorities(
+        this.handle, anchorId, pos, options ? JSON.stringify(options) : "")
     ) as EditResult;
   }
 
