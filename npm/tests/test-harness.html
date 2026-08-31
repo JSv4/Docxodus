@@ -153,6 +153,18 @@
                     return { error: { message: e.message } };
                 }
             },
+            docxDiffCompareBatch: function(baselineBytes, candidatesJson, settingsJson = '', productsJson = '') {
+                try {
+                    const result = window.Docxodus.DocxDiffBridge.CompareBatchJson(
+                        baselineBytes, candidatesJson, settingsJson, productsJson);
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    return { envelope: JSON.parse(result) };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
             docxDiffGetEditScript: function(leftBytes, rightBytes, settingsJson = '') {
                 try {
                     const result = window.Docxodus.DocxDiffBridge.GetEditScriptJson(leftBytes, rightBytes, settingsJson);

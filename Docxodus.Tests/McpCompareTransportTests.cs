@@ -82,6 +82,78 @@ public sealed class McpCompareTransportTests
         Assert.Contains("Reviewer B", authors);
     }
 
+    /// <summary>
+    /// Fan-out (issue #617): the same baseline compared against each revised version separately,
+    /// one redline written per pair, with the baseline read once for the whole set. The default for
+    /// revisedPaths stays consolidate, so this had to be asked for explicitly.
+    /// </summary>
+    [Fact]
+    public void CT006_FanOutWritesOneRedlinePerRevisedVersion()
+    {
+        using var workspace = new StoreWorkspace();
+        workspace.Write("base.docx", Document("Alpha stays. Beta stays."));
+        workspace.Write("a.docx", Document("Alpha moves. Beta stays."));
+        workspace.Write("b.docx", Document("Alpha stays. Beta moves."));
+
+        var response = workspace.Call("docxodus_compare", """
+            {"baselinePath":"base.docx","mode":"fan_out",
+             "revisedPaths":["a.docx","b.docx"],
+             "outputPaths":["redline-a.docx","redline-b.docx"]}
+            """);
+
+        using var summary = JsonDocument.Parse(response);
+        var results = summary.RootElement.GetProperty("results").EnumerateArray().ToList();
+        Assert.Equal(2, results.Count);
+        Assert.All(results, result =>
+        {
+            Assert.False(result.TryGetProperty("error", out _), response);
+            Assert.True(result.GetProperty("revisions").GetInt32() > 0, response);
+            Assert.True(result.GetProperty("bytesWritten").GetInt32() > 0, response);
+        });
+
+        // Each redline is a real artifact carrying only its own version's changes: the redline for
+        // a.docx must not contain b.docx's edit, which is exactly what consolidate WOULD produce.
+        foreach (var (output, expected, forbidden) in new[]
+        {
+            ("redline-a.docx", "moves", "Beta moves"),
+            ("redline-b.docx", "moves", "Alpha moves"),
+        })
+        {
+            var sessionId = workspace.OpenSession(output);
+            using var listed = JsonDocument.Parse(workspace.Call("docxodus_track_changes", $$"""
+                {"sessionId":{{JsonSerializer.Serialize(sessionId)}},"action":"list"}
+                """));
+            var texts = string.Concat(listed.RootElement.GetProperty("revisions").EnumerateArray()
+                .Select(r => r.GetProperty("text").GetString()));
+            Assert.Contains(expected, texts, StringComparison.Ordinal);
+            Assert.DoesNotContain(forbidden.Split(' ')[0] + " moves", texts, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void CT007_FanOutRequiresOneOutputPathPerRevisedPath()
+    {
+        using var workspace = new StoreWorkspace();
+        workspace.Write("base.docx", Document("Alpha stays."));
+        workspace.Write("a.docx", Document("Alpha moves."));
+        workspace.Write("b.docx", Document("Alpha shifts."));
+
+        foreach (var call in new[]
+        {
+            """
+            {"baselinePath":"base.docx","mode":"fan_out","revisedPaths":["a.docx","b.docx"]}
+            """,
+            """
+            {"baselinePath":"base.docx","mode":"fan_out","revisedPaths":["a.docx","b.docx"],
+             "outputPaths":["only-one.docx"]}
+            """,
+        })
+        {
+            var error = Assert.ThrowsAny<Exception>(() => workspace.Call("docxodus_compare", call));
+            Assert.Contains("outputPaths", error.Message, StringComparison.Ordinal);
+        }
+    }
+
     [Fact]
     public void CT003_EveryPathIsResolvedInsideTheDocumentScope()
     {

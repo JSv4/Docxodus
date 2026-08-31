@@ -15,6 +15,8 @@ import type {
   // DocxDiff (IR diff engine)
   DocxDiffSettings,
   DocxDiffRevision,
+  DocxDiffBatchCandidate,
+  DocxDiffBatchResult,
   DocxDiffProduct,
   DocxDiffProducts,
   SemanticChange,
@@ -394,6 +396,8 @@ export type {
   // DocxDiff (IR diff engine)
   DocxDiffSettings,
   DocxDiffRevision,
+  DocxDiffBatchCandidate,
+  DocxDiffBatchResult,
   DocxDiffProduct,
   DocxDiffProducts,
   SemanticChange,
@@ -1348,6 +1352,73 @@ export async function docxDiffCompareProducts(
       ? (parsed.semanticChanges as SemanticChangeSet)
       : undefined,
   };
+}
+
+/**
+ * Compare ONE baseline against MANY candidates, reading the baseline once (issue #617).
+ *
+ * The read is the single largest stage of a comparison, and a fan-out — one negotiated
+ * draft against every counterparty's markup — otherwise re-reads the baseline for each
+ * one. This reads it once and compares every candidate against that snapshot; each
+ * result is identical to what {@link docxDiffCompareProducts} returns for the same pair.
+ *
+ * A candidate that fails carries an `error` instead of products; the rest of the batch
+ * still comes back, because one malformed markup should not cost the other ninety-nine.
+ *
+ * @param baseline - The shared left-hand document.
+ * @param candidates - The documents to compare against it, in order.
+ * @param settings - Optional {@link DocxDiffSettings}; omit for engine defaults.
+ * @param products - Products to compute; omit for all four.
+ * @throws Error if the batch itself fails (a bad baseline, malformed settings).
+ */
+export async function docxDiffCompareBatch(
+  baseline: File | Uint8Array,
+  candidates: readonly DocxDiffBatchCandidate[],
+  settings?: DocxDiffSettings,
+  products?: DocxDiffProduct[]
+): Promise<DocxDiffBatchResult[]> {
+  const exports = ensureInitialized();
+  const baselineBytes = await toBytes(baseline);
+  const payload = [];
+  for (let i = 0; i < candidates.length; i++) {
+    const bytes = await toBytes(candidates[i].document);
+    payload.push({
+      name: candidates[i].name ?? String(i),
+      docB64: bytesToBase64(bytes),
+    });
+  }
+
+  await yieldToMain();
+
+  const result = exports.DocxDiffBridge.CompareBatchJson(
+    baselineBytes,
+    JSON.stringify(payload),
+    docxDiffSettingsJson(settings),
+    products ? JSON.stringify(products) : ""
+  );
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to compare batch: ${error.error}`);
+  }
+
+  const parsed = JSON.parse(result);
+  return (parsed.results ?? []).map((entry: Record<string, unknown>) => ({
+    name: String(entry.name ?? ""),
+    error: typeof entry.error === "string" ? entry.error : undefined,
+    redline: typeof entry.redlineB64 === "string"
+      ? Uint8Array.from(atob(entry.redlineB64), c => c.charCodeAt(0))
+      : undefined,
+    revisions: Array.isArray(entry.revisions)
+      ? entry.revisions.map(mapDocxDiffRevision)
+      : undefined,
+    editScript: entry.editScript !== undefined
+      ? (entry.editScript as Record<string, unknown>)
+      : undefined,
+    semanticChanges: entry.semanticChanges !== undefined
+      ? (entry.semanticChanges as SemanticChangeSet)
+      : undefined,
+  }));
 }
 
 /**

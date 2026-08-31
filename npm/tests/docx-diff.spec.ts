@@ -130,6 +130,48 @@ test.describe('DocxDiff (IR diff engine) bridge', () => {
     expect(selected.semanticChanges).toBeUndefined();
   });
 
+  test('CompareBatchJson reads one baseline for many candidates (issue #617)', async ({ page }) => {
+    const baseline = readTestFile('WC/WC001-Digits.docx');
+    const modified = readTestFile('WC/WC001-Digits-Mod.docx');
+    const deleted = readTestFile('WC/WC002-DeleteAtEnd.docx');
+
+    const result = await page.evaluate(
+      ([b, m, d]) => {
+        const t = (window as any).DocxodusTests;
+        const b64 = (bytes: number[]) => btoa(String.fromCharCode(...bytes));
+        const batch = t.docxDiffCompareBatch(
+          new Uint8Array(b),
+          JSON.stringify([
+            { name: 'modified', docB64: b64(m) },
+            { name: 'junk', docB64: btoa('not a docx') },
+            { name: 'deleted', docB64: b64(d) },
+          ]),
+          '',
+          '["revisions"]'
+        );
+        return {
+          batch,
+          modified: t.docxDiffGetRevisions(new Uint8Array(b), new Uint8Array(m)),
+          deleted: t.docxDiffGetRevisions(new Uint8Array(b), new Uint8Array(d)),
+        };
+      },
+      [Array.from(baseline), Array.from(modified), Array.from(deleted)]
+    );
+
+    expect(result.batch.error).toBeUndefined();
+    const results = result.batch.envelope.results;
+    expect(results.map((r: any) => r.name)).toEqual(['modified', 'junk', 'deleted']);
+
+    // Each candidate's products are exactly what comparing that pair alone produces...
+    expect(results[0].revisions).toEqual(result.modified.revisions);
+    expect(results[2].revisions).toEqual(result.deleted.revisions);
+    // ...unrequested products stay absent...
+    expect(results[0].redlineB64).toBeUndefined();
+    // ...and one malformed candidate carries its error without costing the others.
+    expect(typeof results[1].error).toBe('string');
+    expect(results[1].revisions).toBeUndefined();
+  });
+
   test('settings JSON is honored (detectMoves=false still diffs)', async ({ page }) => {
     const left = readTestFile('WC/WC001-Digits.docx');
     const right = readTestFile('WC/WC001-Digits-Mod.docx');

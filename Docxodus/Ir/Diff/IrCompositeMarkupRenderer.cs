@@ -76,7 +76,12 @@ internal static class IrCompositeMarkupRenderer
         }
         else
         {
-            var readOpts = new IrReaderOptions { RetainSources = true, RevisionView = RevisionView.Accept };
+            var readOpts = new IrReaderOptions
+            {
+                RetainSources = true,
+                RevisionView = RevisionView.Accept,
+                UnidAssignment = UnidAssignment.IdentityBearing,
+            };
             baseIr = IrReader.Read(baseDoc, readOpts);
             reviewerIrs = reviewers.Select(r => IrReader.Read(r.Doc, readOpts)).ToList();
         }

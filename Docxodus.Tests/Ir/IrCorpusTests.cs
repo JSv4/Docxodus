@@ -37,6 +37,73 @@ public class IrCorpusTests
     public IrCorpusTests(ITestOutputHelper output) => _output = output;
 
     /// <summary>
+    /// Issue #618: reading with <see cref="UnidAssignment.IdentityBearing"/> must produce a
+    /// byte-identical IR to reading with <see cref="UnidAssignment.All"/>, over the whole corpus.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The pruned pass skips assigning a Unid to elements no consumer can address — run/table/row/cell
+    /// property containers, page setup, paragraph properties other than an inline section break, and
+    /// text leaves. That is safe only if the assigned VALUES do not move, and the reason they cannot
+    /// is structural: a Unid derives from <c>parentUnid : tag : signature : dupIndex</c> — ancestors
+    /// only, never descendants — and the skip predicate is keyed on element names, so it removes whole
+    /// tag-groups at once and no surviving element's <c>dupIndex</c> can shift.
+    /// </para>
+    /// <para>
+    /// This asserts that reasoning against real documents rather than trusting it. The diagnostic JSON
+    /// is the right comparison surface because it carries EVERY identity the reader hands out — block,
+    /// row, cell, section-break, note, comment and content-control anchors, the inline section-break
+    /// anchor, and the <c>w:drawing</c> Unid on an inline image, which is deliberately equality-neutral
+    /// on <c>IrInlineImage</c> and so would slip through a structural record comparison.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    [Trait("Category", "Corpus")]
+    public void Read_PrunedUnidAssignment_ProducesAnIdenticalIr()
+    {
+        var all = new IrReaderOptions { UnidAssignment = UnidAssignment.All };
+        var pruned = new IrReaderOptions { UnidAssignment = UnidAssignment.IdentityBearing };
+
+        var files = TestFilesDir.GetFiles("*.docx", SearchOption.AllDirectories)
+            .OrderBy(f => f.FullName, StringComparer.Ordinal)
+            .ToList();
+
+        var divergent = new List<string>();
+        int compared = 0;
+        int withAnchors = 0;
+        foreach (var file in files)
+        {
+            if (!CanOpen(file)) continue;
+
+            string expected;
+            string actual;
+            try
+            {
+                expected = IrDiagnosticJson.Write(IrReader.Read(new WmlDocument(file.FullName), all));
+                actual = IrDiagnosticJson.Write(IrReader.Read(new WmlDocument(file.FullName), pruned));
+            }
+            catch (Exception)
+            {
+                // Totality is Read_EntireTestFilesCorpus_DoesNotThrow's job, not this test's.
+                continue;
+            }
+
+            compared++;
+            if (expected.Contains("\"anchor\"", StringComparison.Ordinal)) withAnchors++;
+            if (!string.Equals(expected, actual, StringComparison.Ordinal))
+                divergent.Add(file.Name);
+        }
+
+        // Non-vacuous: the corpus really was read, and the JSON really does carry anchors.
+        Assert.True(compared > 500, $"only {compared} documents compared");
+        Assert.True(withAnchors > 500, $"only {withAnchors} documents produced anchors");
+        Assert.True(divergent.Count == 0,
+            $"{divergent.Count} document(s) read differently under the pruned Unid pass: "
+            + string.Join(", ", divergent.Take(10)));
+        _output.WriteLine($"identical IR on {compared} documents ({withAnchors} carrying anchors)");
+    }
+
+    /// <summary>
     /// Totality proof: the reader must consume every readable fixture in <c>TestFiles/</c> without
     /// throwing (opaque fallback is the contract; a crash on weird-but-valid OOXML is a reader bug).
     /// Files that even <see cref="WordprocessingDocument.Open(Stream, bool)"/> rejects are

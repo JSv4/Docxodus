@@ -40,7 +40,7 @@ are kept for the day each file migrates.
 **`Docxodus.csproj` and `Docxodus.Tests.csproj` both override it to `false`**, so the core
 library and the test project do *not* fail on warnings. The CLI tools, MCP server,
 python-host and WASM project do inherit it. Current baseline: the library builds with
-**133 warnings**, the test project with **776** (mostly StyleCop `SA1633`/`SA1636` file
+**134 warnings**, the test project with **777** (mostly StyleCop `SA1633`/`SA1636` file
 headers and `SA1206` using-order). Don't add to either baseline. Measure with
 `--no-incremental` — a warm incremental build reports zero because nothing recompiles.
 

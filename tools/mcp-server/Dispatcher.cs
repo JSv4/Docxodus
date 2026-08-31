@@ -876,7 +876,14 @@ internal static class Dispatcher
             && revisedPaths.ValueKind == JsonValueKind.Array;
         if ((revisedPath is not null) == hasMany)
             throw new McpToolException(
-                "pass exactly one of revisedPath (two-way compare) or revisedPaths (consolidate)");
+                "pass exactly one of revisedPath (two-way compare) or revisedPaths "
+                + "(consolidate, or fan_out with outputPaths)");
+
+        // fan_out: one redline PER revised version rather than one merged redline, with the
+        // baseline read once for the whole set (issue #617). The default stays consolidate, so an
+        // existing caller passing revisedPaths gets exactly what it always did.
+        if (hasMany && OptStr(args, "mode") is "fan_out")
+            return CompareFanOut(store, args, baseline, revisedPaths);
 
         byte[] redline;
         string revisionsJson;
@@ -922,8 +929,12 @@ internal static class Dispatcher
                 docB64 = Convert.ToBase64String(
                     store.Documents.Read(store.Documents.Resolve(path!))),
             }));
-            redline = DocxDiffOps.Consolidate(baseline, reviewersJson, null);
-            revisionsJson = DocxDiffOps.GetConsolidatedRevisionsJson(baseline, reviewersJson, null);
+            // One memoized consolidation pass serves both products (issue #617) — this used to
+            // read the base and every reviewer twice, once per product.
+            var consolidated = DocxDiffOps.ConsolidateProducts(baseline, reviewersJson, null,
+                redline: true, revisions: true, editScript: false, conflicts: false);
+            redline = consolidated.RedlineBytes!;
+            revisionsJson = consolidated.RevisionsJson!;
         }
 
         var destination = store.Documents.Resolve(Str(args, "outputPath"));
@@ -952,6 +963,69 @@ internal static class Dispatcher
         }
 
         summary.Append("}}}");
+        return summary.ToString();
+    }
+
+    /// <summary>
+    /// Compare the baseline against each revised version separately, writing one redline per pair.
+    /// The baseline is read ONCE for the whole set — the workload
+    /// <see cref="Docxodus.DocxDiff.CreateSnapshot"/> exists for, which a loop of two-way compares
+    /// pays for once per counterparty. A revised version that fails carries its error and the rest
+    /// of the fan-out still completes.
+    /// </summary>
+    private static string CompareFanOut(
+        SessionStore store, JsonElement args, byte[] baseline, JsonElement revisedPaths)
+    {
+        var paths = revisedPaths.EnumerateArray().Select(value => value.GetString()).ToList();
+        if (paths.Count < 2 || paths.Any(string.IsNullOrWhiteSpace))
+            throw new McpToolException(
+                "revisedPaths needs at least two non-empty entries; "
+                + "use revisedPath for a two-way compare");
+
+        if (!args.TryGetProperty("outputPaths", out var outputPaths)
+            || outputPaths.ValueKind != JsonValueKind.Array)
+            throw new McpToolException("mode=fan_out requires outputPaths");
+        var destinations = outputPaths.EnumerateArray().Select(value => value.GetString()).ToList();
+        if (destinations.Count != paths.Count || destinations.Any(string.IsNullOrWhiteSpace))
+            throw new McpToolException(
+                "outputPaths must have one non-empty entry per revisedPaths entry, in the same order");
+
+        var candidatesJson = JsonSerializer.Serialize(paths.Select(path => new
+        {
+            name = path!,
+            docB64 = Convert.ToBase64String(store.Documents.Read(store.Documents.Resolve(path!))),
+        }));
+
+        using var batch = JsonDocument.Parse(DocxDiffOps.CompareBatchJson(
+            baseline, candidatesJson, null, "[\"redline\",\"revisions\"]"));
+
+        var summary = new StringBuilder(256);
+        summary.Append("{\"results\":[");
+        var index = 0;
+        foreach (var entry in batch.RootElement.GetProperty("results").EnumerateArray())
+        {
+            if (index > 0) summary.Append(',');
+            summary.Append("{\"revisedPath\":").Append(JsonRpcIo.JsonString(paths[index]!));
+            if (entry.TryGetProperty("error", out var error))
+            {
+                summary.Append(",\"error\":").Append(JsonRpcIo.JsonString(error.GetString() ?? ""));
+            }
+            else
+            {
+                var bytes = Convert.FromBase64String(entry.GetProperty("redlineB64").GetString()!);
+                var destination = store.Documents.Resolve(destinations[index]!);
+                store.Documents.Write(destination, bytes);
+                summary.Append(",\"path\":").Append(JsonRpcIo.JsonString(destination));
+                summary.Append(",\"bytesWritten\":").Append(bytes.Length);
+                summary.Append(",\"revisions\":")
+                       .Append(entry.GetProperty("revisions").GetArrayLength());
+            }
+
+            summary.Append('}');
+            index++;
+        }
+
+        summary.Append("]}");
         return summary.ToString();
     }
 

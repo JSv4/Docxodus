@@ -535,6 +535,15 @@ so the tool can neither read nor write outside the server's scope. The response 
 generated revisions by author; the written file is a plain DOCX an agent then opens with
 `docxodus_open` to inspect, comment on, resolve, or prove with `prove_reversibility`.
 
+A third form, `mode: "fan_out"` (issue #617), reads `revisedPaths` as *separate* comparisons
+rather than one merge: the baseline is compared against each entry on its own and each redline is
+written to the matching `outputPaths` entry, with the response carrying one result per pair. The
+default for `revisedPaths` stays consolidate, so this has to be asked for. What makes it worth a
+mode rather than a loop of two-way calls is that the baseline is read **once** for the whole set —
+the read is the largest stage of a comparison, so a loop pays for the baseline once per
+counterparty. A revised version that fails carries its `error` and the rest of the fan-out still
+completes.
+
 It is sessionless because it operates on stored documents, not the open session's state, and it
 is not a `docxodus_mutations` step for the same reason a proof is not: a batch is a sequence of
 session mutations, and this mutates no session.
