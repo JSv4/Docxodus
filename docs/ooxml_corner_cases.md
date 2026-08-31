@@ -429,11 +429,22 @@ divergence — RP050 is pinned `acceptEquivalent: false` there, so the sweep ass
 through the coarser story-text check rather than modeled-semantic equivalence, and neither a
 childless shell nor its absence contributes story text.
 
+#### A residual degenerate shape (known, deliberately unhandled)
+
+If a definition's content is wholly deletion-marked while its citation is NOT deleted — a shape
+Word's UI cannot author (deleting all of a note's text tracked leaves the final paragraph mark
+unmarked, so accept correctly keeps an empty-paragraph note) — accepting empties the definition
+but the citation survives, and the orphan-scoped prune correctly cannot touch a cited note. The
+accepted package then carries a cited childless `<w:footnote/>`. This arises only from hand- or
+tool-built markup; the principled fix (leave a minimal empty paragraph when emptying a still-cited
+note) is deferred until there is Word-side evidence of what it ships for an equivalent state.
+Tracked to conclusion in #636's review record.
+
 #### Relevant code
 
 - `Docxodus/Internal/NoteReferenceOps.cs` (`PruneNotesEmptiedByResolution`, the blockless guard)
 - `Docxodus/RevisionProcessor.cs` (accept-side capture/prune)
-- `DS430`/`DS432` in `DocxSessionRevisionTests.cs` — the two husk shapes and their opposite fates
+- `DS430`/`DS432`/`DS434` in `DocxSessionRevisionTests.cs` — the husk shapes and their fates
 
 ### `OpenXmlValidator` Does NOT Resolve Note-Body (note-in-note) References — a validation blind spot
 
