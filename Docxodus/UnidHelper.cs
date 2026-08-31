@@ -48,6 +48,24 @@ namespace Docxodus;
 /// <c>dup_index</c> of later duplicates of the same content (the only rough edge in the scheme).</item>
 /// </list>
 /// </remarks>
+/// <summary>Which elements a deterministic Unid pass assigns to.</summary>
+internal enum UnidAssignment
+{
+    /// <summary>Every element, which is what <see cref="DocxSession"/>, the markdown projection and
+    /// the package change detector expect — a Unid assigned here persists into a saved package, so
+    /// "which elements carry an identity" is a cross-cutting contract those paths keep unchanged.</summary>
+    All,
+
+    /// <summary>
+    /// Only elements an identity can be read back from, plus their ancestors. The diff engine reads
+    /// a Unid from block elements, table structure, content controls, notes, comments and
+    /// <c>w:drawing</c>; the markup renderer strips the attribute on the way out. Assigning to the
+    /// rest costs two SHA-256 hashes each for an identity nothing queries. The assigned VALUES are
+    /// unchanged — see <c>CarriesNoIdentity</c> for why.
+    /// </summary>
+    IdentityBearing,
+}
+
 internal static class UnidHelper
 {
     /// <summary>Random 32-char hex Unid. Used by the legacy bulk-assign path and by
@@ -91,8 +109,10 @@ internal static class UnidHelper
     /// <returns><c>true</c> when at least one Unid was assigned — callers use this to
     /// skip persistence work (part flushes) on the no-op passes that dominate per-op
     /// index rebuilds.</returns>
-    internal static bool AssignToAllElementsDeterministic(XElement contentParent)
+    internal static bool AssignToAllElementsDeterministic(
+        XElement contentParent, UnidAssignment assignment = UnidAssignment.All)
     {
+        bool prune = assignment == UnidAssignment.IdentityBearing;
         // Run the legacy deterministic walk first. Descendant block/run identities below an
         // SDT must keep using the same structural seed they used before SDTs became public
         // anchors; otherwise merely exposing the wrapper would rename every child anchor.
@@ -119,17 +139,9 @@ internal static class UnidHelper
         // wholesale. Assigned values are IDENTICAL to the unpruned walk: dup-index
         // bookkeeping only ever influences an assignment within a parent that has a
         // missing child, and such parents are always in `live`.
-        HashSet<XElement>? live = null;
-        foreach (var el in contentParent.DescendantsAndSelf())
-        {
-            if (el.Attribute(PtOpenXml.Unid) is not null || el == contentParent) continue;
-            live ??= new HashSet<XElement>();
-            for (XElement? a = el.Parent; a is not null; a = a.Parent)
-            {
-                if (!live.Add(a)) break; // ancestors above are already marked
-            }
-        }
-        if (live is null)
+        var live = new HashSet<XElement>();
+        CollectLiveAncestors(contentParent, prune, live);
+        if (live.Count == 0)
         {
             ContentControlIdentity.AssignStableUnids(contentParent, out bool changedControls);
             return assignedRoot || changedControls;
@@ -143,7 +155,7 @@ internal static class UnidHelper
         // lives for one call only: it is keyed on the exact string that is hashed, so a hit returns
         // precisely what a fresh hash would have, and nothing survives to leak between documents.
         var sigCache = new Dictionary<string, string>(StringComparer.Ordinal);
-        AssignDescendantsDeterministic(contentParent, parentUnid, live, sigCache);
+        AssignDescendantsDeterministic(contentParent, parentUnid, live, sigCache, prune);
         ContentControlIdentity.AssignStableUnids(contentParent);
         return true;
     }
@@ -264,7 +276,8 @@ internal static class UnidHelper
     // ─── Deterministic derivation internals ──────────────────────────────
 
     private static void AssignDescendantsDeterministic(
-        XElement parent, string parentUnid, HashSet<XElement> live, Dictionary<string, string> sigCache)
+        XElement parent, string parentUnid, HashSet<XElement> live, Dictionary<string, string> sigCache,
+        bool prune)
     {
         // Signature/dup-index bookkeeping is only needed when THIS parent has a child
         // to assign — for fully-assigned parents (the overwhelming majority after the
@@ -272,12 +285,14 @@ internal static class UnidHelper
         bool anyMissing = false;
         foreach (var c in parent.Elements())
         {
+            if (prune && CarriesNoIdentity(c)) continue;
             if (c.Attribute(PtOpenXml.Unid) == null) { anyMissing = true; break; }
         }
 
         var dup = anyMissing ? new Dictionary<(string Tag, string Sig), int>() : null;
         foreach (var child in parent.Elements())
         {
+            if (prune && CarriesNoIdentity(child)) continue;
             if (child.Attribute(PtOpenXml.Unid) == null)
             {
                 var sig = ContentSignature(child, sigCache);
@@ -305,10 +320,63 @@ internal static class UnidHelper
             // still missing — is a member; anything else has a fully-assigned subtree.
             if (live.Contains(child))
             {
-                var childUnid = (string?)child.Attribute(PtOpenXml.Unid)!;
-                AssignDescendantsDeterministic(child, childUnid, live, sigCache);
+                var childUnid = (string)child.Attribute(PtOpenXml.Unid)!;
+                AssignDescendantsDeterministic(child, childUnid, live, sigCache, prune);
             }
         }
+    }
+
+    /// <summary>
+    /// Mark every element whose subtree still holds an element needing a Unid, so the assignment
+    /// walk can skip fully-assigned subtrees wholesale. Under <paramref name="prune"/> the walk
+    /// does not descend into identityless subtrees either, so they never mark their ancestors live.
+    /// </summary>
+    /// <returns>Whether <paramref name="parent"/>'s subtree holds anything to assign.</returns>
+    private static bool CollectLiveAncestors(XElement parent, bool prune, HashSet<XElement> live)
+    {
+        bool anythingBelow = false;
+        foreach (var child in parent.Elements())
+        {
+            if (prune && CarriesNoIdentity(child)) continue;
+            var below = CollectLiveAncestors(child, prune, live);
+            if (below || child.Attribute(PtOpenXml.Unid) is null) anythingBelow = true;
+        }
+
+        if (anythingBelow) live.Add(parent);
+        return anythingBelow;
+    }
+
+    /// <summary>
+    /// Elements — with their whole subtree — that no consumer can address: run/table/row/cell
+    /// property containers, the page-setup children of a section break, everything under a
+    /// <c>w:pPr</c> other than an inline <c>w:sectPr</c>, and the text leaves. Under
+    /// <see cref="UnidAssignment.IdentityBearing"/> these are neither assigned a Unid nor descended
+    /// into, which is most of a document: an identity is read back from block elements, table
+    /// structure, content controls, notes, comments and <c>w:drawing</c>, and from nothing else.
+    /// <para>
+    /// The predicate is a pure function of the element's name and its parent's name, and that is
+    /// what makes the pruned Unids <b>identical</b> to the unpruned ones rather than merely similar.
+    /// A Unid derives from <c>parentUnid : tag : signature : dupIndex</c> — ancestors only, never
+    /// descendants — and <c>dupIndex</c> counts same-<c>(tag, signature)</c> preceding siblings. A
+    /// name-keyed skip therefore removes whole tag-groups at once, so no surviving element ever
+    /// shares a dup key with a skipped one and no surviving element's index can shift. A predicate
+    /// that looked at content instead could split a tag-group and move an index.
+    /// </para>
+    /// </summary>
+    private static bool CarriesNoIdentity(XElement el)
+    {
+        var name = el.Name;
+        if (name == W.rPr || name == W.tblPr || name == W.tblPrEx || name == W.trPr || name == W.tcPr)
+            return true;
+        if (name == W.t || name == W.delText || name == W.instrText || name == W.delInstrText)
+            return true;
+
+        var parent = el.Parent?.Name;
+        // The one addressable thing under paragraph properties is an inline section break.
+        if (parent == W.pPr) return name != W.sectPr;
+        // The section break itself is addressable; its page setup is not.
+        if (parent == W.sectPr) return true;
+        return false;
     }
 
     /// <summary>
