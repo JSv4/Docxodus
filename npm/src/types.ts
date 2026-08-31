@@ -590,6 +590,24 @@ export interface DocxDiffProducts {
   semanticChanges?: SemanticChangeSet;
 }
 
+/** One candidate of a {@link docxDiffCompareBatch} run: the products of comparing the shared
+ *  baseline against it, or the error that comparing it produced. */
+export interface DocxDiffBatchResult extends DocxDiffProducts {
+  /** The candidate's name, echoed from the request (its index when none was given). */
+  name: string;
+  /** Set when this candidate failed; its products are then absent. The rest of the batch is
+   *  unaffected — one malformed counterparty markup must not cost the other ninety-nine. */
+  error?: string;
+}
+
+/** A candidate document for {@link docxDiffCompareBatch}. */
+export interface DocxDiffBatchCandidate {
+  /** Echoed back on the matching result. Defaults to the candidate's index. */
+  name?: string;
+  /** The candidate document. */
+  document: File | Uint8Array;
+}
+
 /** Stable v1 operation names emitted by the semantic-change schema. */
 export type SemanticChangeOperation = "insert" | "delete" | "move" | "modify";
 
@@ -1646,6 +1664,14 @@ export interface DocxodusWasmExports {
     CompareProductsJson: (
       leftBytes: Uint8Array,
       rightBytes: Uint8Array,
+      settingsJson: string,
+      productsJson: string
+    ) => string;
+    /** One baseline read once, compared against many candidates:
+     *  `{"results":[{"name":…, …products…}]}` JSON (issue #617), or a JSON error object. */
+    CompareBatchJson: (
+      baselineBytes: Uint8Array,
+      candidatesJson: string,
       settingsJson: string,
       productsJson: string
     ) => string;
