@@ -17,57 +17,29 @@
 // E1M1 geometry, rasterized to a character grid offline. That was a real Doom
 // *level* in a Word document. This is the real Doom *engine* in a Word
 // document: id's own BSP renderer, its own 320×200 framebuffer, its own
-// physics, monsters, doors, weapons, menus and status bar — every frame of it
-// pushed through `DocxSession.raw.replaceXml` into a single Word paragraph.
+// physics, monsters, doors, weapons, menus and status bar. Every lossless
+// frame becomes the media payload of one inline image in a Word paragraph.
 //
-// HOW A 320×200 FRAMEBUFFER FITS IN A PARAGRAPH
-// ---------------------------------------------
-// The screen is a character grid — the same kind the rest of the arcade draws
-// on (see ascii-scenes.js), so it inherits the pinned canvas font and the
-// markdown-safe bezel unchanged. A character cell is far too coarse to hold a
-// Doom frame at one color per cell — but a cell is not one pixel. It has an
-// ink, a `w:shd` shading, and a glyph, and only the two colors cost anything:
-// a run breaks when the ink or the shading changes and NEVER when the glyph
-// does, because every character in a span shares one `w:t`.
-//
-// Both projections are answers to that. The detailed `bitmap` one keeps an
-// unrestricted framebuffer-derived palette, allocates 900 horizontal colour
-// pairs where they preserve the most structure, and lets each cell's block
-// glyph independently select those endpoints for its top and bottom samples.
-// The default `8bit` one is the playable path: one high-contrast ink/shading
-// pair across the picture and all sixteen quadrant block characters to draw
-// every 2×2 arrangement of those endpoints. One cell carries four sub-pixels,
-// and glyph changes cost no new Word runs.
-//
-// THIS CARTRIDGE DRAWS ON ITS OWN GRID
-// ------------------------------------
-// The rest of the arcade shares one 92 × 26 grid of 8pt cells. Doom does not:
-// it draws on 96 × 32 cells of 8pt text on an 11.45pt line. The picture occupies
-// 94 × 29 of them — almost the full 462pt document column, at Doom's 4:3
-// display shape — while the controls live in a large 18pt document paragraph
-// above it. That separation is load-bearing: text small enough to carry the
-// framebuffer is not text a player can honestly read.
-//
-// The point of the denser grid is that CELLS carry resolution while rendered
-// style boxes cost conversion time. One authored OOXML run can contain line
-// breaks, but conversion still materializes one picture fragment per visual
-// row. With quadrant blocks, those 94 × 29 cells carry 188 × 58 samples, enough
-// to preserve room edges, sprites, the weapon and HUD while leaving the
-// document conversion enough time for ten complete repaints a second.
-//
-// The viewport is 94 columns wide because an 8pt DejaVu Sans Mono cell advances
-// about 4.8pt. On an 11.45pt line, 94 × 29 cells occupy about 451 × 332pt:
-// Doom's own 4:3 display shape, not a stretched strip.
+// WHY AN INLINE IMAGE
+// -------------------
+// Character projections met the run budget only by destroying the evidence a
+// player needs: ammo, health and armor numerals. More cells restored fidelity
+// but pushed the standard converter below 10 fps. A native w:drawing is both
+// more honest and faster: `replaceImage` updates the actual package media,
+// `editor.refresh()` renders that one changed block, and Save/Undo/reopen see
+// the same frame. The browser never mounts an out-of-document game canvas.
+// At 451 × 338.25 points the original 320×200 image is corrected to Doom's 4:3
+// display aspect; the 11-pixel HUD digits render about 25 CSS pixels tall.
+// The four controls remain separate 18pt Word paragraphs above the image.
 // ═══════════════════════════════════════════════════════════════════════
 
-// The cartridge's own grid, and the cell metrics that make it fit the page.
-// `METRICS` travels with the frame (see the object this module returns) so the
-// canvas paragraph is emitted at this cartridge's font size and line height
-// rather than the arcade's shared ones.
+// Loading and error states still use a text grid. The legacy framebuffer
+// painters below remain exported as pure compatibility/test helpers, but the
+// playable path returns a native image and does not call them.
 const COLS = 96, ROWS = 32;
 export const METRICS = { sz: 16, lineTwips: 229 };  // 8pt text, 11.45pt line
 
-// ─── Doom's framebuffer, and where it lands on the grid ───────────────
+// ─── Doom's framebuffer and legacy grid-helper geometry ──────────────
 const DOOM_W = 320, DOOM_H = 200;
 
 const FIELD_TOP = 2;                      // 0 = bezel, 1 = HUD
@@ -125,15 +97,10 @@ const KEY_MAP = {
   Digit5: 0x35, Digit6: 0x36, Digit7: 0x37,
 };
 
-/** Switches the projection rather than reaching Doom — see PROJECTIONS. */
-export const PROJECTION_KEY = 'KeyP';
-
 /** The arcade key codes this cartridge wants to be handed. ascii-arcade.js
  *  unions this into the set its capture-phase listener claims while playing,
- *  so Doom gets Enter/E/Q/M/digits without the other cartridges caring.
- *  PROJECTION_KEY is claimed too, so the browser never sees it, but it is
- *  handled here and deliberately not in KEY_MAP: Doom must not receive it. */
-export const DOOM_KEY_CODES = [...Object.keys(KEY_MAP), PROJECTION_KEY];
+ *  so Doom gets Enter/E/Q/M/digits without the other cartridges caring. */
+export const DOOM_KEY_CODES = [...Object.keys(KEY_MAP)];
 
 // ─── Grid helpers ─────────────────────────────────────────────────────
 function makeGrid() {
@@ -198,7 +165,7 @@ function wrap(text, width) {
 // horizontal bars; a real captured frame retained only 876 of 5,313 visible
 // horizontal transitions. The result was cheaper but no longer legible.
 //
-// This painter uses the same two resources the high-contrast projection does:
+// This retained experimental painter uses two resources:
 //
 //   * ALLOCATE expensive colour boundaries. Start with one exact segment per
 //     cell, then merge the adjacent pair whose two-endpoint fit loses the least
@@ -212,8 +179,8 @@ function wrap(text, width) {
 //     perceptual error at the same run count and restores the room structure.
 //
 // 900 picture runs leaves room for the HUD/chrome inside the established
-// 1,200 rendered-span ceiling. Unlike the high-contrast playable mode below,
-// the endpoints remain means of Doom's own unrestricted framebuffer colours.
+// historical 1,200 rendered-span ceiling. Its endpoints remain means of
+// Doom's own unrestricted framebuffer colours.
 const BITMAP_BUDGET = 900;
 const bitmapRGB = new Uint8Array(PIX_H * VIEW_W * 3);
 
@@ -341,7 +308,7 @@ export function paintFramebuffer(g, fb) {
   }
 }
 
-// ─── Framebuffer → playable high-contrast grid ───────────────────────
+// ─── Legacy framebuffer → high-contrast grid helper ──────────────────
 // One foreground/background pair makes every picture row a single run. The
 // glyph remains free inside that run, so all sixteen quadrant blocks preserve
 // a literal 188 × 58 silhouette while the document stays cheap to repaint.
@@ -444,7 +411,7 @@ class MergeHeap {
   }
 }
 
-/** Paint one frame as a high-contrast quadrant projection.
+/** Paint one frame as the retired high-contrast quadrant projection.
  *
  *  Exported and pure for the same reason the bitmap painter is — the headless
  *  tests drive it with synthetic frames, and the canvas-font guard needs to
@@ -486,9 +453,8 @@ export function paintFramebuffer8Bit(g, fb) {
   // One stable endpoint pair for the entire 188 x 58 picture. The four free
   // quadrant bits are a literal high-resolution monochrome projection of the
   // exposed Doom framebuffer: room edges, sprites, weapon and HUD stay crisp,
-  // while every picture row is one compact shaded run. This is the playable
-  // contract — image structure and a 32-span total, not a colour photograph
-  // that costs a second to repaint.
+  // while every picture row is one compact shaded run. Kept for the pure
+  // renderer corpus; native-image play no longer uses this projection.
   for (let row = 0; row < FIELD_ROWS; row++) {
     const gy = FIELD_TOP + row;
     for (let x = 0; x < VIEW_W; x++) {
@@ -766,20 +732,10 @@ function createAudio() {
 // The cartridge
 // ═══════════════════════════════════════════════════════════════════════
 
-/** The two ways this cartridge can put Doom on a Word paragraph.
- *
- *  `8bit` is the legacy internal identifier for the playable high-contrast
- *  projection: one stable endpoint pair and a literal 188×58 quadrant
- *  silhouette, represented by three authored runs / 32 rendered spans.
- *  `bitmap` keeps open-palette detail in up to 900 picture segments and is a
- *  paused-frame inspection mode, not a playable renderer. */
-export const PROJECTIONS = ['8bit', 'bitmap'];
-
 export function doomCart(options = {}) {
   const engineUrl = options.engineUrl ?? DEFAULT_ENGINE;
   const wadUrl = options.wadUrl ?? DEFAULT_WAD;
   const sound = options.sound !== false;
-  let projection = PROJECTIONS.includes(options.projection) ? options.projection : '8bit';
 
   let handle = null;
   let status = 'idle';           // idle → loading → playing | error
@@ -788,6 +744,32 @@ export function doomCart(options = {}) {
   let paintedFrames = 0;
   let spinner = 0;
   let edited = false;
+  let imageCanvas = null;
+  let imageContext = null;
+  let imageData = null;
+
+  /** Encode the engine's BGRA framebuffer as a lossless PNG for a real inline
+   *  DOCX image. This is deliberately the actual 320×200 frame, not a DOM
+   *  overlay: the arcade driver replaces the package media part, runs the
+   *  standard block converter, and mounts the resulting <img> from its data
+   *  URI. Saving/reopening therefore keeps exactly the frame the player saw. */
+  function framebufferPng(fb) {
+    if (!imageCanvas) {
+      imageCanvas = document.createElement('canvas');
+      imageCanvas.width = DOOM_W; imageCanvas.height = DOOM_H;
+      imageContext = imageCanvas.getContext('2d', { alpha: false });
+      imageData = imageContext.createImageData(DOOM_W, DOOM_H);
+    }
+    const rgba = imageData.data;
+    for (let i = 0; i < rgba.length; i += 4) {
+      rgba[i] = fb[i + 2]; rgba[i + 1] = fb[i + 1]; rgba[i + 2] = fb[i]; rgba[i + 3] = 255;
+    }
+    imageContext.putImageData(imageData, 0, 0);
+    const binary = atob(imageCanvas.toDataURL('image/png').split(',')[1]);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
 
   function begin() {
     if (status !== 'idle') return;
@@ -814,12 +796,6 @@ export function doomCart(options = {}) {
     // cartridge wants the log rather than the held/pressed sets the other two
     // cartridges use.
     for (const { code, down } of input.drain?.() ?? []) {
-      if (code === PROJECTION_KEY) {
-        // Local to the cartridge: Doom never sees it, and only the press edge
-        // toggles, so holding the key does not flicker between projections.
-        if (down) projection = projection === '8bit' ? 'bitmap' : '8bit';
-        continue;
-      }
       const key = KEY_MAP[code];
       if (key !== undefined) handle.keys.push([key, down ? 1 : 0]);
     }
@@ -877,19 +853,21 @@ function mergeBezelsIntoPicture(g) {
 }
 
   function render() {
-    const g = makeGrid();
     if (status === 'playing' && handle) {
-      if (projection === '8bit') paintFramebuffer8Bit(g, handle.framebuffer);
-      else paintFramebuffer(g, handle.framebuffer);
       paintedFrames++;
-      drawChrome(g, projection === '8bit'
-        ? `DOOM — ${handle.title?.trim() ?? 'id Software engine'} — HIGH-CONTRAST · playable · frame ${handle.frames}`
-        : `DOOM — ${handle.title?.trim() ?? 'id Software engine'} — BITMAP · detailed · frame ${handle.frames}`);
-      mergeBezelsIntoPicture(g);
-    } else {
-      drawLoading(g);
-      drawChrome(g, 'DOOM — the real engine, compiled to JavaScript');
+      return {
+        imageBytes: framebufferPng(handle.framebuffer),
+        imageOptions: {
+          widthPoints: 451,
+          heightPoints: 338.25,
+          preserveAspect: false,
+          altText: `Live Doom framebuffer — ${handle.title?.trim() ?? 'id Software engine'}`,
+        },
+      };
     }
+    const g = makeGrid();
+    drawLoading(g);
+    drawChrome(g, 'DOOM — the real engine, compiled to JavaScript');
     return { grid: g, bg: BG, metrics: METRICS };
   }
 
@@ -900,28 +878,22 @@ function mergeBezelsIntoPicture(g) {
       'CONTROLS · MOVE W/S · STRAFE A/D',
       'TURN ←/→ · FIRE SPACE · USE E',
       'RUN SHIFT · MENU Q · MAP M · WEAPON 1–7',
-      'PROJECTION P · PAUSE/EDIT ESC',
+      'FULL-COLOR HUD · PAUSE/EDIT ESC',
     ],
     caption:
       'The **actual** game: id Software’s Doom engine — GPL-2.0, compiled to JavaScript by ' +
       '[doomgeneric](https://github.com/grubbyplaya/doomgenericjs) — running on Freedoom’s ' +
-      'BSD-licensed game data. Its 320×200 framebuffer is redrawn into this Word paragraph every ' +
-      'frame, and what it costs is *colored runs*: a run breaks when the ink or the `w:shd` ' +
-      'shading changes, never when the glyph does. So the default **high-contrast** projection ' +
-      'uses one stable pair for the entire picture, then lets every cell choose its own arrangement ' +
-      'with a quadrant block — all sixteen 2×2 patterns have a character. The 94 × 29 picture ' +
-      'cells therefore retain a **188 × 58** silhouette while the authored frame stays at three ' +
-      'runs and the rendered paragraph at 32 spans. That is the playable contract: the room, ' +
-      'sprites, weapon and HUD remain distinct while the document sustains about ten complete ' +
-      'repaints a second. The controls are four separate 18pt document paragraphs, so they stay ' +
-      'genuinely readable without being converted on every frame. ' +
-      '**P** switches to the detailed **bitmap**: an unrestricted framebuffer-derived palette, ' +
-      'two vertical samples per cell and far more rendered spans; it is a paused-frame inspection ' +
-      'mode, not the playable renderer. Move **W/S** · strafe ' +
+      'BSD-licensed game data. Its lossless **320×200 framebuffer** is the media payload of a real ' +
+      'inline image in this Word paragraph. Every frame replaces that image through the public ' +
+      'session API, then follows the ordinary incremental OOXML→HTML conversion and DOM reconcile ' +
+      'path. It is not an overlay or a hidden canvas: pause, Undo, Save, or reopen the DOCX and the ' +
+      'full-color frame—including readable ammo, health and armor—is still document content. The ' +
+      'controls are four separate 18pt document paragraphs, so they remain readable without being ' +
+      'rewritten every frame. Move **W/S** · strafe ' +
       '**A/D** · turn **←/→** · **Space** ' +
       'fires · **E** opens · **Q** is Doom’s own menu. **Esc** pauses — and then it is only a ' +
       'document again: put your caret in the frame, Undo rewinds it, Save downloads it as .docx.',
-    hint: '<b>WASD</b> move · <b>←/→</b> turn · <b>Space</b> fire · <b>E</b> open · <b>Q</b> Doom’s menu · <b>P</b> switches projection — high contrast is the playable ~10 fps path; bitmap is for paused detail.',
+    hint: '<b>WASD</b> move · <b>←/→</b> turn · <b>Space</b> fire · <b>E</b> open · <b>Q</b> Doom’s menu · the full-color HUD is the live inline image stored in the DOCX.',
     reset() {
       // Doom's own state lives inside the WebAssembly heap and the engine is
       // a page singleton, so a cartridge reset cannot restart the game. Q
@@ -934,22 +906,16 @@ function mergeBezelsIntoPicture(g) {
     /** The other two cartridges re-read their world from the paragraph on
      *  every resume — type a wall into the map, resume, walk into it. Real
      *  Doom cannot: the level is BSP geometry in the WebAssembly heap, not
-     *  text, and nothing typed into a downsampled framebuffer means anything
+     *  text, and nothing typed alongside a framebuffer image means anything
      *  to it. So the round-trip here is honest about what it is — the frame
      *  stays editable, undoable and saveable like any paragraph, and the next
      *  frame paints over whatever was typed. */
     syncFromRows() { edited = true; },
-    /** Switch projection from outside the keyboard (the specs use this). */
-    setProjection(next) {
-      if (PROJECTIONS.includes(next)) projection = next;
-      return projection;
-    },
     state: () => ({
       status,
       error,
       progress,
       edited,
-      projection,
       title: handle?.title ?? null,
       doomFrames: handle?.frames ?? 0,
       paintedFrames,

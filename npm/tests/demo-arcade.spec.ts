@@ -142,22 +142,34 @@ test.describe('THE DOCX ARCADE page', () => {
         reopenedAnchor: string | null;
         text: string;
         reopenedText: string;
+        image: string;
+        reopenedImage: string;
         magic: number[];
       }> = [];
       for (let i = 0; i < 10; i++) {
         observations.push(await page.evaluate((hudWord) => {
           const a = (window as any).__arcade;
           const anchor = a.canvasAnchor() as string;
+          const canvas = a.canvasElement() as HTMLElement;
           const text = a.canvasText() as string;
+          const image = canvas.querySelector<HTMLImageElement>('img')?.src ?? '';
           const bytes: Uint8Array = a.save();
           const reopened = a.bridge.OpenSession(bytes, '');
           const html = a.bridge.RenderHtml(reopened, 'stress-', false, false, 1) as string;
           const parsed = new DOMParser().parseFromString(html, 'text/html');
-          const reopenedCanvas = Array.from(parsed.querySelectorAll<HTMLElement>('p[data-anchor]'))
-            .find((paragraph) => (paragraph.textContent ?? '')
-              .includes(hudWord)) ?? null;
+          // Quest/Dungeon and Doom's loading frame are text. Once the engine
+          // starts, Doom's complete framebuffer is a native drawing, so find
+          // the reopened block by its image contract rather than pretending
+          // an image has HUD text nodes.
+          const reopenedImageElement = image
+            ? parsed.querySelector<HTMLImageElement>('img[alt^="Live Doom framebuffer"]')
+            : null;
+          const reopenedCanvas = reopenedImageElement?.closest<HTMLElement>('p[data-anchor]') ??
+            Array.from(parsed.querySelectorAll<HTMLElement>('p[data-anchor]'))
+              .find((paragraph) => (paragraph.textContent ?? '').includes(hudWord)) ?? null;
           const reopenedAnchor = reopenedCanvas?.getAttribute('data-anchor') ?? null;
           const reopenedText = reopenedCanvas?.textContent ?? '';
+          const reopenedImage = reopenedImageElement?.src ?? '';
           a.bridge.CloseSession(reopened);
           return {
             frame: a.frames() as number,
@@ -165,6 +177,8 @@ test.describe('THE DOCX ARCADE page', () => {
             reopenedAnchor,
             text,
             reopenedText,
+            image,
+            reopenedImage,
             magic: Array.from(bytes.slice(0, 2)),
           };
         }, CART_HUD[cart]));
@@ -179,8 +193,13 @@ test.describe('THE DOCX ARCADE page', () => {
       for (const observation of observations) {
         expect(observation.magic).toEqual([0x50, 0x4b]);
         expect(observation.reopenedAnchor).toMatch(/^[0-9a-f]{32}$/);
-        expect(observation.reopenedText).toBe(observation.text);
-        expect(observation.reopenedText).toContain(CART_HUD[cart]);
+        if (observation.image) {
+          expect(observation.reopenedImage).toBe(observation.image);
+          expect(observation.reopenedImage).toContain('data:image/png;base64,');
+        } else {
+          expect(observation.reopenedText).toBe(observation.text);
+          expect(observation.reopenedText).toContain(CART_HUD[cart]);
+        }
       }
     });
   }

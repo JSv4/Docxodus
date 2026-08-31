@@ -233,15 +233,15 @@ test.describe('Arcade on a phone-shaped viewport', () => {
 
   test('every cartridge keeps its grid on the same platform', async ({ page }) => {
     test.setTimeout(180000); // one boot, then three cartridges animated in turn
-    // The games draw a box-drawing bezel on every row, the raycaster shades its
-    // walls with ▒ █ and Doom's framebuffer is a solid field of █ and ▀, so the
-    // tilt is not an attract-screen-only property.
+    // The two text games draw a box-drawing bezel on every row and the
+    // raycaster shades its walls with ▒ █, so the tilt is not an
+    // attract-screen-only property. Doom now uses one native 320×200 image;
+    // its mobile contract is exact image geometry rather than text-row drift.
     //
     // The claim is ONE AUTHORED ROW IS ONE RENDERED LINE, so each cartridge is
     // measured against the number of rows it actually drew rather than against
-    // a shared constant. Two of them draw 26; Doom draws 32 on its own
-    // full-width framebuffer grid. A
-    // hardcoded 26 here was reading that deliberate difference as a fold.
+    // a shared constant. The text cartridges draw 26; Doom is checked as the
+    // lossless inline document image it actually authors.
     await emulateAndroidFontCoverage(page);
     await page.goto(`/demo-arcade.html?${OVERRIDE}&boot=tap&intro=0&cart=quest`);
     await page.locator('#boot').click();
@@ -256,6 +256,24 @@ test.describe('Arcade on a phone-shaped viewport', () => {
       await page.waitForFunction(
         (n) => (window as any).__arcade.frames() >= n, from + 20, { timeout: 60000 });
       await page.evaluate(() => (window as any).__arcade.pause());
+
+      if (cart === 'doom') {
+        const image = await page.evaluate(() => {
+          const element = (window as any).__arcade.canvasElement() as HTMLElement;
+          const img = element.querySelector('img') as HTMLImageElement | null;
+          return img && {
+            complete: img.complete,
+            natural: [img.naturalWidth, img.naturalHeight],
+            count: element.querySelectorAll('img').length,
+            rows: element.querySelectorAll('br').length,
+          };
+        });
+        expect.soft(image?.complete, 'doom image decoded').toBe(true);
+        expect.soft(image?.natural, 'doom native framebuffer').toEqual([320, 200]);
+        expect.soft(image?.count, 'doom authored images').toBe(1);
+        expect.soft(image?.rows, 'doom is not a fragile text grid').toBe(0);
+        continue;
+      }
 
       // The rows the cartridge authored: one `w:br` between each pair, so the
       // element carries one <br> per row boundary.

@@ -433,6 +433,15 @@ internal static class HtmlConversionOps
             session.RenderShellSignature = sig;
         }
 
+        var renderDoc = session.RenderShellDoc;
+        var renderMain = renderDoc.MainDocumentPart!;
+        // The reusable shell owns only formatting parts between renders. Image
+        // relationships are block content: remove the prior render's copies,
+        // then attach the live targets' media below while cloning their XML.
+        foreach (var priorImage in renderMain.ImageParts.ToList())
+            renderMain.DeletePart(priorImage);
+        var copiedImages = new Dictionary<string, string>(StringComparer.Ordinal);
+
         var wantedUnids = new HashSet<string>(StringComparer.Ordinal);
         foreach (var t in targets)
         {
@@ -479,6 +488,7 @@ internal static class HtmlConversionOps
                 for (int i = start; i <= end; i++)
                 {
                     var clone = CloneWithListAnnotations(siblings[i]);
+                    RetargetEmbeddedImages(liveDoc, siblings[i], clone, renderMain, copiedImages);
                     identity?.Record(siblings[i], clone);
                     bodyContent.Add(clone);
                 }
@@ -496,8 +506,7 @@ internal static class HtmlConversionOps
         // them, persist across renders. That persistence is the point: re-opening the shell per
         // render paid the package open + styles/numbering parse + cache rebuild on every
         // keystroke commit, and it dominated single-block render time.
-        var renderDoc = session.RenderShellDoc;
-        renderDoc.MainDocumentPart!.PutXDocument(
+        renderMain.PutXDocument(
             BuildBodyDocument(bodyContent.Cast<object>().ToArray()));
 
         var blockSettings = BuildBlockConverterSettings(options);
@@ -709,6 +718,8 @@ internal static class HtmlConversionOps
         {
             var main = blockDoc.AddMainDocumentPart();
             AddFormattingParts(blockDoc, sourceDoc);
+            RetargetEmbeddedImages(sourceDoc, blockElement, blockClone, main,
+                new Dictionary<string, string>(StringComparer.Ordinal));
             main.PutXDocument(BuildBodyDocument(blockClone));
         }
         blockStream.Position = 0;
@@ -781,6 +792,39 @@ internal static class HtmlConversionOps
         CopyPartXml(sourceDoc, blockDoc, p => p.DocumentSettingsPart);
     }
 
+    /// <summary>
+    /// Copy embedded image parts referenced by a cloned block into its throwaway main part and
+    /// rewrite the clone's relationship ids. OOXML relationship ids are scoped to their owning
+    /// package part; copying only the XML leaves a perfectly valid live image pointing at no part
+    /// in the render shell, which WmlToHtmlConverter correctly omits.
+    /// </summary>
+    private static void RetargetEmbeddedImages(
+        WordprocessingDocument sourceDoc,
+        XElement source,
+        XElement clone,
+        MainDocumentPart destination,
+        IDictionary<string, string> copied)
+    {
+        var owner = OwnedPartRelationships.FindOwner(sourceDoc, source)?.Part;
+        if (owner is null) return;
+        foreach (var embed in clone.DescendantsAndSelf().Attributes(R.embed))
+        {
+            var oldId = embed.Value;
+            var key = owner.Uri + "\n" + oldId;
+            if (!copied.TryGetValue(key, out var newId))
+            {
+                var sourcePart = OwnedPartRelationships.ResolveImagePart(owner, oldId);
+                if (sourcePart is null) continue;
+                var imagePart = destination.AddImagePart(sourcePart.ContentType);
+                using var input = sourcePart.GetStream(FileMode.Open, FileAccess.Read);
+                imagePart.FeedData(input);
+                newId = destination.GetIdOfPart(imagePart);
+                copied[key] = newId;
+            }
+            embed.Value = newId;
+        }
+    }
+
     /// <summary>A minimal <c>w:document</c> wrapping <paramref name="bodyContent"/> (or an empty body).</summary>
     private static XDocument BuildBodyDocument(params object[] bodyContent) =>
         new XDocument(
@@ -804,6 +848,13 @@ internal static class HtmlConversionOps
             RenderTrackedChanges = options.RenderTrackedChanges,
             ShowDeletedContent = options.ShowDeletedContent,
             RenderMoveOperations = options.RenderMoveOperations,
+            // Incremental block renders must carry the same native image
+            // contract as a full-document render. Without an image handler
+            // WmlToHtmlConverter deliberately drops w:drawing/w:pict content,
+            // so inserting or replacing an image in a live session refreshed
+            // the paragraph to blank even though the image remained valid in
+            // the package and appeared after a full remount/reopen.
+            ImageHandler = CreateBase64ImageHandler(),
             // The throwaway doc copies the source's (possibly huge) style gallery verbatim;
             // re-simplifying it every render is the dominant single-block cost (~70ms on a 160-style
             // python-docx doc) and only strips rsids, which never reach the HTML. Skip it — the

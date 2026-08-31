@@ -10,7 +10,7 @@ jsDelivr — and differ only in how much of the page belongs to the editor:
 | `app.html` | The editor full-bleed, nothing around it. The useful thing to open on a phone. |
 | `player.html` | The compact iframe target, sized for ~480 × 480. Boots on tap so a feed iframe never streams a .NET runtime unasked, and pins the surface's compact layout. |
 | `observatory.html` | The DOCX Observatory inside the live editor: procedural ASCII phenomena animated onto a Word paragraph in the editor's own session (`raw.replaceXml` + `editor.refresh()`). Pause — or click the water — and it is only a document: edit with the ribbon, Undo rewinds frame by frame, Save downloads the caught wave. The phenomena and frame loop are demo content, not library machinery: they live in `ascii-scenes.js` **in this directory** (also imported, via the test-webroot copy, by the two `npm/examples/ascii-animation*` pages), so `?engine=` pins the library alone and the scenes version with the site. Needs `DocxEditor.refresh()`, which 9.5.0 predates — it was pinned to `docxodus@9.6.0` ahead of that release and healed on its own when it published; it now shares the pin with its siblings. |
-| `arcade.html` | THE DOCX ARCADE — three playable games whose screen is the same per-frame `raw.replaceXml` + `editor.refresh()` Word paragraph. The third cartridge is **DOOM**: id Software's GPL engine on Freedoom's BSD IWAD, with the live 320×200 framebuffer projected into a 96 × 32 grid. Its default high-contrast path preserves **188 × 58** picture samples in three authored runs / 32 rendered spans and is guarded at the ten-FPS design point; **P** switches to a detailed paused-frame bitmap. Four separate static **18pt document paragraphs** keep the complete controls legible. Doom's world remains in its WebAssembly heap, so its honest document round trip is pause, edit, undo and save; the other cartridges additionally re-parse edited terrain on resume. The games live in `ascii-arcade.js`; Doom lives in the GPL `doom-cart.js`, with pinned engine/IWAD URLs documented below. Specs in `npm/tests/demo-arcade-doom.spec.ts` prove real play, dimensions, control size, sustained throughput, input, and save/reopen fidelity. |
+| `arcade.html` | THE DOCX ARCADE — three playable games rendered through the editor's ordinary incremental document path. The text cartridges replace colored runs in one Word paragraph; **DOOM** runs id Software's GPL engine on Freedoom's BSD IWAD and replaces the media payload of one native **320 × 200 full-color inline DOCX image** through the public session API. It is guarded at the ten-visible-FPS design point, including browser decode and presentation. Four separate static **18pt document paragraphs** keep the complete controls legible. Doom's world remains in its WebAssembly heap, so its honest document round trip is pause, copy/paste, undo and save; the other cartridges additionally re-parse edited terrain on resume. The games live in `ascii-arcade.js`; Doom lives in the GPL `doom-cart.js`, with pinned engine/IWAD URLs documented below. Specs in `npm/tests/demo-arcade-doom.spec.ts` prove exact framebuffer pixels, readable displayed HUD dimensions, real play, sustained visible throughput, input, copy/paste, and save/reopen fidelity. |
 | `golf.html` | DOCX GOLF — course play on the editing surface itself, the inverse bet from the arcade: where the arcade painted frames INTO one paragraph through `raw.replaceXml` (the escape hatch), golf makes the real clubs the game. Six holes, each a start document loaded into the live ribbon editor and a target document built beside it; the referee is the comparison engine — a hole is CLEARED when `docxDiffGetRevisions` between your document and the target returns **zero revisions**, and the caddie panel phrases whatever revisions remain as the work left (`remove "Purchasr"`, `move "Governing Law"`, `reformat "Duties" (style)`). Holes escalate across the surface: a one-word fix, clause reordering, scoped defined-term conformance, heading styles (the Style dropdown is the club — the diff cares about `w:pStyle`, not just words), and a table hole (fix a cell, delete a duplicated row from the table toolbar), plus a footnote hole played with Insert → Footnote (the referee reads note parts too). On a phone the caddie collapses to its head strip behind a toggle, and a stuck player can concede with "Show me" — the caddie plays the content-addressed reference line and the scorecard marks the hole assisted. Strokes are counted from the document, not the toolbar: the driver fingerprints `session.save()` on a poll, so one committed burst of editing is one swing, and undo counts. Par/birdie/bogey scoring, a Target view, and a live redline view (`docxDiffCompare` → `convertDocxToHtml`) round out the caddie. The game lives in `docx-golf.js` in this directory (same `?engine=` split as its siblings); its pure logic is tested by `tools/docx-golf.test.mjs`, and `npm/tests/demo-golf.spec.ts` keeps the course honest the way the engine's own evals are kept honest — no hole starts solved, and every hole's content-addressed reference solution reaches zero revisions within par. Boots on tap when iframed. |
 
 ### Playable Doom walkthrough, in the real editor
@@ -21,17 +21,17 @@ then pauses on an editable frame. The lower caption strip labels each step outsi
 document crop, so it covers neither the controls nor the game image.
 
 <p align="center">
-  <img src="../images/arcade-doom.gif" alt="Captioned walkthrough from the live document opener through playable high-contrast Doom and a paused editable frame" width="656">
+  <img src="../images/arcade-doom.gif" alt="Captioned walkthrough from the live document opener through playable full-color Doom and a paused editable frame" width="656">
 </p>
 
-The playable projection is intentionally two-tone: warm off-white ink on near-black shading. It
-preserves the room, sprites, weapon and HUD at **188 × 58** samples while holding the rendered
-paragraph to 32 spans. Four fixed 18pt control paragraphs remain legible above it. The browser
-regression measures completed `replaceXml` +
-`editor.refresh()` cycles over five seconds and requires the playable path to stay at the ten-FPS
-design point. **Esc** turns the frame back into an ordinary editable, undoable, saveable
-paragraph. **P** exposes the open-palette bitmap as a paused-frame inspection mode; it is not
-presented as the playable renderer.
+The playable frame is Doom's complete, lossless **320 × 200 color framebuffer**: view, weapon,
+ammo, health, armor and lives/status face. It is enlarged to the document column so the 11-pixel
+HUD numerals display at least 24 CSS pixels high. Four fixed 18pt control paragraphs remain
+legible above it. Pause and **Ctrl+C / Ctrl+V** duplicates the frame as another native document
+image; **Undo / Redo** becomes a tiny backward/forward frame scrubber. The browser regression
+measures completed image mutations and decoded, animation-frame-presented sources over five
+seconds; both must remain at or above the ten-FPS design point. **Esc** freezes the native inline
+image as ordinary copyable, undoable, saveable document content.
 
 ### The arcade's controls (`arcade-dock.js`)
 
@@ -73,9 +73,9 @@ nav strip and floating controls in `npm/tests/social-demo.spec.ts`.
 `fonts/docxodus-canvas-mono.woff2` (17 KB) is what keeps the Observatory's
 phenomena and the Arcade's game screen on their grid.
 
-Both draw into one Word paragraph as a character grid authored for Courier New —
-92 × 26 cells at 8pt for the Observatory and two of the three cartridges, 96 × 32
-at 8pt for Doom. A grid holds only while
+The Observatory, opener, and first two cartridges draw into one Word paragraph
+as a 92 × 26 character grid authored for Courier New. Doom uses a native image
+and does not depend on glyph metrics. A text grid holds only while
 every cell advances the same width
 — and that is a property of the font the DEVICE resolves, which the document
 has no way to state. The art draws with box drawing (`─ │ ┌`), block elements
@@ -94,9 +94,9 @@ art is densest.
 
 Measured on a Pixel 5 rig with that font situation reproduced, as the spread
 between the widest and narrowest row of the 92-cell grid: **12.1 cells** on the
-attract screen and up to **23.0** in the cartridges, against **0.07 cells** worst
-case with the pin — across both viewports, all three cartridges and all four
-phenomena.
+attract screen and up to **23.0** in the text cartridges, against **0.07 cells**
+worst case with the pin — across both viewports, both text cartridges and all
+four phenomena. The mobile Doom check instead pins its exact 320 × 200 image geometry.
 
 So `createCanvasPin()` in `ascii-scenes.js` pins the canvas paragraph to a font
 we ship, rather than hoping the platform's fallback happens to match: a subset
@@ -126,8 +126,8 @@ rest of this directory it is documentation-site content and is not part of the
 Cartridge 3 is the actual game. `doom-cart.js` drives
 [doomgeneric](https://github.com/grubbyplaya/doomgenericjs) — id Software's
 Doom source, GPL-2.0, compiled to JavaScript — on Freedoom's BSD-licensed
-IWAD, and downsamples its 320×200 framebuffer into the canvas paragraph every
-frame.
+IWAD, and writes its complete 320×200 framebuffer into the media part of one
+inline image in the screen paragraph every frame.
 
 **Neither the engine nor the IWAD is in this repository.** They are 13 MB of
 binary that would show up in every clone forever and never diff usefully, so
@@ -156,60 +156,39 @@ who plays the platformer or the dungeon fetches neither. `?wad=` points the
 cartridge at a **same-origin** IWAD you host yourself and are licensed to play
 (a retail `doom.wad` works), and `?sound=0` boots it mute.
 
-### Two projections, one playable contract
+### One native image, one playable contract
 
-**P** switches how Doom's framebuffer reaches the paragraph, and `?projection=` picks the
-starting projection.
+The screen is not a canvas overlay and it is not a character approximation. Each engine frame is
+encoded losslessly as PNG and passed to `DocxSession.replaceImage`; that replaces the package media
+payload referenced by the existing `w:drawing`. `DocxEditor.refresh()` then performs the same
+single-block OOXML→HTML conversion and DOM reconciliation used after any other session edit. The
+editor contains one `<img>` and no game canvas.
 
-| projection | what it does | document cost | intended use |
-|---|---|---|---|
-| `8bit` (default) | Auto-exposes the live framebuffer, thresholds it to one stable high-contrast ink/shading pair, and uses the sixteen quadrant block characters to preserve a literal **188 × 58** silhouette. Glyph changes are free inside a Word run. | 3 authored runs / 32 rendered spans | Playable, measured at 10.68 completed document repaints/s locally |
-| `bitmap` | Keeps unrestricted framebuffer-derived colour endpoints. An edge-aware allocator merges the least-cost adjacent segment until the 900-picture-run ceiling is met, while ` `, `▀`, `▄` and `█` preserve vertical texture inside each segment for free. | <1,000 rendered spans | Paused-frame detail inspection |
+The acceptance test is deliberately about the displayed document, not optimistic source data:
+the image must decode at exactly 320 × 200, sample pixel-for-pixel against doomgeneric's BGRA
+framebuffer, retain a chromatic palette, fill at least 590 × 440 CSS pixels in the fitted page,
+and make the HUD and its numerals at least 70 and 24 CSS pixels high respectively. Those guards
+make unreadable grayscale, quantized and tiny-screen regressions fail even if they are fast.
 
-The earlier fast projection met its run ceiling but did not meet the visual contract: its
-quantised colour ramps collapsed the room into horizontal bands. The replacement spends colour
-only on one global endpoint pair and spends the free glyph channel on literal local structure.
-At the shipped native size that keeps doorways, enemies, the weapon and HUD distinguishable.
+### Where the ten visible FPS comes from
 
-The detailed bitmap had the inverse failure: a wide fixed colour tolerance met the span ceiling
-by swallowing near-colour texture. Its current allocator starts exact and repeatedly merges the
-adjacent segment whose two-endpoint fit loses the least perceptual information. It is visibly
-detailed, but its conversion cost is deliberately not described as playable.
+The expensive unit is a completed image mutation plus OOXML→HTML refresh, image decode, and
+browser presentation—not a Doom tic. The driver therefore does not schedule the next replacement
+until the current data-URI image is decoded and at least one `requestAnimationFrame` boundary has
+passed. This prevents a fast producer from claiming frames the player never saw.
 
-### Doom's grid is sized for both shape and throughput
+On the live browser path, the integrated five-second turning sample completed **78 document
+frames in 5.02 seconds (15.53 FPS)** and observed **79 distinct decoded image sources on animation
+frames (15.73 visible FPS)**, with approximately 17.7ms mutation and 28.8ms refresh time. The
+browser spec repeats the measurement while holding a real turn key and requires both rates to
+remain at or above 9.5 FPS. It separately proves that the view moves, the HUD stays fixed, and
+keyboard input reaches the real engine.
 
-Doom uses **96 × 32 cells of 8pt text on an 11.45pt exact line**. Inside the bezel, 94 × 29
-picture cells cover roughly 451 × 332pt—the full document column at Doom's 4:3 display shape.
-Quadrant blocks carry four samples per cell, so the framebuffer reaches the document at
-**188 × 58**. This is lower than the discarded 304 × 100 experiment, but it remains legible at
-the actual embed size and removes 21 expensive rendered line spans from every repaint.
-
-The controls do not share that sampling grid. They remain four separate, static **18pt document
-paragraphs**, compute to 24px in the fitted desktop page, and are excluded from per-frame
-conversion.
-
-### Where the ten FPS comes from
-
-The expensive unit is a completed OOXML→HTML refresh, not a Doom tic. A Word run breaks when
-its ink or shading changes, never when its glyph changes. The playable picture therefore shares
-one ink/shading pair, and `frameXml` keeps line breaks inside matching coloured runs. The complete
-frame is three authored runs.
-
-The converter still has to split exact-line-height content around breaks. It previously emitted
-one zero-metric LTR marker span after every such break even though the paragraph's declared LTR
-direction already supplies that information. The converter now omits only that redundant compact
-LTR marker. Ordinary paragraphs are unchanged, and bidi exact-line paragraphs retain their RLM
-marker. The focused library regression covers both branches.
-
-On the same live browser path, that reduced the playable frame from 105 to 32 rendered spans.
-The measured five-second sample completed 54 document refreshes in 5.06 seconds: **10.68 FPS**,
-with 5.36ms mutation and 77.65ms average refresh time. The browser spec repeats that wall-clock
-measurement and also pins the structural ceilings (≤4 authored runs and <40 rendered spans), so
-a visually plausible frame cannot hide a throughput regression.
-
-The pre-existing simplifier guards remain in force too: its faster pairwise run-property
-comparison is checked against the old grouping behavior across the committed corpus, and the
-full .NET and browser suites still exercise ordinary editing, save/reopen and bidi conversion.
+Incremental image rendering needed one general library repair: the isolated render shell now
+copies each embedded image relationship and supplies the normal base64 image handler. A focused
+image-session regression calls `renderBlock()` after insertion and proves it returns a valid data
+PNG and alt text. The full .NET and browser suites remain the guard against collateral library
+regressions.
 
 ### The screen is fenced away from the caption
 
@@ -232,18 +211,11 @@ edit cannot slowly fill the document with Enter-splits — and on the first
 attempt it dutifully deleted the fence on the first pause. It now sweeps up to
 the fence rather than past it.
 
-The current high-contrast picture keeps that contextual saving and reduces the
-frame itself to three authored runs. Together with the compact-break change,
-the live paragraph measures 32 rendered spans at the ten-FPS design point.
-
-The chrome turned out to matter as much as the picture. The old divider and
-side panel spent both page width and one extra run per picture row on text that
-was too small to read. The panel is gone: both bezels borrow their adjacent
-picture colours and merge away, the viewport takes the whole width, and the
-controls are four real 18pt paragraphs.
-
-Both projections are the same Doom and the same document, and either one saves
-as a `.docx` the same way; only high contrast is presented as playable.
+The native image keeps that contextual saving while giving the framebuffer the
+whole document column. Controls stay outside the hot block as four real 18pt
+paragraphs, so neither their conversion cost nor tiny framebuffer text can
+compromise play. The one full-color path is the playable path and saves as a
+`.docx` without a mode switch.
 
 There is deliberately no engine override. `import()` executes whatever it
 fetches, on this page's origin and with its privileges, so a URL parameter

@@ -5,8 +5,8 @@ import { test, expect, Page } from '@playwright/test';
 // Cartridge 3 of THE DOCX ARCADE used to be a hand-written ASCII raycaster
 // walking Freedoom's E1M1 rasterized to a character grid. It is now id
 // Software's own engine — doomgeneric, GPL-2.0, compiled to JavaScript — on
-// Freedoom's BSD-licensed IWAD, with its 320×200 framebuffer downsampled every
-// frame into one Word paragraph as half-block runs.
+// Freedoom's BSD-licensed IWAD, with its lossless 320×200 framebuffer stored
+// every frame as the media payload of one inline image in a Word paragraph.
 //
 // That change moves what a spec can honestly claim. The old one steered a BFS
 // autopilot through geometry it could read out of the grid; this one cannot,
@@ -16,9 +16,9 @@ import { test, expect, Page } from '@playwright/test';
 //
 //   1. it is really Doom     — the engine identifies its own IWAD and its own
 //                              frame counter runs;
-//   2. the picture is in the DOCUMENT — half-block glyphs and per-run `w:shd`
-//                              shading in the canvas paragraph, repainted
-//                              incrementally, one block at a time;
+//   2. the picture is in the DOCUMENT — a mutable image occurrence and PNG
+//                              relationship, repainted incrementally one block
+//                              at a time, never an overlay;
 //   3. the keyboard reaches Doom — driven into a real level through Doom's own
 //                              menu, the view is static when no key is held
 //                              and swings when one is, while the status bar
@@ -116,8 +116,8 @@ test.describe('DOOM inside a Word document', () => {
     // Doom's own counter, not the arcade's: it must keep climbing on its own.
     //
     // The margin is small on purpose. Each painted frame is a whole paragraph
-    // of coloured OOXML runs through replaceXml + refresh, so the frame RATE
-    // is a property of how loaded the machine is — on a busy CI runner it lands near 1 fps,
+    // through PNG encoding, replaceImage, and refresh, so the frame RATE is a
+    // property of how loaded the machine is,
     // which made a +60 margin sit right on this timeout and flake. The claim
     // being made here is liveness, not throughput: a frozen or crashed engine
     // produces no further frames at all, so any sustained advance falsifies
@@ -130,40 +130,54 @@ test.describe('DOOM inside a Word document', () => {
     );
   });
 
-  test('the framebuffer is in the paragraph: half-block runs, shaded, one block repainted', async ({ page }) => {
+  test('the lossless framebuffer is a legible inline DOCX image, one block repainted', async ({ page }) => {
     test.setTimeout(240000);
     await bootDoom(page);
     await page.waitForFunction(() => (window as any).__arcade.frames() >= 4, null, { timeout: 60000 });
 
+    await page.evaluate(() => (window as any).__arcade.pause());
     const screen = await page.evaluate(() => {
       const arcade = (window as any).__arcade;
       const element = arcade.canvasElement() as HTMLElement;
-      const spans = Array.from(element.querySelectorAll('span'));
-      const shaded = spans.filter((span) => {
-        const fill = getComputedStyle(span).backgroundColor;
-        return fill && fill !== 'transparent' && fill !== 'rgba(0, 0, 0, 0)';
-      });
-      const rows = [''];
-      const readRows = (node: Node) => {
-        for (const child of Array.from(node.childNodes)) {
-          if (child.nodeName === 'BR') rows.push('');
-          else if (child.nodeType === Node.TEXT_NODE) {
-            // The HTML converter emits one zero-width bidi guard after each
-            // <br>; it is generated layout chrome, not a document grid cell.
-            rows[rows.length - 1] += (child.textContent ?? '').replace(/[\u200e\u200f]/g, '');
-          }
-          else readRows(child);
+      const image = element.querySelector('img')!;
+      const rect = image.getBoundingClientRect();
+      const sample = document.createElement('canvas');
+      sample.width = 320; sample.height = 200;
+      const context = sample.getContext('2d')!;
+      context.drawImage(image, 0, 0, 320, 200);
+      const rgba = context.getImageData(0, 0, 320, 200).data;
+      let mismatches = 0;
+      const colors = new Set<string>();
+      const chromaticColors = new Set<string>();
+      for (let y = 0; y < 200; y += 10) {
+        for (let x = 0; x < 320; x += 10) {
+          const expected = arcade.game().pixel(x, y)!;
+          const o = (y * 320 + x) * 4;
+          const actual = [rgba[o], rgba[o + 1], rgba[o + 2]];
+          if (actual.some((channel, i) => channel !== expected[i])) mismatches++;
+          colors.add(actual.join(','));
+          if (Math.max(...actual) - Math.min(...actual) > 12) chromaticColors.add(actual.join(','));
         }
-      };
-      readRows(element);
+      }
       const controls = arcade.controlsElements() as HTMLElement[];
+      const occurrences = arcade.session.listImages();
       return {
-        text: arcade.canvasText() as string,
-        rows,
-        columns: rows.map((row) => row.length),
-        spans: spans.length,
-        shaded: shaded.length,
-        inks: new Set(spans.map((span) => getComputedStyle(span).color)).size,
+        source: image.src.slice(0, 32),
+        alt: image.alt,
+        complete: image.complete,
+        naturalWidth: image.naturalWidth,
+        naturalHeight: image.naturalHeight,
+        renderedWidth: rect.width,
+        renderedHeight: rect.height,
+        hudHeight: rect.height * 32 / 200,
+        digitHeight: rect.height * 11 / 200,
+        mismatches,
+        sampledColors: colors.size,
+        chromaticColors: chromaticColors.size,
+        images: element.querySelectorAll('img').length,
+        spans: element.querySelectorAll('span').length,
+        canvasesInDocument: arcade.editor.root.querySelectorAll('canvas').length,
+        occurrences,
         controls: controls.map((line) => line.innerText).join(' '),
         controlsCount: controls.length,
         controlsFontPx: Math.min(...controls.map((line) =>
@@ -174,16 +188,28 @@ test.describe('DOOM inside a Word document', () => {
       };
     });
 
-    // The picture uses solid and partial quadrant blocks from the live frame.
-    expect(screen.text).toMatch(/█/);
-    expect(screen.text).toMatch(/[▀▄]/);
-    // Still the arcade's markdown-safe bezel — no row can open a heading or a
-    // bullet, and no row is blank.
-    expect(screen.text).toContain('┌');
-    expect(screen.rows).toHaveLength(32);
-    expect(screen.columns).toEqual(new Array(32).fill(96));
-    for (const row of screen.rows) expect(row.trim()).not.toBe('');
-    // Controls are large document text, not 8pt framebuffer cells. This is a
+    expect(screen.source).toContain('data:image/png;base64,');
+    expect(screen.alt).toContain('Live Doom framebuffer');
+    expect(screen.complete).toBe(true);
+    expect([screen.naturalWidth, screen.naturalHeight]).toEqual([320, 200]);
+    expect(screen.renderedWidth).toBeGreaterThanOrEqual(590);
+    expect(screen.renderedHeight).toBeGreaterThanOrEqual(440);
+    // Guidepost: Doom's 32-pixel HUD and 11-pixel numerals must be physically
+    // readable in the actual document, not merely present in source pixels.
+    expect(screen.hudHeight).toBeGreaterThanOrEqual(70);
+    expect(screen.digitHeight).toBeGreaterThanOrEqual(24);
+    // The document image is pixel-exact against the engine framebuffer and
+    // retains a real palette; a grayscale/downsampled projection cannot pass.
+    expect(screen.mismatches).toBe(0);
+    expect(screen.sampledColors).toBeGreaterThan(64);
+    expect(screen.chromaticColors).toBeGreaterThan(20);
+    expect(screen.images).toBe(1);
+    expect(screen.spans).toBe(1);
+    expect(screen.canvasesInDocument).toBe(0);
+    expect(screen.occurrences).toHaveLength(1);
+    expect(screen.occurrences[0].contentType).toBe('image/png');
+    expect(screen.occurrences[0].isBroken).toBe(false);
+    // Controls are large document text, not framebuffer pixels. This is a
     // display-size contract, not merely a source-format check: even if the
     // captured editor is reduced to 60% in an embed, the keys must remain at
     // least 14px. The normal fitted desktop page renders them at 24px.
@@ -195,45 +221,53 @@ test.describe('DOOM inside a Word document', () => {
     expect(screen.controlsCount).toBe(4);
     expect(screen.controlsOverflow).toBe(false);
     expect(screen.controlsInsideFrame).toBe(false);
-    // The playable projection deliberately holds one stable high-contrast
-    // endpoint pair across the picture; that is what keeps each row to one
-    // rendered span while the quadrant glyphs carry the structure.
-    expect(screen.inks).toBeGreaterThanOrEqual(2);
-    expect(screen.inks).toBeLessThanOrEqual(3);
-    expect(screen.shaded).toBeGreaterThanOrEqual(29);
     expect(screen.fallback).toBeNull();
   });
 
-  test('the playable projection sustains ten document repaints per second', async ({ page }) => {
+  test('turning sustains ten decoded, visibly presented document frames per second', async ({ page }) => {
     test.setTimeout(300000);
     await bootDoom(page);
     await startLevel(page);
 
-    // Warm the converter, then count COMPLETED document refreshes over a real
-    // wall-clock window. Doom's internal tics do not count here: the screen has
-    // to make it through replaceXml and editor.refresh() to advance `frames`.
+    // Warm the converter, then count both completed session/editor refreshes
+    // and distinct decoded <img> sources observed on animation frames. Doom's
+    // internal tics and repeated static PNGs do not count.
     await page.waitForTimeout(1500);
-    const start = await page.evaluate(() => ({
-      frames: (window as any).__arcade.frames() as number,
-      at: performance.now(),
-    }));
-    await page.waitForTimeout(5000);
-    const result = await page.evaluate((sample) => {
+    const result = await page.evaluate(async () => {
       const arcade = (window as any).__arcade;
-      const elapsed = performance.now() - sample.at;
-      const frames = arcade.frames() - sample.frames;
+      const first = arcade.frames();
+      const started = performance.now();
+      let visible = 0;
+      let priorSource = '';
+      arcade.input.set('ArrowRight', true);
+      while (performance.now() - started < 5000) {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        const image = arcade.canvasElement()?.querySelector('img') as HTMLImageElement | null;
+        if (image?.complete && image.naturalWidth === 320 && image.src !== priorSource) {
+          priorSource = image.src;
+          visible++;
+        }
+      }
+      arcade.input.set('ArrowRight', false);
+      const elapsed = performance.now() - started;
+      const frames = arcade.frames() - first;
+      const element = arcade.canvasElement() as HTMLElement;
       return {
         fps: frames * 1000 / elapsed,
+        visibleFps: visible * 1000 / elapsed,
         runs: arcade.timings().runs as number,
-        spans: (arcade.canvasElement() as HTMLElement).querySelectorAll('span').length,
+        spans: element.querySelectorAll('span').length,
+        images: element.querySelectorAll('img').length,
       };
-    }, start);
+    });
 
-    expect(result.runs).toBeLessThanOrEqual(4);
-    expect(result.spans).toBeLessThan(40);
+    expect(result.runs).toBe(1);
+    expect(result.spans).toBe(1);
+    expect(result.images).toBe(1);
     // Half a frame of scheduling tolerance keeps the guard about the 10 fps
     // design point instead of timer quantisation at either edge of the window.
     expect(result.fps).toBeGreaterThanOrEqual(9.5);
+    expect(result.visibleFps).toBeGreaterThanOrEqual(9.5);
   });
 
   test('the keyboard reaches Doom: turning swings the view, the status bar holds still', async ({ page }) => {
@@ -264,119 +298,45 @@ test.describe('DOOM inside a Word document', () => {
     expect(turningStatusBar, 'the status bar should not move while turning').toBeLessThan(2);
   });
 
-  test('P switches projection, and both stay inside their run budget', async ({ page }) => {
-    test.setTimeout(300000);
-    await bootDoom(page);
-    await startLevel(page);
-
-    /** Spans in the canvas paragraph are the rendered form of OOXML runs, so
-     *  this counts the thing the frame budget is actually made of. */
-    const shape = () => page.evaluate(() => {
-      const el = (window as any).__arcade.canvasElement() as HTMLElement;
-      const spans = Array.from(el.querySelectorAll('span'));
-      const rows = [''];
-      const readRows = (node: Node) => {
-        for (const child of Array.from(node.childNodes)) {
-          if (child.nodeName === 'BR') rows.push('');
-          else if (child.nodeType === Node.TEXT_NODE) {
-            rows[rows.length - 1] += (child.textContent ?? '').replace(/[\u200e\u200f]/g, '');
-          }
-          else readRows(child);
-        }
-      };
-      readRows(el);
-      const shaded = spans.filter((s) => {
-        const f = getComputedStyle(s).backgroundColor;
-        return f && f !== 'transparent' && f !== 'rgba(0, 0, 0, 0)';
-      });
-      return {
-        spans: spans.length,
-        runs: (window as any).__arcade.timings().runs as number,
-        shaded: shaded.length,
-        inks: new Set(spans.map((s) => getComputedStyle(s).color)).size,
-        text: (window as any).__arcade.canvasText() as string,
-        rows,
-        projection: (window as any).__arcade.game().projection as string,
-      };
-    });
-
-    // High contrast is the default, because it is the playable projection.
-    const eight = await shape();
-    expect(eight.projection).toBe('8bit');
-    // The whole picture shares one endpoint pair. The 29 picture rows are one
-    // visible span each, while the authored XML remains three runs across all
-    // line breaks; either ceiling moving means the 10 fps budget regressed.
-    expect(eight.spans).toBeLessThan(40);
-    expect(eight.runs).toBeLessThanOrEqual(4);
-    expect(eight.shaded).toBeGreaterThanOrEqual(29);
-    expect(eight.inks).toBeLessThanOrEqual(3);
-    // Quadrant blocks are where the resolution comes from: they carry four
-    // sub-pixels per cell instead of two, for no extra runs. Seeing them is
-    // the evidence the picture is sampled at 188 x 58 rather than 94 x 58.
-    expect(eight.text).toMatch(/[▘▝▖▗▌▐▚▞▛▜▙▟]/);
-    // Solid quadrants only. The shade characters approximate TONE rather than
-    // carrying detail, and at the shipped cell size they read as dots.
-    expect(eight.text).not.toMatch(/[░▒▓]/);
-
-    // The key is claimed by the arcade and handled inside the cartridge — it
-    // must never reach Doom, which has its own meaning for most letters.
-    await page.keyboard.press('KeyP');
-    await page.waitForFunction(
-      () => (window as any).__arcade.game().projection === 'bitmap', null, { timeout: 60000 });
-    // Let a frame paint in the new projection before measuring.
-    const before = await page.evaluate(() => (window as any).__arcade.frames());
-    await page.waitForFunction((n) => (window as any).__arcade.frames() > n + 1, before,
-      { timeout: 120000 });
-
-    const bitmap = await shape();
-    expect(bitmap.projection).toBe('bitmap');
-    expect(bitmap.shaded).toBeGreaterThanOrEqual(29);   // every picture row shades
-    // Edge-aware segment merging is this projection's whole frame budget:
-    // without it a photographic downsample gives nearly every cell its own
-    // run. The painter allocates 900 picture runs, leaving the document chrome
-    // inside this established rendered-span ceiling.
-    expect(bitmap.spans).toBeLessThan(1200);
-    // The detailed projection derives unrestricted endpoints from the
-    // framebuffer, so its palette is open where the 8-bit one is closed.
-    expect(bitmap.inks).toBeGreaterThan(eight.inks);
-    // The old fixed-tolerance merge satisfied the span ceiling by turning
-    // near-colour wall and floor texture into horizontal bars. Ink/shading
-    // boundaries cost; glyph changes do not. The replacement spends that free
-    // channel so neighbouring half-pixels can keep choosing between each
-    // segment's endpoints. A live E1M1 frame carries thousands of those texture
-    // decisions and both orientations — this is the regression guard for the
-    // actual visible picture, not merely its dimensions and run count.
-    const glyphTransitions = bitmap.rows.slice(2, -1).reduce((total, row) => {
-      const picture = row.slice(1, -1);
-      for (let x = 1; x < picture.length; x++) total += Number(picture[x] !== picture[x - 1]);
-      return total;
-    }, 0);
-    expect(glyphTransitions).toBeGreaterThan(500);
-    expect(bitmap.text).toContain('▄');
-    // Still a document, still the markdown-safe bezel.
-    expect(bitmap.text).toContain('┌');
-    expect(bitmap.rows).toHaveLength(32);
-    for (const row of bitmap.rows) {
-      expect(row).toHaveLength(96);
-      expect(row.trim()).not.toBe('');
-    }
-
-    // And back again.
-    await page.keyboard.press('KeyP');
-    await page.waitForFunction(
-      () => (window as any).__arcade.game().projection === '8bit', null, { timeout: 60000 });
-  });
-
-  test('the paused frame copies and pastes as a real block, runs and shading intact', async ({ page }) => {
+  test('the paused inline frame copies, pastes, saves, and reopens as a real image block', async ({ page }) => {
     test.setTimeout(300000);
     await bootDoom(page);
     await startLevel(page);
     await page.waitForFunction(() => (window as any).__arcade.frames() >= 4, null, { timeout: 60000 });
 
+    // Leave several visibly distinct turns in the session history. Each
+    // replaceImage is one normal undo unit, which makes the paused document a
+    // tiny frame scrubber as well as a still image.
+    const turnFrom = await page.evaluate(() => (window as any).__arcade.frames());
+    await page.keyboard.down('ArrowRight');
+    await page.waitForFunction(
+      (n) => (window as any).__arcade.frames() >= n + 5,
+      turnFrom,
+      { timeout: 60000 },
+    );
+    await page.keyboard.up('ArrowRight');
+
     // Pause first: the frame has to stop moving before it can be selected, and
     // pausing is the cabinet's whole claim — it was a document the whole time.
     await page.evaluate(() => (window as any).__arcade.pause());
     await page.waitForTimeout(500);
+
+    const scrubbed = await page.evaluate(() => {
+      const arcade = (window as any).__arcade;
+      const source = () => (arcade.canvasElement() as HTMLElement)
+        .querySelector<HTMLImageElement>('img')!.src;
+      const forward = source();
+      arcade.editor.undo();
+      const backward = source();
+      (window as any).__scrubbedDoomSource = backward;
+      (window as any).__forwardDoomSource = forward;
+      return {
+        movedBackward: backward !== forward,
+        imageCount: arcade.session.listImages().length,
+      };
+    });
+    expect(scrubbed.movedBackward, 'Undo should reveal the prior framebuffer').toBe(true);
+    expect(scrubbed.imageCount).toBe(1);
 
     const before = await page.evaluate(() =>
       (window as any).__arcade.editor.root.querySelectorAll('[data-anchor]').length as number);
@@ -393,9 +353,20 @@ test.describe('DOOM inside a Word document', () => {
     await page.keyboard.press('Control+C');
     await page.waitForTimeout(300);
 
+    // Copy captured the backward frame. Redo now restores the later one, so a
+    // pasted copy can prove it came from what the editor displayed at copy
+    // time rather than from the game loop's last-frame cache.
+    const movedForward = await page.evaluate(() => {
+      const arcade = (window as any).__arcade;
+      arcade.editor.redo();
+      return (arcade.canvasElement() as HTMLElement)
+        .querySelector<HTMLImageElement>('img')!.src === (window as any).__forwardDoomSource;
+    });
+    expect(movedForward, 'Redo should restore the later framebuffer').toBe(true);
+
     // Paste with the caret in the last block. The editor commits TEXT diffs, so
-    // a native paste would drop the colour; the cabinet inserts the paragraph's
-    // own OOXML instead, which is what this is checking for.
+    // a native paste would flatten/drop document structure; the cabinet inserts
+    // a fresh native drawing through the public image API instead.
     await page.evaluate(() => {
       const blocks = (window as any).__arcade.editor.root.querySelectorAll('[data-anchor]');
       const last = blocks[blocks.length - 1] as HTMLElement;
@@ -416,29 +387,28 @@ test.describe('DOOM inside a Word document', () => {
       const screen = arcade.canvasElement() as HTMLElement;
       const blocks = arcade.editor.root.querySelectorAll('[data-anchor]') as NodeListOf<HTMLElement>;
       const copy = Array.from(blocks)
-        .filter((block) => block !== screen && block.querySelectorAll('span').length > 25)
+        .filter((block) => block !== screen && block.querySelector('img[alt^="Live Doom framebuffer"]'))
         .pop();
-      const spans = Array.from(copy?.querySelectorAll('span') ?? []) as HTMLElement[];
+      const screenImage = screen.querySelector('img') as HTMLImageElement;
+      const copiedImage = copy?.querySelector('img') as HTMLImageElement | null;
       return {
-        text: copy?.textContent ?? '',
-        screenText: screen.textContent ?? '',
-        spans: spans.length,
-        shaded: spans.filter((span) => {
-          const fill = getComputedStyle(span).backgroundColor;
-          return fill && fill !== 'transparent' && fill !== 'rgba(0, 0, 0, 0)';
-        }).length,
-        inks: new Set(spans.map((span) => getComputedStyle(span).color)).size,
+        copied: !!copy,
+        imageCount: copy?.querySelectorAll('img').length ?? 0,
+        sameSource: copiedImage?.src === screenImage.src,
+        matchesCopied: copiedImage?.src === (window as any).__scrubbedDoomSource,
+        natural: [copiedImage?.naturalWidth, copiedImage?.naturalHeight],
       };
     });
 
-    // The copy is the frame: same characters, and the runs came across as runs.
-    expect(pasted.text).toBe(pasted.screenText);
-    expect(pasted.shaded).toBeGreaterThanOrEqual(29);
-    expect(pasted.inks).toBeGreaterThanOrEqual(2);
+    expect(pasted.copied).toBe(true);
+    expect(pasted.imageCount).toBe(1);
+    expect(pasted.sameSource, 'the copied older frame must differ from the redone live frame').toBe(false);
+    expect(pasted.matchesCopied, 'paste must preserve the frame visible when Copy ran').toBe(true);
+    expect(pasted.natural).toEqual([320, 200]);
 
     // And it is in the document, not just in the DOM — it survives a save and
-    // reopen with its shading, which is the difference between a real block and
-    // a browser paste the next commit would flatten.
+    // reopen as embedded PNG data, which is the difference between a real block
+    // and a browser-only paste the next commit would flatten.
     const saved = await page.evaluate(() => {
       const arcade = (window as any).__arcade;
       const bytes: Uint8Array = arcade.save();
@@ -446,12 +416,12 @@ test.describe('DOOM inside a Word document', () => {
       const html = arcade.bridge.RenderHtml(handle, 'doom-', false, false, 1) as string;
       arcade.bridge.CloseSession(handle);
       const parsed = new DOMParser().parseFromString(html, 'text/html');
-      const screens = Array.from(parsed.querySelectorAll<HTMLElement>('p[data-anchor]'))
-        .filter((paragraph) => (paragraph.textContent ?? '').includes('DOOM'));
-      return { count: screens.length, html: screens.map((s) => s.innerHTML).join('') };
+      const images = Array.from(parsed.querySelectorAll<HTMLImageElement>(
+        'img[alt^="Live Doom framebuffer"]'));
+      return { count: images.length, sources: images.map((image) => image.src.slice(0, 32)) };
     });
     expect(saved.count).toBeGreaterThanOrEqual(2);
-    expect(saved.html).toMatch(/background/i);
+    expect(saved.sources.every((source: string) => source.includes('data:image/png;base64,'))).toBe(true);
   });
 
   test('a cross-origin IWAD is refused rather than fetched', async ({ page }) => {
@@ -499,27 +469,27 @@ test.describe('DOOM inside a Word document', () => {
     const result = await page.evaluate(() => {
       const arcade = (window as any).__arcade;
       arcade.pause();
-      const text = arcade.canvasText() as string;
+      const source = (arcade.canvasElement() as HTMLElement).querySelector('img')?.getAttribute('src') ?? '';
       const bytes: Uint8Array = arcade.save();
       const handle = arcade.bridge.OpenSession(bytes, '');
       const html = arcade.bridge.RenderHtml(handle, 'doom-', false, false, 1) as string;
       const parsed = new DOMParser().parseFromString(html, 'text/html');
-      const canvas = Array.from(parsed.querySelectorAll<HTMLElement>('p[data-anchor]'))
-        .find((paragraph) => (paragraph.textContent ?? '').includes('DOOM')) ?? null;
+      const image = parsed.querySelector<HTMLImageElement>('img[alt^="Live Doom framebuffer"]');
       arcade.bridge.CloseSession(handle);
       return {
         playing: arcade.playing() as boolean,
         magic: Array.from(bytes.slice(0, 2)),
-        text,
-        reopenedText: canvas?.textContent ?? '',
-        reopenedHtml: canvas?.innerHTML ?? '',
+        source: source.slice(0, 32),
+        reopenedSource: image?.src.slice(0, 32) ?? '',
+        reopenedAlt: image?.alt ?? '',
       };
     });
 
     expect(result.playing).toBe(false);
     expect(result.magic).toEqual([0x50, 0x4b]); // a real ZIP, i.e. a real .docx
-    // The frame survives the round trip through the file, shading and all.
-    expect(result.reopenedText).toBe(result.text);
-    expect(result.reopenedHtml).toMatch(/background/i);
+    // The frame survives the round trip through the file as embedded PNG data.
+    expect(result.source).toContain('data:image/png;base64,');
+    expect(result.reopenedSource).toContain('data:image/png;base64,');
+    expect(result.reopenedAlt).toContain('Live Doom framebuffer');
   });
 });

@@ -1,13 +1,14 @@
 // THE DOCX ARCADE — playable games rendered INTO a live Word document.
 //
 // Sibling of ascii-scenes.js (the Observatory) and same contract: the game
-// screen is ONE Word paragraph of colored monospaced runs, animated by a
-// Unid-preserving `DocxSession.raw.replaceXml` + `DocxEditor.refresh()` per
-// frame — the editor's public "the session changed behind your back" seam,
-// which reconciles exactly one block in continuous mode. No canvas, no PNG,
-// no separate machinery: pause (or click the screen) and the game is only a
-// document — the caret lands in it, the whole ribbon works, Ctrl+Z rewinds
-// frame by frame, and Save downloads the current frame as a real .docx.
+// screen is ONE Word paragraph, animated through the session API plus
+// `DocxEditor.refresh()` — the editor's public "the session changed behind
+// your back" seam, which reconciles exactly one block in continuous mode.
+// The two text cartridges replace colored OOXML runs; Doom replaces one
+// native inline image because its HUD must remain genuinely readable. Nothing
+// is mounted over the document: pause (or click the screen) and the game is
+// only a paragraph, Ctrl+Z rewinds frames, and Save stores the current frame
+// in a real .docx.
 //
 // What the games add over the Observatory is INPUT, in both directions:
 //   - keyboard in: a capture-phase listener owns WASD/arrows/Space while the
@@ -1208,11 +1209,11 @@ export function seedArcade(session) {
   };
 
   // Controls have to remain readable at the size the document is actually
-  // shown. Doom uses a deliberately dense 5pt framebuffer grid; putting its
-  // key list inside that grid made the words technically present but not
-  // honestly legible. Keep them as large 18pt document text, outside the
-  // frame's hot paragraph and behind the tiny context fence, so every repaint
-  // still converts only the screen and its one-character neighbours.
+  // shown. Putting Doom's key list inside its screen made the words technically
+  // present but not honestly legible. Keep them as large 18pt document text,
+  // outside the frame's hot paragraph and behind the tiny context fence, so
+  // every repaint still converts only the screen and its one-character
+  // neighbours.
   // Four deliberately short paragraphs make the complete map fit at 18pt in
   // fixed-layout renderers that do not reflow one long OOXML run. They stay
   // outside the screen's conversion fence, so this costs nothing per frame.
@@ -1247,9 +1248,10 @@ export function seedArcade(session) {
 
   // A real footnote, because the game screen is a real document.
   check(session.insertFootnote(captionAnchor, 7, // after "loading"
-    'Every frame of the game is OOXML: colored runs and `w:br` breaks in one Word paragraph, ' +
-    'swapped in by `DocxSession.raw.replaceXml` and repainted incrementally by `DocxEditor.refresh()`. ' +
-    'Pause mid-jump and Save: the frame downloads as a real .docx.'), 'footnote');
+    'Every frame is OOXML document content: the text cartridges author colored runs and `w:br` ' +
+    'breaks, while Doom replaces the media payload of one native inline image through the public ' +
+    'session API. `DocxEditor.refresh()` repaints one block incrementally. Pause and Save: the frame ' +
+    'downloads as a real .docx.'), 'footnote');
 
   const seedXml = session.raw.getXml(canvasAnchor);
   const gt = seedXml.indexOf('>');
@@ -1387,6 +1389,9 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
   let frames = 0;
   let fps = 0;
   let lastRuns = 0;
+  let canvasImageId = null;
+  let lastSurface = 'runs';
+  let lastImageOptions = null;
   let lastFrameEnd = performance.now();
   const timings = { mutate: 0, refresh: 0 };
   let interval = Number(ui.pace.value);
@@ -1431,13 +1436,21 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
     setControls(cart.controls);
     session.replaceText(seeded.captionAnchor, cart.caption);
     ui.hint.innerHTML = cart.hint +
-      ' · <b>Esc</b> pauses/resumes · <b>Undo</b> rewinds frames · <b>Save</b> ships the frame as .docx';
+      ' · <b>Esc</b> pauses/resumes · <b>Undo/Redo</b> scrubs frames · <b>Save</b> ships the frame as .docx';
   }
 
   function paintGrid(frame, label) {
     const { xml, runs } = frameXml(openTag, frame.grid, frame.bg, frame.metrics);
     lastRuns = runs;
+    lastSurface = 'runs';
+    lastImageOptions = null;
     const t0 = performance.now();
+    if (canvasImageId) {
+      const removed = session.removeImage(canvasImageId);
+      if (!removed.success) throw new Error(`removeImage: ${removed.error?.code} ${removed.error?.message}`);
+      canvasAnchor = removed.modified?.[0]?.id ?? canvasAnchor;
+      canvasImageId = null;
+    }
     const res = session.raw.replaceXml(canvasAnchor, xml);
     const t1 = performance.now();
     if (!res.success) throw new Error(`replaceXml: ${res.error?.code} ${res.error?.message}`);
@@ -1457,13 +1470,60 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
     ui.stats.innerHTML =
       `<b>${label}</b> · frame <b>${frames}</b> · <b>${fps.toFixed(1)}</b> fps · ` +
       `replaceXml <b>${timings.mutate.toFixed(1)}</b> ms · refresh <b>${timings.refresh.toFixed(1)}</b> ms · ` +
-      `<b>${lastRuns}</b> runs · ` +
+      `<b>${lastRuns}</b> ${lastSurface} · ` +
       (fb ? `remounted (${fb})` : `<span class="inc">incremental — one block repainted</span>`);
+    return null;
+  }
+
+  /** Paint a cartridge frame as a real inline DOCX image. Both insertion and
+   *  replacement go through the public session surface; editor.refresh then
+   *  asks the standard single-block converter for an <img> backed by that
+   *  package media part. No out-of-document canvas is mounted. */
+  function paintImage(frame, label) {
+    lastRuns = 1;
+    lastSurface = 'image';
+    lastImageOptions = { ...frame.imageOptions };
+    const t0 = performance.now();
+    let res;
+    if (canvasImageId) {
+      res = session.replaceImage(canvasImageId, frame.imageBytes);
+    } else {
+      const cleared = session.raw.replaceXml(canvasAnchor, openTag + '</w:p>');
+      if (!cleared.success) throw new Error(`clear image paragraph: ${cleared.error?.code} ${cleared.error?.message}`);
+      canvasAnchor = cleared.modified?.[0]?.id ?? cleared.created?.[0]?.id ?? canvasAnchor;
+      res = session.insertImage(canvasAnchor, 0, frame.imageBytes, frame.imageOptions);
+      canvasImageId = res.imageId ?? null;
+    }
+    const t1 = performance.now();
+    if (!res.success) throw new Error(`image frame: ${res.error?.code} ${res.error?.message}`);
+    canvasAnchor = res.modified?.[0]?.id ?? res.created?.[0]?.id ?? canvasAnchor;
+    pinCanvas(canvasAnchor);
+    editor.refresh();
+    const t2 = performance.now();
+
+    const mix = (a, b) => (a === 0 ? b : a * 0.9 + b * 0.1);
+    timings.mutate = mix(timings.mutate, t1 - t0);
+    timings.refresh = mix(timings.refresh, t2 - t1);
+    fps = mix(fps, 1000 / Math.max(1, t2 - lastFrameEnd));
+    lastFrameEnd = t2;
+    frames++;
+
+    const fb = editor.lastReconcileFallback;
+    ui.stats.innerHTML =
+      `<b>${label}</b> · frame <b>${frames}</b> · <b>${fps.toFixed(1)}</b> fps · ` +
+      `replaceImage <b>${timings.mutate.toFixed(1)}</b> ms · refresh <b>${timings.refresh.toFixed(1)}</b> ms · ` +
+      `<b>1</b> inline image · ` +
+      (fb ? `remounted (${fb})` : `<span class="inc">incremental — one block repainted</span>`);
+    return canvasEl()?.querySelector('img') ?? null;
   }
 
   function drawFrame() {
-    if (mode === 'intro') paintGrid(introFrame(introT), 'attract mode');
-    else paintGrid(cart.render(), cart.label);
+    if (mode === 'intro') return paintGrid(introFrame(introT), 'attract mode');
+    else {
+      const frame = cart.render();
+      if (frame.imageBytes) return paintImage(frame, cart.label);
+      return paintGrid(frame, cart.label);
+    }
   }
 
   /** Drop the coin: leave the attract screen and hand the canvas (and the
@@ -1485,6 +1545,7 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
     const started = performance.now();
     const dt = Math.min(0.2, (started - lastWall) / 1000);
     lastWall = started;
+    let image = null;
     try {
       if (mode === 'intro') {
         introT += dt;
@@ -1498,14 +1559,30 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
       } else {
         cart.tick(dt, input);
         input.endTick();
-        drawFrame();
+        image = drawFrame();
       }
     } catch (e) {
       playing = false;
       ui.stats.textContent = 'halted: ' + e.message;
       throw e;
     }
-    timer = setTimeout(loop, Math.max(0, interval - (performance.now() - started)));
+    const delay = Math.max(0, interval - (performance.now() - started));
+    const schedule = () => {
+      if (!playing) return;
+      timer = setTimeout(loop, delay);
+    };
+    // Replacing a data-URI <img> is a completed document refresh but image
+    // decode/presentation is asynchronous. Never overwrite one native image
+    // with the next before the browser has decoded it and offered it to a
+    // paint frame; this makes the displayed FPS equal the document FPS rather
+    // than flooding the DOM with intermediate sources no player can see.
+    if (image instanceof HTMLImageElement) {
+      const afterDecode = () => requestAnimationFrame(schedule);
+      if (image.complete && image.naturalWidth > 0) afterDecode();
+      else image.decode().catch(() => {}).then(afterDecode);
+    } else {
+      schedule();
+    }
   }
 
   /** Re-read the game world from the document. Called on every resume: the
@@ -1560,8 +1637,11 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
       playing = false;
       clearTimeout(timer);
       ui.playpause.textContent = '▶ Resume';
-      ui.stats.innerHTML = 'paused — the screen is an ordinary paragraph now. ' +
-        '<b>Type into it</b>, then Resume to make it real.';
+      ui.stats.innerHTML = lastSurface === 'image'
+        ? 'paused — this frame is a real DOCX image. <b>Ctrl+C / Ctrl+V</b> duplicates it; ' +
+          '<b>Undo / Redo</b> scrubs backward and forward through frames.'
+        : 'paused — the screen is an ordinary paragraph now. ' +
+          '<b>Type into it</b>, then Resume to make it real.';
     }
   }
 
@@ -1616,22 +1696,45 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
   // Copy and paste the screen paragraph.
   //
   // Selecting the paused frame and pressing Ctrl+C already works — it is
-  // ordinary document text, and the clipboard gets the picture. Pasting it back
-  // is where the cabinet has to help: the editor commits TEXT diffs (see its
-  // MVP scope), so a native paste would drop every colour the frame is made of
-  // and leave a grey wall of block characters. So the copy stashes what the
-  // frame actually IS — the paragraph's own OOXML — and the paste inserts that
-  // as a real block: same runs, same shading, undoable, and in the .docx.
+  // ordinary document content, and the clipboard gets the picture. Pasting it
+  // back is where the cabinet has to help: the editor's native paste surface is
+  // text-only today. The copy therefore stashes either the paragraph OOXML or
+  // the native image bytes, and paste inserts a real block through the public
+  // image API. That also mints fresh drawing ids instead of duplicating the
+  // source paragraph's non-visual ids.
   //
   // Both listeners are scoped to the screen paragraph. Any other copy or paste
   // in the document is the browser's, untouched.
   let copiedFrame = null;
+
+  function dataImageBytes(element) {
+    const source = element?.querySelector('img')?.getAttribute('src') ?? '';
+    const comma = source.indexOf(',');
+    if (!source.startsWith('data:image/') || comma < 0 || !source.slice(0, comma).includes(';base64')) {
+      return null;
+    }
+    const binary = atob(source.slice(comma + 1));
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+
   editor.root.addEventListener('copy', () => {
     const sel = window.getSelection();
     const el = canvasEl();
-    copiedFrame = el && sel && !sel.isCollapsed && sel.containsNode(el, true)
-      ? session.raw.getXml(canvasAnchor)
-      : null;
+    const overlaps = el && sel && !sel.isCollapsed && Array.from({ length: sel.rangeCount }, (_, i) =>
+      sel.getRangeAt(i).intersectsNode(el)).some(Boolean);
+    const visibleImage = overlaps && lastImageOptions ? dataImageBytes(el) : null;
+    copiedFrame = overlaps ? {
+      xml: session.raw.getXml(canvasAnchor),
+      image: visibleImage && {
+        // Read the rendered document image rather than the producer's last
+        // frame cache. If Undo has scrubbed backward, copy must capture the
+        // frame now visible in the editor, not the future frame it replaced.
+        bytes: visibleImage,
+        options: { ...lastImageOptions },
+      },
+    } : null;
   });
   editor.root.addEventListener('paste', (event) => {
     if (!copiedFrame) return;
@@ -1660,7 +1763,14 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
     const seed = session.raw.getXml(created);
     let open = seed.slice(0, seed.indexOf('>') + 1);
     if (open.endsWith('/>')) open = `${open.slice(0, -2)}>`;
-    session.raw.replaceXml(created, open + copiedFrame.slice(copiedFrame.indexOf('>') + 1));
+    if (copiedFrame.image) {
+      const inserted = session.insertImage(created, 0,
+        copiedFrame.image.bytes, copiedFrame.image.options);
+      if (!inserted.success) throw new Error(
+        `paste image: ${inserted.error?.code} ${inserted.error?.message}`);
+    } else {
+      session.raw.replaceXml(created, open + copiedFrame.xml.slice(copiedFrame.xml.indexOf('>') + 1));
+    }
     editor.refresh();
   });
 

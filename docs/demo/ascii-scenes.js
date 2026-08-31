@@ -277,10 +277,8 @@ function rowRuns(chars, colors) {
   return runs;
 }
 
-/** The same merge for a grid that also carries per-cell BACKGROUNDS (the Doom
- *  cartridge's half-block framebuffer: `▀` with the top pixel as ink and the
- *  bottom pixel as run shading, which doubles the vertical resolution of the
- *  screen paragraph).
+/** The same merge for a grid that also carries per-cell BACKGROUNDS (retained
+ *  for shaded-grid cartridges and renderer tests).
  *
  *  A background makes a space VISIBLE, so unlike rowRuns above, every cell
  *  counts here: a run breaks whenever either the ink or the shading changes.
@@ -306,8 +304,7 @@ function rowRunsShaded(chars, colors, bgs) {
  *  a pPr with shading + exact line height, then per row: colored runs joined
  *  by w:br.
  *
- *  `grid.bgs` is optional. When a grid supplies it — the Doom cartridge does,
- *  because a real 320×200 framebuffer needs more than one color per cell — a
+ *  `grid.bgs` is optional. When a grid supplies it, a
  *  run also carries `w:shd`, so a cell can paint an ink color and a background
  *  color independently. Grids without it (the Observatory's phenomena, the
  *  attract screen, the other two cartridges) emit exactly the XML they always
@@ -346,8 +343,8 @@ export function frameXml(openTag, grid, bg, metrics) {
       const prior = stream[stream.length - 1];
       // A line break is content inside the coloured run, not a standalone
       // empty run. Matching row endpoints can therefore stay in the same run;
-      // the high-contrast Doom projection deliberately uses one stable pair
-      // so all 10,904 free quadrant bits cost one picture run.
+      // so a shaded grid with stable endpoints can cross row boundaries
+      // without paying for redundant break-only runs.
       if (prior && prior.color === color && prior.bg === cellBg) {
         if (br) prior.body += '<w:br/>';
         prior.body += `<w:t xml:space="preserve">${esc(text)}</w:t>`;
@@ -447,7 +444,7 @@ export function createCanvasPin() {
       // `:has()` simply drops this one and keeps the anchor pin above.
       `[data-anchor] ${CANVAS_RUN} {${CANVAS_GRID_RULES} }\n` +
       `[data-anchor]:has(> ${CANVAS_RUN}) { overflow-x: hidden;${CANVAS_GRID_RULES} }\n` +
-      // Run shading (the Doom cartridge's half-block framebuffer) paints the
+      // Run shading in legacy/shaded grids paints the
       // INLINE box, whose height is the font's content area — a shade under
       // the exact 10pt line box the canvas pins. Left alone that leaves a hair
       // of paragraph fill between every pair of rows, which reads as scan
@@ -455,10 +452,9 @@ export function createCanvasPin() {
       // the painted box WITHOUT touching line height (CSS 2.1 §10.6.1), so
       // this closes the seam and changes no metric the grid depends on.
       `[data-anchor="${unid}"] span, [data-anchor] ${CANVAS_RUN}` +
-      // Doom's exact 11.45pt line has less leading than the shared 10pt grid
-      // relative to its 8pt text, and is especially sensitive to a one-device-
-      // pixel gap. Slight overlap is harmless for unshaded text and closes the
-      // shaded line box on both grids without changing either measured pitch.
+      // A compact exact line has little leading and is especially sensitive to
+      // a one-device-pixel gap. Slight overlap is harmless for unshaded text
+      // and closes a shaded line box without changing its measured pitch.
       // Converter-authored spans carry an inline `padding: 0` shorthand, so
       // this pin needs the same `!important` strength as the grid properties
       // above. Without it the rule exists but computes to zero — exactly the
