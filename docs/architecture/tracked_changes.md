@@ -644,31 +644,28 @@ var html = WmlToHtmlConverter.ConvertToHtml(wmlDoc, settings);
 
 See [Pagination Architecture](pagination.md) for details on the pagination system.
 
-## Known gap: note insertion under `render_inline` recording is not reversible
+## Note insertion under `render_inline` recording (resolved, #614)
 
-`DocxSession.insertFootnote` / `insertEndnote` applied while the session records
-mutations as tracked changes (`TrackedChangeMode.RenderInline`) produce a mark that
-**reject-all does not undo**. The reference in the body is wrapped in `w:ins` and is
-removed on rejection, but the note *definition* written into `/word/footnotes.xml`
-(or `/word/endnotes.xml`) stays, so the rejected document does not reproduce the
-baseline. `proveRedlineReversibility` reports it as a reject-path divergence in that
-part, and the note's text is still present in the projection afterwards.
+`DocxSession.insertFootnote` / `insertEndnote` under
+`TrackedChangeMode.RenderInline` used to write the citation and the note definition
+as ordinary content, so **reject-all did not undo them**: the note's text survived
+into the "rejected" document and `proveRedlineReversibility` reported a reject-path
+divergence in `/word/footnotes.xml`. Fixed in #625 — the citation is now the
+reversible unit and the definition follows it. The encoding and the note-lifecycle
+rule that prunes an uncited definition are documented in
+[`docx_mutation_api.md`](docx_mutation_api.md#recording-a-note-as-a-tracked-change-issue-614);
+this page does not restate them.
 
-What makes this a defect rather than a documented limitation is the inconsistency:
-the neighbouring operations **fail closed**. `ApplyListFormatRange` under the same
-recording mode refuses with `tracked_operation_unsupported` ("no reversible native
-tracked-change encoding on this document shape; no changes were made") rather than
-writing something it cannot take back. Note insertion should refuse the same way
-until it can encode reversibly — silently writing an irreversible mark is the worse
-of the two failure modes, because the redline looks complete and only fails when
-someone rejects it.
-
-Found while building `docs/demo/redline.html`, whose Act II originally footnoted the
-negotiated liability cap; the demo now inserts a paragraph instead and its
-`docs/demo/tools/redline-theater.test.mjs` guards the step from coming back. The
-demo's finale is what surfaces it: it runs `proveRedlineReversibility` on every run
-and classifies reject-path divergences against a closed set of parts that review
-comments legitimately explain, so a note part shows up as unexplained.
+Worth recording is how it surfaced, because that mechanism is still running.
+`docs/demo/redline.html` footnotes the negotiated liability cap in its Act II and
+then, in the finale, runs `proveRedlineReversibility` over the whole redline and
+classifies each reject-path divergence against a **closed set** of parts that review
+comments legitimately explain. A note part is not in that set, so it showed up as
+unexplained rather than being absorbed by a permissive pattern match. The demo
+re-runs that check on every load, which makes it a live regression guard for the
+fix: `docs/demo/tools/redline-theater.test.mjs` asserts the footnote step is still
+in the script, and `npm/tests/demo-redline.spec.ts` asserts the proof still comes
+back clean with it there.
 
 ## Conclusion
 

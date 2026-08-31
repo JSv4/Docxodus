@@ -163,6 +163,42 @@ test.describe('REDLINE THEATER', () => {
     // And the negotiated positions are gone from the restored text.
     expect(restored).not.toContain('one and one-half times (1.5x)');
     expect(restored).not.toContain('Data Protection');
+    // The footnote is the beat that used to break this (issue #614): its citation
+    // rejected away but the definition stayed in /word/footnotes.xml, so the note
+    // text survived a "full" rejection. #625 made the citation the reversible unit
+    // and prunes the uncited definition, so the side letter must be gone too.
+    expect(restored).not.toContain('side letter of even date');
+  });
+
+  test('the footnote the proof covers is really a tracked citation', async ({ page }) => {
+    await bootTheater(page);
+    await runToFinale(page);
+
+    // Guard against the reversibility proof passing vacuously: it would come back
+    // clean if the note were never written at all. So read the citing paragraph's
+    // own XML out of the redline and check the reference run sits INSIDE a w:ins.
+    // That wrapping is the whole of the #625 fix — it is what makes the citation
+    // rejectable, and the note-lifecycle rule prunes the definition behind it.
+    const cited = await page.evaluate(() => {
+      const engine = (window as any).__theaterEngine;
+      const shadow = engine.openDocxSession((window as any).__theater.redline());
+      try {
+        const match = shadow.grep('months preceding the claim')[0];
+        return {
+          anchor: match?.enclosingAnchor?.id ?? null,
+          xml: match ? shadow.raw.getXml(match.enclosingAnchor.id) : '',
+        };
+      } finally {
+        shadow.close();
+      }
+    });
+    expect(cited.anchor, 'the cap clause is still findable').not.toBeNull();
+    expect(cited.xml).toContain('footnoteReference');
+    const insBlocks = cited.xml.match(/<w:ins\b[\s\S]*?<\/w:ins>/g) ?? [];
+    expect(
+      insBlocks.some((block: string) => block.includes('footnoteReference')),
+      'the footnote reference must be wrapped in w:ins, not written as plain content',
+    ).toBe(true);
   });
 
   test('accepting the redline lands the negotiated terms', async ({ page }) => {

@@ -74,6 +74,17 @@ export function bindFromResult(result) {
   return null;
 }
 
+/** The character offset just past a text match, for ops that address a point inside
+ *  a paragraph rather than the paragraph itself — `insert_footnote`'s
+ *  `characterOffset` is the only one the script uses. An agent gets this the same
+ *  way: it is arithmetic on the span the search already returned, not a second
+ *  lookup. Returns null when the result carries no match to measure. */
+export function offsetAfterMatch(result) {
+  const span = result?.matches?.[0]?.span;
+  if (!span || typeof span.start !== 'number' || typeof span.length !== 'number') return null;
+  return span.start + span.length;
+}
+
 /** Substitute `@name` references from `bindings`, deeply. An unbound reference is
  *  an error rather than a silent literal `"@name"` — a mis-scripted step must fail
  *  loudly, not quietly edit the wrong block. */
@@ -148,6 +159,7 @@ export function validateScript(script, implemented = IMPLEMENTED_TOOLS) {
         if (!bound.has(ref)) problems.push(`${where}: @${ref} is used before it is bound`);
       }
       if (step.bind) bound.add(step.bind);
+      if (step.bindOffset) bound.add(step.bindOffset);
     });
   });
   return problems;
@@ -387,16 +399,34 @@ export const SCRIPT = [
         },
       },
       {
-        // This was a footnote in an earlier cut of the script, and it is a
-        // paragraph now for a reason worth recording: `insert_footnote` under
-        // `render_inline` recording writes a footnote DEFINITION that
-        // reject-all does not remove, so the mark is not reversible — and,
-        // unlike the list-format op above, it does not refuse. See the known
-        // gap noted in docs/architecture/tracked_changes.md.
-        note: 'Record the negotiation history beside the cap',
+        // The marker goes at the END of the clause, not against the figure it
+        // qualifies, and that is the engine's constraint rather than a style
+        // choice: the "1.5x" text was written moments ago as a tracked insertion,
+        // and citing into it puts the reference run inside a w:ins — a revision
+        // nested in a revision, with no independently meaningful resolution.
+        // InsertFootnote refuses that outright ("offset falls inside a revision
+        // or unsupported inline container"). So the script searches the clause's
+        // UNTOUCHED tail and cites past it, which is also where Word convention
+        // puts a marker: after the closing period.
+        note: 'Find the end of the clause, outside the marks, for the marker',
+        tool: 'docxodus_search',
+        args: { mode: 'text', query: 'months preceding the claim.' },
+        bind: 'cap3',
+        bindOffset: 'capMark',
+      },
+      {
+        // A footnote is the beat this act wants, and until #625 it was the one
+        // beat the demo could not have: `insert_footnote` under `render_inline`
+        // wrote a definition into /word/footnotes.xml that reject-all left
+        // behind, so the finale's reversibility proof failed on it (#614). The
+        // citation is now the reversible unit — rejecting removes the reference
+        // run, that leaves the note uncited, and the note-lifecycle rule prunes
+        // the definition in the same resolve. The proof at the end of this run
+        // is what re-checks that on every load.
+        note: 'Footnote the trade that produced this number',
         tool: 'docxodus_create',
         args: {
-          action: 'insert_paragraph', anchorId: '@cap2', position: 'after',
+          action: 'insert_footnote', anchorId: '@cap3', characterOffset: '@capMark',
           markdown: 'The parties agreed this multiple on March 11, 2026; it is recorded in the '
             + 'side letter of even date.',
         },
@@ -556,9 +586,10 @@ export function throughput(callCount, elapsedMs) {
  * `CommentText`/`CommentReference` styles, and the content-types map, the
  * document rels and settings record the new part. So a reject-path divergence
  * confined to these is expected — and a divergence ANYWHERE ELSE is not, which is
- * the point of writing the set out rather than matching a pattern. This list is
- * what caught `insert_footnote` leaving an unremovable `/word/footnotes.xml`
- * behind (see docs/architecture/tracked_changes.md).
+ * the point of writing the set out rather than matching a pattern. Being a closed
+ * set is what caught `insert_footnote` leaving an unremovable `/word/footnotes.xml`
+ * behind (issue #614, fixed in #625); a pattern like /comments|_rels/ would have
+ * excused the note part too and the demo would have reported the redline clean.
  */
 export const COMMENT_ATTRIBUTABLE_PARTS = new Set([
   '/[Content_Types].xml',
@@ -1101,6 +1132,13 @@ export function startTheater({ editor, session, engine, ui, script = SCRIPT, aut
       const bound = bindFromResult(outcome.result);
       if (!bound) throw new Error(`step "${step.note}" bound nothing to @${step.bind}`);
       bindings[step.bind] = bound;
+    }
+    if (step.bindOffset) {
+      const offset = offsetAfterMatch(outcome.result);
+      if (offset === null) {
+        throw new Error(`step "${step.note}" bound no offset to @${step.bindOffset}`);
+      }
+      bindings[step.bindOffset] = offset;
     }
     // Spotlight what this call touched; a search touches nothing.
     const touched = bindFromResult(outcome.result);

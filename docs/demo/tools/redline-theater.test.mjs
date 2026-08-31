@@ -39,6 +39,7 @@ import {
   SPEEDS,
   attributionRollup,
   bindFromResult,
+  offsetAfterMatch,
   classifyDivergences,
   COMMENT_ATTRIBUTABLE_PARTS,
   proofVerdict,
@@ -292,17 +293,61 @@ test('exactly one step demonstrates the engine refusing an irreversible edit', (
   assert.ok(refusals[0].refusalNote, 'a refusal beat must explain itself on the stage');
 });
 
-test('the script writes no footnote under recording', () => {
-  // insert_footnote under render_inline leaves a footnote definition that
-  // reject-all cannot remove, so the redline would not be reversible. Guarded
-  // here so the step cannot quietly come back.
-  for (const act of SCRIPT) {
-    for (const step of act.steps) {
-      assert.notEqual(step.args?.action, 'insert_footnote',
-        `${act.id}: insert_footnote is not reversible under tracked-change recording`);
-      assert.notEqual(step.args?.action, 'insert_endnote', `${act.id}: same for endnotes`);
-    }
+test('the script still footnotes under recording, which is what #614 regressed on', () => {
+  // The inverse of an earlier guard, and deliberately so. insert_footnote under
+  // render_inline used to leave a definition reject-all could not remove, so the
+  // step was taken out of the script; #625 made the citation the reversible unit
+  // and the step came back. Keeping it here means the demo's reversibility proof
+  // runs over a footnote on every load — remove the step and the fix loses the
+  // one end-to-end check that exercises it through the wire.
+  const notes = SCRIPT.flatMap((act) => act.steps.filter(
+    (s) => s.args?.action === 'insert_footnote' || s.args?.action === 'insert_endnote'));
+  assert.equal(notes.length, 1, 'exactly one note-insertion beat');
+  assert.equal(notes[0].args.action, 'insert_footnote');
+});
+
+test('the footnote cites a live offset rather than a hardcoded one', () => {
+  // The cap paragraph is rewritten before the footnote lands, so the span from
+  // the search that bound @cap2 is stale by then. The script must re-search and
+  // bind a fresh offset; a literal number here would drift the moment any
+  // earlier act changes the sentence.
+  const act = SCRIPT.find((a) => a.id === 'act-2');
+  const note = act.steps.find((s) => s.args?.action === 'insert_footnote');
+  assert.equal(typeof note.args.characterOffset, 'string',
+    'characterOffset must be a @reference, not a literal');
+  assert.ok(note.args.characterOffset.startsWith('@'));
+  const source = act.steps.find((s) => s.bindOffset === note.args.characterOffset.slice(1));
+  assert.ok(source, 'the offset reference must be bound by an earlier search step');
+  assert.equal(source.tool, 'docxodus_search');
+  assert.ok(act.steps.indexOf(source) < act.steps.indexOf(note), 'bound before it is used');
+});
+
+test('offsetAfterMatch measures past the match, and refuses to guess', () => {
+  assert.equal(offsetAfterMatch({ matches: [{ span: { start: 12, length: 25 } }] }), 37);
+  // A zero-length match at the start is still an offset, not an absence — the
+  // falsy-vs-null distinction matters because 0 is a legal characterOffset.
+  assert.equal(offsetAfterMatch({ matches: [{ span: { start: 0, length: 0 } }] }), 0);
+  for (const empty of [null, undefined, {}, { matches: [] }, { matches: [{}] },
+    { anchors: [{ id: 'p:body:x' }] }]) {
+    assert.equal(offsetAfterMatch(empty), null);
   }
+});
+
+test('validateScript accepts an offset bound by bindOffset', () => {
+  const search = {
+    tool: 'docxodus_search', args: { mode: 'text', query: 'x' },
+    bind: 'p', bindOffset: 'at',
+  };
+  const cite = {
+    tool: 'docxodus_create',
+    args: { action: 'insert_footnote', anchorId: '@p', characterOffset: '@at', markdown: 'n' },
+  };
+  const act = { id: 'a', title: 'T', counsel: { name: 'C' } };
+  assert.deepEqual(validateScript([{ ...act, steps: [search, cite] }]), []);
+  // ...and still catches the offset being used before anything binds it.
+  const problems = validateScript([{ ...act, steps: [{ ...search, bindOffset: undefined }, cite] }]);
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /@at is used before it is bound/);
 });
 
 test('every act names a distinct counsel, so attribution is visible', () => {

@@ -18,18 +18,23 @@ All notable changes to this project will be documented in this file.
   with zero content differences, with reject-path package divergences classified against
   a closed set of parts that review comments legitimately explain. One scripted call is
   *expected to be refused* — list membership has no reversible tracked-change encoding,
-  so the engine declines it rather than writing a mark reject-all could not undo.
+  so the engine declines it rather than writing a mark reject-all could not undo. That
+  closed-set classification is also what found the note-insertion defect fixed in #625:
+  a footnote's definition survived reject-all, and because `/word/footnotes.xml` is not
+  a part a comment can explain, the demo reported the redline unreversible instead of
+  absorbing it into a pattern match. Act II footnotes the negotiated cap again now, so
+  the proof exercises that path on every run.
   The page carries a second mode, **diff stress**, because "redline" means two things
   here and only one was on screen: where the negotiation RECORDS its markup, the stress
   meter RECOMPUTES the redline from scratch after every edit and times it, appending a
   clause per frame so the input grows under the engine. Three selectable pipeline depths
-  measure ~144 ms (`docxDiffGetRevisions`), ~206 ms (`docxDiffCompareProducts` → package +
-  revisions) and ~422 ms (plus `convertDocxToHtml`) — that is 75× to 196× the cost of the
+  measure ~152 ms (`docxDiffGetRevisions`), ~181 ms (`docxDiffCompareProducts` → package +
+  revisions) and ~352 ms (plus `convertDocxToHtml`) — that is 60× to 154× the cost of the
   ~2 ms mutation path measured through the same endpoint, so a redline-per-edit loop runs
-  between roughly 2 and 7 frames per second rather than at any animation rate. The panel
+  between roughly 3 and 7 frames per second rather than at any animation rate. The panel
   reports the ratio it just measured, not a number written into the page, which is how it
-  picked up the read-amplification fix from the DocxDiff stress work with no change of its
-  own. `benchmarks/docxdiff-stress/FINDINGS.md` remains the authority on engine
+  picked up both the read-amplification fix from the DocxDiff stress work and the
+  normalizer gating below with no change of its own. `benchmarks/docxdiff-stress/FINDINGS.md` remains the authority on engine
   performance; this mode is the watchable version of the same question.
   A browser MCP endpoint (`docs/demo/mcp-wire.js`) reimplements the server's front half
   (envelope parsing, (tool, action) routing, the `content[].text` + `isError` result
