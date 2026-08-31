@@ -232,7 +232,12 @@ internal static class IrMarkupRenderer
         }
         else
         {
-            var readOpts = new IrReaderOptions { RetainSources = true, RevisionView = RevisionView.Accept };
+            var readOpts = new IrReaderOptions
+            {
+                RetainSources = true,
+                RevisionView = RevisionView.Accept,
+                UnidAssignment = UnidAssignment.IdentityBearing,
+            };
             irLeft = IrReader.Read(left, readOpts);
             irRight = IrReader.Read(right, readOpts);
         }
