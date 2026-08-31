@@ -589,6 +589,70 @@ public class McpServerDispatcherTests : IDisposable
         Assert.Contains("##", md);
     }
 
+    /// <summary>
+    /// Reference-field authoring through the agent surface (issue #607). The options are typed and
+    /// flat — an agent asks for "levels 1-3, hyperlinked", never for the switch string — so the
+    /// assertion is on the switch string the server produced from them.
+    /// </summary>
+    [Fact]
+    public void MCP180_Create_ReferenceTables_TurnTypedOptionsIntoFieldSwitches()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+
+        foreach (var (call, expected) in new[]
+        {
+            ($$"""{"sessionId":{{sessionArg}},"action":"insert_table_of_contents","anchorId":"{{anchor}}","position":"before","levels":"1-2","hyperlinks":false}""",
+                "TOC \\o \"1-2\" \\z \\u"),
+            ($$"""{"sessionId":{{sessionArg}},"action":"insert_table_of_figures","anchorId":"{{anchor}}","position":"after","captionLabel":"Exhibit"}""",
+                "TOC \\c \"Exhibit\" \\h"),
+            ($$"""{"sessionId":{{sessionArg}},"action":"insert_table_of_authorities","anchorId":"{{anchor}}","position":"after","category":"statutes"}""",
+                "TOA \\c \"2\" \\h"),
+        })
+        {
+            var result = Parse(Dispatcher.Call(_store, "docxodus_create", J(call)));
+            Assert.True(result.GetProperty("success").GetBoolean(), result.ToString());
+
+            Save(sessionId, "reference-tables.docx");
+            Assert.Contains(expected,
+                SavedDocumentXml(_store.Documents.Resolve("reference-tables.docx")),
+                StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// The batch preflight knows the new actions and their enums, so a mistyped category is
+    /// rejected before step zero changes the package rather than quietly falling back to the
+    /// default category.
+    /// </summary>
+    [Fact]
+    public void MCP181_Mutations_RejectAnUnknownAuthorityCategoryBeforeStepZero()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+
+        var result = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
+            $$"""
+            {"sessionId":{{sessionArg}},"steps":[
+              {"tool":"docxodus_create","action":"insert_table_of_authorities",
+               "anchorId":"{{anchor}}","category":"precedents"}]}
+            """)));
+
+        Assert.False(result.GetProperty("success").GetBoolean(), result.ToString());
+        Assert.Contains("category", result.ToString(), StringComparison.Ordinal);
+
+        // …and a well-formed batch of the same action does apply.
+        var ok = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
+            $$"""
+            {"sessionId":{{sessionArg}},"steps":[
+              {"tool":"docxodus_create","action":"insert_table_of_authorities",
+               "anchorId":"{{anchor}}","category":"statutes"}]}
+            """)));
+        Assert.True(ok.GetProperty("success").GetBoolean(), ok.ToString());
+    }
+
     [Fact]
     public void MCP137_Create_HeaderFooter_ReturnedAnchorsComposeAndReadBack()
     {

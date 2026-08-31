@@ -203,6 +203,19 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
+class AuthorityCategory(str, Enum):
+    """Word's fixed table-of-authorities categories (issue #607). The wire names hide Word's own
+    numbering, which is an OOXML detail a caller should not have to know."""
+
+    CASES = "cases"
+    STATUTES = "statutes"
+    OTHER_AUTHORITIES = "other_authorities"
+    RULES = "rules"
+    TREATISES = "treatises"
+    REGULATIONS = "regulations"
+    CONSTITUTIONAL_PROVISIONS = "constitutional_provisions"
+
+
 @dataclass(frozen=True, slots=True)
 class VerificationDigest:
     """Algorithm-labelled lower-case hexadecimal digest."""
