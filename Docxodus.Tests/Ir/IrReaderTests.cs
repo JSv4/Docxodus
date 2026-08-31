@@ -1,6 +1,8 @@
 #nullable enable
 
 using System;
+using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using Docxodus;
 using Docxodus.Ir;
@@ -521,5 +523,65 @@ public class IrReaderTests
             .Body.Blocks.OfType<IrParagraph>().Single();
 
         Assert.NotEqual(textbox.ContentHash.ToHex(), plain.ContentHash.ToHex());
+    }
+
+    // ─── Throw paths (issue #624, item 5) ────────────────────────────────
+    //
+    // A leaked resource is invisible to every differential and to tooling: the harness digests
+    // return values, and CA2000 was measured against this exact leak shape and does not fire at any
+    // AnalysisMode. What IS assertable is the contract the throw path owes its caller, and that a
+    // failed read leaves the reader usable — which the structural fix (construct the package inside
+    // the try, null-tolerant finally) is what actually delivers.
+
+    /// <summary>
+    /// Handing the reader a spreadsheet package is a real caller mistake and a real throw path.
+    /// The byte-array constructors of <see cref="WmlDocument"/> reject one up front, but the
+    /// <c>MemoryStream</c> constructors do not validate at all — so that is the door this arrives
+    /// through, and it lands on the exact path where the reader used to leak an open package
+    /// (the <c>OpenXmlMemoryStreamDocument</c> was built before the <c>try</c>, so the failure
+    /// escaped the <c>using</c> that disposed it). The call must refuse it, leave the caller's bytes
+    /// alone, and leave nothing behind that stops the next read from working.
+    /// </summary>
+    [Fact]
+    public void Read_SpreadsheetPackage_RefusesWithoutTouchingTheInputOrTheNextRead()
+    {
+        var spreadsheet = EmbeddedWorkbookBytes();
+        Assert.Throws<PowerToolsDocumentException>(() => new WmlDocument("workbook.xlsx", spreadsheet));
+
+        var stream = new MemoryStream();
+        stream.Write(spreadsheet, 0, spreadsheet.Length);
+        var doc = new WmlDocument("workbook.xlsx", stream);
+        var before = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(spreadsheet));
+
+        // Repeated so a per-call leak would have to accumulate, and so "the second one still works"
+        // is asserted rather than assumed.
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var thrown = Assert.ThrowsAny<Exception>(() => IrReader.Read(doc));
+            Assert.Contains("Wordprocessing", thrown.Message, StringComparison.OrdinalIgnoreCase);
+        }
+
+        // The reader promises the caller's DocumentByteArray is left byte-for-byte unchanged, on the
+        // failure path as much as the success path.
+        Assert.Equal(before,
+            Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(doc.DocumentByteArray)));
+
+        // …and a good document still reads afterwards, so the failed reads left nothing behind.
+        var good = IrReader.Read(new WmlDocument("../../../../TestFiles/CU011-Chart-Embedded-Xlsx-03.docx"));
+        Assert.NotEmpty(good.Body.Blocks);
+    }
+
+    /// <summary>The embedded workbook inside a chart-bearing fixture — a real spreadsheet package,
+    /// so the test does not depend on a hand-built one being convincing.</summary>
+    private static byte[] EmbeddedWorkbookBytes()
+    {
+        using var file = File.OpenRead("../../../../TestFiles/CU011-Chart-Embedded-Xlsx-03.docx");
+        using var zip = new ZipArchive(file, ZipArchiveMode.Read);
+        var entry = zip.Entries.Single(e =>
+            e.FullName.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase));
+        using var stream = entry.Open();
+        using var buffer = new MemoryStream();
+        stream.CopyTo(buffer);
+        return buffer.ToArray();
     }
 }
