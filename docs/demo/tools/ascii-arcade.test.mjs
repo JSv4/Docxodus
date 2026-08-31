@@ -26,16 +26,60 @@ test('frame XML coalesces matching formatting across line breaks', () => {
 });
 
 test('the checked-in Doom GIFs keep their native, tightly framed embed size', () => {
-  const readGifSize = (name) => {
+  const readGif = (name) => {
     const bytes = readFileSync(join(DEMO_DIR, '..', 'images', name));
     assert.match(bytes.subarray(0, 6).toString('ascii'), /^GIF8[79]a$/);
-    return [bytes.readUInt16LE(6), bytes.readUInt16LE(8)];
+    const size = [bytes.readUInt16LE(6), bytes.readUInt16LE(8)];
+    let offset = 13;
+    const globalTable = bytes[10];
+    if (globalTable & 0x80) offset += 3 * (2 ** ((globalTable & 0x07) + 1));
+    let frames = 0;
+    let durationMs = 0;
+    const skipBlocks = () => {
+      while (offset < bytes.length) {
+        const length = bytes[offset++];
+        if (length === 0) return;
+        offset += length;
+      }
+      assert.fail(`unterminated GIF block in ${name}`);
+    };
+    while (offset < bytes.length) {
+      const marker = bytes[offset++];
+      if (marker === 0x3b) break;
+      if (marker === 0x21) {
+        const label = bytes[offset++];
+        if (label === 0xf9) {
+          assert.equal(bytes[offset++], 4, `bad graphic-control block in ${name}`);
+          durationMs += bytes.readUInt16LE(offset + 1) * 10;
+          offset += 4;
+          assert.equal(bytes[offset++], 0, `unterminated graphic-control block in ${name}`);
+        } else {
+          skipBlocks();
+        }
+        continue;
+      }
+      assert.equal(marker, 0x2c, `unknown GIF block 0x${marker.toString(16)} in ${name}`);
+      const localTable = bytes[offset + 8];
+      offset += 9;
+      if (localTable & 0x80) offset += 3 * (2 ** ((localTable & 0x07) + 1));
+      offset++; // LZW minimum code size
+      skipBlocks();
+      frames++;
+    }
+    return { size, frames, durationMs, bytes: bytes.length };
   };
 
-  assert.deepEqual(readGifSize('arcade-doom.gif'), [656, 660]);
-  assert.deepEqual(readGifSize('arcade-doom-bitmap.gif'), [656, 660]);
+  const walkthrough = readGif('arcade-doom.gif');
+  assert.deepEqual(walkthrough.size, [656, 716]);
+  assert.ok(walkthrough.frames >= 50, `walkthrough has only ${walkthrough.frames} frames`);
+  assert.ok(walkthrough.durationMs >= 6500,
+    `walkthrough lasts only ${walkthrough.durationMs}ms`);
+  assert.ok(walkthrough.bytes < 2 * 1024 * 1024,
+    `walkthrough GIF grew to ${walkthrough.bytes} bytes`);
+  assert.deepEqual(readGif('arcade-doom-bitmap.gif').size, [656, 660]);
   const readme = readFileSync(join(DEMO_DIR, 'README.md'), 'utf8');
   assert.match(readme, /arcade-doom\.gif[^>]+width="656"/);
+  assert.match(readme, /opener[\s\S]+movement and fire[\s\S]+caption strip/i);
   assert.doesNotMatch(readme, /arcade-doom-bitmap\.gif/,
     'the slow bitmap inspection mode must not be showcased as playable');
   assert.doesNotMatch(readme, /arcade-doom\.gif[^>]+width="(?:100%|60%)"/);

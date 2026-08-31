@@ -13,18 +13,21 @@ jsDelivr — and differ only in how much of the page belongs to the editor:
 | `arcade.html` | THE DOCX ARCADE — three playable games whose screen is the same per-frame `raw.replaceXml` + `editor.refresh()` Word paragraph. The third cartridge is **DOOM**: id Software's GPL engine on Freedoom's BSD IWAD, with the live 320×200 framebuffer projected into a 96 × 32 grid. Its default high-contrast path preserves **188 × 58** picture samples in three authored runs / 32 rendered spans and is guarded at the ten-FPS design point; **P** switches to a detailed paused-frame bitmap. Four separate static **18pt document paragraphs** keep the complete controls legible. Doom's world remains in its WebAssembly heap, so its honest document round trip is pause, edit, undo and save; the other cartridges additionally re-parse edited terrain on resume. The games live in `ascii-arcade.js`; Doom lives in the GPL `doom-cart.js`, with pinned engine/IWAD URLs documented below. Specs in `npm/tests/demo-arcade-doom.spec.ts` prove real play, dimensions, control size, sustained throughput, input, and save/reopen fidelity. |
 | `golf.html` | DOCX GOLF — course play on the editing surface itself, the inverse bet from the arcade: where the arcade painted frames INTO one paragraph through `raw.replaceXml` (the escape hatch), golf makes the real clubs the game. Six holes, each a start document loaded into the live ribbon editor and a target document built beside it; the referee is the comparison engine — a hole is CLEARED when `docxDiffGetRevisions` between your document and the target returns **zero revisions**, and the caddie panel phrases whatever revisions remain as the work left (`remove "Purchasr"`, `move "Governing Law"`, `reformat "Duties" (style)`). Holes escalate across the surface: a one-word fix, clause reordering, scoped defined-term conformance, heading styles (the Style dropdown is the club — the diff cares about `w:pStyle`, not just words), and a table hole (fix a cell, delete a duplicated row from the table toolbar), plus a footnote hole played with Insert → Footnote (the referee reads note parts too). On a phone the caddie collapses to its head strip behind a toggle, and a stuck player can concede with "Show me" — the caddie plays the content-addressed reference line and the scorecard marks the hole assisted. Strokes are counted from the document, not the toolbar: the driver fingerprints `session.save()` on a poll, so one committed burst of editing is one swing, and undo counts. Par/birdie/bogey scoring, a Target view, and a live redline view (`docxDiffCompare` → `convertDocxToHtml`) round out the caddie. The game lives in `docx-golf.js` in this directory (same `?engine=` split as its siblings); its pure logic is tested by `tools/docx-golf.test.mjs`, and `npm/tests/demo-golf.spec.ts` keeps the course honest the way the engine's own evals are kept honest — no hole starts solved, and every hole's content-addressed reference solution reaches zero revisions within par. Boots on tap when iframed. |
 
-### Playable Doom, in the real editor
+### Playable Doom walkthrough, in the real editor
 
-This is a capture from the shipped editor, not a mockup. The game screen is one Word
-paragraph being rewritten and re-rendered in place; the crop keeps the document at native size.
+This is a capture from the shipped editor, not a mockup. It starts on the document-hosted opener,
+drops the coin, boots the real engine, enters Freedoom Episode 1, shows controlled movement and fire,
+then pauses on an editable frame. The lower caption strip labels each step outside the native-size
+document crop, so it covers neither the controls nor the game image.
 
 <p align="center">
-  <img src="../images/arcade-doom.gif" alt="Playable Doom inside the shipped editor, with four large control-reference lines above the high-contrast text framebuffer" width="656">
+  <img src="../images/arcade-doom.gif" alt="Captioned walkthrough from the live document opener through playable high-contrast Doom and a paused editable frame" width="656">
 </p>
 
-The default high-contrast projection preserves the room, sprites, weapon and HUD at **188 × 58**
-samples while holding the rendered paragraph to 32 spans. Four fixed 18pt control paragraphs
-remain legible above it. The browser regression measures completed `replaceXml` +
+The playable projection is intentionally two-tone: warm off-white ink on near-black shading. It
+preserves the room, sprites, weapon and HUD at **188 × 58** samples while holding the rendered
+paragraph to 32 spans. Four fixed 18pt control paragraphs remain legible above it. The browser
+regression measures completed `replaceXml` +
 `editor.refresh()` cycles over five seconds and requires the playable path to stay at the ten-FPS
 design point. **Esc** turns the frame back into an ordinary editable, undoable, saveable
 paragraph. **P** exposes the open-palette bitmap as a paused-frame inspection mode; it is not
