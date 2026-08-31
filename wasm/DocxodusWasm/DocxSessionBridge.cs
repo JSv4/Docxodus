@@ -490,6 +490,41 @@ public static partial class DocxSessionBridge
     public static string SetPageNumbering(int h, string anchor, string opJson) =>
         DocxSessionOps.SetPageNumbering(h, anchor, DocxSessionJson.ParsePageNumberingOp(opJson));
 
+    /// <summary>
+    /// Insert a table of contents before/after <paramref name="anchor"/> (issue #607).
+    /// <paramref name="optionsJson"/> is
+    /// <c>{levels?, hyperlinks?, hideTabAndPageNumbersInWeb?, useOutlineLevels?, title?, rightTabPos?}</c>;
+    /// "" takes Word's own defaults. The field is written dirty and the document asks for a field
+    /// update on open, so Word fills the table itself.
+    /// </summary>
+    [JSExport]
+    public static string InsertTableOfContents(int h, string anchor, string posStr, string optionsJson) =>
+        DocxSessionOps.InsertTableOfContents(h, anchor, DocxSessionJson.ParsePos(posStr),
+            ParseJsonOptions(optionsJson, DocxSessionJson.ParseTableOfContentsOptions));
+
+    /// <summary>Insert a table of figures — <c>{captionLabel?, hyperlinks?, rightTabPos?}</c>.</summary>
+    [JSExport]
+    public static string InsertTableOfFigures(int h, string anchor, string posStr, string optionsJson) =>
+        DocxSessionOps.InsertTableOfFigures(h, anchor, DocxSessionJson.ParsePos(posStr),
+            ParseJsonOptions(optionsJson, DocxSessionJson.ParseTableOfFiguresOptions));
+
+    /// <summary>Insert a table of authorities —
+    /// <c>{category?, hyperlinks?, entryPageSeparator?, rightTabPos?}</c>, where category is a wire
+    /// name ("cases", "statutes", …) rather than Word's number.</summary>
+    [JSExport]
+    public static string InsertTableOfAuthorities(int h, string anchor, string posStr, string optionsJson) =>
+        DocxSessionOps.InsertTableOfAuthorities(h, anchor, DocxSessionJson.ParsePos(posStr),
+            ParseJsonOptions(optionsJson, DocxSessionJson.ParseTableOfAuthoritiesOptions));
+
+    /// <summary>Parse an optional options object; an empty string means "all defaults".</summary>
+    private static T? ParseJsonOptions<T>(string json, System.Func<System.Text.Json.JsonElement, T> parse)
+        where T : class
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        return parse(doc.RootElement);
+    }
+
     /// <summary>Remove the section's page-numbering start/format — see
     /// <see cref="DocxSession.ClearPageNumbering"/>.</summary>
     [JSExport]

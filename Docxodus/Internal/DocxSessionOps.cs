@@ -491,6 +491,26 @@ internal static class DocxSessionOps
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, anchorId, s => s.ClearPageNumbering(anchorId));
 
+    // ─── Reference fields (issue #607) ──────────────────────────────────
+
+    public static string InsertTableOfContents(
+        int handle, string anchorId, Position pos, TableOfContentsOptions? options = null,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId,
+            s => s.InsertTableOfContents(anchorId, pos, options));
+
+    public static string InsertTableOfFigures(
+        int handle, string anchorId, Position pos, TableOfFiguresOptions? options = null,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId,
+            s => s.InsertTableOfFigures(anchorId, pos, options));
+
+    public static string InsertTableOfAuthorities(
+        int handle, string anchorId, Position pos, TableOfAuthoritiesOptions? options = null,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId,
+            s => s.InsertTableOfAuthorities(anchorId, pos, options));
+
     // ─── Footnotes / endnotes ───────────────────────────────────────────
 
     public static string InsertFootnote(int handle, string anchorId, int characterOffset, string markdown,

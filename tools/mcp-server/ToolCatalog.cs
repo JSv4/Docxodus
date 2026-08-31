@@ -303,14 +303,14 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_create",
-            "Insert new structural content: paragraphs, headings, tables, horizontal rules, footnotes/endnotes, running headers/footers, page-number fields.",
+            "Insert new structural content: paragraphs, headings, tables, horizontal rules, footnotes/endnotes, running headers/footers, page-number fields, and the generated reference tables (contents, figures, authorities).",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
                 "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
-                "action": { "type": "string", "enum": ["insert_paragraph", "insert_heading", "insert_table", "insert_horizontal_rule", "insert_footnote", "insert_endnote", "insert_page_number_field", "set_header_text", "set_footer_text", "ensure_header_footer_visible"] },
+                "action": { "type": "string", "enum": ["insert_paragraph", "insert_heading", "insert_table", "insert_horizontal_rule", "insert_footnote", "insert_endnote", "insert_page_number_field", "insert_table_of_contents", "insert_table_of_figures", "insert_table_of_authorities", "set_header_text", "set_footer_text", "ensure_header_footer_visible"] },
                 "anchorId": { "type": "string", "description": "Reference block for insert_paragraph/insert_heading/insert_table/insert_horizontal_rule (paired with position), or the citing paragraph for insert_footnote/insert_endnote, or the target paragraph for insert_page_number_field." },
                 "bodyAnchorId": { "type": "string", "description": "set_header_text/set_footer_text/ensure_header_footer_visible: a body block identifying the section whose running story or visibility flags should change." },
                 "position": { "type": "string", "enum": ["before", "after"] },
@@ -326,7 +326,14 @@ internal static class ToolCatalog
                 "characterOffset": { "type": "integer", "description": "insert_footnote/insert_endnote: character offset within the citing paragraph." },
                 "kind": { "type": "string", "enum": ["default", "first", "even"], "description": "set_header_text/set_footer_text/ensure_header_footer_visible: running-story kind. first/even authoring also enables the corresponding Word visibility setting; ensure_header_footer_visible enables it for an already-referenced story." },
                 "field": { "type": "string", "enum": ["current_page", "total_pages"], "description": "insert_page_number_field." },
-                "numberFormat": { "type": "string", "enum": ["decimal", "upperLetter", "lowerLetter", "upperRoman", "lowerRoman"], "description": "insert_page_number_field: optional explicit \\* switch format." }
+                "numberFormat": { "type": "string", "enum": ["decimal", "upperLetter", "lowerLetter", "upperRoman", "lowerRoman"], "description": "insert_page_number_field: optional explicit \\* switch format." },
+                "levels": { "type": "string", "description": "insert_table_of_contents: heading levels to list, a level or range within 1-9 (default \"1-3\")." },
+                "title": { "type": "string", "description": "insert_table_of_contents: heading above the table (default \"Contents\"); empty inserts none." },
+                "captionLabel": { "type": "string", "description": "insert_table_of_figures: the caption label to list, e.g. \"Figure\" or \"Exhibit\" (default \"Figure\")." },
+                "category": { "type": "string", "enum": ["cases", "statutes", "other_authorities", "rules", "treatises", "regulations", "constitutional_provisions"], "description": "insert_table_of_authorities: which category of marked authority to list (default cases)." },
+                "hyperlinks": { "type": "boolean", "description": "Reference tables: make each entry a hyperlink to its target (default true)." },
+                "entryPageSeparator": { "type": "string", "description": "insert_table_of_authorities: separator between an entry and its page numbers." },
+                "rightTabPos": { "type": "integer", "description": "Reference tables: right-aligned dot-leader tab stop in twips (default 9350)." }
               },
               "required": ["sessionId", "action"]
             }

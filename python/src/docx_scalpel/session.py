@@ -46,6 +46,7 @@ from .enums import (
     WhitespaceMode,
 )
 from .types import (
+    AuthorityCategory,
     AnchorInfo,
     AnchorTarget,
     AnnotationUpdate,
@@ -282,6 +283,10 @@ def prove_redline_reversibility(
 # default comparison engine; ``DocxDiff`` is the NEW engine whose differentiators
 # are anchor-addressed revisions and the diff-as-data edit script. All three are
 # stateless: pass two DOCX byte blobs, get the result — no session.
+
+
+_UNSET: Any = object()
+"""Sentinel distinguishing "title not given" from an explicit ``title=None``."""
 
 
 def _diff_args(left: bytes, right: bytes, settings: DocxDiffSettings | None) -> dict[str, Any]:
@@ -1595,6 +1600,109 @@ class DocxSession:
         if format is not None:
             args["format"] = format.value
         return EditResult._from_wire(self._call("insert_page_number_field", args))
+
+    def insert_table_of_contents(
+        self,
+        anchor_id: str,
+        position: str = "before",
+        *,
+        levels: str | None = None,
+        hyperlinks: bool | None = None,
+        hide_tab_and_page_numbers_in_web: bool | None = None,
+        use_outline_levels: bool | None = None,
+        title: str | None = _UNSET,
+        right_tab_pos: int | None = None,
+    ) -> EditResult:
+        r"""Insert a **table of contents** before/after ``anchor_id`` (issue #607).
+
+        The field is written dirty and the document asks for a field update on open, so Word
+        paginates and fills the table itself rather than shipping a cached result that is stale the
+        moment anything above it moves. The table is wrapped in the ``w:sdt`` content control Word
+        puts around one, which is what gives it the *Update Table* control in Word's UI.
+
+        Every option is a typed switch on the underlying ``TOC`` field — ``levels`` is ``\o``,
+        ``hyperlinks`` ``\h``, and so on. The switch string never crosses the wire, which is the
+        point: a malformed one renders as nothing in Word, silently.
+
+        ``title=None`` inserts the table with no heading; omitting it keeps Word's "Contents".
+        """
+        options: dict[str, Any] = {}
+        if levels is not None:
+            options["levels"] = levels
+        if hyperlinks is not None:
+            options["hyperlinks"] = hyperlinks
+        if hide_tab_and_page_numbers_in_web is not None:
+            options["hideTabAndPageNumbersInWeb"] = hide_tab_and_page_numbers_in_web
+        if use_outline_levels is not None:
+            options["useOutlineLevels"] = use_outline_levels
+        if title is not _UNSET:
+            options["title"] = title
+        if right_tab_pos is not None:
+            options["rightTabPos"] = right_tab_pos
+        return self._insert_reference_field(
+            "insert_table_of_contents", anchor_id, position, options
+        )
+
+    def insert_table_of_figures(
+        self,
+        anchor_id: str,
+        position: str = "before",
+        *,
+        caption_label: str | None = None,
+        hyperlinks: bool | None = None,
+        right_tab_pos: int | None = None,
+    ) -> EditResult:
+        """Insert a **table of figures** — the captions carrying ``caption_label`` and their page
+        numbers. Same field mechanics as :meth:`insert_table_of_contents`; Word writes this one as a
+        bare paragraph rather than inside a content control, so this does too.
+        """
+        options: dict[str, Any] = {}
+        if caption_label is not None:
+            options["captionLabel"] = caption_label
+        if hyperlinks is not None:
+            options["hyperlinks"] = hyperlinks
+        if right_tab_pos is not None:
+            options["rightTabPos"] = right_tab_pos
+        return self._insert_reference_field(
+            "insert_table_of_figures", anchor_id, position, options
+        )
+
+    def insert_table_of_authorities(
+        self,
+        anchor_id: str,
+        position: str = "before",
+        *,
+        category: AuthorityCategory | None = None,
+        hyperlinks: bool | None = None,
+        entry_page_separator: str | None = None,
+        right_tab_pos: int | None = None,
+    ) -> EditResult:
+        """Insert a **table of authorities** — the cases, statutes or other authorities marked in
+        the document, grouped by ``category``.
+
+        The table lists entries the document has MARKED with ``TA`` fields; a document with no
+        marked citations produces a table that is correct and empty.
+        """
+        options: dict[str, Any] = {}
+        if category is not None:
+            options["category"] = category.value
+        if hyperlinks is not None:
+            options["hyperlinks"] = hyperlinks
+        if entry_page_separator is not None:
+            options["entryPageSeparator"] = entry_page_separator
+        if right_tab_pos is not None:
+            options["rightTabPos"] = right_tab_pos
+        return self._insert_reference_field(
+            "insert_table_of_authorities", anchor_id, position, options
+        )
+
+    def _insert_reference_field(
+        self, op: str, anchor_id: str, position: str, options: dict[str, Any]
+    ) -> EditResult:
+        args: dict[str, Any] = {"anchorId": anchor_id, "position": position}
+        if options:
+            args["options"] = options
+        return EditResult._from_wire(self._call(op, args))
 
     def set_page_numbering(
         self,
