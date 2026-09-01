@@ -105,6 +105,18 @@ All notable changes to this project will be documented in this file.
   identical-package shortcut returned the input bytes untouched — a strict package that LibreOffice
   renders poorly and `python-docx` refuses to read. The shortcut now normalizes strict inputs on the
   way out; byte-identical transitional inputs still return an exact detached clone.
+- **A concrete font materialized from the revised side now clears the theme reference it
+  overrides.** Effective-formatting resolution merged `rFonts` attribute-wise, so materializing
+  `ascii="Times New Roman"` could leave a lower layer's `asciiTheme` riding along — and a theme
+  attribute outranks the literal in the same slot, so the output still rendered the theme font
+  (and, substituted, a different-metric family that repaginated the document). Each `rFonts` slot
+  now overrides as a pair: a layer declaring the concrete attribute clears the theme attribute,
+  and vice versa.
+- **The output fontTable is the union of both inputs'.** A font only the revised document's
+  fontTable declares (a Word alias like "Times New Roman (Body CS)" matches no installed face)
+  was missing from the output, leaving LibreOffice no substitution hint for revised-sourced
+  content naming it — it fell back to a different-metric family. Word's compare output carries the
+  union; right-only declarations are now appended verbatim (minus embedded-font relationships).
 - **Document-default declarations the revised side leaves at built-ins no longer leak into the
   accepted view.** The compare output keeps the LEFT package's `docDefaults`, so an updated shared
   style must state the RIGHT's effective formatting explicitly. That held for properties the right
