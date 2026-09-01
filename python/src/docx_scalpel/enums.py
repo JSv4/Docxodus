@@ -530,7 +530,7 @@ class DocxDiffRevisionGranularity(IntEnum):
 
     ``FINE`` (the default) is the engine's native one-revision-per-token-span
     grain; ``WML_COMPARER_COMPATIBLE`` coalesces to counts/texts comparable to
-    the shipped ``WmlComparer``. Integer-coded to match the .NET enum positions.
+    the removed legacy comparer. Integer-coded to match the .NET enum positions.
     """
 
     FINE = 0

@@ -368,7 +368,7 @@ export interface FormatChangeDetails {
 export enum DocxDiffRevisionGranularity {
   /** The engine's native one-revision-per-token-span grain (the default). */
   Fine = 0,
-  /** Coalesced to counts/texts comparable to the shipped WmlComparer's. */
+  /** Coalesced to the coarser contiguous-region grain the legacy comparer reported. */
   WmlComparerCompatible = 1,
 }
 

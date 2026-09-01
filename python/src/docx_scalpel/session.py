@@ -279,8 +279,8 @@ def prove_redline_reversibility(
 #
 # These mirror the .NET ``DocxDiff`` static facade and the WASM/npm
 # ``docxDiffCompare`` / ``docxDiffGetRevisions`` / ``docxDiffGetEditScript``
-# wrappers. ``WmlComparer`` (not exposed in this wrapper yet) remains Docxodus'
-# default comparison engine; ``DocxDiff`` is the NEW engine whose differentiators
+# wrappers. ``DocxDiff`` is Docxodus' comparison engine (the only one since
+# v11.0.0), whose differentiators
 # are anchor-addressed revisions and the diff-as-data edit script. All three are
 # stateless: pass two DOCX byte blobs, get the result — no session.
 
@@ -306,7 +306,7 @@ def docx_diff_compare(
 ) -> bytes:
     """Compare two DOCX blobs; return a redlined DOCX (native tracked-changes markup).
 
-    Mirrors .NET ``DocxDiff.Compare``. The result satisfies the WmlComparer
+    Mirrors .NET ``DocxDiff.Compare``. The result satisfies the redline
     contract: accepting its revisions yields ``right``, rejecting them yields
     ``left`` (at the per-block text level).
     """

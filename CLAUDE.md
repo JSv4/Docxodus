@@ -24,10 +24,11 @@ duplicated description is one that will go stale.
 
 `Docxodus.csproj` sets `<Nullable>enable</Nullable>` (issue #13): every file is
 nullable-checked by default, so a new file needs no directive. The exception is the
-inherited OpenXmlPowerTools core — 21 legacy files (`WmlComparer`, `WmlToHtmlConverter`,
+inherited OpenXmlPowerTools core — 21 legacy files (`WmlToHtmlConverter`, `PackageMerge`,
 the `HtmlToWml*` family, `FormattingAssembler`, `DocumentBuilder`, `RevisionProcessor`,
 `PtOpenXmlUtil`, …) carry an explicit `#nullable disable` header. They hold back a lot:
-stripping all 21 takes the library from its baseline to **3,659**.
+stripping all 21 takes the library from its baseline to **2,977** (**2,907** distinct
+`CS86xx` sites). Removing `WmlComparer` in v11.0.0 retired 536 of them.
 `grep -l "^#nullable disable" Docxodus/*.cs` lists the remaining debt; when
 substantially refactoring one of those files, consider removing its header and fixing
 that file's warnings. CS8632 stays in `NoWarn` deliberately: with the project context
@@ -40,7 +41,7 @@ are kept for the day each file migrates.
 **`Docxodus.csproj` and `Docxodus.Tests.csproj` both override it to `false`**, so the core
 library and the test project do *not* fail on warnings. The CLI tools, MCP server,
 python-host and WASM project do inherit it. Current baseline: the library builds with
-**135 warnings**, the test project with **779** (mostly StyleCop `SA1633`/`SA1636` file
+**133 warnings**, the test project with **713** (mostly StyleCop `SA1633`/`SA1636` file
 headers and `SA1206` using-order). Don't add to either baseline. Measure with
 `--no-incremental` — a warm incremental build reports zero because nothing recompiles.
 
@@ -61,7 +62,7 @@ usually ripple through all of it.
 | Shared facades | `Docxodus/Internal/{DocxSessionOps,DocxDiffOps,HtmlConversionOps,SessionRegistry,DocxSessionJson}.cs` | Single-owner op + wire-shape layer every transport routes through. |
 | Delivery | `Docxodus/Delivery/` | Delivery bundles: manifest, publisher, revision policy, host renderer. See `delivery_bundle.md`. |
 | Verification | `Docxodus/Verification/` | Package manifests, semantic diff, redline-reversibility proof, deliverable inspection. See `deliverable_verification.md`, `package_manifests.md`, `semantic_diff.md`, `redline_reversibility_proof.md`. |
-| Unit tests | `Docxodus.Tests/` | xUnit, **~4,260 tests**, ~4 min. |
+| Unit tests | `Docxodus.Tests/` | xUnit, **~3,900 tests**, ~4 min. |
 | CLI tools | `tools/redline/`, `tools/docx2html/`, `tools/docx2oc/` | Thin `dotnet tool` wrappers. |
 | WASM bridge | `wasm/DocxodusWasm/` | `[JSExport]` shells over the facades. |
 | Stdio host | `tools/python-host/` | NDJSON-over-stdin host (`docxodus-pyhost`) that the `docx-scalpel` pip package subprocesses. |
@@ -80,7 +81,7 @@ first** — both bridges and both clients pick the change up from there. Then ri
 
 The same pattern governs the stateless surfaces: `HtmlConversionOps` owns DOCX→HTML,
 `DocxDiffOps` owns the `DocxDiff` engine, and `DocxCompare` owns the
-`WmlComparer`-vs-`DocxDiff` engine selection. Change the facade first, then the two bridges
+the shared comparison front door (its input-revision policy). Change the facade first, then the two bridges
 and two clients.
 
 ### Ripple checklist
@@ -181,10 +182,17 @@ markdown projection, `DocxSession`, `DocxDiff` revisions, and the editor's `data
 attributes. It is an addressing overlay over the live OOXML, which remains the model of record
 — there is no IR→OOXML writer.
 
-**Comparison engines.** `DocxDiff` is the default since v8.0.0; `WmlComparer` is the older
-engine, feature-frozen and available by explicit selection. Note that `DocxDiff` still depends
-on `WmlComparer`'s *types* (`WmlComparerSettings`, `WmlComparerRevision`), so the older engine
-is not removable.
+**Comparison engine.** `DocxDiff` is the only comparison engine. `WmlComparer` was removed in
+v11.0.0; its cross-package merge helpers survive as `PackageMerge.cs` (styles, numbering and
+related-part copying — never comparison logic), which the markup renderers call. The parity
+evidence gathered before removal is frozen under
+`docs/architecture/wmlcomparer_parity_baseline/`, and `DocxDiffCorpusBaselineTests` is the live
+regression net that replaced the differential harness.
+
+**`DocxCompare` vs `DocxDiff`.** `DocxCompare.Compare` is the front door every transport routes
+through; it always applies `PreAcceptInputRevisions` + `PreserveInputRevisions`, which the raw
+`DocxDiff` API leaves opt-in. Calling `DocxDiff.Compare` with fresh settings is NOT equivalent —
+on revision-bearing inputs it emits whole-document churn.
 
 ## Module Map
 
@@ -195,7 +203,6 @@ detail; this file deliberately does not restate them.
 |--------|--------------|------------|
 | `DocxSession.cs` | Stateful anchor-addressed editing API (text, structural, formatting, tables, notes, comments, revisions, annotations, raw XML, undo/redo) | `docx_mutation_api.md` |
 | `DocxDiff.cs` + `Ir/Diff/` | Structure-aware comparison → native tracked changes; edit script as data; N-way consolidate | `ir_diff_engine.md` |
-| `WmlComparer.cs` | Legacy comparison engine (frozen) | `comparison_engine.md`, `wml_comparer_gaps.md`, `native_move_markup.md`, `format_change_detection.md` |
 | `WmlToHtmlConverter.cs` | DOCX → HTML, the render fidelity oracle | `docx_converter.md`, `comment_rendering.md`, `paginated_headers_footers.md`, `wml_to_html_converter_gaps.md` |
 | `HtmlToWmlConverter.cs` | HTML → DOCX | — |
 | `WmlToMarkdownConverter.cs` | Anchor-addressed markdown projection | `markdown_projection.md` |
@@ -226,7 +233,7 @@ WASM/browser work: `wasm-packaging.md` (trimming, Brotli, size budget, measured 
 ### Scope: the DOCX toolchain, nothing else
 
 Docxodus handles `.docx`/`.docm`/`.dotx`/`.dotm`, and every module in `Docxodus/` earns its
-place by serving `DocxSession`, `DocxDiff`, `WmlComparer`, or the render/projection paths.
+place by serving `DocxSession`, `DocxDiff`, or the render/projection paths.
 Two rounds of the inherited OpenXmlPowerTools fork were removed on that rule — see the
 `### Removed` entry in `CHANGELOG.md` for the full list:
 

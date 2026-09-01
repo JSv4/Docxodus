@@ -1,5 +1,11 @@
 # Format Change Detection Architecture
 
+> **Historical (v11.0.0).** This document describes `WmlComparer`, the legacy comparison engine,
+> which was removed in v11.0.0. It is kept because it records design decisions and Word-behaviour
+> findings that `DocxDiff` inherited or deliberately diverged from — not because the code still
+> exists. For the shipping engine see `ir_diff_engine.md`; for the parity evidence gathered before
+> removal see `wmlcomparer_parity_baseline/`.
+
 > **Status: IMPLEMENTED** (November 2025)
 >
 > **Scope note.** This document describes format-change detection in the **`WmlComparer`** engine, where it is run-level only (`w:rPrChange`). The IR diff engine (`DocxDiff`) tracks the full **block-format-change family** — `w:pPrChange`/`w:tcPrChange`/`w:trPrChange`/`w:tblPrChange`/`w:tblGridChange`/`w:sectPrChange` in addition to `w:rPrChange` — see the "Paragraph-and-above formatting changes" section of [`ir_diff_engine.md`](ir_diff_engine.md). The paragraph/section/table extension sketched at the end of this document was NOT implemented in `WmlComparer`; it was implemented in `DocxDiff` instead.

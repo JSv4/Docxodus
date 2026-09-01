@@ -32,10 +32,12 @@ test.describe('Trim validation (paths uncovered by main suite)', () => {
     await waitForDocxodus(page);
   });
 
-  test('WmlComparer engine compare with images exercises reflective GetPackage()', async ({ page }) => {
-    // WmlComparer.CoalesceRecurse's w:drawing handling calls the reflection-based
-    // OpenXmlPackage.GetPackage() when copying media parts — the only bridge-reachable
-    // route through PtOpenXmlUtil's reflection. engine: 0 = ComparisonEngine.WmlComparer.
+  test('compare with images exercises reflective GetPackage()', async ({ page }) => {
+    // Copying media parts between packages calls the reflection-based
+    // OpenXmlPackage.GetPackage() — the only bridge-reachable route through
+    // PtOpenXmlUtil's reflection. Since v11.0.0 that path is PackageMerge
+    // (MoveRelatedPartsToDestination), reached from DocxDiff's markup renderer
+    // rather than the removed legacy engine's w:drawing handling.
     const left = readTestFile('HC042-Image-Png.docx');
     const right = readTestFile('HC006-Test-01.docx');
 
@@ -44,10 +46,10 @@ test.describe('Trim validation (paths uncovered by main suite)', () => {
         const comparer = (window as any).Docxodus.DocumentComparer;
         const redline = comparer.CompareDocumentsWithOptions(
           new Uint8Array(args.left), new Uint8Array(args.right),
-          'TrimCheck', 0.15, false, /* engine: WmlComparer */ 0);
+          'TrimCheck', false);
         const reverse = comparer.CompareDocumentsWithOptions(
           new Uint8Array(args.right), new Uint8Array(args.left),
-          'TrimCheck', 0.15, false, 0);
+          'TrimCheck', false);
         return { redlineLen: redline.length, reverseLen: reverse.length };
       },
       { left: Array.from(left), right: Array.from(right) },
