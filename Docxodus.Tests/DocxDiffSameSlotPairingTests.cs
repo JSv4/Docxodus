@@ -323,6 +323,20 @@ public class DocxDiffSameSlotPairingTests
         AssertRoundTrip(result, left, right);
     }
 
+    [Fact]
+    public void FormatEqualBlank_BetweenPairedContent_KeepsAnchoring()
+    {
+        var left = Doc("Shared alpha heading line.", "", "Shared beta body line.");
+        var right = Doc("Shared alpha heading line.", "", "Shared beta body line revised.");
+
+        var result = DocxDiff.Compare(left, right);
+
+        var shape = BodyShape(result);
+        Assert.Equal("RET", shape[0]);
+        Assert.Equal("EMPTY:-", shape[1]);
+        AssertRoundTrip(result, left, right);
+    }
+
     // ---------------------------------------------------------------- helpers
 
     private static WmlDocument Doc(params string[] paraTexts) =>

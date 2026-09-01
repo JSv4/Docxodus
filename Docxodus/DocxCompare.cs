@@ -33,9 +33,11 @@ public static class DocxCompare
     /// Compare <paramref name="left"/> against <paramref name="right"/> with the selected
     /// <paramref name="engine"/> and return the redlined document. <see cref="ComparisonEngine.WmlComparer"/>
     /// delegates directly for transitional documents and normalizes Word Strict inputs first; byte-identical
-    /// inputs instead return a detached exact clone without normalization or reserialization when the legacy
-    /// comparer need not repair malformed math revision markup; <see cref="ComparisonEngine.DocxDiff"/>
-    /// routes to <see cref="DocxDiff.Compare"/> with the mapped settings.
+    /// TRANSITIONAL inputs return a detached exact clone without reserialization when the legacy comparer
+    /// need not repair malformed math revision markup, while byte-identical STRICT inputs are normalized to
+    /// transitional (Word converts on open regardless of the compare outcome);
+    /// <see cref="ComparisonEngine.DocxDiff"/> routes to <see cref="DocxDiff.Compare"/> with the mapped
+    /// settings.
     /// </summary>
     /// <param name="left">The earlier / original document.</param>
     /// <param name="right">The later / revised document.</param>
@@ -53,12 +55,16 @@ public static class DocxCompare
         if (engine is not ComparisonEngine.WmlComparer and not ComparisonEngine.DocxDiff)
             throw new ArgumentOutOfRangeException(nameof(engine), engine, "Unknown comparison engine.");
 
-        // An exact same-package comparison has no revisions to produce. More importantly, a no-op
-        // must not silently rewrite a valid Strict package or discard unrelated existing revision
-        // markup merely because it passed through the comparison API. Return a detached clone so the
-        // result remains safe for callers to mutate/save independently of the input.
+        // An exact same-package comparison has no revisions to produce; return a detached clone so
+        // the result remains safe for callers to mutate/save independently of the input. A STRICT
+        // package is still normalized to transitional on the way out — Word converts on open no
+        // matter what the compare finds, and strict bytes break downstream consumers (LibreOffice
+        // renders them poorly, python-docx rejects them). Transitional inputs stay byte-identical.
         if (CanReturnExactNoOp(left, right))
-            return new WmlDocument(left);
+        {
+            var normalized = StrictOoxmlNormalizer.NormalizeToTransitional(left);
+            return ReferenceEquals(normalized, left) ? new WmlDocument(left) : normalized;
+        }
 
         return engine switch
         {
@@ -123,15 +129,15 @@ public static class DocxCompare
         MoveMinimumWordCount = settings.MoveMinimumWordCount,
         // Input-revision policy on the selector path: the DIFF must run over the accepted view (as
         // WmlComparer does internally — otherwise revision-bearing inputs diff their raw surface and
-        // emit whole-document churn), and Word's Compare additionally PRESERVES the inputs' own markup
-        // in its output (original author/date rides through, verified against Word-oracle outputs).
-        // Preserve WINS over the pre-accept by precedence: matching still happens on the accepted view
-        // (the IR read accepts regardless), the byte-level flatten is skipped, and equal/inserted blocks
-        // carry the input's markup through. See DocxDiffSettings.PreserveInputRevisions for the
-        // one-sided round-trip contract this implies (accept ≡ right holds; reject ≠ left where foreign
-        // markup exists — exactly Word). The raw DocxDiff API keeps both flags' opt-in defaults.
+        // emit whole-document churn). Word's Compare dialog says it outright — "Word will treat them
+        // as accepted" — and its outputs confirm it: text an input had struck through is absent from
+        // the compare result entirely, the surviving text is re-detected as the compare author's own
+        // insertions, and the output collapses to a single revision author. Earlier releases preserved
+        // the inputs' markup here (Word's COMBINE behavior, decoded from a batch of oracle documents
+        // that turned out to be Combine-shaped); Compare is the operation this surface models, so the
+        // pre-accept flatten now runs. Callers who want the inputs' own revisions carried through use
+        // the raw DocxDiff API with DocxDiffSettings.PreserveInputRevisions.
         PreAcceptInputRevisions = true,
-        PreserveInputRevisions = true,
     };
 
     /// <summary>

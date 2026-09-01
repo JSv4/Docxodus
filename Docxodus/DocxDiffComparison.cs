@@ -205,13 +205,16 @@ public sealed class DocxDiffComparison
     private WmlDocument BuildRedline()
     {
         var s = _settings;
-        // Exact identity is a no-op even for Strict OOXML or revision-bearing packages. An explicit
-        // accept-all request is an exception — see DocxDiff.Compare, which this mirrors verbatim.
+        // Exact identity is a no-op even for revision-bearing packages; an explicit accept-all
+        // request is the exception. A STRICT no-op still normalizes to transitional on the way out
+        // (Word converts on open no matter what the compare finds); transitional inputs stay
+        // byte-identical.
         if (DocxCompare.HasIdenticalPackageBytes(_originalLeft, _originalRight) &&
             !(s.PreAcceptInputRevisions && !s.PreserveInputRevisions))
         {
             RunGatedPreflight();
-            return new WmlDocument(_originalLeft);
+            var normalized = StrictOoxmlNormalizer.NormalizeToTransitional(_originalLeft);
+            return ReferenceEquals(normalized, _originalLeft) ? new WmlDocument(_originalLeft) : normalized;
         }
 
         var (left, right) = _preflighted.Value;

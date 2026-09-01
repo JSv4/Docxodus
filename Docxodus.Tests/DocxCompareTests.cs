@@ -179,6 +179,13 @@ public class DocxCompareTests
 
         var mapped = DocxCompare.ToDocxDiffSettings(settings);
 
+        // Word-parity input-revision policy: Word's Compare treats revisions already present in
+        // either input as accepted ("Word will treat them as accepted") and re-detects the delta
+        // under the compare author — it does not carry the inputs' own markup through. Callers who
+        // want preservation use the raw DocxDiff API with PreserveInputRevisions.
+        Assert.True(mapped.PreAcceptInputRevisions);
+        Assert.False(mapped.PreserveInputRevisions);
+
         Assert.Equal("Alice", mapped.AuthorForRevisions);
         Assert.Equal("2020-01-02T03:04:05Z", mapped.DateTimeForRevisions);
         Assert.True(mapped.CaseInsensitive);
