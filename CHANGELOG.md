@@ -65,7 +65,20 @@ All notable changes to this project will be documented in this file.
   rewritten. Tracked as issue #642.
 
 ### Added
-
+- **The arcade says why a native-image cartridge is blank instead of playing invisibly.** Doom's
+  playable frame is a native inline image, and the single-block render that puts it on screen only
+  carries images from an engine newer than 10.0.0 — which is the pin `docs/demo/` currently loads
+  from jsDelivr. On that engine everything about the cartridge works except the part you can see:
+  the WebAssembly Doom boots, plays and logs, `replaceImage` succeeds, the frame really is in the
+  package (Save and reopen shows it), and only the refreshed paragraph comes back empty, because
+  the renderer's throwaway shell has neither a copy of the media part nor an image handler and
+  `WmlToHtmlConverter` correctly omits the `w:drawing`. Nothing surfaced that: the arcade ran a
+  full-rate loop over frames no player could see, and the Playwright specs could not catch it
+  because every one of them overrides `?engine=` to the locally built bundle, which has the fix.
+  `paintImage` now proves the surface once — if three image frames refresh without ever producing
+  an `<img>`, it halts and names the cause and the working cartridges in the dock's own status
+  line, on the button paths as well as the loop's. The demo README records the dependency.
+  Demo-content change (`docs/demo/`), not npm surface.
 - **THE DOCX ARCADE's third cartridge is now actual DOOM.** id Software's Doom engine —
   GPL-2.0, compiled to JavaScript by [doomgeneric](https://github.com/grubbyplaya/doomgenericjs)
   — runs on Freedoom's BSD-licensed IWAD, and its complete, lossless 320×200 framebuffer
