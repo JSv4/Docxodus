@@ -190,7 +190,7 @@ test('the shipped subset is single-advance, which is the whole guarantee', () =>
 
 test('the non-ASCII characters the art depends on are all in the subset', () => {
   // The ones the bug was actually about, named so a regression reads clearly.
-  const loadBearing = ['█', '▀', '▄', '·', '░', '▒', '▓', '─', '│', '┌', '┐', '└', '┘', '═', '▶', '◀', '►', '◄',
+  const loadBearing = ['█', '▀', '▄', '░', '▒', '▓', '─', '│', '┌', '┐', '└', '┘', '═', '▶', '◀', '►', '◄',
     '▲', '▼', '§', '¶', '·', '→', '←'];
   for (const ch of loadBearing) {
     assert.ok(covers(ch.codePointAt(0)),

@@ -116,8 +116,9 @@
     // content, and the landing page imports this identical module.
     const DOCK_URL = params.get("dock") ?? "./arcade-dock.js";
 
-    // The Doom cartridge's engine and IWAD are vendored beside this page
-    // (docs/demo/vendor/ — see its NOTICE.md). ?wad= points the cartridge at a
+    // The Doom cartridge's engine and IWAD are pinned jsDelivr URLs — nothing
+    // is vendored here (docs/demo/vendor/ holds only license text and the
+    // provenance record; see its NOTICE.md). ?wad= points the cartridge at a
     // SAME-ORIGIN IWAD you host yourself and are licensed to play; ?sound=0
     // boots it mute. There is deliberately no engine override: a dynamic
     // import() runs whatever it is given, on this origin, so letting a link
