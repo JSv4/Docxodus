@@ -129,15 +129,15 @@ public static class DocxCompare
         MoveMinimumWordCount = settings.MoveMinimumWordCount,
         // Input-revision policy on the selector path: the DIFF must run over the accepted view (as
         // WmlComparer does internally — otherwise revision-bearing inputs diff their raw surface and
-        // emit whole-document churn), and Word's Compare additionally PRESERVES the inputs' own markup
-        // in its output (original author/date rides through, verified against Word-oracle outputs).
-        // Preserve WINS over the pre-accept by precedence: matching still happens on the accepted view
-        // (the IR read accepts regardless), the byte-level flatten is skipped, and equal/inserted blocks
-        // carry the input's markup through. See DocxDiffSettings.PreserveInputRevisions for the
-        // one-sided round-trip contract this implies (accept ≡ right holds; reject ≠ left where foreign
-        // markup exists — exactly Word). The raw DocxDiff API keeps both flags' opt-in defaults.
+        // emit whole-document churn). Word's Compare dialog says it outright — "Word will treat them
+        // as accepted" — and its outputs confirm it: text an input had struck through is absent from
+        // the compare result entirely, the surviving text is re-detected as the compare author's own
+        // insertions, and the output collapses to a single revision author. Earlier releases preserved
+        // the inputs' markup here (Word's COMBINE behavior, decoded from a batch of oracle documents
+        // that turned out to be Combine-shaped); Compare is the operation this surface models, so the
+        // pre-accept flatten now runs. Callers who want the inputs' own revisions carried through use
+        // the raw DocxDiff API with DocxDiffSettings.PreserveInputRevisions.
         PreAcceptInputRevisions = true,
-        PreserveInputRevisions = true,
     };
 
     /// <summary>

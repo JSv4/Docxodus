@@ -786,9 +786,14 @@ public class DocxDiffPreserveInputRevisionsTests
     }
 
     [Fact]
-    public void DocxCompare_docxdiff_branch_enables_preserve()
+    public void DocxCompare_docxdiff_branch_preaccepts_without_preserve()
     {
-        // The engine-selector mapping (CLI/bench path) opts into Word-parity preservation.
-        Assert.True(DocxCompare.ToDocxDiffSettings(new WmlComparerSettings()).PreserveInputRevisions);
+        // The engine-selector mapping models Word's COMPARE, which treats input revisions as
+        // accepted and re-detects the delta under the compare author ("Word will treat them as
+        // accepted"); preservation is Word's COMBINE behavior and stays an explicit opt-in on the
+        // raw DocxDiff API.
+        var mapped = DocxCompare.ToDocxDiffSettings(new WmlComparerSettings());
+        Assert.True(mapped.PreAcceptInputRevisions);
+        Assert.False(mapped.PreserveInputRevisions);
     }
 }
