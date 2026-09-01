@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 
 using System.IO;
 using System.Linq;
@@ -1170,21 +1170,6 @@ public class BlockFormatChangeTests
         var tblRev = IrTestDocuments.FromBodyXml(Table("", "<w:tcW w:w=\"4000\" w:type=\"dxa\"/>", grid: "<w:gridCol w:w=\"6000\"/>"));
         var tblMerged = DocxDiff.Consolidate(tblBase, new[] { new DocxDiffReviewer { Document = tblRev, Author = "R" } });
         Assert.NotEmpty(BodyOf(tblMerged).Descendants(W + "tblGridChange"));
-    }
-
-    // ------------------------------------------------------------------ the WmlComparer oracle
-
-    [Fact]
-    public void Oracle_WmlComparer_ignores_a_pPr_only_change()
-    {
-        // Rationale pin for the differential harness: the blessed oracle reports NOTHING for a
-        // pPr-only change (it emits no pPrChange anywhere), so IR-side paragraph-scope format
-        // revisions bucket as "IR more correct" / oracle-cannot-produce.
-        var settings = new WmlComparerSettings();
-        var compared = WmlComparer.Compare(PPrLeft, PPrRight, settings);
-        var revisions = WmlComparer.GetRevisions(compared, settings);
-        Assert.Empty(revisions);
-        Assert.Empty(BodyOf(compared).Descendants(W + "pPrChange"));
     }
 
     // ------------- pPrChange PRESENCE laws (decoded 2026-07-27 from reference compare output) -------------

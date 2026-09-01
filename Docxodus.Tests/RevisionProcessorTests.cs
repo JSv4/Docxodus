@@ -167,13 +167,21 @@ namespace OxPt
             }
 
             ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-            // Use WmlComparer to see if accepted baseline is same as processed
+            // Compare the accepted baseline against the processed document — equal iff no revisions.
             if (baselineAcceptedFi.Exists)
             {
                 var baselineAcceptedWml = new WmlDocument(baselineAcceptedFi.FullName);
-                WmlComparerSettings wmlComparerSettings = new WmlComparerSettings();
-                WmlDocument result = WmlComparer.Compare(baselineAcceptedWml, afterAcceptingWml, wmlComparerSettings);
-                var revisions = WmlComparer.GetRevisions(result, wmlComparerSettings);
+                // Ask the engine directly whether the two differ, rather than rendering a redline and
+                // counting its markup: DocxCompare's front door PRESERVES the inputs' own revisions, so a
+                // fixture that already carries tracked changes would show them in the output and read as a
+                // difference that is not one. Pre-accept both sides — the question is whether the RESOLVED
+                // documents agree. Text-free revisions are ignored: the engine reports a paragraph-mark
+                // change as an empty-text Inserted revision, which the legacy reader this assertion was
+                // written against dropped by its own normalize-and-drop-if-empty rule. Counting them
+                // would flag structural noise these fixtures have always carried.
+                var revisions = DocxDiff.GetRevisions(baselineAcceptedWml, afterAcceptingWml,
+                    new DocxDiffSettings { PreAcceptInputRevisions = true })
+                    .Where(r => !string.IsNullOrWhiteSpace(r.Text));
                 if (revisions.Any())
                 {
                     Assert.True(false, "Regression Error: Accepted baseline document did not match processed document");
@@ -185,13 +193,18 @@ namespace OxPt
             }
 
             ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-            // Use WmlComparer to see if rejected baseline is same as processed
+            // Compare the rejected baseline against the processed document — equal iff no revisions.
             if (baselineRejectedFi.Exists)
             {
                 var baselineRejectedWml = new WmlDocument(baselineRejectedFi.FullName);
-                WmlComparerSettings wmlComparerSettings = new WmlComparerSettings();
-                WmlDocument result = WmlComparer.Compare(baselineRejectedWml, afterRejectingWml, wmlComparerSettings);
-                var revisions = WmlComparer.GetRevisions(result, wmlComparerSettings);
+                // Ask the engine directly whether the two differ, rather than rendering a redline and
+                // counting its markup: DocxCompare's front door PRESERVES the inputs' own revisions, so a
+                // fixture that already carries tracked changes would show them in the output and read as a
+                // difference that is not one. Pre-accept both sides — the question is whether the RESOLVED
+                // documents agree.
+                var revisions = DocxDiff.GetRevisions(baselineRejectedWml, afterRejectingWml,
+                    new DocxDiffSettings { PreAcceptInputRevisions = true })
+                    .Where(r => !string.IsNullOrWhiteSpace(r.Text));
                 if (revisions.Any())
                 {
                     Assert.True(false, "Regression Error: Rejected baseline document did not match processed document");

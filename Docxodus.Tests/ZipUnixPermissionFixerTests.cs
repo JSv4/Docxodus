@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 
 // Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
@@ -31,7 +31,7 @@ namespace Docxodus.Tests;
 /// <c>ExternalAttributes == 0</c> on every entry (Word doesn't set them), which is the baseline that
 /// reproduces the bug; these tests load <c>TestFiles/Blank-wml.docx</c> for exactly that reason.</para>
 ///
-/// <para>DS350/DS351 cover a defense-in-depth extension: <see cref="WmlComparer"/>'s own
+/// <para>DS350/DS351 cover a defense-in-depth extension: the comparison engine's own
 /// open/dispose/save pipeline (independent of both <see cref="DocxSession"/> and
 /// <see cref="OpenXmlMemoryStreamDocument"/>) doesn't reproduce the bug on the currently-targeted
 /// SDK, so those two don't need the zero-attribute Word-authored baseline to prove anything — they
@@ -130,7 +130,7 @@ public class ZipUnixPermissionFixerTests
     public void DS349_DocumentBuilderOutputFromExistingWordDocx_HasNonZeroUnixPermissions()
     {
         // Covers the OpenXmlMemoryStreamDocument.GetModified*Document() choke point shared by
-        // DocumentBuilder/WmlComparer/HtmlToWmlConverter/etc. — the library-wide half of the fix,
+        // DocumentBuilder/DocxDiff/HtmlToWmlConverter/etc. — the library-wide half of the fix,
         // independent of DocxSession, exercised against the same zero-attribute baseline.
         var wmlDoc = new WmlDocument("Blank-wml.docx", LoadWordAuthoredFixture());
 
@@ -141,39 +141,33 @@ public class ZipUnixPermissionFixerTests
     }
 
     [Fact]
-    public void DS350_WmlComparerCompareOutput_HasNonZeroUnixPermissions()
+    public void DS350_CompareOutput_HasNonZeroUnixPermissions()
     {
-        // WmlComparer.Compare (the legacy comparison engine, still the most-used save path) manages
-        // its own open/dispose/ToArray() pipeline independent of both DocxSession and
-        // OpenXmlMemoryStreamDocument. Its dispose-based pattern happens not to reproduce #302 on the
-        // currently-targeted SDK, but had no code-level defense the way the other two save paths now
-        // do — this closes that gap and guards against a future SDK behavior change regressing it
-        // silently.
+        // The comparison path manages its own open/dispose/ToArray() pipeline independent of both
+        // DocxSession and OpenXmlMemoryStreamDocument. Its dispose-based pattern happens not to
+        // reproduce #302 on the currently-targeted SDK, but had no code-level defense the way the other
+        // two save paths now do — this closes that gap and guards against a future SDK behavior change
+        // regressing it silently.
         var source1 = new WmlDocument("source1.docx", BuildSimpleDoc("Original paragraph text."));
         var source2 = new WmlDocument("source2.docx", BuildSimpleDoc("Modified paragraph text."));
 
-        var compared = WmlComparer.Compare(source1, source2, new WmlComparerSettings());
+        var compared = DocxCompare.Compare(source1, source2);
 
         AssertAllEntriesHaveUnixPermissions(compared.DocumentByteArray);
     }
 
     [Fact]
-    public void DS351_WmlComparerConsolidateOutput_HasNonZeroUnixPermissions()
+    public void DS351_ConsolidateOutput_HasNonZeroUnixPermissions()
     {
-        // Same coverage gap as DS350, for WmlComparer.Consolidate's separate output path.
+        // Same coverage gap as DS350, for Consolidate's separate output path.
         var original = new WmlDocument("original.docx", BuildSimpleDoc("Original paragraph text."));
         var revised = new WmlDocument("revised.docx", BuildSimpleDoc("Revised paragraph text."));
-        var revisedList = new List<WmlRevisedDocumentInfo>
+        var reviewers = new List<DocxDiffReviewer>
         {
-            new WmlRevisedDocumentInfo
-            {
-                RevisedDocument = revised,
-                Color = ColorParser.FromName("red"),
-                Revisor = "Reviewer One",
-            },
+            new DocxDiffReviewer { Document = revised, Author = "Reviewer One" },
         };
 
-        var consolidated = WmlComparer.Consolidate(original, revisedList, new WmlComparerSettings());
+        var consolidated = DocxDiff.Consolidate(original, reviewers);
 
         AssertAllEntriesHaveUnixPermissions(consolidated.DocumentByteArray);
     }

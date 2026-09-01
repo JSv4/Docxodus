@@ -167,8 +167,8 @@ internal static class IrCompositeMarkupRenderer
                     using var wDocRev = revStream.GetWordprocessingDocument();
                     if (main.StyleDefinitionsPart != null &&
                         wDocRev.MainDocumentPart?.StyleDefinitionsPart != null)
-                        WmlComparer.CopyMissingStylesFromOneDocToAnother(wDocRev, wDoc);
-                    WmlComparer.CopyMissingNumberingFromOneDocToAnother(wDocRev, wDoc);
+                        PackageMerge.CopyMissingStylesFromOneDocToAnother(wDocRev, wDoc);
+                    PackageMerge.CopyMissingNumberingFromOneDocToAnother(wDocRev, wDoc);
                     IrMarkupRenderer.MergeRightCommentDefinitions(main, wDocRev.MainDocumentPart, streamDoc, revStream);
                 }
 

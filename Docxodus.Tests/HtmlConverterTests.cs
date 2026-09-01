@@ -389,7 +389,7 @@ namespace OxPt
         [Fact]
         public void HC003_TrackedChanges_InsertionsAndDeletions()
         {
-            // Use WmlComparer to create a document with tracked changes
+            // Use DocxCompare to create a document with tracked changes
             DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
             FileInfo doc1 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
             FileInfo doc2 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-InsertInMiddle.docx"));
@@ -397,8 +397,7 @@ namespace OxPt
             WmlDocument wmlDoc1 = new WmlDocument(doc1.FullName);
             WmlDocument wmlDoc2 = new WmlDocument(doc2.FullName);
 
-            WmlComparerSettings comparerSettings = new WmlComparerSettings();
-            WmlDocument comparedDoc = WmlComparer.Compare(wmlDoc1, wmlDoc2, comparerSettings);
+            WmlDocument comparedDoc = DocxCompare.Compare(wmlDoc1, wmlDoc2);
 
             // Convert to HTML with tracked changes rendering enabled
             using (MemoryStream ms = new MemoryStream())
@@ -439,7 +438,7 @@ namespace OxPt
         [Fact]
         public void HC004_TrackedChanges_Deletions()
         {
-            // Use WmlComparer to create a document with deletions
+            // Use DocxCompare to create a document with deletions
             DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
             FileInfo doc1 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
             FileInfo doc2 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-DeleteInMiddle.docx"));
@@ -447,8 +446,7 @@ namespace OxPt
             WmlDocument wmlDoc1 = new WmlDocument(doc1.FullName);
             WmlDocument wmlDoc2 = new WmlDocument(doc2.FullName);
 
-            WmlComparerSettings comparerSettings = new WmlComparerSettings();
-            WmlDocument comparedDoc = WmlComparer.Compare(wmlDoc1, wmlDoc2, comparerSettings);
+            WmlDocument comparedDoc = DocxCompare.Compare(wmlDoc1, wmlDoc2);
 
             // Convert to HTML with tracked changes rendering enabled
             using (MemoryStream ms = new MemoryStream())
@@ -487,7 +485,7 @@ namespace OxPt
         [Fact]
         public void HC005_TrackedChanges_CssGenerated()
         {
-            // Use WmlComparer to create a document with tracked changes
+            // Use DocxCompare to create a document with tracked changes
             DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
             FileInfo doc1 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
             FileInfo doc2 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-InsertInMiddle.docx"));
@@ -495,8 +493,7 @@ namespace OxPt
             WmlDocument wmlDoc1 = new WmlDocument(doc1.FullName);
             WmlDocument wmlDoc2 = new WmlDocument(doc2.FullName);
 
-            WmlComparerSettings comparerSettings = new WmlComparerSettings();
-            WmlDocument comparedDoc = WmlComparer.Compare(wmlDoc1, wmlDoc2, comparerSettings);
+            WmlDocument comparedDoc = DocxCompare.Compare(wmlDoc1, wmlDoc2);
 
             using (MemoryStream ms = new MemoryStream())
             {
@@ -533,8 +530,7 @@ namespace OxPt
             WmlDocument wmlDoc1 = new WmlDocument(doc1.FullName);
             WmlDocument wmlDoc2 = new WmlDocument(doc2.FullName);
 
-            WmlComparerSettings comparerSettings = new WmlComparerSettings();
-            WmlDocument comparedDoc = WmlComparer.Compare(wmlDoc1, wmlDoc2, comparerSettings);
+            WmlDocument comparedDoc = DocxCompare.Compare(wmlDoc1, wmlDoc2);
 
             using (MemoryStream ms = new MemoryStream())
             {
@@ -1161,7 +1157,7 @@ namespace OxPt
         [Fact]
         public void HC011_TrackedChanges_MoveOperations()
         {
-            // Use WmlComparer to create a document with move operations
+            // Use DocxCompare to create a document with move operations
             DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
             FileInfo doc1 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
             FileInfo doc2 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-MovedPara.docx"));
@@ -1175,8 +1171,7 @@ namespace OxPt
             WmlDocument wmlDoc1 = new WmlDocument(doc1.FullName);
             WmlDocument wmlDoc2 = new WmlDocument(doc2.FullName);
 
-            WmlComparerSettings comparerSettings = new WmlComparerSettings();
-            WmlDocument comparedDoc = WmlComparer.Compare(wmlDoc1, wmlDoc2, comparerSettings);
+            WmlDocument comparedDoc = DocxCompare.Compare(wmlDoc1, wmlDoc2);
 
             using (MemoryStream ms = new MemoryStream())
             {
@@ -1249,8 +1244,7 @@ namespace OxPt
             WmlDocument wmlDoc1 = new WmlDocument(doc1.FullName);
             WmlDocument wmlDoc2 = new WmlDocument(doc2.FullName);
 
-            WmlComparerSettings comparerSettings = new WmlComparerSettings();
-            WmlDocument comparedDoc = WmlComparer.Compare(wmlDoc1, wmlDoc2, comparerSettings);
+            WmlDocument comparedDoc = DocxCompare.Compare(wmlDoc1, wmlDoc2);
 
             using (MemoryStream ms = new MemoryStream())
             {

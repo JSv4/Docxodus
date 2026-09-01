@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 
 using System;
 using System.IO;
@@ -786,9 +786,11 @@ public class DocxDiffPreserveInputRevisionsTests
     }
 
     [Fact]
-    public void DocxCompare_docxdiff_branch_enables_preserve()
+    public void DocxCompare_front_door_enables_preserve()
     {
-        // The engine-selector mapping (CLI/bench path) opts into Word-parity preservation.
-        Assert.True(DocxCompare.ToDocxDiffSettings(new WmlComparerSettings()).PreserveInputRevisions);
+        // The front-door policy (CLI/WASM/bench path) opts into Word-parity preservation; the raw
+        // DocxDiff API leaves it off.
+        Assert.True(DocxCompare.ApplyFrontDoorRevisionPolicy(null).PreserveInputRevisions);
+        Assert.False(new DocxDiffSettings().PreserveInputRevisions);
     }
 }

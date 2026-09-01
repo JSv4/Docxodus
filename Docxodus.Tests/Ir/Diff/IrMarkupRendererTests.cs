@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 
 using System;
 using System.Collections.Generic;
@@ -1280,17 +1280,31 @@ public class IrMarkupRendererTests
     }
 
     [Fact]
-    public void Render_move_output_is_recognized_as_Moved_by_WmlComparer_GetRevisions()
+    public void Render_move_output_is_recognized_as_Moved_by_the_native_revision_reader()
     {
-        // THE ORACLE: WmlComparer.GetRevisions, run over OUR rendered output, must see Moved revisions — proving
-        // our native move markup is structurally what the shipped reader recognizes.
+        // THE ORACLE: the native revision reader, run over OUR rendered output, must see Move-family
+        // revisions — proving our move markup is structurally what a markup-native reader recognizes.
+        // Through v10 this used WmlComparer.GetRevisions; DocxSession.ListRevisions reads the same
+        // w:moveFrom/w:moveTo markup without re-deriving moves from a similarity threshold.
         var left = MoveDoc(MoveLeft);
         var right = MoveDoc(MoveRight);
         var rendered = RenderMarkup(left, right);
 
-        var revs = WmlComparer.GetRevisions(rendered, new WmlComparerSettings());
-        var moved = revs.Where(r => r.RevisionType == WmlComparer.WmlComparerRevisionType.Moved).ToList();
-        Assert.True(moved.Count >= 2, $"WmlComparer.GetRevisions should see ≥2 Moved in our output (saw {moved.Count} of {revs.Count} total)");
+        using var session = new DocxSession(rendered.DocumentByteArray);
+        var revs = session.ListRevisions();
+        var moved = revs.Where(r => r.Family == RevisionFamily.Move).ToList();
+
+        // One entry per MOVE, not per half. The legacy reader surfaced a move as two Moved revisions
+        // (source and destination); the native reader groups them, and only emits a Move-family entry when
+        // BOTH w:moveFrom and w:moveTo are present with correctly paired range-marker ids. So one complete
+        // entry here is a strictly stronger statement about our markup than two halves were.
+        Assert.True(moved.Count >= 1,
+            $"the native reader should see a Move revision in our output (saw {moved.Count} of {revs.Count} total)");
+        Assert.All(moved, m =>
+        {
+            Assert.Equal(RevisionResolutionStatus.Supported, m.ResolutionStatus);
+            Assert.Null(m.Diagnostic);
+        });
     }
 
     [Fact]
@@ -1506,11 +1520,10 @@ public class IrMarkupRendererTests
         var before = new WmlDocument(Path.Combine(WcCorpus.WcDir.FullName, "WC-BodyBookmarks-Before.docx"));
         var after = new WmlDocument(Path.Combine(WcCorpus.WcDir.FullName, "WC-BodyBookmarks-After.docx"));
 
-        // The oracle throws on this fixture (no behaviour to match) — assert that explicitly so the verdict is
-        // self-documenting and re-checked: if WmlComparer ever LEARNS to handle this pair, revisit the verdict.
-        Assert.Throws<DocxodusException>(() => WmlComparer.Compare(before, after, new WmlComparerSettings()));
-
-        // Our engine completes and produces revisions in BOTH directions — the capability win.
+        // The legacy engine threw on this fixture; ours completes and produces revisions in BOTH
+        // directions. That capability gap is recorded in the frozen parity baseline (the two OLD_ERROR
+        // rows of docs/architecture/wmlcomparer_parity_baseline/IrVsWmlComparerTests.txt); what stays
+        // testable here is our own side of it.
         var fwd = DocxDiff.GetRevisions(before, after);
         var rev = DocxDiff.GetRevisions(after, before);
         Assert.NotEmpty(fwd);
@@ -1991,7 +2004,7 @@ public class IrMarkupRendererTests
         // over the per-document baseline.
         return validator.Validate(wd).Count(e =>
             e.ErrorType == DocumentFormat.OpenXml.Validation.ValidationErrorType.Schema &&
-            !OxPt.WcTests.ExpectedErrors.Contains(e.Description));
+            !Docxodus.Tests.CorpusValidation.ExpectedErrors.Contains(e.Description));
     }
 
     // ----------------------------------------------------------------- header/footer story markup (2026-07-03)

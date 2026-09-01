@@ -156,34 +156,13 @@ public class DocxDiffStrictOoxmlTests
         Assert.Equal(new List<string> { "Alpha bravo charlie.", "Tail." }, BodyTexts(rejected));
     }
 
-    // The legacy engine stays reachable behind DocxCompare / WASM / npm via an explicit selector.
-    // It therefore needs the same Strict-OOXML open normalization as the default IR engine;
-    // otherwise public callers can only compare a Strict input by knowing to select DocxDiff.
     [Fact]
-    public void Compare_WmlComparer_StrictLeft_TransitionalRight_RoundTrips()
-    {
-        var left = ToStrict(Doc("The quick brown fox.", "Second paragraph."));
-        var right = Doc("The quick red fox.", "Second paragraph.");
-
-        var result = DocxCompare.Compare(left, right, ComparisonEngine.WmlComparer,
-            new WmlComparerSettings { AuthorForRevisions = "Test", DetailThreshold = 0 });
-
-        var accepted = RevisionProcessor.AcceptRevisions(result);
-        var rejected = RevisionProcessor.RejectRevisions(result);
-        Assert.Equal(BodyTexts(right), BodyTexts(accepted));
-        Assert.Equal(new List<string> { "The quick brown fox.", "Second paragraph." },
-            BodyTexts(rejected));
-    }
-
-    [Theory]
-    [InlineData(ComparisonEngine.WmlComparer)]
-    [InlineData(ComparisonEngine.DocxDiff)]
-    public void Compare_StrictSelfCompare_PreservesExactPackageBytes(ComparisonEngine engine)
+    public void Compare_StrictSelfCompare_PreservesExactPackageBytes()
     {
         var strict = ToStrict(Doc("Identity paragraph.", "Another one."));
         var samePackage = new WmlDocument(strict);
 
-        var result = DocxCompare.Compare(strict, samePackage, engine, new WmlComparerSettings());
+        var result = DocxCompare.Compare(strict, samePackage);
 
         Assert.NotSame(strict, result);
         Assert.NotSame(strict.DocumentByteArray, result.DocumentByteArray);
