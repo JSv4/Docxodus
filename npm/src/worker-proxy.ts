@@ -43,8 +43,7 @@ import type {
   ConversionOptions,
   CompareOptions,
   DocxDiffSettings,
-  GetRevisionsOptions,
-  Revision,
+  RevisionListEntry,
   VersionInfo,
   DocumentMetadata,
   DocxSessionSettings,
@@ -285,10 +284,7 @@ export interface WorkerDocxodus {
    * @param options - Revision extraction options
    * @returns Array of revisions
    */
-  getRevisions(
-    document: File | Uint8Array,
-    options?: GetRevisionsOptions
-  ): Promise<Revision[]>;
+  getRevisions(document: File | Uint8Array): Promise<RevisionListEntry[]>;
 
   /**
    * Get document metadata for lazy loading pagination.
@@ -687,16 +683,14 @@ export async function createWorkerDocxodus(
     },
 
     async getRevisions(
-      document: File | Uint8Array,
-      options?: GetRevisionsOptions
-    ): Promise<Revision[]> {
+      document: File | Uint8Array
+    ): Promise<RevisionListEntry[]> {
       const bytes = await toBytes(document);
       const response = await sendRequest<WorkerGetRevisionsResponse>(
         {
           id: generateId(),
           type: "getRevisions",
           documentBytes: bytes,
-          options,
         },
         [bytes.buffer]
       );

@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft. All rights reserved.
+﻿// Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 using System;
@@ -82,14 +82,7 @@ class Program
         }
 
         // Build settings from flags
-        var settings = new WmlComparerSettings
-        {
-            DetailThreshold = 0
-        };
-
-        // DocxDiff is the production comparison path. --engine=wmlcomparer remains available for
-        // callers that explicitly need the historical engine.
-        var engine = ComparisonEngine.DocxDiff;
+        var settings = new DocxDiffSettings();
 
         foreach (var flag in flags)
         {
@@ -99,12 +92,9 @@ class Program
             }
             else if (flag.StartsWith("--detail-threshold="))
             {
-                if (!double.TryParse(flag["--detail-threshold=".Length..], NumberStyles.Float, CultureInfo.InvariantCulture, out var val))
-                {
-                    Console.Error.WriteLine($"Error: Invalid value for --detail-threshold: {flag["--detail-threshold=".Length..]}");
-                    return 1;
-                }
-                settings.DetailThreshold = val;
+                Console.Error.WriteLine(
+                    "Warning: --detail-threshold is ignored since v11.0.0 (it tuned the removed legacy " +
+                    "engine's LCS granularity and has no equivalent in DocxDiff).");
             }
             else if (flag == "--case-insensitive")
             {
@@ -116,7 +106,9 @@ class Program
             }
             else if (flag == "--simplify-move-markup")
             {
-                settings.SimplifyMoveMarkup = true;
+                Console.Error.WriteLine(
+                    "Warning: --simplify-move-markup is ignored since v11.0.0 (DocxDiff renders moves " +
+                    "natively; the flag existed to work around the removed legacy engine's markup).");
             }
             else if (flag.StartsWith("--move-similarity-threshold="))
             {
@@ -138,7 +130,7 @@ class Program
             }
             else if (flag == "--no-detect-format-changes")
             {
-                settings.DetectFormatChanges = false;
+                settings.TrackBlockFormatChanges = false;
             }
             else if (flag == "--no-conflate-spaces")
             {
@@ -147,15 +139,6 @@ class Program
             else if (flag.StartsWith("--date-time="))
             {
                 settings.DateTimeForRevisions = flag["--date-time=".Length..];
-            }
-            else if (flag.StartsWith("--engine="))
-            {
-                var engineName = flag["--engine=".Length..];
-                if (!DocxCompare.TryParseEngine(engineName, out engine))
-                {
-                    Console.Error.WriteLine($"Error: Unknown engine: {engineName} (expected 'wmlcomparer' or 'docxdiff')");
-                    return 1;
-                }
             }
             else
             {
@@ -179,8 +162,9 @@ class Program
             Console.WriteLine($"  Original: {originalFilePath}");
             Console.WriteLine($"  Modified: {modifiedFilePath}");
 
-            var result = DocxCompare.Compare(originalDocument, modifiedDocument, engine, settings);
-            var revisions = WmlComparer.GetRevisions(result, settings);
+            var result = DocxCompare.Compare(originalDocument, modifiedDocument, settings);
+            using var resultSession = new DocxSession(result.DocumentByteArray);
+            var revisions = resultSession.ListRevisions();
 
             File.WriteAllBytes(outputFilePath, result.DocumentByteArray);
 
@@ -216,12 +200,9 @@ class Program
         Console.WriteLine("  output.docx      Path for the output redline document");
         Console.WriteLine();
         Console.WriteLine("Options:");
-        Console.WriteLine("  --engine=<wmlcomparer|docxdiff>   Comparison engine (default: docxdiff)");
         Console.WriteLine("  --author=<name>                   Author name for tracked changes (default: Redline)");
-        Console.WriteLine("  --detail-threshold=<0.0-1.0>      Comparison granularity (lower = more detailed, default: 0; wmlcomparer only)");
         Console.WriteLine("  --case-insensitive                 Ignore case differences");
         Console.WriteLine("  --detect-moves                     Enable move detection");
-        Console.WriteLine("  --simplify-move-markup             Convert moves to del/ins for Word compatibility");
         Console.WriteLine("  --move-similarity-threshold=<val>  Jaccard threshold for move matching (default: 0.8)");
         Console.WriteLine("  --move-minimum-word-count=<val>    Min words for move detection (default: 3)");
         Console.WriteLine("  --no-detect-format-changes         Disable formatting change detection");
@@ -233,9 +214,8 @@ class Program
         Console.WriteLine("Examples:");
         Console.WriteLine("  redline contract-v1.docx contract-v2.docx redline.docx");
         Console.WriteLine("  redline draft.docx final.docx changes.docx --author=\"Legal Review\"");
-        Console.WriteLine("  redline old.docx new.docx diff.docx --detect-moves --simplify-move-markup");
-        Console.WriteLine("  redline old.docx new.docx diff.docx --detail-threshold=0.5 --case-insensitive");
-        Console.WriteLine("  redline old.docx new.docx diff.docx --engine=docxdiff");
+        Console.WriteLine("  redline old.docx new.docx diff.docx --detect-moves");
+        Console.WriteLine("  redline old.docx new.docx diff.docx --case-insensitive");
         Console.WriteLine();
         Console.WriteLine("Environment Variables:");
         Console.WriteLine("  REDLINE_DEBUG=1  Show detailed error information");

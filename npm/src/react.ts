@@ -18,7 +18,7 @@ import {
 import type {
   ConversionOptions,
   CompareOptions,
-  Revision,
+  RevisionListEntry,
   Annotation,
   AddAnnotationRequest,
   AddAnnotationResponse,
@@ -64,7 +64,7 @@ import {
 export type {
   ConversionOptions,
   CompareOptions,
-  Revision,
+  RevisionListEntry,
   PaginationOptions,
   PaginationResult,
   PageMap,
@@ -127,7 +127,7 @@ export interface UseDocxodusResult {
     options?: CompareOptions
   ) => Promise<string>;
   /** Get revisions from a compared document */
-  getRevisions: (document: File | Uint8Array) => Promise<Revision[]>;
+  getRevisions: (document: File | Uint8Array) => Promise<RevisionListEntry[]>;
   /** Get all annotations from a document */
   getAnnotations: (document: File | Uint8Array) => Promise<Annotation[]>;
   /** Add an annotation to a document */
@@ -431,7 +431,7 @@ export interface UseComparisonResult {
   /** The comparison result as HTML (if compareToHtml was used) */
   html: string | null;
   /** Revisions extracted from the comparison */
-  revisions: Revision[] | null;
+  revisions: RevisionListEntry[] | null;
   /** Whether a comparison is in progress */
   isComparing: boolean;
   /** Error from the last comparison attempt */
@@ -489,7 +489,7 @@ export function useComparison(wasmBasePath?: string): UseComparisonResult {
   const docxodus = useDocxodus(wasmBasePath);
   const [result, setResult] = useState<Uint8Array | null>(null);
   const [html, setHtml] = useState<string | null>(null);
-  const [revisions, setRevisions] = useState<Revision[] | null>(null);
+  const [revisions, setRevisions] = useState<RevisionListEntry[] | null>(null);
   const [isComparing, setIsComparing] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
