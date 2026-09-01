@@ -397,7 +397,7 @@ test.describe('The landing page on a phone', () => {
     await expect(page.locator('#dockcarts')).toBeHidden();
     await page.locator('#dockmore').click();
     await expect(page.locator('#dockcarts')).toBeVisible();
-    expect(await page.locator('#dockcarts button').count()).toBe(3);
+    expect(await page.locator('#dockcarts button').count()).toBe(4);
     await expect(page.locator('#restart')).toBeVisible();
     // The pad sits a fixed distance above the dock, so an opened sheet grows
     // the dock up underneath it: the D-pad covered the cartridge buttons and
