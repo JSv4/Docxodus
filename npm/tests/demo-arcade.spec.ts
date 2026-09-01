@@ -64,12 +64,13 @@ async function installFrameGate(page: Page) {
 export const CART_HUD: Record<string, string> = {
   quest: 'PILCROW',
   dungeon: 'DUNGEON',
+  e1m1: 'FREEDOOM',
   // Doom's HUD row says so while the engine and its IWAD are still
   // downloading, which is the frame these gated specs land on.
   doom: 'DOOM',
 };
 
-async function bootGatedCartridge(page: Page, cart: 'quest' | 'dungeon' | 'doom') {
+async function bootGatedCartridge(page: Page, cart: 'quest' | 'dungeon' | 'e1m1' | 'doom') {
   await page.goto(`/demo-arcade.html?${OVERRIDE}&boot=tap&cart=${cart}`);
   await installFrameGate(page);
   await page.locator('#boot').click();
@@ -114,7 +115,7 @@ async function replaceCanvasCharacter(page: Page, row: number, column: number, t
 }
 
 test.describe('THE DOCX ARCADE page', () => {
-  for (const cart of ['quest', 'dungeon', 'doom'] as const) {
+  for (const cart of ['quest', 'dungeon', 'e1m1', 'doom'] as const) {
     test(`${cart}: its very first frame reconciles incrementally`, async ({ page }) => {
       await bootGatedCartridge(page, cart);
       const state = await page.evaluate(() => {

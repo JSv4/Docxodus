@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { dungeonCart, rowsFromXml } from '../ascii-arcade.js';
+import { dungeonCart, freedoomCart, rowsFromXml } from '../ascii-arcade.js';
 import { frameXml } from '../ascii-scenes.js';
 
 const DEMO_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -200,13 +200,14 @@ function bfsNext(state) {
   return null;
 }
 
-// This used to drive the Freedoom E1M1 cartridge, which was the same
-// raycaster fed a bigger level pack. That cartridge is real Doom now (see
-// doom-cart.js), whose world lives in a WebAssembly heap and cannot be walked
-// by a headless script — so the raycaster's own "clear the level" logic is
-// proved on the pack that still ships.
-test('the fast headless cartridge run reaches every objective and the exit', () => {
-  const cart = dungeonCart();
+// Both raycaster level packs, cleared end to end by the same autopilot: the
+// hand-drawn dungeon and Freedoom's rasterized E1M1. The real Doom engine
+// (doom-cart.js) deliberately has no equivalent — its world lives in a
+// WebAssembly heap and cannot be walked by a headless script, which is
+// exactly why the E1M1 pack stays: its world is readable document text.
+for (const [packName, makeCart] of [['dungeon', dungeonCart], ['e1m1', freedoomCart]]) {
+test(`the fast headless ${packName} run reaches every objective and the exit`, () => {
+  const cart = makeCart();
   const input = new TestInput();
   let goal = null;
   let goalTicks = 0;
@@ -277,3 +278,4 @@ test('the fast headless cartridge run reaches every objective and the exit', () 
   assert.equal(final.sigilsLeft, 0);
   assert.equal(final.mode, 'won');
 });
+}

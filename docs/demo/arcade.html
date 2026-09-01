@@ -6,17 +6,17 @@
   <meta name="color-scheme" content="light" />
   <title>Docxodus — THE DOCX ARCADE: a video game inside a Word document</title>
   <link rel="icon" href="../favicon.svg" type="image/svg+xml" />
-  <meta name="description" content="A platformer, a Doom-style raycaster, and DOOM — the actual id Software engine, GPL-2.0, compiled to JavaScript — playable as a full-color inline image in a live Word document. Pause anywhere: it is only a document. Save mid-game as .docx." />
+  <meta name="description" content="A platformer, a Doom-style raycaster, Freedoom&#39;s E1M1 rasterized from the real WAD, and DOOM — the actual id Software engine, GPL-2.0, compiled to JavaScript — playable as a full-color inline image in a live Word document. Pause anywhere: it is only a document. Save mid-game as .docx." />
 
   <!-- Share THIS page's URL. Social platforms link through to the live game. -->
   <meta property="og:type" content="website" />
   <meta property="og:title" content="THE DOCX ARCADE — a video game running inside a Word document" />
-  <meta property="og:description" content="WASD works, and cartridge three is the REAL Doom engine — id&#39;s own renderer, drawing its 320×200 framebuffer into a Word paragraph. Pause and the frame is an ordinary paragraph: edit it, undo it, save it as a real .docx. 100% in-browser." />
+  <meta property="og:description" content="WASD works, and cartridge four is the REAL Doom engine — id&#39;s own renderer, drawing its 320×200 framebuffer into a Word paragraph. Pause and the frame is an ordinary paragraph: edit it, undo it, save it as a real .docx. 100% in-browser." />
   <meta property="og:url" content="https://jsv4.github.io/Docxodus/demo/arcade.html" />
   <meta property="og:image" content="https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/images/arcade-social.png" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="THE DOCX ARCADE — a video game running inside a Word document" />
-  <meta name="twitter:description" content="A platformer, a Doom-style raycaster, and actual DOOM — id&#39;s GPL engine compiled to JavaScript — whose screen is a live Word paragraph. Pause and it is only a document again." />
+  <meta name="twitter:description" content="A platformer, a Doom-style raycaster, a real Doom-format level, and actual DOOM — id&#39;s GPL engine compiled to JavaScript — whose screen is a live Word paragraph. Pause and it is only a document again." />
   <meta name="twitter:image" content="https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/images/arcade-social.png" />
 
   <style>
@@ -116,8 +116,9 @@
     // content, and the landing page imports this identical module.
     const DOCK_URL = params.get("dock") ?? "./arcade-dock.js";
 
-    // The Doom cartridge's engine and IWAD are vendored beside this page
-    // (docs/demo/vendor/ — see its NOTICE.md). ?wad= points the cartridge at a
+    // The Doom cartridge's engine and IWAD are pinned jsDelivr URLs — nothing
+    // is vendored here (docs/demo/vendor/ holds only license text and the
+    // provenance record; see its NOTICE.md). ?wad= points the cartridge at a
     // SAME-ORIGIN IWAD you host yourself and are licensed to play; ?sound=0
     // boots it mute. There is deliberately no engine override: a dynamic
     // import() runs whatever it is given, on this origin, so letting a link

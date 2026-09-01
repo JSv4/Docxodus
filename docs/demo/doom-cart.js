@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════
-// Cartridge 3 — DOOM. The actual game, not an impression of it.
+// Cartridge 4 — DOOM. The actual game, not an impression of it.
 //
 // LICENSE NOTE — THIS FILE IS GPL-2.0-or-later, NOT MIT.
 // Docxodus is MIT (see the root LICENSE) and every other file in this
@@ -9,11 +9,11 @@
 // offered under GPL-2.0-or-later too. The engine itself is not in this
 // repository: it is a pinned jsDelivr URL loaded through a dynamic `import()`,
 // which is also why the 3 MB build never downloads for a visitor who plays the
-// other two cartridges. See vendor/NOTICE.md.
+// other three cartridges. See vendor/NOTICE.md.
 //
 // WHAT THIS REPLACES
 // ------------------
-// Cartridge 3 used to be a hand-written ASCII raycaster fed by Freedoom's
+// Cartridge 4's slot used to end at a hand-written ASCII raycaster fed by Freedoom's
 // E1M1 geometry, rasterized to a character grid offline. That was a real Doom
 // *level* in a Word document. This is the real Doom *engine* in a Word
 // document: id's own BSP renderer, its own 320×200 framebuffer, its own
@@ -743,7 +743,6 @@ export function doomCart(options = {}) {
   let error = null;
   let paintedFrames = 0;
   let spinner = 0;
-  let edited = false;
   let imageCanvas = null;
   let imageContext = null;
   let imageData = null;
@@ -831,27 +830,6 @@ export function doomCart(options = {}) {
     }
   }
 
-/** Let both bezels merge into the picture.
- *
- *  Every row of this paragraph starts with a box-drawing character so the
- *  editor's markdown blur-commit can never read a row as a heading or a
- *  bullet. That safety is a property of the CHARACTER, not of its colour — but
- *  giving the column its own ink cost it its own run on every picture row —
- *  one run per row of the frame, for a one-cell grey line. Painting the bezel in its
- *  neighbour's colours keeps the character exactly where it was and merges the
- *  run away. The same rule on the right replaced the tiny control panel: those
- *  controls are now a legible paragraph above the screen, and the viewport gets
- *  the whole document width. */
-function mergeBezelsIntoPicture(g) {
-  for (let row = 0; row < FIELD_ROWS; row++) {
-    const y = FIELD_TOP + row;
-    g.colors[y][0] = g.colors[y][1];
-    g.bgs[y][0] = g.bgs[y][1];
-    g.colors[y][COLS - 1] = g.colors[y][COLS - 2];
-    g.bgs[y][COLS - 1] = g.bgs[y][COLS - 2];
-  }
-}
-
   function render() {
     if (status === 'playing' && handle) {
       paintedFrames++;
@@ -910,25 +888,17 @@ function mergeBezelsIntoPicture(g) {
      *  to it. So the round-trip here is honest about what it is — the frame
      *  stays editable, undoable and saveable like any paragraph, and the next
      *  frame paints over whatever was typed. */
-    syncFromRows() { edited = true; },
+    syncFromRows() {},
     state: () => ({
       status,
       error,
       progress,
-      edited,
       title: handle?.title ?? null,
       doomFrames: handle?.frames ?? 0,
       paintedFrames,
-      /** A cheap digest of the live framebuffer, so a spec can prove the
-       *  picture actually changes when keys are sent — the difference between
-       *  "Doom booted" and "Doom is playing". */
-      frameHash: () => {
-        const fb = handle?.framebuffer;
-        if (!fb) return 0;
-        let h = 2166136261;
-        for (let i = 0; i < fb.length; i += 997) h = Math.imul(h ^ fb[i], 16777619);
-        return h >>> 0;
-      },
+      /** One live framebuffer pixel as [r, g, b] — the specs' probe for "Doom
+       *  is playing", not merely "Doom booted": sampled bands of these prove
+       *  the view swings under a held turn key while the status bar holds. */
       pixel: (x, y) => {
         const fb = handle?.framebuffer;
         if (!fb) return null;

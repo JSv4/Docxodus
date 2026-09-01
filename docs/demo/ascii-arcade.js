@@ -4,7 +4,7 @@
 // screen is ONE Word paragraph, animated through the session API plus
 // `DocxEditor.refresh()` — the editor's public "the session changed behind
 // your back" seam, which reconciles exactly one block in continuous mode.
-// The two text cartridges replace colored OOXML runs; Doom replaces one
+// The three text cartridges replace colored OOXML runs; Doom replaces one
 // native inline image because its HUD must remain genuinely readable. Nothing
 // is mounted over the document: pause (or click the screen) and the game is
 // only a paragraph, Ctrl+Z rewinds frames, and Save stores the current frame
@@ -28,7 +28,10 @@
 // machinery, and is deliberately NOT shipped in the npm package.
 
 import { COLS, ROWS, frameXml, createCanvasPin } from './ascii-scenes.js';
-// Cartridge 3 is real Doom. doom-cart.js is GPL-2.0-or-later (it is written
+// The raycaster's second level pack: Freedoom's E1M1, rasterized to the grid
+// offline by tools/wad2cart.mjs (BSD-licensed level data).
+import { FREEDOOM_LEVEL } from './freedoom-e1m1.js';
+// Cartridge 4 is real Doom. doom-cart.js is GPL-2.0-or-later (it is written
 // against id Software's GPL'd engine) while this file stays MIT; the 3 MB
 // engine itself is behind a dynamic import inside that module, so a visitor
 // who only plays the platformer never downloads it.
@@ -453,12 +456,13 @@ export function platformerCart() {
 // step through the * gate.
 //
 // The raycaster is a LEVEL PACK player: renderer, controls and map-band round
-// trip are all driven from a pack, and the hand-drawn 24×16 dungeon is the one
-// that ships. It used to run a second pack — Freedoom's E1M1 rasterized to a
-// grid — which is now the real Doom engine instead (doom-cart.js), so the
-// packs it plays are hand-drawn again. Maps larger than the band scroll it as
-// a 24×16 window that follows the player; typing into the window edits the
-// world cells it shows.
+// trip are all driven from a pack. Two packs ship: the hand-drawn 24×16
+// dungeon, and a real Doom-format level — Freedoom's E1M1, rasterized to the
+// grid by tools/wad2cart.mjs. The E1M1 pack is a different demo from the real
+// Doom engine in doom-cart.js: the engine's frames can only be pictured, while
+// the raycaster's world stays readable, typable document text. Maps larger
+// than the band scroll it as a 24×16 window that follows the player; typing
+// into the window edits the world cells it shows.
 // ═══════════════════════════════════════════════════════════════════════
 
 const VIEW_W = 64;                 // 3-D viewport columns inside the bezel
@@ -601,8 +605,37 @@ const DUNGEON_PACK = {
   coneRadius: 7,
 };
 
+const FREEDOOM_PACK = {
+  name: 'e1m1',
+  label: '☩ Freedoom E1M1',
+  controls: [
+    'CONTROLS · MOVE W/S · STRAFE A/D',
+    'TURN ←/→ · FIRE SPACE',
+    'RUN SHIFT · RESTART R',
+    'PAUSE/EDIT ESC',
+  ],
+  hudTitle: 'FREEDOOM E1M1',
+  bg: '120D0A',
+  caption:
+    'A REAL Doom-format level — E1M1 from the Freedoom project (BSD-licensed), its 1,175 ' +
+    'linedefs rasterized onto this grid by `wad2cart.mjs` — playable inside a Word paragraph, ' +
+    'monsters included (its own zombies, imps and demons, right where the level put them). ' +
+    'Move **W/S** · strafe **A/D** · turn **←/→** · **Shift** sprints · **Space** fires. ' +
+    'Recover every § the level placed, then step through the * exit switch. ' +
+    'The scrolling MAP window is still just document text: pause, type walls — or `&` baddies — resume. ' +
+    'That round trip is what the real Doom engine one cartridge over cannot do.',
+  hint: '<b>WASD</b> move · <b>←/→</b> turn · <b>Space</b> fire — a real Doom-format map with its own monsters; § heal and open the gate.',
+  winBanner: ['E1M1 CLEARED', 'a real Doom-format level, beaten inside a Word document', 'press R to rip and tear again'],
+  rows: FREEDOOM_LEVEL.rows, w: FREEDOOM_LEVEL.w, h: FREEDOOM_LEVEL.h,
+  spawn: FREEDOOM_LEVEL.spawn,
+  monsters: FREEDOOM_LEVEL.monsters,
+  moveSpeed: 6.8, // 32-unit cells: double the dungeon's 64-unit stride
+  wallScale: 2,   // Doom walls span two 32-unit cells
+  coneRadius: 14,
+};
+
 /** The raycaster, as a level-pack player. Exported to the Playwright spec and
- *  headless logic checks through dungeonCart() below. */
+ *  headless logic checks through dungeonCart()/freedoomCart() below. */
 function raycastCart(pack) {
   const W = pack.w, H = pack.h, S = pack.wallScale;
   let map, px, py, dx, dy, plx, ply, state;
@@ -1149,6 +1182,13 @@ function raycastCart(pack) {
 /** Exported for the Playwright spec and headless logic checks. */
 export function dungeonCart() { return raycastCart(DUNGEON_PACK); }
 
+/** Cartridge 3 — a REAL Doom-format level: Freedoom's E1M1 (BSD-licensed),
+ *  rasterized to the raycaster's grid by docs/demo/tools/wad2cart.mjs. Same
+ *  controls, same renderer, same document round-trip — only the level pack
+ *  differs. It keeps the trick the real engine (cartridge 4) had to drop:
+ *  its world is readable document text, so typed walls become real. */
+export function freedoomCart() { return raycastCart(FREEDOOM_PACK); }
+
 // ─── Frame → document plumbing ────────────────────────────────────────
 
 /** Decode the screen paragraph's XML back into text rows: `w:t` text joined
@@ -1378,7 +1418,7 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
   const pinCanvas = createCanvasPin();
   pinCanvas(canvasAnchor);
 
-  const carts = [platformerCart(), dungeonCart(), doomCart(doom)];
+  const carts = [platformerCart(), dungeonCart(), freedoomCart(), doomCart(doom)];
   let cart = carts.find((c) => c.name === startCart) ?? carts[0];
 
   let mode = intro ? 'intro' : 'game';

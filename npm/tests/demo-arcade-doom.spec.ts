@@ -2,7 +2,7 @@ import { test, expect, Page } from '@playwright/test';
 
 // Proof that the ACTUAL Doom engine runs inside a live Word document.
 //
-// Cartridge 3 of THE DOCX ARCADE used to be a hand-written ASCII raycaster
+// Cartridge 4 of THE DOCX ARCADE grew out of a hand-written ASCII raycaster
 // walking Freedoom's E1M1 rasterized to a character grid. It is now id
 // Software's own engine — doomgeneric, GPL-2.0, compiled to JavaScript — on
 // Freedoom's BSD-licensed IWAD, with its lossless 320×200 framebuffer stored

@@ -10,7 +10,7 @@ jsDelivr — and differ only in how much of the page belongs to the editor:
 | `app.html` | The editor full-bleed, nothing around it. The useful thing to open on a phone. |
 | `player.html` | The compact iframe target, sized for ~480 × 480. Boots on tap so a feed iframe never streams a .NET runtime unasked, and pins the surface's compact layout. |
 | `observatory.html` | The DOCX Observatory inside the live editor: procedural ASCII phenomena animated onto a Word paragraph in the editor's own session (`raw.replaceXml` + `editor.refresh()`). Pause — or click the water — and it is only a document: edit with the ribbon, Undo rewinds frame by frame, Save downloads the caught wave. The phenomena and frame loop are demo content, not library machinery: they live in `ascii-scenes.js` **in this directory** (also imported, via the test-webroot copy, by the two `npm/examples/ascii-animation*` pages), so `?engine=` pins the library alone and the scenes version with the site. Needs `DocxEditor.refresh()`, which 9.5.0 predates — it was pinned to `docxodus@9.6.0` ahead of that release and healed on its own when it published; it now shares the pin with its siblings. |
-| `arcade.html` | THE DOCX ARCADE — three playable games rendered through the editor's ordinary incremental document path. The text cartridges replace colored runs in one Word paragraph; **DOOM** runs id Software's GPL engine on Freedoom's BSD IWAD and replaces the media payload of one native **320 × 200 full-color inline DOCX image** through the public session API. It is guarded at the ten-visible-FPS design point, including browser decode and presentation. Four separate static **18pt document paragraphs** keep the complete controls legible. Doom's world remains in its WebAssembly heap, so its honest document round trip is pause, copy/paste, undo and save; the other cartridges additionally re-parse edited terrain on resume. The games live in `ascii-arcade.js`; Doom lives in the GPL `doom-cart.js`, with pinned engine/IWAD URLs documented below. Specs in `npm/tests/demo-arcade-doom.spec.ts` prove exact framebuffer pixels, readable displayed HUD dimensions, real play, sustained visible throughput, input, copy/paste, and save/reopen fidelity. |
+| `arcade.html` | THE DOCX ARCADE — four playable games rendered through the editor's ordinary incremental document path. The text cartridges replace colored runs in one Word paragraph; **DOOM** runs id Software's GPL engine on Freedoom's BSD IWAD and replaces the media payload of one native **320 × 200 full-color inline DOCX image** through the public session API. It is guarded at the ten-visible-FPS design point, including browser decode and presentation. Four separate static **18pt document paragraphs** keep the complete controls legible. Doom's world remains in its WebAssembly heap, so its honest document round trip is pause, copy/paste, undo and save; the other cartridges additionally re-parse edited terrain on resume. The games live in `ascii-arcade.js`; Doom lives in the GPL `doom-cart.js`, with pinned engine/IWAD URLs documented below. Specs in `npm/tests/demo-arcade-doom.spec.ts` prove exact framebuffer pixels, readable displayed HUD dimensions, real play, sustained visible throughput, input, copy/paste, and save/reopen fidelity. |
 | `golf.html` | DOCX GOLF — course play on the editing surface itself, the inverse bet from the arcade: where the arcade painted frames INTO one paragraph through `raw.replaceXml` (the escape hatch), golf makes the real clubs the game. Six holes, each a start document loaded into the live ribbon editor and a target document built beside it; the referee is the comparison engine — a hole is CLEARED when `docxDiffGetRevisions` between your document and the target returns **zero revisions**, and the caddie panel phrases whatever revisions remain as the work left (`remove "Purchasr"`, `move "Governing Law"`, `reformat "Duties" (style)`). Holes escalate across the surface: a one-word fix, clause reordering, scoped defined-term conformance, heading styles (the Style dropdown is the club — the diff cares about `w:pStyle`, not just words), and a table hole (fix a cell, delete a duplicated row from the table toolbar), plus a footnote hole played with Insert → Footnote (the referee reads note parts too). On a phone the caddie collapses to its head strip behind a toggle, and a stuck player can concede with "Show me" — the caddie plays the content-addressed reference line and the scorecard marks the hole assisted. Strokes are counted from the document, not the toolbar: the driver fingerprints `session.save()` on a poll, so one committed burst of editing is one swing, and undo counts. Par/birdie/bogey scoring, a Target view, and a live redline view (`docxDiffCompare` → `convertDocxToHtml`) round out the caddie. The game lives in `docx-golf.js` in this directory (same `?engine=` split as its siblings); its pure logic is tested by `tools/docx-golf.test.mjs`, and `npm/tests/demo-golf.spec.ts` keeps the course honest the way the engine's own evals are kept honest — no hole starts solved, and every hole's content-addressed reference solution reaches zero revisions within par. Boots on tap when iframed. |
 
 ### Playable Doom walkthrough, in the real editor
@@ -47,7 +47,7 @@ is narrow.
 | **wide** | One bar under the document: cartridges, transport, pacing, embed, telemetry, hint. Unchanged from the cabinet's original dock. |
 | **compact** | A slim HUD strip keeps the two controls you touch mid-game (play/pause and pacing); cartridges, restart, embed, telemetry and the hint move behind a `⋯` sheet. A thumb D-pad and a round **FIRE** button float over the bottom corners of the game. Nothing is dropped, only re-placed. |
 
-`FIRE` sends `Space` — jump in the platformer, the weapon in the raycaster and
+`FIRE` sends `Space` — jump in the platformer, the weapon in the raycasters and
 in Doom, and the coin drop on the attract screen. The old touch row had no
 Space at all, so the shooters could be walked but never fought on a phone.
 
@@ -73,7 +73,7 @@ nav strip and floating controls in `npm/tests/social-demo.spec.ts`.
 `fonts/docxodus-canvas-mono.woff2` (17 KB) is what keeps the Observatory's
 phenomena and the Arcade's game screen on their grid.
 
-The Observatory, opener, and first two cartridges draw into one Word paragraph
+The Observatory, opener, and first three cartridges draw into one Word paragraph
 as a 92 × 26 character grid authored for Courier New. Doom uses a native image
 and does not depend on glyph metrics. A text grid holds only while
 every cell advances the same width
@@ -95,7 +95,7 @@ art is densest.
 Measured on a Pixel 5 rig with that font situation reproduced, as the spread
 between the widest and narrowest row of the 92-cell grid: **12.1 cells** on the
 attract screen and up to **23.0** in the text cartridges, against **0.07 cells**
-worst case with the pin — across both viewports, both text cartridges and all
+worst case with the pin — across both viewports, the text cartridges and all
 four phenomena. The mobile Doom check instead pins its exact 320 × 200 image geometry.
 
 So `createCanvasPin()` in `ascii-scenes.js` pins the canvas paragraph to a font
@@ -111,7 +111,7 @@ Rebuild it with `tools/build-canvas-font.sh`, which pins the source font by
 SHA-256 and refuses any other — a font that is not single-advance would not
 provide the guarantee. It writes the `.woff2` and the `.json` manifest that
 `tools/canvas-font.test.mjs` reads: that test drives every scene, the whole
-attract-screen sweep and all three cartridges, and fails if they can draw a
+attract-screen sweep and every cartridge, and fails if they can draw a
 character the subset does not cover. `npm/tests/demo-arcade-mobile.spec.ts`
 proves the rest on a phone-shaped rig with Android's font coverage reproduced.
 
@@ -123,7 +123,7 @@ rest of this directory it is documentation-site content and is not part of the
 
 ### Doom, and what it does to the licensing
 
-Cartridge 3 is the actual game. `doom-cart.js` drives
+Cartridge 4 is the actual game. `doom-cart.js` drives
 [doomgeneric](https://github.com/grubbyplaya/doomgenericjs) — id Software's
 Doom source, GPL-2.0, compiled to JavaScript — on Freedoom's BSD-licensed
 IWAD, and writes its complete 320×200 framebuffer into the media part of one
