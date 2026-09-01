@@ -1,13 +1,14 @@
 // THE DOCX ARCADE — playable games rendered INTO a live Word document.
 //
 // Sibling of ascii-scenes.js (the Observatory) and same contract: the game
-// screen is ONE Word paragraph of colored monospaced runs, animated by a
-// Unid-preserving `DocxSession.raw.replaceXml` + `DocxEditor.refresh()` per
-// frame — the editor's public "the session changed behind your back" seam,
-// which reconciles exactly one block in continuous mode. No canvas, no PNG,
-// no separate machinery: pause (or click the screen) and the game is only a
-// document — the caret lands in it, the whole ribbon works, Ctrl+Z rewinds
-// frame by frame, and Save downloads the current frame as a real .docx.
+// screen is ONE Word paragraph, animated through the session API plus
+// `DocxEditor.refresh()` — the editor's public "the session changed behind
+// your back" seam, which reconciles exactly one block in continuous mode.
+// The three text cartridges replace colored OOXML runs; Doom replaces one
+// native inline image because its HUD must remain genuinely readable. Nothing
+// is mounted over the document: pause (or click the screen) and the game is
+// only a paragraph, Ctrl+Z rewinds frames, and Save stores the current frame
+// in a real .docx.
 //
 // What the games add over the Observatory is INPUT, in both directions:
 //   - keyboard in: a capture-phase listener owns WASD/arrows/Space while the
@@ -27,7 +28,14 @@
 // machinery, and is deliberately NOT shipped in the npm package.
 
 import { COLS, ROWS, frameXml, createCanvasPin } from './ascii-scenes.js';
+// The raycaster's second level pack: Freedoom's E1M1, rasterized to the grid
+// offline by tools/wad2cart.mjs (BSD-licensed level data).
 import { FREEDOOM_LEVEL } from './freedoom-e1m1.js';
+// Cartridge 4 is real Doom. doom-cart.js is GPL-2.0-or-later (it is written
+// against id Software's GPL'd engine) while this file stays MIT; the 3 MB
+// engine itself is behind a dynamic import inside that module, so a visitor
+// who only plays the platformer never downloads it.
+import { doomCart, DOOM_KEY_CODES } from './doom-cart.js';
 
 // ─── Screen geometry ──────────────────────────────────────────────────
 // Same 92×26 cell grid as the Observatory (proven to repaint incrementally at
@@ -109,23 +117,38 @@ const GAME_CODES = new Set([
   'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
   'KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'KeyR',
   'ShiftLeft', 'ShiftRight',
+  // Doom wants more of the keyboard than the ASCII cartridges do — a menu
+  // key, a use key, weapon digits. Claiming Enter matters for a second
+  // reason: unclaimed, it would split the screen paragraph in two.
+  ...DOOM_KEY_CODES,
 ]);
 
 function createInput(isPlaying) {
   const down = new Set();
   const pressed = new Set(); // keydown edges, consumed once per tick
+  // Every press AND release, in order, for cartridges that need both edges.
+  // The ASCII games read the held/pressed sets above and ignore this; Doom
+  // reads only this, because its own input layer wants key-down and key-up
+  // events one at a time. Capped so a paused tab cannot grow it forever.
+  let transitions = [];
+  const log = (code, isDown) => {
+    if (transitions.length < 256) transitions.push({ code, down: isDown });
+  };
   const onKeyDown = (e) => {
     if (!isPlaying() || e.metaKey || e.ctrlKey || e.altKey) return;
     if (!GAME_CODES.has(e.code)) return;
     e.preventDefault();
     e.stopPropagation();
-    if (!down.has(e.code)) pressed.add(e.code);
+    if (!down.has(e.code)) { pressed.add(e.code); log(e.code, true); }
     down.add(e.code);
   };
   // keyup always clears, playing or not — a key released while paused must
   // not stay latched into the next resume.
-  const onKeyUp = (e) => { down.delete(e.code); };
-  const onBlur = () => { down.clear(); pressed.clear(); };
+  const onKeyUp = (e) => { if (down.delete(e.code)) log(e.code, false); };
+  const onBlur = () => {
+    for (const code of down) log(code, false);
+    down.clear(); pressed.clear();
+  };
   window.addEventListener('keydown', onKeyDown, true);
   window.addEventListener('keyup', onKeyUp, true);
   window.addEventListener('blur', onBlur);
@@ -137,10 +160,16 @@ function createInput(isPlaying) {
       return hit;
     },
     endTick: () => pressed.clear(),
+    /** Take the press/release log since the last call. */
+    drain: () => { const out = transitions; transitions = []; return out; },
     /** Synthetic press/release — the on-screen touch pad and tests use this. */
     set: (code, isDown) => {
-      if (isDown) { if (!down.has(code)) pressed.add(code); down.add(code); }
-      else down.delete(code);
+      if (isDown) {
+        if (!down.has(code)) { pressed.add(code); log(code, true); }
+        down.add(code);
+      } else if (down.delete(code)) {
+        log(code, false);
+      }
     },
     dispose: () => {
       window.removeEventListener('keydown', onKeyDown, true);
@@ -392,6 +421,12 @@ export function platformerCart() {
   return {
     name: 'quest',
     label: '¶ Pilcrow’s Quest',
+    controls: [
+      'CONTROLS · RUN A/D or ←/→',
+      'JUMP W/↑/SPACE',
+      'RESTART R',
+      'PAUSE/EDIT ESC',
+    ],
     caption:
       'Run **A/D** or **←/→** · jump **W/↑/Space** · stomp the & gremlins, collect every §, ' +
       'reach the > flag. Pause and TYPE terrain into the screen — # bricks, = platforms, ' +
@@ -420,12 +455,14 @@ export function platformerCart() {
 // in the corridor as 3-D towers of that letter. Collect every § sigil, then
 // step through the * gate.
 //
-// The raycaster is a LEVEL PACK player: the same renderer, controls, and
-// map-band round-trip run both the hand-drawn 24×16 dungeon and a real
-// Doom-format level (Cartridge 3 — Freedoom's E1M1, rasterized to a grid by
-// docs/demo/tools/wad2cart.mjs). Maps larger than the band scroll it as a
-// 24×16 window that follows the player; typing into the window edits the
-// world cells it shows, exactly as before.
+// The raycaster is a LEVEL PACK player: renderer, controls and map-band round
+// trip are all driven from a pack. Two packs ship: the hand-drawn 24×16
+// dungeon, and a real Doom-format level — Freedoom's E1M1, rasterized to the
+// grid by tools/wad2cart.mjs. The E1M1 pack is a different demo from the real
+// Doom engine in doom-cart.js: the engine's frames can only be pictured, while
+// the raycaster's world stays readable, typable document text. Maps larger
+// than the band scroll it as a 24×16 window that follows the player; typing
+// into the window edits the world cells it shows.
 // ═══════════════════════════════════════════════════════════════════════
 
 const VIEW_W = 64;                 // 3-D viewport columns inside the bezel
@@ -547,6 +584,12 @@ const DUNGEON_MAP = [
 const DUNGEON_PACK = {
   name: 'dungeon',
   label: '▓ The Docx Dungeon',
+  controls: [
+    'CONTROLS · MOVE W/S · STRAFE A/D',
+    'TURN ←/→ · FIRE SPACE',
+    'RUN SHIFT · RESTART R',
+    'PAUSE/EDIT ESC',
+  ],
   hudTitle: 'THE DOCX DUNGEON',
   bg: '0A0F1A',
   caption:
@@ -565,6 +608,12 @@ const DUNGEON_PACK = {
 const FREEDOOM_PACK = {
   name: 'e1m1',
   label: '☩ Freedoom E1M1',
+  controls: [
+    'CONTROLS · MOVE W/S · STRAFE A/D',
+    'TURN ←/→ · FIRE SPACE',
+    'RUN SHIFT · RESTART R',
+    'PAUSE/EDIT ESC',
+  ],
   hudTitle: 'FREEDOOM E1M1',
   bg: '120D0A',
   caption:
@@ -573,7 +622,8 @@ const FREEDOOM_PACK = {
     'monsters included (its own zombies, imps and demons, right where the level put them). ' +
     'Move **W/S** · strafe **A/D** · turn **←/→** · **Shift** sprints · **Space** fires. ' +
     'Recover every § the level placed, then step through the * exit switch. ' +
-    'The scrolling MAP window is still just document text: pause, type walls — or `&` baddies — resume.',
+    'The scrolling MAP window is still just document text: pause, type walls — or `&` baddies — resume. ' +
+    'That round trip is what the real Doom engine one cartridge over cannot do.',
   hint: '<b>WASD</b> move · <b>←/→</b> turn · <b>Space</b> fire — a real Doom-format map with its own monsters; § heal and open the gate.',
   winBanner: ['E1M1 CLEARED', 'a real Doom-format level, beaten inside a Word document', 'press R to rip and tear again'],
   rows: FREEDOOM_LEVEL.rows, w: FREEDOOM_LEVEL.w, h: FREEDOOM_LEVEL.h,
@@ -1110,6 +1160,7 @@ function raycastCart(pack) {
   return {
     name: pack.name,
     label: pack.label,
+    controls: pack.controls,
     caption: pack.caption,
     hint: pack.hint,
     reset,
@@ -1134,7 +1185,8 @@ export function dungeonCart() { return raycastCart(DUNGEON_PACK); }
 /** Cartridge 3 — a REAL Doom-format level: Freedoom's E1M1 (BSD-licensed),
  *  rasterized to the raycaster's grid by docs/demo/tools/wad2cart.mjs. Same
  *  controls, same renderer, same document round-trip — only the level pack
- *  differs. */
+ *  differs. It keeps the trick the real engine (cartridge 4) had to drop:
+ *  its world is readable document text, so typed walls become real. */
 export function freedoomCart() { return raycastCart(FREEDOOM_PACK); }
 
 // ─── Frame → document plumbing ────────────────────────────────────────
@@ -1175,25 +1227,77 @@ export function seedArcade(session) {
   check(session.setParagraphFormat(titleAnchor, { alignment: 'center', spacingAfter: 160 }), 'title format');
   check(session.applyFormat(titleAnchor, null, { bold: true, fontFamily: 'Courier New', fontSizePts: 13, color: '1F2937' }), 'title run format');
 
-  const canvasResult = check(session.insertParagraph(titleAnchor, 'after', '(inserting coin…)'), 'screen insert');
+  // ─── Why the screen is fenced by two near-empty paragraphs ──────────
+  // A single-block re-render does not render the block alone. The engine pads
+  // each target with ONE REAL NEIGHBOUR on each side before converting it, so
+  // that `w:contextualSpacing` resolves exactly as it would in a full render —
+  // and those context clones are thrown away once the target's HTML is
+  // extracted. That is correct, and it is cheap when the neighbours are small.
+  //
+  // The screen's neighbours were the title and the CAPTION, and the caption is
+  // a long formatted prose paragraph (36 runs, with a footnote reference). So
+  // every frame of every game converted it in full, purely as context, and
+  // discarded the result. Fencing the screen with two one-character paragraphs
+  // moves the caption out of that slot: measured 7.44 -> 9.25 fps on the Doom
+  // cartridge, a 24% gain that costs the document two hairlines.
+  const fence = (after, label) => {
+    const res = check(session.insertParagraph(after, 'after', '\u00a0'), label);
+    const id = res.created[0].id;
+    check(session.setParagraphFormat(id, { spacingBefore: 0, spacingAfter: 0 }), `${label} format`);
+    check(session.applyFormat(id, null, { fontFamily: 'Courier New', fontSizePts: 1 }), `${label} run format`);
+    return id;
+  };
+
+  // Controls have to remain readable at the size the document is actually
+  // shown. Putting Doom's key list inside its screen made the words technically
+  // present but not honestly legible. Keep them as large 18pt document text,
+  // outside the frame's hot paragraph and behind the tiny context fence, so
+  // every repaint still converts only the screen and its one-character
+  // neighbours.
+  // Four deliberately short paragraphs make the complete map fit at 18pt in
+  // fixed-layout renderers that do not reflow one long OOXML run. They stay
+  // outside the screen's conversion fence, so this costs nothing per frame.
+  const controlsAnchors = [];
+  let controlsAfter = titleAnchor;
+  for (let i = 0; i < 4; i++) {
+    const controlsResult = check(
+      session.insertParagraph(controlsAfter, 'after', i === 0 ? 'CONTROLS · loading cartridge…' : '\u00a0'),
+      `controls line ${i + 1} insert`);
+    const anchor = controlsResult.created[0].id;
+    controlsAnchors.push(anchor);
+    controlsAfter = anchor;
+    check(session.setParagraphFormat(anchor, {
+      alignment: 'center', spacingBefore: 0, spacingAfter: i === 3 ? 80 : 0,
+    }), `controls line ${i + 1} format`);
+    check(session.applyFormat(anchor, null,
+      { bold: true, fontFamily: 'Courier New', fontSizePts: 18, color: '25324A' }),
+    `controls line ${i + 1} run format`);
+  }
+  const controlsAnchor = controlsAnchors[0];
+
+  const fenceAbove = fence(controlsAnchors[3], 'screen fence above');
+  const canvasResult = check(session.insertParagraph(fenceAbove, 'after', '(inserting coin…)'), 'screen insert');
   const canvasAnchor = canvasResult.created[0].id;
 
-  const captionResult = check(session.insertParagraph(canvasAnchor, 'after', 'loading cartridge…'), 'caption insert');
+  const fenceBelow = fence(canvasAnchor, 'screen fence below');
+
+  const captionResult = check(session.insertParagraph(fenceBelow, 'after', 'loading cartridge…'), 'caption insert');
   const captionAnchor = captionResult.created[0].id;
   check(session.setParagraphFormat(captionAnchor, { alignment: 'center', spacingBefore: 160 }), 'caption format');
   check(session.applyFormat(captionAnchor, null, { fontFamily: 'Courier New', fontSizePts: 8, color: '6B7280' }), 'caption run format');
 
   // A real footnote, because the game screen is a real document.
   check(session.insertFootnote(captionAnchor, 7, // after "loading"
-    'Every frame of the game is OOXML: colored runs and `w:br` breaks in one Word paragraph, ' +
-    'swapped in by `DocxSession.raw.replaceXml` and repainted incrementally by `DocxEditor.refresh()`. ' +
-    'Pause mid-jump and Save: the frame downloads as a real .docx.'), 'footnote');
+    'Every frame is OOXML document content: the text cartridges author colored runs and `w:br` ' +
+    'breaks, while Doom replaces the media payload of one native inline image through the public ' +
+    'session API. `DocxEditor.refresh()` repaints one block incrementally. Pause and Save: the frame ' +
+    'downloads as a real .docx.'), 'footnote');
 
   const seedXml = session.raw.getXml(canvasAnchor);
   const gt = seedXml.indexOf('>');
   let openTag = seedXml.slice(0, gt + 1);
   if (openTag.endsWith('/>')) openTag = openTag.slice(0, -2) + '>';
-  return { titleAnchor, canvasAnchor, captionAnchor, openTag };
+  return { titleAnchor, controlsAnchor, controlsAnchors, canvasAnchor, captionAnchor, fenceBelow, openTag };
 }
 
 // ─── The attract screen ───────────────────────────────────────────────
@@ -1304,7 +1408,7 @@ export function introFrame(t) {
  * the coin. Returns the controller the host page publishes as
  * `window.__arcade`.
  */
-export function startArcade({ editor, session, ui, cart: startCart, intro = true }) {
+export function startArcade({ editor, session, ui, cart: startCart, intro = true, doom = {} }) {
   if (typeof editor.refresh !== 'function') {
     throw new Error('This engine predates DocxEditor.refresh() — the Arcade needs docxodus ≥ 9.6.0.');
   }
@@ -1314,7 +1418,7 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
   const pinCanvas = createCanvasPin();
   pinCanvas(canvasAnchor);
 
-  const carts = [platformerCart(), dungeonCart(), freedoomCart()];
+  const carts = [platformerCart(), dungeonCart(), freedoomCart(), doomCart(doom)];
   let cart = carts.find((c) => c.name === startCart) ?? carts[0];
 
   let mode = intro ? 'intro' : 'game';
@@ -1325,6 +1429,20 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
   let frames = 0;
   let fps = 0;
   let lastRuns = 0;
+  let canvasImageId = null;
+  // A cartridge whose frame is a native inline image (Doom) depends on the
+  // engine's SINGLE-BLOCK render carrying that image. Engines up to and
+  // including 10.0.0 do not: the incremental renderer clones the block's XML
+  // into a throwaway shell without copying the referenced media part, and its
+  // converter settings carry no image handler, so WmlToHtmlConverter omits the
+  // w:drawing and the paragraph refreshes to blank. The image is genuinely in
+  // the package the whole time — Save and reopen shows it — which is exactly
+  // what makes the failure invisible from the outside. So prove the surface
+  // once, rather than painting frames no one can see.
+  let imageSurfaceProven = false;
+  let imageFramesPainted = 0;
+  let lastSurface = 'runs';
+  let lastImageOptions = null;
   let lastFrameEnd = performance.now();
   const timings = { mutate: 0, refresh: 0 };
   let interval = Number(ui.pace.value);
@@ -1333,9 +1451,31 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
 
   const unidOf = (anchor) => anchor.split(':')[2];
   const canvasEl = () => editor.root.querySelector(`[data-anchor="${unidOf(canvasAnchor)}"]`);
+  const controlsEls = () => seeded.controlsAnchors.map((anchor) =>
+    editor.root.querySelector(`[data-anchor="${unidOf(anchor)}"]`));
+  const controlsEl = () => controlsEls()[0];
+
+  // replaceText authors a fresh run, so re-assert the controls' presentation
+  // after each cartridge/intro label swap. Formatting only the initial
+  // "loading cartridge" run would leave the visible replacement at the
+  // document default despite the paragraph having been seeded at 18pt.
+  function setControls(lines) {
+    for (let i = 0; i < seeded.controlsAnchors.length; i++) {
+      const anchor = seeded.controlsAnchors[i];
+      session.replaceText(anchor, lines[i] ?? '\u00a0');
+      session.applyFormat(anchor, null,
+        { bold: true, fontFamily: 'Courier New', fontSizePts: 18, color: '25324A' });
+    }
+  }
 
   function setCaption() {
     if (mode === 'intro') {
+      setControls([
+        'CONTROLS · START SPACE',
+        'CHOOSE A CARTRIDGE BELOW',
+        '\u00a0',
+        'PAUSE/EDIT ESC',
+      ]);
       session.replaceText(seeded.captionAnchor,
         'OS Legal presents **DOCXODUS** — press **Space** to start. ' +
         'This title card is a Word paragraph too: pause and put your caret in it.');
@@ -1344,15 +1484,24 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
         '<b>Esc</b> pauses — even the title screen is just a document';
       return;
     }
+    setControls(cart.controls);
     session.replaceText(seeded.captionAnchor, cart.caption);
     ui.hint.innerHTML = cart.hint +
-      ' · <b>Esc</b> pauses/resumes · <b>Undo</b> rewinds frames · <b>Save</b> ships the frame as .docx';
+      ' · <b>Esc</b> pauses/resumes · <b>Undo/Redo</b> scrubs frames · <b>Save</b> ships the frame as .docx';
   }
 
   function paintGrid(frame, label) {
-    const { xml, runs } = frameXml(openTag, frame.grid, frame.bg);
+    const { xml, runs } = frameXml(openTag, frame.grid, frame.bg, frame.metrics);
     lastRuns = runs;
+    lastSurface = 'runs';
+    lastImageOptions = null;
     const t0 = performance.now();
+    if (canvasImageId) {
+      const removed = session.removeImage(canvasImageId);
+      if (!removed.success) throw new Error(`removeImage: ${removed.error?.code} ${removed.error?.message}`);
+      canvasAnchor = removed.modified?.[0]?.id ?? canvasAnchor;
+      canvasImageId = null;
+    }
     const res = session.raw.replaceXml(canvasAnchor, xml);
     const t1 = performance.now();
     if (!res.success) throw new Error(`replaceXml: ${res.error?.code} ${res.error?.message}`);
@@ -1372,13 +1521,78 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
     ui.stats.innerHTML =
       `<b>${label}</b> · frame <b>${frames}</b> · <b>${fps.toFixed(1)}</b> fps · ` +
       `replaceXml <b>${timings.mutate.toFixed(1)}</b> ms · refresh <b>${timings.refresh.toFixed(1)}</b> ms · ` +
-      `<b>${lastRuns}</b> runs · ` +
+      `<b>${lastRuns}</b> ${lastSurface} · ` +
       (fb ? `remounted (${fb})` : `<span class="inc">incremental — one block repainted</span>`);
+    return null;
+  }
+
+  /** Paint a cartridge frame as a real inline DOCX image. Both insertion and
+   *  replacement go through the public session surface; editor.refresh then
+   *  asks the standard single-block converter for an <img> backed by that
+   *  package media part. No out-of-document canvas is mounted. */
+  function paintImage(frame, label) {
+    lastRuns = 1;
+    lastSurface = 'image';
+    lastImageOptions = { ...frame.imageOptions };
+    const t0 = performance.now();
+    let res;
+    if (canvasImageId) {
+      res = session.replaceImage(canvasImageId, frame.imageBytes);
+    } else {
+      const cleared = session.raw.replaceXml(canvasAnchor, openTag + '</w:p>');
+      if (!cleared.success) throw new Error(`clear image paragraph: ${cleared.error?.code} ${cleared.error?.message}`);
+      canvasAnchor = cleared.modified?.[0]?.id ?? cleared.created?.[0]?.id ?? canvasAnchor;
+      res = session.insertImage(canvasAnchor, 0, frame.imageBytes, frame.imageOptions);
+      canvasImageId = res.imageId ?? null;
+    }
+    const t1 = performance.now();
+    if (!res.success) throw new Error(`image frame: ${res.error?.code} ${res.error?.message}`);
+    canvasAnchor = res.modified?.[0]?.id ?? res.created?.[0]?.id ?? canvasAnchor;
+    pinCanvas(canvasAnchor);
+    editor.refresh();
+    const t2 = performance.now();
+
+    const mix = (a, b) => (a === 0 ? b : a * 0.9 + b * 0.1);
+    timings.mutate = mix(timings.mutate, t1 - t0);
+    timings.refresh = mix(timings.refresh, t2 - t1);
+    fps = mix(fps, 1000 / Math.max(1, t2 - lastFrameEnd));
+    lastFrameEnd = t2;
+    frames++;
+
+    const fb = editor.lastReconcileFallback;
+    ui.stats.innerHTML =
+      `<b>${label}</b> · frame <b>${frames}</b> · <b>${fps.toFixed(1)}</b> fps · ` +
+      `replaceImage <b>${timings.mutate.toFixed(1)}</b> ms · refresh <b>${timings.refresh.toFixed(1)}</b> ms · ` +
+      `<b>1</b> inline image · ` +
+      (fb ? `remounted (${fb})` : `<span class="inc">incremental — one block repainted</span>`);
+    const img = canvasEl()?.querySelector('img') ?? null;
+    // Two frames of slack before calling it: the check is a capability probe,
+    // not a per-frame assertion, and one empty reconcile should not halt a game.
+    imageFramesPainted++;
+    if (img) imageSurfaceProven = true;
+    else if (!imageSurfaceProven && imageFramesPainted >= 3) {
+      const why =
+        'this engine renders a single block without its inline image, so the frame '
+        + 'is in the .docx but never on screen — the image-bearing cartridges need a '
+        + 'docxodus newer than 10.0.0 (Save still downloads the frame; ?cart=e1m1, '
+        + '?cart=dungeon and ?cart=platformer paint runs and work here).';
+      // Not every drawFrame call is inside the loop's try — the cartridge
+      // switch and restart buttons repaint directly — so say it here rather
+      // than relying on a catch that only one of the three call sites has.
+      ui.stats.textContent = 'halted: ' + why;
+      playing = false;
+      throw new Error(why);
+    }
+    return img;
   }
 
   function drawFrame() {
-    if (mode === 'intro') paintGrid(introFrame(introT), 'attract mode');
-    else paintGrid(cart.render(), cart.label);
+    if (mode === 'intro') return paintGrid(introFrame(introT), 'attract mode');
+    else {
+      const frame = cart.render();
+      if (frame.imageBytes) return paintImage(frame, cart.label);
+      return paintGrid(frame, cart.label);
+    }
   }
 
   /** Drop the coin: leave the attract screen and hand the canvas (and the
@@ -1400,6 +1614,7 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
     const started = performance.now();
     const dt = Math.min(0.2, (started - lastWall) / 1000);
     lastWall = started;
+    let image = null;
     try {
       if (mode === 'intro') {
         introT += dt;
@@ -1413,14 +1628,30 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
       } else {
         cart.tick(dt, input);
         input.endTick();
-        drawFrame();
+        image = drawFrame();
       }
     } catch (e) {
       playing = false;
       ui.stats.textContent = 'halted: ' + e.message;
       throw e;
     }
-    timer = setTimeout(loop, Math.max(0, interval - (performance.now() - started)));
+    const delay = Math.max(0, interval - (performance.now() - started));
+    const schedule = () => {
+      if (!playing) return;
+      timer = setTimeout(loop, delay);
+    };
+    // Replacing a data-URI <img> is a completed document refresh but image
+    // decode/presentation is asynchronous. Never overwrite one native image
+    // with the next before the browser has decoded it and offered it to a
+    // paint frame; this makes the displayed FPS equal the document FPS rather
+    // than flooding the DOM with intermediate sources no player can see.
+    if (image instanceof HTMLImageElement) {
+      const afterDecode = () => requestAnimationFrame(schedule);
+      if (image.complete && image.naturalWidth > 0) afterDecode();
+      else image.decode().catch(() => {}).then(afterDecode);
+    } else {
+      schedule();
+    }
   }
 
   /** Re-read the game world from the document. Called on every resume: the
@@ -1443,10 +1674,16 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
     // The attract screen has no game world to parse back — whatever was typed
     // into the title card simply stays until the next frame repaints it.
     if (mode !== 'intro') cart.syncFromRows(rowsFromXml(xml));
-    // Sweep paragraphs an Enter-split stranded between screen and caption, so
-    // pausing to edit can never slowly litter the document.
+    // Sweep paragraphs an Enter-split stranded below the screen, so pausing to
+    // edit can never slowly litter the document. The boundary is the FENCE, not
+    // the caption: the fence is a deliberate near-empty paragraph that keeps the
+    // caption out of the screen's render context (see seedDocument), and sweeping
+    // up to the caption would delete it on the first pause — which is exactly
+    // what happened the first time this was tried.
     const ids = session.findByKind('p', 'body').map((r) => r.id);
-    const from = ids.indexOf(canvasAnchor), to = ids.indexOf(seeded.captionAnchor);
+    const fenceIdx = ids.indexOf(seeded.fenceBelow);
+    const from = ids.indexOf(canvasAnchor);
+    const to = fenceIdx >= 0 ? fenceIdx : ids.indexOf(seeded.captionAnchor);
     if (from >= 0 && to > from + 1) {
       for (const id of ids.slice(from + 1, to)) session.deleteBlock(id);
     }
@@ -1456,6 +1693,10 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
     if (playing === next) return;
     if (next) {
       syncFromDocument();
+      // Resume is always reached from a gesture (a click, a key, the dock),
+      // which is the only moment a browser will start an AudioContext. Only
+      // the Doom cartridge has one; the others do not offer the hook.
+      try { cart.state().resumeAudio?.(); } catch { /* sound is never fatal */ }
       playing = true;
       ui.playpause.textContent = '⏸ Pause & edit';
       lastWall = performance.now();
@@ -1465,8 +1706,11 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
       playing = false;
       clearTimeout(timer);
       ui.playpause.textContent = '▶ Resume';
-      ui.stats.innerHTML = 'paused — the screen is an ordinary paragraph now. ' +
-        '<b>Type into it</b>, then Resume to make it real.';
+      ui.stats.innerHTML = lastSurface === 'image'
+        ? 'paused — this frame is a real DOCX image. <b>Ctrl+C / Ctrl+V</b> duplicates it; ' +
+          '<b>Undo / Redo</b> scrubs backward and forward through frames.'
+        : 'paused — the screen is an ordinary paragraph now. ' +
+          '<b>Type into it</b>, then Resume to make it real.';
     }
   }
 
@@ -1518,6 +1762,87 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
   // caret lands in it. No mode switch — it was a document the whole time.
   editor.root.addEventListener('pointerdown', () => setPlaying(false), true);
 
+  // Copy and paste the screen paragraph.
+  //
+  // Selecting the paused frame and pressing Ctrl+C already works — it is
+  // ordinary document content, and the clipboard gets the picture. Pasting it
+  // back is where the cabinet has to help: the editor's native paste surface is
+  // text-only today. The copy therefore stashes either the paragraph OOXML or
+  // the native image bytes, and paste inserts a real block through the public
+  // image API. That also mints fresh drawing ids instead of duplicating the
+  // source paragraph's non-visual ids.
+  //
+  // Both listeners are scoped to the screen paragraph. Any other copy or paste
+  // in the document is the browser's, untouched.
+  let copiedFrame = null;
+
+  function dataImageBytes(element) {
+    const source = element?.querySelector('img')?.getAttribute('src') ?? '';
+    const comma = source.indexOf(',');
+    if (!source.startsWith('data:image/') || comma < 0 || !source.slice(0, comma).includes(';base64')) {
+      return null;
+    }
+    const binary = atob(source.slice(comma + 1));
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+
+  editor.root.addEventListener('copy', () => {
+    const sel = window.getSelection();
+    const el = canvasEl();
+    const overlaps = el && sel && !sel.isCollapsed && Array.from({ length: sel.rangeCount }, (_, i) =>
+      sel.getRangeAt(i).intersectsNode(el)).some(Boolean);
+    const visibleImage = overlaps && lastImageOptions ? dataImageBytes(el) : null;
+    copiedFrame = overlaps ? {
+      xml: session.raw.getXml(canvasAnchor),
+      image: visibleImage && {
+        // Read the rendered document image rather than the producer's last
+        // frame cache. If Undo has scrubbed backward, copy must capture the
+        // frame now visible in the editor, not the future frame it replaced.
+        bytes: visibleImage,
+        options: { ...lastImageOptions },
+      },
+    } : null;
+  });
+  editor.root.addEventListener('paste', (event) => {
+    if (!copiedFrame) return;
+    const unid = event.target?.closest?.('[data-anchor]')?.getAttribute('data-anchor');
+    if (!unid) return;
+    event.preventDefault();
+
+    // Where it lands. After the block holding the caret, unless that is the
+    // screen itself or one of the fence paragraphs around it — everything in
+    // that span is swept on resume (see the litter sweep), so a copy dropped
+    // there would vanish the moment the game restarts. Those go to the end of
+    // the body instead, where they keep.
+    const ids = session.findByKind('p', 'body').map((t) => t.id);
+    const fence = ids.indexOf(seeded.fenceBelow);
+    const screen = ids.indexOf(canvasAnchor);
+    let at = ids.findIndex((id) => id.endsWith(unid));
+    if (at < 0 || (screen >= 0 && at >= screen - 1 && at <= fence)) at = ids.length - 1;
+    if (at < 0) return;
+
+    // A block-level insert, then the copied body under the NEW paragraph's
+    // opening tag: the Unid in that tag is the block's identity, so reusing the
+    // source's would give two blocks one anchor.
+    const made = session.insertParagraph(ids[at], 'after', '\u00a0');
+    const created = made.created?.[0]?.id;
+    if (!created) return;
+    const seed = session.raw.getXml(created);
+    let open = seed.slice(0, seed.indexOf('>') + 1);
+    if (open.endsWith('/>')) open = `${open.slice(0, -2)}>`;
+    if (copiedFrame.image) {
+      const inserted = session.insertImage(created, 0,
+        copiedFrame.image.bytes, copiedFrame.image.options);
+      if (!inserted.success) throw new Error(
+        `paste image: ${inserted.error?.code} ${inserted.error?.message}`);
+    } else {
+      session.raw.replaceXml(created, open + copiedFrame.xml.slice(copiedFrame.xml.indexOf('>') + 1));
+    }
+    editor.refresh();
+  });
+
   // On-screen pad (touch): buttons carry data-code="ArrowLeft" etc.
   if (ui.pad) {
     ui.pad.querySelectorAll('[data-code]').forEach((btn) => {
@@ -1538,6 +1863,9 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
     canvasAnchor: () => canvasAnchor,
     canvasText: () => canvasEl()?.textContent ?? '',
     canvasElement: () => canvasEl(),
+    controlsText: () => controlsEls().map((line) => line?.textContent ?? '').join(' '),
+    controlsElement: () => controlsEl(),
+    controlsElements: () => controlsEls(),
     frames: () => frames,
     fps: () => fps,
     timings: () => ({ ...timings, runs: lastRuns }),

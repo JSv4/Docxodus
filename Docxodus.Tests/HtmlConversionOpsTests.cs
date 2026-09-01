@@ -1944,22 +1944,27 @@ public class HtmlConversionOpsTests
     // A default-formatted run containing only w:br must not contribute its own font-size
     // strut when the paragraph declares exact line spacing. Chromium otherwise expands a
     // 10pt arcade row to ~15.3px because the generated 11pt span wraps the break.
-    [Fact]
-    public void HCO084_ExactLineHeight_RendersBreakOnlyRunsWithoutStyledSpan()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void HCO084_ExactLineHeight_RendersBreakOnlyRunsWithoutStyledSpan(bool bidi)
     {
         using var ms = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(ms,
                    DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
         {
             var main = doc.AddMainDocumentPart();
+            var paragraphProperties = new Wp.ParagraphProperties(
+                new Wp.SpacingBetweenLines
+                {
+                    Line = "200",
+                    LineRule = Wp.LineSpacingRuleValues.Exact,
+                });
+            if (bidi)
+                paragraphProperties.Append(new Wp.BiDi());
             main.Document = new Wp.Document(new Wp.Body(
                 new Wp.Paragraph(
-                    new Wp.ParagraphProperties(
-                        new Wp.SpacingBetweenLines
-                        {
-                            Line = "200",
-                            LineRule = Wp.LineSpacingRuleValues.Exact,
-                        }),
+                    paragraphProperties,
                     new Wp.Run(
                         new Wp.RunProperties(new Wp.FontSize { Val = "16" }),
                         new Wp.Text("ROW ONE")),
@@ -1986,8 +1991,19 @@ public class HtmlConversionOpsTests
         Assert.Equal("p", lineBreak.Parent!.Name.LocalName);
         Assert.Contains("font-size: 0", (string?)lineBreak.Attribute("style"));
         Assert.Contains("line-height: 0", (string?)lineBreak.Attribute("style"));
-        Assert.DoesNotContain(paragraph.Nodes().OfType<System.Xml.Linq.XText>(),
-            text => text.Value.Contains('\u200e'));
+        var directionMark = bidi ? '\u200f' : '\u200e';
+        if (bidi)
+        {
+            Assert.Contains(paragraph.Descendants(), e =>
+                e.Name.LocalName == "span" && e.Value.Contains(directionMark));
+        }
+        else
+        {
+            Assert.DoesNotContain(paragraph.Nodes().OfType<System.Xml.Linq.XText>(),
+                text => text.Value.Contains(directionMark));
+            Assert.DoesNotContain(paragraph.Descendants(), e =>
+                e.Name.LocalName == "span" && e.Value.Contains(directionMark));
+        }
         Assert.DoesNotContain(paragraph.Descendants(), e =>
             e.Name.LocalName == "span" && e.Descendants().Any(d => d.Name.LocalName == "br"));
     }

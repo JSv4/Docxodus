@@ -40,7 +40,10 @@ import { test, expect, Page } from '@playwright/test';
 // free to win, and aborting the font's request is the control that shows the
 // pin is what's doing the work.
 
-const OVERRIDE = 'engine=./embed.bundle.js';
+// wad= is the webroot copy fetch-doom-iwad.mjs provides; the grid specs
+// below animate the Doom cartridge and want its real framebuffer.
+const OVERRIDE = 'engine=./embed.bundle.js&sound=0'
+  + '&wad=' + encodeURIComponent('./vendor/freedoom1.wad.gz');
 
 async function waitForBoot(page: Page) {
   await page.waitForFunction(
@@ -53,8 +56,8 @@ async function waitForBoot(page: Page) {
   expect(err, `arcade boot failed: ${err}`).toBeUndefined();
 }
 
-/** Visual line boxes inside the canvas paragraph. The frame is 26 rows
- * joined by `w:br`, so an intact render is exactly 26; every over-wide row
+/** Visual line boxes inside the canvas paragraph. Each frame has a fixed row
+ * count joined by `w:br`; every over-wide row
  * that WRAPS adds one more. Rows are read from the `<br>` structure (the
  * same segmentation `rowWidthSpreadInCells` uses) and each row contributes
  * 1 + how many full LINE PITCHES its own fragments' tops span: a real fold
@@ -174,9 +177,10 @@ async function rowWidthSpreadInCells(page: Page): Promise<number> {
       }
       return right - (left ?? 0);
     });
+    const columns = rows[0].reduce((n, text) => n + (text.textContent?.length ?? 0), 0);
     const min = Math.min(...widths);
     const max = Math.max(...widths);
-    return (max - min) / (min / 92); // cell width = a full row / COLS
+    return (max - min) / (min / columns); // normalize the spread to actual cells
   });
 }
 
@@ -228,15 +232,22 @@ test.describe('Arcade on a phone-shaped viewport', () => {
   });
 
   test('every cartridge keeps its grid on the same platform', async ({ page }) => {
-    test.setTimeout(180000); // one boot, then three cartridges animated in turn
-    // The games draw a box-drawing bezel on every row and the raycaster shades
-    // its walls with ▒ █, so the tilt is not an attract-screen-only property.
+    test.setTimeout(240000); // one boot, then four cartridges animated in turn
+    // The three text games draw a box-drawing bezel on every row and the
+    // raycasters shade their walls with ▒ █, so the tilt is not an
+    // attract-screen-only property. Doom now uses one native 320×200 image;
+    // its mobile contract is exact image geometry rather than text-row drift.
+    //
+    // The claim is ONE AUTHORED ROW IS ONE RENDERED LINE, so each cartridge is
+    // measured against the number of rows it actually drew rather than against
+    // a shared constant. The text cartridges draw 26; Doom is checked as the
+    // lossless inline document image it actually authors.
     await emulateAndroidFontCoverage(page);
     await page.goto(`/demo-arcade.html?${OVERRIDE}&boot=tap&intro=0&cart=quest`);
     await page.locator('#boot').click();
     await waitForBoot(page);
 
-    for (const cart of ['quest', 'dungeon', 'e1m1']) {
+    for (const cart of ['quest', 'dungeon', 'e1m1', 'doom']) {
       await page.evaluate((name) => {
         (window as any).__arcade.setCart(name);
         (window as any).__arcade.resume();
@@ -246,8 +257,32 @@ test.describe('Arcade on a phone-shaped viewport', () => {
         (n) => (window as any).__arcade.frames() >= n, from + 20, { timeout: 60000 });
       await page.evaluate(() => (window as any).__arcade.pause());
 
+      if (cart === 'doom') {
+        const image = await page.evaluate(() => {
+          const element = (window as any).__arcade.canvasElement() as HTMLElement;
+          const img = element.querySelector('img') as HTMLImageElement | null;
+          return img && {
+            complete: img.complete,
+            natural: [img.naturalWidth, img.naturalHeight],
+            count: element.querySelectorAll('img').length,
+            rows: element.querySelectorAll('br').length,
+          };
+        });
+        expect.soft(image?.complete, 'doom image decoded').toBe(true);
+        expect.soft(image?.natural, 'doom native framebuffer').toEqual([320, 200]);
+        expect.soft(image?.count, 'doom authored images').toBe(1);
+        expect.soft(image?.rows, 'doom is not a fragile text grid').toBe(0);
+        continue;
+      }
+
+      // The rows the cartridge authored: one `w:br` between each pair, so the
+      // element carries one <br> per row boundary.
+      const rows = await page.evaluate(() =>
+        ((window as any).__arcade.canvasElement() as HTMLElement)
+          .querySelectorAll('br').length + 1);
+      expect.soft(rows, `${cart} authored rows`).toBeGreaterThan(20);
       expect.soft(await rowWidthSpreadInCells(page), `${cart} row widths`).toBeLessThan(0.1);
-      expect.soft(await canvasLineBoxes(page), `${cart} line boxes`).toBe(26);
+      expect.soft(await canvasLineBoxes(page), `${cart} line boxes`).toBe(rows);
     }
     expect(test.info().errors).toHaveLength(0);
   });
@@ -278,8 +313,17 @@ test.describe('Arcade on a phone-shaped viewport', () => {
     // document: four 44px arrows on a row of their own beneath the cartridge
     // chips, the transport row and the telemetry — a stack that ate the bottom
     // of a phone screen, sat nowhere near a thumb, and offered no Space at all,
-    // so Freedoom could be walked but never fought on a touch screen.
-    await page.goto(`/demo-arcade.html?${OVERRIDE}&boot=tap&intro=0&cart=e1m1`);
+    // so a shooter could be walked but never fought on a touch screen.
+    //
+    // Pinned to the raycaster, not to Doom. This is a test of the DOCK — the
+    // geometry of the pad and that a tap reaches the game's input — and the
+    // raycaster answers that crisply, because it exposes the player's heading
+    // and a tap can be shown to turn it. Doom's own state is a framebuffer, so
+    // the equivalent assertion there is a fuzzy pixel-motion probe that also
+    // wants a 10 MB IWAD in a phone-emulated browser; its input path already
+    // has precise coverage in demo-arcade-doom.spec.ts. The FIRE assertion
+    // below is cart-agnostic either way — it reads the arcade's own input.
+    await page.goto(`/demo-arcade.html?${OVERRIDE}&boot=tap&intro=0&cart=dungeon`);
     await page.locator('#boot').click();
     await waitForBoot(page);
     await page.waitForFunction(() => (window as any).__arcade.frames() >= 3, { timeout: 60000 });

@@ -265,7 +265,7 @@ const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, 
 function rowRuns(chars, colors) {
   const runs = [];
   let text = '', color = null;
-  for (let x = 0; x < COLS; x++) {
+  for (let x = 0; x < chars.length; x++) {
     const ch = chars[x];
     if (ch !== ' ' && colors[x] !== color && color !== null) {
       runs.push([text, color]); text = '';
@@ -277,29 +277,94 @@ function rowRuns(chars, colors) {
   return runs;
 }
 
+/** The same merge for a grid that also carries per-cell BACKGROUNDS (retained
+ *  for shaded-grid cartridges and renderer tests).
+ *
+ *  A background makes a space VISIBLE, so unlike rowRuns above, every cell
+ *  counts here: a run breaks whenever either the ink or the shading changes.
+ *  `null` shading means "no w:shd on this run" — the paragraph fill shows
+ *  through, which is what the chrome around the picture wants. */
+function rowRunsShaded(chars, colors, bgs) {
+  const runs = [];
+  let text = '', color = null, bg;
+  for (let x = 0; x < chars.length; x++) {
+    const cellBg = bgs[x] ?? null;
+    if (text !== '' && (colors[x] !== color || cellBg !== bg)) {
+      runs.push([text, color, bg]); text = '';
+    }
+    color = colors[x] ?? color; bg = cellBg;
+    text += chars[x];
+  }
+  if (text !== '') runs.push([text, color ?? '9CB3C9', bg ?? null]);
+  return runs;
+}
+
 /** The whole frame as one w:p: the captured opening tag (which carries the
  *  paragraph's Unid — THE thing that keeps the anchor stable across frames),
  *  a pPr with shading + exact line height, then per row: colored runs joined
- *  by w:br. */
-export function frameXml(openTag, grid, bg) {
+ *  by w:br.
+ *
+ *  `grid.bgs` is optional. When a grid supplies it, a
+ *  run also carries `w:shd`, so a cell can paint an ink color and a background
+ *  color independently. Grids without it (the Observatory's phenomena, the
+ *  attract screen, the other two cartridges) emit exactly the XML they always
+ *  did.
+ *
+ *  The grid's own shape is the frame's shape — rows from `grid.chars`, columns
+ *  from each row — so a cartridge may draw on a grid other than the shared
+ *  COLS×ROWS one. A denser grid needs a smaller cell to occupy the same page,
+ *  which is what `metrics` carries: `{ sz, lineTwips }`, the run font size in
+ *  half-points and the exact line height in twips. Omit it and the frame uses
+ *  the shared canvas metrics, unchanged. */
+export function frameXml(openTag, grid, bg, metrics) {
+  const sz = metrics?.sz ?? SZ;
+  const lineTwips = metrics?.lineTwips ?? LINE_TWIPS;
   const parts = [openTag,
     '<w:pPr>',
-    `<w:spacing w:before="0" w:after="0" w:line="${LINE_TWIPS}" w:lineRule="exact"/>`,
+    `<w:spacing w:before="0" w:after="0" w:line="${lineTwips}" w:lineRule="exact"/>`,
     `<w:shd w:val="clear" w:color="auto" w:fill="${bg}"/>`,
     '</w:pPr>'];
-  let runs = 0;
-  for (let y = 0; y < ROWS; y++) {
-    if (y > 0) parts.push('<w:r><w:br/></w:r>');
-    for (const [text, color] of rowRuns(grid.chars[y], grid.colors[y])) {
-      runs++;
-      parts.push(
-        `<w:r><w:rPr><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/>` +
-        `<w:color w:val="${color}"/><w:sz w:val="${SZ}"/><w:szCs w:val="${SZ}"/></w:rPr>` +
-        `<w:t xml:space="preserve">${esc(text)}</w:t></w:r>`);
+  // Treat the paragraph as one property stream, not as N unrelated rows. A
+  // line break is valid content inside a Word run, so when the last segment of
+  // one row and the first segment of the next share formatting they can be the
+  // SAME run with `<w:br/>` between their text nodes. Even when their
+  // formatting differs, the break belongs at the front of the next coloured
+  // run. A standalone `<w:r><w:br/></w:r>` inflated authored-run telemetry
+  // and discarded formatting continuity the converter can preserve.
+  const stream = [];
+  for (let y = 0; y < grid.chars.length; y++) {
+    const row = grid.bgs
+      ? rowRunsShaded(grid.chars[y], grid.colors[y], grid.bgs[y])
+      : rowRuns(grid.chars[y], grid.colors[y]);
+    for (let i = 0; i < row.length; i++) {
+      const [text, color, rawBg] = row[i];
+      const cellBg = rawBg ?? null;
+      const br = y > 0 && i === 0;
+      const prior = stream[stream.length - 1];
+      // A line break is content inside the coloured run, not a standalone
+      // empty run. Matching row endpoints can therefore stay in the same run;
+      // so a shaded grid with stable endpoints can cross row boundaries
+      // without paying for redundant break-only runs.
+      if (prior && prior.color === color && prior.bg === cellBg) {
+        if (br) prior.body += '<w:br/>';
+        prior.body += `<w:t xml:space="preserve">${esc(text)}</w:t>`;
+      } else {
+        stream.push({ color, bg: cellBg,
+          body: (br ? '<w:br/>' : '') + `<w:t xml:space="preserve">${esc(text)}</w:t>` });
+      }
     }
   }
+  for (const run of stream) {
+    parts.push(
+      `<w:r><w:rPr><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/>` +
+      `<w:color w:val="${run.color}"/><w:sz w:val="${sz}"/><w:szCs w:val="${sz}"/>` +
+      // w:shd is last in CT_RPr's sequence among the properties we emit, so
+      // appending it here keeps the run properties schema-ordered.
+      (run.bg ? `<w:shd w:val="clear" w:color="auto" w:fill="${run.bg}"/>` : '') +
+      `</w:rPr>${run.body}</w:r>`);
+  }
   parts.push('</w:p>');
-  return { xml: parts.join(''), runs };
+  return { xml: parts.join(''), runs: stream.length };
 }
 
 // ─── The canvas grid pin ──────────────────────────────────────────────
@@ -344,6 +409,14 @@ const CANVAS_GRID_RULES =
   ' white-space: pre !important;' +
   ' -webkit-text-size-adjust: 100% !important; text-size-adjust: 100% !important;';
 
+/** A canvas run, wherever it ends up. The converter writes the run's own font
+ *  onto the span, so this matches the canvas paragraph's runs by what they ARE
+ *  rather than by which block currently holds them — which is what keeps a
+ *  COPY of the game screen looking like the game screen. Paste a paused frame
+ *  further down the document and it is a new block with a new anchor; the pin
+ *  below would not know it, and the paragraph would lose its grid. */
+const CANVAS_RUN = 'span[style*="Courier New"]';
+
 /** Returns a `pin(canvasAnchor)` the driver calls once per frame: the rules are
  *  keyed to the canvas paragraph's Unid (stable across frames, so this is a
  *  no-op except on first paint and after the canvas is rebuilt). The
@@ -366,7 +439,27 @@ export function createCanvasPin() {
     pinned = unid;
     style.textContent =
       `[data-anchor="${unid}"], [data-anchor="${unid}"] span {${CANVAS_GRID_RULES} }\n` +
-      `[data-anchor="${unid}"] { overflow-x: hidden; }`;
+      `[data-anchor="${unid}"] { overflow-x: hidden; }\n` +
+      // Copies of the canvas paragraph, in their own rule so a browser without
+      // `:has()` simply drops this one and keeps the anchor pin above.
+      `[data-anchor] ${CANVAS_RUN} {${CANVAS_GRID_RULES} }\n` +
+      `[data-anchor]:has(> ${CANVAS_RUN}) { overflow-x: hidden;${CANVAS_GRID_RULES} }\n` +
+      // Run shading in legacy/shaded grids paints the
+      // INLINE box, whose height is the font's content area — a shade under
+      // the exact 10pt line box the canvas pins. Left alone that leaves a hair
+      // of paragraph fill between every pair of rows, which reads as scan
+      // lines across the picture. Vertical padding on an inline element grows
+      // the painted box WITHOUT touching line height (CSS 2.1 §10.6.1), so
+      // this closes the seam and changes no metric the grid depends on.
+      `[data-anchor="${unid}"] span, [data-anchor] ${CANVAS_RUN}` +
+      // A compact exact line has little leading and is especially sensitive to
+      // a one-device-pixel gap. Slight overlap is harmless for unshaded text
+      // and closes a shaded line box without changing its measured pitch.
+      // Converter-authored spans carry an inline `padding: 0` shorthand, so
+      // this pin needs the same `!important` strength as the grid properties
+      // above. Without it the rule exists but computes to zero — exactly the
+      // one-pixel black seams this rule is here to prevent.
+      ' { padding-top: 0.22em !important; padding-bottom: 0.22em !important; }';
   };
 }
 

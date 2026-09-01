@@ -529,6 +529,66 @@ namespace Docxodus
                 element.Nodes().Select(n => NormalizeNode(n, false)));
         }
 
+        /// <summary>
+        /// The element names <see cref="SimplifyMarkupTransform"/> can act on under these settings.
+        /// Empty when the settings ask for nothing it does.
+        /// </summary>
+        private static HashSet<XName> SimplifyTransformTargets(SimplifyMarkupSettings settings)
+        {
+            var names = new HashSet<XName>();
+            if (settings.RemovePermissions) { names.Add(W.permEnd); names.Add(W.permStart); }
+            if (settings.RemoveProof) { names.Add(W.proofErr); names.Add(W.noProof); }
+            if (settings.RemoveSoftHyphens) names.Add(W.softHyphen);
+            if (settings.RemoveLastRenderedPageBreak) names.Add(W.lastRenderedPageBreak);
+            if (settings.RemoveBookmarks || settings.RemoveGoBackBookmark)
+            {
+                names.Add(W.bookmarkStart);
+                names.Add(W.bookmarkEnd);
+            }
+            if (settings.RemoveWebHidden) names.Add(W.webHidden);
+            if (settings.ReplaceTabsWithSpaces) names.Add(W.tab);
+            if (settings.RemoveComments)
+            {
+                names.Add(W.commentRangeStart);
+                names.Add(W.commentRangeEnd);
+                names.Add(W.commentReference);
+                names.Add(W.annotationRef);
+                names.Add(W.rStyle);
+            }
+            if (settings.RemoveEndAndFootNotes)
+            {
+                names.Add(W.endnoteReference);
+                names.Add(W.footnoteReference);
+            }
+            if (settings.RemoveFieldCodes)
+            {
+                names.Add(W.fldSimple);
+                names.Add(W.fldData);
+                names.Add(W.fldChar);
+                names.Add(W.instrText);
+            }
+            if (settings.RemoveHyperlinks) names.Add(W.hyperlink);
+            return names;
+        }
+
+        private static bool ContainsAny(XElement root, HashSet<XName> names)
+        {
+            if (names.Count == 0) return false;
+            if (names.Contains(root.Name)) return true;
+            foreach (XElement d in root.Descendants())
+                if (names.Contains(d.Name)) return true;
+            return false;
+        }
+
+        /// <summary>Whether any run or property element has been emptied out.</summary>
+        private static bool HasEmptyRunOrProperties(XElement root)
+        {
+            foreach (XElement d in root.DescendantsAndSelf())
+                if ((d.Name == W.r || d.Name == W.rPr || d.Name == W.pPr) && !d.Elements().Any())
+                    return true;
+            return false;
+        }
+
         private static void SimplifyMarkupForPart(OpenXmlPart part, SimplifyMarkupSettings settings)
         {
             var parameters = new SimplifyMarkupParameters();
@@ -558,29 +618,36 @@ namespace Docxodus
             if (settings.RemoveRsidInfo)
                 newRoot = (XElement) RemoveRsidTransform(newRoot);
 
+            // Each pass below REBUILDS the whole tree, so a pass that cannot possibly change
+            // anything is a full allocation of the document for nothing — and on a large,
+            // formatting-dense part that was most of the cost of preparing it for rendering.
+            // Three of the five say in advance whether they have work: they are pure structural
+            // rebuilds outside the elements they target, so with none of those elements present
+            // the output is the input and the pass can be skipped on a read-only scan.
+            //
+            // The other two are NOT identities even when they merge and split nothing --
+            // coalescing renormalizes a run's `w:t` (its `xml:space`, its non-status attributes)
+            // and separating drops run attributes -- so they keep running unconditionally, and a
+            // guard that skipped them would change output rather than only cost. Making the
+            // expensive one cheap was a separate job, done inside the rule it groups by: see
+            // WordprocessingMLUtil.CanCoalesceAdjacent.
+            HashSet<XName> simplifyTargets = SimplifyTransformTargets(settings);
             var prevNewRoot = new XDocument(newRoot);
             while (true)
             {
-                if (settings.RemoveComments ||
-                    settings.RemoveEndAndFootNotes ||
-                    settings.ReplaceTabsWithSpaces ||
-                    settings.RemoveFieldCodes ||
-                    settings.RemovePermissions ||
-                    settings.RemoveProof ||
-                    settings.RemoveBookmarks ||
-                    settings.RemoveWebHidden ||
-                    settings.RemoveGoBackBookmark ||
-                    settings.RemoveHyperlinks)
+                if (ContainsAny(newRoot, simplifyTargets))
                     newRoot = (XElement) SimplifyMarkupTransform(newRoot, settings, parameters);
 
                 // Remove runs and run properties that have become empty due to previous transforms.
-                newRoot = (XElement) RemoveEmptyRunsAndRunPropertiesTransform(newRoot);
+                if (HasEmptyRunOrProperties(newRoot))
+                    newRoot = (XElement) RemoveEmptyRunsAndRunPropertiesTransform(newRoot);
 
                 // Merge adjacent runs that have identical run properties.
                 newRoot = (XElement) MergeAdjacentRunsTransform(newRoot);
 
                 // Merge adjacent instrText elements.
-                newRoot = (XElement) MergeAdjacentInstrText(newRoot);
+                if (newRoot.DescendantsAndSelf(W.instrText).Any())
+                    newRoot = (XElement) MergeAdjacentInstrText(newRoot);
 
                 // Separate run children into separate runs
                 newRoot = (XElement) SeparateRunChildrenIntoSeparateRuns(newRoot);
