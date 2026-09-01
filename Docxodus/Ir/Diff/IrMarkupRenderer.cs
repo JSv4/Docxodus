@@ -557,7 +557,7 @@ internal static class IrMarkupRenderer
                 // output substitutes those fonts DIFFERENTLY from Word's redline (which always carries one),
                 // so a rendered redline diverges from Word's compare output even on a byte-identical body.
                 // See WordCompareFontTableBackfill.
-                WordCompareFontTableBackfill.Backfill(main);
+                WordCompareFontTableBackfill.Backfill(main, wDocRight.MainDocumentPart);
 
                 // Some HTML-to-DOCX producers write CSS font-family lists directly into w:rFonts
                 // (for example "Roboto, sans-serif").  Word's comparison output keeps that raw
@@ -6095,6 +6095,13 @@ internal static class IrMarkupRenderer
         var rightMain = rightDocument.MainDocumentPart;
         var leftStyles = leftMain?.StyleDefinitionsPart?.GetXDocument().Root;
         var rightStyles = rightMain?.StyleDefinitionsPart?.GetXDocument().Root;
+        // The blanket consumer gates encode observed Word behavior, not just caution: an
+        // experiment that removed them projected docDefaults deltas onto dozens of documents whose
+        // oracles carry an EMPTY updated style — Word does not run this equal-definitions
+        // projection for theme-referencing or consumer-bearing documents (it normalizes the output
+        // docDefaults to its stock and absorbs the delta silently). Styles whose DEFINITIONS
+        // differ take the raw-payload branch regardless of these gates, and that branch carries
+        // the docDefaults delta materializations.
         if (leftMain is null || rightMain is null || leftStyles is null || rightStyles is null ||
             leftMain.GlossaryDocumentPart is not null ||
             DocDefaultsPayloadsEqual(leftStyles, rightStyles) ||
@@ -7596,6 +7603,13 @@ internal static class IrMarkupRenderer
         return (accPPr, accRPr);
     }
 
+    /// <summary>The rFonts slot pairs: a concrete attribute and the theme reference that OUTRANKS it
+    /// in the same slot. A layer declaring one member of a pair overrides the other from below.</summary>
+    private static readonly (XName Concrete, XName Theme)[] RFontsSlots =
+    {
+        (W.ascii, W.asciiTheme), (W.hAnsi, W.hAnsiTheme), (W.eastAsia, W.eastAsiaTheme), (W.cs, W.cstheme),
+    };
+
     private static void OverlayProps(XElement acc, XElement? layer)
     {
         if (layer is null)
@@ -7607,6 +7621,17 @@ internal static class IrMarkupRenderer
             var existing = acc.Element(prop.Name);
             if (prop.Name == W.rFonts && existing is not null)
             {
+                // Attribute-wise merge, but per SLOT: a theme attribute outranks the concrete one in
+                // the same slot, so a layer that declares either member must clear the other from the
+                // accumulated element — materializing ascii="Times New Roman" while a lower layer's
+                // asciiTheme rides along would still render the theme font.
+                foreach (var (concrete, theme) in RFontsSlots)
+                {
+                    if (prop.Attribute(concrete) is not null)
+                        existing.Attribute(theme)?.Remove();
+                    if (prop.Attribute(theme) is not null)
+                        existing.Attribute(concrete)?.Remove();
+                }
                 foreach (var at in prop.Attributes())
                     existing.SetAttributeValue(at.Name, at.Value);
                 continue;

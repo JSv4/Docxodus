@@ -530,6 +530,9 @@ public class DocxDiffStyleProvenanceTests
     [Fact]
     public void DocDefaultsProjection_DeclinesThemeReferences_WithoutCopyingPackagePresentation()
     {
+        // Oracle-verified decline (an experiment that projected here regressed dozens of documents
+        // whose oracles carry an EMPTY updated style): Word does not run the equal-definitions
+        // projection for theme-referencing defaults.
         var left = DocWithThemeDefault("22");
         var right = DocWithThemeDefault("28");
 
@@ -1039,6 +1042,53 @@ public class DocxDiffStyleProvenanceTests
         Assert.NotNull(spacing);
         Assert.Equal("160", (string?)spacing!.Attribute(W + "after"));
         Assert.Equal("278", (string?)spacing.Attribute(W + "line"));
+    }
+
+    /// <summary>
+    /// A concrete font in a higher layer must CLEAR the theme reference accumulated from a lower
+    /// one — in OOXML a theme attribute outranks the literal in the same slot, so materializing
+    /// "ascii=Times New Roman" while carrying "asciiTheme=minorHAnsi" still renders the theme font.
+    /// Word's materialized payload states the concrete attributes only.
+    /// </summary>
+    [Fact]
+    public void MaterializedRunFonts_DropThemeAttributesOverriddenByConcreteOnes()
+    {
+        WmlDocument DocThemedDefaults(string? normalFont, string text)
+        {
+            using var stream = new MemoryStream();
+            using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+            {
+                var main = doc.AddMainDocumentPart();
+                main.Document = new Document(new Body(new Paragraph(new Run(new Text(text)))));
+                var styles = main.AddNewPart<StyleDefinitionsPart>();
+                var normalRPr = normalFont is null
+                    ? string.Empty
+                    : $"<w:rPr><w:rFonts w:ascii=\"{normalFont}\" w:hAnsi=\"{normalFont}\"/></w:rPr>";
+                using (var writer = new StreamWriter(styles.GetStream(FileMode.Create, FileAccess.Write)))
+                {
+                    writer.Write($"<w:styles xmlns:w=\"{W.NamespaceName}\">" +
+                        "<w:docDefaults><w:rPrDefault><w:rPr>" +
+                        "<w:rFonts w:asciiTheme=\"minorHAnsi\" w:hAnsiTheme=\"minorHAnsi\"/><w:sz w:val=\"24\"/>" +
+                        "</w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults>" +
+                        "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\">" +
+                        $"<w:name w:val=\"Normal\"/><w:qFormat/>{normalRPr}</w:style></w:styles>");
+                }
+                main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+                doc.Save();
+            }
+            return new WmlDocument("themed.docx", stream.ToArray());
+        }
+
+        var left = DocThemedDefaults(null, "Shared body line.");
+        var right = DocThemedDefaults("Times New Roman", "Shared body line revised.");
+
+        var result = DocxDiff.Compare(left, right);
+
+        var rFonts = StyleOf(StylesOf(result), "Normal").Element(W + "rPr")?.Element(W + "rFonts");
+        Assert.NotNull(rFonts);
+        Assert.Equal("Times New Roman", (string?)rFonts!.Attribute(W + "ascii"));
+        Assert.Null(rFonts.Attribute(W + "asciiTheme"));
+        Assert.Null(rFonts.Attribute(W + "hAnsiTheme"));
     }
 
     /// <summary>Same leak with EQUAL Normal definitions (the docDefaults projection branch).</summary>
