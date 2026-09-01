@@ -319,6 +319,14 @@ internal static class IrMarkupRenderer
                 // package still contains the original LEFT stories; outside that shape it returns null and
                 // style treatment remains the established general path.
                 var leftHadTheme = main.ThemePart is not null;
+                // A left package with NO styles part at all takes the RIGHT's style definitions
+                // wholesale — Word's compare output for this shape carries every right style
+                // definition unchanged (a used ListParagraph's contextualSpacing is what keeps
+                // inserted bullet lists tight) while its docDefaults remain the STOCK backfill
+                // below, never the right's (both decoded from oracle outputs of style-less
+                // originals). With no left definitions there is nothing to collide with or
+                // preserve, so the wholesale copy is the safest of the style-provenance shapes.
+                AdoptRightStyleDefinitionsForStylelessLeft(main, wDocRight.MainDocumentPart);
                 var insertedStyleNormalization = TryCreateInsertedStyleNormalization(
                     script, state, main, wDocRight.MainDocumentPart);
                 var docDefaultsStyleProjection = TryCreateDocDefaultsStyleProjection(wDoc, wDocRight, state);
@@ -7444,6 +7452,31 @@ internal static class IrMarkupRenderer
     private static bool IsDeletedParagraph(XElement paragraph) =>
         paragraph.Element(W.pPr)?.Element(W.rPr)?.Elements().Any(e =>
             e.Name == W.del || e.Name == W.moveFrom) == true;
+
+    /// <summary>When the LEFT package has no styles part, copy the RIGHT's style definitions
+    /// (everything but <c>w:docDefaults</c>, which stays with the stock backfill) into a fresh
+    /// styles part. See the call site for the decoded provenance. No-op when the left has any
+    /// styles part or the right has none.</summary>
+    private static void AdoptRightStyleDefinitionsForStylelessLeft(
+        MainDocumentPart main, MainDocumentPart? rightMain)
+    {
+        if (main.StyleDefinitionsPart is not null)
+            return;
+        var rightRoot = rightMain?.StyleDefinitionsPart?.GetXDocument().Root;
+        if (rightRoot is null)
+            return;
+
+        var adopted = new XElement(rightRoot);
+        adopted.Elements(W.docDefaults).Remove();
+        foreach (var attr in adopted.DescendantsAndSelf().Attributes()
+                     .Where(a => a.Name.Namespace == PtOpenXml.pt).ToList())
+            attr.Remove();
+
+        var stylesPart = main.AddDeterministicPart<StyleDefinitionsPart>("rIdStylesBackfill");
+        var stylesDoc = stylesPart.GetXDocument();
+        stylesDoc.Add(adopted);
+        stylesPart.PutXDocument();
+    }
 
     /// <summary>When the output styles part lacks <c>w:docDefaults</c> (or the whole part is
     /// missing), insert Word's stock docDefaults (<see cref="WordStockDocDefaults"/>) — the era

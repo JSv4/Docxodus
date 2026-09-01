@@ -958,6 +958,66 @@ public class DocxDiffStyleProvenanceTests
         Assert.Equal("none", (string?)rPr.Element(w14 + "ligatures")?.Attribute(w14 + "val"));
     }
 
+    /// <summary>
+    /// A left package with NO styles part at all takes the right's style definitions wholesale —
+    /// Word's compare output for this shape carries every right style definition (a used
+    /// ListParagraph's contextualSpacing is what keeps inserted bullet lists tight) while the
+    /// docDefaults remain the stock backfill, never the right's.
+    /// </summary>
+    [Fact]
+    public void StylelessLeftPackage_AdoptsRightStyleDefinitions_WithStockDocDefaults()
+    {
+        WmlDocument StylelessDoc(string text)
+        {
+            using var stream = new MemoryStream();
+            using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+            {
+                doc.AddMainDocumentPart().Document = new Document(new Body(new Paragraph(new Run(new Text(text)))));
+                doc.Save();
+            }
+            return new WmlDocument("styleless.docx", stream.ToArray());
+        }
+
+        WmlDocument StyledDoc(string text)
+        {
+            using var stream = new MemoryStream();
+            using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+            {
+                var main = doc.AddMainDocumentPart();
+                main.Document = new Document(new Body(
+                    new Paragraph(
+                        new ParagraphProperties(new ParagraphStyleId { Val = "ListParagraph" }),
+                        new Run(new Text(text)))));
+                var styles = main.AddNewPart<StyleDefinitionsPart>();
+                using (var writer = new StreamWriter(styles.GetStream(FileMode.Create, FileAccess.Write)))
+                {
+                    writer.Write($"<w:styles xmlns:w=\"{W.NamespaceName}\">" +
+                        "<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii=\"Inter\" w:hAnsi=\"Inter\"/></w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults>" +
+                        "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\"><w:name w:val=\"Normal\"/><w:qFormat/></w:style>" +
+                        "<w:style w:type=\"paragraph\" w:styleId=\"ListParagraph\"><w:name w:val=\"List Paragraph\"/>" +
+                        "<w:basedOn w:val=\"Normal\"/><w:pPr><w:contextualSpacing/></w:pPr></w:style></w:styles>");
+                }
+                main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+                doc.Save();
+            }
+            return new WmlDocument("styled.docx", stream.ToArray());
+        }
+
+        var left = StylelessDoc("Old body entirely.");
+        var right = StyledDoc("Completely new list entry.");
+
+        var result = DocxDiff.Compare(left, right);
+
+        var styles = StylesOf(result);
+        Assert.Contains(styles.Root!.Elements(W + "style"), s => (string?)s.Attribute(W + "styleId") == "Normal");
+        Assert.Contains(styles.Root!.Elements(W + "style"), s => (string?)s.Attribute(W + "styleId") == "ListParagraph");
+        // docDefaults are the STOCK backfill (the left had no theme, so the modern stock spacing),
+        // not the right's empty pPrDefault.
+        var pPrDefault = styles.Root!.Element(W + "docDefaults")?.Element(W + "pPrDefault")?.Element(W + "pPr");
+        Assert.NotNull(pPrDefault);
+        Assert.Equal("160", (string?)pPrDefault!.Element(W + "spacing")?.Attribute(W + "after"));
+    }
+
     /// <summary>Same leak with EQUAL Normal definitions (the docDefaults projection branch).</summary>
     [Fact]
     public void LeftDocDefaultsLeftAtBuiltinsByRight_AreNeutralizedInCurrentPayload_EqualDefinitions()

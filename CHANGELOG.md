@@ -150,6 +150,24 @@ All notable changes to this project will be documented in this file.
   All four now run the same gate.
 
 ### Changed
+- **The engine selector's compare profile now treats input revisions the way Word's Compare does:
+  accepted first, not preserved.** Word's Compare dialog says it outright — "Word will treat them as
+  accepted" — and its outputs confirm it: text an input had struck through is absent from the result
+  entirely, the surviving text is re-detected as the compare author's own change, and the output
+  carries a single revision author. The selector (`DocxCompare.Compare`, and with it
+  `compareDocuments` on npm, the redline CLI, and the MCP compare tools) previously carried the
+  inputs' own tracked changes through under their original authors — Word's *Combine* behavior, not
+  its Compare. For callers passing revision-free documents nothing changes. Callers who compared
+  documents that already contained tracked changes now get Word-Compare output: the inputs' own
+  revisions are folded in as accepted before diffing, and every revision in the result belongs to
+  the compare author. To keep the old carry-through behavior, call the `DocxDiff` API directly with
+  `DocxDiffSettings.PreserveInputRevisions = true`.
+- **A revision of a style-less document adopts the revised side's style definitions.** When the
+  original document has no styles part at all, the compare output now carries every style
+  definition from the revised document (its `ListParagraph`'s `contextualSpacing` is what keeps an
+  inserted bullet list tight), while document defaults remain the stock backfill — matching what
+  Word emits for this shape. Previously the output had no style definitions, so inserted content
+  styled through `pStyle` lost its formatting.
 - **The corpus differential's consolidate rows now observe their calls (#632).** The N-way half of
   the differential recorded its warnings and order-variance channels as `n/a` on two premises that
   were both false when they were written down: that the consolidate settings type carries no
