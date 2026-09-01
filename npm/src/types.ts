@@ -159,7 +159,10 @@ export interface MarkdownProjection {
 }
 
 /**
- * Revision type enum matching the .NET WmlComparerRevisionType
+ * Revision type enum matching the .NET `DocxDiffRevisionType`, as returned by the `docxDiff*`
+ * comparison APIs. NOT the shape {@link getRevisions} returns — that reads a document's own markup
+ * and reports the markup-level kind on `RevisionListEntry.type` (`ins`/`del`/`moveFrom`), with the
+ * grouped classification on `family`.
  */
 export enum RevisionType {
   /** Text or content that was added/inserted */
