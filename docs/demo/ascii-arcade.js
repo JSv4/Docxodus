@@ -1430,6 +1430,17 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
   let fps = 0;
   let lastRuns = 0;
   let canvasImageId = null;
+  // A cartridge whose frame is a native inline image (Doom) depends on the
+  // engine's SINGLE-BLOCK render carrying that image. Engines up to and
+  // including 10.0.0 do not: the incremental renderer clones the block's XML
+  // into a throwaway shell without copying the referenced media part, and its
+  // converter settings carry no image handler, so WmlToHtmlConverter omits the
+  // w:drawing and the paragraph refreshes to blank. The image is genuinely in
+  // the package the whole time — Save and reopen shows it — which is exactly
+  // what makes the failure invisible from the outside. So prove the surface
+  // once, rather than painting frames no one can see.
+  let imageSurfaceProven = false;
+  let imageFramesPainted = 0;
   let lastSurface = 'runs';
   let lastImageOptions = null;
   let lastFrameEnd = performance.now();
@@ -1554,7 +1565,25 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
       `replaceImage <b>${timings.mutate.toFixed(1)}</b> ms · refresh <b>${timings.refresh.toFixed(1)}</b> ms · ` +
       `<b>1</b> inline image · ` +
       (fb ? `remounted (${fb})` : `<span class="inc">incremental — one block repainted</span>`);
-    return canvasEl()?.querySelector('img') ?? null;
+    const img = canvasEl()?.querySelector('img') ?? null;
+    // Two frames of slack before calling it: the check is a capability probe,
+    // not a per-frame assertion, and one empty reconcile should not halt a game.
+    imageFramesPainted++;
+    if (img) imageSurfaceProven = true;
+    else if (!imageSurfaceProven && imageFramesPainted >= 3) {
+      const why =
+        'this engine renders a single block without its inline image, so the frame '
+        + 'is in the .docx but never on screen — the image-bearing cartridges need a '
+        + 'docxodus newer than 10.0.0 (Save still downloads the frame; ?cart=e1m1, '
+        + '?cart=dungeon and ?cart=platformer paint runs and work here).';
+      // Not every drawFrame call is inside the loop's try — the cartridge
+      // switch and restart buttons repaint directly — so say it here rather
+      // than relying on a catch that only one of the three call sites has.
+      ui.stats.textContent = 'halted: ' + why;
+      playing = false;
+      throw new Error(why);
+    }
+    return img;
   }
 
   function drawFrame() {
