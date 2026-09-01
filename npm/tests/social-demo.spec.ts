@@ -356,8 +356,24 @@ test.describe('The landing page on a phone', () => {
     await page.waitForFunction(() => (window as any).__arcade.frames() >= 3, { timeout: 60000 });
     await expect(page.locator('#pageStatus')).toContainText(/live/i);
     await expect(page.locator('.dxr')).toHaveAttribute('data-chrome', 'compact');
-    expect(await page.evaluate(() => (window as any).__arcade.canvasText() as string))
-      .toContain('│'); // the game screen is drawn in the document
+    const screen = await page.evaluate(() => {
+      const arcade = (window as any).__arcade;
+      const element = arcade.canvasElement() as HTMLElement;
+      const image = element.querySelector<HTMLImageElement>('img');
+      return {
+        text: arcade.canvasText() as string,
+        imageCount: element.querySelectorAll('img').length,
+        natural: image ? [image.naturalWidth, image.naturalHeight] : null,
+        inEditor: arcade.editor.root.contains(element),
+      };
+    });
+    expect(screen.inEditor, 'the game screen must be on the editor surface').toBe(true);
+    if (screen.imageCount) {
+      expect(screen.imageCount, 'Doom is one native document image').toBe(1);
+      expect(screen.natural, 'Doom keeps its exact framebuffer').toEqual([320, 200]);
+    } else {
+      expect(screen.text).toContain('│'); // a text cartridge is drawn in the document
+    }
   });
 
   test('the floating controls steer the game and keep the screen clear', async ({ page }) => {
@@ -381,7 +397,7 @@ test.describe('The landing page on a phone', () => {
     await expect(page.locator('#dockcarts')).toBeHidden();
     await page.locator('#dockmore').click();
     await expect(page.locator('#dockcarts')).toBeVisible();
-    expect(await page.locator('#dockcarts button').count()).toBe(3);
+    expect(await page.locator('#dockcarts button').count()).toBe(4);
     await expect(page.locator('#restart')).toBeVisible();
     // The pad sits a fixed distance above the dock, so an opened sheet grows
     // the dock up underneath it: the D-pad covered the cartridge buttons and

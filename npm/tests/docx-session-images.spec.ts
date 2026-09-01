@@ -84,6 +84,10 @@ test.describe('DocxSession native images (typed wrapper — Issue #453)', () => 
             widthPoints: 90,
           });
           const images = session.listImages();
+          const renderedBlock = session.renderBlock(
+            inserted.modified?.[0]?.id ?? anchor,
+            { fabricateClasses: false },
+          );
 
           // Reopen the saved bytes: proves the media survived the whole round trip, not just
           // that the in-memory session reported success.
@@ -101,6 +105,7 @@ test.describe('DocxSession native images (typed wrapper — Issue #453)', () => 
             errorCode: inserted.error?.code,
             imageId: inserted.imageId,
             images,
+            renderedBlock,
             reopenedImages,
           };
         } finally {
@@ -125,6 +130,14 @@ test.describe('DocxSession native images (typed wrapper — Issue #453)', () => 
     expect(image.isBroken).toBe(false);
     expect(image.canMutate).toBe(true);
     expect(image.renderedWidthPoints).toBeCloseTo(90, 6);
+
+    // The editor refreshes mutations through this single-block converter.
+    // Copying only w:drawing XML into its reusable shell used to strand the
+    // r:embed relationship in the source package, yielding a blank paragraph
+    // until a full remount even though listImages/save saw a valid image.
+    expect(result.renderedBlock).toContain('<img');
+    expect(result.renderedBlock).toContain('data:image/png;base64,');
+    expect(result.renderedBlock).toContain('alt="browser transport"');
 
     expect(result.reopenedImages).toHaveLength(1);
     expect(result.reopenedImages[0].intrinsicWidthPixels).toBe(180);

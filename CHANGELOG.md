@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **The arcade says why a native-image cartridge is blank instead of playing invisibly.** Doom's
+  playable frame is a native inline image, and the single-block render that puts it on screen only
+  carries images from an engine newer than 10.0.0 — which is the pin `docs/demo/` currently loads
+  from jsDelivr. On that engine everything about the cartridge works except the part you can see:
+  the WebAssembly Doom boots, plays and logs, `replaceImage` succeeds, the frame really is in the
+  package (Save and reopen shows it), and only the refreshed paragraph comes back empty, because
+  the renderer's throwaway shell has neither a copy of the media part nor an image handler and
+  `WmlToHtmlConverter` correctly omits the `w:drawing`. Nothing surfaced that: the arcade ran a
+  full-rate loop over frames no player could see, and the Playwright specs could not catch it
+  because every one of them overrides `?engine=` to the locally built bundle, which has the fix.
+  `paintImage` now proves the surface once — if three image frames refresh without ever producing
+  an `<img>`, it halts and names the cause and the working cartridges in the dock's own status
+  line, on the button paths as well as the loop's. The demo README records the dependency.
+  Demo-content change (`docs/demo/`), not npm surface.
+- **THE DOCX ARCADE's third cartridge is now actual DOOM.** id Software's Doom engine —
+  GPL-2.0, compiled to JavaScript by [doomgeneric](https://github.com/grubbyplaya/doomgenericjs)
+  — runs on Freedoom's BSD-licensed IWAD, and its complete, lossless 320×200 framebuffer
+  becomes the media payload of one native inline image in a Word paragraph every frame:
+  `replaceImage` swaps the package media through the public session API, and
+  `editor.refresh()` re-renders that one block, the same incremental loop the rest of the
+  arcade uses. Real BSP rendering, real monsters, doors, weapons, menus
+  and status bar, in a document you can pause, edit, undo and save as a `.docx`. The engine
+  and IWAD are not in the repository at all — they are pinned jsDelivr URLs (by 40-hex commit
+  for both) behind a dynamic `import()`, so a visitor who plays the
+  other three cartridges fetches neither. The rasterized Freedoom E1M1 cartridge stays
+  alongside it as cartridge 3 — the raycaster's readable, typable world is a different demo
+  from the engine's picture-only frames, and `?cart=e1m1` still selects it. `?wad=` points the cartridge at a same-origin IWAD
+  you host and are licensed to play; `?sound=0` boots it mute; there is deliberately no
+  engine override, since `import()` executes what it fetches. `docs/demo/doom-cart.js` is
+  offered under GPL-2.0-or-later because it is combined with the GPL engine at runtime — the
+  one file in the repository that is not MIT. Upstream commits, digests, license texts and
+  verification commands are in `docs/demo/vendor/NOTICE.md`.
+  Demo-content change (`docs/demo/`), not npm surface.
 - **Reference-field authoring is back, as session ops (#607).** Narrowing the library to the DOCX
   toolchain removed `ReferenceAdder`, and with it the only way Docxodus could *create* a table of
   contents, figures or authorities — it could read, render, diff and edit around one, but not author
@@ -148,7 +181,128 @@ All notable changes to this project will be documented in this file.
   `ThrowOnCompatibilityWarning` and asked for conflicts, consolidated revisions or the consolidated
   edit script was silently never told — the N-way half of the gap #622 closed on the pairwise side.
   All four now run the same gate.
-
+- **A single-block render no longer drops the block's embedded images.** The incremental
+  renderer behind `renderBlock` and the editor's per-mutation refresh clones the target's XML
+  into a reusable throwaway shell — but OOXML relationship ids are scoped to their owning
+  package part, so the clone's `r:embed` pointed at no part in the shell and
+  `WmlToHtmlConverter` correctly omitted the picture. Inserting or replacing an image in a live
+  session therefore refreshed the paragraph to blank, even though the image was valid in the
+  package and appeared after a full remount or reopen. The renderer now copies the referenced
+  image parts into the shell and rewrites the clone's relationship ids (dropping the prior
+  render's copies first — the shell owns only formatting parts between renders), and the block
+  converter settings gain the same base64 image handler a full-document render uses, since
+  without one the converter deliberately drops `w:drawing` content.
+- **Doom is legible at a playable frame rate, and its controls are ordinary document
+  text.** Two things had to stop competing for the same paragraph. The keyboard map
+  used to be a side panel drawn on the framebuffer grid, which rendered it about seven
+  pixels high — the right words at an unusable size. It is now four short, bold **18pt
+  document paragraphs** above the screen (24px in the fitted desktop page, and still at
+  least 14px at the tested 60% embed scale), kept out of every frame conversion by the
+  existing one-character context fence. Four fixed lines rather than one, because a
+  single oversized OOXML run can clip.
+  That freed the whole document column for the picture, and the picture stopped being a
+  character grid at all. Character projections of the framebuffer — several were built,
+  from a fixed-tolerance colour merge through a budgeted run allocator riding the free
+  glyph channel — could meet the run budget only by destroying the evidence a player
+  needs (ammo, health and armor numerals), and restoring those pushed the converter
+  below 10 fps, because a run cannot cross a line break and resolution bought in rows is
+  bought at the worst price. The playable frame is now Doom's **complete, lossless
+  320 × 200 colour framebuffer** as one native inline image, drawn at 451 × 338.25
+  points so the 4:3 display aspect is correct and the 11-pixel HUD digits land about
+  25 CSS pixels tall. The budgeted colour painter and the high-contrast quadrant painter
+  survive only as exported helpers for the headless renderer tests; the loading and
+  error screens are still a text grid.
+  Two rendering fixes went with it. The canvas shading overlap now carries `!important`,
+  because converter spans set an inline `padding: 0` shorthand that made the
+  seam-closing rule compute to zero and leave one-pixel black lines between rows. And
+  the converter no longer emits a zero-metric LTR marker span after every break in
+  exact-line-height content, where the paragraph's declared direction already supplies
+  that information — one fewer DOM span per line, with bidi exact-line paragraphs
+  keeping their marker and a focused regression covering both branches.
+  The Playwright guard asserts the pixel-exact 320 × 200 inline image on the editor
+  surface (no out-of-document canvas), all four non-overflowing control lines at 24px
+  source / 14px scaled, controls outside the framebuffer block, and ten decoded,
+  animation-frame-presented document frames per second. The checked-in GIFs are framed
+  at the document content's native 656px width rather than shrinking a 1,000px editor
+  screenshot into the same slot.
+- **The arcade's game screen is fenced away from its caption.** A single-block re-render
+  does not render that block alone: the
+  engine pads each target with one real neighbour on each side before converting it, so
+  `w:contextualSpacing` resolves as it would in a full render, and those context clones are
+  discarded once the target's HTML is extracted. The screen's lower neighbour was the caption —
+  a formatted prose paragraph of 36 runs carrying a footnote reference — converted in full on
+  every frame of every game purely as context. Two one-character paragraphs now fence the screen
+  from it, worth a measured 7.4 → 8.8 repaints a second on the grid projection that first
+  exposed it, A/B'd inside a single browser process so
+  the container's ~30% speed drift could not be mistaken for the change. `syncFromDocument`'s
+  litter sweep (which deletes stray paragraphs between the screen and the caption, so pausing to
+  edit cannot fill the document with Enter-splits) now stops at the fence rather than deleting
+  it.
+  Demo-content change (`docs/demo/`), not npm surface.
+- **A cartridge can draw on its own character grid.** Cells carry resolution; runs carry cost;
+  those are different quantities, and a cartridge that wants more of the first without paying
+  the second needs a grid of its own. `frameXml` now takes the frame's shape from the grid it
+  is given and the cell metrics (`{ sz, lineTwips }`) from the cartridge, so a denser or
+  coarser screen is a cartridge decision — the text cartridges and the Observatory emit
+  exactly the XML they did before. Doom's loading and error screens are the caller that uses
+  it (its playable frame is a native image; see the entry above).
+  One limit is worth recording, because it bounds every such choice: a run cannot cross a line
+  break, so a frame can never use fewer runs than it has picture rows. More rows is more runs
+  the merge can never reclaim, whatever the colour budget does.
+  What did have to change is how a run picks its two endpoint colours. They were the span's
+  darkest and brightest cell halves, which is fine while a run covers a handful of samples and
+  catastrophic once it covers a hundred: extremes are outliers, one specular highlight and one
+  shadow define a ramp that nothing else in the span lies on, and every mid-tone then snaps to
+  whichever end is nearer — a black-and-white checkerboard where a wall should be, and worse at
+  every resolution increase. The endpoints are now the two group means either side of the span's
+  mean luminance, which is block truncation coding's rule (the one a GPU texture format uses),
+  costs the same two passes, and holds at any span length. That painter is no longer on the
+  playable path — it survives as an exported helper the headless renderer tests drive with
+  synthetic frames.
+  Demo-content change (`docs/demo/`), not npm surface.
+- **The paused game frame can be copied and pasted as a real block.** Selecting the screen
+  paragraph and pressing Ctrl+C always worked — it is ordinary document content. Pasting it back
+  did not: the editor commits *text* diffs by design, so a native paste dropped everything the
+  frame is made of. The cabinet now recognises a copy of its own screen: for the text cartridges
+  it inserts the paragraph's OOXML (same runs, same shading), and for Doom's native image it
+  reads the frame visible in the editor at copy time — so an Undo-scrubbed frame copies as what
+  the player sees, not the game loop's newer cache — and inserts it as a fresh inline image
+  through the public image API, minting fresh drawing ids rather than duplicating the source
+  paragraph's. Either way the pasted frame is a real block — undoable, and in the saved `.docx`.
+  It lands at the end of the body when the
+  caret is inside the screen or its fence, since everything in that span is swept on resume. The
+  demo's display pin also matches canvas runs by the font they carry rather than by one block's
+  anchor, so a copy of a text game screen keeps the grid. Any other copy or paste in the document
+  is the browser's, untouched.
+  Demo-content change (`docs/demo/`), not npm surface.
+- **Preparing a document for HTML conversion is substantially cheaper: run coalescing no longer
+  serializes every run's properties to a string, and three of `MarkupSimplifier`'s five passes
+  are skipped when nothing in the part can trigger them.** Profiling one conversion put 45% of
+  the time in `MarkupSimplifier` and 25% in `FormattingAssembler`, and inside the simplifier the
+  most expensive single step was the rule deciding which adjacent runs may merge: it built a
+  string per run — the run's kind plus its run properties through `XElement.ToString` — and
+  grouped by string equality. On a part whose runs mostly differ, every one of those strings was
+  built only to be found unequal. The rule is now a pairwise predicate comparing run properties
+  as trees. The three skippable passes (the settings-driven element removal, empty-run removal,
+  and `w:instrText` merging) are pure structural rebuilds outside the elements they target, so a
+  read-only scan that finds none of those elements proves the pass is an identity; the other two
+  keep running unconditionally, because coalescing renormalizes a run's `w:t` and separating run
+  children drops run attributes, which makes them non-identities even when they merge and split
+  nothing — a guard there would change output rather than only cost. Measured through the
+  editor's incremental block render: `refresh()` 88 ms → 73 ms on the same 101-run paragraph.
+  Output is unchanged, and the grouping rule that was replaced is kept as an executable oracle
+  (`CoalesceGroupingTests`) requiring the two to agree on every adjacent pair in the committed
+  corpus — a grouping rule that changes quietly merges a little more or a little less and still
+  emits well-formed markup.
+- **A single-block render no longer builds the session's anchor index when it will not use it.**
+  `BlockSourceIdentity.For` already declines the index walk for a render that does not stamp
+  anchors — the editor's incremental swap path — but C# evaluates arguments eagerly, so passing
+  `session.AnchorIndex()` positionally built the index before `For` could refuse it, on a session
+  whose index the preceding mutation had just invalidated. The call is now made only when
+  stamping is on. This was found while chasing a per-frame cost it turned out not to explain (the
+  arcade's document is small enough that the difference is below measurement noise there), so it
+  is housekeeping rather than a fix — but the guard is no longer defeated by its own call site,
+  which matters on documents where the index is not small.
 ### Changed
 - **The engine selector's compare profile now treats input revisions the way Word's Compare does:
   accepted first, not preserved.** Word's Compare dialog says it outright — "Word will treat them as
@@ -269,6 +423,16 @@ All notable changes to this project will be documented in this file.
   script, all four consolidate products and the compatibility report across eight generated
   edit shapes and every one of the 678 documents in `TestFiles/`, and every digest is
   byte-identical before and after.
+- **The canvas frame emitter can give a cell a background as well as an ink.** A grid may
+  now carry a `bgs` layer, which `frameXml` emits as `w:shd` in each run's `w:rPr`; the
+  canvas pin pads those inline boxes so the shading fills the exact line height instead of
+  leaving hairlines of paragraph fill between rows. This is what lets one character cell
+  hold two pixels (`▀` — top pixel as ink, bottom as shading). The shaded-grid painters that
+  used it for playable Doom were later retired for the native inline image, but the layer
+  and the retained painters remain exercised by the headless renderer tests. Grids without a
+  `bgs` layer — the
+  Observatory's phenomena, the attract screen, the text cartridges — emit exactly the
+  XML they always did. Demo-content change (`docs/demo/`), not npm surface.
 - **The ribbon's strips signal their overflow instead of hard-clipping.** On a narrow
   surface the compact chrome keeps every command by scrolling its strips (title bar, tab
   strip, ribbon panels, anchor rail) — but the clipped edge read as a squashed, broken
@@ -282,7 +446,7 @@ All notable changes to this project will be documented in this file.
   Reset/Show me/Next) raises as a bottom sheet over the document, with a grab handle and
   a scrim. Clearing a hole raises the sheet so the banner and the unlocked Next hole are
   never celebrated off-screen. Demo-content change (`docs/demo/`), not npm surface.
-- **The arcade presents the game, not the paper, on a phone** — Freedoom E1M1 included.
+- **The arcade presents the game, not the paper, on a phone** — Doom included.
   On the landing page and the cabinet the letter page's white side margins are cropped at
   phone widths (the fit-to-width zoom measures the surface element, so widening it by the
   margins' share lands the 6.5in game bezel edge-to-edge — presentation only, the document
@@ -290,9 +454,9 @@ All notable changes to this project will be documented in this file.
   the raycasters' HUD readable. The landing page's arcade card also hugs the game screen
   after boot instead of stretching 80dvh of blank paper, so the thumb D-pad and FIRE land
   directly under the action. Demo-content change (`docs/demo/`), not npm surface.
-- **The arcade now opens on Freedoom's E1M1 by default**, on both the landing page and the
-  full-screen cabinet — a visitor's first coin drop is the real Doom-format level rather
-  than the platformer. `?cart=quest|dungeon` still pick the other two cartridges explicitly.
+- **The arcade now opens on DOOM by default**, on both the landing page and the
+  full-screen cabinet — a visitor's first coin drop is the real game rather than the
+  platformer. `?cart=quest|dungeon|e1m1` still pick the other three cartridges explicitly.
   Demo-content change (`docs/demo/`), not npm surface.
 
 ## [10.0.0] - 2026-08-27

@@ -14,6 +14,13 @@
 // cartridges under input scripts that reach the banners, deaths and win
 // screens — rather than by scanning the source for literals.
 //
+// The Doom cartridge is driven differently from the other two, because its
+// picture comes from a WebAssembly Doom that will not boot in a Node test: its
+// framebuffer painter is exported and fed synthetic frames instead, which is
+// enough because the glyph a picture cell can hold is decided entirely by
+// whether its two half-pixels match. Its chrome, loading and error screens
+// come from render() as usual.
+//
 // If this fails, either widen the subset (edit UNICODES in
 // tools/build-canvas-font.sh and rebuild) or pick a character already in it.
 import assert from 'node:assert/strict';
@@ -22,6 +29,7 @@ import { readFileSync } from 'node:fs';
 
 import { SCENES } from '../ascii-scenes.js';
 import { platformerCart, dungeonCart, freedoomCart, introFrame } from '../ascii-arcade.js';
+import { doomCart, paintFramebuffer, paintFramebuffer8Bit } from '../doom-cart.js';
 
 const manifest = JSON.parse(
   readFileSync(new URL('../fonts/docxodus-canvas-mono.json', import.meta.url), 'utf8'));
@@ -71,8 +79,92 @@ function drawnCharacters() {
       }
     }
   }
+
+  // Doom: the chrome and the pre-game screens, straight from render().
+  const doom = doomCart({ engineUrl: 'about:blank', wadUrl: 'about:blank' });
+  for (let i = 0; i < 40; i++) collect(doom.render().grid, 'cart:doom');
+
+  // Doom: the picture itself. A framebuffer whose halves sometimes match and
+  // sometimes do not exercises both cell glyphs; the gradient makes sure the
+  // painter is not accidentally emitting anything else.
+  const fb = new Uint8Array(320 * 200 * 4);
+  for (let y = 0; y < 200; y++) {
+    for (let x = 0; x < 320; x++) {
+      const i = (y * 320 + x) * 4;
+      fb[i] = (x * 7) & 0xff;                       // B
+      fb[i + 1] = (y * 5) & 0xff;                   // G
+      fb[i + 2] = y < 100 ? 0x40 : (x ^ y) & 0xff;  // R — flat above, noisy below
+    }
+  }
+  const doomGrid = doom.render().grid;
+  paintFramebuffer(doomGrid, fb);
+  collect(doomGrid, 'cart:doom framebuffer');
+
+  // The playable projection can emit all sixteen quadrant patterns, so it
+  // needs its own pass — the pinned subset has to cover every glyph either
+  // projection can emit.
+  const eightBitGrid = doom.render().grid;
+  paintFramebuffer8Bit(eightBitGrid, fb);
+  collect(eightBitGrid, 'cart:doom 8-bit projection');
+
+  // A second frame with a hard horizontal split in every cell, to force the
+  // edge glyphs the gradient above may never trigger.
+  const split = new Uint8Array(320 * 200 * 4);
+  for (let y = 0; y < 200; y++) {
+    for (let x = 0; x < 320; x++) {
+      const i = (y * 320 + x) * 4;
+      const bright = (y % 9) < 4;
+      split[i] = bright ? 0xF0 : 0x08;
+      split[i + 1] = bright ? 0x30 : 0x08;
+      split[i + 2] = bright ? 0xC0 : 0x08;
+    }
+  }
+  const edgeGrid = doom.render().grid;
+  paintFramebuffer8Bit(edgeGrid, split);
+  collect(edgeGrid, 'cart:doom 8-bit edges');
+
   return seen;
 }
+
+test('the bitmap run budget preserves near-colour texture through free glyphs', () => {
+  // This is the failure mode from the shipped GIF in executable form. Every
+  // adjacent sample differs by only 30 grey levels: the old 13% pair-snap
+  // tolerance swallowed the entire row into one flat bar. A colour run does
+  // not break on glyphs, so the budgeted painter can keep one ink/bg pair and
+  // alternate solid/empty cells to retain nearly every boundary for free.
+  const fb = new Uint8Array(320 * 200 * 4);
+  for (let y = 0; y < 200; y++) {
+    for (let x = 0; x < 320; x++) {
+      const projectedX = Math.min(93, Math.floor(x * 94 / 320));
+      const grey = projectedX % 2 ? 110 : 80;
+      const i = (y * 320 + x) * 4;
+      fb[i] = grey; fb[i + 1] = grey; fb[i + 2] = grey;
+    }
+  }
+
+  const doom = doomCart({ engineUrl: 'about:blank', wadUrl: 'about:blank' });
+  const grid = doom.render().grid;
+  paintFramebuffer(grid, fb);
+  const row = grid.chars[2].slice(1, -1);
+  const expectedBoundaries = row.length - 1;
+  const glyphTransitions = row.slice(1).reduce(
+    (n, ch, i) => n + Number(ch !== row[i]), 0);
+  assert.ok(glyphTransitions >= expectedBoundaries - 6,
+    `near-colour texture smeared into bands: only ${glyphTransitions}/${expectedBoundaries} glyph boundaries survived`);
+  assert.ok(row.includes(' ') && row.includes('█'),
+    'both bitmap endpoints must be selectable through the free glyph channel');
+
+  let propertyRuns = 0;
+  for (let y = 2; y < grid.chars.length - 1; y++) {
+    let prior = null;
+    for (let x = 1; x < grid.chars[y].length - 1; x++) {
+      const pair = `${grid.colors[y][x]}/${grid.bgs[y][x]}`;
+      if (pair !== prior) { propertyRuns++; prior = pair; }
+    }
+  }
+  assert.ok(propertyRuns <= 900,
+    `bitmap exceeded its 900-run picture budget: ${propertyRuns}`);
+});
 
 test('the pinned canvas font covers every character the demos can draw', () => {
   const drawn = drawnCharacters();
@@ -98,8 +190,8 @@ test('the shipped subset is single-advance, which is the whole guarantee', () =>
 
 test('the non-ASCII characters the art depends on are all in the subset', () => {
   // The ones the bug was actually about, named so a regression reads clearly.
-  const loadBearing = ['█', '░', '▒', '▓', '─', '│', '┌', '┐', '└', '┘', '═', '▶', '◀', '►', '◄',
-    '▲', '▼', '§', '¶', '·', '→'];
+  const loadBearing = ['█', '▀', '▄', '░', '▒', '▓', '─', '│', '┌', '┐', '└', '┘', '═', '▶', '◀', '►', '◄',
+    '▲', '▼', '§', '¶', '·', '→', '←'];
   for (const ch of loadBearing) {
     assert.ok(covers(ch.codePointAt(0)),
       `${hex(ch.codePointAt(0))} ${ch} is not in the pinned font`);
