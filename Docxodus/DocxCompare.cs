@@ -33,9 +33,11 @@ public static class DocxCompare
     /// Compare <paramref name="left"/> against <paramref name="right"/> with the selected
     /// <paramref name="engine"/> and return the redlined document. <see cref="ComparisonEngine.WmlComparer"/>
     /// delegates directly for transitional documents and normalizes Word Strict inputs first; byte-identical
-    /// inputs instead return a detached exact clone without normalization or reserialization when the legacy
-    /// comparer need not repair malformed math revision markup; <see cref="ComparisonEngine.DocxDiff"/>
-    /// routes to <see cref="DocxDiff.Compare"/> with the mapped settings.
+    /// TRANSITIONAL inputs return a detached exact clone without reserialization when the legacy comparer
+    /// need not repair malformed math revision markup, while byte-identical STRICT inputs are normalized to
+    /// transitional (Word converts on open regardless of the compare outcome);
+    /// <see cref="ComparisonEngine.DocxDiff"/> routes to <see cref="DocxDiff.Compare"/> with the mapped
+    /// settings.
     /// </summary>
     /// <param name="left">The earlier / original document.</param>
     /// <param name="right">The later / revised document.</param>
@@ -53,12 +55,16 @@ public static class DocxCompare
         if (engine is not ComparisonEngine.WmlComparer and not ComparisonEngine.DocxDiff)
             throw new ArgumentOutOfRangeException(nameof(engine), engine, "Unknown comparison engine.");
 
-        // An exact same-package comparison has no revisions to produce. More importantly, a no-op
-        // must not silently rewrite a valid Strict package or discard unrelated existing revision
-        // markup merely because it passed through the comparison API. Return a detached clone so the
-        // result remains safe for callers to mutate/save independently of the input.
+        // An exact same-package comparison has no revisions to produce; return a detached clone so
+        // the result remains safe for callers to mutate/save independently of the input. A STRICT
+        // package is still normalized to transitional on the way out — Word converts on open no
+        // matter what the compare finds, and strict bytes break downstream consumers (LibreOffice
+        // renders them poorly, python-docx rejects them). Transitional inputs stay byte-identical.
         if (CanReturnExactNoOp(left, right))
-            return new WmlDocument(left);
+        {
+            var normalized = StrictOoxmlNormalizer.NormalizeToTransitional(left);
+            return ReferenceEquals(normalized, left) ? new WmlDocument(left) : normalized;
+        }
 
         return engine switch
         {
