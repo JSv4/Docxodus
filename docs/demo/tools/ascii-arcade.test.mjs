@@ -1,9 +1,89 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
-import { dungeonCart, freedoomCart } from '../ascii-arcade.js';
+import { dungeonCart, freedoomCart, rowsFromXml } from '../ascii-arcade.js';
+import { frameXml } from '../ascii-scenes.js';
+
+const DEMO_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
 
 const MAP_TOP = 4;
+
+test('frame XML coalesces matching formatting across line breaks', () => {
+  const grid = {
+    chars: [['A', 'A'], ['B', 'B']],
+    colors: [['FFFFFF', 'FFFFFF'], ['FFFFFF', 'FFFFFF']],
+    bgs: [['000000', '000000'], ['000000', '000000']],
+  };
+  const frame = frameXml('<w:p xmlns:w="urn:test">', grid, '000000');
+  assert.equal(frame.runs, 1, 'matching row properties must cross the break in one run');
+  assert.equal((frame.xml.match(/<w:r>/g) ?? []).length, 1,
+    'line breaks must not create standalone OOXML runs');
+  assert.doesNotMatch(frame.xml, /<w:r><w:br\s*\/><\/w:r>/);
+  assert.deepEqual(rowsFromXml(frame.xml), ['AA', 'BB']);
+});
+
+test('the checked-in Doom GIFs keep their native, tightly framed embed size', () => {
+  const readGif = (name) => {
+    const bytes = readFileSync(join(DEMO_DIR, '..', 'images', name));
+    assert.match(bytes.subarray(0, 6).toString('ascii'), /^GIF8[79]a$/);
+    const size = [bytes.readUInt16LE(6), bytes.readUInt16LE(8)];
+    let offset = 13;
+    const globalTable = bytes[10];
+    if (globalTable & 0x80) offset += 3 * (2 ** ((globalTable & 0x07) + 1));
+    let frames = 0;
+    let durationMs = 0;
+    const skipBlocks = () => {
+      while (offset < bytes.length) {
+        const length = bytes[offset++];
+        if (length === 0) return;
+        offset += length;
+      }
+      assert.fail(`unterminated GIF block in ${name}`);
+    };
+    while (offset < bytes.length) {
+      const marker = bytes[offset++];
+      if (marker === 0x3b) break;
+      if (marker === 0x21) {
+        const label = bytes[offset++];
+        if (label === 0xf9) {
+          assert.equal(bytes[offset++], 4, `bad graphic-control block in ${name}`);
+          durationMs += bytes.readUInt16LE(offset + 1) * 10;
+          offset += 4;
+          assert.equal(bytes[offset++], 0, `unterminated graphic-control block in ${name}`);
+        } else {
+          skipBlocks();
+        }
+        continue;
+      }
+      assert.equal(marker, 0x2c, `unknown GIF block 0x${marker.toString(16)} in ${name}`);
+      const localTable = bytes[offset + 8];
+      offset += 9;
+      if (localTable & 0x80) offset += 3 * (2 ** ((localTable & 0x07) + 1));
+      offset++; // LZW minimum code size
+      skipBlocks();
+      frames++;
+    }
+    return { size, frames, durationMs, bytes: bytes.length };
+  };
+
+  const walkthrough = readGif('arcade-doom.gif');
+  assert.deepEqual(walkthrough.size, [656, 716]);
+  assert.ok(walkthrough.frames >= 50, `walkthrough has only ${walkthrough.frames} frames`);
+  assert.ok(walkthrough.durationMs >= 6500,
+    `walkthrough lasts only ${walkthrough.durationMs}ms`);
+  assert.ok(walkthrough.bytes < 2 * 1024 * 1024,
+    `walkthrough GIF grew to ${walkthrough.bytes} bytes`);
+  assert.deepEqual(readGif('arcade-doom-bitmap.gif').size, [656, 660]);
+  const readme = readFileSync(join(DEMO_DIR, 'README.md'), 'utf8');
+  assert.match(readme, /arcade-doom\.gif[^>]+width="656"/);
+  assert.match(readme, /opener[\s\S]+movement and fire[\s\S]+caption strip/i);
+  assert.doesNotMatch(readme, /arcade-doom-bitmap\.gif/,
+    'the slow bitmap inspection mode must not be showcased as playable');
+  assert.doesNotMatch(readme, /arcade-doom\.gif[^>]+width="(?:100%|60%)"/);
+});
 
 function renderedRows(cart) {
   return cart.render().grid.chars.map((row) => row.join(''));
@@ -120,8 +200,14 @@ function bfsNext(state) {
   return null;
 }
 
-test('the fast headless cartridge run reaches every objective and the exit', () => {
-  const cart = freedoomCart();
+// Both raycaster level packs, cleared end to end by the same autopilot: the
+// hand-drawn dungeon and Freedoom's rasterized E1M1. The real Doom engine
+// (doom-cart.js) deliberately has no equivalent — its world lives in a
+// WebAssembly heap and cannot be walked by a headless script, which is
+// exactly why the E1M1 pack stays: its world is readable document text.
+for (const [packName, makeCart] of [['dungeon', dungeonCart], ['e1m1', freedoomCart]]) {
+test(`the fast headless ${packName} run reaches every objective and the exit`, () => {
+  const cart = makeCart();
   const input = new TestInput();
   let goal = null;
   let goalTicks = 0;
@@ -192,3 +278,4 @@ test('the fast headless cartridge run reaches every objective and the exit', () 
   assert.equal(final.sigilsLeft, 0);
   assert.equal(final.mode, 'won');
 });
+}

@@ -5244,7 +5244,13 @@ namespace Docxodus
                                                                              b.Attribute(W.val).ToBoolean() == true);
             var zeroWidthChar = isBidi ? new XEntity("#x200f") : new XEntity("#x200e");
             var breakElement = new XElement(Xhtml.br);
-            object directionMark = zeroWidthChar;
+            // In an ordinary LTR exact-line-height paragraph the break already
+            // resumes in the paragraph's declared direction. A synthetic LRM
+            // contributes no bidi information there, but wrapping it in the
+            // zero-metric span below creates one extra DOM span per line. Keep
+            // the mark for bidi paragraphs; omit only the provably redundant
+            // compact LTR case used for split-out break-only runs.
+            object directionMark = compactDirectionMark && !isBidi ? null : zeroWidthChar;
             if (compactDirectionMark)
             {
                 // A bare <br> still inherits the paragraph's default font size. Chromium uses
@@ -5256,13 +5262,16 @@ namespace Docxodus
                     { "font-size", "0" },
                     { "line-height", "0" },
                 });
-                var markSpan = new XElement(Xhtml.span, zeroWidthChar);
-                markSpan.AddAnnotation(new Dictionary<string, string>
+                if (directionMark != null)
                 {
-                    { "font-size", "0" },
-                    { "line-height", "0" },
-                });
-                directionMark = markSpan;
+                    var markSpan = new XElement(Xhtml.span, zeroWidthChar);
+                    markSpan.AddAnnotation(new Dictionary<string, string>
+                    {
+                        { "font-size", "0" },
+                        { "line-height", "0" },
+                    });
+                    directionMark = markSpan;
+                }
             }
 
             return new object[]
