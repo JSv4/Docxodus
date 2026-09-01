@@ -6586,13 +6586,17 @@ internal static class IrMarkupRenderer
             var (rightEffPPr, rightRPr) = ResolveEffectiveStyleFormatting(rightRoot, type, styleId);
             var (_, leftRPr) = ResolveEffectiveStyleFormatting(leftOriginalRoot, type, styleId);
 
-            // Left docDefaults declarations the right leaves at built-ins need explicit neutralizers
-            // in the CURRENT payload or they keep ruling the accepted view (the package retains the
-            // LEFT docDefaults). The raw pPr provenance is otherwise unchanged.
+            // The package retains the LEFT docDefaults, so the CURRENT payload must state the
+            // docDefaults DELTA both ways: a left declaration the right leaves at built-ins gets an
+            // explicit neutralizer, and a right docDefaults declaration the left lacks (or values
+            // differently) is materialized in. The raw pPr provenance is otherwise unchanged.
             if (string.Equals(type, "paragraph", StringComparison.Ordinal))
             {
                 AddDocDefaultsNeutralizers(rightRawPPr,
                     LeftDocDefaultsProps(leftOriginalRoot, paragraphAxis: true), rightEffPPr, paragraphAxis: true);
+                MaterializeRightDocDefaults(rightRawPPr,
+                    LeftDocDefaultsProps(leftOriginalRoot, paragraphAxis: true),
+                    LeftDocDefaultsProps(rightRoot, paragraphAxis: true));
                 NormalizeStylePropertyOrder(rightRawPPr, StylePPrChildOrder);
             }
             AddDocDefaultsNeutralizers(rightRPr,
@@ -6729,6 +6733,28 @@ internal static class IrMarkupRenderer
     private static XElement? LeftDocDefaultsProps(XElement stylesRoot, bool paragraphAxis) => paragraphAxis
         ? stylesRoot.Element(W.docDefaults)?.Element(W.pPrDefault)?.Element(W.pPr)
         : stylesRoot.Element(W.docDefaults)?.Element(W.rPrDefault)?.Element(W.rPr);
+
+    /// <summary>
+    /// The mirror of <see cref="AddDocDefaultsNeutralizers"/>: a property the RIGHT declares in its
+    /// docDefaults that the LEFT's (retained) docDefaults lack or value differently must be stated
+    /// on the updated style's CURRENT payload, or the accepted view renders with the left's value.
+    /// A key the style's own raw payload already carries wins untouched.
+    /// </summary>
+    private static void MaterializeRightDocDefaults(
+        XElement current, XElement? leftDocDefaultsProps, XElement? rightDocDefaultsProps)
+    {
+        if (rightDocDefaultsProps is null)
+            return;
+        foreach (var declared in rightDocDefaultsProps.Elements())
+        {
+            if (current.Element(declared.Name) is not null)
+                continue;
+            var leftDeclared = leftDocDefaultsProps?.Element(declared.Name);
+            if (leftDeclared is not null && XNode.DeepEquals(leftDeclared, declared))
+                continue;
+            current.Add(StripUnids(new XElement(declared)));
+        }
+    }
 
     /// <summary>Replace only the style property slices supplied by a presentation projection, preserving the
     /// style metadata and the schema-required pPr → rPr → table-property ordering.</summary>

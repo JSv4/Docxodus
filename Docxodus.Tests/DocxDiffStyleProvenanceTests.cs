@@ -1018,6 +1018,29 @@ public class DocxDiffStyleProvenanceTests
         Assert.Equal("160", (string?)pPrDefault!.Element(W + "spacing")?.Attribute(W + "after"));
     }
 
+    /// <summary>
+    /// The mirror of the neutralizer: paragraph spacing the RIGHT declares in its docDefaults (and
+    /// the left does not) must materialize into the updated style's current payload — the output
+    /// package retains the LEFT docDefaults, so without it the accepted view renders with the
+    /// left's (absent) spacing. Word writes exactly this materialization.
+    /// </summary>
+    [Fact]
+    public void RightDocDefaultsLeftLacks_AreMaterializedInCurrentPayload_DifferingDefinitions()
+    {
+        // Left: empty pPrDefault, Normal carries its own marker payload so the definitions differ.
+        var left = DocWithDefaultsAndNormalPPr(false, "<w:widowControl w:val=\"0\"/>", "Shared body line.");
+        // Right: docDefaults declare paragraph spacing; Normal payload empty.
+        var right = DocWithDefaultsAndNormalPPr(true, string.Empty, "Shared body line revised.");
+
+        var result = DocxDiff.Compare(left, right);
+
+        var normal = StyleOf(StylesOf(result), "Normal");
+        var spacing = normal.Element(W + "pPr")?.Element(W + "spacing");
+        Assert.NotNull(spacing);
+        Assert.Equal("160", (string?)spacing!.Attribute(W + "after"));
+        Assert.Equal("278", (string?)spacing.Attribute(W + "line"));
+    }
+
     /// <summary>Same leak with EQUAL Normal definitions (the docDefaults projection branch).</summary>
     [Fact]
     public void LeftDocDefaultsLeftAtBuiltinsByRight_AreNeutralizedInCurrentPayload_EqualDefinitions()
