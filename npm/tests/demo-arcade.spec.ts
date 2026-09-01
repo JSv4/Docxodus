@@ -230,7 +230,7 @@ test.describe('THE DOCX ARCADE page', () => {
     expect(state.text).toContain('PILCROW');      // HUD present
     expect(state.text).toContain('│');            // bezel present
     expect(state.fallback).toBeNull();            // per-frame path stayed incremental
-    expect(state.cartButtons).toBe(3);
+    expect(state.cartButtons).toBe(4);
     // Computed visibility, not the `hidden` attribute: the overlay/dock carry
     // explicit display values, which would silently defeat the attribute.
     await expect(page.locator('#dock')).toBeVisible();
