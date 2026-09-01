@@ -28,7 +28,7 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 
 import { SCENES } from '../ascii-scenes.js';
-import { platformerCart, dungeonCart, introFrame } from '../ascii-arcade.js';
+import { platformerCart, dungeonCart, freedoomCart, introFrame } from '../ascii-arcade.js';
 import { doomCart, paintFramebuffer, paintFramebuffer8Bit } from '../doom-cart.js';
 
 const manifest = JSON.parse(
@@ -67,7 +67,7 @@ function drawnCharacters() {
     for (let i = 0; i < 400; i++) collect(scene.gen(i * 0.08), `scene:${scene.name}`);
   }
   for (let i = 0; i < 900; i++) collect(introFrame(i * 0.02).grid, 'attract screen');
-  for (const make of [platformerCart, dungeonCart]) {
+  for (const make of [platformerCart, dungeonCart, freedoomCart]) {
     for (const script of SCRIPTS) {
       const cart = make();
       const input = new ScriptedInput(script);

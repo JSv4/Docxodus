@@ -15,7 +15,9 @@ All notable changes to this project will be documented in this file.
   and status bar, in a document you can pause, edit, undo and save as a `.docx`. The engine
   and IWAD are not in the repository at all — they are pinned jsDelivr URLs (by 40-hex commit
   for both) behind a dynamic `import()`, so a visitor who plays the
-  other two cartridges fetches neither. `?wad=` points the cartridge at a same-origin IWAD
+  other three cartridges fetches neither. The rasterized Freedoom E1M1 cartridge stays
+  alongside it as cartridge 3 — the raycaster's readable, typable world is a different demo
+  from the engine's picture-only frames, and `?cart=e1m1` still selects it. `?wad=` points the cartridge at a same-origin IWAD
   you host and are licensed to play; `?sound=0` boots it mute; there is deliberately no
   engine override, since `import()` executes what it fetches. `docs/demo/doom-cart.js` is
   offered under GPL-2.0-or-later because it is combined with the GPL engine at runtime — the
@@ -195,7 +197,7 @@ All notable changes to this project will be documented in this file.
   those are different quantities, and a cartridge that wants more of the first without paying
   the second needs a grid of its own. `frameXml` now takes the frame's shape from the grid it
   is given and the cell metrics (`{ sz, lineTwips }`) from the cartridge, so a denser or
-  coarser screen is a cartridge decision — the other two cartridges and the Observatory emit
+  coarser screen is a cartridge decision — the text cartridges and the Observatory emit
   exactly the XML they did before. Doom's loading and error screens are the caller that uses
   it (its playable frame is a native image; see the entry above).
   One limit is worth recording, because it bounds every such choice: a run cannot cross a line
@@ -364,7 +366,7 @@ All notable changes to this project will be documented in this file.
   used it for playable Doom were later retired for the native inline image, but the layer
   and the retained painters remain exercised by the headless renderer tests. Grids without a
   `bgs` layer — the
-  Observatory's phenomena, the attract screen, the other two cartridges — emit exactly the
+  Observatory's phenomena, the attract screen, the text cartridges — emit exactly the
   XML they always did. Demo-content change (`docs/demo/`), not npm surface.
 - **The ribbon's strips signal their overflow instead of hard-clipping.** On a narrow
   surface the compact chrome keeps every command by scrolling its strips (title bar, tab
@@ -389,17 +391,8 @@ All notable changes to this project will be documented in this file.
   directly under the action. Demo-content change (`docs/demo/`), not npm surface.
 - **The arcade now opens on DOOM by default**, on both the landing page and the
   full-screen cabinet — a visitor's first coin drop is the real game rather than the
-  platformer. `?cart=quest|dungeon` still pick the other two cartridges explicitly.
+  platformer. `?cart=quest|dungeon|e1m1` still pick the other three cartridges explicitly.
   Demo-content change (`docs/demo/`), not npm surface.
-
-### Removed
-- **The rasterized Freedoom E1M1 cartridge and its converter.** `docs/demo/freedoom-e1m1.js`
-  (the level rasterized to a character grid), `docs/demo/tools/wad2cart.mjs` and its test are
-  gone: cartridge 3 no longer approximates a Doom level with an ASCII raycaster, it runs the
-  Doom engine. The raycaster itself stays — it is still what The Docx Dungeon plays, and it
-  keeps the "pause, type walls into the map, resume and walk through them" round trip that
-  real Doom cannot offer. `?cart=e1m1` is now `?cart=doom`. Demo-content change
-  (`docs/demo/`), not npm surface.
 
 ## [10.0.0] - 2026-08-27
 

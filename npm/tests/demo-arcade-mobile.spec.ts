@@ -232,9 +232,9 @@ test.describe('Arcade on a phone-shaped viewport', () => {
   });
 
   test('every cartridge keeps its grid on the same platform', async ({ page }) => {
-    test.setTimeout(180000); // one boot, then three cartridges animated in turn
-    // The two text games draw a box-drawing bezel on every row and the
-    // raycaster shades its walls with ▒ █, so the tilt is not an
+    test.setTimeout(240000); // one boot, then four cartridges animated in turn
+    // The three text games draw a box-drawing bezel on every row and the
+    // raycasters shade their walls with ▒ █, so the tilt is not an
     // attract-screen-only property. Doom now uses one native 320×200 image;
     // its mobile contract is exact image geometry rather than text-row drift.
     //
@@ -247,7 +247,7 @@ test.describe('Arcade on a phone-shaped viewport', () => {
     await page.locator('#boot').click();
     await waitForBoot(page);
 
-    for (const cart of ['quest', 'dungeon', 'doom']) {
+    for (const cart of ['quest', 'dungeon', 'e1m1', 'doom']) {
       await page.evaluate((name) => {
         (window as any).__arcade.setCart(name);
         (window as any).__arcade.resume();

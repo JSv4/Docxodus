@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════
-// Cartridge 3 — DOOM. The actual game, not an impression of it.
+// Cartridge 4 — DOOM. The actual game, not an impression of it.
 //
 // LICENSE NOTE — THIS FILE IS GPL-2.0-or-later, NOT MIT.
 // Docxodus is MIT (see the root LICENSE) and every other file in this
@@ -9,11 +9,11 @@
 // offered under GPL-2.0-or-later too. The engine itself is not in this
 // repository: it is a pinned jsDelivr URL loaded through a dynamic `import()`,
 // which is also why the 3 MB build never downloads for a visitor who plays the
-// other two cartridges. See vendor/NOTICE.md.
+// other three cartridges. See vendor/NOTICE.md.
 //
 // WHAT THIS REPLACES
 // ------------------
-// Cartridge 3 used to be a hand-written ASCII raycaster fed by Freedoom's
+// Cartridge 4's slot used to end at a hand-written ASCII raycaster fed by Freedoom's
 // E1M1 geometry, rasterized to a character grid offline. That was a real Doom
 // *level* in a Word document. This is the real Doom *engine* in a Word
 // document: id's own BSP renderer, its own 320×200 framebuffer, its own
