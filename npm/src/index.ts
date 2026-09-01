@@ -1,7 +1,7 @@
 import type {
   ConversionOptions,
   CompareOptions,
-  Revision,
+  RevisionListEntry,
   VersionInfo,
   ErrorResponse,
   CompareResult,
@@ -10,7 +10,6 @@ import type {
   DeliveryReceiptVerificationResult,
   RedlineReversibilityProof,
   DocxodusWasmExports,
-  GetRevisionsOptions,
   FormatChangeDetails,
   // DocxDiff (IR diff engine)
   DocxDiffSettings,
@@ -60,9 +59,6 @@ import type {
   ExternalAnnotationValidationIssue,
   ExternalAnnotationProjectionSettings,
   // Comparison log types
-  ComparisonLogEntry,
-  CompareResultWithLog,
-  CompareToHtmlResultWithLog,
   // Markdown projection types
   MarkdownProjectionSettings,
   MarkdownAnchorTarget,
@@ -136,7 +132,6 @@ export type {
   PageNumberingOp,
   ParagraphBorderEdge,
   ParagraphFormatOp,
-  RevisionListEntry,
   RevisionDiagnostic,
   RevisionFamily,
   RevisionResolutionStatus,
@@ -230,7 +225,6 @@ import {
   PaginationMode,
   AnnotationLabelMode,
   RevisionType,
-  ComparisonEngine,
   DocxDiffRevisionGranularity,
   DocxDiffFormatComparison,
   ConflictResolution,
@@ -247,9 +241,6 @@ import {
   isInsertion,
   isDeletion,
   isMove,
-  isMoveSource,
-  isMoveDestination,
-  findMovePair,
   isFormatChange,
   findElementById,
   findElementsByType,
@@ -352,11 +343,10 @@ export type {
 export type {
   ConversionOptions,
   CompareOptions,
-  Revision,
+  RevisionListEntry,
   VersionInfo,
   ErrorResponse,
   CompareResult,
-  GetRevisionsOptions,
   FormatChangeDetails,
   Annotation,
   AddAnnotationRequest,
@@ -389,9 +379,6 @@ export type {
   ExternalAnnotationValidationIssue,
   ExternalAnnotationProjectionSettings,
   // Comparison log types
-  ComparisonLogEntry,
-  CompareResultWithLog,
-  CompareToHtmlResultWithLog,
   // Markdown projection types
   MarkdownProjectionSettings,
   MarkdownAnchorTarget,
@@ -421,7 +408,6 @@ export {
   PaginationMode,
   AnnotationLabelMode,
   RevisionType,
-  ComparisonEngine,
   DocxDiffRevisionGranularity,
   DocxDiffFormatComparison,
   ConflictResolution,
@@ -438,9 +424,6 @@ export {
   isInsertion,
   isDeletion,
   isMove,
-  isMoveSource,
-  isMoveDestination,
-  findMovePair,
   isFormatChange,
   // Document structure helpers
   findElementById,
@@ -936,23 +919,19 @@ export async function compareDocuments(
   await yieldToMain();
 
   let result: Uint8Array;
-  const engine = options?.engine ?? ComparisonEngine.DocxDiff;
 
-  if (options?.detailThreshold !== undefined || options?.caseInsensitive) {
+  if (options?.caseInsensitive) {
     result = exports.DocumentComparer.CompareDocumentsWithOptions(
       originalBytes,
       modifiedBytes,
       options?.authorName ?? "Docxodus",
-      options?.detailThreshold ?? 0.15,
-      options?.caseInsensitive ?? false,
-      engine
+      options.caseInsensitive
     );
   } else {
     result = exports.DocumentComparer.CompareDocuments(
       originalBytes,
       modifiedBytes,
-      options?.authorName ?? "Docxodus",
-      engine
+      options?.authorName ?? "Docxodus"
     );
   }
 
@@ -985,28 +964,23 @@ export async function compareDocumentsToHtml(
   await yieldToMain();
 
   const renderTrackedChanges = options?.renderTrackedChanges ?? true;
-  const engine = options?.engine ?? ComparisonEngine.DocxDiff;
 
   let result: string;
 
-  // Use full method when detailThreshold or caseInsensitive are specified
-  if (options?.detailThreshold !== undefined || options?.caseInsensitive !== undefined) {
+  if (options?.caseInsensitive !== undefined) {
     result = exports.DocumentComparer.CompareDocumentsToHtmlFull(
       originalBytes,
       modifiedBytes,
       options?.authorName ?? "Docxodus",
-      options?.detailThreshold ?? 0.15,
-      options?.caseInsensitive ?? false,
-      renderTrackedChanges,
-      engine
+      options.caseInsensitive,
+      renderTrackedChanges
     );
   } else {
     result = exports.DocumentComparer.CompareDocumentsToHtmlWithOptions(
       originalBytes,
       modifiedBytes,
       options?.authorName ?? "Docxodus",
-      renderTrackedChanges,
-      engine
+      renderTrackedChanges
     );
   }
 
@@ -1018,138 +992,8 @@ export async function compareDocumentsToHtml(
   return result;
 }
 
-/**
- * Compare two DOCX documents with logging enabled.
- * Returns both the redlined document and a log of any warnings/errors encountered.
- * This allows the comparison to continue past recoverable issues (like orphaned footnotes)
- * while providing visibility into what was fixed or skipped.
- *
- * @param original - Original DOCX document
- * @param modified - Modified DOCX document
- * @param options - Comparison options
- * @returns Result with document bytes and log entries
- *
- * @example
- * ```typescript
- * const result = await compareDocumentsWithLog(original, modified, {
- *   authorName: "Reviewer",
- *   detailThreshold: 0.15
- * });
- *
- * if (result.success) {
- *   // Use result.document (Uint8Array)
- *   if (result.hasWarnings) {
- *     console.log("Warnings during comparison:");
- *     for (const entry of result.log) {
- *       console.log(`  [${entry.level}] ${entry.code}: ${entry.message}`);
- *     }
- *   }
- * } else {
- *   console.error(`Comparison failed: ${result.error}`);
- * }
- * ```
- */
-export async function compareDocumentsWithLog(
-  original: File | Uint8Array,
-  modified: File | Uint8Array,
-  options?: CompareOptions
-): Promise<CompareResultWithLog> {
-  const exports = ensureInitialized();
-  const originalBytes = await toBytes(original);
-  const modifiedBytes = await toBytes(modified);
 
-  await yieldToMain();
 
-  const result = exports.DocumentComparer.CompareDocumentsWithLog(
-    originalBytes,
-    modifiedBytes,
-    options?.authorName ?? "Docxodus",
-    options?.detailThreshold ?? 0.15,
-    options?.caseInsensitive ?? false
-  );
-
-  const parsed = JSON.parse(result);
-
-  return {
-    success: parsed.Success ?? parsed.success ?? false,
-    document: parsed.DocumentBase64 || parsed.documentBase64
-      ? Uint8Array.from(atob(parsed.DocumentBase64 || parsed.documentBase64), c => c.charCodeAt(0))
-      : undefined,
-    error: parsed.Error ?? parsed.error,
-    log: convertLogEntries(parsed.Log || parsed.log || []),
-    hasWarnings: parsed.HasWarnings ?? parsed.hasWarnings ?? false,
-    hasErrors: parsed.HasErrors ?? parsed.hasErrors ?? false,
-  };
-}
-
-/**
- * Compare two DOCX documents to HTML with logging enabled.
- * Returns both the HTML output and a log of any warnings/errors encountered.
- *
- * @param original - Original DOCX document
- * @param modified - Modified DOCX document
- * @param options - Comparison options
- * @returns Result with HTML and log entries
- *
- * @example
- * ```typescript
- * const result = await compareDocumentsToHtmlWithLog(original, modified, {
- *   authorName: "Reviewer",
- *   renderTrackedChanges: true
- * });
- *
- * if (result.success) {
- *   document.getElementById("viewer").innerHTML = result.html;
- *   if (result.hasWarnings) {
- *     console.log(`${result.log.length} warnings during comparison`);
- *   }
- * }
- * ```
- */
-export async function compareDocumentsToHtmlWithLog(
-  original: File | Uint8Array,
-  modified: File | Uint8Array,
-  options?: CompareOptions
-): Promise<CompareToHtmlResultWithLog> {
-  const exports = ensureInitialized();
-  const originalBytes = await toBytes(original);
-  const modifiedBytes = await toBytes(modified);
-
-  await yieldToMain();
-
-  const result = exports.DocumentComparer.CompareDocumentsToHtmlWithLog(
-    originalBytes,
-    modifiedBytes,
-    options?.authorName ?? "Docxodus",
-    options?.detailThreshold ?? 0.15,
-    options?.caseInsensitive ?? false,
-    options?.renderTrackedChanges ?? true
-  );
-
-  const parsed = JSON.parse(result);
-
-  return {
-    success: parsed.Success ?? parsed.success ?? false,
-    html: parsed.Html ?? parsed.html,
-    error: parsed.Error ?? parsed.error,
-    log: convertLogEntries(parsed.Log || parsed.log || []),
-    hasWarnings: parsed.HasWarnings ?? parsed.hasWarnings ?? false,
-    hasErrors: parsed.HasErrors ?? parsed.hasErrors ?? false,
-  };
-}
-
-/**
- * Convert log entries from PascalCase to camelCase.
- */
-function convertLogEntries(entries: any[]): ComparisonLogEntry[] {
-  return entries.map((e: any) => ({
-    level: e.Level ?? e.level ?? "Info",
-    code: e.Code ?? e.code ?? "",
-    message: e.Message ?? e.message ?? "",
-    details: e.Details ?? e.details,
-    location: e.Location ?? e.location,
-  }));
-}
 
 /**
  * Get revisions from a compared document.
@@ -1177,48 +1021,23 @@ function convertLogEntries(entries: any[]): ComparisonLogEntry[] {
  * ```
  */
 export async function getRevisions(
-  document: File | Uint8Array,
-  options?: GetRevisionsOptions
-): Promise<Revision[]> {
+  document: File | Uint8Array
+): Promise<RevisionListEntry[]> {
   const exports = ensureInitialized();
   const bytes = await toBytes(document);
 
   // Yield to browser before WASM work - allows loading states to render
   await yieldToMain();
 
-  // Apply defaults for move detection options
-  const detectMoves = options?.detectMoves ?? true;
-  const moveSimilarityThreshold = options?.moveSimilarityThreshold ?? 0.8;
-  const moveMinimumWordCount = options?.moveMinimumWordCount ?? 3;
-  const caseInsensitive = options?.caseInsensitive ?? false;
-
-  const result = exports.DocumentComparer.GetRevisionsJsonWithOptions(
-    bytes,
-    detectMoves,
-    moveSimilarityThreshold,
-    moveMinimumWordCount,
-    caseInsensitive
-  );
+  const result = exports.DocumentComparer.GetRevisionsJson(bytes);
 
   if (isErrorResponse(result)) {
     const error = parseError(result);
     throw new Error(`Failed to get revisions: ${error.error}`);
   }
 
-  const parsed = JSON.parse(result);
-  return (parsed.Revisions || parsed.revisions || []).map((r: any) => ({
-    author: r.Author || r.author,
-    date: r.Date || r.date,
-    revisionType: r.RevisionType || r.revisionType,
-    text: r.Text || r.text,
-    moveGroupId: r.MoveGroupId ?? r.moveGroupId,
-    isMoveSource: r.IsMoveSource ?? r.isMoveSource,
-    formatChange: (r.FormatChange || r.formatChange) ? {
-      oldProperties: r.FormatChange?.OldProperties || r.formatChange?.oldProperties,
-      newProperties: r.FormatChange?.NewProperties || r.formatChange?.newProperties,
-      changedPropertyNames: r.FormatChange?.ChangedPropertyNames || r.formatChange?.changedPropertyNames,
-    } : undefined,
-  }));
+  // The payload is the session's own revision wire shape, so it needs no remapping.
+  return JSON.parse(result) as RevisionListEntry[];
 }
 
 // ─── DocxDiff (IR diff engine) ──────────────────────────────────────────────

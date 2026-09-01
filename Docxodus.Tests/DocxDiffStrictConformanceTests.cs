@@ -126,14 +126,18 @@ public class DocxDiffStrictConformanceTests
         Assert.DoesNotContain("<w:ins ", mainXml);
     }
 
+    // The front door reaches the same identical-package shortcut as the raw engine above, so it is
+    // pinned separately: through v10 this took an engine argument, and the strict normalization lived
+    // on the selector branch. With the selector gone the shortcut is the front door's own, and this
+    // is what keeps it from regressing to handing back strict bytes.
     [Fact]
-    public void Selector_compare_of_identical_strict_packages_returns_a_transitional_package()
+    public void Front_door_compare_of_identical_strict_packages_returns_a_transitional_package()
     {
         var strict = AsStrict(IrTestDocuments.FromBodyXml(
             "<w:p><w:r><w:t>Alpha shared body text.</w:t></w:r></w:p>"));
         var identical = new WmlDocument(strict);
 
-        var redline = DocxCompare.Compare(strict, identical, ComparisonEngine.DocxDiff, new WmlComparerSettings());
+        var redline = DocxCompare.Compare(strict, identical);
 
         var (mainXml, relType) = ReadMain(redline);
         Assert.Equal(TransitionalRelPrefix + "officeDocument", relType);

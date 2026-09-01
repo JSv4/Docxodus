@@ -159,7 +159,10 @@ export interface MarkdownProjection {
 }
 
 /**
- * Revision type enum matching the .NET WmlComparerRevisionType
+ * Revision type enum matching the .NET `DocxDiffRevisionType`, as returned by the `docxDiff*`
+ * comparison APIs. NOT the shape {@link getRevisions} returns — that reads a document's own markup
+ * and reports the markup-level kind on `RevisionListEntry.type` (`ins`/`del`/`moveFrom`), with the
+ * grouped classification on `family`.
  */
 export enum RevisionType {
   /** Text or content that was added/inserted */
@@ -172,24 +175,6 @@ export enum RevisionType {
   FormatChanged = "FormatChanged",
 }
 
-/**
- * Which comparison engine {@link compareDocuments} / {@link compareDocumentsToHtml}
- * use to redline two documents.
- *
- * The numeric values are the contract shared with the .NET `ComparisonEngine` enum
- * and the WASM boundary (marshalled as an int); `0` remains
- * {@link ComparisonEngine.WmlComparer} for wire compatibility. Omitted selectors use
- * {@link ComparisonEngine.DocxDiff}.
- *
- * `DocxDiff` is the default comparison engine. `WmlComparer` remains available for
- * callers that explicitly require its historical behavior.
- */
-export enum ComparisonEngine {
-  /** The legacy WmlComparer engine (retained at wire value 0). */
-  WmlComparer = 0,
-  /** The default DocxDiff IR diff engine. */
-  DocxDiff = 1,
-}
 
 /**
  * Comment render mode
@@ -323,8 +308,6 @@ export interface ConversionOptions {
 export interface CompareOptions {
   /** Author name for tracked changes (default: "Docxodus") */
   authorName?: string;
-  /** Detail threshold 0.0-1.0 (default: 0.15, lower = more detailed) */
-  detailThreshold?: number;
   /** Whether comparison is case-insensitive (default: false) */
   caseInsensitive?: boolean;
   /**
@@ -333,70 +316,8 @@ export interface CompareOptions {
    * If false: changes are accepted, output shows final "clean" document
    */
   renderTrackedChanges?: boolean;
-  /**
-   * Which comparison engine to use (default: {@link ComparisonEngine.DocxDiff}).
-   * Pass {@link ComparisonEngine.WmlComparer} only when its historical behavior is required.
-   */
-  engine?: ComparisonEngine;
 }
 
-/**
- * Information about a document revision extracted from a compared document.
- *
- * @example
- * ```typescript
- * const revisions = await getRevisions(comparedDoc);
- * for (const rev of revisions) {
- *   if (rev.revisionType === RevisionType.Inserted) {
- *     console.log(`${rev.author} added: "${rev.text}"`);
- *   } else if (rev.revisionType === RevisionType.Deleted) {
- *     console.log(`${rev.author} removed: "${rev.text}"`);
- *   }
- * }
- * ```
- */
-export interface Revision {
-  /**
-   * Author who made the revision.
-   * This comes from the Word document's tracked changes author attribute.
-   * May be empty string if the document doesn't specify an author.
-   */
-  author: string;
-  /**
-   * ISO 8601 date string when the revision was made.
-   * Format: "YYYY-MM-DDTHH:mm:ssZ" (e.g., "2024-01-15T10:30:00Z")
-   * May be empty string if the document doesn't specify a date.
-   */
-  date: string;
-  /**
-   * Type of revision - "Inserted", "Deleted", or "Moved".
-   * Use the RevisionType enum for type-safe comparisons.
-   */
-  revisionType: RevisionType | string;
-  /**
-   * Text content of the revision.
-   * For paragraph breaks, this will be a newline character.
-   * May be empty string for non-text elements (e.g., images, math equations).
-   */
-  text: string;
-  /**
-   * For Moved revisions, this ID links the source and destination.
-   * Both the "from" and "to" revisions share the same moveGroupId.
-   * Undefined for non-move revisions.
-   */
-  moveGroupId?: number;
-  /**
-   * For Moved revisions: true = source (content moved FROM here),
-   * false = destination (content moved TO here).
-   * Undefined for non-move revisions.
-   */
-  isMoveSource?: boolean;
-  /**
-   * For FormatChanged revisions: details about what formatting changed.
-   * Undefined for non-format-change revisions.
-   */
-  formatChange?: FormatChangeDetails;
-}
 
 /**
  * Which property container a FormatChanged revision describes.
@@ -450,7 +371,7 @@ export interface FormatChangeDetails {
 export enum DocxDiffRevisionGranularity {
   /** The engine's native one-revision-per-token-span grain (the default). */
   Fine = 0,
-  /** Coalesced to counts/texts comparable to the shipped WmlComparer's. */
+  /** Coalesced to the coarser contiguous-region grain the legacy comparer reported. */
   WmlComparerCompatible = 1,
 }
 
@@ -767,8 +688,8 @@ export interface DocxDiffConsolidatedRevision extends DocxDiffRevision {
  * const insertions = revisions.filter(isInsertion);
  * ```
  */
-export function isInsertion(revision: Revision): boolean {
-  return revision.revisionType === RevisionType.Inserted;
+export function isInsertion(revision: RevisionListEntry): boolean {
+  return revision.family === "content_insert";
 }
 
 /**
@@ -782,8 +703,8 @@ export function isInsertion(revision: Revision): boolean {
  * const deletions = revisions.filter(isDeletion);
  * ```
  */
-export function isDeletion(revision: Revision): boolean {
-  return revision.revisionType === RevisionType.Deleted;
+export function isDeletion(revision: RevisionListEntry): boolean {
+  return revision.family === "content_delete";
 }
 
 /**
@@ -797,8 +718,8 @@ export function isDeletion(revision: Revision): boolean {
  * const moves = revisions.filter(isMove);
  * ```
  */
-export function isMove(revision: Revision): boolean {
-  return revision.revisionType === RevisionType.Moved;
+export function isMove(revision: RevisionListEntry): boolean {
+  return revision.family === "move";
 }
 
 /**
@@ -815,68 +736,12 @@ export function isMove(revision: Revision): boolean {
  * }
  * ```
  */
-export function isFormatChange(revision: Revision): boolean {
-  return revision.revisionType === RevisionType.FormatChanged;
+export function isFormatChange(revision: RevisionListEntry): boolean {
+  return revision.family === "properties_change";
 }
 
-/**
- * Type guard to check if a revision is a move source (content moved FROM here).
- * @param revision - The revision to check
- * @returns true if the revision is the source of a move
- *
- * @example
- * ```typescript
- * const revisions = await getRevisions(doc);
- * const moveSources = revisions.filter(isMoveSource);
- * ```
- */
-export function isMoveSource(revision: Revision): boolean {
-  return isMove(revision) && revision.isMoveSource === true;
-}
 
-/**
- * Type guard to check if a revision is a move destination (content moved TO here).
- * @param revision - The revision to check
- * @returns true if the revision is the destination of a move
- *
- * @example
- * ```typescript
- * const revisions = await getRevisions(doc);
- * const moveDestinations = revisions.filter(isMoveDestination);
- * ```
- */
-export function isMoveDestination(revision: Revision): boolean {
-  return isMove(revision) && revision.isMoveSource === false;
-}
 
-/**
- * Find the matching pair for a move revision.
- * @param revision - A move revision
- * @param allRevisions - All revisions from the document
- * @returns The matching move revision, or undefined if not found
- *
- * @example
- * ```typescript
- * const revisions = await getRevisions(doc);
- * for (const rev of revisions.filter(isMoveSource)) {
- *   const destination = findMovePair(rev, revisions);
- *   console.log(`"${rev.text}" moved to become "${destination?.text}"`);
- * }
- * ```
- */
-export function findMovePair(
-  revision: Revision,
-  allRevisions: Revision[]
-): Revision | undefined {
-  if (!isMove(revision) || revision.moveGroupId === undefined) {
-    return undefined;
-  }
-  return allRevisions.find(
-    (r) =>
-      r.moveGroupId === revision.moveGroupId &&
-      r.isMoveSource !== revision.isMoveSource
-  );
-}
 
 /**
  * Version information for the library
@@ -903,7 +768,7 @@ export interface CompareResult {
   /** The redlined document as a Uint8Array */
   document: Uint8Array;
   /** List of revisions found */
-  revisions: Revision[];
+  revisions: RevisionListEntry[];
 }
 
 /** Algorithm-labelled digest in a verification artifact. */
@@ -1578,8 +1443,7 @@ export interface DocxodusWasmExports {
     CompareDocuments: (
       originalBytes: Uint8Array,
       modifiedBytes: Uint8Array,
-      authorName: string,
-      engine: number
+      authorName: string
     ) => Uint8Array;
     CompareDocumentsToHtml: (
       originalBytes: Uint8Array,
@@ -1590,49 +1454,22 @@ export interface DocxodusWasmExports {
       originalBytes: Uint8Array,
       modifiedBytes: Uint8Array,
       authorName: string,
-      renderTrackedChanges: boolean,
-      engine: number
+      renderTrackedChanges: boolean
     ) => string;
     CompareDocumentsToHtmlFull: (
       originalBytes: Uint8Array,
       modifiedBytes: Uint8Array,
       authorName: string,
-      detailThreshold: number,
       caseInsensitive: boolean,
-      renderTrackedChanges: boolean,
-      engine: number
+      renderTrackedChanges: boolean
     ) => string;
     CompareDocumentsWithOptions: (
       originalBytes: Uint8Array,
       modifiedBytes: Uint8Array,
       authorName: string,
-      detailThreshold: number,
-      caseInsensitive: boolean,
-      engine: number
+      caseInsensitive: boolean
     ) => Uint8Array;
     GetRevisionsJson: (comparedDocBytes: Uint8Array) => string;
-    GetRevisionsJsonWithOptions: (
-      comparedDocBytes: Uint8Array,
-      detectMoves: boolean,
-      moveSimilarityThreshold: number,
-      moveMinimumWordCount: number,
-      caseInsensitive: boolean
-    ) => string;
-    CompareDocumentsWithLog: (
-      originalBytes: Uint8Array,
-      modifiedBytes: Uint8Array,
-      authorName: string,
-      detailThreshold: number,
-      caseInsensitive: boolean
-    ) => string;
-    CompareDocumentsToHtmlWithLog: (
-      originalBytes: Uint8Array,
-      modifiedBytes: Uint8Array,
-      authorName: string,
-      detailThreshold: number,
-      caseInsensitive: boolean,
-      renderTrackedChanges: boolean
-    ) => string;
   };
   DocxDiffBridge: {
     /** Redlined DOCX bytes (native markup), or empty array on error. */
@@ -3495,63 +3332,8 @@ export enum ComparisonLogLevel {
   Error = "Error",
 }
 
-/**
- * A single log entry from the comparison process.
- */
-export interface ComparisonLogEntry {
-  /** Severity level: "Info", "Warning", or "Error" */
-  level: ComparisonLogLevel | string;
-  /**
-   * Machine-readable code identifying the type of issue.
-   * Examples: "ORPHANED_FOOTNOTE_REFERENCE", "MISSING_STYLE"
-   */
-  code: string;
-  /** Human-readable description of the issue */
-  message: string;
-  /** Additional context or technical details (optional) */
-  details?: string;
-  /**
-   * Location in the document where the issue occurred (optional).
-   * Format: "part/xpath" e.g., "document.xml/w:footnoteReference[@w:id='3']"
-   */
-  location?: string;
-}
 
-/**
- * Result from comparison operations that includes a log of warnings/errors.
- */
-export interface CompareResultWithLog {
-  /** Whether the comparison succeeded */
-  success: boolean;
-  /** The redlined document as a Uint8Array (only if success is true) */
-  document?: Uint8Array;
-  /** Error message if success is false */
-  error?: string;
-  /** Log entries from the comparison process */
-  log: ComparisonLogEntry[];
-  /** Whether the log contains any warnings */
-  hasWarnings: boolean;
-  /** Whether the log contains any errors */
-  hasErrors: boolean;
-}
 
-/**
- * Result from HTML comparison operations that includes a log of warnings/errors.
- */
-export interface CompareToHtmlResultWithLog {
-  /** Whether the comparison succeeded */
-  success: boolean;
-  /** The HTML output (only if success is true) */
-  html?: string;
-  /** Error message if success is false */
-  error?: string;
-  /** Log entries from the comparison process */
-  log: ComparisonLogEntry[];
-  /** Whether the log contains any warnings */
-  hasWarnings: boolean;
-  /** Whether the log contains any errors */
-  hasErrors: boolean;
-}
 
 /**
  * Well-known log entry codes used by the comparison engine.
@@ -3575,37 +3357,6 @@ export const ComparisonLogCodes = {
   OrphanedBookmark: "ORPHANED_BOOKMARK",
 } as const;
 
-/**
- * Options for revision extraction with move detection configuration.
- */
-export interface GetRevisionsOptions {
-  /**
-   * Whether to detect and mark moved content.
-   * When enabled, deletions and insertions with similar text are linked as move pairs.
-   * @default true
-   */
-  detectMoves?: boolean;
-
-  /**
-   * Jaccard similarity threshold for move detection (0.0 to 1.0).
-   * Higher values require more exact word overlap between deletion and insertion.
-   * @default 0.8
-   */
-  moveSimilarityThreshold?: number;
-
-  /**
-   * Minimum word count for content to be considered for move detection.
-   * Short phrases below this threshold are excluded to avoid false positives.
-   * @default 3
-   */
-  moveMinimumWordCount?: number;
-
-  /**
-   * Whether similarity matching ignores case differences.
-   * @default false
-   */
-  caseInsensitive?: boolean;
-}
 
 /**
  * A custom annotation on a document range.
@@ -4325,8 +4076,6 @@ export interface WorkerGetRevisionsRequest extends WorkerRequestBase {
   type: "getRevisions";
   /** Document bytes */
   documentBytes: Uint8Array;
-  /** Revision extraction options */
-  options?: GetRevisionsOptions;
 }
 
 /**
@@ -4549,7 +4298,7 @@ export interface WorkerGetSemanticChangesResponse extends WorkerResponseBase {
 export interface WorkerGetRevisionsResponse extends WorkerResponseBase {
   type: "getRevisions";
   /** Array of revisions */
-  revisions?: Revision[];
+  revisions?: RevisionListEntry[];
 }
 
 /**

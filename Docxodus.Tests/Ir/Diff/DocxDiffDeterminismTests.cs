@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft. All rights reserved.
+﻿// Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 #nullable enable
@@ -12,6 +12,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Xml.Linq;
 using Docxodus;
+using Docxodus.Internal;
 using Xunit;
 
 namespace Docxodus.Tests.Ir.Diff;
@@ -163,7 +164,7 @@ public class DocxDiffDeterminismTests
             new XElement(test + "a", new XAttribute(R + "id", "rIdA")),
             new XElement(test + "b", new XAttribute(R + "id", "rIdB")));
 
-        WmlComparer.MoveRelatedPartsToDestination(sourceRoot, destinationRoot, carrier);
+        PackageMerge.MoveRelatedPartsToDestination(sourceRoot, destinationRoot, carrier);
 
         var a = RelatedPart(destinationRoot, (string)carrier.Element(test + "a")!.Attribute(R + "id")!);
         var b = RelatedPart(destinationRoot, (string)carrier.Element(test + "b")!.Attribute(R + "id")!);

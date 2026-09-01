@@ -1,7 +1,7 @@
-// Complex-form-document benchmark harness.
+﻿// Complex-form-document benchmark harness.
 //
 // Exercises the surfaces an agentic caller leans on hardest — markdown/HTML projection,
-// tracked-change session editing, DocxDiff/WmlComparer redlining — against a single
+// tracked-change session editing, DocxDiff redlining — against a single
 // heavyweight .docx and verifies the invariants that matter for legal work:
 //
 //   * no-edit open→save round-trip is text-exact and part-preserving
@@ -149,25 +149,6 @@ Bench("redline -> HTML with tracked-change markup", () =>
     });
     File.WriteAllText(Path.Combine(outDir, "redline.html"), WmlToHtmlConverter.ToHtmlString(html, indent: false));
 });
-
-// ---------- 5. Legacy engine, for regression tracking ----------
-Bench("WmlComparer.Compare (legacy engine)", () =>
-{
-    var settings = new WmlComparerSettings { AuthorForRevisions = edits.Author };
-    var legacy = WmlComparer.Compare(left, right, settings);
-    File.WriteAllBytes(Path.Combine(outDir, "redline-wmlcomparer.docx"), legacy.DocumentByteArray);
-    Console.WriteLine($"    revisions: {WmlComparer.GetRevisions(legacy, settings).Count}");
-    var acceptAll = RevisionProcessor.AcceptRevisions(legacy);
-    var rejectAll = RevisionProcessor.RejectRevisions(legacy);
-    Check("legacy accept-all == modified text", ExtractText(acceptAll.DocumentByteArray) == ExtractText(modified));
-    Check("legacy reject-all == baseline text", ExtractText(rejectAll.DocumentByteArray) == ExtractText(bytes));
-});
-
-Console.WriteLine();
-Console.WriteLine(FailedChecks == 0
-    ? "ALL CHECKS PASSED"
-    : $"{FailedChecks} CHECK(S) FAILED (see [check] lines above)");
-return FailedChecks == 0 ? 0 : 2;
 
 // ---------- helpers ----------
 

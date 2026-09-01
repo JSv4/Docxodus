@@ -59,11 +59,11 @@
                 }
             },
 
-            // Compare two documents. engine: 0 = WmlComparer, 1 = DocxDiff (default).
-            compareDocuments: function(originalBytes, modifiedBytes, authorName = 'Test', engine = 1) {
+            // Compare two documents.
+            compareDocuments: function(originalBytes, modifiedBytes, authorName = 'Test') {
                 try {
                     const result = window.Docxodus.DocumentComparer.CompareDocuments(
-                        originalBytes, modifiedBytes, authorName, engine
+                        originalBytes, modifiedBytes, authorName
                     );
                     if (result.length === 0) {
                         return { error: { message: 'Comparison returned empty result' } };
@@ -89,11 +89,11 @@
                 }
             },
 
-            // Compare and get HTML with options. engine: 0 = WmlComparer, 1 = DocxDiff (default).
-            compareToHtmlWithOptions: function(originalBytes, modifiedBytes, authorName = 'Test', renderTrackedChanges = true, engine = 1) {
+            // Compare and get HTML with options.
+            compareToHtmlWithOptions: function(originalBytes, modifiedBytes, authorName = 'Test', renderTrackedChanges = true) {
                 try {
                     const result = window.Docxodus.DocumentComparer.CompareDocumentsToHtmlWithOptions(
-                        originalBytes, modifiedBytes, authorName, renderTrackedChanges, engine
+                        originalBytes, modifiedBytes, authorName, renderTrackedChanges
                     );
                     if (result.startsWith('{') && result.includes('"Error"')) {
                         return { error: JSON.parse(result) };
@@ -111,8 +111,10 @@
                     if (result.startsWith('{') && result.includes('"Error"')) {
                         return { error: JSON.parse(result) };
                     }
+                    // Since v11.0.0 GetRevisionsJson returns the session's own revision
+                    // wire shape: a bare JSON array, not a { Revisions: [...] } envelope.
                     const parsed = JSON.parse(result);
-                    return { revisions: parsed.Revisions || [] };
+                    return { revisions: Array.isArray(parsed) ? parsed : [] };
                 } catch (e) {
                     return { error: { message: e.message } };
                 }

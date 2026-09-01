@@ -1,59 +1,46 @@
 #nullable enable
 
 using System;
-using System.Collections.Generic;
 using System.Linq;
-using System.Xml.Linq;
-using DocumentFormat.OpenXml.Packaging;
 
 namespace Docxodus;
 
 /// <summary>
-/// The single, shared front door for two-document DOCX comparison, owning the ONE
-/// <see cref="WmlComparer"/>-vs-<see cref="DocxDiff"/> branch in the codebase. The CLI
-/// (<c>tools/redline</c>), the WASM bridge (<c>DocumentComparer</c>), and — transitively — the npm
-/// wrappers all route their primary "compare these two documents → redlined DOCX" call through
-/// <see cref="Compare"/>, so the engine choice lives in exactly one place (mirroring the single-owner
-/// facade pattern used by <see cref="Internal.DocxDiffOps"/> / <c>HtmlConversionOps</c>).
+/// The shared front door for two-document DOCX comparison. The CLI (<c>tools/redline</c>), the WASM
+/// bridge (<c>DocumentComparer</c>), and — transitively — the npm wrappers all route their
+/// "compare these two documents → redlined DOCX" call through <see cref="Compare"/>, so the
+/// comparison POLICY lives in exactly one place (mirroring the single-owner facade pattern used by
+/// <see cref="Internal.DocxDiffOps"/> / <c>HtmlConversionOps</c>).
 ///
-/// <para>Both engines emit native tracked-changes markup (<c>w:ins</c>/<c>w:del</c>/<c>w:moveFrom</c>/…),
-/// so callers can count revisions on the returned document via
-/// <see cref="WmlComparer.GetRevisions(WmlDocument, WmlComparerSettings)"/> regardless of which engine
-/// produced it.</para>
+/// <para><b>Front door vs. raw engine.</b> <see cref="DocxDiff.Compare"/> is the engine; this is the
+/// product. The difference is the input-revision policy: the front door always compares on the
+/// ACCEPTED view, because that is what Word's Compare does. The raw <see cref="DocxDiff"/> API keeps
+/// that flag at its opt-in default for callers who want the engine's unopinionated behavior. Calling
+/// <see cref="DocxDiff.Compare"/> directly with a fresh <see cref="DocxDiffSettings"/> is therefore
+/// NOT equivalent to calling this — see <see cref="ApplyFrontDoorRevisionPolicy"/>.</para>
 ///
-/// <para>The parameter is a <see cref="WmlComparerSettings"/> — the settings shape all three surfaces
-/// already build — so wiring the selector in only adds an <see cref="ComparisonEngine"/> argument; the
-/// surfaces' settings-construction code is untouched. On the <see cref="ComparisonEngine.DocxDiff"/>
-/// branch the common option set is mapped to <see cref="DocxDiffSettings"/> by
-/// <see cref="ToDocxDiffSettings"/> (WmlComparer-only knobs are dropped — see that method).</para>
+/// <para>Before v11.0.0 this type also owned the one <c>WmlComparer</c>-vs-<c>DocxDiff</c> engine
+/// branch in the codebase. The legacy engine is gone; what remains is the policy it used to share.</para>
 /// </summary>
 public static class DocxCompare
 {
     /// <summary>
-    /// Compare <paramref name="left"/> against <paramref name="right"/> with the selected
-    /// <paramref name="engine"/> and return the redlined document. <see cref="ComparisonEngine.WmlComparer"/>
-    /// delegates directly for transitional documents and normalizes Word Strict inputs first; byte-identical
-    /// TRANSITIONAL inputs return a detached exact clone without reserialization when the legacy comparer
-    /// need not repair malformed math revision markup, while byte-identical STRICT inputs are normalized to
-    /// transitional (Word converts on open regardless of the compare outcome);
-    /// <see cref="ComparisonEngine.DocxDiff"/> routes to <see cref="DocxDiff.Compare"/> with the mapped
-    /// settings.
+    /// Compare <paramref name="left"/> against <paramref name="right"/> and return the redlined
+    /// document, with the front-door input-revision policy applied on top of
+    /// <paramref name="settings"/>. Byte-identical TRANSITIONAL inputs return a detached exact clone
+    /// without reserialization — a no-op must not rewrite a valid package merely because it passed
+    /// through the comparison API; byte-identical STRICT inputs are normalized to transitional.
     /// </summary>
     /// <param name="left">The earlier / original document.</param>
     /// <param name="right">The later / revised document.</param>
-    /// <param name="engine">Which comparison engine to use.</param>
-    /// <param name="settings">Comparison settings (the same <see cref="WmlComparerSettings"/> shape both engines accept via mapping).</param>
-    /// <exception cref="ArgumentOutOfRangeException"><paramref name="engine"/> is not a defined <see cref="ComparisonEngine"/> value.</exception>
+    /// <param name="settings">Comparison settings; <c>null</c> takes <see cref="DocxDiffSettings"/> defaults.</param>
     public static WmlDocument Compare(
         WmlDocument left,
         WmlDocument right,
-        ComparisonEngine engine,
-        WmlComparerSettings settings)
+        DocxDiffSettings? settings = null)
     {
-        // The selector crosses the WASM boundary as an int. Never let an unknown value
-        // silently become the legacy branch (the old two-way conditional did exactly that).
-        if (engine is not ComparisonEngine.WmlComparer and not ComparisonEngine.DocxDiff)
-            throw new ArgumentOutOfRangeException(nameof(engine), engine, "Unknown comparison engine.");
+        ArgumentNullException.ThrowIfNull(left);
+        ArgumentNullException.ThrowIfNull(right);
 
         // An exact same-package comparison has no revisions to produce; return a detached clone so
         // the result remains safe for callers to mutate/save independently of the input. A STRICT
@@ -66,15 +53,7 @@ public static class DocxCompare
             return ReferenceEquals(normalized, left) ? new WmlDocument(left) : normalized;
         }
 
-        return engine switch
-        {
-            ComparisonEngine.DocxDiff => DocxDiff.Compare(left, right, ToDocxDiffSettings(settings)),
-            ComparisonEngine.WmlComparer => WmlComparer.Compare(
-                StrictOoxmlNormalizer.NormalizeToTransitional(left),
-                StrictOoxmlNormalizer.NormalizeToTransitional(right),
-                settings),
-            _ => throw new ArgumentOutOfRangeException(nameof(engine), engine, "Unknown comparison engine."),
-        };
+        return DocxDiff.Compare(left, right, ApplyFrontDoorRevisionPolicy(settings));
     }
 
     /// <summary>Whether two documents are the exact same package bytes, not merely semantically equal.</summary>
@@ -82,83 +61,41 @@ public static class DocxCompare
         left.DocumentByteArray.AsSpan().SequenceEqual(right.DocumentByteArray);
 
     /// <summary>
-    /// Whether an exact-package comparison can skip the legacy comparer safely. A small set of old Word
-    /// documents place tracked-revision wrappers directly inside an Office Math run, which is schema-invalid.
-    /// The legacy preprocessing path repairs that shape; returning an exact clone would retain the invalid
-    /// markup and violate the comparer’s long-standing valid-output contract.
+    /// Whether an exact-package comparison can skip the engine. Byte equality is the whole test.
+    ///
+    /// <para>Through v10 this additionally refused the shortcut for documents carrying tracked-revision
+    /// wrappers inside an Office Math run — schema-invalid markup that <c>WmlComparer</c>'s
+    /// preprocessing repaired as a side effect, so routing through the engine was strictly better than
+    /// cloning. <see cref="DocxDiff"/> performs no such repair: on that input it returns the source
+    /// bytes unchanged, with the same validation error. The guard therefore bought nothing but a full
+    /// comparison, and was removed with the engine that motivated it. Tracked as issue #642.</para>
     /// </summary>
     internal static bool CanReturnExactNoOp(WmlDocument left, WmlDocument right) =>
-        HasIdenticalPackageBytes(left, right) && !HasRevisionMarkupInsideMathRun(left);
-
-    private static readonly HashSet<XName> TrackedRevisionNames = new(RevisionProcessor.TrackedRevisionsElements);
-
-    private static bool HasRevisionMarkupInsideMathRun(WmlDocument document)
-    {
-        try
-        {
-            using var streamDoc = new OpenXmlMemoryStreamDocument(document);
-            using var wordDoc = streamDoc.GetWordprocessingDocument();
-            var mainXDoc = wordDoc.MainDocumentPart?.GetXDocument();
-            return mainXDoc?.Descendants(M.r).Any(mathRun =>
-                mathRun.Descendants().Any(element => TrackedRevisionNames.Contains(element.Name))) ?? false;
-        }
-        catch (Exception)
-        {
-            // A damaged package cannot safely take an exact-package shortcut. Let the established comparer
-            // path report or repair it with its normal diagnostics instead.
-            return true;
-        }
-    }
+        HasIdenticalPackageBytes(left, right);
 
     /// <summary>
-    /// Map the option set shared by both engines from <see cref="WmlComparerSettings"/> onto a fresh
-    /// <see cref="DocxDiffSettings"/>. WmlComparer-only knobs are intentionally dropped: <c>DetailThreshold</c>
-    /// (an LCS-granularity knob with no IR equivalent), <c>SimplifyMoveMarkup</c> (DocxDiff renders moves
-    /// natively), and <c>DetectFormatChanges</c> (DocxDiff uses <see cref="DocxDiffSettings.FormatComparison"/>,
-    /// left at its default). DocxDiff-specific settings keep their defaults. An explicit
-    /// <c>DateTimeForRevisions</c> is carried through and wins over <see cref="DocxDiffSettings.Deterministic"/>.
+    /// Layer the front-door input-revision policy onto the caller's settings.
+    ///
+    /// <para>The DIFF runs over the ACCEPTED view. Word's Compare dialog says it outright — "Word will
+    /// treat them as accepted" — and its outputs confirm it: text an input had struck through is absent
+    /// from the compare result entirely, the surviving text is re-detected as the compare author's own
+    /// insertions, and the output collapses to a single revision author. Without the pre-accept,
+    /// revision-bearing inputs diff their raw surface and emit whole-document churn.</para>
+    ///
+    /// <para>Earlier releases ALSO preserved the inputs' own markup here — Word's COMBINE behavior,
+    /// decoded from a batch of oracle documents that turned out to be Combine-shaped. Compare is the
+    /// operation this surface models, so only the pre-accept flatten runs. Callers who want the inputs'
+    /// revisions carried through use the raw <see cref="DocxDiff"/> API with
+    /// <see cref="DocxDiffSettings.PreserveInputRevisions"/>.</para>
+    ///
+    /// <para>This is unconditional, exactly as the pre-v11 settings mapping was: it is the front door's
+    /// defining behavior, not a default a caller is expected to opt into. A caller who wants the
+    /// engine's opt-in defaults should call <see cref="DocxDiff.Compare"/> directly.</para>
     /// </summary>
-    internal static DocxDiffSettings ToDocxDiffSettings(WmlComparerSettings settings) => new()
+    internal static DocxDiffSettings ApplyFrontDoorRevisionPolicy(DocxDiffSettings? settings)
     {
-        AuthorForRevisions = settings.AuthorForRevisions,
-        DateTimeForRevisions = settings.DateTimeForRevisions,
-        CaseInsensitive = settings.CaseInsensitive,
-        ConflateBreakingAndNonbreakingSpaces = settings.ConflateBreakingAndNonbreakingSpaces,
-        DetectMoves = settings.DetectMoves,
-        MoveSimilarityThreshold = settings.MoveSimilarityThreshold,
-        MoveMinimumWordCount = settings.MoveMinimumWordCount,
-        // Input-revision policy on the selector path: the DIFF must run over the accepted view (as
-        // WmlComparer does internally — otherwise revision-bearing inputs diff their raw surface and
-        // emit whole-document churn). Word's Compare dialog says it outright — "Word will treat them
-        // as accepted" — and its outputs confirm it: text an input had struck through is absent from
-        // the compare result entirely, the surviving text is re-detected as the compare author's own
-        // insertions, and the output collapses to a single revision author. Earlier releases preserved
-        // the inputs' markup here (Word's COMBINE behavior, decoded from a batch of oracle documents
-        // that turned out to be Combine-shaped); Compare is the operation this surface models, so the
-        // pre-accept flatten now runs. Callers who want the inputs' own revisions carried through use
-        // the raw DocxDiff API with DocxDiffSettings.PreserveInputRevisions.
-        PreAcceptInputRevisions = true,
-    };
-
-    /// <summary>
-    /// Parse a case-insensitive engine name — <c>wmlcomparer</c> or <c>docxdiff</c> — as accepted by the
-    /// redline CLI's <c>--engine=</c> flag. Surrounding whitespace is trimmed. Returns <c>false</c> for an
-    /// unrecognized value, in which case <paramref name="engine"/> is set to the default
-    /// <see cref="ComparisonEngine.DocxDiff"/>.
-    /// </summary>
-    public static bool TryParseEngine(string? value, out ComparisonEngine engine)
-    {
-        switch (value?.Trim().ToLowerInvariant())
-        {
-            case "wmlcomparer":
-                engine = ComparisonEngine.WmlComparer;
-                return true;
-            case "docxdiff":
-                engine = ComparisonEngine.DocxDiff;
-                return true;
-            default:
-                engine = ComparisonEngine.DocxDiff;
-                return false;
-        }
+        var result = settings is null ? new DocxDiffSettings() : settings.Clone();
+        result.PreAcceptInputRevisions = true;
+        return result;
     }
 }

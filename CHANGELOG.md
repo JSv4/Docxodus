@@ -4,6 +4,69 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Removed
+
+- **`WmlComparer` — the legacy comparison engine — is gone (BREAKING).** `DocxDiff` has been the
+  default since v8.0.0; this removes the alternative rather than carrying a frozen second engine.
+  Removed: the `WmlComparer` engine and its whole public surface (`WmlComparerSettings`,
+  `WmlComparerConsolidateSettings`, `WmlRevisedDocumentInfo`, the nested `WmlComparerRevision` /
+  `WmlComparerRevisionType` / `FormatChangeInfo` / `FormatChangeDetails`, the `ComparisonUnit*`
+  hierarchy, `CorrelationStatus`, `PtpSHA1Util`, `Base64Util`), the `ComparisonEngine` selector enum,
+  and `ComparisonLog`. The `--engine=` flag on the `redline` CLI, the `engine` argument on the WASM
+  exports, and the `ComparisonEngine` TypeScript enum go with them.
+
+  **Kept, relocated:** the cross-package merge helpers (`CopyMissingStylesFromOneDocToAnother`,
+  `CopyMissingNumberingFromOneDocToAnother`, `MoveRelatedPartsToDestination`) move verbatim to
+  `Docxodus/PackageMerge.cs`. They copy styles, numbering definitions and related package parts
+  between two packages — never comparison logic — and `DocxDiff`'s markup renderers have always
+  called them.
+
+  **What changes for a caller who passes nothing:** `DocxCompare.Compare` now takes a
+  `DocxDiffSettings` and no engine argument. It still applies the front-door revision policy —
+  `PreAcceptInputRevisions`, which the raw `DocxDiff` API leaves opt-in. That is the difference
+  between Word-like behaviour and whole-document churn on revision-bearing inputs, so a caller
+  moving from `DocxCompare.Compare` to `DocxDiff.Compare` must set that flag to keep the old output.
+  (The policy was `PreAccept` + `PreserveInputRevisions` when this removal was written; the
+  Word-Compare-parity change that dropped `Preserve` from the front door landed separately on `main`
+  and is described in its own entry. Preservation remains an explicit opt-in on the raw API.)
+  There is no way to pin the old engine's behaviour: it is gone.
+
+- **`getRevisions` reads native markup instead of re-deriving moves (BREAKING).** The legacy call took
+  ONE already-redlined document and re-ran move detection over it, which is why it accepted
+  `detectMoves` / `moveSimilarityThreshold` / `moveMinimumWordCount` / `caseInsensitive`. It now reads
+  the document's own `w:moveFrom`/`w:moveTo` markup through `DocxSession.ListRevisions`, so those four
+  options are gone — the moves in the document are the moves. A move is now ONE grouped entry (emitted
+  only when both halves are present with paired range-marker ids) rather than a source/destination
+  pair, so `moveGroupId` and `isMoveSource` are gone, and with them the `isMoveSource`,
+  `isMoveDestination` and `findMovePair` helpers. The listing gains families the legacy reader never
+  reported (rows, cells, content controls, numbering, property changes) and each entry now carries an
+  addressable `id`, a `family`, a block `anchorId` and a `resolutionStatus`. npm's `getRevisions`
+  returns `RevisionListEntry[]` — the same shape the session's own `listRevisions` already returned,
+  serialized by the same writer, so the two paths cannot drift. Because the reported type is now the
+  markup-level name (`ins`/`del`/`moveFrom`), `isInsertion`/`isDeletion`/`isMove`/`isFormatChange` test
+  `family` instead; `RevisionType`'s `Inserted`/`Deleted`/`Moved`/`FormatChanged` names remain the
+  shape the `docxDiff*` APIs return.
+
+- **`compareDocumentsWithLog` / `compareDocumentsToHtmlWithLog` and `ComparisonLog` (BREAKING).**
+  `ComparisonLog` was only ever populated through `WmlComparerSettings.Log`, so on the `DocxDiff` path
+  these two surfaces had already been returning an empty log. Removed rather than left hollow.
+
+- **Dead comparison knobs (BREAKING).** `detailThreshold` tuned the removed engine's LCS granularity
+  and `--simplify-move-markup` worked around its move markup; neither has a `DocxDiff` equivalent, and
+  both are gone from the WASM and npm surfaces. The `redline` CLI keeps both flags one release longer
+  as an explicit warning rather than an unknown-flag error, so a script passing them says so instead of
+  failing. `--no-detect-format-changes` now maps onto `DocxDiffSettings.TrackBlockFormatChanges`.
+
+### Changed
+
+- **The byte-identical fast path no longer repairs Office Math revision markup.** `CanReturnExactNoOp`
+  used to refuse the exact-clone shortcut for documents carrying tracked-revision wrappers inside an
+  `m:r`, so they would route through the legacy path that repaired that schema-invalid shape.
+  `DocxDiff` performs no such repair — measured on `WC012-Math-After.docx`: same single validation
+  error, byte-identical output — so the guard only bought a full comparison that changed nothing. It is
+  now plain byte equality, and such input passes through unrepaired rather than being silently
+  rewritten. Tracked as issue #642.
+
 ### Added
 - **The arcade says why a native-image cartridge is blank instead of playing invisibly.** Doom's
   playable frame is a native inline image, and the single-block render that puts it on screen only

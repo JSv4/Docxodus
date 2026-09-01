@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 
 using System;
 using System.IO;
@@ -9,6 +9,7 @@ using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using Docxodus;
+using Docxodus.Internal;
 using Docxodus.Ir;
 using Xunit;
 
@@ -344,7 +345,7 @@ public class IrDrawingGraphTests
             new XElement(test + "a", new XAttribute(R + "id", "rIdA")),
             new XElement(test + "b", new XAttribute(R + "id", "rIdB")));
 
-        WmlComparer.MoveRelatedPartsToDestination(sourceRoot, destinationRoot, carrier);
+        PackageMerge.MoveRelatedPartsToDestination(sourceRoot, destinationRoot, carrier);
 
         var destinationOwnerA = RelatedPart(destinationRoot, (string)carrier.Element(test + "a")!.Attribute(R + "id")!);
         var destinationOwnerB = RelatedPart(destinationRoot, (string)carrier.Element(test + "b")!.Attribute(R + "id")!);

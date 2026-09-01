@@ -501,7 +501,7 @@ internal static class IrMarkupRenderer
                 // abstractNum would make LibreOffice (which keys list counters by abstractNumId)
                 // CONTINUE numbering across two genuinely different lists where Word RESTARTS.
                 // Definitions nothing in the output references keep the legacy dedup treatment.
-                var numIdMap = WmlComparer.CopyMissingNumberingFromOneDocToAnother(
+                var numIdMap = PackageMerge.CopyMissingNumberingFromOneDocToAnother(
                     wDocRight, wDoc, CollectAlignedNumIdPairs(script, state),
                     CollectRightNumberingUsage(wDocRight.MainDocumentPart, rightImportedStyles));
                 RebindRightNumberingReferences(main, numIdMap, state);
@@ -787,7 +787,7 @@ internal static class IrMarkupRenderer
         // as P<guid> duplicates. Those scopes are not diffed; the LEFT package's parts (same r:ids — shared
         // base) are authoritative, so the cloned references already resolve there. Media (drawings) still import.
         foreach (var clone in rightClones)
-            WmlComparer.MoveRelatedPartsToDestination(
+            PackageMerge.MoveRelatedPartsToDestination(
                 rightPkgPart, leftPkgPart, clone, skipDanglingRelationships: true,
                 skipHeaderFooterReferences: true);
     }
@@ -2471,7 +2471,7 @@ internal static class IrMarkupRenderer
         var outPkgPart = leftStreamDoc.GetPackage().GetPart(outputPart.Uri);
         var rightPkgPart = rightStreamDoc.GetPackage().GetPart(rightPart.Uri);
         foreach (var clone in noteClones)
-            WmlComparer.MoveRelatedPartsToDestination(
+            PackageMerge.MoveRelatedPartsToDestination(
                 rightPkgPart, outPkgPart, clone, skipDanglingRelationships: true,
                 skipHeaderFooterReferences: true);
     }
@@ -2890,7 +2890,7 @@ internal static class IrMarkupRenderer
         var outPkgPart = leftStreamDoc.GetPackage().GetPart(outputPart.Uri);
         var rightPkgPart = rightStreamDoc.GetPackage().GetPart(rightPart.Uri);
         foreach (var clone in storyClones)
-            WmlComparer.MoveRelatedPartsToDestination(
+            PackageMerge.MoveRelatedPartsToDestination(
                 rightPkgPart, outPkgPart, clone, skipDanglingRelationships: true,
                 skipHeaderFooterReferences: true);
     }
@@ -3174,7 +3174,7 @@ internal static class IrMarkupRenderer
         var outputPackagePart = outputStream.GetPackage().GetPart(outputComments.Uri);
         var rightPackagePart = rightStream.GetPackage().GetPart(rightComments!.Uri);
         foreach (var clone in addedDefinitions)
-            WmlComparer.MoveRelatedPartsToDestination(
+            PackageMerge.MoveRelatedPartsToDestination(
                 rightPackagePart, outputPackagePart, clone, skipDanglingRelationships: true,
                 skipHeaderFooterReferences: true);
 
@@ -7204,7 +7204,7 @@ internal static class IrMarkupRenderer
     /// list instance the diff proved to be a surviving left list, whose counter must therefore
     /// continue across inserted items. Every other imported instance gets its own fresh cloned
     /// abstractNum, matching Word's compare output (see
-    /// <see cref="WmlComparer.CopyMissingNumberingFromOneDocToAnother"/>).
+    /// <see cref="PackageMerge.CopyMissingNumberingFromOneDocToAnother"/>).
     /// </summary>
     private static IReadOnlyCollection<(int FromNumId, int ToNumId)> CollectAlignedNumIdPairs(
         IrEditScript script, RenderState state)
@@ -7371,7 +7371,7 @@ internal static class IrMarkupRenderer
     /// references owned by right styles the output imports. Instances outside this set are
     /// definitions nothing renders through — the numbering copy gives THEM the legacy content-dedup
     /// treatment instead of a fresh forked abstractNum (see
-    /// <see cref="WmlComparer.CopyMissingNumberingFromOneDocToAnother"/>).
+    /// <see cref="PackageMerge.CopyMissingNumberingFromOneDocToAnother"/>).
     /// </summary>
     private static IReadOnlySet<int> CollectRightNumberingUsage(
         MainDocumentPart? rightMain, IReadOnlySet<StyleIdentity> rightImportedStyles)
@@ -8405,7 +8405,7 @@ internal static class IrMarkupRenderer
         /// <summary>RIGHT-sourced clone roots that may carry image relationship references the base package cannot
         /// resolve, BUCKETED by <see cref="RightSourceId"/> (the source package they were cloned from). After they
         /// are placed in the new body (still the same XElement instances),
-        /// <see cref="WmlComparer.MoveRelatedPartsToDestination"/> walks each and remaps ids in place. Only roots
+        /// <see cref="PackageMerge.MoveRelatedPartsToDestination"/> walks each and remaps ids in place. Only roots
         /// actually containing an r-namespace attribute are recorded, so the common text-only case adds nothing.
         /// In a two-way render every clone lands in bucket 0 (the right package).</summary>
         public Dictionary<int, List<XElement>> RightSourcedClonesBySource { get; } = new();
