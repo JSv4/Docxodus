@@ -117,8 +117,14 @@ public class DocxCompareTests
 
         var applied = DocxCompare.ApplyFrontDoorRevisionPolicy(settings);
 
+        // Word-parity input-revision policy: Word's Compare treats revisions already present in
+        // either input as accepted ("Word will treat them as accepted") and re-detects the delta
+        // under the compare author — it does not carry the inputs' own markup through. Preservation
+        // is Word's COMBINE behavior and stays an explicit opt-in on the raw DocxDiff API.
         Assert.True(applied.PreAcceptInputRevisions);
-        Assert.True(applied.PreserveInputRevisions);
+        Assert.False(applied.PreserveInputRevisions);
+
+        // Everything the caller set rides through the clone untouched.
         Assert.Equal("Bench", applied.AuthorForRevisions);
 
         // The caller's object keeps the raw-engine opt-in defaults.
@@ -132,7 +138,7 @@ public class DocxCompareTests
         var applied = DocxCompare.ApplyFrontDoorRevisionPolicy(null);
 
         Assert.True(applied.PreAcceptInputRevisions);
-        Assert.True(applied.PreserveInputRevisions);
+        Assert.False(applied.PreserveInputRevisions);
     }
 
     [Fact]

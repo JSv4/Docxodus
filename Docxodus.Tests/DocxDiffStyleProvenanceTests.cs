@@ -530,6 +530,9 @@ public class DocxDiffStyleProvenanceTests
     [Fact]
     public void DocDefaultsProjection_DeclinesThemeReferences_WithoutCopyingPackagePresentation()
     {
+        // Oracle-verified decline (an experiment that projected here regressed dozens of documents
+        // whose oracles carry an EMPTY updated style): Word does not run the equal-definitions
+        // projection for theme-referencing defaults.
         var left = DocWithThemeDefault("22");
         var right = DocWithThemeDefault("28");
 
@@ -890,4 +893,218 @@ public class DocxDiffStyleProvenanceTests
         Assert.True(rFontsIndex < kernIndex && kernIndex < langIndex);
     }
 
+    /// <summary>A doc whose docDefaults optionally declare paragraph spacing / kern / ligatures, with a
+    /// Normal style whose own pPr payload is <paramref name="normalPPrXml"/> (may be empty).</summary>
+    private static WmlDocument DocWithDefaultsAndNormalPPr(bool declareDefaults, string normalPPrXml, string text)
+    {
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Document(new Body(new Paragraph(new Run(new Text(text)))));
+            var styles = main.AddNewPart<StyleDefinitionsPart>();
+            var defaults = declareDefaults
+                ? "<w:docDefaults><w:rPrDefault><w:rPr>" +
+                  "<w:rFonts w:ascii=\"Times New Roman\" w:hAnsi=\"Times New Roman\"/>" +
+                  "<w:kern w:val=\"2\"/><w:sz w:val=\"24\"/>" +
+                  "<w14:ligatures w14:val=\"standardContextual\"/>" +
+                  "</w:rPr></w:rPrDefault><w:pPrDefault><w:pPr>" +
+                  "<w:spacing w:after=\"160\" w:line=\"278\" w:lineRule=\"auto\"/>" +
+                  "</w:pPr></w:pPrDefault></w:docDefaults>"
+                : "<w:docDefaults><w:rPrDefault><w:rPr>" +
+                  "<w:rFonts w:ascii=\"Inter\" w:hAnsi=\"Inter\"/><w:sz w:val=\"22\"/>" +
+                  "</w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults>";
+            using (var writer = new StreamWriter(styles.GetStream(FileMode.Create, FileAccess.Write)))
+            {
+                writer.Write(
+                    $"<w:styles xmlns:w=\"{W.NamespaceName}\" " +
+                    "xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" " +
+                    "xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" mc:Ignorable=\"w14\">" +
+                    defaults +
+                    "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\">" +
+                    $"<w:name w:val=\"Normal\"/><w:qFormat/>{(normalPPrXml.Length == 0 ? string.Empty : $"<w:pPr>{normalPPrXml}</w:pPr>")}</w:style></w:styles>");
+            }
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+            doc.Save();
+        }
+        return new WmlDocument("defaults-leak.docx", stream.ToArray());
+    }
+
+    /// <summary>
+    /// Left docDefaults declare paragraph spacing, kern and ligatures; the right leaves all three at
+    /// built-in defaults. The output keeps the LEFT docDefaults part, so the updated style's CURRENT
+    /// payload must materialize the built-in defaults (spacing 0/240/auto, kern 0, ligatures none) or
+    /// the left declarations keep ruling the accepted view — Word writes exactly these neutralizers.
+    /// Differing Normal definitions take the raw-payload branch.
+    /// </summary>
+    [Fact]
+    public void LeftDocDefaultsLeftAtBuiltinsByRight_AreNeutralizedInCurrentPayload_DifferingDefinitions()
+    {
+        var left = DocWithDefaultsAndNormalPPr(true, "<w:widowControl w:val=\"0\"/>", "Shared body line.");
+        var right = DocWithDefaultsAndNormalPPr(false, string.Empty, "Shared body line revised.");
+
+        var result = DocxDiff.Compare(left, right);
+
+        var normal = StyleOf(StylesOf(result), "Normal");
+        var pPr = normal.Element(W + "pPr");
+        Assert.NotNull(pPr);
+        var spacing = pPr!.Element(W + "spacing");
+        Assert.NotNull(spacing);
+        Assert.Equal("0", (string?)spacing!.Attribute(W + "after"));
+        Assert.Equal("240", (string?)spacing.Attribute(W + "line"));
+        Assert.Equal("auto", (string?)spacing.Attribute(W + "lineRule"));
+
+        var rPr = normal.Element(W + "rPr");
+        Assert.NotNull(rPr);
+        Assert.Equal("0", (string?)rPr!.Element(W + "kern")?.Attribute(W + "val"));
+        XNamespace w14 = "http://schemas.microsoft.com/office/word/2010/wordml";
+        Assert.Equal("none", (string?)rPr.Element(w14 + "ligatures")?.Attribute(w14 + "val"));
+    }
+
+    /// <summary>
+    /// A left package with NO styles part at all takes the right's style definitions wholesale —
+    /// Word's compare output for this shape carries every right style definition (a used
+    /// ListParagraph's contextualSpacing is what keeps inserted bullet lists tight) while the
+    /// docDefaults remain the stock backfill, never the right's.
+    /// </summary>
+    [Fact]
+    public void StylelessLeftPackage_AdoptsRightStyleDefinitions_WithStockDocDefaults()
+    {
+        WmlDocument StylelessDoc(string text)
+        {
+            using var stream = new MemoryStream();
+            using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+            {
+                doc.AddMainDocumentPart().Document = new Document(new Body(new Paragraph(new Run(new Text(text)))));
+                doc.Save();
+            }
+            return new WmlDocument("styleless.docx", stream.ToArray());
+        }
+
+        WmlDocument StyledDoc(string text)
+        {
+            using var stream = new MemoryStream();
+            using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+            {
+                var main = doc.AddMainDocumentPart();
+                main.Document = new Document(new Body(
+                    new Paragraph(
+                        new ParagraphProperties(new ParagraphStyleId { Val = "ListParagraph" }),
+                        new Run(new Text(text)))));
+                var styles = main.AddNewPart<StyleDefinitionsPart>();
+                using (var writer = new StreamWriter(styles.GetStream(FileMode.Create, FileAccess.Write)))
+                {
+                    writer.Write($"<w:styles xmlns:w=\"{W.NamespaceName}\">" +
+                        "<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii=\"Inter\" w:hAnsi=\"Inter\"/></w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults>" +
+                        "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\"><w:name w:val=\"Normal\"/><w:qFormat/></w:style>" +
+                        "<w:style w:type=\"paragraph\" w:styleId=\"ListParagraph\"><w:name w:val=\"List Paragraph\"/>" +
+                        "<w:basedOn w:val=\"Normal\"/><w:pPr><w:contextualSpacing/></w:pPr></w:style></w:styles>");
+                }
+                main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+                doc.Save();
+            }
+            return new WmlDocument("styled.docx", stream.ToArray());
+        }
+
+        var left = StylelessDoc("Old body entirely.");
+        var right = StyledDoc("Completely new list entry.");
+
+        var result = DocxDiff.Compare(left, right);
+
+        var styles = StylesOf(result);
+        Assert.Contains(styles.Root!.Elements(W + "style"), s => (string?)s.Attribute(W + "styleId") == "Normal");
+        Assert.Contains(styles.Root!.Elements(W + "style"), s => (string?)s.Attribute(W + "styleId") == "ListParagraph");
+        // docDefaults are the STOCK backfill (the left had no theme, so the modern stock spacing),
+        // not the right's empty pPrDefault.
+        var pPrDefault = styles.Root!.Element(W + "docDefaults")?.Element(W + "pPrDefault")?.Element(W + "pPr");
+        Assert.NotNull(pPrDefault);
+        Assert.Equal("160", (string?)pPrDefault!.Element(W + "spacing")?.Attribute(W + "after"));
+    }
+
+    /// <summary>
+    /// The mirror of the neutralizer: paragraph spacing the RIGHT declares in its docDefaults (and
+    /// the left does not) must materialize into the updated style's current payload — the output
+    /// package retains the LEFT docDefaults, so without it the accepted view renders with the
+    /// left's (absent) spacing. Word writes exactly this materialization.
+    /// </summary>
+    [Fact]
+    public void RightDocDefaultsLeftLacks_AreMaterializedInCurrentPayload_DifferingDefinitions()
+    {
+        // Left: empty pPrDefault, Normal carries its own marker payload so the definitions differ.
+        var left = DocWithDefaultsAndNormalPPr(false, "<w:widowControl w:val=\"0\"/>", "Shared body line.");
+        // Right: docDefaults declare paragraph spacing; Normal payload empty.
+        var right = DocWithDefaultsAndNormalPPr(true, string.Empty, "Shared body line revised.");
+
+        var result = DocxDiff.Compare(left, right);
+
+        var normal = StyleOf(StylesOf(result), "Normal");
+        var spacing = normal.Element(W + "pPr")?.Element(W + "spacing");
+        Assert.NotNull(spacing);
+        Assert.Equal("160", (string?)spacing!.Attribute(W + "after"));
+        Assert.Equal("278", (string?)spacing.Attribute(W + "line"));
+    }
+
+    /// <summary>
+    /// A concrete font in a higher layer must CLEAR the theme reference accumulated from a lower
+    /// one — in OOXML a theme attribute outranks the literal in the same slot, so materializing
+    /// "ascii=Times New Roman" while carrying "asciiTheme=minorHAnsi" still renders the theme font.
+    /// Word's materialized payload states the concrete attributes only.
+    /// </summary>
+    [Fact]
+    public void MaterializedRunFonts_DropThemeAttributesOverriddenByConcreteOnes()
+    {
+        WmlDocument DocThemedDefaults(string? normalFont, string text)
+        {
+            using var stream = new MemoryStream();
+            using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+            {
+                var main = doc.AddMainDocumentPart();
+                main.Document = new Document(new Body(new Paragraph(new Run(new Text(text)))));
+                var styles = main.AddNewPart<StyleDefinitionsPart>();
+                var normalRPr = normalFont is null
+                    ? string.Empty
+                    : $"<w:rPr><w:rFonts w:ascii=\"{normalFont}\" w:hAnsi=\"{normalFont}\"/></w:rPr>";
+                using (var writer = new StreamWriter(styles.GetStream(FileMode.Create, FileAccess.Write)))
+                {
+                    writer.Write($"<w:styles xmlns:w=\"{W.NamespaceName}\">" +
+                        "<w:docDefaults><w:rPrDefault><w:rPr>" +
+                        "<w:rFonts w:asciiTheme=\"minorHAnsi\" w:hAnsiTheme=\"minorHAnsi\"/><w:sz w:val=\"24\"/>" +
+                        "</w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults>" +
+                        "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\">" +
+                        $"<w:name w:val=\"Normal\"/><w:qFormat/>{normalRPr}</w:style></w:styles>");
+                }
+                main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+                doc.Save();
+            }
+            return new WmlDocument("themed.docx", stream.ToArray());
+        }
+
+        var left = DocThemedDefaults(null, "Shared body line.");
+        var right = DocThemedDefaults("Times New Roman", "Shared body line revised.");
+
+        var result = DocxDiff.Compare(left, right);
+
+        var rFonts = StyleOf(StylesOf(result), "Normal").Element(W + "rPr")?.Element(W + "rFonts");
+        Assert.NotNull(rFonts);
+        Assert.Equal("Times New Roman", (string?)rFonts!.Attribute(W + "ascii"));
+        Assert.Null(rFonts.Attribute(W + "asciiTheme"));
+        Assert.Null(rFonts.Attribute(W + "hAnsiTheme"));
+    }
+
+    /// <summary>Same leak with EQUAL Normal definitions (the docDefaults projection branch).</summary>
+    [Fact]
+    public void LeftDocDefaultsLeftAtBuiltinsByRight_AreNeutralizedInCurrentPayload_EqualDefinitions()
+    {
+        var left = DocWithDefaultsAndNormalPPr(true, string.Empty, "Shared body line.");
+        var right = DocWithDefaultsAndNormalPPr(false, string.Empty, "Shared body line revised.");
+
+        var result = DocxDiff.Compare(left, right);
+
+        var normal = StyleOf(StylesOf(result), "Normal");
+        var spacing = normal.Element(W + "pPr")?.Element(W + "spacing");
+        Assert.NotNull(spacing);
+        Assert.Equal("0", (string?)spacing!.Attribute(W + "after"));
+        Assert.Equal("240", (string?)spacing.Attribute(W + "line"));
+        Assert.Equal("0", (string?)normal.Element(W + "rPr")?.Element(W + "kern")?.Attribute(W + "val"));
+    }
 }

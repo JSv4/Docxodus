@@ -448,12 +448,54 @@ namespace Docxodus
             {
                 if (GetDocumentType() != typeof(WordprocessingDocument))
                     throw new PowerToolsDocumentException("Not a Wordprocessing document.");
+                DropDanglingRelationships(DocPackage);
                 return WordprocessingDocument.Open(DocPackage);
             }
             catch (Exception e)
             {
                 throw new PowerToolsDocumentException(e.Message);
             }
+        }
+
+        // Word tolerates a relationship whose internal target part is missing from the package
+        // (an orphaned /docProps/thumbnail.jpeg reference is the wild-caught case) and drops the
+        // reference on save; the Open XML SDK instead throws from its eager part-tree load the
+        // first time the part graph is touched. Mirror Word by removing dangling relationships
+        // before handing the package to the SDK. Relationships whose target URI cannot even be
+        // resolved are left alone so stranger breakage keeps its existing diagnostics.
+        private static void DropDanglingRelationships(Package package)
+        {
+            foreach (PackageRelationship rel in package.GetRelationships().ToList())
+            {
+                if (IsDanglingInternalRelationship(package, rel))
+                    package.DeleteRelationship(rel.Id);
+            }
+            foreach (PackagePart part in package.GetParts().ToList())
+            {
+                if (PackUriHelper.IsRelationshipPartUri(part.Uri))
+                    continue;
+                foreach (PackageRelationship rel in part.GetRelationships().ToList())
+                {
+                    if (IsDanglingInternalRelationship(package, rel))
+                        part.DeleteRelationship(rel.Id);
+                }
+            }
+        }
+
+        private static bool IsDanglingInternalRelationship(Package package, PackageRelationship rel)
+        {
+            if (rel.TargetMode != TargetMode.Internal)
+                return false;
+            Uri target;
+            try
+            {
+                target = PackUriHelper.ResolvePartUri(rel.SourceUri, rel.TargetUri);
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+            return !package.PartExists(target);
         }
         public Type GetDocumentType()
         {

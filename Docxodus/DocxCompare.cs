@@ -14,9 +14,8 @@ namespace Docxodus;
 ///
 /// <para><b>Front door vs. raw engine.</b> <see cref="DocxDiff.Compare"/> is the engine; this is the
 /// product. The difference is the input-revision policy: the front door always compares on the
-/// accepted view AND preserves the inputs' own revision markup, because that is what Word's Compare
-/// does and what every shipping surface wants. The raw <see cref="DocxDiff"/> API keeps both flags at
-/// their opt-in defaults for callers who want the engine's unopinionated behavior. Calling
+/// ACCEPTED view, because that is what Word's Compare does. The raw <see cref="DocxDiff"/> API keeps
+/// that flag at its opt-in default for callers who want the engine's unopinionated behavior. Calling
 /// <see cref="DocxDiff.Compare"/> directly with a fresh <see cref="DocxDiffSettings"/> is therefore
 /// NOT equivalent to calling this — see <see cref="ApplyFrontDoorRevisionPolicy"/>.</para>
 ///
@@ -28,9 +27,9 @@ public static class DocxCompare
     /// <summary>
     /// Compare <paramref name="left"/> against <paramref name="right"/> and return the redlined
     /// document, with the front-door input-revision policy applied on top of
-    /// <paramref name="settings"/>. Byte-identical inputs return a detached exact clone without
-    /// reserialization — a no-op must not rewrite a valid package merely because it passed through
-    /// the comparison API.
+    /// <paramref name="settings"/>. Byte-identical TRANSITIONAL inputs return a detached exact clone
+    /// without reserialization — a no-op must not rewrite a valid package merely because it passed
+    /// through the comparison API; byte-identical STRICT inputs are normalized to transitional.
     /// </summary>
     /// <param name="left">The earlier / original document.</param>
     /// <param name="right">The later / revised document.</param>
@@ -43,11 +42,16 @@ public static class DocxCompare
         ArgumentNullException.ThrowIfNull(left);
         ArgumentNullException.ThrowIfNull(right);
 
-        // An exact same-package comparison has no revisions to produce. More importantly, a no-op must
-        // not silently rewrite a valid Strict package or discard unrelated existing revision markup.
-        // Return a detached clone so the result stays safe for callers to mutate/save independently.
+        // An exact same-package comparison has no revisions to produce; return a detached clone so
+        // the result remains safe for callers to mutate/save independently of the input. A STRICT
+        // package is still normalized to transitional on the way out — Word converts on open no
+        // matter what the compare finds, and strict bytes break downstream consumers (LibreOffice
+        // renders them poorly, python-docx rejects them). Transitional inputs stay byte-identical.
         if (CanReturnExactNoOp(left, right))
-            return new WmlDocument(left);
+        {
+            var normalized = StrictOoxmlNormalizer.NormalizeToTransitional(left);
+            return ReferenceEquals(normalized, left) ? new WmlDocument(left) : normalized;
+        }
 
         return DocxDiff.Compare(left, right, ApplyFrontDoorRevisionPolicy(settings));
     }
@@ -72,14 +76,17 @@ public static class DocxCompare
     /// <summary>
     /// Layer the front-door input-revision policy onto the caller's settings.
     ///
-    /// <para>The DIFF must run over the accepted view — otherwise revision-bearing inputs diff their
-    /// raw surface and emit whole-document churn — and Word's Compare additionally PRESERVES the
-    /// inputs' own markup in its output (original author/date rides through, verified against
-    /// Word-oracle outputs). Preserve WINS over the pre-accept by precedence: matching still happens on
-    /// the accepted view (the IR read accepts regardless), the byte-level flatten is skipped, and
-    /// equal/inserted blocks carry the input's markup through. See
-    /// <see cref="DocxDiffSettings.PreserveInputRevisions"/> for the one-sided round-trip contract this
-    /// implies (accept ≡ right holds; reject ≠ left where foreign markup exists — exactly Word).</para>
+    /// <para>The DIFF runs over the ACCEPTED view. Word's Compare dialog says it outright — "Word will
+    /// treat them as accepted" — and its outputs confirm it: text an input had struck through is absent
+    /// from the compare result entirely, the surviving text is re-detected as the compare author's own
+    /// insertions, and the output collapses to a single revision author. Without the pre-accept,
+    /// revision-bearing inputs diff their raw surface and emit whole-document churn.</para>
+    ///
+    /// <para>Earlier releases ALSO preserved the inputs' own markup here — Word's COMBINE behavior,
+    /// decoded from a batch of oracle documents that turned out to be Combine-shaped. Compare is the
+    /// operation this surface models, so only the pre-accept flatten runs. Callers who want the inputs'
+    /// revisions carried through use the raw <see cref="DocxDiff"/> API with
+    /// <see cref="DocxDiffSettings.PreserveInputRevisions"/>.</para>
     ///
     /// <para>This is unconditional, exactly as the pre-v11 settings mapping was: it is the front door's
     /// defining behavior, not a default a caller is expected to opt into. A caller who wants the
@@ -89,7 +96,6 @@ public static class DocxCompare
     {
         var result = settings is null ? new DocxDiffSettings() : settings.Clone();
         result.PreAcceptInputRevisions = true;
-        result.PreserveInputRevisions = true;
         return result;
     }
 }

@@ -22,11 +22,14 @@ All notable changes to this project will be documented in this file.
   called them.
 
   **What changes for a caller who passes nothing:** `DocxCompare.Compare` now takes a
-  `DocxDiffSettings` and no engine argument. It still applies the front-door revision policy
-  (`PreAcceptInputRevisions` + `PreserveInputRevisions`), which the raw `DocxDiff` API leaves opt-in —
-  that is the difference between Word-like behaviour and whole-document churn on revision-bearing
-  inputs, so a caller moving from `DocxCompare.Compare` to `DocxDiff.Compare` must set both flags to
-  keep the old output. There is no way to pin the old engine's behaviour: it is gone.
+  `DocxDiffSettings` and no engine argument. It still applies the front-door revision policy —
+  `PreAcceptInputRevisions`, which the raw `DocxDiff` API leaves opt-in. That is the difference
+  between Word-like behaviour and whole-document churn on revision-bearing inputs, so a caller
+  moving from `DocxCompare.Compare` to `DocxDiff.Compare` must set that flag to keep the old output.
+  (The policy was `PreAccept` + `PreserveInputRevisions` when this removal was written; the
+  Word-Compare-parity change that dropped `Preserve` from the front door landed separately on `main`
+  and is described in its own entry. Preservation remains an explicit opt-in on the raw API.)
+  There is no way to pin the old engine's behaviour: it is gone.
 
 - **`getRevisions` reads native markup instead of re-deriving moves (BREAKING).** The legacy call took
   ONE already-redlined document and re-ran move detection over it, which is why it accepted
@@ -142,6 +145,50 @@ All notable changes to this project will be documented in this file.
   candidate that fails carries its error instead of products rather than failing the batch.
 
 ### Fixed
+- **A relationship whose target part is missing no longer aborts the compare.** Word tolerates a
+  package that declares, say, a `/docProps/thumbnail.jpeg` thumbnail in `_rels/.rels` without
+  shipping the part — it opens the document and silently drops the dangling reference on save. The
+  Open XML SDK instead throws from its eager part-tree load the first time the part graph is
+  touched, so comparing such a document failed outright (and returned an empty result through the
+  WASM bridge). `OpenXmlMemoryStreamDocument` now removes dangling internal relationships — package-
+  and part-level — before handing the package to the SDK, mirroring Word's repair; relationships
+  whose target URI cannot even be resolved are left alone so stranger breakage keeps its existing
+  diagnostics.
+- **A trailing `w:sectPr` present on only one side of a compare is now diffed against the default
+  section instead of being ignored.** A body with no trailing section properties reads as the
+  default section (Word's rule). Previously, when the LEFT had none the RIGHT's page setup was
+  dropped entirely — a two-column revision rendered single-column — and when the RIGHT had none the
+  LEFT's page setup survived accept. Now a right-only sectPr is adopted (its properties render;
+  header/footer references stay with the header/footer machinery) under a `w:sectPrChange`
+  archiving the default section, and a left-only sectPr is replaced by the default section with the
+  left's properties archived, so accept reproduces the right page setup and reject restores the
+  left's.
+- **Comparing two identical Strict OOXML documents now returns a transitional package.** Strict
+  inputs are normalized to transitional before any diff (Word converts on open), but the
+  identical-package shortcut returned the input bytes untouched — a strict package that LibreOffice
+  renders poorly and `python-docx` refuses to read. The shortcut now normalizes strict inputs on the
+  way out; byte-identical transitional inputs still return an exact detached clone.
+- **A concrete font materialized from the revised side now clears the theme reference it
+  overrides.** Effective-formatting resolution merged `rFonts` attribute-wise, so materializing
+  `ascii="Times New Roman"` could leave a lower layer's `asciiTheme` riding along — and a theme
+  attribute outranks the literal in the same slot, so the output still rendered the theme font
+  (and, substituted, a different-metric family that repaginated the document). Each `rFonts` slot
+  now overrides as a pair: a layer declaring the concrete attribute clears the theme attribute,
+  and vice versa.
+- **The output fontTable is the union of both inputs'.** A font only the revised document's
+  fontTable declares (a Word alias like "Times New Roman (Body CS)" matches no installed face)
+  was missing from the output, leaving LibreOffice no substitution hint for revised-sourced
+  content naming it — it fell back to a different-metric family. Word's compare output carries the
+  union; right-only declarations are now appended verbatim (minus embedded-font relationships).
+- **Document-default declarations the revised side leaves at built-ins no longer leak into the
+  accepted view.** The compare output keeps the LEFT package's `docDefaults`, so an updated shared
+  style must state the RIGHT's effective formatting explicitly. That held for properties the right
+  declared, but a property the left's docDefaults declare and the right leaves at its built-in
+  default — paragraph spacing, kerning, ligatures — kept ruling the output through the retained
+  part: a left template with `spacing after=160 line=278` rendered every right-sourced paragraph
+  double-spaced. The updated style's current payload now materializes the built-in default for
+  exactly those properties (`w:spacing` 0/240/auto attribute-wise, `w:kern` 0, `w14:ligatures`
+  none), which is precisely what Word writes.
 - **The stateless reject no longer eats a baseline-owned note the counterpart merely cited, and
   a session-recorded note's definition now carries insertion markup (#636).** The stateless reject
   pruned every definition its resolution orphaned, unconditionally. That was cover for #614's
@@ -331,6 +378,25 @@ All notable changes to this project will be documented in this file.
   arcade's document is small enough that the difference is below measurement noise there), so it
   is housekeeping rather than a fix — but the guard is no longer defeated by its own call site,
   which matters on documents where the index is not small.
+### Changed
+- **The engine selector's compare profile now treats input revisions the way Word's Compare does:
+  accepted first, not preserved.** Word's Compare dialog says it outright — "Word will treat them as
+  accepted" — and its outputs confirm it: text an input had struck through is absent from the result
+  entirely, the surviving text is re-detected as the compare author's own change, and the output
+  carries a single revision author. The selector (`DocxCompare.Compare`, and with it
+  `compareDocuments` on npm, the redline CLI, and the MCP compare tools) previously carried the
+  inputs' own tracked changes through under their original authors — Word's *Combine* behavior, not
+  its Compare. For callers passing revision-free documents nothing changes. Callers who compared
+  documents that already contained tracked changes now get Word-Compare output: the inputs' own
+  revisions are folded in as accepted before diffing, and every revision in the result belongs to
+  the compare author. To keep the old carry-through behavior, call the `DocxDiff` API directly with
+  `DocxDiffSettings.PreserveInputRevisions = true`.
+- **A revision of a style-less document adopts the revised side's style definitions.** When the
+  original document has no styles part at all, the compare output now carries every style
+  definition from the revised document (its `ListParagraph`'s `contextualSpacing` is what keeps an
+  inserted bullet list tight), while document defaults remain the stock backfill — matching what
+  Word emits for this shape. Previously the output had no style definitions, so inserted content
+  styled through `pStyle` lost its formatting.
 - **The corpus differential's consolidate rows now observe their calls (#632).** The N-way half of
   the differential recorded its warnings and order-variance channels as `n/a` on two premises that
   were both false when they were written down: that the consolidate settings type carries no

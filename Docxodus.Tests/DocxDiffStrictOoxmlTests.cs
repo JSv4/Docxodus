@@ -157,7 +157,12 @@ public class DocxDiffStrictOoxmlTests
     }
 
     [Fact]
-    public void Compare_StrictSelfCompare_PreservesExactPackageBytes()
+    // RE-PINNED: a strict self-compare used to return the input bytes untouched; that hands the
+    // caller a strict package LibreOffice renders poorly and python-docx rejects, and diverges from
+    // Word, which converts to transitional on open regardless of the compare outcome. The identity
+    // shortcut now normalizes strict inputs on the way out (transitional identity still returns an
+    // exact detached clone — see DocxCompareTests).
+    public void Compare_StrictSelfCompare_ReturnsDetachedTransitionalPackage()
     {
         var strict = ToStrict(Doc("Identity paragraph.", "Another one."));
         var samePackage = new WmlDocument(strict);
@@ -167,9 +172,11 @@ public class DocxDiffStrictOoxmlTests
         Assert.NotSame(strict, result);
         Assert.NotSame(strict.DocumentByteArray, result.DocumentByteArray);
         Assert.Equal(strict.FileName, result.FileName);
-        Assert.Equal(strict.DocumentByteArray, result.DocumentByteArray);
-        result.DocumentByteArray[0] ^= 0x01;
-        Assert.NotEqual(strict.DocumentByteArray, result.DocumentByteArray);
+        Assert.Equal(BodyTexts(strict), BodyTexts(result));
+        using var ms = new MemoryStream(result.DocumentByteArray);
+        using var package = System.IO.Packaging.Package.Open(ms, FileMode.Open, FileAccess.Read);
+        Assert.Contains(package.GetRelationships(), rel => rel.RelationshipType ==
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument");
     }
 
     [Fact]

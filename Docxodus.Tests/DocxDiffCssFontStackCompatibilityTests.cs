@@ -160,6 +160,45 @@ public class DocxDiffCssFontStackCompatibilityTests
             .ToList();
     }
 
+    /// <summary>A doc with a real fontTable declaring the given fonts (name → family), so the
+    /// output carries a LEFT fontTable and the union path (not the from-scratch synthesis) runs.</summary>
+    private static WmlDocument DocWithFontTable(string text, params (string Name, string Family)[] fonts)
+    {
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Document(new Body(new Paragraph(new Run(new Text(text)))));
+            var part = main.AddNewPart<FontTablePart>();
+            using var writer = new StreamWriter(part.GetStream(FileMode.Create, FileAccess.Write));
+            writer.Write($"<w:fonts xmlns:w=\"{W.NamespaceName}\">" +
+                string.Concat(fonts.Select(f =>
+                    $"<w:font w:name=\"{f.Name}\"><w:altName w:val=\"Times New Roman\"/>" +
+                    $"<w:family w:val=\"{f.Family}\"/></w:font>")) +
+                "</w:fonts>");
+        }
+        return new WmlDocument("with-fonttable.docx", stream.ToArray());
+    }
+
+    /// <summary>
+    /// Word's compare output fontTable is the UNION: the original's entries verbatim, plus any font
+    /// the revised document's fontTable declares that the original's lacks. Without the revised
+    /// side's entry, LibreOffice has no substitution hint for a revised-only font name (a Word UI
+    /// alias like "Times New Roman (Body CS)" matches no real face) and falls back to a
+    /// different-metric family, repaginating the whole rendered redline.
+    /// </summary>
+    [Fact]
+    public void CarriedFontTable_MergesRevisedSideOnlyFontDeclarations()
+    {
+        var left = DocWithFontTable("Original body line.", ("Calibri", "swiss"));
+        var right = DocWithFontTable("Revised body line.", ("Calibri", "swiss"), ("Whimsy Custom", "roman"));
+
+        var redline = DocxDiff.Compare(left, right);
+
+        Assert.Equal("Times New Roman", FontTableAltName(redline, "Whimsy Custom"));
+        Assert.Empty(SchemaErrors(redline));
+    }
+
     private static string? FontTableAltName(WmlDocument doc, string fontName)
     {
         using var stream = new MemoryStream(doc.DocumentByteArray);
