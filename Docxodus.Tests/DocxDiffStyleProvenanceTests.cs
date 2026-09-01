@@ -890,4 +890,88 @@ public class DocxDiffStyleProvenanceTests
         Assert.True(rFontsIndex < kernIndex && kernIndex < langIndex);
     }
 
+    /// <summary>A doc whose docDefaults optionally declare paragraph spacing / kern / ligatures, with a
+    /// Normal style whose own pPr payload is <paramref name="normalPPrXml"/> (may be empty).</summary>
+    private static WmlDocument DocWithDefaultsAndNormalPPr(bool declareDefaults, string normalPPrXml, string text)
+    {
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Document(new Body(new Paragraph(new Run(new Text(text)))));
+            var styles = main.AddNewPart<StyleDefinitionsPart>();
+            var defaults = declareDefaults
+                ? "<w:docDefaults><w:rPrDefault><w:rPr>" +
+                  "<w:rFonts w:ascii=\"Times New Roman\" w:hAnsi=\"Times New Roman\"/>" +
+                  "<w:kern w:val=\"2\"/><w:sz w:val=\"24\"/>" +
+                  "<w14:ligatures w14:val=\"standardContextual\"/>" +
+                  "</w:rPr></w:rPrDefault><w:pPrDefault><w:pPr>" +
+                  "<w:spacing w:after=\"160\" w:line=\"278\" w:lineRule=\"auto\"/>" +
+                  "</w:pPr></w:pPrDefault></w:docDefaults>"
+                : "<w:docDefaults><w:rPrDefault><w:rPr>" +
+                  "<w:rFonts w:ascii=\"Inter\" w:hAnsi=\"Inter\"/><w:sz w:val=\"22\"/>" +
+                  "</w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults>";
+            using (var writer = new StreamWriter(styles.GetStream(FileMode.Create, FileAccess.Write)))
+            {
+                writer.Write(
+                    $"<w:styles xmlns:w=\"{W.NamespaceName}\" " +
+                    "xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\" " +
+                    "xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" mc:Ignorable=\"w14\">" +
+                    defaults +
+                    "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\">" +
+                    $"<w:name w:val=\"Normal\"/><w:qFormat/>{(normalPPrXml.Length == 0 ? string.Empty : $"<w:pPr>{normalPPrXml}</w:pPr>")}</w:style></w:styles>");
+            }
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+            doc.Save();
+        }
+        return new WmlDocument("defaults-leak.docx", stream.ToArray());
+    }
+
+    /// <summary>
+    /// Left docDefaults declare paragraph spacing, kern and ligatures; the right leaves all three at
+    /// built-in defaults. The output keeps the LEFT docDefaults part, so the updated style's CURRENT
+    /// payload must materialize the built-in defaults (spacing 0/240/auto, kern 0, ligatures none) or
+    /// the left declarations keep ruling the accepted view — Word writes exactly these neutralizers.
+    /// Differing Normal definitions take the raw-payload branch.
+    /// </summary>
+    [Fact]
+    public void LeftDocDefaultsLeftAtBuiltinsByRight_AreNeutralizedInCurrentPayload_DifferingDefinitions()
+    {
+        var left = DocWithDefaultsAndNormalPPr(true, "<w:widowControl w:val=\"0\"/>", "Shared body line.");
+        var right = DocWithDefaultsAndNormalPPr(false, string.Empty, "Shared body line revised.");
+
+        var result = DocxDiff.Compare(left, right);
+
+        var normal = StyleOf(StylesOf(result), "Normal");
+        var pPr = normal.Element(W + "pPr");
+        Assert.NotNull(pPr);
+        var spacing = pPr!.Element(W + "spacing");
+        Assert.NotNull(spacing);
+        Assert.Equal("0", (string?)spacing!.Attribute(W + "after"));
+        Assert.Equal("240", (string?)spacing.Attribute(W + "line"));
+        Assert.Equal("auto", (string?)spacing.Attribute(W + "lineRule"));
+
+        var rPr = normal.Element(W + "rPr");
+        Assert.NotNull(rPr);
+        Assert.Equal("0", (string?)rPr!.Element(W + "kern")?.Attribute(W + "val"));
+        XNamespace w14 = "http://schemas.microsoft.com/office/word/2010/wordml";
+        Assert.Equal("none", (string?)rPr.Element(w14 + "ligatures")?.Attribute(w14 + "val"));
+    }
+
+    /// <summary>Same leak with EQUAL Normal definitions (the docDefaults projection branch).</summary>
+    [Fact]
+    public void LeftDocDefaultsLeftAtBuiltinsByRight_AreNeutralizedInCurrentPayload_EqualDefinitions()
+    {
+        var left = DocWithDefaultsAndNormalPPr(true, string.Empty, "Shared body line.");
+        var right = DocWithDefaultsAndNormalPPr(false, string.Empty, "Shared body line revised.");
+
+        var result = DocxDiff.Compare(left, right);
+
+        var normal = StyleOf(StylesOf(result), "Normal");
+        var spacing = normal.Element(W + "pPr")?.Element(W + "spacing");
+        Assert.NotNull(spacing);
+        Assert.Equal("0", (string?)spacing!.Attribute(W + "after"));
+        Assert.Equal("240", (string?)spacing.Attribute(W + "line"));
+        Assert.Equal("0", (string?)normal.Element(W + "rPr")?.Element(W + "kern")?.Attribute(W + "val"));
+    }
 }

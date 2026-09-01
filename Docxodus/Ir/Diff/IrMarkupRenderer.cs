@@ -331,19 +331,43 @@ internal static class IrMarkupRenderer
                 // references + rsids), stamp native w:sectPrChange — the right properties are applied and the left
                 // properties preserved in the marker. References (owned by the header/footer machinery, which runs
                 // later and mutates them) and any mid-document sectPr inside a pPr are untouched (v1 ceilings).
-                if (settings.TrackSectionFormatChanges && trailingSectPr != null)
+                // A side MISSING its trailing sectPr entirely reads as the DEFAULT section (Word's rule): a
+                // right-only sectPr is adopted (its page setup renders) over an archived default section, and a
+                // left-only sectPr is replaced by the default section with the left's properties archived.
+                if (settings.TrackSectionFormatChanges)
                 {
                     var rightTrailingSectPr = wDocRight.MainDocumentPart?.GetXDocument().Root?
                         .Element(W.body)?.Elements(W.sectPr).LastOrDefault();
-                    if (rightTrailingSectPr != null && SectPrPropsDiffer(trailingSectPr, rightTrailingSectPr))
-                        ApplySectPrChange(trailingSectPr, trailingSectPr, rightTrailingSectPr, state);
+                    if (trailingSectPr != null && rightTrailingSectPr != null)
+                    {
+                        if (SectPrPropsDiffer(trailingSectPr, rightTrailingSectPr))
+                            ApplySectPrChange(trailingSectPr, trailingSectPr, rightTrailingSectPr, state);
+                    }
+                    else if (trailingSectPr == null && rightTrailingSectPr != null)
+                    {
+                        // Adopt the right's PROPERTIES only: header/footer references carry right-package
+                        // r:ids and belong to the header/footer machinery, which wires the output's own.
+                        // The absent left reads as the default section, so the differ test folds defaults
+                        // into both sides (a right that merely spells the defaults out is no change).
+                        trailingSectPr = new XElement(W.sectPr,
+                            rightTrailingSectPr.Elements().Where(IsSectPrProp)
+                                .Select(e => StripUnids(new XElement(e))));
+                        if (SectPrPropsDiffer(DefaultSectPrLive(), EffectiveSectPrProps(rightTrailingSectPr)))
+                            ApplySectPrChange(trailingSectPr, DefaultSectPrArchive(), rightTrailingSectPr, state);
+                    }
+                    else if (trailingSectPr != null && rightTrailingSectPr == null)
+                    {
+                        if (SectPrPropsDiffer(EffectiveSectPrProps(trailingSectPr), DefaultSectPrLive()))
+                            ApplySectPrChange(trailingSectPr, trailingSectPr, DefaultSectPrLive(), state);
+                    }
                 }
 
                 bodyEl.Elements().Where(e => e.Name != W.sectPr).Remove();
                 // Re-add the rendered blocks BEFORE the trailing sectPr (schema: sectPr is last in body).
                 if (trailingSectPr != null)
                 {
-                    trailingSectPr.Remove();
+                    if (trailingSectPr.Parent != null)
+                        trailingSectPr.Remove();
                     bodyEl.Add(bodyBlocks);
                     bodyEl.Add(trailingSectPr);
                 }
@@ -5845,6 +5869,52 @@ internal static class IrMarkupRenderer
     private static bool IsSectPrProp(XElement e)
         => e.Name != W.headerReference && e.Name != W.footerReference && e.Name != W.sectPrChange;
 
+    /// <summary>
+    /// The DEFAULT section standing in for a side that has no trailing sectPr, as Word materializes it
+    /// when that side is the ACCEPTED state (right missing): full page setup, single column.
+    /// </summary>
+    private static XElement DefaultSectPrLive() => new(W.sectPr,
+        new XElement(W.type, new XAttribute(W.val, "nextPage")),
+        new XElement(W.pgSz, new XAttribute(W._w, "12240"), new XAttribute(W.h, "15840")),
+        DefaultSectPrMargins(),
+        new XElement(W.cols, new XAttribute(W.num, "1"), new XAttribute(W.space, "720")),
+        new XElement(W.docGrid, new XAttribute(W.linePitch, "360")));
+
+    /// <summary>
+    /// The DEFAULT section standing in for a side that has no trailing sectPr, as Word materializes it
+    /// inside a <c>w:sectPrChange</c> archive (left missing): margins and single column only.
+    /// </summary>
+    private static XElement DefaultSectPrArchive() => new(W.sectPr,
+        DefaultSectPrMargins(),
+        new XElement(W.cols, new XAttribute(W.num, "1")));
+
+    /// <summary>
+    /// A sectPr's tracked properties overlaid on the default section — the EFFECTIVE page setup used
+    /// when one side's trailing sectPr is absent: an explicit property replaces its default slot, a
+    /// property with no default slot (titlePg, pgNumType, …) rides along, an omitted one reads as
+    /// its default.
+    /// </summary>
+    private static XElement EffectiveSectPrProps(XElement sectPr)
+    {
+        var effective = DefaultSectPrLive();
+        foreach (var e in sectPr.Elements().Where(IsSectPrProp))
+        {
+            var clone = StripUnids(new XElement(e));
+            var slot = effective.Elements(e.Name).FirstOrDefault();
+            if (slot != null)
+                slot.ReplaceWith(clone);
+            else
+                effective.Add(clone);
+        }
+        return effective;
+    }
+
+    private static XElement DefaultSectPrMargins() => new(W.pgMar,
+        new XAttribute(W.top, "1440"), new XAttribute(W.right, "1440"),
+        new XAttribute(W.bottom, "1440"), new XAttribute(W.left, "1440"),
+        new XAttribute(W.header, "720"), new XAttribute(W.footer, "720"),
+        new XAttribute(W.gutter, "0"));
+
     /// <summary>True when two trailing sectPrs differ in their tracked PROPERTIES (page setup/columns/…),
     /// ignoring header/footer references, the change marker, and canonical noise (rsids).</summary>
     private static bool SectPrPropsDiffer(XElement left, XElement right)
@@ -6505,8 +6575,21 @@ internal static class IrMarkupRenderer
             // (docDefaults + basedOn chain) fonts/size, exactly as Word writes them.
             var rightRawPPr = RawStylePayload(W.pPr, rightStyle);
             var leftRawPPr = RawStylePayload(W.pPr, leftStyle);
-            var (_, rightRPr) = ResolveEffectiveStyleFormatting(rightRoot, type, styleId);
+            var (rightEffPPr, rightRPr) = ResolveEffectiveStyleFormatting(rightRoot, type, styleId);
             var (_, leftRPr) = ResolveEffectiveStyleFormatting(leftOriginalRoot, type, styleId);
+
+            // Left docDefaults declarations the right leaves at built-ins need explicit neutralizers
+            // in the CURRENT payload or they keep ruling the accepted view (the package retains the
+            // LEFT docDefaults). The raw pPr provenance is otherwise unchanged.
+            if (string.Equals(type, "paragraph", StringComparison.Ordinal))
+            {
+                AddDocDefaultsNeutralizers(rightRawPPr,
+                    LeftDocDefaultsProps(leftOriginalRoot, paragraphAxis: true), rightEffPPr, paragraphAxis: true);
+                NormalizeStylePropertyOrder(rightRawPPr, StylePPrChildOrder);
+            }
+            AddDocDefaultsNeutralizers(rightRPr,
+                LeftDocDefaultsProps(leftOriginalRoot, paragraphAxis: false), rightRPr, paragraphAxis: false);
+            NormalizeStylePropertyOrder(rightRPr, StyleRPrChildOrder);
 
             leftStyle.Elements(W.pPr).Remove();
             leftStyle.Elements(W.rPr).Remove();
@@ -6564,6 +6647,9 @@ internal static class IrMarkupRenderer
         if (projectPPr)
         {
             currentPPr = new XElement(rightPPr);
+            AddDocDefaultsNeutralizers(currentPPr,
+                LeftDocDefaultsProps(leftStylesRoot, paragraphAxis: true), rightPPr, paragraphAxis: true);
+            NormalizeStylePropertyOrder(currentPPr, StylePPrChildOrder);
             currentPPr.Add(new XElement(W.pPrChange, state.RevisionAttributes(), new XElement(leftPPr)));
         }
 
@@ -6571,11 +6657,70 @@ internal static class IrMarkupRenderer
         if (projectRPr)
         {
             currentRPr = new XElement(rightRPr);
+            AddDocDefaultsNeutralizers(currentRPr,
+                LeftDocDefaultsProps(leftStylesRoot, paragraphAxis: false), rightRPr, paragraphAxis: false);
+            NormalizeStylePropertyOrder(currentRPr, StyleRPrChildOrder);
             currentRPr.Add(new XElement(W.rPrChange, state.RevisionAttributes(), new XElement(leftRPr)));
         }
 
         ReplaceStyleProperties(outputStyle, currentPPr, currentRPr);
     }
+
+    /// <summary>
+    /// LEFT docDefaults declarations that the RIGHT leaves at built-in defaults would otherwise keep
+    /// ruling the accepted view through the retained LEFT docDefaults part. Word materializes the
+    /// built-in default into the updated style's CURRENT payload for exactly those properties
+    /// (oracle-decoded: spacing → 0/240/auto attribute-wise, kern → 0, ligatures → none). Properties
+    /// without a confident built-in stay untouched — the leak is the pre-existing status quo there.
+    /// </summary>
+    private static void AddDocDefaultsNeutralizers(
+        XElement current, XElement? leftDocDefaultsProps, XElement rightEffectiveProps, bool paragraphAxis)
+    {
+        if (leftDocDefaultsProps is null)
+            return;
+        foreach (var declared in leftDocDefaultsProps.Elements())
+        {
+            if (rightEffectiveProps.Element(declared.Name) is not null ||
+                current.Element(declared.Name) is not null)
+                continue;
+            var neutral = BuiltinDefaultFor(declared, paragraphAxis);
+            if (neutral is not null)
+                current.Add(neutral);
+        }
+    }
+
+    private static XElement? BuiltinDefaultFor(XElement declared, bool paragraphAxis)
+    {
+        if (paragraphAxis && declared.Name == W.spacing)
+        {
+            // Attribute-wise neutralization mirroring Word: only the attributes the left declared,
+            // each at its built-in value. An unrecognized attribute means no confident neutralizer.
+            var neutral = new XElement(W.spacing);
+            foreach (var at in declared.Attributes())
+            {
+                string? value =
+                    at.Name == W.line ? "240" :
+                    at.Name == W.lineRule ? "auto" :
+                    at.Name == W.before || at.Name == W.after ||
+                    at.Name == W.beforeLines || at.Name == W.afterLines ||
+                    at.Name == W.beforeAutospacing || at.Name == W.afterAutospacing ? "0" :
+                    null;
+                if (value is null)
+                    return null;
+                neutral.SetAttributeValue(at.Name, value);
+            }
+            return neutral;
+        }
+        if (!paragraphAxis && declared.Name == W.kern)
+            return new XElement(W.kern, new XAttribute(W.val, "0"));
+        if (!paragraphAxis && declared.Name == W14.ligatures)
+            return new XElement(W14.ligatures, new XAttribute(W14.val, "none"));
+        return null;
+    }
+
+    private static XElement? LeftDocDefaultsProps(XElement stylesRoot, bool paragraphAxis) => paragraphAxis
+        ? stylesRoot.Element(W.docDefaults)?.Element(W.pPrDefault)?.Element(W.pPr)
+        : stylesRoot.Element(W.docDefaults)?.Element(W.rPrDefault)?.Element(W.rPr);
 
     /// <summary>Replace only the style property slices supplied by a presentation projection, preserving the
     /// style metadata and the schema-required pPr → rPr → table-property ordering.</summary>

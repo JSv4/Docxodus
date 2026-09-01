@@ -49,6 +49,38 @@ All notable changes to this project will be documented in this file.
   candidate that fails carries its error instead of products rather than failing the batch.
 
 ### Fixed
+- **A relationship whose target part is missing no longer aborts the compare.** Word tolerates a
+  package that declares, say, a `/docProps/thumbnail.jpeg` thumbnail in `_rels/.rels` without
+  shipping the part — it opens the document and silently drops the dangling reference on save. The
+  Open XML SDK instead throws from its eager part-tree load the first time the part graph is
+  touched, so comparing such a document failed outright (and returned an empty result through the
+  WASM bridge). `OpenXmlMemoryStreamDocument` now removes dangling internal relationships — package-
+  and part-level — before handing the package to the SDK, mirroring Word's repair; relationships
+  whose target URI cannot even be resolved are left alone so stranger breakage keeps its existing
+  diagnostics.
+- **A trailing `w:sectPr` present on only one side of a compare is now diffed against the default
+  section instead of being ignored.** A body with no trailing section properties reads as the
+  default section (Word's rule). Previously, when the LEFT had none the RIGHT's page setup was
+  dropped entirely — a two-column revision rendered single-column — and when the RIGHT had none the
+  LEFT's page setup survived accept. Now a right-only sectPr is adopted (its properties render;
+  header/footer references stay with the header/footer machinery) under a `w:sectPrChange`
+  archiving the default section, and a left-only sectPr is replaced by the default section with the
+  left's properties archived, so accept reproduces the right page setup and reject restores the
+  left's.
+- **Comparing two identical Strict OOXML documents now returns a transitional package.** Strict
+  inputs are normalized to transitional before any diff (Word converts on open), but the
+  identical-package shortcut returned the input bytes untouched — a strict package that LibreOffice
+  renders poorly and `python-docx` refuses to read. The shortcut now normalizes strict inputs on the
+  way out; byte-identical transitional inputs still return an exact detached clone.
+- **Document-default declarations the revised side leaves at built-ins no longer leak into the
+  accepted view.** The compare output keeps the LEFT package's `docDefaults`, so an updated shared
+  style must state the RIGHT's effective formatting explicitly. That held for properties the right
+  declared, but a property the left's docDefaults declare and the right leaves at its built-in
+  default — paragraph spacing, kerning, ligatures — kept ruling the output through the retained
+  part: a left template with `spacing after=160 line=278` rendered every right-sourced paragraph
+  double-spaced. The updated style's current payload now materializes the built-in default for
+  exactly those properties (`w:spacing` 0/240/auto attribute-wise, `w:kern` 0, `w14:ligatures`
+  none), which is precisely what Word writes.
 - **The stateless reject no longer eats a baseline-owned note the counterpart merely cited, and
   a session-recorded note's definition now carries insertion markup (#636).** The stateless reject
   pruned every definition its resolution orphaned, unconditionally. That was cover for #614's
