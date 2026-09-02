@@ -68,7 +68,9 @@ public static class DocxCompare
     /// preprocessing repaired as a side effect, so routing through the engine was strictly better than
     /// cloning. <see cref="DocxDiff"/> performs no such repair: on that input it returns the source
     /// bytes unchanged, with the same validation error. The guard therefore bought nothing but a full
-    /// comparison, and was removed with the engine that motivated it. Tracked as issue #642.</para>
+    /// comparison, and was removed with the engine that motivated it. Preserving that invalid input
+    /// rather than silently rewriting it is a decided position, not an oversight — see "Office Math:
+    /// revision wrappers nested inside <c>m:r</c>" in <c>docs/ooxml_corner_cases.md</c> (issue #642).</para>
     /// </summary>
     internal static bool CanReturnExactNoOp(WmlDocument left, WmlDocument right) =>
         HasIdenticalPackageBytes(left, right);
