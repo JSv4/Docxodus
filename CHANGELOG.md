@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [11.0.0] - 2026-09-01
+
 ### Removed
 
 - **`WmlComparer` — the legacy comparison engine — is gone (BREAKING).** `DocxDiff` has been the
