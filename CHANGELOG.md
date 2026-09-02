@@ -14,7 +14,16 @@ All notable changes to this project will be documented in this file.
   tool with its kind and a one-line purpose, matching the arithmetic in
   `docs/architecture/docx_agent_server.md`, and a test holds it in step with `ToolCatalog.Tools`
   so a tool cannot be added or removed without the README moving with it.
-
+- The complex-form benchmark harness (`benchmarks/complex-form-doc`) compiles again. Removing the
+  legacy comparison engine deleted the harness's terminal summary along with its legacy stage,
+  leaving the `int`-returning entry point with a path that never returned (`CS0161`). The summary
+  line and the `0`/`2` exit code are restored, and CI now compiles every out-of-solution tool and
+  benchmark so this class of rot cannot go unnoticed again.
+- The complex-form benchmark's `README.md` and `FINDINGS.md` no longer describe the removed legacy
+  engine as a live stage. The README's stage table is now keyed on the exact labels the harness
+  prints, `FINDINGS.md` is refreshed from a recorded current-`main` run with its stable assertions
+  separated from indicative timings, and a test asserts the README and `Program.cs` name the same
+  set of stages so they cannot drift apart again.
 - `OpenXmlRegex.Match` no longer throws a `NullReferenceException` when called without a callback
   on PowerPoint/DrawingML content (the `a:p`/`p:p` namespaced path) — it now returns the match
   count like the Wordprocessing path already did.
