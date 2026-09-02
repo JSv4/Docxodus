@@ -20,6 +20,13 @@ All notable changes to this project will be documented in this file.
   no longer throws a `NullReferenceException` while computing the list item text — it now falls
   back within the style's own levels correctly, matching every other "not found" path in list-item
   resolution.
+- `FormattingAssembler`'s list-item marker synthesis no longer throws when a list item's abstract
+  numbering ID doesn't resolve — the `pt:AbstractNumId` attribute is now omitted for that item
+  instead of crashing the whole document's formatting assembly.
+- `FormattingAssembler.AssembleFormatting` no longer throws a `NullReferenceException` when
+  resolving theme fonts for a paragraph whose accumulated properties don't carry a paragraph-mark
+  run-properties element (`w:rPr`) — it now skips theme-font resolution for that paragraph mark
+  instead of crashing.
 - **The demo site's engine pin moves to `docxodus@11.0.0`, which is what makes DOOM visible
   again.** `docs/demo/` loaded 11.0.0's predecessor from jsDelivr, and on that engine the
   arcade's DOOM cartridge boots, plays and writes real 320×200 frames into the document while

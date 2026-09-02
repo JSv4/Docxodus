@@ -1,6 +1,3 @@
-// Inherited OpenXmlPowerTools code that predates nullable annotations (issue #13).
-#nullable disable
-
 // Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
@@ -118,15 +115,18 @@ namespace Docxodus.HtmlToWml
 {
     public class ElementToStyleMap
     {
-        public string ElementName;
-        public string StyleName;
+        // Unused elsewhere in the codebase -- no construction site sets these, so there is
+        // no real invariant to lean on here; nullable widening (rather than `!`) reflects
+        // that honestly.
+        public string? ElementName;
+        public string? StyleName;
     }
 
     public static class LocalExtensions
     {
-        public static CssExpression GetProp(this XElement element, string propertyName)
+        public static CssExpression? GetProp(this XElement element, string propertyName)
         {
-            Dictionary<string, CssExpression> d = element.Annotation<Dictionary<string, CssExpression>>();
+            Dictionary<string, CssExpression>? d = element.Annotation<Dictionary<string, CssExpression>>();
             if (d != null)
             {
                 if (d.ContainsKey(propertyName))
@@ -154,8 +154,8 @@ namespace Docxodus.HtmlToWml
             string userCss,
             XElement xhtml,
             HtmlToWmlConverterSettings settings,
-            WmlDocument emptyDocument,
-            string annotatedHtmlDumpFileName)
+            WmlDocument? emptyDocument,
+            string? annotatedHtmlDumpFileName)
         {
             if (emptyDocument == null)
                 emptyDocument = HtmlToWmlConverter.EmptyDocument;
@@ -205,7 +205,7 @@ namespace Docxodus.HtmlToWml
 
         private static object TransformToLower(XNode node)
         {
-            XElement element = node as XElement;
+            XElement? element = node as XElement;
             if (element != null)
             {
                 XElement e = new XElement(element.Name.LocalName.ToLower(),
@@ -228,7 +228,7 @@ namespace Docxodus.HtmlToWml
                 rowSpanCell.Add(
                     new XAttribute("HtmlToWmlVMergeRestart", "true"));
                 int colNumber = rowSpanCell.ElementsBeforeSelf(XhtmlNoNamespace.td).Count();
-                int numberPseudoToAdd = (int)rowSpanCell.Attribute(XhtmlNoNamespace.rowspan) - 1;
+                int numberPseudoToAdd = (int)rowSpanCell.Attribute(XhtmlNoNamespace.rowspan)! - 1;
                 var tr = rowSpanCell.Ancestors(XhtmlNoNamespace.tr).FirstOrDefault();
                 if (tr == null)
                     throw new DocxodusException("Invalid HTML - td does not have parent tr");
@@ -247,7 +247,7 @@ namespace Docxodus.HtmlToWml
                         var td = new XElement(XhtmlNoNamespace.td,
                             rowSpanCell.Attributes(),
                             new XAttribute("HtmlToWmlVMergeNoRestart", "true"));
-                        tdToAddAfter.AddAfterSelf(td);
+                        tdToAddAfter!.AddAfterSelf(td);
                     }
                     else
                     {
@@ -258,7 +258,7 @@ namespace Docxodus.HtmlToWml
                         var td = new XElement(XhtmlNoNamespace.td,
                             rowSpanCell.Attributes(),
                             new XAttribute("HtmlToWmlVMergeNoRestart", "true"));
-                        tdToAddBefore.AddBeforeSelf(td);
+                        tdToAddBefore!.AddBeforeSelf(td);
                     }
                 }
             }
@@ -269,7 +269,7 @@ namespace Docxodus.HtmlToWml
         {
             public int numId;
             public int ilvl;
-            public string listStyleType;
+            required public string listStyleType;
         }
 
         private static void AnnotateOlUl(WordprocessingDocument wDoc, XElement html)
@@ -278,13 +278,19 @@ namespace Docxodus.HtmlToWml
             NumberingUpdater.GetNextNumId(wDoc, out numId);
             foreach (var item in html.DescendantsAndSelf().Where(d => d.Name == XhtmlNoNamespace.ol || d.Name == XhtmlNoNamespace.ul))
             {
-                XElement parentOlUl = item.Ancestors().Where(a => a.Name == XhtmlNoNamespace.ol || a.Name == XhtmlNoNamespace.ul).LastOrDefault();
+                XElement? parentOlUl = item.Ancestors().Where(a => a.Name == XhtmlNoNamespace.ol || a.Name == XhtmlNoNamespace.ul).LastOrDefault();
                 int numIdToUse;
                 if (parentOlUl != null)
-                    numIdToUse = parentOlUl.Annotation<NumberedItemAnnotation>().numId;
+                    // DescendantsAndSelf() visits ancestors before their descendants, so any
+                    // parent ol/ul has already been annotated by an earlier iteration of this
+                    // same loop.
+                    numIdToUse = parentOlUl.Annotation<NumberedItemAnnotation>()!.numId;
                 else
                     numIdToUse = numId++;
-                string lst = CssApplier.GetComputedPropertyValue(null, item, "list-style-type", null).ToString();
+                // GetComputedPropertyValue's settings parameter is only dereferenced by a
+                // property's ComputedValue delegate; list-style-type's is null (see
+                // PropertyInfoList), so passing no settings here is safe.
+                string lst = CssApplier.GetComputedPropertyValue(null, item, "list-style-type", null!).ToString();
                 item.AddAnnotation(new NumberedItemAnnotation
                 {
                     numId = numIdToUse,
@@ -323,13 +329,13 @@ namespace Docxodus.HtmlToWml
 
             foreach (var d in body.Descendants())
                 d.Attributes().Where(a => a.Name.Namespace == PtOpenXml.pt).Remove();
-            xDoc.Root.Add(body);
-            wDoc.MainDocumentPart.PutXDocument(xDoc);
+            xDoc.Root!.Add(body);
+            wDoc.MainDocumentPart!.PutXDocument(xDoc);
         }
 
         private static object TransformWhiteSpaceInPreCodeTtKbdSamp(XNode node, bool inPre, bool inOther)
         {
-            XElement element = node as XElement;
+            XElement? element = node as XElement;
             if (element != null)
             {
                 if (element.Name == XhtmlNoNamespace.pre)
@@ -351,7 +357,7 @@ namespace Docxodus.HtmlToWml
                     element.Attributes(),
                     element.Nodes().Select(n => TransformWhiteSpaceInPreCodeTtKbdSamp(n, false, false)));
             }
-            XText xt = node as XText;
+            XText? xt = node as XText;
             if (xt != null && inPre)
             {
                 var val = xt.Value.TrimStart('\r', '\n').TrimEnd('\r', '\n');
@@ -540,7 +546,7 @@ namespace Docxodus.HtmlToWml
 
         private static object TransformAndOrderElements(XNode node)
         {
-            XElement element = node as XElement;
+            XElement? element = node as XElement;
             if (element != null)
             {
                 if (element.Name == W.pPr)
@@ -640,11 +646,11 @@ namespace Docxodus.HtmlToWml
                 .ToList();
             foreach (XElement run in runsWithWidth)
             {
-                XElement p = run.Ancestors(W.p).FirstOrDefault();
-                XElement pPr = p != null ? p.Element(W.pPr) : null;
-                XElement rPr = run.Element(W.rPr);
-                XElement rFonts = rPr != null ? rPr.Element(W.rFonts) : null;
-                string str = run.Descendants(W.t).Select(t => (string) t).StringConcatenate();
+                XElement? p = run.Ancestors(W.p).FirstOrDefault();
+                XElement? pPr = p != null ? p.Element(W.pPr) : null;
+                XElement? rPr = run.Element(W.rPr);
+                XElement? rFonts = rPr != null ? rPr.Element(W.rFonts) : null;
+                string str = run.Descendants(W.t).Select(t => t.Value).StringConcatenate();
                 if ((pPr == null) || (rPr == null) || (rFonts == null) || (str == "")) continue;
 
                 AdjustFontAttributes(wDoc, run, pPr, rPr);
@@ -654,31 +660,31 @@ namespace Docxodus.HtmlToWml
                     charToExamine = str[0];
 
                 FontType ft = DetermineFontTypeFromCharacter(charToExamine, csa);
-                string fontType = null;
-                string languageType = null;
+                string? fontType = null;
+                string? languageType = null;
                 switch (ft)
                 {
                     case FontType.Ascii:
-                        fontType = (string) rFonts.Attribute(W.ascii);
+                        fontType = (string?)rFonts.Attribute(W.ascii);
                         languageType = "western";
                         break;
                     case FontType.HAnsi:
-                        fontType = (string) rFonts.Attribute(W.hAnsi);
+                        fontType = (string?)rFonts.Attribute(W.hAnsi);
                         languageType = "western";
                         break;
                     case FontType.EastAsia:
-                        fontType = (string) rFonts.Attribute(W.eastAsia);
+                        fontType = (string?)rFonts.Attribute(W.eastAsia);
                         languageType = "eastAsia";
                         break;
                     case FontType.CS:
-                        fontType = (string) rFonts.Attribute(W.cs);
+                        fontType = (string?)rFonts.Attribute(W.cs);
                         languageType = "bidi";
                         break;
                 }
 
                 if (fontType != null)
                 {
-                    XAttribute fontNameAttribute = run.Attribute(PtOpenXml.FontName);
+                    XAttribute? fontNameAttribute = run.Attribute(PtOpenXml.FontName);
                     if (fontNameAttribute == null)
                         run.Add(new XAttribute(PtOpenXml.FontName, fontType));
                     else
@@ -687,7 +693,7 @@ namespace Docxodus.HtmlToWml
 
                 if (languageType != null)
                 {
-                    XAttribute languageTypeAttribute = run.Attribute(PtOpenXml.LanguageType);
+                    XAttribute? languageTypeAttribute = run.Attribute(PtOpenXml.LanguageType);
                     if (languageTypeAttribute == null)
                     {
                         run.Add(new XAttribute(PtOpenXml.LanguageType, languageType));
@@ -709,8 +715,9 @@ namespace Docxodus.HtmlToWml
                 if (nbSpWidth == 0)
                     continue;
 
-                // get HtmlToWmlCssWidth attribute
-                var cssWidth = (string) run.Attribute(PtOpenXml.HtmlToWmlCssWidth);
+                // get HtmlToWmlCssWidth attribute -- runsWithWidth was filtered above to only
+                // runs that have this attribute, so it is always present here.
+                var cssWidth = (string)run.Attribute(PtOpenXml.HtmlToWmlCssWidth)!;
                 if (!cssWidth.EndsWith("pt")) continue;
 
                 cssWidth = cssWidth.Substring(0, cssWidth.Length - 2);
@@ -727,15 +734,15 @@ namespace Docxodus.HtmlToWml
 
         private static void NormalizeMainDocumentPart(WordprocessingDocument wDoc)
         {
-            XDocument mainXDoc = wDoc.MainDocumentPart.GetXDocument();
-            XElement newRoot = (XElement)NormalizeTransform(mainXDoc.Root);
-            mainXDoc.Root.ReplaceWith(newRoot);
+            XDocument mainXDoc = wDoc.MainDocumentPart!.GetXDocument();
+            XElement newRoot = (XElement)NormalizeTransform(mainXDoc.Root!);
+            mainXDoc.Root!.ReplaceWith(newRoot);
             wDoc.MainDocumentPart.PutXDocument();
         }
 
         private static object NormalizeTransform(XNode node)
         {
-            XElement element = node as XElement;
+            XElement? element = node as XElement;
             if (element != null)
             {
                 if (element.Name == W.p && element.Elements().Any(c => c.Name == W.p || c.Name == W.tbl))
@@ -770,25 +777,25 @@ namespace Docxodus.HtmlToWml
             SubRun,
         }
 
-        private static object Transform(XNode node, HtmlToWmlConverterSettings settings, WordprocessingDocument wDoc, NextExpected nextExpected, bool preserveWhiteSpace)
+        private static object? Transform(XNode node, HtmlToWmlConverterSettings settings, WordprocessingDocument wDoc, NextExpected nextExpected, bool preserveWhiteSpace)
         {
-            XElement element = node as XElement;
+            XElement? element = node as XElement;
             if (element != null)
             {
                 if (element.Name == XhtmlNoNamespace.a)
                 {
                     string rId = "R" + Guid.NewGuid().ToString().Replace("-", "");
-                    string href = (string)element.Attribute(NoNamespace.href);
+                    string? href = (string?)element.Attribute(NoNamespace.href);
                     if (href != null)
                     {
-                        Uri uri = null;
+                        Uri? uri = null;
                         try
                         {
                             uri = new Uri(href);
                         }
                         catch (UriFormatException)
                         {
-                            XElement rPr = GetRunProperties(element, settings);
+                            XElement? rPr = GetRunProperties(element, settings);
                             XElement run = new XElement(W.r,
                                     rPr,
                                     new XElement(W.t, element.Value));
@@ -797,7 +804,7 @@ namespace Docxodus.HtmlToWml
 
                         if (uri != null)
                         {
-                            wDoc.MainDocumentPart.AddHyperlinkRelationship(uri, true, rId);
+                            wDoc.MainDocumentPart!.AddHyperlinkRelationship(uri, true, rId);
                             if (element.Element(XhtmlNoNamespace.img) != null)
                             {
                                 var imageTransformed = element.Nodes().Select(n => Transform(n, settings, wDoc, nextExpected, preserveWhiteSpace)).OfType<XElement>();
@@ -823,7 +830,7 @@ namespace Docxodus.HtmlToWml
                                 return newImageTransformed;
                             }
 
-                            XElement rPr = GetRunProperties(element, settings);
+                            XElement? rPr = GetRunProperties(element, settings);
                             XElement hyperlink = new XElement(W.hyperlink,
                                 new XAttribute(R.id, rId),
                                 new XElement(W.r,
@@ -875,7 +882,7 @@ namespace Docxodus.HtmlToWml
                 if (element.Name == XhtmlNoNamespace.em)
                     return element.Nodes().Select(n => Transform(n, settings, wDoc, NextExpected.Run, preserveWhiteSpace));
 
-                HeadingInfo hi = HeadingTagMap.FirstOrDefault(htm => htm.Name == element.Name);
+                HeadingInfo? hi = HeadingTagMap.FirstOrDefault(htm => htm.Name == element.Name);
                 if (hi != null)
                 {
                     return GenerateNextExpected(element, settings, wDoc, hi.StyleName, NextExpected.Paragraph, false);
@@ -916,7 +923,7 @@ namespace Docxodus.HtmlToWml
 
                 if (element.Name == XhtmlNoNamespace.img)
                 {
-                    if (element.Parent.Name == XhtmlNoNamespace.body)
+                    if (element.Parent!.Name == XhtmlNoNamespace.body)
                     {
                         XElement para = new XElement(W.p,
                             GetParagraphPropertiesForImage(),
@@ -925,7 +932,7 @@ namespace Docxodus.HtmlToWml
                     }
                     else
                     {
-                        XElement content = TransformImageToWml(element, settings, wDoc);
+                        XElement? content = TransformImageToWml(element, settings, wDoc);
                         return content;
                     }
                 }
@@ -958,7 +965,7 @@ namespace Docxodus.HtmlToWml
                 //        new XElement(W.r,
                 //            new XElement(W.t, element.Value)));
                 //}
-                if (element.Name == XhtmlNoNamespace.span && (string)element.Attribute(XhtmlNoNamespace.id) == "layoutsData")
+                if (element.Name == XhtmlNoNamespace.span && (string?)element.Attribute(XhtmlNoNamespace.id) == "layoutsData")
                     return null;
                 /****************************************** End SharePoint Specific ********************************************/
 
@@ -967,23 +974,23 @@ namespace Docxodus.HtmlToWml
                     var spanReplacement = element.Nodes().Select(n => Transform(n, settings, wDoc, nextExpected, preserveWhiteSpace));
                     var dummyElement = new XElement("dummy", spanReplacement);
                     var firstChild = dummyElement.Elements().FirstOrDefault();
-                    XElement run = null;
+                    XElement? run = null;
                     if (firstChild != null && firstChild.Name == W.r)
                         run = firstChild;
                     if (run != null)
                     {
-                        Dictionary<string, CssExpression> computedProperties = element.Annotation<Dictionary<string, CssExpression>>();
+                        Dictionary<string, CssExpression>? computedProperties = element.Annotation<Dictionary<string, CssExpression>>();
                         if (computedProperties != null && computedProperties.ContainsKey("width"))
                         {
                             string width = computedProperties["width"];
                             if (width != "auto")
                                 run.Add(new XAttribute(PtOpenXml.HtmlToWmlCssWidth, width));
                             var rFontsLocal = run.Element(W.rFonts);
-                            XElement rFontsGlobal = null;
-                            var styleDefPart = wDoc.MainDocumentPart.StyleDefinitionsPart;
+                            XElement? rFontsGlobal = null;
+                            var styleDefPart = wDoc.MainDocumentPart!.StyleDefinitionsPart;
                             if (styleDefPart != null)
                             {
-                                rFontsGlobal = styleDefPart.GetXDocument().Root.Elements(W.docDefaults).Elements(W.rPrDefault).Elements(W.rPr).Elements(W.rFonts).FirstOrDefault();
+                                rFontsGlobal = styleDefPart.GetXDocument().Root!.Elements(W.docDefaults).Elements(W.rPrDefault).Elements(W.rPr).Elements(W.rFonts).FirstOrDefault();
                             }
                             var rFontsNew = FontMerge(rFontsLocal, rFontsGlobal);
                             var rPr = run.Element(W.rPr);
@@ -1102,14 +1109,16 @@ namespace Docxodus.HtmlToWml
                 return element.Nodes().Select(n => Transform(n, settings, wDoc, nextExpected, preserveWhiteSpace));
             }
 
-            if (node.Parent.Name != XhtmlNoNamespace.title)
+            // Every node reaching this fallback branch came from a parent's .Nodes()
+            // enumeration, so it always has a parent.
+            if (node.Parent!.Name != XhtmlNoNamespace.title)
                 return GenerateNextExpected(node, settings, wDoc, null, nextExpected, preserveWhiteSpace);
 
             return null;
 
         }
 
-        private static XElement FontMerge(XElement higherPriorityFont, XElement lowerPriorityFont)
+        private static XElement? FontMerge(XElement? higherPriorityFont, XElement? lowerPriorityFont)
         {
             XElement rFonts;
 
@@ -1117,8 +1126,6 @@ namespace Docxodus.HtmlToWml
                 return lowerPriorityFont;
             if (lowerPriorityFont == null)
                 return higherPriorityFont;
-            if (higherPriorityFont == null && lowerPriorityFont == null)
-                return null;
 
             rFonts = new XElement(W.rFonts,
                 (higherPriorityFont.Attribute(W.ascii) != null || higherPriorityFont.Attribute(W.asciiTheme) != null) ?
@@ -1142,8 +1149,8 @@ namespace Docxodus.HtmlToWml
 
         private static int? CalcWidthOfRunInPixels(XElement r)
         {
-            var fontName = (string)r.Attribute(PtOpenXml.FontName) ??
-               (string)r.Ancestors(W.p).First().Attribute(PtOpenXml.FontName);
+            var fontName = (string?)r.Attribute(PtOpenXml.FontName) ??
+               (string?)r.Ancestors(W.p).First().Attribute(PtOpenXml.FontName);
             if (fontName == null)
                 throw new DocxodusException("Internal Error, should have FontName attribute");
             if (FontFamilyHelper.IsMarkedUnknown(fontName))
@@ -1172,12 +1179,12 @@ namespace Docxodus.HtmlToWml
             // TODO: Revisit.
             var runText = r.DescendantsTrimmed(W.txbxContent)
                 .Where(e => e.Name == W.t)
-                .Select(t => (string)t)
+                .Select(t => t.Value)
                 .StringConcatenate() + " ";
 
             var tabLength = r.DescendantsTrimmed(W.txbxContent)
                 .Where(e => e.Name == W.tab)
-                .Select(t => (decimal)t.Attribute(PtOpenXml.TabWidth))
+                .Select(t => (decimal)t.Attribute(PtOpenXml.TabWidth)!)
                 .Sum();
 
             if (runText.Length == 0 && tabLength == 0)
@@ -1221,24 +1228,26 @@ namespace Docxodus.HtmlToWml
 
         public class CharStyleAttributes
         {
-            public string AsciiFont;
-            public string HAnsiFont;
-            public string EastAsiaFont;
-            public string CsFont;
-            public string Hint;
+            // Genuinely optional: left null when rPr/rFonts/lang is absent from the run, or
+            // when the corresponding attribute isn't set on rFonts/lang.
+            public string? AsciiFont;
+            public string? HAnsiFont;
+            public string? EastAsiaFont;
+            public string? CsFont;
+            public string? Hint;
             public bool Rtl;
 
-            public string LatinLang;
-            public string BidiLang;
-            public string EastAsiaLang;
+            public string? LatinLang;
+            public string? BidiLang;
+            public string? EastAsiaLang;
 
             public Dictionary<XName, bool?> ToggleProperties;
-            public Dictionary<XName, XElement> Properties;
+            public Dictionary<XName, XElement?> Properties;
 
             public CharStyleAttributes(XElement pPr, XElement rPr)
             {
                 ToggleProperties = new Dictionary<XName, bool?>();
-                Properties = new Dictionary<XName, XElement>();
+                Properties = new Dictionary<XName, XElement?>();
 
                 if (rPr == null)
                     return;
@@ -1261,33 +1270,33 @@ namespace Docxodus.HtmlToWml
                 }
                 else
                 {
-                    this.AsciiFont = (string)(rFonts.Attribute(W.ascii));
-                    this.HAnsiFont = (string)(rFonts.Attribute(W.hAnsi));
-                    this.EastAsiaFont = (string)(rFonts.Attribute(W.eastAsia));
-                    this.CsFont = (string)(rFonts.Attribute(W.cs));
-                    this.Hint = (string)(rFonts.Attribute(W.hint));
+                    this.AsciiFont = (string?)(rFonts.Attribute(W.ascii));
+                    this.HAnsiFont = (string?)(rFonts.Attribute(W.hAnsi));
+                    this.EastAsiaFont = (string?)(rFonts.Attribute(W.eastAsia));
+                    this.CsFont = (string?)(rFonts.Attribute(W.cs));
+                    this.Hint = (string?)(rFonts.Attribute(W.hint));
                 }
-                XElement csel = this.Properties[W.cs];
+                XElement? csel = this.Properties[W.cs];
                 bool cs = csel != null && (csel.Attribute(W.val) == null || csel.Attribute(W.val).ToBoolean() == true);
-                XElement rtlel = this.Properties[W.rtl];
+                XElement? rtlel = this.Properties[W.rtl];
                 bool rtl = rtlel != null && (rtlel.Attribute(W.val) == null || rtlel.Attribute(W.val).ToBoolean() == true);
                 var bidi = false;
                 if (pPr != null)
                 {
-                    XElement bidiel = pPr.Element(W.bidi);
+                    XElement? bidiel = pPr.Element(W.bidi);
                     bidi = bidiel != null && (bidiel.Attribute(W.val) == null || bidiel.Attribute(W.val).ToBoolean() == true);
                 }
                 Rtl = cs || rtl || bidi;
                 var lang = rPr.Element(W.lang);
                 if (lang != null)
                 {
-                    LatinLang = (string)lang.Attribute(W.val);
-                    BidiLang = (string)lang.Attribute(W.bidi);
-                    EastAsiaLang = (string)lang.Attribute(W.eastAsia);
+                    LatinLang = (string?)lang.Attribute(W.val);
+                    BidiLang = (string?)lang.Attribute(W.bidi);
+                    EastAsiaLang = (string?)lang.Attribute(W.eastAsia);
                 }
             }
 
-            private static XElement GetXmlProperty(XElement rPr, XName propertyName)
+            private static XElement? GetXmlProperty(XElement rPr, XName propertyName)
             {
                 return rPr.Element(propertyName);
             }
@@ -1968,17 +1977,17 @@ namespace Docxodus.HtmlToWml
 
         private static void AdjustFontAttributes(WordprocessingDocument wDoc, XElement paraOrRun, XElement pPr, XElement rPr)
         {
-            XDocument themeXDoc = null;
-            if (wDoc.MainDocumentPart.ThemePart != null)
+            XDocument? themeXDoc = null;
+            if (wDoc.MainDocumentPart!.ThemePart != null)
                 themeXDoc = wDoc.MainDocumentPart.ThemePart.GetXDocument();
 
-            XElement fontScheme = null;
-            XElement majorFont = null;
-            XElement minorFont = null;
+            XElement? fontScheme = null;
+            XElement? majorFont = null;
+            XElement? minorFont = null;
             if (themeXDoc != null)
             {
-                fontScheme = themeXDoc.Root.Element(A.themeElements).Element(A.fontScheme);
-                majorFont = fontScheme.Element(A.majorFont);
+                fontScheme = themeXDoc.Root!.Element(A.themeElements)!.Element(A.fontScheme);
+                majorFont = fontScheme!.Element(A.majorFont);
                 minorFont = fontScheme.Element(A.minorFont);
             }
             var rFonts = rPr.Element(W.rFonts);
@@ -1986,30 +1995,32 @@ namespace Docxodus.HtmlToWml
             {
                 return;
             }
-            var asciiTheme = (string)rFonts.Attribute(W.asciiTheme);
-            var hAnsiTheme = (string)rFonts.Attribute(W.hAnsiTheme);
-            var eastAsiaTheme = (string)rFonts.Attribute(W.eastAsiaTheme);
-            var cstheme = (string)rFonts.Attribute(W.cstheme);
-            string ascii = null;
-            string hAnsi = null;
-            string eastAsia = null;
-            string cs = null;
+            var asciiTheme = (string?)rFonts.Attribute(W.asciiTheme);
+            var hAnsiTheme = (string?)rFonts.Attribute(W.hAnsiTheme);
+            var eastAsiaTheme = (string?)rFonts.Attribute(W.eastAsiaTheme);
+            var cstheme = (string?)rFonts.Attribute(W.cstheme);
+            string? ascii = null;
+            string? hAnsi = null;
+            string? eastAsia = null;
+            string? cs = null;
 
-            XElement minorLatin = null;
-            string minorLatinTypeface = null;
-            XElement majorLatin = null;
-            string majorLatinTypeface = null;
+            XElement? minorLatin = null;
+            string? minorLatinTypeface = null;
+            XElement? majorLatin = null;
+            string? majorLatinTypeface = null;
 
             if (minorFont != null)
             {
+                // A theme's fontScheme always has a latin child per the OOXML DrawingML
+                // schema.
                 minorLatin = minorFont.Element(A.latin);
-                minorLatinTypeface = (string)minorLatin.Attribute("typeface");
+                minorLatinTypeface = (string?)minorLatin!.Attribute("typeface");
             }
 
             if (majorFont != null)
             {
                 majorLatin = majorFont.Element(A.latin);
-                majorLatinTypeface = (string)majorLatin.Attribute("typeface");
+                majorLatinTypeface = (string?)majorLatin!.Attribute("typeface");
             }
             if (asciiTheme != null)
             {
@@ -2048,11 +2059,13 @@ namespace Docxodus.HtmlToWml
             {
                 if (cstheme.StartsWith("minor") && minorFont != null)
                 {
-                    cs = (string)minorFont.Element(A.cs).Attribute("typeface");
+                    // A theme's fontScheme always has a cs child per the OOXML DrawingML
+                    // schema, so this is always present when minorFont/majorFont are.
+                    cs = (string?)minorFont.Element(A.cs)!.Attribute("typeface");
                 }
                 else if (cstheme.StartsWith("major") && majorFont != null)
                 {
-                    cs = (string)majorFont.Element(A.cs).Attribute("typeface");
+                    cs = (string?)majorFont.Element(A.cs)!.Attribute("typeface");
                 }
             }
 
@@ -2118,24 +2131,24 @@ namespace Docxodus.HtmlToWml
                 charToExamine = str[0];
 
             var ft = DetermineFontTypeFromCharacter(charToExamine, csa);
-            string fontType = null;
-            string languageType = null;
+            string? fontType = null;
+            string? languageType = null;
             switch (ft)
             {
                 case FontType.Ascii:
-                    fontType = (string)rFonts.Attribute(W.ascii);
+                    fontType = (string?)rFonts.Attribute(W.ascii);
                     languageType = "western";
                     break;
                 case FontType.HAnsi:
-                    fontType = (string)rFonts.Attribute(W.hAnsi);
+                    fontType = (string?)rFonts.Attribute(W.hAnsi);
                     languageType = "western";
                     break;
                 case FontType.EastAsia:
-                    fontType = (string)rFonts.Attribute(W.eastAsia);
+                    fontType = (string?)rFonts.Attribute(W.eastAsia);
                     languageType = "eastAsia";
                     break;
                 case FontType.CS:
-                    fontType = (string)rFonts.Attribute(W.cs);
+                    fontType = (string?)rFonts.Attribute(W.cs);
                     languageType = "bidi";
                     break;
             }
@@ -2149,7 +2162,7 @@ namespace Docxodus.HtmlToWml
                 }
                 else
                 {
-                    paraOrRun.Attribute(PtOpenXml.FontName).Value = fontType.ToString();
+                    paraOrRun.Attribute(PtOpenXml.FontName)!.Value = fontType.ToString();
                 }
             }
             if (languageType != null)
@@ -2161,14 +2174,14 @@ namespace Docxodus.HtmlToWml
                 }
                 else
                 {
-                    paraOrRun.Attribute(PtOpenXml.LanguageType).Value = languageType;
+                    paraOrRun.Attribute(PtOpenXml.LanguageType)!.Value = languageType;
                 }
             }
         }
 
         private static decimal? GetFontSize(XElement e)
         {
-            var languageType = (string)e.Attribute(PtOpenXml.LanguageType);
+            var languageType = (string?)e.Attribute(PtOpenXml.LanguageType);
             if (e.Name == W.p)
             {
                 return GetFontSize(languageType, e.Elements(W.pPr).Elements(W.rPr).FirstOrDefault());
@@ -2180,7 +2193,7 @@ namespace Docxodus.HtmlToWml
             return null;
         }
 
-        private static decimal? GetFontSize(string languageType, XElement rPr)
+        private static decimal? GetFontSize(string? languageType, XElement? rPr)
         {
             if (rPr == null) return null;
             return languageType == "bidi"
@@ -2195,12 +2208,12 @@ namespace Docxodus.HtmlToWml
             return NextRectId++;
         }
 
-        private static object GenerateNextExpected(XNode node, HtmlToWmlConverterSettings settings, WordprocessingDocument wDoc,
-            string styleName, NextExpected nextExpected, bool preserveWhiteSpace)
+        private static object? GenerateNextExpected(XNode node, HtmlToWmlConverterSettings settings, WordprocessingDocument wDoc,
+            string? styleName, NextExpected nextExpected, bool preserveWhiteSpace)
         {
             if (nextExpected == NextExpected.Paragraph)
             {
-                XElement element = node as XElement;
+                XElement? element = node as XElement;
                 if (element != null)
                 {
                     return new XElement(W.p,
@@ -2209,13 +2222,13 @@ namespace Docxodus.HtmlToWml
                 }
                 else
                 {
-                    XText xTextNode = node as XText;
+                    XText? xTextNode = node as XText;
                     if (xTextNode != null)
                     {
                         string textNodeString = GetDisplayText(xTextNode, preserveWhiteSpace);
                         XElement p;
                         p = new XElement(W.p,
-                            GetParagraphProperties(node.Parent, null, settings),
+                            GetParagraphProperties(node.Parent!, null, settings),
                             new XElement(W.r,
                                 GetRunProperties((XText)node, settings),
                                 new XElement(W.t,
@@ -2228,7 +2241,7 @@ namespace Docxodus.HtmlToWml
             }
             else
             {
-                XElement element = node as XElement;
+                XElement? element = node as XElement;
                 if (element != null)
                 {
                     return element.Nodes().Select(n => Transform(n, settings, wDoc, nextExpected, preserveWhiteSpace));
@@ -2236,7 +2249,7 @@ namespace Docxodus.HtmlToWml
                 else
                 {
                     string textNodeString = GetDisplayText((XText)node, preserveWhiteSpace);
-                    XElement rPr = GetRunProperties((XText)node, settings);
+                    XElement? rPr = GetRunProperties((XText)node, settings);
                     XElement r = new XElement(W.r,
                         rPr,
                         new XElement(W.t,
@@ -2247,10 +2260,12 @@ namespace Docxodus.HtmlToWml
             }
         }
 
-        private static XElement TransformImageToWml(XElement element, HtmlToWmlConverterSettings settings, WordprocessingDocument wDoc)
+        private static XElement? TransformImageToWml(XElement element, HtmlToWmlConverterSettings settings, WordprocessingDocument wDoc)
         {
-            string srcAttribute = (string)element.Attribute(XhtmlNoNamespace.src);
-            byte[] ba = null;
+            // An <img> lacking a src attribute is malformed input; preserve the pre-existing
+            // throw-on-malformed-input behavior rather than silently tolerating it.
+            string srcAttribute = (string)element.Attribute(XhtmlNoNamespace.src)!;
+            byte[]? ba = null;
             int imageWidth = 0;
             int imageHeight = 0;
 
@@ -2312,14 +2327,14 @@ namespace Docxodus.HtmlToWml
             }
 #endif
 
-            MainDocumentPart mdp = wDoc.MainDocumentPart;
+            MainDocumentPart mdp = wDoc.MainDocumentPart!;
             string rId = "R" + Guid.NewGuid().ToString().Replace("-", "");
             PartTypeInfo ipt = ImagePartType.Png;
             ImagePart newPart = mdp.AddImagePart(ipt, rId);
             using (Stream s = newPart.GetStream(FileMode.Create, FileAccess.ReadWrite))
                 s.Write(ba, 0, ba.GetUpperBound(0) + 1);
 
-            PictureId pid = wDoc.Annotation<PictureId>();
+            PictureId? pid = wDoc.Annotation<PictureId>();
             if (pid == null)
             {
                 pid = new PictureId
@@ -2333,7 +2348,9 @@ namespace Docxodus.HtmlToWml
 
             string pictureDescription = "Picture " + pictureId.ToString();
 
-            string floatValue = element.GetProp("float").ToString();
+            // CSS shorthand/normalization always expands a float value onto styled elements
+            // reaching this point in the pipeline.
+            string floatValue = element.GetProp("float")!.ToString();
             if (floatValue == "none")
             {
                 XElement run = new XElement(W.r,
@@ -2376,34 +2393,37 @@ namespace Docxodus.HtmlToWml
             Emu minDistFromEdge = (long)(0.125 * Emu.s_EmusPerInch);
             long relHeight = 251658240;  // z-order
 
-            CssExpression marginTopProp = element.GetProp("margin-top");
-            CssExpression marginLeftProp = element.GetProp("margin-left");
-            CssExpression marginBottomProp = element.GetProp("margin-bottom");
-            CssExpression marginRightProp = element.GetProp("margin-right");
+            // IsNotAuto/IsAuto tolerate being called on a null CssExpression (they check
+            // "this != null" internally), so a `!` here doesn't change runtime behavior --
+            // it only satisfies the compiler, which can't see that internal check.
+            CssExpression? marginTopProp = element.GetProp("margin-top");
+            CssExpression? marginLeftProp = element.GetProp("margin-left");
+            CssExpression? marginBottomProp = element.GetProp("margin-bottom");
+            CssExpression? marginRightProp = element.GetProp("margin-right");
 
             Emu marginTopInEmus = 0;
             Emu marginBottomInEmus = 0;
             Emu marginLeftInEmus = 0;
             Emu marginRightInEmus = 0;
 
-            if (marginTopProp.IsNotAuto)
+            if (marginTopProp!.IsNotAuto)
                 marginTopInEmus = (Emu)marginTopProp;
 
-            if (marginBottomProp.IsNotAuto)
+            if (marginBottomProp!.IsNotAuto)
                 marginBottomInEmus = (Emu)marginBottomProp;
 
-            if (marginLeftProp.IsNotAuto)
+            if (marginLeftProp!.IsNotAuto)
                 marginLeftInEmus = (Emu)marginLeftProp;
 
-            if (marginRightProp.IsNotAuto)
+            if (marginRightProp!.IsNotAuto)
                 marginRightInEmus = (Emu)marginRightProp;
 
             Emu relativeFromColumn = 0;
             if (floatValue == "left")
             {
                 relativeFromColumn = marginLeftInEmus;
-                CssExpression parentMarginLeft = element.Parent.GetProp("margin-left");
-                if (parentMarginLeft.IsNotAuto)
+                CssExpression? parentMarginLeft = element.Parent!.GetProp("margin-left");
+                if (parentMarginLeft!.IsNotAuto)
                     relativeFromColumn += (long)(Emu)parentMarginLeft;
                 marginRightInEmus = Math.Max(marginRightInEmus, minDistFromEdge);
             }
@@ -2414,15 +2434,15 @@ namespace Docxodus.HtmlToWml
                 relativeFromColumn = printWidth - sl.m_Width;
                 if (marginRightProp.IsNotAuto)
                     relativeFromColumn -= (long)(Emu)marginRightInEmus;
-                CssExpression parentMarginRight = element.Parent.GetProp("margin-right");
-                if (parentMarginRight.IsNotAuto)
+                CssExpression? parentMarginRight = element.Parent!.GetProp("margin-right");
+                if (parentMarginRight!.IsNotAuto)
                     relativeFromColumn -= (long)(Emu)parentMarginRight;
                 marginLeftInEmus = Math.Max(marginLeftInEmus, minDistFromEdge);
             }
 
             Emu relativeFromParagraph = marginTopInEmus;
-            CssExpression parentMarginTop = element.Parent.GetProp("margin-top");
-            if (parentMarginTop.IsNotAuto)
+            CssExpression? parentMarginTop = element.Parent!.GetProp("margin-top");
+            if (parentMarginTop!.IsNotAuto)
                 relativeFromParagraph += (long)(Emu)parentMarginTop;
 
             XElement anchor = new XElement(WP.anchor,
@@ -2540,7 +2560,7 @@ namespace Docxodus.HtmlToWml
           </wp:anchor>
 #endif
 
-        private static XElement GetParagraphPropertiesForImage()
+        private static XElement? GetParagraphPropertiesForImage()
         {
             return null;
         }
@@ -2560,9 +2580,9 @@ namespace Docxodus.HtmlToWml
             Emu cx = (long)((double)(imageWidth / hres) * (double)Emu.s_EmusPerInch);
             Emu cy = (long)((double)(imageHeight / vres) * (double)Emu.s_EmusPerInch);
 
-            CssExpression width = img.GetProp("width");
-            CssExpression height = img.GetProp("height");
-            if (width.IsNotAuto && height.IsAuto)
+            CssExpression? width = img.GetProp("width");
+            CssExpression? height = img.GetProp("height");
+            if (width!.IsNotAuto && height!.IsAuto)
             {
                 Emu widthInEmus = (Emu)width;
                 double percentChange = (float)widthInEmus / (float)cx;
@@ -2570,7 +2590,7 @@ namespace Docxodus.HtmlToWml
                 cy = (long)(cy * percentChange);
                 return new SizeEmu(cx, cy);
             }
-            if (width.IsAuto && height.IsNotAuto)
+            if (width.IsAuto && height!.IsNotAuto)
             {
                 Emu heightInEmus = (Emu)height;
                 double percentChange = (float)heightInEmus / (float)cy;
@@ -2578,7 +2598,7 @@ namespace Docxodus.HtmlToWml
                 cx = (long)(cx * percentChange);
                 return new SizeEmu(cx, cy);
             }
-            if (width.IsNotAuto && height.IsNotAuto)
+            if (width.IsNotAuto && height!.IsNotAuto)
             {
                 return new SizeEmu((Emu)width, (Emu)height);
             }
@@ -2607,7 +2627,7 @@ namespace Docxodus.HtmlToWml
             return new XElement(WP.docPr,
                 new XAttribute(NoNamespace.id, pictureId),
                 new XAttribute(NoNamespace.name, pictureDescription),
-                new XAttribute(NoNamespace.descr, (string)element.Attribute(NoNamespace.src)));
+                new XAttribute(NoNamespace.descr, (string)element.Attribute(NoNamespace.src)!));
         }
 
         private static XElement GetCNvGraphicFramePr()
@@ -2631,7 +2651,7 @@ namespace Docxodus.HtmlToWml
                             new XElement(Pic.cNvPr,
                                 new XAttribute(NoNamespace.id, pictureId),
                                 new XAttribute(NoNamespace.name, pictureDescription),
-                                new XAttribute(NoNamespace.descr, (string)element.Attribute(NoNamespace.src))),
+                                new XAttribute(NoNamespace.descr, (string)element.Attribute(NoNamespace.src)!)),
                             new XElement(Pic.cNvPicPr,
                                 new XElement(A.picLocks,
                                     new XAttribute(NoNamespace.noChangeAspect, 1),
@@ -2699,17 +2719,17 @@ namespace Docxodus.HtmlToWml
               </a:graphicData>
             </a:graphic>
 #endif
-        private static XElement GetParagraphProperties(XElement blockLevelElement, string styleName, HtmlToWmlConverterSettings settings)
+        private static XElement GetParagraphProperties(XElement blockLevelElement, string? styleName, HtmlToWmlConverterSettings settings)
         {
-            XElement paragraphMarkRunProperties = GetRunProperties(blockLevelElement, settings);
-            XElement backgroundProperty = GetBackgroundProperty(blockLevelElement);
-            XElement[] spacingProperty = GetSpacingProperties(blockLevelElement, settings); // spacing, ind, contextualSpacing
-            XElement jc = GetJustification(blockLevelElement, settings);
-            XElement pStyle = styleName != null ? new XElement(W.pStyle, new XAttribute(W.val, styleName)) : null;
-            XElement numPr = GetNumberingProperties(blockLevelElement, settings);
-            XElement pBdr = GetBlockContentBorders(blockLevelElement, W.pBdr, true);
+            XElement? paragraphMarkRunProperties = GetRunProperties(blockLevelElement, settings);
+            XElement? backgroundProperty = GetBackgroundProperty(blockLevelElement);
+            XElement?[] spacingProperty = GetSpacingProperties(blockLevelElement, settings); // spacing, ind, contextualSpacing
+            XElement? jc = GetJustification(blockLevelElement, settings);
+            XElement? pStyle = styleName != null ? new XElement(W.pStyle, new XAttribute(W.val, styleName)) : null;
+            XElement? numPr = GetNumberingProperties(blockLevelElement, settings);
+            XElement? pBdr = GetBlockContentBorders(blockLevelElement, W.pBdr, true);
 
-            XElement bidi = null;
+            XElement? bidi = null;
             string direction = GetDirection(blockLevelElement);
             if (direction == "rtl")
                 bidi = new XElement(W.bidi);
@@ -2733,15 +2753,15 @@ namespace Docxodus.HtmlToWml
         // this could be possible.  I am pretty sure that this is not worth the effort.
 
         // Returns the spacing, ind, and contextualSpacing elements
-        private static XElement[] GetSpacingProperties(XElement paragraph, HtmlToWmlConverterSettings settings)
+        private static XElement?[] GetSpacingProperties(XElement paragraph, HtmlToWmlConverterSettings settings)
         {
-            CssExpression marginLeftProperty = paragraph.GetProp("margin-left");
-            CssExpression marginRightProperty = paragraph.GetProp("margin-right");
-            CssExpression marginTopProperty = paragraph.GetProp("margin-top");
-            CssExpression marginBottomProperty = paragraph.GetProp("margin-bottom");
-            CssExpression lineHeightProperty = paragraph.GetProp("line-height");
-            CssExpression leftPaddingProperty = paragraph.GetProp("padding-left");
-            CssExpression rightPaddingProperty = paragraph.GetProp("padding-right");
+            CssExpression? marginLeftProperty = paragraph.GetProp("margin-left");
+            CssExpression? marginRightProperty = paragraph.GetProp("margin-right");
+            CssExpression? marginTopProperty = paragraph.GetProp("margin-top");
+            CssExpression? marginBottomProperty = paragraph.GetProp("margin-bottom");
+            CssExpression? lineHeightProperty = paragraph.GetProp("line-height");
+            CssExpression? leftPaddingProperty = paragraph.GetProp("padding-left");
+            CssExpression? rightPaddingProperty = paragraph.GetProp("padding-right");
 
             /*****************************************************************************************/
             // leftIndent, rightIndent, firstLine
@@ -2768,12 +2788,11 @@ namespace Docxodus.HtmlToWml
                 leftIndent += 180;
                 rightIndent += 180;
             }
-            XElement listElement = null;
-            NumberedItemAnnotation numberedItemAnnotation = null;
-            listElement = paragraph.Ancestors().FirstOrDefault(a => a.Name == XhtmlNoNamespace.ol || a.Name == XhtmlNoNamespace.ul);
+            XElement? listElement = paragraph.Ancestors().FirstOrDefault(a => a.Name == XhtmlNoNamespace.ol || a.Name == XhtmlNoNamespace.ul);
             if (listElement != null)
             {
-                numberedItemAnnotation = listElement.Annotation<NumberedItemAnnotation>();
+                // AnnotateOlUl runs before Transform and annotates every ol/ul it visits.
+                NumberedItemAnnotation numberedItemAnnotation = listElement.Annotation<NumberedItemAnnotation>()!;
                 leftIndent += 600 * (numberedItemAnnotation.ilvl + 1);
             }
 
@@ -2786,14 +2805,14 @@ namespace Docxodus.HtmlToWml
                 if (marginRightProperty != null && marginRightProperty.IsNotAuto && marginRightProperty.IsNotNormal)
                     rightIndent += (Twip)marginRightProperty;
             }
-            CssExpression textIndentProperty = paragraph.GetProp("text-indent");
+            CssExpression? textIndentProperty = paragraph.GetProp("text-indent");
             if (textIndentProperty != null)
             {
                 Twip twips = (Twip)textIndentProperty;
                 firstLine = twips;
             }
 
-            XElement ind = null;
+            XElement? ind = null;
             if (leftIndent > 0 || rightIndent > 0 || firstLine != 0)
             {
                 if (firstLine < 0)
@@ -2813,27 +2832,28 @@ namespace Docxodus.HtmlToWml
 
             long line = 240;
             string lineRule = "auto";
-            string beforeAutospacing = null;
-            string afterAutospacing = null;
+            string? beforeAutospacing = null;
+            string? afterAutospacing = null;
             long? before = null;
             long? after = null;
 
             if (paragraph.Name == XhtmlNoNamespace.td || paragraph.Name == XhtmlNoNamespace.th || paragraph.Name == XhtmlNoNamespace.caption)
             {
-                line = (long)settings.DefaultSpacingElementForParagraphsInTables.Attribute(W.line);
-                lineRule = (string)settings.DefaultSpacingElementForParagraphsInTables.Attribute(W.lineRule);
-                before = (long?)settings.DefaultSpacingElementForParagraphsInTables.Attribute(W.before);
-                beforeAutospacing = (string)settings.DefaultSpacingElementForParagraphsInTables.Attribute(W.beforeAutospacing);
-                after = (long?)settings.DefaultSpacingElementForParagraphsInTables.Attribute(W.after);
-                afterAutospacing = (string)settings.DefaultSpacingElementForParagraphsInTables.Attribute(W.afterAutospacing);
+                // GetDefaultSettings() unconditionally sets all six spacing attributes below.
+                line = (long)settings.DefaultSpacingElementForParagraphsInTables!.Attribute(W.line)!;
+                lineRule = (string)settings.DefaultSpacingElementForParagraphsInTables!.Attribute(W.lineRule)!;
+                before = (long?)settings.DefaultSpacingElementForParagraphsInTables!.Attribute(W.before);
+                beforeAutospacing = (string?)settings.DefaultSpacingElementForParagraphsInTables!.Attribute(W.beforeAutospacing);
+                after = (long?)settings.DefaultSpacingElementForParagraphsInTables!.Attribute(W.after);
+                afterAutospacing = (string?)settings.DefaultSpacingElementForParagraphsInTables!.Attribute(W.afterAutospacing);
             }
 
             // todo should check based on display property
             bool numItem = paragraph.Name == XhtmlNoNamespace.li;
 
-            if (numItem && marginTopProperty.IsAuto)
+            if (numItem && marginTopProperty!.IsAuto)
                 beforeAutospacing = "1";
-            if (numItem && marginBottomProperty.IsAuto)
+            if (numItem && marginBottomProperty!.IsAuto)
                 afterAutospacing = "1";
             if (marginTopProperty != null && marginTopProperty.IsNotAuto)
             {
@@ -2863,49 +2883,53 @@ namespace Docxodus.HtmlToWml
             /*****************************************************************************************/
             // contextualSpacing
 
-            XElement contextualSpacing = null;
+            XElement? contextualSpacing = null;
             if (paragraph.Name == XhtmlNoNamespace.li)
             {
-                NumberedItemAnnotation thisNumberedItemAnnotation = null;
-                XElement listElement2 = paragraph.Ancestors().FirstOrDefault(a => a.Name == XhtmlNoNamespace.ol || a.Name == XhtmlNoNamespace.ul);
+                NumberedItemAnnotation? thisNumberedItemAnnotation = null;
+                XElement? listElement2 = paragraph.Ancestors().FirstOrDefault(a => a.Name == XhtmlNoNamespace.ol || a.Name == XhtmlNoNamespace.ul);
                 if (listElement2 != null)
                 {
-                    thisNumberedItemAnnotation = listElement2.Annotation<NumberedItemAnnotation>();
-                    XElement next = paragraph.ElementsAfterSelf().FirstOrDefault();
+                    // AnnotateOlUl runs before Transform and annotates every ol/ul it visits.
+                    thisNumberedItemAnnotation = listElement2.Annotation<NumberedItemAnnotation>()!;
+                    XElement? next = paragraph.ElementsAfterSelf().FirstOrDefault();
                     if (next != null && next.Name == XhtmlNoNamespace.li)
                     {
-                        XElement nextListElement = next.Ancestors().FirstOrDefault(a => a.Name == XhtmlNoNamespace.ol || a.Name == XhtmlNoNamespace.ul);
-                        NumberedItemAnnotation nextNumberedItemAnnotation = nextListElement.Annotation<NumberedItemAnnotation>();
+                        XElement? nextListElement = next.Ancestors().FirstOrDefault(a => a.Name == XhtmlNoNamespace.ol || a.Name == XhtmlNoNamespace.ul);
+                        NumberedItemAnnotation? nextNumberedItemAnnotation = nextListElement?.Annotation<NumberedItemAnnotation>();
                         if (nextNumberedItemAnnotation != null && thisNumberedItemAnnotation.numId == nextNumberedItemAnnotation.numId)
                             contextualSpacing = new XElement(W.contextualSpacing);
                     }
                 }
             }
 
-            return new XElement[] { spacing, ind, contextualSpacing };
+            return new XElement?[] { spacing, ind, contextualSpacing };
         }
 
-        private static XElement GetRunProperties(XText textNode, HtmlToWmlConverterSettings settings)
+        private static XElement? GetRunProperties(XText textNode, HtmlToWmlConverterSettings settings)
         {
-            XElement parent = textNode.Parent;
-            XElement rPr = GetRunProperties(parent, settings);
+            XElement? parent = textNode.Parent;
+            XElement? rPr = GetRunProperties(parent!, settings);
             return rPr;
         }
 
-        private static XElement GetRunProperties(XElement element, HtmlToWmlConverterSettings settings)
+        private static XElement? GetRunProperties(XElement element, HtmlToWmlConverterSettings settings)
         {
-            CssExpression colorProperty = element.GetProp("color");
-            CssExpression fontFamilyProperty = element.GetProp("font-family");
-            CssExpression fontSizeProperty = element.GetProp("font-size");
-            CssExpression textDecorationProperty = element.GetProp("text-decoration");
-            CssExpression fontStyleProperty = element.GetProp("font-style");
-            CssExpression fontWeightProperty = element.GetProp("font-weight");
-            CssExpression backgroundColorProperty = element.GetProp("background-color");
-            CssExpression letterSpacingProperty = element.GetProp("letter-spacing");
-            CssExpression directionProp = element.GetProp("direction");
+            // CSS shorthand/normalization always expands these onto styled elements reaching
+            // this point in the pipeline, except font-family and font-size which the helpers
+            // below already tolerate being absent.
+            CssExpression colorProperty = element.GetProp("color")!;
+            CssExpression? fontFamilyProperty = element.GetProp("font-family");
+            CssExpression? fontSizeProperty = element.GetProp("font-size");
+            CssExpression textDecorationProperty = element.GetProp("text-decoration")!;
+            CssExpression fontStyleProperty = element.GetProp("font-style")!;
+            CssExpression fontWeightProperty = element.GetProp("font-weight")!;
+            CssExpression backgroundColorProperty = element.GetProp("background-color")!;
+            CssExpression letterSpacingProperty = element.GetProp("letter-spacing")!;
+            CssExpression directionProp = element.GetProp("direction")!;
 
             string colorPropertyString = colorProperty.ToString();
-            string fontFamilyString = GetUsedFontFromFontFamilyProperty(fontFamilyProperty);
+            string? fontFamilyString = GetUsedFontFromFontFamilyProperty(fontFamilyProperty);
             TPoint? fontSizeTPoint = GetUsedSizeFromFontSizeProperty(fontSizeProperty);
             string textDecorationString = textDecorationProperty.ToString();
             string fontStyleString = fontStyleProperty.ToString();
@@ -2923,25 +2947,25 @@ namespace Docxodus.HtmlToWml
             bool uAncestor = element.AncestorsAndSelf(XhtmlNoNamespace.u).Any();
             bool sAncestor = element.AncestorsAndSelf(XhtmlNoNamespace.s).Any();
 
-            XAttribute dirAttribute = element.Attribute(XhtmlNoNamespace.dir);
+            XAttribute? dirAttribute = element.Attribute(XhtmlNoNamespace.dir);
             string dirAttributeString = "";
             if (dirAttribute != null)
                 dirAttributeString = dirAttribute.Value.ToLower();
 
-            XElement shd = null;
+            XElement? shd = null;
             if (backgroundColorString != "transparent")
                 shd = new XElement(W.shd, new XAttribute(W.val, "clear"),
                     new XAttribute(W.color, "auto"),
                     new XAttribute(W.fill, backgroundColorString));
 
-            XElement subSuper = null;
+            XElement? subSuper = null;
             if (subAncestor)
                 subSuper = new XElement(W.vertAlign, new XAttribute(W.val, "subscript"));
             else
                 if (supAncestor)
                     subSuper = new XElement(W.vertAlign, new XAttribute(W.val, "superscript"));
 
-            XElement rFonts = null;
+            XElement? rFonts = null;
             if (fontFamilyString != null)
             {
                 rFonts = new XElement(W.rFonts,
@@ -2951,52 +2975,52 @@ namespace Docxodus.HtmlToWml
             }
 
             // todo I think this puts a color on every element.
-            XElement color = colorPropertyString != null ?
+            XElement? color = colorPropertyString != null ?
                 new XElement(W.color, new XAttribute(W.val, colorPropertyString)) : null;
 
-            XElement sz = null;
-            XElement szCs = null;
+            XElement? sz = null;
+            XElement? szCs = null;
             if (fontSizeTPoint != null)
             {
                 sz = new XElement(W.sz, new XAttribute(W.val, (int)((double)fontSizeTPoint * 2)));
                 szCs = new XElement(W.szCs, new XAttribute(W.val, (int)((double)fontSizeTPoint * 2)));
             }
 
-            XElement strike = null;
+            XElement? strike = null;
             if (textDecorationString == "line-through" || sAncestor)
                 strike = new XElement(W.strike);
 
-            XElement bold = null;
-            XElement boldCs = null;
+            XElement? bold = null;
+            XElement? boldCs = null;
             if (bAncestor || strongAncestor || fontWeightString == "bold" || fontWeightString == "bolder" || fontWeightString == "600" || fontWeightString == "700" || fontWeightString == "800" || fontWeightString == "900")
             {
                 bold = new XElement(W.b);
                 boldCs = new XElement(W.bCs);
             }
 
-            XElement italic = null;
-            XElement italicCs = null;
+            XElement? italic = null;
+            XElement? italicCs = null;
             if (iAncestor || emAncestor || fontStyleString == "italic")
             {
                 italic = new XElement(W.i);
                 italicCs = new XElement(W.iCs);
             }
 
-            XElement underline = null;
+            XElement? underline = null;
             if (uAncestor || textDecorationString == "underline")
                 underline = new XElement(W.u, new XAttribute(W.val, "single"));
 
-            XElement rStyle = null;
+            XElement? rStyle = null;
             if (element.Name == XhtmlNoNamespace.a)
                 rStyle = new XElement(W.rStyle,
                     new XAttribute(W.val, "Hyperlink"));
 
-            XElement spacing = null;
+            XElement? spacing = null;
             if (letterSpacingProperty.IsNotNormal)
                 spacing = new XElement(W.spacing,
                     new XAttribute(W.val, (long)(Twip)letterSpacingProperty));
 
-            XElement rtl = null;
+            XElement? rtl = null;
             if (dirAttributeString == "rtl" || directionString == "rtl")
                 rtl = new XElement(W.rtl);
 
@@ -3029,11 +3053,16 @@ namespace Docxodus.HtmlToWml
         // def and ghi.
         private static string GetDisplayText(XText node, bool preserveWhiteSpace)
         {
-            string textTransform = node.Parent.GetProp("text-transform").ToString();
-            bool isFirst = node.Parent.Name == XhtmlNoNamespace.p && node == node.Parent.FirstNode;
-            bool isLast = node.Parent.Name == XhtmlNoNamespace.p && node == node.Parent.LastNode;
+            // Every XText reaching this method came from a parent's .Nodes() enumeration, so
+            // it always has a parent.
+            XElement parent = node.Parent!;
+            // CSS shorthand/normalization always expands text-transform onto styled elements
+            // reaching this point in the pipeline.
+            string textTransform = parent.GetProp("text-transform")!.ToString();
+            bool isFirst = parent.Name == XhtmlNoNamespace.p && node == parent.FirstNode;
+            bool isLast = parent.Name == XhtmlNoNamespace.p && node == parent.LastNode;
 
-            IEnumerable<IGrouping<bool, char>> groupedCharacters = null;
+            IEnumerable<IGrouping<bool, char>> groupedCharacters;
             if (preserveWhiteSpace)
                 groupedCharacters = node.Value.GroupAdjacent(c => c == '\r' || c == '\n');
             else
@@ -3063,27 +3092,29 @@ namespace Docxodus.HtmlToWml
             return newString;
         }
 
-        private static XElement GetNumberingProperties(XElement paragraph, HtmlToWmlConverterSettings settings)
+        private static XElement? GetNumberingProperties(XElement paragraph, HtmlToWmlConverterSettings settings)
         {
             // Numbering properties ******************************************************
-            NumberedItemAnnotation numberedItemAnnotation = null;
-            XElement listElement = paragraph.Ancestors().FirstOrDefault(a => a.Name == XhtmlNoNamespace.ol || a.Name == XhtmlNoNamespace.ul);
+            // AnnotateOlUl runs before Transform and annotates every ol/ul it visits, and a
+            // paragraph is only <li> when it has one as an ancestor.
+            NumberedItemAnnotation? numberedItemAnnotation = null;
+            XElement? listElement = paragraph.Ancestors().FirstOrDefault(a => a.Name == XhtmlNoNamespace.ol || a.Name == XhtmlNoNamespace.ul);
             if (listElement != null)
             {
                 numberedItemAnnotation = listElement.Annotation<NumberedItemAnnotation>();
             }
-            XElement numPr = null;
+            XElement? numPr = null;
             if (paragraph.Name == XhtmlNoNamespace.li)
                 numPr = new XElement(W.numPr,
-                    new XElement(W.ilvl, new XAttribute(W.val, numberedItemAnnotation.ilvl)),
+                    new XElement(W.ilvl, new XAttribute(W.val, numberedItemAnnotation!.ilvl)),
                     new XElement(W.numId, new XAttribute(W.val, numberedItemAnnotation.numId)));
             return numPr;
         }
 
-        private static XElement GetJustification(XElement blockLevelElement, HtmlToWmlConverterSettings settings)
+        private static XElement? GetJustification(XElement blockLevelElement, HtmlToWmlConverterSettings settings)
         {
             // Justify ******************************************************
-            CssExpression textAlignProperty = blockLevelElement.GetProp("text-align");
+            CssExpression? textAlignProperty = blockLevelElement.GetProp("text-align");
             string textAlign;
             if (blockLevelElement.Name == XhtmlNoNamespace.caption || blockLevelElement.Name == XhtmlNoNamespace.th)
                 textAlign = "center";
@@ -3091,7 +3122,7 @@ namespace Docxodus.HtmlToWml
                 textAlign = "left";
             if (textAlignProperty != null)
                 textAlign = textAlignProperty.ToString();
-            string jc = null;
+            string? jc = null;
             if (textAlign == "center")
                 jc = "center";
             else
@@ -3112,7 +3143,7 @@ namespace Docxodus.HtmlToWml
                 else if (jc == "right")
                     jc = "left";
             }
-            XElement jcElement = null;
+            XElement? jcElement = null;
             if (jc != null)
                 jcElement = new XElement(W.jc, new XAttribute(W.val, jc));
             return jcElement;
@@ -3120,8 +3151,8 @@ namespace Docxodus.HtmlToWml
 
         private class HeadingInfo
         {
-            public XName Name;
-            public string StyleName;
+            required public XName Name;
+            required public string StyleName;
         };
 
         private static HeadingInfo[] HeadingTagMap = new[]
@@ -3139,10 +3170,10 @@ namespace Docxodus.HtmlToWml
         private static string GetDirection(XElement element)
         {
             string retValue = "ltr";
-            string dirString = (string)element.Attribute(XhtmlNoNamespace.dir);
+            string? dirString = (string?)element.Attribute(XhtmlNoNamespace.dir);
             if (dirString != null && dirString.ToLower() == "rtl")
                 retValue = "rtl";
-            CssExpression directionProp = element.GetProp("direction");
+            CssExpression? directionProp = element.GetProp("direction");
             if (directionProp != null)
             {
                 string directionValue = directionProp.ToString();
@@ -3155,7 +3186,7 @@ namespace Docxodus.HtmlToWml
         private static XElement GetTableProperties(XElement element)
         {
 
-            XElement bidiVisual = null;
+            XElement? bidiVisual = null;
             string direction = GetDirection(element);
             if (direction == "rtl")
                 bidiVisual = new XElement(W.bidiVisual);
@@ -3171,7 +3202,7 @@ namespace Docxodus.HtmlToWml
             return tblPr;
         }
 
-        private static XElement GetTableShading(XElement element)
+        private static XElement? GetTableShading(XElement element)
         {
             // todo this is not done.
             // needs to work for W.tbl and W.tc
@@ -3185,7 +3216,9 @@ namespace Docxodus.HtmlToWml
 
         private static XElement GetTableWidth(XElement element)
         {
-            CssExpression width = element.GetProp("width");
+            // CSS shorthand/normalization always expands width onto styled elements
+            // reaching this point in the pipeline.
+            CssExpression width = element.GetProp("width")!;
             if (width.IsAuto)
             {
                 return new XElement(W.tblW,
@@ -3200,7 +3233,7 @@ namespace Docxodus.HtmlToWml
 
         private static XElement GetCellWidth(XElement element)
         {
-            CssExpression width = element.GetProp("width");
+            CssExpression width = element.GetProp("width")!;
             if (width.IsAuto)
             {
                 return new XElement(W.tcW,
@@ -3213,7 +3246,7 @@ namespace Docxodus.HtmlToWml
             return widthElement;
         }
 
-        private static XElement GetBlockContentBorders(XElement element, XName borderXName, bool forParagraph)
+        private static XElement? GetBlockContentBorders(XElement element, XName borderXName, bool forParagraph)
         {
             if ((element.Name == XhtmlNoNamespace.td || element.Name == XhtmlNoNamespace.th || element.Name == XhtmlNoNamespace.caption) && forParagraph)
                 return null;
@@ -3222,7 +3255,7 @@ namespace Docxodus.HtmlToWml
                 new XElement(W.left, GetBorderAttributes(element, "left")),
                 new XElement(W.bottom, GetBorderAttributes(element, "bottom")),
                 new XElement(W.right, GetBorderAttributes(element, "right")));
-            if (borders.Elements().Attributes(W.val).Where(v => (string)v == "none").Count() == 4)
+            if (borders.Elements().Attributes(W.val).Where(v => (string?)v == "none").Count() == 4)
                 return null;
             return borders;
         }
@@ -3241,14 +3274,14 @@ namespace Docxodus.HtmlToWml
             { "outset", "outset" },
         };
 
-        private static List<XAttribute> GetBorderAttributes(XElement element, string whichBorder)
+        private static List<XAttribute?> GetBorderAttributes(XElement element, string whichBorder)
         {
             //if (whichBorder == "right")
             //    Console.WriteLine(1);
-            CssExpression styleProp = element.GetProp(string.Format("border-{0}-style", whichBorder));
-            CssExpression colorProp = element.GetProp(string.Format("border-{0}-color", whichBorder));
-            CssExpression paddingProp = element.GetProp(string.Format("padding-{0}", whichBorder));
-            CssExpression marginProp = element.GetProp(string.Format("margin-{0}", whichBorder));
+            CssExpression? styleProp = element.GetProp(string.Format("border-{0}-style", whichBorder));
+            CssExpression? colorProp = element.GetProp(string.Format("border-{0}-color", whichBorder));
+            CssExpression? paddingProp = element.GetProp(string.Format("padding-{0}", whichBorder));
+            CssExpression? marginProp = element.GetProp(string.Format("margin-{0}", whichBorder));
 
             // The space attribute is equivalent to the margin properties of CSS
             // the ind element of the parent is more or less equivalent to the padding properties of CSS, except that ind takes space
@@ -3257,10 +3290,10 @@ namespace Docxodus.HtmlToWml
             // if there is no border, and yet there is padding, then need to create a thin border so that word will display the background
             // color of the paragraph properly (including padding).
 
-            XAttribute val = null;
-            XAttribute sz = null;
-            XAttribute space = null;
-            XAttribute color = null;
+            XAttribute? val = null;
+            XAttribute sz;
+            XAttribute space;
+            XAttribute? color = null;
 
             if (styleProp != null)
             {
@@ -3305,9 +3338,9 @@ namespace Docxodus.HtmlToWml
                 color = new XAttribute(W.color, colorProp.ToString());
             // no default yet
 
-            if ((string)val == "none" && (double)space != 0d)
+            if ((string?)val == "none" && (double)space != 0d)
             {
-                val.Value = "single";
+                val!.Value = "single";
                 sz.Value = "0";
                 //color.Value = "FF0000";
             }
@@ -3315,7 +3348,7 @@ namespace Docxodus.HtmlToWml
             // sz is in 1/8 of a point
             // space is in 1/20 of a point
 
-            List<XAttribute> attList = new List<XAttribute>()
+            List<XAttribute?> attList = new List<XAttribute?>()
             {
                 val,
                 sz,
@@ -3327,7 +3360,7 @@ namespace Docxodus.HtmlToWml
 
         private static Twip GetBorderSize(XElement element, string whichBorder)
         {
-            CssExpression widthProp = element.GetProp(string.Format("border-{0}-width", whichBorder));
+            CssExpression? widthProp = element.GetProp(string.Format("border-{0}-width", whichBorder));
 
             if (widthProp != null && widthProp.Terms.Count() == 1)
             {
@@ -3359,11 +3392,11 @@ namespace Docxodus.HtmlToWml
 
         private static XElement GetTableGrid(XElement element, HtmlToWmlConverterSettings settings)
         {
-            Twip? pageWidthInTwips = (int?)settings.SectPr.Elements(W.pgSz).Attributes(W._w).FirstOrDefault();
+            Twip? pageWidthInTwips = (int?)settings.SectPr!.Elements(W.pgSz).Attributes(W._w).FirstOrDefault();
             Twip? marginLeft = (int?)settings.SectPr.Elements(W.pgMar).Attributes(W.left).FirstOrDefault();
             Twip? marginRight = (int?)settings.SectPr.Elements(W.pgMar).Attributes(W.right).FirstOrDefault();
-            Twip printable = (long)pageWidthInTwips - (long)marginLeft - (long)marginRight;
-            XElement[][] tableArray = GetTableArray(element);
+            Twip printable = (long)pageWidthInTwips! - (long)marginLeft! - (long)marginRight!;
+            XElement?[][] tableArray = GetTableArray(element);
             int numberColumns = tableArray[0].Length;
             CssExpression[] columnWidths = new CssExpression[numberColumns];
             for (int c = 0; c < numberColumns; c++)
@@ -3373,9 +3406,11 @@ namespace Docxodus.HtmlToWml
                 {
                     if (tableArray[r][c] != null)
                     {
-                        XElement cell = tableArray[r][c];
-                        CssExpression width = cell.GetProp("width");
-                        XAttribute colSpan = cell.Attribute(XhtmlNoNamespace.colspan);
+                        XElement cell = tableArray[r][c]!;
+                        // CSS shorthand/normalization always expands width onto styled
+                        // elements reaching this point in the pipeline.
+                        CssExpression width = cell.GetProp("width")!;
+                        XAttribute? colSpan = cell.Attribute(XhtmlNoNamespace.colspan);
                         if (colSpan == null && columnWidth.ToString() == "auto" && width.ToString() != "auto")
                         {
                             columnWidth = width;
@@ -3412,15 +3447,15 @@ namespace Docxodus.HtmlToWml
             return defaultTwipWidth;
         }
 
-        private static XElement[][] GetTableArray(XElement table)
+        private static XElement?[][] GetTableArray(XElement table)
         {
             List<XElement> rowList = table.DescendantsTrimmed(XhtmlNoNamespace.table).Where(e => e.Name == XhtmlNoNamespace.tr).ToList();
             int numberColumns = rowList.Select(r => r.Elements().Where(e => e.Name == XhtmlNoNamespace.td || e.Name == XhtmlNoNamespace.th).Count()).Max();
-            XElement[][] tableArray = new XElement[rowList.Count()][];
+            XElement?[][] tableArray = new XElement?[rowList.Count()][];
             int rowNumber = 0;
             foreach (var row in rowList)
             {
-                tableArray[rowNumber] = new XElement[numberColumns];
+                tableArray[rowNumber] = new XElement?[numberColumns];
                 int columnNumber = 0;
                 foreach (var cell in row.Elements(XhtmlNoNamespace.td))
                 {
@@ -3437,7 +3472,7 @@ namespace Docxodus.HtmlToWml
             XElement gridSpan = new XElement(W.gridSpan,
                     new XAttribute(W.val, 3));
 
-            XElement tcBorders = GetBlockContentBorders(element, W.tcBorders, false);
+            XElement? tcBorders = GetBlockContentBorders(element, W.tcBorders, false);
             if (tcBorders == null)
                 tcBorders = new XElement(W.tcBorders,
                     new XElement(W.top, new XAttribute(W.val, "nil")),
@@ -3445,12 +3480,12 @@ namespace Docxodus.HtmlToWml
                     new XElement(W.bottom, new XAttribute(W.val, "nil")),
                     new XElement(W.right, new XAttribute(W.val, "nil")));
 
-            XElement shd = GetCellShading(element);
+            XElement? shd = GetCellShading(element);
 
             //XElement hideMark = new XElement(W.hideMark);
-            XElement hideMark = null;
+            XElement? hideMark = null;
 
-            XElement tcMar = GetCellMargins(element);
+            XElement? tcMar = GetCellMargins(element);
 
             XElement vAlign = new XElement(W.vAlign, new XAttribute(W.val, "center"));
 
@@ -3466,25 +3501,25 @@ namespace Docxodus.HtmlToWml
         private static XElement GetCellProperties(XElement element)
         {
             int? colspan = (int?)element.Attribute(XhtmlNoNamespace.colspan);
-            XElement gridSpan = null;
+            XElement? gridSpan = null;
             if (colspan != null)
                 gridSpan = new XElement(W.gridSpan,
                     new XAttribute(W.val, colspan));
 
             XElement tblW = GetCellWidth(element);
 
-            XElement tcBorders = GetBlockContentBorders(element, W.tcBorders, false);
+            XElement? tcBorders = GetBlockContentBorders(element, W.tcBorders, false);
 
-            XElement shd = GetCellShading(element);
+            XElement? shd = GetCellShading(element);
 
             //XElement hideMark = new XElement(W.hideMark);
-            XElement hideMark = null;
+            XElement? hideMark = null;
 
-            XElement tcMar = GetCellMargins(element);
+            XElement? tcMar = GetCellMargins(element);
 
             XElement vAlign = new XElement(W.vAlign, new XAttribute(W.val, "center"));
 
-            XElement vMerge = null;
+            XElement? vMerge = null;
             if (element.Attribute("HtmlToWmlVMergeNoRestart") != null)
                 vMerge = new XElement(W.vMerge);
             else
@@ -3492,8 +3527,8 @@ namespace Docxodus.HtmlToWml
                     vMerge = new XElement(W.vMerge,
                         new XAttribute(W.val, "restart"));
 
-            string vAlignValue = (string)element.Attribute(XhtmlNoNamespace.valign);
-            CssExpression verticalAlignmentProp = element.GetProp("vertical-align");
+            string? vAlignValue = (string?)element.Attribute(XhtmlNoNamespace.valign);
+            CssExpression? verticalAlignmentProp = element.GetProp("vertical-align");
             if (verticalAlignmentProp != null && verticalAlignmentProp.ToString() != "inherit")
                 vAlignValue = verticalAlignmentProp.ToString();
             if (vAlignValue != null)
@@ -3524,14 +3559,14 @@ namespace Docxodus.HtmlToWml
 
             XElement tblW = GetCellWidth(element);
 
-            XElement tcBorders = GetBlockContentBorders(element, W.tcBorders, false);
+            XElement? tcBorders = GetBlockContentBorders(element, W.tcBorders, false);
 
-            XElement shd = GetCellShading(element);
+            XElement? shd = GetCellShading(element);
 
             //XElement hideMark = new XElement(W.hideMark);
-            XElement hideMark = null;
+            XElement? hideMark = null;
 
-            XElement tcMar = GetCellMargins(element);
+            XElement? tcMar = GetCellMargins(element);
 
             XElement vAlign = new XElement(W.vAlign, new XAttribute(W.val, "center"));
 
@@ -3544,10 +3579,10 @@ namespace Docxodus.HtmlToWml
                 hideMark);
         }
 
-        private static XElement GetCellShading(XElement element)
+        private static XElement? GetCellShading(XElement element)
         {
-            CssExpression backgroundColorProp = element.GetProp("background-color");
-            if (backgroundColorProp != null && (string)backgroundColorProp != "transparent")
+            CssExpression? backgroundColorProp = element.GetProp("background-color");
+            if (backgroundColorProp != null && (string?)backgroundColorProp != "transparent")
             {
                 XElement shd = new XElement(W.shd,
                     new XAttribute(W.val, "clear"),
@@ -3558,33 +3593,33 @@ namespace Docxodus.HtmlToWml
             return null;
         }
 
-        private static XElement GetCellMargins(XElement element)
+        private static XElement? GetCellMargins(XElement element)
         {
-            CssExpression topProp = element.GetProp("padding-top");
-            CssExpression leftProp = element.GetProp("padding-left");
-            CssExpression bottomProp = element.GetProp("padding-bottom");
-            CssExpression rightProp = element.GetProp("padding-right");
-            if ((long)topProp == 0 &&
-                (long)leftProp == 0 &&
-                (long)bottomProp == 0 &&
-                (long)rightProp == 0)
+            CssExpression? topProp = element.GetProp("padding-top");
+            CssExpression? leftProp = element.GetProp("padding-left");
+            CssExpression? bottomProp = element.GetProp("padding-bottom");
+            CssExpression? rightProp = element.GetProp("padding-right");
+            if ((long)topProp! == 0 &&
+                (long)leftProp! == 0 &&
+                (long)bottomProp! == 0 &&
+                (long)rightProp! == 0)
                 return null;
-            XElement top = null;
+            XElement? top = null;
             if (topProp != null)
                 top = new XElement(W.top,
                     new XAttribute(W._w, (long)(Twip)topProp),
                     new XAttribute(W.type, "dxa"));
-            XElement left = null;
+            XElement? left = null;
             if (leftProp != null)
                 left = new XElement(W.left,
                     new XAttribute(W._w, (long)(Twip)leftProp),
                     new XAttribute(W.type, "dxa"));
-            XElement bottom = null;
+            XElement? bottom = null;
             if (bottomProp != null)
                 bottom = new XElement(W.bottom,
                     new XAttribute(W._w, (long)(Twip)bottomProp),
                     new XAttribute(W.type, "dxa"));
-            XElement right = null;
+            XElement? right = null;
             if (rightProp != null)
                 right = new XElement(W.right,
                     new XAttribute(W._w, (long)(Twip)rightProp),
@@ -3609,21 +3644,21 @@ namespace Docxodus.HtmlToWml
             </w:tcMar>
 #endif
 
-        private static XElement GetTableCellSpacing(XElement element)
+        private static XElement? GetTableCellSpacing(XElement element)
         {
-            XElement table = element.AncestorsAndSelf(XhtmlNoNamespace.table).FirstOrDefault();
-            XElement tblCellSpacing = null;
+            XElement? table = element.AncestorsAndSelf(XhtmlNoNamespace.table).FirstOrDefault();
+            XElement? tblCellSpacing = null;
             if (table != null)
             {
-                CssExpression borderCollapse = table.GetProp("border-collapse");
-                if (borderCollapse == null || (string)borderCollapse != "collapse")
+                CssExpression? borderCollapse = table.GetProp("border-collapse");
+                if (borderCollapse == null || (string?)borderCollapse != "collapse")
                 {
                     // todo very incomplete
-                    CssExpression borderSpacing = table.GetProp("border-spacing");
-                    CssExpression marginTopProperty = element.GetProp("margin-top");
+                    CssExpression? borderSpacing = table.GetProp("border-spacing");
+                    CssExpression? marginTopProperty = element.GetProp("margin-top");
                     if (marginTopProperty == null)
                         marginTopProperty = new CssExpression { Terms = new List<CssTerm> { new CssTerm { Value = "0", Type = CssTermType.Number, Unit = CssUnit.PT } } };
-                    CssExpression marginBottomProperty = element.GetProp("margin-bottom");
+                    CssExpression? marginBottomProperty = element.GetProp("margin-bottom");
                     if (marginBottomProperty == null)
                         marginBottomProperty = new CssExpression { Terms = new List<CssTerm> { new CssTerm { Value = "0", Type = CssTermType.Number, Unit = CssUnit.PT } } };
                     Twip twips1 = (Twip)marginTopProperty;
@@ -3662,13 +3697,13 @@ namespace Docxodus.HtmlToWml
             return tblCellMar;
         }
 
-        private static XElement GetTableRowProperties(XElement element)
+        private static XElement? GetTableRowProperties(XElement element)
         {
-            XElement trPr = null;
-            XElement table = element.AncestorsAndSelf(XhtmlNoNamespace.table).FirstOrDefault();
+            XElement? trPr = null;
+            XElement? table = element.AncestorsAndSelf(XhtmlNoNamespace.table).FirstOrDefault();
             if (table != null)
             {
-                CssExpression heightProperty = element.GetProp("height");
+                CssExpression? heightProperty = element.GetProp("height");
                 //long? maxCellHeight = element.Elements(Xhtml.td).Aggregate((long?)null,
                 //    (XElement td, long? last) =>
                 //    {
@@ -3684,9 +3719,9 @@ namespace Docxodus.HtmlToWml
                     .Select(td => td.GetProp("height"))
                     .Concat(new[] { heightProperty })
                     .Where(d => d != null)
-                    .Select(e => (long)(Twip)e)
+                    .Select(e => (long)(Twip)e!)
                     .ToList();
-                XElement trHeight = null;
+                XElement? trHeight = null;
                 if (cellHeights.Any())
                 {
                     long max = cellHeights.Max();
@@ -3694,9 +3729,9 @@ namespace Docxodus.HtmlToWml
                         new XAttribute(W.val, max));
                 }
 
-                CssExpression borderCollapseProperty = table.GetProp("border-collapse");
-                XElement borderCollapse = null;
-                if (borderCollapseProperty != null && (string)borderCollapseProperty != "collapse")
+                CssExpression? borderCollapseProperty = table.GetProp("border-collapse");
+                XElement? borderCollapse = null;
+                if (borderCollapseProperty != null && (string?)borderCollapseProperty != "collapse")
                     borderCollapse = GetTableCellSpacing(element);
 
                 trPr = new XElement(W.trPr,
@@ -3708,7 +3743,7 @@ namespace Docxodus.HtmlToWml
             return trPr;
         }
 
-        private static XAttribute GetXmlSpaceAttribute(string value)
+        private static XAttribute? GetXmlSpaceAttribute(string value)
         {
             if (value.StartsWith(" ") || value.EndsWith(" "))
                 return new XAttribute(XNamespace.Xml + "space", "preserve");
@@ -4122,7 +4157,7 @@ namespace Docxodus.HtmlToWml
                 {"wingdings3", "Wingdings 3"},
             };
 
-        private static TPoint? GetUsedSizeFromFontSizeProperty(CssExpression fontSize)
+        private static TPoint? GetUsedSizeFromFontSizeProperty(CssExpression? fontSize)
         {
             if (fontSize == null)
                 return null;
@@ -4141,7 +4176,7 @@ namespace Docxodus.HtmlToWml
             return null;
         }
 
-        private static string GetUsedFontFromFontFamilyProperty(CssExpression fontFamily)
+        private static string? GetUsedFontFromFontFamilyProperty(CssExpression? fontFamily)
         {
             if (fontFamily == null)
                 return null;
@@ -4152,9 +4187,11 @@ namespace Docxodus.HtmlToWml
             return null;
         }
 
-        private static XElement GetBackgroundProperty(XElement element)
+        private static XElement? GetBackgroundProperty(XElement element)
         {
-            CssExpression color = element.GetProp("background-color");
+            // CSS shorthand/normalization always expands background-color onto styled
+            // elements reaching this point in the pipeline.
+            CssExpression color = element.GetProp("background-color")!;
 
             // todo this really should test against default background color
             if (color.ToString() != "transparent")
@@ -4180,13 +4217,13 @@ namespace Docxodus.HtmlToWml
     {
         public static void UpdateFontsPart(WordprocessingDocument wDoc, XElement html, HtmlToWmlConverterSettings settings)
         {
-            XDocument fontXDoc = wDoc.MainDocumentPart.FontTablePart.GetXDocument();
+            XDocument fontXDoc = wDoc.MainDocumentPart!.FontTablePart!.GetXDocument();
 
             PtUtils.AddElementIfMissing(fontXDoc,
                 fontXDoc
-                    .Root
+                    .Root!
                     .Elements(W.style)
-                    .Where(e => (string)e.Attribute(W.type) == "paragraph" && (string)e.Attribute(W.styleId) == "Heading1")
+                    .Where(e => (string?)e.Attribute(W.type) == "paragraph" && (string?)e.Attribute(W.styleId) == "Heading1")
                     .FirstOrDefault(),
 @"<w:font w:name='Verdana' xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'>
   <w:panose1 w:val='020B0604030504040204'/>
@@ -4201,7 +4238,7 @@ namespace Docxodus.HtmlToWml
           w:csb1='00000000'/>
 </w:font>");
 
-            wDoc.MainDocumentPart.FontTablePart.PutXDocument();
+            wDoc.MainDocumentPart!.FontTablePart!.PutXDocument();
         }
     }
 
@@ -4209,23 +4246,24 @@ namespace Docxodus.HtmlToWml
     {
         public static void InitializeNumberingPart(WordprocessingDocument wDoc)
         {
-            NumberingDefinitionsPart numberingPart = wDoc.MainDocumentPart.NumberingDefinitionsPart;
+            NumberingDefinitionsPart? numberingPart = wDoc.MainDocumentPart!.NumberingDefinitionsPart;
             if (numberingPart == null)
             {
                 wDoc.MainDocumentPart.AddNewPart<NumberingDefinitionsPart>();
                 XDocument npXDoc = new XDocument(
                     new XElement(W.numbering,
                         new XAttribute(XNamespace.Xmlns + "w", W.w)));
-                wDoc.MainDocumentPart.NumberingDefinitionsPart.PutXDocument(npXDoc);
+                wDoc.MainDocumentPart.NumberingDefinitionsPart!.PutXDocument(npXDoc);
             }
         }
 
         public static void GetNextNumId(WordprocessingDocument wDoc, out int nextNumId)
         {
             InitializeNumberingPart(wDoc);
-            NumberingDefinitionsPart numberingPart = wDoc.MainDocumentPart.NumberingDefinitionsPart;
+            // InitializeNumberingPart guarantees NumberingDefinitionsPart exists by now.
+            NumberingDefinitionsPart numberingPart = wDoc.MainDocumentPart!.NumberingDefinitionsPart!;
             XDocument numberingXDoc = numberingPart.GetXDocument();
-            nextNumId = numberingXDoc.Root.Elements(W.num).Attributes(W.numId).Select(ni => (int)ni).Concat(new[] { 1 }).Max();
+            nextNumId = numberingXDoc.Root!.Elements(W.num).Attributes(W.numId).Select(ni => (int)ni).Concat(new[] { 1 }).Max();
         }
 
         // decimal, lowerLetter
@@ -4522,10 +4560,11 @@ namespace Docxodus.HtmlToWml
         public static void UpdateNumberingPart(WordprocessingDocument wDoc, XElement html, HtmlToWmlConverterSettings settings)
         {
             InitializeNumberingPart(wDoc);
-            NumberingDefinitionsPart numberingPart = wDoc.MainDocumentPart.NumberingDefinitionsPart;
+            // InitializeNumberingPart guarantees NumberingDefinitionsPart exists by now.
+            NumberingDefinitionsPart numberingPart = wDoc.MainDocumentPart!.NumberingDefinitionsPart!;
             XDocument numberingXDoc = numberingPart.GetXDocument();
             int nextAbstractId, nextNumId;
-            nextNumId = numberingXDoc.Root.Elements(W.num).Attributes(W.numId).Select(ni => (int)ni).Concat(new[] { 1 }).Max();
+            nextNumId = numberingXDoc.Root!.Elements(W.num).Attributes(W.numId).Select(ni => (int)ni).Concat(new[] { 1 }).Max();
             nextAbstractId = numberingXDoc.Root.Elements(W.abstractNum).Attributes(W.abstractNumId).Select(ani => (int)ani).Concat(new[] { 0 }).Max();
             var numberingElements = html.DescendantsAndSelf().Where(d => d.Name == XhtmlNoNamespace.ol || d.Name == XhtmlNoNamespace.ul).ToList();
 
@@ -4536,14 +4575,15 @@ namespace Docxodus.HtmlToWml
             int currentAbstractId = nextAbstractId;
             foreach (var list in numberingElements)
             {
-                HtmlToWmlConverterCore.NumberedItemAnnotation nia = list.Annotation<HtmlToWmlConverterCore.NumberedItemAnnotation>();
+                // AnnotateOlUl runs before this and annotates every ol/ul it visits.
+                HtmlToWmlConverterCore.NumberedItemAnnotation nia = list.Annotation<HtmlToWmlConverterCore.NumberedItemAnnotation>()!;
                 if (!numToAbstractNum.ContainsKey(nia.numId))
                 {
                     numToAbstractNum.Add(nia.numId, currentAbstractId);
                     if (list.Name == XhtmlNoNamespace.ul)
                     {
                         XElement bulletAbstract = XElement.Parse(String.Format(BulletAbstractXml, currentAbstractId++));
-                        WordprocessingMLUtil.InsertNumberingChildInOrder(numberingXDoc.Root, bulletAbstract);
+                        WordprocessingMLUtil.InsertNumberingChildInOrder(numberingXDoc.Root!, bulletAbstract);
                     }
                     if (list.Name == XhtmlNoNamespace.ol)
                     {
@@ -4553,17 +4593,17 @@ namespace Docxodus.HtmlToWml
                         {
                             numFmt[i] = "decimal";
                             just[i] = "left";
-                            XElement itemAtLevel = numberingElements
+                            XElement? itemAtLevel = numberingElements
                                 .FirstOrDefault(nf =>
                                 {
-                                    HtmlToWmlConverterCore.NumberedItemAnnotation n = nf.Annotation<HtmlToWmlConverterCore.NumberedItemAnnotation>();
+                                    HtmlToWmlConverterCore.NumberedItemAnnotation? n = nf.Annotation<HtmlToWmlConverterCore.NumberedItemAnnotation>();
                                     if (n != null && n.numId == nia.numId && n.ilvl == i)
                                         return true;
                                     return false;
                                 });
                             if (itemAtLevel != null)
                             {
-                                HtmlToWmlConverterCore.NumberedItemAnnotation thisLevelNia = itemAtLevel.Annotation<HtmlToWmlConverterCore.NumberedItemAnnotation>();
+                                HtmlToWmlConverterCore.NumberedItemAnnotation thisLevelNia = itemAtLevel.Annotation<HtmlToWmlConverterCore.NumberedItemAnnotation>()!;
                                 string thisLevelNumFmt = thisLevelNia.listStyleType;
                                 if (thisLevelNumFmt == "lower-alpha" || thisLevelNumFmt == "lower-latin")
                                 {
@@ -4595,19 +4635,19 @@ namespace Docxodus.HtmlToWml
 
                         XElement simpleNumAbstract = XElement.Parse(String.Format(OrderedListAbstractXml, currentAbstractId++,
                             numFmt[0], just[0], numFmt[1], just[1], numFmt[2], just[2], numFmt[3], just[3], numFmt[4], just[4], numFmt[5], just[5], numFmt[6], just[6], numFmt[7], just[7], numFmt[8], just[8]));
-                        WordprocessingMLUtil.InsertNumberingChildInOrder(numberingXDoc.Root, simpleNumAbstract);
+                        WordprocessingMLUtil.InsertNumberingChildInOrder(numberingXDoc.Root!, simpleNumAbstract);
                     }
                 }
             }
 
             foreach (var list in numToAbstractNum)
             {
-                WordprocessingMLUtil.InsertNumberingChildInOrder(numberingXDoc.Root,
+                WordprocessingMLUtil.InsertNumberingChildInOrder(numberingXDoc.Root!,
                     new XElement(W.num, new XAttribute(W.numId, list.Key),
                         new XElement(W.abstractNumId, new XAttribute(W.val, list.Value))));
             }
 
-            wDoc.MainDocumentPart.NumberingDefinitionsPart.PutXDocument();
+            wDoc.MainDocumentPart!.NumberingDefinitionsPart!.PutXDocument();
 #if false
   <w:num w:numId='1'>
     <w:abstractNumId w:val='0'/>
@@ -4626,19 +4666,19 @@ namespace Docxodus.HtmlToWml
             CssDocument authorCssDoc,
             CssDocument userCssDoc)
         {
-            XDocument styleXDoc = wDoc.MainDocumentPart.StyleDefinitionsPart.GetXDocument();
+            XDocument styleXDoc = wDoc.MainDocumentPart!.StyleDefinitionsPart!.GetXDocument();
 
             if (settings.DefaultSpacingElement != null)
             {
-                XElement spacingElement = styleXDoc.Root.Elements(W.docDefaults).Elements(W.pPrDefault).Elements(W.pPr).Elements(W.spacing).FirstOrDefault();
+                XElement? spacingElement = styleXDoc.Root!.Elements(W.docDefaults).Elements(W.pPrDefault).Elements(W.pPr).Elements(W.spacing).FirstOrDefault();
                 if (spacingElement != null)
                     spacingElement.ReplaceWith(settings.DefaultSpacingElement);
             }
 
             var classes = html
                 .DescendantsAndSelf()
-                .Where(d => d.Attribute(XhtmlNoNamespace._class) != null && ((string)d.Attribute(XhtmlNoNamespace._class)).Split().Length == 1)
-                .Select(d => (string)d.Attribute(XhtmlNoNamespace._class));
+                .Where(d => d.Attribute(XhtmlNoNamespace._class) != null && ((string?)d.Attribute(XhtmlNoNamespace._class))!.Split().Length == 1)
+                .Select(d => (string?)d.Attribute(XhtmlNoNamespace._class));
 
             foreach (var item in classes)
             {
@@ -4658,7 +4698,7 @@ namespace Docxodus.HtmlToWml
                     if (selector != null)
                     {
                         //Console.WriteLine("found ruleset and selector for {0}", item);
-                        string styleName = item.ToLower();
+                        string styleName = item!.ToLower();
                         XElement newStyle = new XElement(W.style,
                             new XAttribute(W.type, "paragraph"),
                             new XAttribute(W.customStyle, "1"),
@@ -4681,9 +4721,9 @@ namespace Docxodus.HtmlToWml
                                 new XElement(W.sz, new XAttribute(W.val, "24")),
                                 new XElement(W.szCs, new XAttribute(W.val, "24"))));
                         if (styleXDoc
-                            .Root
+                            .Root!
                             .Elements(W.style)
-                            .Where(e => (string)e.Attribute(W.type) == "paragraph" && ((string)e.Attribute(W.styleId)).ToLower() == styleName)
+                            .Where(e => (string?)e.Attribute(W.type) == "paragraph" && ((string?)e.Attribute(W.styleId))!.ToLower() == styleName)
                             .FirstOrDefault() == null)
                             styleXDoc.Root.Add(newStyle);
                     }
@@ -4693,9 +4733,9 @@ namespace Docxodus.HtmlToWml
             if (html.Descendants(XhtmlNoNamespace.h1).Any())
                 PtUtils.AddElementIfMissing(styleXDoc,
                     styleXDoc
-                        .Root
+                        .Root!
                         .Elements(W.style)
-                        .Where(e => (string)e.Attribute(W.type) == "paragraph" && (string)e.Attribute(W.styleId) == "Heading1")
+                        .Where(e => (string?)e.Attribute(W.type) == "paragraph" && (string?)e.Attribute(W.styleId) == "Heading1")
                         .FirstOrDefault(),
 @"<w:style w:type='paragraph'
         w:styleId='Heading1'
@@ -4731,9 +4771,9 @@ namespace Docxodus.HtmlToWml
             if (html.Descendants(XhtmlNoNamespace.h2).Any())
                 PtUtils.AddElementIfMissing(styleXDoc,
                     styleXDoc
-                        .Root
+                        .Root!
                         .Elements(W.style)
-                        .Where(e => (string)e.Attribute(W.type) == "paragraph" && (string)e.Attribute(W.styleId) == "Heading2")
+                        .Where(e => (string?)e.Attribute(W.type) == "paragraph" && (string?)e.Attribute(W.styleId) == "Heading2")
                         .FirstOrDefault(),
 @"<w:style w:type='paragraph'
          w:styleId='Heading2'
@@ -4769,9 +4809,9 @@ namespace Docxodus.HtmlToWml
             if (html.Descendants(XhtmlNoNamespace.h3).Any())
                 PtUtils.AddElementIfMissing(styleXDoc,
                 styleXDoc
-                    .Root
+                    .Root!
                     .Elements(W.style)
-                    .Where(e => (string)e.Attribute(W.type) == "paragraph" && (string)e.Attribute(W.styleId) == "Heading3")
+                    .Where(e => (string?)e.Attribute(W.type) == "paragraph" && (string?)e.Attribute(W.styleId) == "Heading3")
                     .FirstOrDefault(),
 @"<w:style w:type='paragraph'
          w:styleId='Heading3'
@@ -4805,9 +4845,9 @@ namespace Docxodus.HtmlToWml
             if (html.Descendants(XhtmlNoNamespace.h4).Any())
                 PtUtils.AddElementIfMissing(styleXDoc,
                 styleXDoc
-                    .Root
+                    .Root!
                     .Elements(W.style)
-                    .Where(e => (string)e.Attribute(W.type) == "paragraph" && (string)e.Attribute(W.styleId) == "Heading4")
+                    .Where(e => (string?)e.Attribute(W.type) == "paragraph" && (string?)e.Attribute(W.styleId) == "Heading4")
                     .FirstOrDefault(),
 @"<w:style w:type='paragraph'
          w:styleId='Heading4'
@@ -4843,9 +4883,9 @@ namespace Docxodus.HtmlToWml
             if (html.Descendants(XhtmlNoNamespace.h5).Any())
                 PtUtils.AddElementIfMissing(styleXDoc,
                 styleXDoc
-                    .Root
+                    .Root!
                     .Elements(W.style)
-                    .Where(e => (string)e.Attribute(W.type) == "paragraph" && (string)e.Attribute(W.styleId) == "Heading5")
+                    .Where(e => (string?)e.Attribute(W.type) == "paragraph" && (string?)e.Attribute(W.styleId) == "Heading5")
                     .FirstOrDefault(),
 @"<w:style w:type='paragraph'
          w:styleId='Heading5'
@@ -4878,9 +4918,9 @@ namespace Docxodus.HtmlToWml
             if (html.Descendants(XhtmlNoNamespace.h6).Any())
                 PtUtils.AddElementIfMissing(styleXDoc,
                 styleXDoc
-                    .Root
+                    .Root!
                     .Elements(W.style)
-                    .Where(e => (string)e.Attribute(W.type) == "paragraph" && (string)e.Attribute(W.styleId) == "Heading6")
+                    .Where(e => (string?)e.Attribute(W.type) == "paragraph" && (string?)e.Attribute(W.styleId) == "Heading6")
                     .FirstOrDefault(),
 @"<w:style w:type='paragraph'
          w:styleId='Heading6'
@@ -4915,9 +4955,9 @@ namespace Docxodus.HtmlToWml
             if (html.Descendants(XhtmlNoNamespace.h7).Any())
                 PtUtils.AddElementIfMissing(styleXDoc,
                 styleXDoc
-                    .Root
+                    .Root!
                     .Elements(W.style)
-                    .Where(e => (string)e.Attribute(W.type) == "paragraph" && (string)e.Attribute(W.styleId) == "Heading7")
+                    .Where(e => (string?)e.Attribute(W.type) == "paragraph" && (string?)e.Attribute(W.styleId) == "Heading7")
                     .FirstOrDefault(),
 @"<w:style w:type='paragraph'
          w:styleId='Heading7'
@@ -4952,9 +4992,9 @@ namespace Docxodus.HtmlToWml
             if (html.Descendants(XhtmlNoNamespace.h8).Any())
                 PtUtils.AddElementIfMissing(styleXDoc,
                 styleXDoc
-                    .Root
+                    .Root!
                     .Elements(W.style)
-                    .Where(e => (string)e.Attribute(W.type) == "paragraph" && (string)e.Attribute(W.styleId) == "Heading8")
+                    .Where(e => (string?)e.Attribute(W.type) == "paragraph" && (string?)e.Attribute(W.styleId) == "Heading8")
                     .FirstOrDefault(),
 @"<w:style w:type='paragraph'
          w:styleId='Heading8'
@@ -4989,9 +5029,9 @@ namespace Docxodus.HtmlToWml
             if (html.Descendants(XhtmlNoNamespace.h9).Any())
                 PtUtils.AddElementIfMissing(styleXDoc,
                 styleXDoc
-                    .Root
+                    .Root!
                     .Elements(W.style)
-                    .Where(e => (string)e.Attribute(W.type) == "paragraph" && (string)e.Attribute(W.styleId) == "Heading9")
+                    .Where(e => (string?)e.Attribute(W.type) == "paragraph" && (string?)e.Attribute(W.styleId) == "Heading9")
                     .FirstOrDefault(),
 @"<w:style w:type='paragraph'
          w:styleId='Heading9'
@@ -5028,9 +5068,9 @@ namespace Docxodus.HtmlToWml
             if (html.Descendants(XhtmlNoNamespace.h1).Any())
                 PtUtils.AddElementIfMissing(styleXDoc,
                 styleXDoc
-                    .Root
+                    .Root!
                     .Elements(W.style)
-                    .Where(e => (string)e.Attribute(W.type) == "character" && (string)e.Attribute(W.styleId) == "Heading1Char")
+                    .Where(e => (string?)e.Attribute(W.type) == "character" && (string?)e.Attribute(W.styleId) == "Heading1Char")
                     .FirstOrDefault(),
 @"<w:style w:type='character'
          w:customStyle='1'
@@ -5058,9 +5098,9 @@ namespace Docxodus.HtmlToWml
             if (html.Descendants(XhtmlNoNamespace.h2).Any())
                 PtUtils.AddElementIfMissing(styleXDoc,
                 styleXDoc
-                    .Root
+                    .Root!
                     .Elements(W.style)
-                    .Where(e => (string)e.Attribute(W.type) == "character" && (string)e.Attribute(W.styleId) == "Heading2Char")
+                    .Where(e => (string?)e.Attribute(W.type) == "character" && (string?)e.Attribute(W.styleId) == "Heading2Char")
                     .FirstOrDefault(),
 @"<w:style w:type='character'
          w:customStyle='1'
@@ -5087,9 +5127,9 @@ namespace Docxodus.HtmlToWml
             if (html.Descendants(XhtmlNoNamespace.h3).Any())
                 PtUtils.AddElementIfMissing(styleXDoc,
                 styleXDoc
-                    .Root
+                    .Root!
                     .Elements(W.style)
-                    .Where(e => (string)e.Attribute(W.type) == "character" && (string)e.Attribute(W.styleId) == "Heading3Char")
+                    .Where(e => (string?)e.Attribute(W.type) == "character" && (string?)e.Attribute(W.styleId) == "Heading3Char")
                     .FirstOrDefault(),
 @"<w:style w:type='character'
          w:customStyle='1'
@@ -5114,9 +5154,9 @@ namespace Docxodus.HtmlToWml
             if (html.Descendants(XhtmlNoNamespace.h4).Any())
                 PtUtils.AddElementIfMissing(styleXDoc,
                 styleXDoc
-                    .Root
+                    .Root!
                     .Elements(W.style)
-                    .Where(e => (string)e.Attribute(W.type) == "character" && (string)e.Attribute(W.styleId) == "Heading4Char")
+                    .Where(e => (string?)e.Attribute(W.type) == "character" && (string?)e.Attribute(W.styleId) == "Heading4Char")
                     .FirstOrDefault(),
 @"<w:style w:type='character'
          w:customStyle='1'
@@ -5143,9 +5183,9 @@ namespace Docxodus.HtmlToWml
             if (html.Descendants(XhtmlNoNamespace.h5).Any())
                 PtUtils.AddElementIfMissing(styleXDoc,
                 styleXDoc
-                    .Root
+                    .Root!
                     .Elements(W.style)
-                    .Where(e => (string)e.Attribute(W.type) == "character" && (string)e.Attribute(W.styleId) == "Heading5Char")
+                    .Where(e => (string?)e.Attribute(W.type) == "character" && (string?)e.Attribute(W.styleId) == "Heading5Char")
                     .FirstOrDefault(),
 @"<w:style w:type='character'
          w:customStyle='1'
@@ -5169,9 +5209,9 @@ namespace Docxodus.HtmlToWml
             if (html.Descendants(XhtmlNoNamespace.h6).Any())
                 PtUtils.AddElementIfMissing(styleXDoc,
                 styleXDoc
-                    .Root
+                    .Root!
                     .Elements(W.style)
-                    .Where(e => (string)e.Attribute(W.type) == "character" && (string)e.Attribute(W.styleId) == "Heading6Char")
+                    .Where(e => (string?)e.Attribute(W.type) == "character" && (string?)e.Attribute(W.styleId) == "Heading6Char")
                     .FirstOrDefault(),
 @"<w:style w:type='character'
          w:customStyle='1'
@@ -5197,9 +5237,9 @@ namespace Docxodus.HtmlToWml
             if (html.Descendants(XhtmlNoNamespace.h7).Any())
                 PtUtils.AddElementIfMissing(styleXDoc,
                 styleXDoc
-                    .Root
+                    .Root!
                     .Elements(W.style)
-                    .Where(e => (string)e.Attribute(W.type) == "character" && (string)e.Attribute(W.styleId) == "Heading7Char")
+                    .Where(e => (string?)e.Attribute(W.type) == "character" && (string?)e.Attribute(W.styleId) == "Heading7Char")
                     .FirstOrDefault(),
 @"<w:style w:type='character'
          w:customStyle='1'
@@ -5225,9 +5265,9 @@ namespace Docxodus.HtmlToWml
             if (html.Descendants(XhtmlNoNamespace.h8).Any())
                 PtUtils.AddElementIfMissing(styleXDoc,
                 styleXDoc
-                    .Root
+                    .Root!
                     .Elements(W.style)
-                    .Where(e => (string)e.Attribute(W.type) == "character" && (string)e.Attribute(W.styleId) == "Heading8Char")
+                    .Where(e => (string?)e.Attribute(W.type) == "character" && (string?)e.Attribute(W.styleId) == "Heading8Char")
                     .FirstOrDefault(),
 @"<w:style w:type='character'
          w:customStyle='1'
@@ -5253,9 +5293,9 @@ namespace Docxodus.HtmlToWml
             if (html.Descendants(XhtmlNoNamespace.h9).Any())
                 PtUtils.AddElementIfMissing(styleXDoc,
                 styleXDoc
-                    .Root
+                    .Root!
                     .Elements(W.style)
-                    .Where(e => (string)e.Attribute(W.type) == "character" && (string)e.Attribute(W.styleId) == "Heading9Char")
+                    .Where(e => (string?)e.Attribute(W.type) == "character" && (string?)e.Attribute(W.styleId) == "Heading9Char")
                     .FirstOrDefault(),
 @"<w:style w:type='character'
          w:customStyle='1'
@@ -5283,9 +5323,9 @@ namespace Docxodus.HtmlToWml
             if (html.Descendants(XhtmlNoNamespace.a).Any())
                 PtUtils.AddElementIfMissing(styleXDoc,
                 styleXDoc
-                    .Root
+                    .Root!
                     .Elements(W.style)
-                    .Where(e => (string)e.Attribute(W.type) == "character" && (string)e.Attribute(W.styleId) == "Hyperlink")
+                    .Where(e => (string?)e.Attribute(W.type) == "character" && (string?)e.Attribute(W.styleId) == "Hyperlink")
                     .FirstOrDefault(),
 @"<w:style w:type='character'
          w:styleId='Hyperlink'
@@ -5301,7 +5341,7 @@ namespace Docxodus.HtmlToWml
   </w:rPr>
 </w:style>");
 
-            wDoc.MainDocumentPart.StyleDefinitionsPart.PutXDocument();
+            wDoc.MainDocumentPart!.StyleDefinitionsPart!.PutXDocument();
         }
     }
 
@@ -5309,10 +5349,11 @@ namespace Docxodus.HtmlToWml
     {
         public static void UpdateThemePart(WordprocessingDocument wDoc, XElement html, HtmlToWmlConverterSettings settings)
         {
-            XDocument themeXDoc = wDoc.MainDocumentPart.ThemePart.GetXDocument();
+            XDocument themeXDoc = wDoc.MainDocumentPart!.ThemePart!.GetXDocument();
 
-            CssExpression minorFont = html.Descendants(XhtmlNoNamespace.body).FirstOrDefault().GetProp("font-family");
-            XElement majorFontElement = html.Descendants().Where(e =>
+            // The pipeline guarantees a <body> element by this point.
+            CssExpression? minorFont = html.Descendants(XhtmlNoNamespace.body).FirstOrDefault()!.GetProp("font-family");
+            XElement? majorFontElement = html.Descendants().Where(e =>
                 e.Name == XhtmlNoNamespace.h1 ||
                 e.Name == XhtmlNoNamespace.h2 ||
                 e.Name == XhtmlNoNamespace.h3 ||
@@ -5322,12 +5363,12 @@ namespace Docxodus.HtmlToWml
                 e.Name == XhtmlNoNamespace.h7 ||
                 e.Name == XhtmlNoNamespace.h8 ||
                 e.Name == XhtmlNoNamespace.h9).FirstOrDefault();
-            CssExpression majorFont = null;
+            CssExpression? majorFont = null;
             if (majorFontElement != null)
                 majorFont = majorFontElement.GetProp("font-family");
 
-            XAttribute majorTypeface = themeXDoc
-                .Root
+            XAttribute? majorTypeface = themeXDoc
+                .Root!
                 .Elements(A.themeElements)
                 .Elements(A.fontScheme)
                 .Elements(A.majorFont)
@@ -5336,12 +5377,12 @@ namespace Docxodus.HtmlToWml
                 .FirstOrDefault();
             if (majorTypeface != null && majorFont != null)
             {
-                CssTerm term = majorFont.Terms.FirstOrDefault();
+                CssTerm? term = majorFont.Terms.FirstOrDefault();
                 if (term != null)
-                    majorTypeface.Value = term.Value;
+                    majorTypeface.Value = term.Value!;
             }
-            XAttribute minorTypeface = themeXDoc
-                .Root
+            XAttribute? minorTypeface = themeXDoc
+                .Root!
                 .Elements(A.themeElements)
                 .Elements(A.fontScheme)
                 .Elements(A.minorFont)
@@ -5350,12 +5391,12 @@ namespace Docxodus.HtmlToWml
                 .FirstOrDefault();
             if (minorTypeface != null && minorFont != null)
             {
-                CssTerm term = minorFont.Terms.FirstOrDefault();
+                CssTerm? term = minorFont.Terms.FirstOrDefault();
                 if (term != null)
-                    minorTypeface.Value = term.Value;
+                    minorTypeface.Value = term.Value!;
             }
 
-            wDoc.MainDocumentPart.ThemePart.PutXDocument();
+            wDoc.MainDocumentPart.ThemePart!.PutXDocument();
         }
     }
 }

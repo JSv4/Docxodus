@@ -1,6 +1,3 @@
-// Inherited OpenXmlPowerTools code that predates nullable annotations (issue #13).
-#nullable disable
-
 // Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
@@ -29,11 +26,11 @@ namespace Docxodus.HtmlToWml.CSS
 {
     public class CssAttribute
     {
-        private string m_operand;
+        private string? m_operand;
         private CssAttributeOperator? m_op = null;
-        private string m_val;
+        private string? m_val;
 
-        public string Operand
+        public string? Operand
         {
             get {
                 return m_operand;
@@ -53,7 +50,7 @@ namespace Docxodus.HtmlToWml.CSS
             }
         }
 
-        public string CssOperatorString
+        public string? CssOperatorString
         {
             get {
                 if (this.m_op.HasValue)
@@ -66,11 +63,11 @@ namespace Docxodus.HtmlToWml.CSS
                 }
             }
             set {
-                this.m_op = (CssAttributeOperator)Enum.Parse(typeof(CssAttributeOperator), value);
+                this.m_op = (CssAttributeOperator)Enum.Parse(typeof(CssAttributeOperator), value!);
             }
         }
 
-        public string Value
+        public string? Value
         {
             get {
                 return m_val;
@@ -178,8 +175,10 @@ namespace Docxodus.HtmlToWml.CSS
 
     public class CssDeclaration
     {
-        private string m_name;
-        private CssExpression m_expression;
+        // Declaration()'s sole construction site always builds Name via string concatenation
+        // (never null).
+        private string m_name = "";
+        private CssExpression? m_expression;
         private bool m_important;
 
         public string Name
@@ -202,7 +201,7 @@ namespace Docxodus.HtmlToWml.CSS
             }
         }
 
-        public CssExpression Expression
+        public CssExpression? Expression
         {
             get {
                 return m_expression;
@@ -215,9 +214,10 @@ namespace Docxodus.HtmlToWml.CSS
         public override string ToString()
         {
             StringBuilder sb = new StringBuilder();
+            // Declaration() always assigns Expression from Exprsn(), which always constructs one.
             sb.AppendFormat("{0}: {1}{2}",
                 m_name,
-                m_expression.ToString(),
+                m_expression!.ToString(),
                 m_important ? " !important" : "");
             return sb.ToString();
         }
@@ -226,8 +226,12 @@ namespace Docxodus.HtmlToWml.CSS
     public class CssDirective : ItfDeclarationContainer, ItfRuleSetContainer
     {
         private CssDirectiveType m_type;
-        private string m_name;
-        private CssExpression m_expression;
+        // Directive()'s sole construction site sets Name unconditionally as its first act.
+        // Expression is genuinely optional -- it's set on the "expression" grammar alternative
+        // but not the "medium list" one (e.g. @media has Mediums instead), and every ToString()
+        // path already null-checks it accordingly.
+        private string m_name = "";
+        private CssExpression? m_expression;
         private List<CssMedium> m_mediums = new List<CssMedium>();
         private List<CssDirective> m_directives = new List<CssDirective>();
         private List<CssRuleSet> m_rulesets = new List<CssRuleSet>();
@@ -253,7 +257,7 @@ namespace Docxodus.HtmlToWml.CSS
             }
         }
 
-        public CssExpression Expression
+        public CssExpression? Expression
         {
             get {
                 return this.m_expression;
@@ -500,9 +504,11 @@ namespace Docxodus.HtmlToWml.CSS
 
         private string ToCharSetString(string start)
         {
-            return string.Format("{2}{0} {1}", 
-                m_name, 
-                m_expression.ToString(), 
+            // Only reached for Type == Charset, whose grammar always carries a quoted-string
+            // expression (never the medium-list alternative that leaves Expression unset).
+            return string.Format("{2}{0} {1}",
+                m_name,
+                m_expression!.ToString(),
                 start);
         }
     }
@@ -591,18 +597,18 @@ namespace Docxodus.HtmlToWml.CSS
 
         public static explicit operator double(CssExpression e)
         {
-            return double.Parse(e.Terms.First().Value, CultureInfo.InvariantCulture);
+            return double.Parse(e.Terms.First().Value!, CultureInfo.InvariantCulture);
         }
 
         public static explicit operator Emu(CssExpression e)
         {
-            return Emu.PointsToEmus(double.Parse(e.Terms.First().Value, CultureInfo.InvariantCulture));
+            return Emu.PointsToEmus(double.Parse(e.Terms.First().Value!, CultureInfo.InvariantCulture));
         }
 
         // will only be called on expression that is in terms of points
         public static explicit operator TPoint(CssExpression e)
         {
-            return new TPoint(double.Parse(e.Terms.First().Value, CultureInfo.InvariantCulture));
+            return new TPoint(double.Parse(e.Terms.First().Value!, CultureInfo.InvariantCulture));
         }
 
         // will only be called on expression that is in terms of points
@@ -614,7 +620,7 @@ namespace Docxodus.HtmlToWml.CSS
                 if (term.Unit == CssUnit.PT)
                 {
                     double ptValue;
-                    if (double.TryParse(term.Value.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out ptValue))
+                    if (double.TryParse(term.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out ptValue))
                     {
                         if (term.Sign == '-')
                             ptValue = -ptValue;
@@ -628,8 +634,10 @@ namespace Docxodus.HtmlToWml.CSS
 
     public class CssFunction
     {
-        private string m_name;
-        private CssExpression m_expression;
+        // Name is non-null: Term()'s only construction site always sets it from a just-parsed
+        // identifier.
+        private string m_name = "";
+        private CssExpression? m_expression;
 
         public string Name
         {
@@ -641,7 +649,7 @@ namespace Docxodus.HtmlToWml.CSS
             }
         }
 
-        public CssExpression Expression
+        public CssExpression? Expression
         {
             get {
                 return m_expression;
@@ -664,13 +672,13 @@ namespace Docxodus.HtmlToWml.CSS
                     {
                         first = false;
                     }
-                    else if (!t.Value.EndsWith("="))
+                    else if (!t.Value!.EndsWith("="))
                     {
                         sb.Append(", ");
                     }
 
                     bool quote = false;
-                    if (t.Type == CssTermType.String && !t.Value.EndsWith("="))
+                    if (t.Type == CssTermType.String && !t.Value!.EndsWith("="))
                     {
                         quote = true;
                     }
@@ -719,11 +727,13 @@ namespace Docxodus.HtmlToWml.CSS
         tv
     }
 
+    // Unused elsewhere in the codebase -- no construction site sets Value, so there is no real
+    // invariant to lean on here; nullable widening (rather than `!`) reflects that honestly.
     public class CssPropertyValue
     {
         private CssValueType m_type;
         private CssUnit m_unit;
-        private string m_value;
+        private string? m_value;
 
         public CssValueType Type
         {
@@ -745,7 +755,7 @@ namespace Docxodus.HtmlToWml.CSS
             }
         }
 
-        public string Value
+        public string? Value
         {
             get {
                 return this.m_value;
@@ -772,12 +782,13 @@ namespace Docxodus.HtmlToWml.CSS
         {
             get
             {
-                if (((m_type == CssValueType.Hex) 
-                    || (m_type == CssValueType.String && m_value.StartsWith("#"))) 
-                    && (m_value.Length == 6 || (m_value.Length == 7 && m_value.StartsWith("#"))))
+                string value = m_value ?? "";
+                if (((m_type == CssValueType.Hex)
+                    || (m_type == CssValueType.String && value.StartsWith("#")))
+                    && (value.Length == 6 || (value.Length == 7 && value.StartsWith("#"))))
                 {
                     bool hex = true;
-                    foreach (char c in m_value)
+                    foreach (char c in value)
                     {
                         if (!char.IsDigit(c)
                             && c != '#'
@@ -803,7 +814,7 @@ namespace Docxodus.HtmlToWml.CSS
                 else if (m_type == CssValueType.String)
                 {
                     bool number = true;
-                    foreach (char c in m_value)
+                    foreach (char c in value)
                     {
                         if (!char.IsDigit(c))
                         {
@@ -813,7 +824,7 @@ namespace Docxodus.HtmlToWml.CSS
                     }
                     if (number) { return false; }
 
-                    if (ColorParser.IsValidName(m_value))
+                    if (ColorParser.IsValidName(value))
                     {
                         return true;
                     }
@@ -825,20 +836,21 @@ namespace Docxodus.HtmlToWml.CSS
         public DocxColor ToColor()
         {
             string hex = "000000";
+            string value = m_value ?? "";
             if (m_type == CssValueType.Hex)
             {
-                if (m_value.Length == 7 && m_value.StartsWith("#"))
+                if (value.Length == 7 && value.StartsWith("#"))
                 {
-                    hex = m_value.Substring(1);
+                    hex = value.Substring(1);
                 }
-                else if (m_value.Length == 6)
+                else if (value.Length == 6)
                 {
-                    hex = m_value;
+                    hex = value;
                 }
             }
             else
             {
-                if (ColorParser.TryFromName(m_value, out var c))
+                if (ColorParser.TryFromName(value, out var c))
                 {
                     return c;
                 }
@@ -996,13 +1008,13 @@ namespace Docxodus.HtmlToWml.CSS
     public class CssSimpleSelector
     {
         private CssCombinator? m_combinator = null;
-        private string m_elementname;
-        private string m_id;
-        private string m_cls;
-        private CssAttribute m_attribute;
-        private string m_pseudo;
-        private CssFunction m_function;
-        private CssSimpleSelector m_child;
+        private string? m_elementname;
+        private string? m_id;
+        private string? m_cls;
+        private CssAttribute? m_attribute;
+        private string? m_pseudo;
+        private CssFunction? m_function;
+        private CssSimpleSelector? m_child;
 
         public CssCombinator? Combinator
         {
@@ -1013,7 +1025,7 @@ namespace Docxodus.HtmlToWml.CSS
                 m_combinator = value;
             }
         }
-        public string CombinatorString
+        public string? CombinatorString
         {
             get {
                 if (this.m_combinator.HasValue)
@@ -1026,11 +1038,11 @@ namespace Docxodus.HtmlToWml.CSS
                 }
             }
             set {
-                this.m_combinator = (CssCombinator)Enum.Parse(typeof(CssCombinator), value);
+                this.m_combinator = (CssCombinator)Enum.Parse(typeof(CssCombinator), value!);
             }
         }
 
-        public string ElementName
+        public string? ElementName
         {
             get {
                 return m_elementname;
@@ -1040,7 +1052,7 @@ namespace Docxodus.HtmlToWml.CSS
             }
         }
 
-        public string ID
+        public string? ID
         {
             get {
                 return m_id;
@@ -1050,7 +1062,7 @@ namespace Docxodus.HtmlToWml.CSS
             }
         }
 
-        public string Class
+        public string? Class
         {
             get {
                 return m_cls;
@@ -1060,7 +1072,7 @@ namespace Docxodus.HtmlToWml.CSS
             }
         }
 
-        public string Pseudo
+        public string? Pseudo
         {
             get {
                 return m_pseudo;
@@ -1070,7 +1082,7 @@ namespace Docxodus.HtmlToWml.CSS
             }
         }
 
-        public CssAttribute Attribute
+        public CssAttribute? Attribute
         {
             get {
                 return m_attribute;
@@ -1080,7 +1092,7 @@ namespace Docxodus.HtmlToWml.CSS
             }
         }
 
-        public CssFunction Function
+        public CssFunction? Function
         {
             get {
                 return m_function;
@@ -1090,7 +1102,7 @@ namespace Docxodus.HtmlToWml.CSS
             }
         }
 
-        public CssSimpleSelector Child
+        public CssSimpleSelector? Child
         {
             get {
                 return m_child;
@@ -1157,12 +1169,12 @@ namespace Docxodus.HtmlToWml.CSS
     public class CssTag
     {
         private CssTagType m_tagtype;
-        private string m_name;
-        private string m_cls;
-        private string m_pseudo;
-        private string m_id;
+        private string? m_name;
+        private string? m_cls;
+        private string? m_pseudo;
+        private string? m_id;
         private char m_parentrel = '\0';
-        private CssTag m_subtag;
+        private CssTag? m_subtag;
         private List<string> m_attribs = new List<string>();
 
         public CssTagType TagType
@@ -1203,7 +1215,7 @@ namespace Docxodus.HtmlToWml.CSS
             }
         }
 
-        public string Name
+        public string? Name
         {
             get {
                 return m_name;
@@ -1213,7 +1225,7 @@ namespace Docxodus.HtmlToWml.CSS
             }
         }
 
-        public string Class
+        public string? Class
         {
             get {
                 return m_cls;
@@ -1223,7 +1235,7 @@ namespace Docxodus.HtmlToWml.CSS
             }
         }
 
-        public string Pseudo
+        public string? Pseudo
         {
             get {
                 return m_pseudo;
@@ -1233,7 +1245,7 @@ namespace Docxodus.HtmlToWml.CSS
             }
         }
 
-        public string Id
+        public string? Id
         {
             get {
                 return m_id;
@@ -1253,7 +1265,7 @@ namespace Docxodus.HtmlToWml.CSS
             }
         }
 
-        public CssTag SubTag
+        public CssTag? SubTag
         {
             get {
                 return m_subtag;
@@ -1334,9 +1346,11 @@ namespace Docxodus.HtmlToWml.CSS
         private char? m_separator;
         private char? m_sign;
         private CssTermType m_type;
-        private string m_val;
+        // Non-null for every term shape except Function, where the parser's Term() production
+        // explicitly sets this to null once it repackages the term's text into Function.Name.
+        private string? m_val;
         private CssUnit? m_unit;
-        private CssFunction m_function;
+        private CssFunction? m_function;
 
         public char? Separator
         {
@@ -1347,7 +1361,7 @@ namespace Docxodus.HtmlToWml.CSS
                 m_separator = value;
             }
         }
-        public string SeparatorChar
+        public string? SeparatorChar
         {
             get {
                 return m_separator.HasValue ? this.m_separator.Value.ToString() : null;
@@ -1366,7 +1380,7 @@ namespace Docxodus.HtmlToWml.CSS
                 m_sign = value;
             }
         }
-        public string SignChar
+        public string? SignChar
         {
             get {
                 return this.m_sign.HasValue ? this.m_sign.Value.ToString() : null;
@@ -1386,7 +1400,7 @@ namespace Docxodus.HtmlToWml.CSS
             }
         }
 
-        public string Value
+        public string? Value
         {
             get {
                 return m_val;
@@ -1405,7 +1419,7 @@ namespace Docxodus.HtmlToWml.CSS
                 m_unit = value;
             }
         }
-        public string UnitString
+        public string? UnitString
         {
             get {
                 if (this.m_unit.HasValue)
@@ -1418,11 +1432,11 @@ namespace Docxodus.HtmlToWml.CSS
                 }
             }
             set {
-                this.m_unit = (CssUnit)Enum.Parse(typeof(CssUnit), value);
+                this.m_unit = (CssUnit)Enum.Parse(typeof(CssUnit), value!);
             }
         }
 
-        public CssFunction Function
+        public CssFunction? Function
         {
             get {
                 return m_function;
@@ -1438,7 +1452,7 @@ namespace Docxodus.HtmlToWml.CSS
 
             if (m_type == CssTermType.Function)
             {
-                sb.Append(m_function.ToString());
+                sb.Append(m_function!.ToString());
             }
             else if (m_type == CssTermType.Url)
             {
@@ -1446,11 +1460,12 @@ namespace Docxodus.HtmlToWml.CSS
             }
             else if (m_type == CssTermType.Unicode)
             {
-                sb.AppendFormat("U\\{0}", m_val.ToUpper());
+                // Only the Function branch ever leaves m_val null (see the field comment).
+                sb.AppendFormat("U\\{0}", m_val!.ToUpper());
             }
             else if (m_type == CssTermType.Hex)
             {
-                sb.Append(m_val.ToUpper());
+                sb.Append(m_val!.ToUpper());
             }
             else
             {
@@ -1480,8 +1495,8 @@ namespace Docxodus.HtmlToWml.CSS
             get
             {
                 if (((m_type == CssTermType.Hex)
-                    || (m_type == CssTermType.String && m_val.StartsWith("#")))
-                    && (m_val.Length == 6 || m_val.Length == 3 || ((m_val.Length == 7 || m_val.Length == 4)
+                    || (m_type == CssTermType.String && m_val!.StartsWith("#")))
+                    && (m_val!.Length == 6 || m_val.Length == 3 || ((m_val.Length == 7 || m_val.Length == 4)
                     && m_val.StartsWith("#"))))
                 {
                     bool hex = true;
@@ -1511,7 +1526,7 @@ namespace Docxodus.HtmlToWml.CSS
                 else if (m_type == CssTermType.String)
                 {
                     bool number = true;
-                    foreach (char c in m_val)
+                    foreach (char c in m_val!)
                     {
                         if (!char.IsDigit(c))
                         {
@@ -1530,28 +1545,32 @@ namespace Docxodus.HtmlToWml.CSS
                 }
                 else if (m_type == CssTermType.Function)
                 {
-                    if ((m_function.Name.ToLower().Equals("rgb") && m_function.Expression.Terms.Count == 3)
-                        || (m_function.Name.ToLower().Equals("rgba") && m_function.Expression.Terms.Count == 4)
+                    // Paired with Type == Function: the parser only sets one alongside the other,
+                    // both from the same Term() branch.
+                    CssFunction func = m_function!;
+                    CssExpression funcExpr = func.Expression!;
+                    if ((func.Name.ToLower().Equals("rgb") && funcExpr.Terms.Count == 3)
+                        || (func.Name.ToLower().Equals("rgba") && funcExpr.Terms.Count == 4)
                         )
                     {
-                        for (int i = 0; i < m_function.Expression.Terms.Count; i++)
+                        for (int i = 0; i < funcExpr.Terms.Count; i++)
                         {
-                            if (m_function.Expression.Terms[i].Type != CssTermType.Number) 
-                            { 
-                                return false; 
+                            if (funcExpr.Terms[i].Type != CssTermType.Number)
+                            {
+                                return false;
                             }
                         }
                         return true;
                     }
-                    else if ((m_function.Name.ToLower().Equals("hsl") && m_function.Expression.Terms.Count == 3)
-                      || (m_function.Name.ToLower().Equals("hsla") && m_function.Expression.Terms.Count == 4)
+                    else if ((func.Name.ToLower().Equals("hsl") && funcExpr.Terms.Count == 3)
+                      || (func.Name.ToLower().Equals("hsla") && funcExpr.Terms.Count == 4)
                       )
                     {
-                        for (int i = 0; i < m_function.Expression.Terms.Count; i++)
+                        for (int i = 0; i < funcExpr.Terms.Count; i++)
                         {
-                            if (m_function.Expression.Terms[i].Type != CssTermType.Number) 
-                            { 
-                                return false; 
+                            if (funcExpr.Terms[i].Type != CssTermType.Number)
+                            {
+                                return false;
                             }
                         }
                         return true;
@@ -1567,9 +1586,9 @@ namespace Docxodus.HtmlToWml.CSS
             {
                 if (t.Unit.HasValue && t.Unit.Value == Docxodus.HtmlToWml.CSS.CssUnit.Percent)
                 {
-                    return (int)(255f * float.Parse(t.Value) / 100f);
+                    return (int)(255f * float.Parse(t.Value!) / 100f);
                 }
-                return int.Parse(t.Value);
+                return int.Parse(t.Value!);
             }
             catch { }
             return 0;
@@ -1579,7 +1598,7 @@ namespace Docxodus.HtmlToWml.CSS
         {
             try
             {
-                return (int)(float.Parse(t.Value) * 255f / 360f);
+                return (int)(float.Parse(t.Value!) * 255f / 360f);
             }
             catch { }
             return 0;
@@ -1590,7 +1609,7 @@ namespace Docxodus.HtmlToWml.CSS
             string hex = "000000";
             if (m_type == CssTermType.Hex)
             {
-                if ((m_val.Length == 7 || m_val.Length == 4) && m_val.StartsWith("#"))
+                if ((m_val!.Length == 7 || m_val.Length == 4) && m_val.StartsWith("#"))
                 {
                     hex = m_val.Substring(1);
                 }
@@ -1601,44 +1620,47 @@ namespace Docxodus.HtmlToWml.CSS
             }
             else if (m_type == CssTermType.Function)
             {
-                if ((m_function.Name.ToLower().Equals("rgb") && m_function.Expression.Terms.Count == 3)
-                    || (m_function.Name.ToLower().Equals("rgba") && m_function.Expression.Terms.Count == 4)
+                // Paired with Type == Function, both set together by the same Term() branch.
+                CssFunction func = m_function!;
+                CssExpression funcExpr = func.Expression!;
+                if ((func.Name.ToLower().Equals("rgb") && funcExpr.Terms.Count == 3)
+                    || (func.Name.ToLower().Equals("rgba") && funcExpr.Terms.Count == 4)
                     )
                 {
                     int fr = 0, fg = 0, fb = 0;
-                    for (int i = 0; i < m_function.Expression.Terms.Count; i++)
+                    for (int i = 0; i < funcExpr.Terms.Count; i++)
                     {
-                        if (m_function.Expression.Terms[i].Type != CssTermType.Number)
+                        if (funcExpr.Terms[i].Type != CssTermType.Number)
                         {
                             return DocxColor.Black;
                         }
                         switch (i)
                         {
-                            case 0: fr = GetRGBValue(m_function.Expression.Terms[i]);
+                            case 0: fr = GetRGBValue(funcExpr.Terms[i]);
                                 break;
-                            case 1: fg = GetRGBValue(m_function.Expression.Terms[i]);
+                            case 1: fg = GetRGBValue(funcExpr.Terms[i]);
                                 break;
-                            case 2: fb = GetRGBValue(m_function.Expression.Terms[i]);
+                            case 2: fb = GetRGBValue(funcExpr.Terms[i]);
                                 break;
                         }
                     }
                     return ColorHelper.FromArgb(fr, fg, fb);
                 }
-                else if ((m_function.Name.ToLower().Equals("hsl") && m_function.Expression.Terms.Count == 3)
-                  || (m_function.Name.Equals("hsla") && m_function.Expression.Terms.Count == 4)
+                else if ((func.Name.ToLower().Equals("hsl") && funcExpr.Terms.Count == 3)
+                  || (func.Name.Equals("hsla") && funcExpr.Terms.Count == 4)
                   )
                 {
                     int h = 0, s = 0, v = 0;
-                    for (int i = 0; i < m_function.Expression.Terms.Count; i++)
+                    for (int i = 0; i < funcExpr.Terms.Count; i++)
                     {
-                        if (m_function.Expression.Terms[i].Type != CssTermType.Number) { return DocxColor.Black; }
+                        if (funcExpr.Terms[i].Type != CssTermType.Number) { return DocxColor.Black; }
                         switch (i)
                         {
-                            case 0: h = GetHueValue(m_function.Expression.Terms[i]);
+                            case 0: h = GetHueValue(funcExpr.Terms[i]);
                                 break;
-                            case 1: s = GetRGBValue(m_function.Expression.Terms[i]);
+                            case 1: s = GetRGBValue(funcExpr.Terms[i]);
                                 break;
-                            case 2: v = GetRGBValue(m_function.Expression.Terms[i]);
+                            case 2: v = GetRGBValue(funcExpr.Terms[i]);
                                 break;
                         }
                     }
@@ -1648,7 +1670,7 @@ namespace Docxodus.HtmlToWml.CSS
             }
             else
             {
-                if (ColorParser.TryFromName(m_val, out var c))
+                if (ColorParser.TryFromName(m_val!, out var c))
                 {
                     return c;
                 }
@@ -1782,7 +1804,7 @@ namespace Docxodus.HtmlToWml.CSS
     public class CssParser
     {
         private List<string> m_errors = new List<string>();
-        private CssDocument m_doc;
+        private CssDocument? m_doc;
 
         public CssDocument ParseText(string content)
         {
@@ -1810,7 +1832,7 @@ namespace Docxodus.HtmlToWml.CSS
             return m_doc;
         }
 
-        public CssDocument CSSDocument
+        public CssDocument? CSSDocument
         {
             get { return m_doc; }
         }
@@ -2004,9 +2026,9 @@ namespace Docxodus.HtmlToWml.CSS
             return (left.Hue == right.Hue && left.Value == right.Value && left.Saturation == right.Saturation);
         }
 
-        public override bool Equals(object obj)
+        public override bool Equals(object? obj)
         {
-            return this == (HueSatVal)obj;
+            return this == (HueSatVal)obj!;
         }
 
         public override int GetHashCode()
@@ -2031,11 +2053,11 @@ namespace Docxodus.HtmlToWml.CSS
         public Scanner m_scanner;
         public Errors m_errors;
 
-        public CssToken m_lastRecognizedToken;
-        public CssToken m_lookaheadToken;
+        public CssToken m_lastRecognizedToken = new CssToken();
+        public CssToken m_lookaheadToken = new CssToken();
         int errDist = minErrDist;
 
-        public CssDocument CssDoc;
+        public CssDocument CssDoc = new CssDocument();
 
         bool IsInHex(string value)
         {
@@ -2176,8 +2198,8 @@ namespace Docxodus.HtmlToWml.CSS
         void Css3()
         {
             CssDoc = new CssDocument();
-            CssRuleSet rset = null;
-            CssDirective dir = null;
+            CssRuleSet? rset = null;
+            CssDirective? dir = null;
 
             while (m_lookaheadToken.m_tokenKind == 4)
             {
@@ -2227,8 +2249,8 @@ namespace Docxodus.HtmlToWml.CSS
         void RuleSet(out CssRuleSet rset)
         {
             rset = new CssRuleSet();
-            CssSelector sel = null;
-            CssDeclaration dec = null;
+            CssSelector? sel = null;
+            CssDeclaration? dec = null;
 
             Selector(out sel);
             rset.Selectors.Add(sel);
@@ -2302,11 +2324,11 @@ namespace Docxodus.HtmlToWml.CSS
         void Directive(out CssDirective dir)
         {
             dir = new CssDirective();
-            CssDeclaration dec = null;
-            CssRuleSet rset = null;
-            CssExpression exp = null;
-            CssDirective dr = null;
-            string ident = null;
+            CssDeclaration? dec = null;
+            CssRuleSet? rset = null;
+            CssExpression? exp = null;
+            CssDirective? dr = null;
+            string? ident = null;
             CssMedium m;
 
             Expect(23);
@@ -2692,7 +2714,7 @@ namespace Docxodus.HtmlToWml.CSS
         {
             exp = new CssExpression();
             char? sep = null;
-            CssTerm trm = null;
+            CssTerm? trm = null;
 
             Term(out trm);
             exp.Terms.Add(trm);
@@ -2737,7 +2759,7 @@ namespace Docxodus.HtmlToWml.CSS
         void Declaration(out CssDeclaration dec)
         {
             dec = new CssDeclaration();
-            CssExpression exp = null;
+            CssExpression? exp = null;
             string ident = "";
 
             if (m_lookaheadToken.m_tokenKind == 24)
@@ -2781,7 +2803,7 @@ namespace Docxodus.HtmlToWml.CSS
         void Selector(out CssSelector sel)
         {
             sel = new CssSelector();
-            CssSimpleSelector ss = null;
+            CssSimpleSelector? ss = null;
             CssCombinator? cb = null;
 
             SimpleSelector(out ss);
@@ -2833,10 +2855,10 @@ namespace Docxodus.HtmlToWml.CSS
         {
             ss = new CssSimpleSelector();
             ss.ElementName = "";
-            string psd = null;
-            Docxodus.HtmlToWml.CSS.CssAttribute atb = null;
+            string? psd = null;
+            Docxodus.HtmlToWml.CSS.CssAttribute? atb = null;
             CssSimpleSelector parent = ss;
-            string ident = null;
+            string? ident = null;
 
             if (StartOf(3))
             {
@@ -2950,8 +2972,8 @@ namespace Docxodus.HtmlToWml.CSS
         {
             atb = new Docxodus.HtmlToWml.CSS.CssAttribute();
             atb.Value = "";
-            string quote = null;
-            string ident = null;
+            string? quote = null;
+            string? ident = null;
 
             Expect(35);
             while (m_lookaheadToken.m_tokenKind == 4)
@@ -3036,8 +3058,8 @@ namespace Docxodus.HtmlToWml.CSS
         void Pseudo(out string pseudo)
         {
             pseudo = "";
-            CssExpression exp = null;
-            string ident = null;
+            CssExpression? exp = null;
+            string? ident = null;
 
             Expect(43);
             if (m_lookaheadToken.m_tokenKind == 43)
@@ -3078,8 +3100,8 @@ namespace Docxodus.HtmlToWml.CSS
         {
             trm = new CssTerm();
             string val = "";
-            CssExpression exp = null;
-            string ident = null;
+            CssExpression? exp = null;
+            string? ident = null;
 
             if (m_lookaheadToken.m_tokenKind == 7 || m_lookaheadToken.m_tokenKind == 8)
             {
@@ -3217,7 +3239,9 @@ namespace Docxodus.HtmlToWml.CSS
                         }
                         Exprsn(out exp);
                         CssFunction func = new CssFunction();
-                        func.Name = trm.Value;
+                        // trm.Value was just set to the parsed identifier a few lines up in this
+                        // same production, before the Function branch repackages it as func.Name.
+                        func.Name = trm.Value!;
                         func.Expression = exp;
                         trm.Value = null;
                         trm.Function = func;
@@ -3550,8 +3574,8 @@ namespace Docxodus.HtmlToWml.CSS
         public int m_tokenPositionInCharacters;
         public int m_tokenColumn;
         public int m_tokenLine;
-        public string m_tokenValue;
-        public CssToken m_nextToken;
+        public string m_tokenValue = "";
+        public CssToken? m_nextToken;
     }
 
     public class CssBuffer
@@ -3564,16 +3588,16 @@ namespace Docxodus.HtmlToWml.CSS
         int m_bufferLength;
         int m_inputStreamLength;
         int m_currentPositionInBuffer;
-        Stream m_inputStream;
+        Stream? m_inputStream;
         bool m_isUserStream;
 
         public CssBuffer(Stream s, bool isUserStream)
         {
             m_inputStream = s; this.m_isUserStream = isUserStream;
 
-            if (m_inputStream.CanSeek)
+            if (s.CanSeek)
             {
-                m_inputStreamLength = (int)m_inputStream.Length;
+                m_inputStreamLength = (int)s.Length;
                 m_bufferLength = Math.Min(m_inputStreamLength, MAX_BUFFER_LENGTH);
                 m_bufferStart = Int32.MaxValue;
             }
@@ -3587,7 +3611,7 @@ namespace Docxodus.HtmlToWml.CSS
                 Pos = 0;
             else
                 m_currentPositionInBuffer = 0;
-            if (m_bufferLength == m_inputStreamLength && m_inputStream.CanSeek)
+            if (m_bufferLength == m_inputStreamLength && s.CanSeek)
                 Close();
         }
 
@@ -3697,7 +3721,8 @@ namespace Docxodus.HtmlToWml.CSS
                 m_inputBuffer = newBuf;
                 free = m_bufferLength;
             }
-            int read = m_inputStream.Read(m_inputBuffer, m_bufferLength, free);
+            // Every call site checks m_inputStream != null before calling this method.
+            int read = m_inputStream!.Read(m_inputBuffer, m_bufferLength, free);
             if (read > 0)
             {
                 m_inputStreamLength = m_bufferLength = (m_bufferLength + read);
@@ -3763,7 +3788,7 @@ namespace Docxodus.HtmlToWml.CSS
 
         public CssBuffer m_scannerBuffer;
 
-        CssToken m_currentToken;
+        CssToken m_currentToken = new CssToken();
         int m_currentInputCharacter;
         int m_currentCharacterBytePosition;
         int m_unicodeCharacterPosition;
@@ -3772,8 +3797,8 @@ namespace Docxodus.HtmlToWml.CSS
         int m_eolInComment;
         static readonly Hashtable s_start;
 
-        CssToken m_tokensAlreadyPeeked;
-        CssToken m_currentPeekToken;
+        CssToken m_tokensAlreadyPeeked = new CssToken();
+        CssToken m_currentPeekToken = new CssToken();
 
         char[] m_textOfCurrentToken = new char[c_maxTokenLength];
         int m_lengthOfCurrentToken;
@@ -4023,7 +4048,8 @@ namespace Docxodus.HtmlToWml.CSS
             int state;
             if (s_start.ContainsKey(m_currentInputCharacter))
             {
-                state = (int)s_start[m_currentInputCharacter];
+                // s_start's generated initializer only ever boxes non-null ints.
+                state = (int)s_start[m_currentInputCharacter]!;
             }
             else {
                 state = 0;

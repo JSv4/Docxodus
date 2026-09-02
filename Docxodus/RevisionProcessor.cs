@@ -1,6 +1,3 @@
-// Inherited OpenXmlPowerTools code that predates nullable annotations (issue #13).
-#nullable disable
-
 // Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
@@ -37,9 +34,9 @@ namespace Docxodus
             // reject both orphaned and emptied goes with its citation. Rationale, the emptied
             // guard, and its interlocks live with the rule's owner:
             // Internal.NoteReferenceOps.PruneNotesEmptiedByResolution.
-            var citedBefore = Internal.NoteReferenceOps.ReferencedNoteIds(doc.MainDocumentPart);
-            RejectRevisionsForPart(doc.MainDocumentPart);
-            foreach (var part in doc.MainDocumentPart.HeaderParts)
+            var citedBefore = Internal.NoteReferenceOps.ReferencedNoteIds(doc.MainDocumentPart!);
+            RejectRevisionsForPart(doc.MainDocumentPart!);
+            foreach (var part in doc.MainDocumentPart!.HeaderParts)
                 RejectRevisionsForPart(part);
             foreach (var part in doc.MainDocumentPart.FooterParts)
                 RejectRevisionsForPart(part);
@@ -71,11 +68,11 @@ namespace Docxodus
         {
             var xDoc = part.GetXDocument();
             var newRoot = RejectRevisionsForPartTransform(xDoc.Root);
-            xDoc.Root.ReplaceWith(newRoot);
+            xDoc.Root!.ReplaceWith(newRoot);
             part.PutXDocument();
         }
 
-        private static object RejectRevisionsForPartTransform(XNode node)
+        private static object? RejectRevisionsForPartTransform(XNode? node)
         {
             var element = node as XElement;
             if (element != null)
@@ -138,7 +135,7 @@ namespace Docxodus
                 if (element.Name == W.pPr &&
                     element.Element(W.pPrChange) != null)
                 {
-                    var pPr = element.Element(W.pPrChange).Element(W.pPr);
+                    var pPr = element.Element(W.pPrChange)!.Element(W.pPr);
                     if (pPr == null)
                         pPr = new XElement(W.pPr);
                     var new_pPr = new XElement(pPr); // clone it
@@ -177,7 +174,7 @@ namespace Docxodus
                 if (element.Name == W.rPr &&
                     element.Element(W.rPrChange) != null)
                 {
-                    var new_rPr = element.Element(W.rPrChange).Element(W.rPr);
+                    var new_rPr = element.Element(W.rPrChange)!.Element(W.rPr);
                     return RejectRevisionsForPartTransform(new_rPr);
                 }
 
@@ -235,7 +232,7 @@ namespace Docxodus
                     // the CURRENT references and restoring the old properties (Word's own behavior), rather
                     // than replacing the whole element with the reference-less inner — otherwise rejecting a
                     // sectPrChange would silently drop the section's headers/footers.
-                    var oldSectPr = element.Element(W.sectPrChange).Element(W.sectPr);
+                    var oldSectPr = element.Element(W.sectPrChange)!.Element(W.sectPr);
                     var rebuilt = new XElement(W.sectPr,
                         oldSectPr?.Attributes() ?? element.Attributes());
                     foreach (var refEl in element.Elements()
@@ -266,7 +263,7 @@ namespace Docxodus
                 if (element.Name == W.tblGrid &&
                     element.Element(W.tblGridChange) != null)
                 {
-                    var newTblGrid = element.Element(W.tblGridChange).Element(W.tblGrid);
+                    var newTblGrid = element.Element(W.tblGridChange)!.Element(W.tblGrid);
                     return RejectRevisionsForPartTransform(newTblGrid);
                 }
 
@@ -292,7 +289,7 @@ namespace Docxodus
                 if (element.Name == W.tcPr &&
                     element.Element(W.tcPrChange) != null)
                 {
-                    var newTcPr = element.Element(W.tcPrChange).Element(W.tcPr);
+                    var newTcPr = element.Element(W.tcPrChange)!.Element(W.tcPr);
                     return RejectRevisionsForPartTransform(newTcPr);
                 }
 
@@ -301,7 +298,7 @@ namespace Docxodus
                 if (element.Name == W.trPr &&
                     element.Element(W.trPrChange) != null)
                 {
-                    var newTrPr = element.Element(W.trPrChange).Element(W.trPr);
+                    var newTrPr = element.Element(W.trPrChange)!.Element(W.trPr);
                     return RejectRevisionsForPartTransform(newTrPr);
                 }
 
@@ -348,7 +345,7 @@ namespace Docxodus
                 if (element.Name == W.tblPrEx &&
                     element.Element(W.tblPrExChange) != null)
                 {
-                    var newTblPrEx = element.Element(W.tblPrExChange).Element(W.tblPrEx);
+                    var newTblPrEx = element.Element(W.tblPrExChange)!.Element(W.tblPrEx);
                     return RejectRevisionsForPartTransform(newTblPrEx);
                 }
 
@@ -372,7 +369,7 @@ namespace Docxodus
                 if (element.Name == W.tblPr &&
                     element.Element(W.tblPrChange) != null)
                 {
-                    var newTrPr = element.Element(W.tblPrChange).Element(W.tblPr);
+                    var newTrPr = element.Element(W.tblPrChange)!.Element(W.tblPr);
                     return RejectRevisionsForPartTransform(newTrPr);
                 }
 
@@ -412,26 +409,26 @@ namespace Docxodus
         {
             var xDoc = stylesDefinitionsPart.GetXDocument();
             var newRoot = RejectRevisionsForStylesTransform(xDoc.Root);
-            xDoc.Root.ReplaceWith(newRoot);
+            xDoc.Root!.ReplaceWith(newRoot);
             stylesDefinitionsPart.PutXDocument();
         }
 
-        private static object RejectRevisionsForStylesTransform(XNode node)
+        private static object? RejectRevisionsForStylesTransform(XNode? node)
         {
-            XElement element = node as XElement;
+            XElement? element = node as XElement;
             if (element != null)
             {
                 if (element.Name == W.pPr &&
                     element.Element(W.pPrChange) != null)
                 {
-                    var new_pPr = element.Element(W.pPrChange).Element(W.pPr);
+                    var new_pPr = element.Element(W.pPrChange)!.Element(W.pPr);
                     return RejectRevisionsForStylesTransform(new_pPr);
                 }
 
                 if (element.Name == W.rPr &&
                     element.Element(W.rPrChange) != null)
                 {
-                    var new_rPr = element.Element(W.rPrChange).Element(W.rPr);
+                    var new_rPr = element.Element(W.rPrChange)!.Element(W.rPr);
                     return RejectRevisionsForStylesTransform(new_rPr);
                 }
 
@@ -446,8 +443,8 @@ namespace Docxodus
 
         private static void ReverseRevisions(WordprocessingDocument doc)
         {
-            ReverseRevisionsForPart(doc.MainDocumentPart);
-            foreach (var part in doc.MainDocumentPart.HeaderParts)
+            ReverseRevisionsForPart(doc.MainDocumentPart!);
+            foreach (var part in doc.MainDocumentPart!.HeaderParts)
                 ReverseRevisionsForPart(part);
             foreach (var part in doc.MainDocumentPart.FooterParts)
                 ReverseRevisionsForPart(part);
@@ -462,15 +459,15 @@ namespace Docxodus
             var xDoc = part.GetXDocument();
             ReverseRevisionsInfo rri = new ReverseRevisionsInfo();
             rri.InInsert = false;
-            var newRoot = (XElement)ReverseRevisionsTransform(xDoc.Root, rri);
-            newRoot = (XElement)RemoveRsidTransform(newRoot);
-            xDoc.Root.ReplaceWith(newRoot);
+            var newRoot = (XElement)ReverseRevisionsTransform(xDoc.Root, rri)!;
+            newRoot = (XElement)RemoveRsidTransform(newRoot)!;
+            xDoc.Root!.ReplaceWith(newRoot);
             part.PutXDocument();
         }
 
-        private static object RemoveRsidTransform(XNode node)
+        private static object? RemoveRsidTransform(XNode? node)
         {
-            XElement element = node as XElement;
+            XElement? element = node as XElement;
             if (element != null)
             {
                 if (element.Name == W.rsid)
@@ -489,9 +486,9 @@ namespace Docxodus
             return node;
         }
 
-        private static object MergeAdjacentTablesTransform(XNode node)
+        private static object? MergeAdjacentTablesTransform(XNode? node)
         {
-            XElement element = node as XElement;
+            XElement? element = node as XElement;
             if (element != null)
             {
                 if (element.Element(W.tbl) != null)
@@ -560,7 +557,7 @@ namespace Docxodus
                                                     if (w == null)
                                                         return tc;
                                                     var cellsToLeft = tc
-                                                        .Parent
+                                                        .Parent!
                                                         .Elements(W.tc)
                                                         .TakeWhile(btc => btc != tc);
                                                     int widthToLeft = 0;
@@ -642,7 +639,7 @@ namespace Docxodus
             public PreexistingCleanTableRun(IEnumerable<XElement> sourceTables)
             {
                 Tables = sourceTables
-                    .Select(t => (XElement)RemoveRsidTransform(new XElement(t)))
+                    .Select(t => (XElement)RemoveRsidTransform(new XElement(t))!)
                     .ToList();
                 Rows = Tables.SelectMany(t => t.Elements(W.tr))
                     .Select(TableRunRowMatchShape)
@@ -655,7 +652,7 @@ namespace Docxodus
 
             public List<XElement> Tables { get; }
             public List<XElement> Rows { get; }
-            public XElement FirstTableProperties { get; }
+            public XElement? FirstTableProperties { get; }
             public bool HasBidiVisual { get; }
         }
 
@@ -777,7 +774,7 @@ namespace Docxodus
             name == W.customXmlMoveToRangeStart ||
             name == W.customXmlMoveToRangeEnd;
 
-        private static object ReverseRevisionsTransform(XNode node, ReverseRevisionsInfo rri)
+        private static object? ReverseRevisionsTransform(XNode? node, ReverseRevisionsInfo rri)
         {
             var element = node as XElement;
             if (element != null)
@@ -810,7 +807,7 @@ namespace Docxodus
                 // changed/removed hyperlink (WmlComparer never hits it — it strips hyperlinks pre-compare via
                 // RemoveHyperlinks — so this only ADDS handling for a previously-unhandled valid shape).
                 if (element.Name == W.del &&
-                    (parent.Name == W.p || parent.Name == W.hyperlink))
+                    (parent?.Name == W.p || parent?.Name == W.hyperlink))
                 {
                     return new XElement(W.ins,
                         element.Nodes().Select(n => ReverseRevisionsTransform(n, rri)));
@@ -836,8 +833,8 @@ namespace Docxodus
     </w:p>
 #endif
                 if (element.Name == W.del &&
-                    parent.Name == W.rPr &&
-                    parent.Parent.Name == W.pPr)
+                    parent?.Name == W.rPr &&
+                    parent?.Parent?.Name == W.pPr)
                 {
                     return new XElement(W.ins);
                 }
@@ -865,8 +862,8 @@ namespace Docxodus
     </w:p>
 #endif
                 if (element.Name == W.ins &&
-                    parent.Name == W.rPr &&
-                    parent.Parent.Name == W.pPr)
+                    parent?.Name == W.rPr &&
+                    parent?.Parent?.Name == W.pPr)
                 {
                     return new XElement(W.del);
                 }
@@ -892,7 +889,7 @@ namespace Docxodus
                 // Reject removes the insertion by reversing w:ins → w:del. The hyperlink case is the symmetric
                 // partner of the deleted-hyperlink-run rule above (see its note) — additive, valid-shape only.
                 if (element.Name == W.ins &&
-                    (parent.Name == W.p || parent.Name == W.hyperlink))
+                    (parent?.Name == W.p || parent?.Name == W.hyperlink))
                 {
                     var newRri = new ReverseRevisionsInfo() { InInsert = true };
                     return new XElement(W.del,
@@ -943,7 +940,7 @@ namespace Docxodus
     </w:tbl>
 #endif
                 if (element.Name == W.del &&
-                    parent.Name == W.trPr)
+                    parent?.Name == W.trPr)
                 {
                     return new XElement(W.ins);
                 }
@@ -992,7 +989,7 @@ namespace Docxodus
     </w:tbl>
 #endif
                 if (element.Name == W.ins &&
-                    parent.Name == W.trPr)
+                    parent?.Name == W.trPr)
                 {
                     return new XElement(W.del);
                 }
@@ -1025,7 +1022,7 @@ namespace Docxodus
           </m:r>
 #endif
                 if (element.Name == W.del &&
-                    parent.Name == M.r)
+                    parent?.Name == M.r)
                 {
                     return new XElement(W.ins,
                         element.Nodes().Select(n => ReverseRevisionsTransform(n, rri)));
@@ -1059,7 +1056,7 @@ namespace Docxodus
           </m:r>
 #endif
                 if (element.Name == W.ins &&
-                    parent.Name == M.r)
+                    parent?.Name == M.r)
                 {
                     return new XElement(W.del,
                         element.Nodes().Select(n => ReverseRevisionsTransform(n, rri)));
@@ -1477,8 +1474,8 @@ namespace Docxodus
             // is documented once, on the rule's owner: Internal.NoteReferenceOps
             // .PruneNotesEmptiedByResolution.
             var citedBefore = Internal.NoteReferenceOps.ReferencedNoteIds(doc.MainDocumentPart);
-            AcceptRevisionsForPart(doc.MainDocumentPart, preservePreexistingCleanTableRuns);
-            foreach (var part in doc.MainDocumentPart.HeaderParts)
+            AcceptRevisionsForPart(doc.MainDocumentPart!, preservePreexistingCleanTableRuns);
+            foreach (var part in doc.MainDocumentPart!.HeaderParts)
                 AcceptRevisionsForPart(part, preservePreexistingCleanTableRuns);
             foreach (var part in doc.MainDocumentPart.FooterParts)
                 AcceptRevisionsForPart(part, preservePreexistingCleanTableRuns);
@@ -1496,13 +1493,13 @@ namespace Docxodus
         {
             var xDoc = stylesDefinitionsPart.GetXDocument();
             var newRoot = AcceptRevisionsForStylesTransform(xDoc.Root);
-            xDoc.Root.ReplaceWith(newRoot);
+            xDoc.Root!.ReplaceWith(newRoot);
             stylesDefinitionsPart.PutXDocument();
         }
 
-        private static object AcceptRevisionsForStylesTransform(XNode node)
+        private static object? AcceptRevisionsForStylesTransform(XNode? node)
         {
-            XElement element = node as XElement;
+            XElement? element = node as XElement;
             if (element != null)
             {
                 if (element.Name == W.pPrChange || element.Name == W.rPrChange)
@@ -1516,27 +1513,27 @@ namespace Docxodus
 
         public static void AcceptRevisionsForPart(OpenXmlPart part, bool preservePreexistingCleanTableRuns = false)
         {
-            XElement documentElement = part.GetXDocument().Root;
+            XElement documentElement = part.GetXDocument().Root!;
             var cleanTableRuns = preservePreexistingCleanTableRuns
                 ? CapturePreexistingCleanTableRuns(documentElement)
                 : null;
-            documentElement = (XElement)RemoveRsidTransform(documentElement);
-            documentElement = (XElement)FixUpDeletedOrInsertedFieldCodesTransform(documentElement);
+            documentElement = (XElement)RemoveRsidTransform(documentElement)!;
+            documentElement = (XElement)FixUpDeletedOrInsertedFieldCodesTransform(documentElement)!;
             var containsMoveFromMoveTo = documentElement.Descendants(W.moveFrom).Any();
-            documentElement = (XElement)AcceptMoveFromMoveToTransform(documentElement);
+            documentElement = (XElement)AcceptMoveFromMoveToTransform(documentElement)!;
             documentElement = AcceptMoveFromRanges(documentElement);
             // AcceptParagraphEndTagsInMoveFromTransform needs rewritten similar to AcceptDeletedAndMoveFromParagraphMarks
-            documentElement = (XElement)AcceptParagraphEndTagsInMoveFromTransform(documentElement);
+            documentElement = (XElement)AcceptParagraphEndTagsInMoveFromTransform(documentElement)!;
             documentElement = AcceptDeletedAndMovedFromContentControls(documentElement);
             documentElement = AcceptDeletedAndMoveFromParagraphMarks(documentElement);
             if (containsMoveFromMoveTo)
-                documentElement = (XElement)RemoveRowsLeftEmptyByMoveFrom(documentElement);
-            documentElement = (XElement)AcceptAllOtherRevisionsTransform(documentElement);
-            documentElement = (XElement)AcceptDeletedCellsTransform(documentElement);
-            documentElement = (XElement)MergeAdjacentTablesTransform(documentElement);
+                documentElement = (XElement)RemoveRowsLeftEmptyByMoveFrom(documentElement)!;
+            documentElement = (XElement)AcceptAllOtherRevisionsTransform(documentElement)!;
+            documentElement = (XElement)AcceptDeletedCellsTransform(documentElement)!;
+            documentElement = (XElement)MergeAdjacentTablesTransform(documentElement)!;
             if (cleanTableRuns is { Count: > 0 })
                 RestorePreexistingCleanTableRuns(documentElement, cleanTableRuns);
-            documentElement = (XElement)AddEmptyParagraphToAnyEmptyCells(documentElement);
+            documentElement = (XElement)AddEmptyParagraphToAnyEmptyCells(documentElement)!;
             documentElement.Descendants().Attributes().Where(a => a.Name == PT.UniqueId || a.Name == PT.RunIds).Remove();
             documentElement.Descendants(W.numPr).Where(np => !np.HasElements).Remove();
             RemoveEmptyParagraphMarkShells(documentElement);
@@ -1566,16 +1563,16 @@ namespace Docxodus
         public static XElement AcceptRevisionsForElement(XElement element)
         {
             XElement rElement = element;
-            rElement = (XElement)RemoveRsidTransform(rElement);
+            rElement = (XElement)RemoveRsidTransform(rElement)!;
             var containsMoveFromMoveTo = rElement.Descendants(W.moveFrom).Any();
-            rElement = (XElement)AcceptMoveFromMoveToTransform(rElement);
-            rElement = (XElement)AcceptAllOtherRevisionsTransform(rElement);
+            rElement = (XElement)AcceptMoveFromMoveToTransform(rElement)!;
+            rElement = (XElement)AcceptAllOtherRevisionsTransform(rElement)!;
             rElement.Descendants().Attributes().Where(a => a.Name == PT.UniqueId || a.Name == PT.RunIds).Remove();
             rElement.Descendants(W.numPr).Where(np => !np.HasElements).Remove();
             return rElement;
         }
 
-        private static object FixUpDeletedOrInsertedFieldCodesTransform(XNode node)
+        private static object? FixUpDeletedOrInsertedFieldCodesTransform(XNode? node)
         {
             var element = node as XElement;
             if (element != null)
@@ -1652,7 +1649,7 @@ namespace Docxodus
             return node;
         }
 
-        private static object TransformInstrTextToDelInstrText(XNode node)
+        private static object? TransformInstrTextToDelInstrText(XNode? node)
         {
             var element = node as XElement;
             if (element != null)
@@ -1669,9 +1666,9 @@ namespace Docxodus
             return node;
         }
 
-        private static object AddEmptyParagraphToAnyEmptyCells(XNode node)
+        private static object? AddEmptyParagraphToAnyEmptyCells(XNode? node)
         {
-            XElement element = node as XElement;
+            XElement? element = node as XElement;
             if (element != null)
             {
                 if (element.Name == W.tc && !element.Elements().Where(e => e.Name != W.tcPr).Any())
@@ -1735,9 +1732,9 @@ namespace Docxodus
             return newTbl;
         }
 
-        private static object AcceptMoveFromMoveToTransform(XNode node)
+        private static object? AcceptMoveFromMoveToTransform(XNode? node)
         {
-            XElement element = node as XElement;
+            XElement? element = node as XElement;
             if (element != null)
             {
                 if (element.Name == W.moveTo)
@@ -1770,7 +1767,7 @@ namespace Docxodus
 
         private static XElement AcceptMoveFromRanges(XElement document)
         {
-            string wordProcessingNamespacePrefix = document.GetPrefixOfNamespace(W.w);
+            string? wordProcessingNamespacePrefix = document.GetPrefixOfNamespace(W.w);
 
             // The following lists contain the elements that are between start/end elements.
             List<XElement> startElementTagsInMoveFromRange = new List<XElement>();
@@ -1785,13 +1782,13 @@ namespace Docxodus
             {
                 if (tag.Element.Name == W.moveFromRangeStart)
                 {
-                    string id = tag.Element.Attribute(W.id).Value;
+                    string id = tag.Element.Attribute(W.id)!.Value;
                     potentialDeletedElements.Add(id, new PotentialInRangeElements());
                     continue;
                 }
                 if (tag.Element.Name == W.moveFromRangeEnd)
                 {
-                    string id = tag.Element.Attribute(W.id).Value;
+                    string id = tag.Element.Attribute(W.id)!.Value;
                     if (potentialDeletedElements.ContainsKey(id))
                     {
                         startElementTagsInMoveFromRange.AddRange(
@@ -1838,7 +1835,7 @@ namespace Docxodus
                 .ToArray();
             if (moveFromElementsToDelete.Count() > 0)
                 return (XElement)AcceptMoveFromRangesTransform(
-                    document, moveFromElementsToDelete);
+                    document, moveFromElementsToDelete)!;
             return document;
         }
 
@@ -1848,9 +1845,9 @@ namespace Docxodus
             Other
         };
 
-        private static object AcceptParagraphEndTagsInMoveFromTransform(XNode node)
+        private static object? AcceptParagraphEndTagsInMoveFromTransform(XNode? node)
         {
-            XElement element = node as XElement;
+            XElement? element = node as XElement;
             if (element != null)
             {
                 if (W.BlockLevelContentContainers.Contains(element.Name))
@@ -1868,14 +1865,14 @@ namespace Docxodus
                                 if (paragraphMarkIsInMoveFromRange)
                                     return MoveFromCollectionType.ParagraphEndTagInMoveFromRange;
                             }
-                            XElement previousContentElement = c.ContentElementsBeforeSelf()
+                            XElement? previousContentElement = c.ContentElementsBeforeSelf()
                                 .Where(e => e.GetParagraphInfo().ThisBlockContentElement != null)
                                 .FirstOrDefault();
                             if (previousContentElement != null)
                             {
                                 BlockContentInfo pi2 = previousContentElement.GetParagraphInfo();
                                 if (c.Name == W.p &&
-                                    pi2.ThisBlockContentElement.Elements(W.moveFromRangeStart).Any() &&
+                                    pi2.ThisBlockContentElement!.Elements(W.moveFromRangeStart).Any() &&
                                     !pi2.ThisBlockContentElement.Elements(W.moveFromRangeEnd).Any())
                                     return MoveFromCollectionType.ParagraphEndTagInMoveFromRange;
                             }
@@ -1928,9 +1925,9 @@ namespace Docxodus
                 e.Name == W.r || e.Name == W.smartTag || e.Name == W.ins || e.Name == W.del ||
                 e.Name == W.hyperlink || e.Name == W.fldSimple || e.Name == W.sdt);
 
-        private static object AcceptAllOtherRevisionsTransform(XNode node)
+        private static object? AcceptAllOtherRevisionsTransform(XNode? node)
         {
-            XElement element = node as XElement;
+            XElement? element = node as XElement;
             if (element != null)
             {
                 /// Accept inserted text, inserted paragraph marks, etc.
@@ -2049,13 +2046,13 @@ namespace Docxodus
                 //     to <w:vMerge w:val="continue"/>
 
                 if (element.Name == W.cellMerge &&
-                    element.Parent.Name == W.tcPr &&
-                    (string)element.Attribute(W.vMerge) == "rest")
+                    element.Parent?.Name == W.tcPr &&
+                    (string)element.Attribute(W.vMerge)! == "rest")
                     return new XElement(W.vMerge,
                         new XAttribute(W.val, "restart"));
                 if (element.Name == W.cellMerge &&
-                    element.Parent.Name == W.tcPr &&
-                    (string)element.Attribute(W.vMerge) == "cont")
+                    element.Parent?.Name == W.tcPr &&
+                    (string)element.Attribute(W.vMerge)! == "cont")
                     return new XElement(W.vMerge,
                         new XAttribute(W.val, "continue"));
 
@@ -2079,9 +2076,9 @@ namespace Docxodus
             return node;
         }
 
-        private static object CollapseParagraphTransform(XNode node)
+        private static object? CollapseParagraphTransform(XNode? node)
         {
-            XElement element = node as XElement;
+            XElement? element = node as XElement;
             if (element != null)
             {
                 if (element.Name == W.p)
@@ -2174,7 +2171,7 @@ namespace Docxodus
             //   paragraph.
             if (contentContainer.Annotation<BlockContentInfo>() != null)
                 return;
-            XElement firstContentElement = contentContainer
+            XElement? firstContentElement = contentContainer
                 .Elements()
                 .DescendantsAndSelf()
                 .FirstOrDefault(e => IsBlockContentElement(e, contentContainer));
@@ -2192,9 +2189,11 @@ namespace Docxodus
             contentContainer.AddAnnotation(currentContentInfo);
             while (true)
             {
-                currentContentInfo.ThisBlockContentElement.AddAnnotation(currentContentInfo);
+                // Set below, either from firstContentElement above or nextContentElement's
+                // != null check at the bottom of the inner loop — never null here.
+                currentContentInfo.ThisBlockContentElement!.AddAnnotation(currentContentInfo);
                 // Find next sibling content element.
-                XElement nextContentElement = null;
+                XElement? nextContentElement = null;
                 XElement current = currentContentInfo.ThisBlockContentElement;
                 while (true)
                 {
@@ -2207,7 +2206,9 @@ namespace Docxodus
                         currentContentInfo.NextBlockContentElement = nextContentElement;
                         break;
                     }
-                    current = current.Parent;
+                    // The walk started at a descendant of contentContainer, so the parent chain
+                    // is non-null until it reaches contentContainer, which ends the loop below.
+                    current = current.Parent!;
                     // When we've backed up the tree to the contentContainer, we're done.
                     if (current == contentContainer)
                         return;
@@ -2223,11 +2224,11 @@ namespace Docxodus
 
         private static IEnumerable<BlockContentInfo> IterateBlockContentElements(XElement element)
         {
-            XElement current = element.Elements().FirstOrDefault();
+            XElement? current = element.Elements().FirstOrDefault();
             if (current == null)
                 yield break;
             AnnotateBlockContentElements(element);
-            BlockContentInfo currentBlockContentInfo = element.Annotation<BlockContentInfo>();
+            BlockContentInfo? currentBlockContentInfo = element.Annotation<BlockContentInfo>();
             if (currentBlockContentInfo != null)
             {
                 while (true)
@@ -2235,7 +2236,10 @@ namespace Docxodus
                     yield return currentBlockContentInfo;
                     if (currentBlockContentInfo.NextBlockContentElement == null)
                         yield break;
-                    currentBlockContentInfo = currentBlockContentInfo.NextBlockContentElement.Annotation<BlockContentInfo>();
+                    // AnnotateBlockContentElements annotates every element it ever sets as a
+                    // NextBlockContentElement on its own following loop iteration, so the lookup
+                    // below always finds the annotation it just walked past.
+                    currentBlockContentInfo = currentBlockContentInfo.NextBlockContentElement.Annotation<BlockContentInfo>()!;
                 }
             }
         }
@@ -2269,7 +2273,7 @@ namespace Docxodus
                 e.Add(new XAttribute(PT.RunIds,
                     e.DescendantsTrimmed(W.txbxContent)
                      .Where(d => d.Name == W.r)
-                     .Select(r => r.Attribute(PT.UniqueId).Value)
+                     .Select(r => r.Attribute(PT.UniqueId)!.Value)
                      .StringConcatenate(s => s + ",")
                      .Trim(',')),
                     new XAttribute(PT.UniqueId, sdtId++));
@@ -2281,11 +2285,11 @@ namespace Docxodus
             var originalContentControls = original.Descendants(W.sdt).ToList();
             var existingContentControls = newDocument.Descendants(W.sdt).ToList();
             var contentControlsToAdd = originalContentControls
-                .Select(occ => occ.Attribute(PT.UniqueId).Value)
+                .Select(occ => occ.Attribute(PT.UniqueId)!.Value)
                 .Except(existingContentControls
-                    .Select(ecc => ecc.Attribute(PT.UniqueId).Value));
+                    .Select(ecc => ecc.Attribute(PT.UniqueId)!.Value));
             foreach (var contentControl in originalContentControls
-                .Where(occ => contentControlsToAdd.Contains(occ.Attribute(PT.UniqueId).Value)))
+                .Where(occ => contentControlsToAdd.Contains(occ.Attribute(PT.UniqueId)!.Value)))
             {
                 // TODO - Need a slight modification here.  If there is a paragraph
                 // in the content control that contains no runs, then the paragraph isn't included in the
@@ -2293,7 +2297,7 @@ namespace Docxodus
                 // To see an example of this, see example document "NumberingParagraphPropertiesChange.docxs"
 
                 // find list of runs to surround
-                var runIds = contentControl.Attribute(PT.RunIds).Value.Split(',');
+                var runIds = contentControl.Attribute(PT.RunIds)!.Value.Split(',');
                 var runs = contentControl.Descendants(W.r).Where(r => runIds.Contains(r.Attribute(PT.UniqueId)?.Value));
                 // Find the runs in the new document. A recorded run may not SURVIVE accept (its
                 // whole content was deleted/moved) — skip missing ones rather than throw; when no
@@ -2301,13 +2305,13 @@ namespace Docxodus
                 var runsInNewDocument = runs
                     .Select(r => newDocument.Descendants(W.r)
                         .FirstOrDefault(z => z.Attribute(PT.UniqueId)?.Value == r.Attribute(PT.UniqueId)?.Value))
-                    .Where(z => z != null)
+                    .OfType<XElement>()
                     .ToList();
                 if (runsInNewDocument.Count == 0)
                     continue;
 
                 // find common ancestor
-                List<XElement> runAncestorIntersection = null;
+                List<XElement>? runAncestorIntersection = null;
                 foreach (var run in runsInNewDocument)
                 {
                     if (runAncestorIntersection == null)
@@ -2328,12 +2332,12 @@ namespace Docxodus
                     .Elements()
                     .First(c => c.DescendantsAndSelf()
                         .Any(z => z.Name == W.r &&
-                             z.Attribute(PT.UniqueId).Value == runsInNewDocument.First().Attribute(PT.UniqueId).Value));
+                             z.Attribute(PT.UniqueId)!.Value == runsInNewDocument.First().Attribute(PT.UniqueId)!.Value));
                 var lastRunChild = commonAncestor
                     .Elements()
                     .First(c => c.DescendantsAndSelf()
                         .Any(z => z.Name == W.r &&
-                             z.Attribute(PT.UniqueId).Value == runsInNewDocument.Last().Attribute(PT.UniqueId).Value));
+                             z.Attribute(PT.UniqueId)!.Value == runsInNewDocument.Last().Attribute(PT.UniqueId)!.Value));
 
                 /// If the list of runs for the content control is exactly the list of runs for the paragraph, then
                 /// create the content control surrounding the paragraph, not surrounding the runs.
@@ -2421,7 +2425,7 @@ namespace Docxodus
         {
             AnnotateRunElementsWithId(element);
             AnnotateContentControlsWithRunIds(element);
-            XElement newElement = (XElement)AcceptDeletedAndMoveFromParagraphMarksTransform(element);
+            XElement newElement = (XElement)AcceptDeletedAndMoveFromParagraphMarksTransform(element)!;
             XElement withBlockLevelContentControls = AddBlockLevelContentControls(newElement, element);
             return withBlockLevelContentControls;
         }
@@ -2438,14 +2442,14 @@ namespace Docxodus
             public int GroupingKey;
         };
 
-        private static object AcceptDeletedAndMoveFromParagraphMarksTransform(XNode node)
+        private static object? AcceptDeletedAndMoveFromParagraphMarksTransform(XNode? node)
         {
-            XElement element = node as XElement;
+            XElement? element = node as XElement;
             if (element != null)
             {
                 if (IsParagraphMarkContentContainer(element))
                 {
-                    XElement bodySectPr = null;
+                    XElement? bodySectPr = null;
                     if (element.Name == W.body)
                         bodySectPr = element.Element(W.sectPr);
 
@@ -2458,10 +2462,10 @@ namespace Docxodus
 
                     foreach (var c in IterateBlockContentElements(element))
                     {
-                        if (c.ThisBlockContentElement.Name == W.p)
+                        if (c.ThisBlockContentElement!.Name == W.p)
                         {
                             bool paragraphMarkIsDeletedOrMovedFrom = c
-                                .ThisBlockContentElement
+                                .ThisBlockContentElement!
                                 .Elements(W.pPr)
                                 .Elements(W.rPr)
                                 .Elements()
@@ -2540,9 +2544,9 @@ namespace Docxodus
                                 continue;
                             }
                         }
-                        else if (c.ThisBlockContentElement.Name == W.tbl ||
-                                 c.ThisBlockContentElement.Name == W.sdt ||
-                                 c.ThisBlockContentElement.Name.Namespace == M.m)
+                        else if (c.ThisBlockContentElement!.Name == W.tbl ||
+                                 c.ThisBlockContentElement!.Name == W.sdt ||
+                                 c.ThisBlockContentElement!.Name.Namespace == M.m)
                         {
                             // A table that accept REMOVES ENTIRELY (every row deleted, no surviving
                             // content) is transparent to paragraph-mark coalescing: a deleted
@@ -2553,8 +2557,8 @@ namespace Docxodus
                             // paragraph behind it in the accepted output. The table element itself
                             // rides along in the group and is removed by the row-deletion pass.
                             if (state == 1 &&
-                                c.ThisBlockContentElement.Name == W.tbl &&
-                                TableIsEntirelyDeleted(c.ThisBlockContentElement))
+                                c.ThisBlockContentElement!.Name == W.tbl &&
+                                TableIsEntirelyDeleted(c.ThisBlockContentElement!))
                             {
                                 deletedParagraphGroupingInfo.Add(
                                     new GroupingInfo()
@@ -2610,14 +2614,14 @@ namespace Docxodus
                                 // pass removes it, so its interim position is immaterial; only the
                                 // PARAGRAPH members coalesce.
                                 var paragraphMembers = g
-                                    .Where(z => z.BlockLevelContent.ThisBlockContentElement.Name == W.p)
+                                    .Where(z => z.BlockLevelContent.ThisBlockContentElement!.Name == W.p)
                                     .ToList();
                                 var tableMembers = g
-                                    .Where(z => z.BlockLevelContent.ThisBlockContentElement.Name == W.tbl)
+                                    .Where(z => z.BlockLevelContent.ThisBlockContentElement!.Name == W.tbl)
                                     .Select(z => (object)new XElement(
-                                        z.BlockLevelContent.ThisBlockContentElement.Name,
-                                        z.BlockLevelContent.ThisBlockContentElement.Attributes(),
-                                        z.BlockLevelContent.ThisBlockContentElement.Nodes()
+                                        z.BlockLevelContent.ThisBlockContentElement!.Name,
+                                        z.BlockLevelContent.ThisBlockContentElement!.Attributes(),
+                                        z.BlockLevelContent.ThisBlockContentElement!.Nodes()
                                             .Select(n => AcceptDeletedAndMoveFromParagraphMarksTransform(n))))
                                     .ToList();
 
@@ -2627,25 +2631,25 @@ namespace Docxodus
                                     // however, this caused test [InlineData("RP/RP052-Deleted-Para-Mark.docx")] to lose paragraph numbering for a paragraph that we did not want to loose it for.
                                     // the question is - when coalescing multiple paragraphs due to deleted paragraph marks, should we be taking the paragraph properties from the first or the last
                                     // in the sequence of coalesced paragraph.  It is possible that we should take Last when accepting revisions, but First when rejecting revisions.
-                                    g.First().BlockLevelContent.ThisBlockContentElement.Elements(W.pPr),
+                                    g.First().BlockLevelContent.ThisBlockContentElement!.Elements(W.pPr),
 #endif
                                     // Identity comes from the SAME member the properties do. Building the
                                     // coalesced paragraph without its attributes dropped pt:Unid, so an
                                     // anchor-stamped render of the resolved document emitted a block with no
                                     // data-anchor — unaddressable, and invisible to the editor's reconciler,
                                     // which diffs the rendered DOM against ListBlocks.
-                                    paragraphMembers.Last().BlockLevelContent.ThisBlockContentElement.Attributes(),
-                                    paragraphMembers.Last().BlockLevelContent.ThisBlockContentElement.Elements(W.pPr),
-                                    paragraphMembers.Select(z => CollapseParagraphTransform(z.BlockLevelContent.ThisBlockContentElement)));
+                                    paragraphMembers.Last().BlockLevelContent.ThisBlockContentElement!.Attributes(),
+                                    paragraphMembers.Last().BlockLevelContent.ThisBlockContentElement!.Elements(W.pPr),
+                                    paragraphMembers.Select(z => CollapseParagraphTransform(z.BlockLevelContent.ThisBlockContentElement!)));
 
                                 // if this contains the last paragraph in the document, and if there is no content,
                                 // and if the paragraph mark is deleted, then nuke the paragraph.
                                 var allIsDeleted = AllParaContentIsDeleted(newParagraph);
                                 if (allIsDeleted &&
-                                    paragraphMembers.Last().BlockLevelContent.ThisBlockContentElement.Elements(W.pPr).Elements(W.rPr).Elements(W.del).Any() &&
+                                    paragraphMembers.Last().BlockLevelContent.ThisBlockContentElement!.Elements(W.pPr).Elements(W.rPr).Elements(W.del).Any() &&
                                     (g.Last().BlockLevelContent.NextBlockContentElement == null ||
-                                     g.Last().BlockLevelContent.NextBlockContentElement.Name == W.tbl ||
-                                     g.Last().BlockLevelContent.NextBlockContentElement.Name == W.sdt))
+                                     g.Last().BlockLevelContent.NextBlockContentElement?.Name == W.tbl ||
+                                     g.Last().BlockLevelContent.NextBlockContentElement?.Name == W.sdt))
                                     return tableMembers.Count > 0 ? (object)tableMembers : null;
 
                                 if (tableMembers.Count == 0)
@@ -2657,9 +2661,9 @@ namespace Docxodus
                             {
                                 return g.Select(z =>
                                 {
-                                    var newEle = new XElement(z.BlockLevelContent.ThisBlockContentElement.Name,
-                                        z.BlockLevelContent.ThisBlockContentElement.Attributes(),
-                                        z.BlockLevelContent.ThisBlockContentElement.Nodes().Select(n => AcceptDeletedAndMoveFromParagraphMarksTransform(n)));
+                                    var newEle = new XElement(z.BlockLevelContent.ThisBlockContentElement!.Name,
+                                        z.BlockLevelContent.ThisBlockContentElement!.Attributes(),
+                                        z.BlockLevelContent.ThisBlockContentElement!.Nodes().Select(n => AcceptDeletedAndMoveFromParagraphMarksTransform(n)));
                                     return newEle;
                                 });
                             }
@@ -2695,7 +2699,7 @@ namespace Docxodus
         {
             // needs collapse
             // dir, bdo, sdt, ins, moveTo, smartTag
-            var testP = (XElement)CollapseTransform(p);
+            var testP = (XElement)CollapseTransform(p)!;
 
             var childElements = testP.Elements();
             var contentElements = childElements
@@ -2712,9 +2716,9 @@ namespace Docxodus
         }
 
         // dir, bdo, sdt, ins, moveTo, smartTag
-        private static object CollapseTransform(XNode node)
+        private static object? CollapseTransform(XNode? node)
         {
-            XElement element = node as XElement;
+            XElement? element = node as XElement;
             if (element != null)
             {
                 if (element.Name == W.dir ||
@@ -2854,20 +2858,20 @@ namespace Docxodus
 
         private class Tag
         {
-            public XElement Element;
+            required public XElement Element;
             public TagTypeEnum TagType;
         }
 
-        private static object AcceptDeletedAndMovedFromContentControlsTransform(XNode node,
+        private static object? AcceptDeletedAndMovedFromContentControlsTransform(XNode? node,
             XElement[] contentControlElementsToCollapse,
             XElement[] moveFromElementsToDelete)
         {
-            XElement element = node as XElement;
+            XElement? element = node as XElement;
             if (element != null)
             {
                 if (element.Name == W.sdt && contentControlElementsToCollapse.Contains(element))
                     return element
-                        .Element(W.sdtContent)
+                        .Element(W.sdtContent)!
                         .Nodes()
                         .Select(n => AcceptDeletedAndMovedFromContentControlsTransform(
                             n, contentControlElementsToCollapse, moveFromElementsToDelete));
@@ -2883,7 +2887,7 @@ namespace Docxodus
 
         private static XElement AcceptDeletedAndMovedFromContentControls(XElement documentRootElement)
         {
-            string wordProcessingNamespacePrefix = documentRootElement.GetPrefixOfNamespace(W.w);
+            string? wordProcessingNamespacePrefix = documentRootElement.GetPrefixOfNamespace(W.w);
 
             // The following lists contain the elements that are between start/end elements.
             List<XElement> startElementTagsInDeleteRange = new List<XElement>();
@@ -2902,13 +2906,13 @@ namespace Docxodus
             {
                 if (tag.Element.Name == W.customXmlDelRangeStart)
                 {
-                    string id = tag.Element.Attribute(W.id).Value;
+                    string id = tag.Element.Attribute(W.id)!.Value;
                     potentialDeletedElements.Add(id, new PotentialInRangeElements());
                     continue;
                 }
                 if (tag.Element.Name == W.customXmlDelRangeEnd)
                 {
-                    string id = tag.Element.Attribute(W.id).Value;
+                    string id = tag.Element.Attribute(W.id)!.Value;
                     if (potentialDeletedElements.ContainsKey(id))
                     {
                         startElementTagsInDeleteRange.AddRange(
@@ -2921,13 +2925,13 @@ namespace Docxodus
                 }
                 if (tag.Element.Name == W.customXmlMoveFromRangeStart)
                 {
-                    string id = tag.Element.Attribute(W.id).Value;
+                    string id = tag.Element.Attribute(W.id)!.Value;
                     potentialMoveFromElements.Add(id, new PotentialInRangeElements());
                     continue;
                 }
                 if (tag.Element.Name == W.customXmlMoveFromRangeEnd)
                 {
-                    string id = tag.Element.Attribute(W.id).Value;
+                    string id = tag.Element.Attribute(W.id)!.Value;
                     if (potentialMoveFromElements.ContainsKey(id))
                     {
                         startElementTagsInMoveFromRange.AddRange(
@@ -3013,16 +3017,16 @@ namespace Docxodus
             {
                 var newDoc = AcceptDeletedAndMovedFromContentControlsTransform(documentRootElement,
                     contentControlElementsToCollapse, elementsToDeleteBecauseMovedFrom);
-                return newDoc as XElement;
+                return (XElement)newDoc!;
             }
             else
                 return documentRootElement;
         }
 
-        private static object AcceptMoveFromRangesTransform(XNode node,
+        private static object? AcceptMoveFromRangesTransform(XNode? node,
             XElement[] elementsToDelete)
         {
-            XElement element = node as XElement;
+            XElement? element = node as XElement;
             if (element != null)
             {
                 if (elementsToDelete.Contains(element))
@@ -3035,10 +3039,10 @@ namespace Docxodus
             return node;
         }
 
-        private static object CoalesqueParagraphEndTagsInMoveFromTransform(XNode node,
+        private static object? CoalesqueParagraphEndTagsInMoveFromTransform(XNode? node,
             IGrouping<MoveFromCollectionType, XElement> g)
         {
-            XElement element = node as XElement;
+            XElement? element = node as XElement;
             if (element != null)
             {
                 if (element.Name == W.p)
@@ -3064,9 +3068,9 @@ namespace Docxodus
         // For each table row, group deleted cells plus the cell before any deleted cell.
         // Produce a new cell that has gridSpan set appropriately for group, and clone everything
         // else.
-        private static object AcceptDeletedCellsTransform(XNode node)
+        private static object? AcceptDeletedCellsTransform(XNode? node)
         {
-            XElement element = node as XElement;
+            XElement? element = node as XElement;
             if (element != null)
             {
                 if (element.Name == W.tr)
@@ -3075,7 +3079,7 @@ namespace Docxodus
                         .Elements()
                         .GroupAdjacent(e =>
                         {
-                            XElement cellAfter = e.ElementsAfterSelf(W.tc).FirstOrDefault();
+                            XElement? cellAfter = e.ElementsAfterSelf(W.tc).FirstOrDefault();
                             bool cellAfterIsDeleted = cellAfter != null &&
                                 cellAfter.Descendants(W.cellDel).Any();
                             if (e.Name == W.tc &&
@@ -3095,7 +3099,7 @@ namespace Docxodus
                             var a2 = new
                             {
                                 CollectionType = DeletedCellCollectionType.Other,
-                                Disambiguator = e
+                                Disambiguator = (XElement?)e
                             };
                             return a2;
                         });
@@ -3114,7 +3118,7 @@ namespace Docxodus
                             int newGridSpan = g.Where(e => e.Name == W.tc).Sum(tc =>
                                 (int?)tc.Elements(W.tcPr).Elements(W.gridSpan)
                                     .Attributes(W.val).FirstOrDefault() ?? 1);
-                            XElement currentTcPr = g.First().Elements(W.tcPr).FirstOrDefault();
+                            XElement? currentTcPr = g.First().Elements(W.tcPr).FirstOrDefault();
                             // The absorbing cell may have NO tcPr at all (minimal cells) — synthesize one
                             // carrying just the widened gridSpan instead of dereferencing null.
                             XElement newTcPr = new XElement(W.tcPr,
@@ -3168,9 +3172,9 @@ namespace Docxodus
             W.moveTo,
         };
 
-        private static object RemoveRowsLeftEmptyByMoveFrom(XNode node)
+        private static object? RemoveRowsLeftEmptyByMoveFrom(XNode? node)
         {
-            XElement element = node as XElement;
+            XElement? element = node as XElement;
             if (element != null)
             {
                 if (element.Name == W.tr)
@@ -3242,9 +3246,9 @@ namespace Docxodus
 
         public static bool HasTrackedRevisions(WordprocessingDocument doc)
         {
-            if (PartHasTrackedRevisions(doc.MainDocumentPart))
+            if (PartHasTrackedRevisions(doc.MainDocumentPart!))
                 return true;
-            foreach (var part in doc.MainDocumentPart.HeaderParts)
+            foreach (var part in doc.MainDocumentPart!.HeaderParts)
                 if (PartHasTrackedRevisions(part))
                     return true;
             foreach (var part in doc.MainDocumentPart.FooterParts)
@@ -3274,9 +3278,9 @@ namespace Docxodus
 
     public class BlockContentInfo
     {
-        public XElement PreviousBlockContentElement;
-        public XElement ThisBlockContentElement;
-        public XElement NextBlockContentElement;
+        public XElement? PreviousBlockContentElement;
+        public XElement? ThisBlockContentElement;
+        public XElement? NextBlockContentElement;
     }
 
     public static class RevisionAccepterExtensions
@@ -3286,12 +3290,12 @@ namespace Docxodus
             if (!(W.BlockLevelContentContainers.Contains(contentContext.Name)))
                 throw new ArgumentException(
                     "GetParagraphInfo called for element that is not child of content container");
-            XElement prev = null;
+            XElement? prev = null;
             foreach (var content in contentContext.Elements())
             {
                 // This may return null, indicating that there is no descendant paragraph.  For
                 // example, comment elements have no descendant elements.
-                XElement paragraph = content
+                XElement? paragraph = content
                     .DescendantsAndSelf()
                     .Where(e => e.Name == W.p || e.Name == W.tc || e.Name == W.txbxContent)
                     .FirstOrDefault();
@@ -3310,11 +3314,11 @@ namespace Docxodus
 
         public static BlockContentInfo GetParagraphInfo(this XElement contentElement)
         {
-            BlockContentInfo paragraphInfo = contentElement.Annotation<BlockContentInfo>();
+            BlockContentInfo? paragraphInfo = contentElement.Annotation<BlockContentInfo>();
             if (paragraphInfo != null)
                 return paragraphInfo;
-            InitializeParagraphInfo(contentElement.Parent);
-            return contentElement.Annotation<BlockContentInfo>();
+            InitializeParagraphInfo(contentElement.Parent!);
+            return contentElement.Annotation<BlockContentInfo>()!;
         }
 
         public static IEnumerable<XElement> ContentElementsBeforeSelf(this XElement element)

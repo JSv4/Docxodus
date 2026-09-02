@@ -23,17 +23,13 @@ duplicated description is one that will go stale.
 ### Nullable Reference Types
 
 `Docxodus.csproj` sets `<Nullable>enable</Nullable>` (issue #13): every file is
-nullable-checked by default, so a new file needs no directive. The exception is the
-inherited OpenXmlPowerTools core — 21 legacy files (`WmlToHtmlConverter`, `PackageMerge`,
-the `HtmlToWml*` family, `FormattingAssembler`, `DocumentBuilder`, `RevisionProcessor`,
-`PtOpenXmlUtil`, …) carry an explicit `#nullable disable` header. They hold back a lot:
-stripping all 21 takes the library from its baseline to **2,977** (**2,907** distinct
-`CS86xx` sites). Removing `WmlComparer` in v11.0.0 retired 536 of them.
-`grep -l "^#nullable disable" Docxodus/*.cs` lists the remaining debt; when
-substantially refactoring one of those files, consider removing its header and fixing
-that file's warnings. CS8632 stays in `NoWarn` deliberately: with the project context
-enabled it can only fire inside the opted-out files, where some inert `?` annotations
-are kept for the day each file migrates.
+nullable-checked by default, so a new file needs no directive. The inherited
+OpenXmlPowerTools core has fully migrated (issue #645): no file under `Docxodus/`
+carries a `#nullable disable` header anymore. `grep -l "^#nullable disable" Docxodus/*.cs`
+should return nothing — reintroducing the header on a new or refactored file is a
+regression, not a shortcut. `CS8632` still sits in the project's `NoWarn` list; issue
+#651 tracks retiring it now that no opted-out file needs the inert `?` annotations it
+was covering.
 
 ### Warnings
 
@@ -41,7 +37,7 @@ are kept for the day each file migrates.
 **`Docxodus.csproj` and `Docxodus.Tests.csproj` both override it to `false`**, so the core
 library and the test project do *not* fail on warnings. The CLI tools, MCP server,
 python-host and WASM project do inherit it. Current baseline: the library builds with
-**122 warnings**, the test project with **705** (mostly StyleCop `SA1633`/`SA1636` file
+**113 warnings**, the test project with **689** (mostly StyleCop `SA1633`/`SA1636` file
 headers and `SA1206` using-order). Don't add to either baseline. Measure with
 `--no-incremental` — a warm incremental build reports zero because nothing recompiles.
 
@@ -49,6 +45,7 @@ The one movement that is not a regression: no file in the library carries a Styl
 header, so `SA1633` fires once per file and **every new `.cs` file under `Docxodus/` moves
 both counts by exactly one** (the test build compiles the library through its project
 reference). A change that adds one file and one warning is at baseline; anything more is not.
+
 Update the two numbers here in the same commit rather than leaving them stale.
 
 ## Repository Layout
