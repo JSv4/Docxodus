@@ -6,6 +6,15 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `tools/mcp-server/README.md` now describes the tool surface the server actually advertises. It
+  claimed three lifecycle tools plus eighteen grouped-intent tools against a `ToolCatalog` of 22,
+  and omitted `docxodus_preview`, `docxodus_links`, `docxodus_images`,
+  `docxodus_content_controls` and `docxodus_verify_receipt` entirely, making shipped capabilities
+  undiscoverable to MCP hosts reading the package's quick start. The table now carries one row per
+  tool with its kind and a one-line purpose, matching the arithmetic in
+  `docs/architecture/docx_agent_server.md`, and a test holds it in step with `ToolCatalog.Tools`
+  so a tool cannot be added or removed without the README moving with it.
+
 - `OpenXmlRegex.Match` no longer throws a `NullReferenceException` when called without a callback
   on PowerPoint/DrawingML content (the `a:p`/`p:p` namespaced path) — it now returns the match
   count like the Wordprocessing path already did.

@@ -78,26 +78,41 @@ path stay as they are.
 
 ## Tool surface
 
-Three lifecycle tools plus eighteen grouped-intent tools, each addressed by the anchor ids the
-markdown projection and search tools return:
+**22 tools.** Three session-lifecycle tools, four read/preview tools, twelve grouped-intent
+mutation tools, and three sessionless operations — the same arithmetic as the tool reference in
+`docs/architecture/docx_agent_server.md`. Everything except the three sessionless tools takes the
+`sessionId` that `docxodus_open` returns, and addresses content by the anchor ids the markdown
+projection and search tools hand back. Each grouped tool takes an `action` discriminator plus
+action-specific arguments.
 
-| Tool | Purpose |
-|------|---------|
-| `docxodus_open` / `docxodus_save` / `docxodus_close` | Session lifecycle |
-| `docxodus_pagination` | Register, inspect, or query an externally materialized PageMap |
-| `docxodus_get_content` | Read markdown/HTML/text, block or section facts, styles, direct/effective formatting, mutation-ready inline spans, a complete deterministic package manifest, the opening-to-current semantic change set, or a default deliverable-verification report (`format: "verification"`) |
-| `docxodus_search` | Find text (literal/regex), or blocks by kind/annotation/bookmark |
-| `docxodus_edit` | Insert/replace/delete text and blocks, split/merge paragraphs, undo/redo |
-| `docxodus_format` | Character and paragraph formatting, list level |
-| `docxodus_create` | New paragraphs, headings, tables, horizontal rules, footnotes/endnotes, running headers/footers, page-number fields |
-| `docxodus_list` | Promote/demote/renumber list membership; restart numbering (Word's *Set Numbering Value…*) |
-| `docxodus_comment` | Native Word review comments (real `w:comment` markup): add on an anchor/span or tracked revision id, reply in-thread, resolve/reopen, update, remove, list |
-| `docxodus_annotate` | Anchor-addressed highlight/label annotations (a custom-XML overlay for external tools, distinct from comments) |
-| `docxodus_track_changes` | List tracked changes; accept/reject one by id, or all |
-| `docxodus_compare` | Sessionless: diff or N-way consolidate stored document versions into one author-attributed native redline written back into the document scope |
-| `docxodus_mutations` | Apply or safely preview a batch atomically by default; opt explicitly into best-effort |
-| `docxodus_deliver` | Build a verified delivery bundle from a named baseline and the current session; return its manifest and available artifact bytes |
-| `docxodus_table` | Create/read tables; resolve canonical cell anchors ↔ grid coordinates; edit rows/columns/cell content/style |
+| Tool | Kind | Purpose |
+|---|---|---|
+| `docxodus_open` | lifecycle | Open a `.docx` from the configured document scope into an in-memory session and return its `sessionId`. |
+| `docxodus_save` | lifecycle | Write the session's current bytes back into the scope, optionally to a different location. |
+| `docxodus_close` | lifecycle | Dispose the session and release its undo history and retry journal. |
+| `docxodus_get_content` | read | Read markdown/HTML/text, block or section facts, styles, direct/effective formatting, mutation-ready inline spans, a deterministic package manifest, the opening-to-current semantic change set, or a deliverable-verification report. |
+| `docxodus_preview` | read | Render the same HTML as `format: "html"` but shaped for an MCP Apps widget: the markup rides in `_meta` so a large render costs the model's context nothing. |
+| `docxodus_pagination` | read | Register, inspect, or query an externally materialized PageMap; the server never paginates or bundles a browser itself. |
+| `docxodus_search` | read | Find text (literal or regex), or find blocks by kind, annotation, or bookmark, returning reusable anchor ids. |
+| `docxodus_edit` | grouped-intent | Insert, replace, and delete text and blocks; split and merge paragraphs; undo and redo. |
+| `docxodus_format` | grouped-intent | Character and paragraph formatting, and list level. |
+| `docxodus_create` | grouped-intent | New paragraphs, headings, tables, horizontal rules, footnotes/endnotes, running headers/footers, and page-number fields. |
+| `docxodus_list` | grouped-intent | Promote, demote, and renumber list membership; restart numbering (Word's *Set Numbering Value…*). |
+| `docxodus_comment` | grouped-intent | Native Word review comments (real `w:comment` markup): add on an anchor/span or tracked revision id, reply in-thread, resolve/reopen, update, remove, list. |
+| `docxodus_annotate` | grouped-intent | Anchor-addressed highlight/label annotations — a custom-XML overlay for external tools, distinct from comments. |
+| `docxodus_links` | grouped-intent | Native hyperlinks and bookmarks — list, add, update, move, remove — plus REF-field cross-references that track their bookmark target when Word refreshes fields. |
+| `docxodus_images` | grouped-intent | Native Word images: list, insert, replace, resize, set metadata or floating layout, remove. Payloads cross the JSON boundary as base64 only — the server never fetches a URL or reads an image path. |
+| `docxodus_content_controls` | grouped-intent | List and fill native Word content controls (`w:sdt`) — text, rich text, checkbox, date, list item, picture, repeating items — preserving each control's wrapper and metadata. |
+| `docxodus_track_changes` | grouped-intent | List tracked changes; accept or reject one by id or all; switch the session's recording mode; prove redline reversibility. |
+| `docxodus_mutations` | grouped-intent | Apply or safely preview a batch atomically by default, with opt-in best-effort and MCP-only transaction idempotency. |
+| `docxodus_table` | grouped-intent | Create and read tables; resolve canonical cell anchors ↔ grid coordinates; edit rows, columns, cell content, and style. |
+| `docxodus_compare` | sessionless | Diff or N-way consolidate stored document versions into one author-attributed native redline, written back into the document scope. |
+| `docxodus_deliver` | sessionless | Build a verified delivery bundle from a named baseline and the current session; return its manifest and available artifact bytes. |
+| `docxodus_verify_receipt` | sessionless | Verify a portable delivery change receipt against the document it claims to describe. |
+
+`McpToolInventoryDocumentationTests` asserts this table and `ToolCatalog.Tools` name exactly the
+same set of tools, and that the count above is the live one, so a tool cannot be added or removed
+without this section moving with it.
 
 `docxodus_deliver` uses the same `DeliveryBundleService` as the .NET API and
 `docxodus-deliver` CLI. The MCP response returns canonical manifest bytes plus available artifacts
