@@ -899,9 +899,10 @@ namespace Docxodus.HtmlToWml
                         element.Name != XhtmlNoNamespace.table &&
                         assignedValue.IsAuto)
                     {
-                        // This lambda is only ever invoked after PropertyInfoList's static
-                        // initializer has fully completed, though the compiler can't see that
-                        // through the self-referential closure.
+                        // The compiler can't see through this self-referential closure that
+                        // PropertyInfoList is non-null here: GetComputedPropertyValue (the only
+                        // invoker of a ComputedValue lambda) is never called from a static
+                        // initializer, so this always runs after PropertyInfoList is assigned.
                         PropertyInfo? pi = PropertyInfoList!.FirstOrDefault(p => p.Names.Contains("width"));
                         string display = GetComputedPropertyValue(pi, element, "display", settings).ToString();
                         if (display != "inline")
