@@ -15,6 +15,7 @@ All notable changes to this project will be documented in this file.
   finding the input already carried. See "Office Math: revision wrappers nested inside `m:r`" in
   `docs/ooxml_corner_cases.md` for the reasoning and for where a repair would belong if one is ever
   warranted.
+
 ### Added
 
 - **REDLINE THEATER (`docs/demo/redline.html`) — the agent protocol as the demo.** Three
