@@ -468,10 +468,10 @@ public partial class DocumentConverter
             {
                 Annotations = annotations.Select(a => new AnnotationInfo
                 {
-                    Id = a.Id,
-                    LabelId = a.LabelId,
-                    Label = a.Label,
-                    Color = a.Color,
+                    Id = a.Id ?? "",
+                    LabelId = a.LabelId ?? "",
+                    Label = a.Label ?? "",
+                    Color = a.Color ?? "",
                     Author = a.Author,
                     Created = a.Created?.ToString("o"),
                     BookmarkName = a.BookmarkName,
@@ -552,10 +552,10 @@ public partial class DocumentConverter
                 DocumentBytes = Convert.ToBase64String(resultDoc.DocumentByteArray),
                 Annotation = addedAnnotation != null ? new AnnotationInfo
                 {
-                    Id = addedAnnotation.Id,
-                    LabelId = addedAnnotation.LabelId,
-                    Label = addedAnnotation.Label,
-                    Color = addedAnnotation.Color,
+                    Id = addedAnnotation.Id ?? "",
+                    LabelId = addedAnnotation.LabelId ?? "",
+                    Label = addedAnnotation.Label ?? "",
+                    Color = addedAnnotation.Color ?? "",
                     Author = addedAnnotation.Author,
                     Created = addedAnnotation.Created?.ToString("o"),
                     BookmarkName = addedAnnotation.BookmarkName,
@@ -760,10 +760,10 @@ public partial class DocumentConverter
                 DocumentBytes = resultDoc.DocumentByteArray,
                 Annotation = addedAnnotation != null ? new AnnotationInfo
                 {
-                    Id = addedAnnotation.Id,
-                    LabelId = addedAnnotation.LabelId,
-                    Label = addedAnnotation.Label,
-                    Color = addedAnnotation.Color,
+                    Id = addedAnnotation.Id ?? "",
+                    LabelId = addedAnnotation.LabelId ?? "",
+                    Label = addedAnnotation.Label ?? "",
+                    Color = addedAnnotation.Color ?? "",
                     Author = addedAnnotation.Author,
                     Created = addedAnnotation.Created?.ToString("o"),
                     BookmarkName = addedAnnotation.BookmarkName,

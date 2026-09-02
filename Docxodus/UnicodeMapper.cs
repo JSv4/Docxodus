@@ -247,9 +247,9 @@ namespace Docxodus
         /// Each run will have the specified run properties.
         /// </summary>
         /// <param name="textValue">The text value to transform.</param>
-        /// <param name="runProperties">The run properties to apply.</param>
+        /// <param name="runProperties">The run properties to apply, or null for a run with none.</param>
         /// <returns>A list of runs representing the text value.</returns>
-        public static List<XElement> StringToCoalescedRunList(string textValue, XElement runProperties)
+        public static List<XElement> StringToCoalescedRunList(string textValue, XElement? runProperties)
         {
             return textValue
                 .Select(CharToRunChild)
@@ -265,9 +265,9 @@ namespace Docxodus
         /// text element with that text value. The run will have the specified run properties.
         /// </summary>
         /// <param name="textValue">The text value to transform.</param>
-        /// <param name="runProperties">The run properties to apply.</param>
+        /// <param name="runProperties">The run properties to apply, or null for a run with none.</param>
         /// <returns>A list with a single run.</returns>
-        public static IEnumerable<XElement> StringToSingleRunList(string textValue, XElement runProperties)
+        public static IEnumerable<XElement> StringToSingleRunList(string textValue, XElement? runProperties)
         {
             var run = new XElement(W.r,
                 runProperties,

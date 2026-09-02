@@ -6,6 +6,20 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `OpenXmlRegex.Match` no longer throws a `NullReferenceException` when called without a callback
+  on PowerPoint/DrawingML content (the `a:p`/`p:p` namespaced path) — it now returns the match
+  count like the Wordprocessing path already did.
+- The `WmlDocument(WmlDocument, params XElement[])` replacement-part constructor now throws a
+  clear `DocxodusException` when a replacement part's `pt:Uri` attribute does not match any part
+  in the package, instead of a `NullReferenceException`.
+- `MetricsGetter.GetDocxMetrics`/`GetWmlMetrics` no longer throw an `ArgumentNullException` for a
+  byte-array-loaded `WmlDocument` (no file path) — the `FileName` label in the returned metrics
+  now defaults to an empty string instead of the underlying `null`.
+- A style-only list item (numbering inherited from its paragraph style rather than direct
+  paragraph properties) whose resolved level has no definition anywhere in its abstract numbering
+  no longer throws a `NullReferenceException` while computing the list item text — it now falls
+  back within the style's own levels correctly, matching every other "not found" path in list-item
+  resolution.
 - **The demo site's engine pin moves to `docxodus@11.0.0`, which is what makes DOOM visible
   again.** `docs/demo/` loaded 11.0.0's predecessor from jsDelivr, and on that engine the
   arcade's DOOM cartridge boots, plays and writes real 320×200 frames into the document while

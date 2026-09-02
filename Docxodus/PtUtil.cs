@@ -1,6 +1,3 @@
-// Inherited OpenXmlPowerTools code that predates nullable annotations (issue #13).
-#nullable disable
-
 // Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
@@ -63,7 +60,7 @@ namespace Docxodus
                 : p;
         }
 
-        public static void AddElementIfMissing(XDocument partXDoc, XElement existing, string newElement)
+        public static void AddElementIfMissing(XDocument partXDoc, XElement? existing, string newElement)
         {
             if (existing != null)
                 return;
@@ -76,25 +73,25 @@ namespace Docxodus
 
     public class MhtParser
     {
-        public string MimeVersion;
-        public string ContentType;
-        public MhtParserPart[] Parts;
+        public string? MimeVersion;
+        public string? ContentType;
+        public MhtParserPart[] Parts = Array.Empty<MhtParserPart>();
 
         public class MhtParserPart
         {
-            public string ContentLocation;
-            public string ContentTransferEncoding;
-            public string ContentType;
-            public string CharSet;
-            public string Text;
-            public byte[] Binary;
+            public string? ContentLocation;
+            public string? ContentTransferEncoding;
+            public string? ContentType;
+            public string? CharSet;
+            public string Text = "";
+            public byte[]? Binary;
         }
 
         public static MhtParser Parse(string src)
         {
-            string mimeVersion = null;
-            string contentType = null;
-            string boundary = null;
+            string? mimeVersion = null;
+            string? contentType = null;
+            string? boundary = null;
 
             string[] lines = src.Split(new[] { Environment.NewLine }, StringSplitOptions.None);
 
@@ -163,11 +160,11 @@ namespace Docxodus
                         return partPriambleKeyWords.Any(pk => s.StartsWith(pk));
                     }).ToArray();
 
-                    string contentLocation = null;
-                    string contentTransferEncoding = null;
-                    string partContentType = null;
-                    string partCharSet = null;
-                    byte[] partBinary = null;
+                    string? contentLocation = null;
+                    string? contentTransferEncoding = null;
+                    string? partContentType = null;
+                    string? partCharSet = null;
+                    byte[]? partBinary = null;
 
                     foreach (var item in partPriamble)
                     {
@@ -192,7 +189,7 @@ namespace Docxodus
 
                     if (partContentType != null && partContentType.Contains(";"))
                     {
-                        string thisPartContentType = null;
+                        string? thisPartContentType = null;
                         var spl = partContentType.Split(';').Select(s => s.Trim()).ToArray();
                         foreach (var s in spl)
                         {
@@ -242,7 +239,7 @@ namespace Docxodus
 
     public class Normalizer
     {
-        public static XDocument Normalize(XDocument source, XmlSchemaSet schema)
+        public static XDocument Normalize(XDocument source, XmlSchemaSet? schema)
         {
             bool havePSVI = false;
             // validate, throw errors, add PSVI information
@@ -260,7 +257,7 @@ namespace Docxodus
                     // children of a document, so we can remove all text nodes.
                     if (n is XComment || n is XProcessingInstruction || n is XText)
                         return null;
-                    XElement e = n as XElement;
+                    XElement? e = n as XElement;
                     if (e != null)
                         return NormalizeElement(e, havePSVI);
                     return n;
@@ -270,7 +267,7 @@ namespace Docxodus
         }
 
         public static bool DeepEqualsWithNormalization(XDocument doc1, XDocument doc2,
-            XmlSchemaSet schemaSet)
+            XmlSchemaSet? schemaSet)
         {
             XDocument d1 = Normalize(doc1, schemaSet);
             XDocument d2 = Normalize(doc2, schemaSet);
@@ -291,7 +288,7 @@ namespace Docxodus
                         {
                             if (havePSVI)
                             {
-                                var dt = a.GetSchemaInfo().SchemaType.TypeCode;
+                                var dt = a.GetSchemaInfo()!.SchemaType!.TypeCode;
                                 switch (dt)
                                 {
                                     case XmlTypeCode.Boolean:
@@ -315,12 +312,12 @@ namespace Docxodus
                     );
         }
 
-        private static XNode NormalizeNode(XNode node, bool havePSVI)
+        private static XNode? NormalizeNode(XNode node, bool havePSVI)
         {
             // trim comments and processing instructions from normalized tree
             if (node is XComment || node is XProcessingInstruction)
                 return null;
-            XElement e = node as XElement;
+            XElement? e = node as XElement;
             if (e != null)
                 return NormalizeElement(e, havePSVI);
             // Only thing left is XCData and XText, so clone them
@@ -331,8 +328,10 @@ namespace Docxodus
         {
             if (havePSVI)
             {
-                var dt = element.GetSchemaInfo();
-                switch (dt.SchemaType.TypeCode)
+                // Validate() (called by the only caller, Normalize()) attaches PSVI info to
+                // every element when havePSVI is true.
+                var dt = element.GetSchemaInfo()!;
+                switch (dt.SchemaType!.TypeCode)
                 {
                     case XmlTypeCode.Boolean:
                         return new XElement(element.Name,
@@ -514,7 +513,7 @@ namespace Docxodus
 
     public static class PtExtensions
     {
-        public static XElement GetXElement(this XmlNode node)
+        public static XElement? GetXElement(this XmlNode node)
         {
             var xDoc = new XDocument();
             using (XmlWriter xmlWriter = xDoc.CreateWriter())
@@ -536,7 +535,7 @@ namespace Docxodus
             using (XmlWriter xmlWriter = xDoc.CreateWriter())
                 document.WriteTo(xmlWriter);
 
-            XmlDeclaration decl = document.ChildNodes.OfType<XmlDeclaration>().FirstOrDefault();
+            XmlDeclaration? decl = document.ChildNodes.OfType<XmlDeclaration>().FirstOrDefault();
             if (decl != null)
                 xDoc.Declaration = new XDeclaration(decl.Version, decl.Encoding, decl.Standalone);
 
@@ -551,7 +550,7 @@ namespace Docxodus
                 xmlDoc.Load(xmlReader);
                 if (document.Declaration != null)
                 {
-                    XmlDeclaration dec = xmlDoc.CreateXmlDeclaration(document.Declaration.Version,
+                    XmlDeclaration dec = xmlDoc.CreateXmlDeclaration(document.Declaration.Version!,
                         document.Declaration.Encoding, document.Declaration.Standalone);
                     xmlDoc.InsertBefore(dec, xmlDoc.FirstChild);
                 }
@@ -590,7 +589,7 @@ namespace Docxodus
             this IEnumerable<TSource> source,
             Func<TSource, TKey> keySelector)
         {
-            TKey last = default(TKey);
+            TKey last = default!;
             var haveLast = false;
             var list = new List<TSource>();
 
@@ -599,7 +598,7 @@ namespace Docxodus
                 TKey k = keySelector(s);
                 if (haveLast)
                 {
-                    if (!k.Equals(last))
+                    if (!k!.Equals(last))
                     {
                         yield return new GroupOfAdjacent<TSource, TKey>(list, last);
 
@@ -625,7 +624,7 @@ namespace Docxodus
 
         private static void InitializeSiblingsReverseDocumentOrder(XElement element)
         {
-            XElement prev = null;
+            XElement? prev = null;
             foreach (XElement e in element.Elements())
             {
                 e.AddAnnotation(new SiblingsReverseDocumentOrderInfo { PreviousSibling = prev });
@@ -638,12 +637,13 @@ namespace Docxodus
             this XElement element)
         {
             if (element.Annotation<SiblingsReverseDocumentOrderInfo>() == null)
-                InitializeSiblingsReverseDocumentOrder(element.Parent);
+                InitializeSiblingsReverseDocumentOrder(element.Parent!);
             XElement current = element;
             while (true)
             {
-                XElement previousElement = current
-                    .Annotation<SiblingsReverseDocumentOrderInfo>()
+                // Initialize above (or on a prior call) always annotates every sibling, current included.
+                XElement? previousElement = current
+                    .Annotation<SiblingsReverseDocumentOrderInfo>()!
                     .PreviousSibling;
                 if (previousElement == null)
                     yield break;
@@ -656,7 +656,7 @@ namespace Docxodus
 
         private static void InitializeDescendantsReverseDocumentOrder(XElement element)
         {
-            XElement prev = null;
+            XElement? prev = null;
             foreach (XElement e in element.Descendants())
             {
                 e.AddAnnotation(new DescendantsReverseDocumentOrderInfo { PreviousElement = prev });
@@ -673,8 +673,8 @@ namespace Docxodus
             XElement current = element;
             while (true)
             {
-                XElement previousElement = current
-                    .Annotation<DescendantsReverseDocumentOrderInfo>()
+                XElement? previousElement = current
+                    .Annotation<DescendantsReverseDocumentOrderInfo>()!
                     .PreviousElement;
                 if (previousElement == null)
                     yield break;
@@ -687,7 +687,7 @@ namespace Docxodus
 
         private static void InitializeDescendantsTrimmedReverseDocumentOrder(XElement element, XName trimName)
         {
-            XElement prev = null;
+            XElement? prev = null;
             foreach (XElement e in element.DescendantsTrimmed(trimName))
             {
                 e.AddAnnotation(new DescendantsTrimmedReverseDocumentOrderInfo { PreviousElement = prev });
@@ -709,8 +709,8 @@ namespace Docxodus
             XElement current = element;
             while (true)
             {
-                XElement previousElement = current
-                    .Annotation<DescendantsTrimmedReverseDocumentOrderInfo>()
+                XElement? previousElement = current
+                    .Annotation<DescendantsTrimmedReverseDocumentOrderInfo>()!
                     .PreviousElement;
                 if (previousElement == null)
                     yield break;
@@ -818,7 +818,7 @@ namespace Docxodus
             }
         }
 
-        public static bool? ToBoolean(this XAttribute a)
+        public static bool? ToBoolean(this XAttribute? a)
         {
             if (a == null)
                 return null;
@@ -845,7 +845,7 @@ namespace Docxodus
 
         private static string GetQName(XElement xe)
         {
-            string prefix = xe.GetPrefixOfNamespace(xe.Name.Namespace);
+            string? prefix = xe.GetPrefixOfNamespace(xe.Name.Namespace);
             if (xe.Name.Namespace == XNamespace.None || prefix == null)
                 return xe.Name.LocalName;
 
@@ -854,7 +854,7 @@ namespace Docxodus
 
         private static string GetQName(XAttribute xa)
         {
-            string prefix = xa.Parent != null ? xa.Parent.GetPrefixOfNamespace(xa.Name.Namespace) : null;
+            string? prefix = xa.Parent != null ? xa.Parent.GetPrefixOfNamespace(xa.Name.Namespace) : null;
             if (xa.Name.Namespace == XNamespace.None || prefix == null)
                 return xa.Name.ToString();
 
@@ -875,12 +875,12 @@ namespace Docxodus
         {
             return source.Aggregate(new StringBuilder(),
                        (sb, i) => sb
-                           .Append(i.ToString())
+                           .Append(i?.ToString())
                            .Append(separator),
                        s => s.ToString());
         }
 
-        public static string GetXPath(this XObject xobj)
+        public static string? GetXPath(this XObject xobj)
         {
             if (xobj.Parent == null)
             {
@@ -1086,9 +1086,9 @@ namespace Docxodus
         public class RunResults
         {
             public int ExitCode;
-            public Exception RunException;
-            public StringBuilder Output;
-            public StringBuilder Error;
+            public Exception? RunException;
+            public StringBuilder Output = new StringBuilder();
+            public StringBuilder Error = new StringBuilder();
         }
 
         public static RunResults RunExecutable(string executablePath, string arguments, string workingDirectory)
@@ -1137,17 +1137,17 @@ namespace Docxodus
 
     public class SiblingsReverseDocumentOrderInfo
     {
-        public XElement PreviousSibling;
+        public XElement? PreviousSibling;
     }
 
     public class DescendantsReverseDocumentOrderInfo
     {
-        public XElement PreviousElement;
+        public XElement? PreviousElement;
     }
 
     public class DescendantsTrimmedReverseDocumentOrderInfo
     {
-        public XElement PreviousElement;
+        public XElement? PreviousElement;
     }
 
     public class GroupOfAdjacent<TSource, TKey> : IGrouping<TKey, TSource>
@@ -1187,7 +1187,7 @@ namespace Docxodus
             public TimeSpan Time;
         }
 
-        private string LastBucket = null;
+        private string? LastBucket = null;
         private DateTime LastTime;
         private Dictionary<string, BucketInfo> Buckets;
 
@@ -1210,8 +1210,9 @@ namespace Docxodus
 
         private void AddToBuckets(DateTime now)
         {
+            // Both callers (Bucket, End) only call this after checking LastBucket != null.
             TimeSpan d = now - LastTime;
-            var bucketParts = LastBucket.Split('/');
+            var bucketParts = LastBucket!.Split('/');
             var bucketList = bucketParts.Select((t, i) => bucketParts
                 .Take(i + 1)
                 .Select(z => z + "/")
@@ -1302,9 +1303,9 @@ namespace Docxodus
             public TimeSpan Time;
         }
 
-        public static string LastBucket = null;
+        public static string? LastBucket = null;
         private static DateTime LastTime;
-        private static Dictionary<string, BucketInfo> Buckets;
+        private static Dictionary<string, BucketInfo> Buckets = new Dictionary<string, BucketInfo>();
 
         public static void Bucket(string bucket)
         {
@@ -1325,16 +1326,18 @@ namespace Docxodus
 
         private static void AddToBuckets(DateTime now)
         {
+            // Both callers (Bucket, End) only call this after checking LastBucket != null.
             TimeSpan d = now - LastTime;
+            string lastBucket = LastBucket!;
 
-            if (Buckets.ContainsKey(LastBucket))
+            if (Buckets.ContainsKey(lastBucket))
             {
-                Buckets[LastBucket].Count += 1;
-                Buckets[LastBucket].Time += d;
+                Buckets[lastBucket].Count += 1;
+                Buckets[lastBucket].Time += d;
             }
             else
             {
-                Buckets.Add(LastBucket, new BucketInfo()
+                Buckets.Add(lastBucket, new BucketInfo()
                 {
                     Count = 1,
                     Time = d,

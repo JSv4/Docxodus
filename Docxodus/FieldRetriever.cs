@@ -1,6 +1,3 @@
-// Inherited OpenXmlPowerTools code that predates nullable annotations (issue #13).
-#nullable disable
-
 // Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
@@ -43,10 +40,14 @@ namespace Docxodus
             var relevantElements = cachedAnnotationInformation[id];
 #endif
 
+            // Every element reachable here came from cachedAnnotationInformation, which
+            // AnnotateWithFieldInfo populates only from elements that already carry a non-null
+            // Stack<FieldElementTypeInfo> annotation — so the Annotation<>() calls below are
+            // guaranteed non-null.
             var groupedSubFields = relevantElements
                 .GroupAdjacent(e =>
                 {
-                    Stack<FieldElementTypeInfo> s = e.Annotation<Stack<FieldElementTypeInfo>>();
+                    Stack<FieldElementTypeInfo> s = e.Annotation<Stack<FieldElementTypeInfo>>()!;
                     var stackElement = s.FirstOrDefault(z => z.Id == id);
                     var elementsBefore = s.TakeWhile(z => z != stackElement);
                     return elementsBefore.Any();
@@ -60,8 +61,10 @@ namespace Docxodus
                     {
                         return g.Select(e =>
                         {
-                            Stack<FieldElementTypeInfo> s = e.Annotation<Stack<FieldElementTypeInfo>>();
-                            var stackElement = s.FirstOrDefault(z => z.Id == id);
+                            Stack<FieldElementTypeInfo> s = e.Annotation<Stack<FieldElementTypeInfo>>()!;
+                            // e is a member of its own stack's grouping, so a stack entry with
+                            // Id == id (namely e's own entry) is guaranteed present.
+                            var stackElement = s.FirstOrDefault(z => z.Id == id)!;
                             if (stackElement.FieldElementType == FieldElementTypeEnum.InstrText &&
                                 e.Name == w + "instrText")
                                 return e.Value;
@@ -71,7 +74,7 @@ namespace Docxodus
                     }
                     else
                     {
-                        Stack<FieldElementTypeInfo> s = g.First().Annotation<Stack<FieldElementTypeInfo>>();
+                        Stack<FieldElementTypeInfo> s = g.First().Annotation<Stack<FieldElementTypeInfo>>()!;
                         var stackElement = s.FirstOrDefault(z => z.Id == id);
                         var elementBefore = s.TakeWhile(z => z != stackElement).Last();
                         var subFieldId = elementBefore.Id;
@@ -116,7 +119,7 @@ namespace Docxodus
         {
             XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
-            XElement root = part.GetXDocument().Root;
+            XElement root = part.GetXDocument().Root!;
             var r = root.DescendantsAndSelf()
                 .Rollup(
                     new FieldElementTypeStack
@@ -126,9 +129,10 @@ namespace Docxodus
                     },
                     (e, s) =>
                     {
+                        // w:fldChar always carries w:fldCharType per the WordprocessingML schema.
                         if (e.Name == w + "fldChar")
                         {
-                            if (e.Attribute(w + "fldCharType").Value == "begin")
+                            if (e.Attribute(w + "fldCharType")!.Value == "begin")
                             {
                                 Stack<FieldElementTypeInfo> fis;
                                 if (s.FiStack == null)
@@ -147,9 +151,11 @@ namespace Docxodus
                                     FiStack = fis,
                                 };
                             };
-                            if (e.Attribute(w + "fldCharType").Value == "separate")
+                            // An orphan separate/end with no preceding begin throws here (NullReferenceException
+                            // via FiStack!), exactly as it did before this file was nullable-annotated.
+                            if (e.Attribute(w + "fldCharType")!.Value == "separate")
                             {
-                                Stack<FieldElementTypeInfo> fis = new Stack<FieldElementTypeInfo>(s.FiStack.Reverse());
+                                Stack<FieldElementTypeInfo> fis = new Stack<FieldElementTypeInfo>(s.FiStack!.Reverse());
                                 FieldElementTypeInfo wfi = fis.Pop();
                                 fis.Push(
                                     new FieldElementTypeInfo
@@ -163,9 +169,9 @@ namespace Docxodus
                                     FiStack = fis,
                                 };
                             }
-                            if (e.Attribute(w + "fldCharType").Value == "end")
+                            if (e.Attribute(w + "fldCharType")!.Value == "end")
                             {
-                                Stack<FieldElementTypeInfo> fis = new Stack<FieldElementTypeInfo>(s.FiStack.Reverse());
+                                Stack<FieldElementTypeInfo> fis = new Stack<FieldElementTypeInfo>(s.FiStack!.Reverse());
                                 FieldElementTypeInfo wfi = fis.Pop();
                                 return new FieldElementTypeStack
                                 {
@@ -211,7 +217,7 @@ namespace Docxodus
                         }
                         if (wfi3.FieldElementType == FieldElementTypeEnum.End)
                         {
-                            Stack<FieldElementTypeInfo> fis = new Stack<FieldElementTypeInfo>(s.FiStack.Reverse());
+                            Stack<FieldElementTypeInfo>? fis = new Stack<FieldElementTypeInfo>(s.FiStack!.Reverse());
                             fis.Pop();
                             if (!fis.Any())
                                 fis = null;
@@ -257,7 +263,7 @@ namespace Docxodus
             var cachedAnnotationInformation = new Dictionary<int, List<XElement>>();
             foreach (var desc in root.DescendantsTrimmed(d => d.Name == W.rPr || d.Name == W.pPr))
             {
-                Stack<FieldElementTypeInfo> s = desc.Annotation<Stack<FieldElementTypeInfo>>();
+                Stack<FieldElementTypeInfo>? s = desc.Annotation<Stack<FieldElementTypeInfo>>();
 
                 if (s != null )
                 {
@@ -397,7 +403,7 @@ namespace Docxodus
 
             if (field.Length == 0)
                 return emptyField;
-            string fieldType = field.TrimStart().Split(' ').FirstOrDefault();
+            string? fieldType = field.TrimStart().Split(' ').FirstOrDefault();
             if (fieldType == null)
                 return emptyField;
             if (fieldType.ToUpper() != "HYPERLINK" &&
@@ -421,9 +427,9 @@ namespace Docxodus
 
         public class FieldInfo
         {
-            public string FieldType;
-            public string[] Switches;
-            public string[] Arguments;
+            public string FieldType = "";
+            public string[] Switches = Array.Empty<string>();
+            public string[] Arguments = Array.Empty<string>();
         }
 
         public enum FieldElementTypeEnum
@@ -444,7 +450,7 @@ namespace Docxodus
         public class FieldElementTypeStack
         {
             public int Id;
-            public Stack<FieldElementTypeInfo> FiStack;
+            public Stack<FieldElementTypeInfo>? FiStack;
         }
     }
 }
