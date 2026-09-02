@@ -24,10 +24,10 @@ duplicated description is one that will go stale.
 
 `Docxodus.csproj` sets `<Nullable>enable</Nullable>` (issue #13): every file is
 nullable-checked by default, so a new file needs no directive. The exception is the
-inherited OpenXmlPowerTools core — 4 legacy files (`WmlToHtmlConverter` + `.Charts`,
-`FormattingAssembler`, `DocumentBuilder`) carry an explicit `#nullable disable` header,
-tracked by issues #646, #648 and #649. They hold back a lot: stripping all 4 takes the
-library from its baseline to **1,696** (**1,579** distinct `CS86xx` sites).
+inherited OpenXmlPowerTools core — 3 legacy files (`WmlToHtmlConverter` + `.Charts`,
+`FormattingAssembler`) carry an explicit `#nullable disable` header,
+tracked by issues #648 and #649. They hold back a lot: stripping all 3 takes the
+library from its baseline to **1,131** (**1,016** distinct `CS86xx` sites).
 `grep -l "^#nullable disable" Docxodus/*.cs` lists the remaining debt; when
 substantially refactoring one of those files, consider removing its header and fixing
 that file's warnings. CS8632 stays in `NoWarn` deliberately: with the project context
@@ -40,7 +40,7 @@ are kept for the day each file migrates.
 **`Docxodus.csproj` and `Docxodus.Tests.csproj` both override it to `false`**, so the core
 library and the test project do *not* fail on warnings. The CLI tools, MCP server,
 python-host and WASM project do inherit it. Current baseline: the library builds with
-**117 warnings**, the test project with **693** (mostly StyleCop `SA1633`/`SA1636` file
+**116 warnings**, the test project with **692** (mostly StyleCop `SA1633`/`SA1636` file
 headers and `SA1206` using-order). Don't add to either baseline. Measure with
 `--no-incremental` — a warm incremental build reports zero because nothing recompiles.
 
