@@ -46,6 +46,29 @@ namespace OxPt
 
             Assert.NotNull(metrics);
         }
+
+        [Fact]
+        public void MG002_GetDocxMetrics_ByteLoadedDocumentWithNoFileName()
+        {
+            // Regression test: WmlDocument(fileName: null, bytes) is a normal, supported
+            // construction (e.g. a document received over the wire rather than loaded from
+            // disk). GetDocxMetrics used to build an XAttribute directly from the null
+            // FileName, which throws ArgumentNullException at the point of construction.
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/");
+            FileInfo fi = new FileInfo(Path.Combine(sourceDir.FullName, "DA001-TemplateDocument.docx"));
+            byte[] bytes = File.ReadAllBytes(fi.FullName);
+            WmlDocument wmlDocument = new WmlDocument(null, bytes);
+
+            MetricsGetterSettings settings = new MetricsGetterSettings()
+            {
+                IncludeTextInContentControls = false,
+            };
+
+            XElement metrics = MetricsGetter.GetDocxMetrics(wmlDocument, settings);
+
+            Assert.NotNull(metrics);
+            Assert.Equal("", (string?)metrics.Attribute(H.FileName));
+        }
     }
 }
 
