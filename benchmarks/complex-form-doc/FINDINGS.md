@@ -1,37 +1,64 @@
-# Findings from the 2026-08-26 run (NVCA Model COI, Oct 2025)
+# Findings
 
-Measured at commit c8e13d2 on .NET 10.0.400, single container, cold process per phase.
-Timings are indicative, not benchmarks-grade.
+## Current run
 
-## Headline results
-
-| Measurement | Result |
+| | |
 |---|---|
-| HTML (footnotes + headers rendered) | 0.8–2.1 s |
-| Markdown projection | 364–459 ms, 214,469 chars, 462 anchors, all 94 footnotes projected inline |
-| No-edit session round-trip | 401–535 ms, text-exact, part inventory identical |
-| Tracked session, 8-edit counsel script | all edits succeed; 11 native revisions, correct author; single accept/reject verified |
-| `DocxDiff.Compare` | 1.5–2.4 s, 18 word-level revisions with both-side anchors |
-| Accept-all / reject-all round-trip | exact in both directions |
-| Schema findings added by any output | 0 (source baseline 80 → outputs 80) |
-| Edit-script / semantic-changes JSON | 46.6 KB / ~50 KB, 24 typed changes with SHA-256 content+format digests |
-| Redline → HTML (tracked markup) | 0.7–0.8 s, semantic `<ins>`/`<del>` |
-| `@docxodus/export` PDF | 51 pages in 17.3 s cold (Chromium launch included), render report `complete`; redline with `reviewProfile: "markup"` renders as Word-style strikeout/underline markup |
-| `docxodus-mcp` end-to-end (open → search → tracked edit → revision list → sessionless compare) | first-try success; compare 3.8 s with per-author revision summary |
+| Commit | `18eb50ea` (main) |
+| Date | 2026-09-02 |
+| Runtime | .NET SDK 10.0.301, Linux x64, Release build |
+| Input | `TestFiles/NVCA-Model-COI.docx`, 147,622 bytes |
+| Input SHA-256 | `d75600769c12724990de48149d7a2bb161f3522daa54b1783672f93697d87d29` |
+| Edit script | `edits/nvca-coi.json` (8 edits) |
+| Command | `dotnet run --project benchmarks/complex-form-doc -c Release -- TestFiles/NVCA-Model-COI.docx --out <dir>` |
+| Exit code | 0 (`ALL CHECKS PASSED`) |
 
-## Issues discovered (Docxodus)
+### Stable assertions
 
-1. **`WmlComparer` (legacy engine) fails its round-trip invariants on this document.**
-   Accept-all and reject-all both diverge from the expected text: the engine silently
-   drops an empty paragraph inside a footnote (adjacent to the *Kumar v. Racing Corp.*
-   footnote), and it rewrites the package wholesale (validator findings drop 80 → 29,
-   i.e. it normalizes markup it should preserve). It is also ~3× slower than `DocxDiff`
-   (6.3–7.5 s vs 1.5–2.4 s). The benchmark keeps the legacy engine as a tracked
-   known-gap: the two `[check] legacy ... FAIL` lines are expected until this is fixed
-   or the engine's documentation explicitly scopes it away from footnote-heavy
-   documents. `DocxDiff` on the identical inputs passes both invariants exactly.
+These are the harness's contract. They are expected to hold on every run of any
+comparable form document, and a change that breaks one is a regression.
 
-2. **`DocxSession.DeleteBlock` leaves orphaned footnote definitions.** Deleting a
+| Check | Result |
+|---|---|
+| `round-trip text exact` — open/save with no edits preserves every text run | PASS |
+| `round-trip parts identical` — open/save with no edits preserves the part inventory | PASS |
+| `accept single revision` — one tracked revision accepts in isolation | PASS |
+| `reject single revision` — one tracked revision rejects in isolation | PASS |
+| `tracked save adds no schema findings` — output validator count ≤ source baseline | PASS |
+| `accept-all == modified text` — accepting the whole redline reproduces the revised document | PASS |
+| `reject-all == baseline text` — rejecting the whole redline reproduces the original | PASS |
+| `redline adds no schema findings` — output validator count ≤ source baseline | PASS |
+
+The source document's own validator baseline is **80 findings**; every output matched it
+exactly, so the toolchain added none.
+
+### Indicative measurements
+
+Single run, cold process, one machine. These are *not* benchmark-grade numbers and no
+threshold is asserted on them — they exist to catch order-of-magnitude drift.
+
+| Stage | Time | Output |
+|---|---|---|
+| `html (footnotes+headers rendered)` | 1,569 ms | 214,469 chars |
+| `markdown projection` | 542 ms | 462 anchors, all 94 footnotes projected inline |
+| `DocxDiff compatibility probe` | 108 ms | 0 warnings |
+| `no-edit session round-trip` | 725 ms | — |
+| `tracked session: full edit script` | 3,814 ms | 8/8 edits applied, 11 native revisions, author `Series A Counsel` |
+| `clean session: same edit script untracked` | 1,793 ms | — |
+| `DocxDiff.Compare` | 1,397 ms | — |
+| `DocxDiff.GetRevisions` | 721 ms | 20 revisions |
+| `DocxDiff edit script + semantic changes` | 2,659 ms | 46,460 / 67,164 chars |
+| `DocxDiff round-trip invariants` | 1,960 ms | — |
+| `redline -> HTML with tracked-change markup` | 1,095 ms | — |
+
+Revision counts are one-run observations of a specific edit script against a specific
+document; they are reported, not asserted. The 8-edit script yields 11 tracked-session
+revisions (some edits split across runs) and 20 `DocxDiff` revisions (word-level
+granularity over the same edits).
+
+## Open issues this benchmark surfaced
+
+1. **`DocxSession.DeleteBlock` leaves orphaned footnote definitions.** Deleting a
    paragraph whose text carries a footnote reference removes the reference but leaves
    the footnote body in `word/footnotes.xml`. Word renders nothing (the note is
    unreferenced), but the text still ships inside the file — for legal workflows this is
@@ -40,22 +67,37 @@ Timings are indicative, not benchmarks-grade.
    `CompactFootnotes`-style op; whichever is chosen should be revision-aware (a tracked
    delete must keep the note until the revision is accepted).
 
-3. **Formatting-only edits that cross a field envelope surface as delete+insert pairs
+2. **Formatting-only edits that cross a field envelope surface as delete+insert pairs
    in the native redline.** Italicizing a span that intersects a cross-reference field
    produces a full del+ins of the field region rather than a formatting revision —
    correct OOXML, but noisy for a human reviewer. The semantic changeset already
    classifies it precisely (`run_formatting` modify on the exact token span plus a
    `field` envelope change), so this is a markup-shaping improvement, not a diff bug.
 
-4. **PDF export's sandbox posture will surprise container deployments.**
-   `@docxodus/export` (correctly) refuses to launch Chromium without its OS sandbox: it
-   fails when run as root and needs unprivileged user namespaces enabled. The error and
-   remediation text are good; the README warning deserves to be louder, and a
-   preflight `checkEnvironment()` helper would turn the first failed conversion into a
-   configuration message.
+3. **`DocxDiffRevision` has no useful `ToString()`** — logging a revision prints the type
+   name. Minor, but it makes agent traces harder to read.
 
-5. **Small DX nits.** `DocxDiffRevision` has no useful `ToString()` (logging a revision
-   prints the type name); the projection-side tracked-changes knob
+4. **Two tracked-changes knobs are easy to conflate.** The projection-side knob
    (`ProjectionSettings.TrackedChanges`) is separate from the mutation-recording knob
-   (`SetTrackedChanges`) and easy to conflate — an agent that records tracked edits and
-   then projects sees clean text unless it also sets the projection mode.
+   (`SetTrackedChanges`): an agent that records tracked edits and then projects sees
+   clean text unless it also sets the projection mode.
+
+## Historical: the 2026-08-26 run (superseded)
+
+The first run of this harness, at commit `c8e13d2`, additionally measured the legacy
+`WmlComparer` engine alongside `DocxDiff`. **That stage no longer exists** — `WmlComparer`
+was removed from the library in v11.0.0 (#643), and the harness's legacy phase went with
+it. The observations below are kept only as the record of why that engine was retired;
+they do not describe any behaviour of current `main`.
+
+- `WmlComparer` failed both round-trip invariants on this document: accept-all and
+  reject-all each diverged from the expected text, because the engine silently dropped an
+  empty paragraph inside a footnote.
+- It rewrote the package wholesale — validator findings dropped 80 → 29, i.e. it
+  normalized markup it should have preserved.
+- It was roughly 3× slower than `DocxDiff` (6.3–7.5 s vs 1.5–2.4 s).
+- `DocxDiff` passed both invariants exactly on the identical inputs, which it still does.
+
+Two further findings from that run have since been fixed and are not repeated above:
+`@docxodus/export`'s Chromium sandbox posture (now covered by `docxodus doctor`), and the
+absence of a preflight environment check.
