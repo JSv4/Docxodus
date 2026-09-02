@@ -3971,7 +3971,7 @@ public sealed partial class DocxSession : IDisposable
     private static MutationBatchChangeSet<T> SafeChangeSet<T>(
         IReadOnlyList<T>? before,
         IReadOnlyList<T>? after,
-        Func<T, string> key,
+        Func<T, string?> key,
         Func<T, T, bool> equivalent,
         string kind,
         List<string> warnings)
@@ -3989,12 +3989,12 @@ public sealed partial class DocxSession : IDisposable
     private static MutationBatchChangeSet<T> ChangeSet<T>(
         IReadOnlyList<T> before,
         IReadOnlyList<T> after,
-        Func<T, string> key,
+        Func<T, string?> key,
         Func<T, T, bool> equivalent)
     {
         static Dictionary<string, List<int>> IndexByKey(
             IReadOnlyList<T> items,
-            Func<T, string> selectKey)
+            Func<T, string?> selectKey)
         {
             var groups = new Dictionary<string, List<int>>(StringComparer.Ordinal);
             for (var index = 0; index < items.Count; index++)
@@ -4901,6 +4901,7 @@ public sealed partial class DocxSession : IDisposable
         {
             if (!string.Equals(ann.LabelId, labelId, StringComparison.Ordinal)) continue;
             if (string.IsNullOrEmpty(ann.BookmarkName)) continue;
+            if (ann.Id is null) continue;
             var anchors = ResolveBookmarkAnchors(ann.BookmarkName)
                 .Select(target => AttachCitation(target, citationRequest)).ToArray();
             if (anchors.Length > 0) map[ann.Id] = anchors;

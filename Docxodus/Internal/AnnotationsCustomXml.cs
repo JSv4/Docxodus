@@ -79,6 +79,9 @@ internal static class AnnotationsCustomXml
 
     public static void Write(WordprocessingDocument doc, DocumentAnnotation annotation)
     {
+        if (string.IsNullOrEmpty(annotation.Id))
+            throw new ArgumentException("Annotation must have an Id before it can be persisted.", nameof(annotation));
+
         var part = GetOrCreate(doc);
         var xdoc = part.GetXDocument();
         var existing = xdoc.Root?
@@ -105,8 +108,9 @@ internal static class AnnotationsCustomXml
 
     private static XElement Serialize(DocumentAnnotation a)
     {
+        // Only reachable via Write, which has already rejected a null/empty Id.
         var element = new XElement(Ann + "annotation",
-            new XAttribute("id", a.Id),
+            new XAttribute("id", a.Id!),
             new XAttribute("labelId", a.LabelId ?? ""),
             new XAttribute("label", a.Label ?? ""),
             new XAttribute("color", a.Color ?? "#FFFF00"));

@@ -1,6 +1,3 @@
-// Inherited OpenXmlPowerTools code that predates nullable annotations (issue #13).
-#nullable disable
-
 // Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
@@ -78,7 +75,7 @@ namespace Docxodus
         ///     Then the callback can return true / false to indicate whether to delete or not
         /// </summary>
         public static int Replace(IEnumerable<XElement> content, Regex regex, string replacement,
-            Func<XElement, Match, bool> doReplacement)
+            Func<XElement, Match, bool>? doReplacement)
         {
             return ReplaceInternal(content, regex, replacement, doReplacement, false, null, true);
         }
@@ -87,7 +84,7 @@ namespace Docxodus
         /// This overload enables not coalescing content, for callers that need runs left as-is.
         /// </summary>
         public static int Replace(IEnumerable<XElement> content, Regex regex, string replacement,
-            Func<XElement, Match, bool> doReplacement, bool coalesceContent)
+            Func<XElement, Match, bool>? doReplacement, bool coalesceContent)
         {
             return ReplaceInternal(content, regex, replacement, doReplacement, false, null, coalesceContent);
         }
@@ -108,13 +105,13 @@ namespace Docxodus
         ///     Then code throws an exception
         /// </summary>
         public static int Replace(IEnumerable<XElement> content, Regex regex, string replacement,
-            Func<XElement, Match, bool> doReplacement, bool trackRevisions, string author)
+            Func<XElement, Match, bool>? doReplacement, bool trackRevisions, string author)
         {
             return ReplaceInternal(content, regex, replacement, doReplacement, trackRevisions, author, true);
         }
 
-        private static int ReplaceInternal(IEnumerable<XElement> content, Regex regex, string replacement,
-            Func<XElement, Match, bool> callback, bool trackRevisions, string revisionTrackingAuthor,
+        private static int ReplaceInternal(IEnumerable<XElement> content, Regex regex, string? replacement,
+            Func<XElement, Match, bool>? callback, bool trackRevisions, string? revisionTrackingAuthor,
             bool coalesceContent)
         {
             if (content == null) throw new ArgumentNullException("content");
@@ -122,7 +119,7 @@ namespace Docxodus
 
             IEnumerable<XElement> contentList = content as IList<XElement> ?? content.ToList();
 
-            XElement first = contentList.FirstOrDefault();
+            XElement? first = contentList.FirstOrDefault();
             if (first == null)
                 return 0;
 
@@ -153,16 +150,18 @@ namespace Docxodus
                 foreach (XElement item in revTrackingWithoutId)
                     item.Add(new XAttribute(W.id, nextId++));
 
+                // Every RevTrackMarkupWithId element was just given a w:id above, so the lookup
+                // below is guaranteed non-null.
                 List<IGrouping<int, XElement>> revTrackingWithDuplicateIds = root
                     .DescendantsAndSelf()
                     .Where(d => RevTrackMarkupWithId.Contains(d.Name))
-                    .GroupBy(d => (int) d.Attribute(W.id))
+                    .GroupBy(d => (int) d.Attribute(W.id)!)
                     .Where(g => g.Count() > 1)
                     .ToList();
                 foreach (IGrouping<int, XElement> group in revTrackingWithDuplicateIds)
                     foreach (XElement gc in group.Skip(1))
                     {
-                        XAttribute xAttribute = gc.Attribute(W.id);
+                        XAttribute? xAttribute = gc.Attribute(W.id);
                         if (xAttribute != null) xAttribute.Value = nextId.ToString();
                         nextId++;
                     }
@@ -188,8 +187,8 @@ namespace Docxodus
             return 0;
         }
 
-        private static object WmlSearchAndReplaceTransform(XNode node, Regex regex, string replacement,
-            Func<XElement, Match, bool> callback, bool trackRevisions, string revisionTrackingAuthor,
+        private static object WmlSearchAndReplaceTransform(XNode node, Regex regex, string? replacement,
+            Func<XElement, Match, bool>? callback, bool trackRevisions, string? revisionTrackingAuthor,
             ReplaceInternalInfo replInfo, bool coalesceContent)
         {
             var element = node as XElement;
@@ -250,12 +249,14 @@ namespace Docxodus
                         // uses the Skip / Take special semantics of array to implement efficient finding of sub array
 
                         XElement firstRun = runCollection.First();
-                        XElement firstRunProperties = firstRun.Elements(W.rPr).FirstOrDefault();
+                        XElement? firstRunProperties = firstRun.Elements(W.rPr).FirstOrDefault();
 
                         // save away first run properties
 
                         if (trackRevisions)
                         {
+                            // The only caller that sets trackRevisions also requires a non-null
+                            // author (see the public Replace(..., trackRevisions, author) overload).
                             if (replacement != "")
                             {
                                 // We coalesce runs because a caller can pass coalesceContent:false
@@ -264,7 +265,7 @@ namespace Docxodus
                                 List<XElement> newRuns = UnicodeMapper.StringToCoalescedRunList(newTextValue,
                                     firstRunProperties);
                                 var newIns = new XElement(W.ins,
-                                    new XAttribute(W.author, revisionTrackingAuthor),
+                                    new XAttribute(W.author, revisionTrackingAuthor!),
                                     new XAttribute(W.date, DateTime.UtcNow.ToString("s") + "Z"),
                                     newRuns);
 
@@ -276,14 +277,15 @@ namespace Docxodus
 
                             foreach (XElement run in runCollection)
                             {
-                                bool isInIns = run.Parent != null && run.Parent.Name == W.ins;
+                                XElement? runParent = run.Parent;
+                                bool isInIns = runParent != null && runParent.Name == W.ins;
                                 if (isInIns)
                                 {
-                                    XElement parentIns = run.Parent;
-                                    XElement grandParentParagraph = parentIns.Parent;
+                                    XElement parentIns = runParent!;
+                                    XElement? grandParentParagraph = parentIns.Parent;
                                     if (grandParentParagraph != null)
                                     {
-                                        if ((string) parentIns.Attributes(W.author).FirstOrDefault() ==
+                                        if ((string?) parentIns.Attributes(W.author).FirstOrDefault() ==
                                             revisionTrackingAuthor)
                                         {
                                             List<XElement> parentInsSiblings = grandParentParagraph
@@ -300,7 +302,7 @@ namespace Docxodus
                                                     ? new XElement(W.ins,
                                                         parentIns.Attributes(),
                                                         new XElement(W.del,
-                                                            new XAttribute(W.author, revisionTrackingAuthor),
+                                                            new XAttribute(W.author, revisionTrackingAuthor!),
                                                             new XAttribute(W.date, DateTime.UtcNow.ToString("s") + "Z"),
                                                             parentIns.Elements().Select(TransformToDelText)))
                                                     : c)
@@ -312,7 +314,7 @@ namespace Docxodus
                                 else
                                 {
                                     var delRun = new XElement(W.del,
-                                        new XAttribute(W.author, revisionTrackingAuthor),
+                                        new XAttribute(W.author, revisionTrackingAuthor!),
                                         new XAttribute(W.date, DateTime.UtcNow.ToString("s") + "Z"),
                                         TransformToDelText(run));
                                     run.ReplaceWith(delRun);
@@ -420,8 +422,8 @@ namespace Docxodus
                 element.Nodes().Select(TransformToDelText));
         }
 
-        private static object PmlSearchAndReplaceTransform(XNode node, Regex regex, string replacement,
-            Func<XElement, Match, bool> callback, ReplaceInternalInfo counter)
+        private static object PmlSearchAndReplaceTransform(XNode node, Regex regex, string? replacement,
+            Func<XElement, Match, bool>? callback, ReplaceInternalInfo counter)
         {
             var element = node as XElement;
             if (element == null) return node;
@@ -445,7 +447,7 @@ namespace Docxodus
                 var charsAndRuns = runsTrimmed
                     .Select(r =>
                         r.Element(A.t) != null
-                            ? new { Ch = r.Element(A.t).Value, r }
+                            ? new { Ch = r.Element(A.t)!.Value, r }
                             : new { Ch = "\x01", r })
                     .ToList();
 
@@ -456,8 +458,9 @@ namespace Docxodus
                 counter.Count += matchCollection.Count;
                 if (replacement == null)
                 {
-                    foreach (Match match in matchCollection.Cast<Match>())
-                        callback(paragraph, match);
+                    if (callback != null)
+                        foreach (Match match in matchCollection.Cast<Match>())
+                            callback(paragraph, match);
                 }
                 else
                 {
@@ -508,7 +511,7 @@ namespace Docxodus
                                 if ((ce.Elements().Count(e => e.Name != A.rPr) != 1) || (ce.Element(A.t) == null))
                                     return DontConsolidate;
 
-                                XElement rPr = ce.Element(A.rPr);
+                                XElement? rPr = ce.Element(A.rPr);
                                 return rPr == null ? "" : rPr.ToString(SaveOptions.None);
                             });
                     var paragraphWithConsolidatedRuns = new XElement(A.p,
@@ -517,7 +520,9 @@ namespace Docxodus
                             if (g.Key == DontConsolidate)
                                 return (object) g;
 
-                            string textValue = g.Select(r => r.Element(A.t).Value).StringConcatenate();
+                            // Grouped by GroupAdjacent above, which routed every run without an
+                            // A.t element into the DontConsolidate group already handled above.
+                            string textValue = g.Select(r => r.Element(A.t)!.Value).StringConcatenate();
                             XAttribute xs = XmlUtil.GetXmlSpaceAttribute(textValue);
                             return new XElement(A.r,
                                 g.First().Elements(A.rPr),
