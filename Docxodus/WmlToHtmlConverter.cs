@@ -1,6 +1,3 @@
-// Inherited OpenXmlPowerTools code that predates nullable annotations (issue #13).
-#nullable disable
-
 // Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
@@ -117,8 +114,8 @@ namespace Docxodus
         public string AdditionalCss;
         public bool RestrictToSupportedLanguages;
         public bool RestrictToSupportedNumberingFormats;
-        public Dictionary<string, Func<string, int, string, string>> ListItemImplementations;
-        public Func<ImageInfo, XElement> ImageHandler;
+        public Dictionary<string, Func<string, int, string?, string?>> ListItemImplementations;
+        public Func<ImageInfo, XElement?>? ImageHandler;
 
         /// <summary>
         /// If true, render tracked changes visually in HTML output.
@@ -145,7 +142,7 @@ namespace Docxodus
         /// <summary>
         /// Custom colors for different authors (author name -> CSS color)
         /// </summary>
-        public Dictionary<string, string> AuthorColors;
+        public Dictionary<string, string>? AuthorColors;
 
         /// <summary>
         /// If true, render move operations as separate from/to (default: true)
@@ -253,7 +250,7 @@ namespace Docxodus
         /// (w:themeFontLang or default paragraph style).
         /// Examples: "en-US", "fr-FR", "de-DE", "ja-JP"
         /// </summary>
-        public string DocumentLanguage;
+        public string? DocumentLanguage;
 
         /// <summary>
         /// If true, resolve theme colors from document theme to actual color values.
@@ -388,8 +385,8 @@ namespace Docxodus
         public string AdditionalCss;
         public bool RestrictToSupportedLanguages;
         public bool RestrictToSupportedNumberingFormats;
-        public Dictionary<string, Func<string, int, string, string>> ListItemImplementations;
-        public Func<ImageInfo, XElement> ImageHandler;
+        public Dictionary<string, Func<string, int, string?, string?>> ListItemImplementations;
+        public Func<ImageInfo, XElement?>? ImageHandler;
 
         /// <summary>
         /// If true, render tracked changes visually in HTML output.
@@ -416,7 +413,7 @@ namespace Docxodus
         /// <summary>
         /// Custom colors for different authors (author name -> CSS color)
         /// </summary>
-        public Dictionary<string, string> AuthorColors;
+        public Dictionary<string, string>? AuthorColors;
 
         /// <summary>
         /// If true, render move operations as separate from/to (default: true)
@@ -524,7 +521,7 @@ namespace Docxodus
         /// (w:themeFontLang or default paragraph style).
         /// Examples: "en-US", "fr-FR", "de-DE", "ja-JP"
         /// </summary>
-        public string DocumentLanguage;
+        public string? DocumentLanguage;
 
         /// <summary>
         /// If true, resolve theme colors from document theme to actual color values.
@@ -636,10 +633,12 @@ namespace Docxodus
     public class CommentInfo
     {
         public int Id { get; set; }
-        public string Author { get; set; }
-        public string Date { get; set; }
-        public string Initials { get; set; }
-        internal XElement SourceElement { get; set; }
+        public string? Author { get; set; }
+        public string? Date { get; set; }
+        public string? Initials { get; set; }
+        // Always set by the object initializer at the sole construction site (LoadComments);
+        // `required` isn't usable here because it can't be less visible than the public class.
+        internal XElement SourceElement { get; set; } = null!;
         public List<XElement> ContentParagraphs { get; set; } = new List<XElement>();
 
         /// <summary>
@@ -966,8 +965,8 @@ namespace Docxodus
             ReverseTableBordersForRtlTables(wordDoc);
             AdjustTableBorders(wordDoc);
             AnnotateOwningContentParts(wordDoc);
-            XElement rootElement = wordDoc.MainDocumentPart.GetXDocument().Root;
-            FieldRetriever.AnnotateWithFieldInfo(wordDoc.MainDocumentPart);
+            XElement rootElement = wordDoc.MainDocumentPart!.GetXDocument().Root!;
+            FieldRetriever.AnnotateWithFieldInfo(wordDoc.MainDocumentPart!);
             AnnotateForSections(wordDoc);
 
             // Load comments if rendering is enabled and store as annotation
@@ -1037,8 +1036,9 @@ namespace Docxodus
                 };
             }
 
+            // The root w:document element always transforms to a real h:html element.
             XElement xhtml = (XElement)ConvertToHtmlTransform(wordDoc, htmlConverterSettings,
-                rootElement, false, 0m);
+                rootElement, false, 0m)!;
 
             ReifyStylesAndClasses(htmlConverterSettings, xhtml, wordDoc);
 
@@ -1085,7 +1085,7 @@ namespace Docxodus
         {
             var metadata = new DocumentMetadata();
 
-            var mainDocPart = wordDoc.MainDocumentPart;
+            var mainDocPart = wordDoc.MainDocumentPart!;
             if (mainDocPart == null)
                 return metadata;
 
@@ -1098,15 +1098,15 @@ namespace Docxodus
             var footnotesPart = mainDocPart.FootnotesPart;
             metadata.HasFootnotes = footnotesPart != null &&
                 footnotesPart.GetXDocument().Root?.Elements(W.footnote)
-                    .Any(fn => (string)fn.Attribute(W.type) != "separator" &&
-                              (string)fn.Attribute(W.type) != "continuationSeparator") == true;
+                    .Any(fn => (string?)fn.Attribute(W.type) != "separator" &&
+                              (string?)fn.Attribute(W.type) != "continuationSeparator") == true;
 
             // Check for endnotes
             var endnotesPart = mainDocPart.EndnotesPart;
             metadata.HasEndnotes = endnotesPart != null &&
                 endnotesPart.GetXDocument().Root?.Elements(W.endnote)
-                    .Any(en => (string)en.Attribute(W.type) != "separator" &&
-                              (string)en.Attribute(W.type) != "continuationSeparator") == true;
+                    .Any(en => (string?)en.Attribute(W.type) != "separator" &&
+                              (string?)en.Attribute(W.type) != "continuationSeparator") == true;
 
             // Check for comments
             var commentsPart = mainDocPart.WordprocessingCommentsPart;
@@ -1206,9 +1206,9 @@ namespace Docxodus
         /// construction. See docs/ooxml_corner_cases.md.
         /// </para>
         /// </remarks>
-        private static List<(XElement sectPr, List<XElement> paragraphs, List<XElement> tables)> CollectSectionData(XElement body)
+        private static List<(XElement? sectPr, List<XElement> paragraphs, List<XElement> tables)> CollectSectionData(XElement body)
         {
-            var result = new List<(XElement sectPr, List<XElement> paragraphs, List<XElement> tables)>();
+            var result = new List<(XElement? sectPr, List<XElement> paragraphs, List<XElement> tables)>();
             var currentParagraphs = new List<XElement>();
             var currentTables = new List<XElement>();
 
@@ -1284,7 +1284,7 @@ namespace Docxodus
         /// </summary>
         private static (double PageWidthPt, double PageHeightPt, double MarginTopPt, double MarginRightPt,
             double MarginBottomPt, double MarginLeftPt, double ContentWidthPt, double ContentHeightPt,
-            double HeaderPt, double FooterPt) ExtractPageDimensions(XElement sectPr)
+            double HeaderPt, double FooterPt) ExtractPageDimensions(XElement? sectPr)
         {
             // Default to US Letter: 8.5" x 11" (612pt x 792pt) with 1" margins (72pt)
             double pageWidthPt = 612;
@@ -1302,9 +1302,9 @@ namespace Docxodus
                 var pgSz = sectPr.Element(W.pgSz);
                 if (pgSz != null)
                 {
-                    if (int.TryParse((string)pgSz.Attribute(W._w), out int w))
+                    if (int.TryParse((string?)pgSz.Attribute(W._w), out int w))
                         pageWidthPt = w / 20.0;
-                    if (int.TryParse((string)pgSz.Attribute(W.h), out int h))
+                    if (int.TryParse((string?)pgSz.Attribute(W.h), out int h))
                         pageHeightPt = h / 20.0;
                 }
 
@@ -1312,17 +1312,17 @@ namespace Docxodus
                 var pgMar = sectPr.Element(W.pgMar);
                 if (pgMar != null)
                 {
-                    if (int.TryParse((string)pgMar.Attribute(W.top), out int top))
+                    if (int.TryParse((string?)pgMar.Attribute(W.top), out int top))
                         marginTopPt = top / 20.0;
-                    if (int.TryParse((string)pgMar.Attribute(W.right), out int right))
+                    if (int.TryParse((string?)pgMar.Attribute(W.right), out int right))
                         marginRightPt = right / 20.0;
-                    if (int.TryParse((string)pgMar.Attribute(W.bottom), out int bottom))
+                    if (int.TryParse((string?)pgMar.Attribute(W.bottom), out int bottom))
                         marginBottomPt = bottom / 20.0;
-                    if (int.TryParse((string)pgMar.Attribute(W.left), out int left))
+                    if (int.TryParse((string?)pgMar.Attribute(W.left), out int left))
                         marginLeftPt = left / 20.0;
-                    if (int.TryParse((string)pgMar.Attribute(W.header), out int header))
+                    if (int.TryParse((string?)pgMar.Attribute(W.header), out int header))
                         headerPt = header / 20.0;
-                    if (int.TryParse((string)pgMar.Attribute(W.footer), out int footer))
+                    if (int.TryParse((string?)pgMar.Attribute(W.footer), out int footer))
                         footerPt = footer / 20.0;
                 }
             }
@@ -1349,7 +1349,7 @@ namespace Docxodus
 
             public IEnumerable<XElement> FooterReferences => footerReferences.Values;
 
-            public void Update(XElement sectPr)
+            public void Update(XElement? sectPr)
             {
                 // A section may carry no properties at all — CollectSectionData's documented
                 // (null => defaults) contract. There is then nothing explicit to record, so the
@@ -1361,10 +1361,10 @@ namespace Docxodus
                 UpdateReferences(footerReferences, sectPr.Elements(W.footerReference));
             }
 
-            public XElement GetHeader(string type) =>
+            public XElement? GetHeader(string type) =>
                 headerReferences.TryGetValue(type, out var reference) ? reference : null;
 
-            public XElement GetFooter(string type) =>
+            public XElement? GetFooter(string type) =>
                 footerReferences.TryGetValue(type, out var reference) ? reference : null;
 
             private static void UpdateReferences(
@@ -1373,21 +1373,21 @@ namespace Docxodus
             {
                 foreach (var reference in explicitReferences)
                 {
-                    var type = (string)reference.Attribute(W.type);
+                    var type = (string?)reference.Attribute(W.type);
                     if (!string.IsNullOrEmpty(type))
                         effectiveReferences[type] = reference;
                 }
             }
         }
 
-        private static bool IsOnOffPropertyEnabled(XElement property) =>
+        private static bool IsOnOffPropertyEnabled(XElement? property) =>
             property != null
             && (property.Attribute(W.val) == null
                 || property.Attribute(W.val).ToBoolean() == true);
 
         private static void DetectHeadersFooters(
             WordprocessingDocument wordDoc,
-            XElement sectPr,
+            XElement? sectPr,
             SectionMetadata sectionMeta,
             EffectiveHeaderFooterReferences effectiveReferences,
             bool hasEvenAndOddHeaders)
@@ -1395,14 +1395,14 @@ namespace Docxodus
             if (sectPr == null)
                 return;
 
-            var mainDocPart = wordDoc.MainDocumentPart;
+            var mainDocPart = wordDoc.MainDocumentPart!;
             bool hasTitlePage = IsOnOffPropertyEnabled(sectPr.Element(W.titlePg));
 
             // Check header references
             foreach (var headerRef in effectiveReferences.HeaderReferences)
             {
-                var type = (string)headerRef.Attribute(W.type);
-                var headerId = (string)headerRef.Attribute(R.id);
+                var type = (string?)headerRef.Attribute(W.type);
+                var headerId = (string?)headerRef.Attribute(R.id);
 
                 if (string.IsNullOrEmpty(headerId))
                     continue;
@@ -1437,8 +1437,8 @@ namespace Docxodus
             // Check footer references
             foreach (var footerRef in effectiveReferences.FooterReferences)
             {
-                var type = (string)footerRef.Attribute(W.type);
-                var footerId = (string)footerRef.Attribute(R.id);
+                var type = (string?)footerRef.Attribute(W.type);
+                var footerId = (string?)footerRef.Attribute(R.id);
 
                 if (string.IsNullOrEmpty(footerId))
                     continue;
@@ -1505,7 +1505,7 @@ namespace Docxodus
 
         private static void ReverseTableBordersForRtlTables(WordprocessingDocument wordDoc)
         {
-            XDocument xd = wordDoc.MainDocumentPart.GetXDocument();
+            XDocument xd = wordDoc.MainDocumentPart!.GetXDocument();
             foreach (var tbl in xd.Descendants(W.tbl))
             {
                 var bidiVisual = tbl.Elements(W.tblPr).Elements(W.bidiVisual).FirstOrDefault();
@@ -1626,7 +1626,8 @@ namespace Docxodus
                         Element = d,
                         Styles = d.Annotation<Dictionary<string, string>>(),
                     })
-                    .Where(z => z.Styles != null);
+                    .Where(z => z.Styles != null)
+                    .Select(z => new { z.Element, Styles = z.Styles! });
                 var augmented = elementsThatNeedClasses
                     .Select(p => new
                     {
@@ -1716,8 +1717,9 @@ namespace Docxodus
                         .Select(e => string.Format("{0}: {1};", e.Key, e.Value))
                         .StringConcatenate();
                     XAttribute st = new XAttribute("style", styleValue);
-                    if (d.Attribute("style") != null)
-                        d.Attribute("style").Value += styleValue;
+                    var existingStyle = d.Attribute("style");
+                    if (existingStyle != null)
+                        existingStyle.Value += styleValue;
                     else
                         d.Add(st);
                 }
@@ -2750,7 +2752,7 @@ namespace Docxodus
             return sb.ToString();
         }
 
-        private static XElement CreateUnsupportedContentPlaceholder(
+        private static XElement? CreateUnsupportedContentPlaceholder(
             WmlToHtmlConverterSettings settings,
             XElement element,
             UnsupportedContentType contentType,
@@ -2801,7 +2803,7 @@ namespace Docxodus
             };
         }
 
-        private static object ConvertToHtmlTransform(WordprocessingDocument wordDoc,
+        private static object? ConvertToHtmlTransform(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings, XNode node,
             bool suppressTrailingWhiteSpace,
             decimal currentMarginLeft,
@@ -2950,7 +2952,7 @@ namespace Docxodus
                 try
                 {
                     var ownerPart = GetOwningPart(wordDoc, element);
-                    var relationshipId = (string)element.Attribute(R.id);
+                    var relationshipId = (string?)element.Attribute(R.id);
                     var relationship = ownerPart.HyperlinkRelationships
                         .FirstOrDefault(candidate => candidate.Id == relationshipId);
                     if (relationship == null)
@@ -3011,7 +3013,7 @@ namespace Docxodus
             // Transform symbols to spans
             if (element.Name == W.sym)
             {
-                var cs = (string)element.Attribute(W._char);
+                var cs = (string?)element.Attribute(W._char);
                 var c = Convert.ToInt32(cs, 16);
                 return new XElement(Xhtml.span, new XEntity(string.Format("#{0}", c)));
             }
@@ -3142,8 +3144,8 @@ namespace Docxodus
                     new XText("Section properties changed"));
                 if (settings.IncludeRevisionMetadata)
                 {
-                    var changeAuthor = (string)sectPrChange.Attribute(W.author);
-                    var changeDate = (string)sectPrChange.Attribute(W.date);
+                    var changeAuthor = (string?)sectPrChange.Attribute(W.author);
+                    var changeDate = (string?)sectPrChange.Attribute(W.date);
                     if (changeAuthor != null)
                         sectionMarker.Add(new XAttribute("data-author", changeAuthor));
                     if (changeDate != null)
@@ -3295,7 +3297,7 @@ namespace Docxodus
         {
             var style = new Dictionary<string, string>();
             var a = new XElement(Xhtml.a,
-                new XAttribute("href", "#" + (string) element.Attribute(W.anchor)),
+                new XAttribute("href", "#" + (string?) element.Attribute(W.anchor)),
                 ConvertHyperlinkRuns(wordDoc, settings, element));
             if (!a.Nodes().Any())
                 a.Add(new XText(""));
@@ -3305,7 +3307,7 @@ namespace Docxodus
             return a;
         }
 
-        private static IEnumerable<object> ConvertHyperlinkRuns(
+        private static IEnumerable<object?> ConvertHyperlinkRuns(
             WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings,
             XElement hyperlink)
@@ -3332,9 +3334,9 @@ namespace Docxodus
             return content;
         }
 
-        private static object ProcessBookmarkStart(WmlToHtmlConverterSettings settings, XElement element)
+        private static object? ProcessBookmarkStart(WmlToHtmlConverterSettings settings, XElement element)
         {
-            var name = (string) element.Attribute(W.name);
+            var name = (string?) element.Attribute(W.name);
             if (name == null) return null;
 
             // Check if this is an annotation bookmark and track it
@@ -3358,11 +3360,11 @@ namespace Docxodus
             return a;
         }
 
-        private static object ProcessBookmarkEnd(WmlToHtmlConverterSettings settings, XElement element)
+        private static object? ProcessBookmarkEnd(WmlToHtmlConverterSettings settings, XElement element)
         {
             // bookmarkEnd uses w:id to reference the bookmark, not w:name
             // We need to find the corresponding bookmarkStart to get the name
-            var id = (string)element.Attribute(W.id);
+            var id = (string?)element.Attribute(W.id);
             if (id == null)
                 return null;
 
@@ -3378,11 +3380,11 @@ namespace Docxodus
             if (root != null)
             {
                 var bookmarkStart = root.Descendants(W.bookmarkStart)
-                    .FirstOrDefault(bs => (string)bs.Attribute(W.id) == id);
+                    .FirstOrDefault(bs => (string?)bs.Attribute(W.id) == id);
 
                 if (bookmarkStart != null)
                 {
-                    var name = (string)bookmarkStart.Attribute(W.name);
+                    var name = (string?)bookmarkStart.Attribute(W.name);
                     if (name != null && name.StartsWith(AnnotationManager.BookmarkPrefix) &&
                         tracker.BookmarkToAnnotationId.TryGetValue(name, out var annotationId))
                     {
@@ -3413,8 +3415,8 @@ namespace Docxodus
             // Add metadata if requested
             if (settings.IncludeRevisionMetadata)
             {
-                var author = (string)element.Attribute(W.author);
-                var date = (string)element.Attribute(W.date);
+                var author = (string?)element.Attribute(W.author);
+                var date = (string?)element.Attribute(W.date);
 
                 if (author != null)
                     ins.Add(new XAttribute("data-author", author));
@@ -3436,7 +3438,7 @@ namespace Docxodus
             return ins;
         }
 
-        private static object ProcessDeletion(WordprocessingDocument wordDoc,
+        private static object? ProcessDeletion(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings, XElement element, decimal currentMarginLeft)
         {
             if (!settings.RenderTrackedChanges)
@@ -3463,8 +3465,8 @@ namespace Docxodus
             // Add metadata if requested
             if (settings.IncludeRevisionMetadata)
             {
-                var author = (string)element.Attribute(W.author);
-                var date = (string)element.Attribute(W.date);
+                var author = (string?)element.Attribute(W.author);
+                var date = (string?)element.Attribute(W.date);
 
                 if (author != null)
                     del.Add(new XAttribute("data-author", author));
@@ -3486,7 +3488,7 @@ namespace Docxodus
             return del;
         }
 
-        private static object ProcessMoveFrom(WordprocessingDocument wordDoc,
+        private static object? ProcessMoveFrom(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings, XElement element, decimal currentMarginLeft)
         {
             if (!settings.RenderTrackedChanges)
@@ -3519,9 +3521,9 @@ namespace Docxodus
             // Add metadata if requested
             if (settings.IncludeRevisionMetadata)
             {
-                var author = (string)element.Attribute(W.author);
-                var date = (string)element.Attribute(W.date);
-                var moveId = (string)element.Attribute(W.id);
+                var author = (string?)element.Attribute(W.author);
+                var date = (string?)element.Attribute(W.date);
+                var moveId = (string?)element.Attribute(W.id);
 
                 if (author != null)
                     del.Add(new XAttribute("data-author", author));
@@ -3570,9 +3572,9 @@ namespace Docxodus
             // Add metadata if requested
             if (settings.IncludeRevisionMetadata)
             {
-                var author = (string)element.Attribute(W.author);
-                var date = (string)element.Attribute(W.date);
-                var moveId = (string)element.Attribute(W.id);
+                var author = (string?)element.Attribute(W.author);
+                var date = (string?)element.Attribute(W.date);
+                var moveId = (string?)element.Attribute(W.id);
 
                 if (author != null)
                     ins.Add(new XAttribute("data-author", author));
@@ -3596,7 +3598,7 @@ namespace Docxodus
             return ins;
         }
 
-        private static object ProcessFootnoteReference(WordprocessingDocument wordDoc,
+        private static object? ProcessFootnoteReference(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings, XElement element)
         {
             if (!settings.RenderFootnotesAndEndnotes)
@@ -3604,7 +3606,7 @@ namespace Docxodus
                 return null;
             }
 
-            var footnoteId = (string)element.Attribute(W.id);
+            var footnoteId = (string?)element.Attribute(W.id);
             if (footnoteId == null)
                 return null;
 
@@ -3626,7 +3628,7 @@ namespace Docxodus
             return anchor;
         }
 
-        private static object ProcessEndnoteReference(WordprocessingDocument wordDoc,
+        private static object? ProcessEndnoteReference(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings, XElement element)
         {
             if (!settings.RenderFootnotesAndEndnotes)
@@ -3634,7 +3636,7 @@ namespace Docxodus
                 return null;
             }
 
-            var endnoteId = (string)element.Attribute(W.id);
+            var endnoteId = (string?)element.Attribute(W.id);
             if (endnoteId == null)
                 return null;
 
@@ -3656,10 +3658,10 @@ namespace Docxodus
             return anchor;
         }
 
-        private static XElement RenderFootnotesSection(WordprocessingDocument wordDoc,
+        private static XElement? RenderFootnotesSection(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings)
         {
-            var footnotesPart = wordDoc.MainDocumentPart.FootnotesPart;
+            var footnotesPart = wordDoc.MainDocumentPart!.FootnotesPart;
             if (footnotesPart == null)
                 return null;
 
@@ -3667,17 +3669,17 @@ namespace Docxodus
             var allFootnotes = footnotesXDoc.Root?.Elements(W.footnote)
                 .Where(fn =>
                 {
-                    var typeAttr = (string)fn.Attribute(W.type);
+                    var typeAttr = (string?)fn.Attribute(W.type);
                     // Skip separator and continuationSeparator footnotes
                     return typeAttr != "separator" && typeAttr != "continuationSeparator";
                 })
-                .ToDictionary(fn => (string)fn.Attribute(W.id), fn => fn);
+                .ToDictionary(fn => (string)fn.Attribute(W.id)!, fn => fn);
 
             if (allFootnotes == null || !allFootnotes.Any())
                 return null;
 
             // Get tracker for ordering and display numbers
-            var mainXDoc = wordDoc.MainDocumentPart.GetXDocument();
+            var mainXDoc = wordDoc.MainDocumentPart!.GetXDocument();
             var tracker = mainXDoc.Root?.Annotation<FootnoteNumberingTracker>();
 
             // Order footnotes by document order using tracker, with fallback to XML order
@@ -3703,10 +3705,10 @@ namespace Docxodus
             return footnotesSection;
         }
 
-        private static XElement RenderEndnotesSection(WordprocessingDocument wordDoc,
+        private static XElement? RenderEndnotesSection(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings)
         {
-            var endnotesPart = wordDoc.MainDocumentPart.EndnotesPart;
+            var endnotesPart = wordDoc.MainDocumentPart!.EndnotesPart;
             if (endnotesPart == null)
                 return null;
 
@@ -3714,17 +3716,17 @@ namespace Docxodus
             var allEndnotes = endnotesXDoc.Root?.Elements(W.endnote)
                 .Where(en =>
                 {
-                    var typeAttr = (string)en.Attribute(W.type);
+                    var typeAttr = (string?)en.Attribute(W.type);
                     // Skip separator and continuationSeparator endnotes
                     return typeAttr != "separator" && typeAttr != "continuationSeparator";
                 })
-                .ToDictionary(en => (string)en.Attribute(W.id), en => en);
+                .ToDictionary(en => (string)en.Attribute(W.id)!, en => en);
 
             if (allEndnotes == null || !allEndnotes.Any())
                 return null;
 
             // Get tracker for ordering and display numbers
-            var mainXDoc = wordDoc.MainDocumentPart.GetXDocument();
+            var mainXDoc = wordDoc.MainDocumentPart!.GetXDocument();
             var tracker = mainXDoc.Root?.Annotation<FootnoteNumberingTracker>();
 
             // Order endnotes by document order using tracker, with fallback to XML order
@@ -3750,11 +3752,11 @@ namespace Docxodus
             return endnotesSection;
         }
 
-        private static XElement RenderFootnoteItem(WordprocessingDocument wordDoc,
+        private static XElement? RenderFootnoteItem(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings, XElement noteElement, string noteType,
-            FootnoteNumberingTracker tracker)
+            FootnoteNumberingTracker? tracker)
         {
-            var noteId = (string)noteElement.Attribute(W.id);
+            var noteId = (string?)noteElement.Attribute(W.id);
             if (noteId == null)
                 return null;
 
@@ -3827,10 +3829,10 @@ namespace Docxodus
             return li;
         }
 
-        private static XElement RenderPaginatedFootnoteSeparator(
+        private static XElement? RenderPaginatedFootnoteSeparator(
             WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings,
-            XElement source,
+            XElement? source,
             string kind)
         {
             if (source == null)
@@ -3912,10 +3914,10 @@ namespace Docxodus
         /// to each page by the client-side pagination engine based on which footnote
         /// references appear on each page.
         /// </summary>
-        private static XElement RenderPaginatedFootnoteRegistry(WordprocessingDocument wordDoc,
+        private static XElement? RenderPaginatedFootnoteRegistry(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings)
         {
-            var footnotesPart = wordDoc.MainDocumentPart.FootnotesPart;
+            var footnotesPart = wordDoc.MainDocumentPart!.FootnotesPart;
             if (footnotesPart == null)
                 return null;
 
@@ -3925,13 +3927,13 @@ namespace Docxodus
                 // continuationNotice can carry a positive id in real documents and
                 // must not leak into the user-note registry.
                 .Where(fn => !WmlToMarkdownConverter.IsBoilerplateNote(fn))
-                .ToDictionary(fn => (string)fn.Attribute(W.id), fn => fn);
+                .ToDictionary(fn => (string)fn.Attribute(W.id)!, fn => fn);
 
             if (allFootnotes == null || !allFootnotes.Any())
                 return null;
 
             // Get tracker for ordering and display numbers
-            var mainXDoc = wordDoc.MainDocumentPart.GetXDocument();
+            var mainXDoc = wordDoc.MainDocumentPart!.GetXDocument();
             var tracker = mainXDoc.Root?.Annotation<FootnoteNumberingTracker>();
 
             // Order footnotes by document order using tracker, with fallback to XML order
@@ -3952,9 +3954,9 @@ namespace Docxodus
                 new XAttribute("style", "display:none"));
 
             var normalSeparator = footnotesXDoc.Root?.Elements(W.footnote)
-                .FirstOrDefault(fn => (string)fn.Attribute(W.type) == "separator");
+                .FirstOrDefault(fn => (string?)fn.Attribute(W.type) == "separator");
             var continuationSeparator = footnotesXDoc.Root?.Elements(W.footnote)
-                .FirstOrDefault(fn => (string)fn.Attribute(W.type) == "continuationSeparator");
+                .FirstOrDefault(fn => (string?)fn.Attribute(W.type) == "continuationSeparator");
             var renderedNormalSeparator = RenderPaginatedFootnoteSeparator(
                 wordDoc, settings, normalSeparator, "normal");
             var renderedContinuationSeparator = RenderPaginatedFootnoteSeparator(
@@ -3966,7 +3968,7 @@ namespace Docxodus
 
             foreach (var fn in orderedFootnotes)
             {
-                var footnoteId = (string)fn.Attribute(W.id);
+                var footnoteId = (string?)fn.Attribute(W.id);
                 if (footnoteId == null)
                     continue;
 
@@ -4002,21 +4004,21 @@ namespace Docxodus
             return registry.HasElements ? registry : null;
         }
 
-        private static XElement RenderHeadersSection(WordprocessingDocument wordDoc,
+        private static XElement? RenderHeadersSection(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings)
         {
-            var headerParts = wordDoc.MainDocumentPart.HeaderParts.ToList();
+            var headerParts = wordDoc.MainDocumentPart!.HeaderParts.ToList();
             if (!headerParts.Any())
                 return null;
 
             // Get the section properties from the document body or last sectPr
-            var mainDoc = wordDoc.MainDocumentPart.GetXDocument();
+            var mainDoc = wordDoc.MainDocumentPart!.GetXDocument();
             var body = mainDoc.Root?.Element(W.body);
             var sectPr = body?.Element(W.sectPr) ?? body?.Elements(W.p).LastOrDefault()?.Element(W.pPr)?.Element(W.sectPr);
 
             // Find the default header reference
             var defaultHeaderRef = sectPr?.Elements(W.headerReference)
-                .FirstOrDefault(hr => (string)hr.Attribute(W.type) == "default");
+                .FirstOrDefault(hr => (string?)hr.Attribute(W.type) == "default");
 
             if (defaultHeaderRef == null)
             {
@@ -4033,10 +4035,10 @@ namespace Docxodus
 
             if (defaultHeaderRef != null)
             {
-                var headerId = (string)defaultHeaderRef.Attribute(R.id);
+                var headerId = (string?)defaultHeaderRef.Attribute(R.id);
                 if (headerId != null)
                 {
-                    var headerPart = wordDoc.MainDocumentPart.GetPartById(headerId) as HeaderPart;
+                    var headerPart = wordDoc.MainDocumentPart!.GetPartById(headerId) as HeaderPart;
                     if (headerPart != null)
                     {
                         return RenderHeaderPart(wordDoc, settings, headerPart);
@@ -4047,7 +4049,7 @@ namespace Docxodus
             return null;
         }
 
-        private static XElement RenderHeaderPart(WordprocessingDocument wordDoc,
+        private static XElement? RenderHeaderPart(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings, HeaderPart headerPart)
         {
             var headerXDoc = headerPart.GetXDocument();
@@ -4070,21 +4072,21 @@ namespace Docxodus
                 content);
         }
 
-        private static XElement RenderFootersSection(WordprocessingDocument wordDoc,
+        private static XElement? RenderFootersSection(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings)
         {
-            var footerParts = wordDoc.MainDocumentPart.FooterParts.ToList();
+            var footerParts = wordDoc.MainDocumentPart!.FooterParts.ToList();
             if (!footerParts.Any())
                 return null;
 
             // Get the section properties from the document body or last sectPr
-            var mainDoc = wordDoc.MainDocumentPart.GetXDocument();
+            var mainDoc = wordDoc.MainDocumentPart!.GetXDocument();
             var body = mainDoc.Root?.Element(W.body);
             var sectPr = body?.Element(W.sectPr) ?? body?.Elements(W.p).LastOrDefault()?.Element(W.pPr)?.Element(W.sectPr);
 
             // Find the default footer reference
             var defaultFooterRef = sectPr?.Elements(W.footerReference)
-                .FirstOrDefault(fr => (string)fr.Attribute(W.type) == "default");
+                .FirstOrDefault(fr => (string?)fr.Attribute(W.type) == "default");
 
             if (defaultFooterRef == null)
             {
@@ -4101,10 +4103,10 @@ namespace Docxodus
 
             if (defaultFooterRef != null)
             {
-                var footerId = (string)defaultFooterRef.Attribute(R.id);
+                var footerId = (string?)defaultFooterRef.Attribute(R.id);
                 if (footerId != null)
                 {
-                    var footerPart = wordDoc.MainDocumentPart.GetPartById(footerId) as FooterPart;
+                    var footerPart = wordDoc.MainDocumentPart!.GetPartById(footerId) as FooterPart;
                     if (footerPart != null)
                     {
                         return RenderFooterPart(wordDoc, settings, footerPart);
@@ -4115,7 +4117,7 @@ namespace Docxodus
             return null;
         }
 
-        private static XElement RenderFooterPart(WordprocessingDocument wordDoc,
+        private static XElement? RenderFooterPart(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings, FooterPart footerPart)
         {
             var footerXDoc = footerPart.GetXDocument();
@@ -4142,7 +4144,7 @@ namespace Docxodus
         /// Renders headers and footers into a hidden registry for pagination mode.
         /// Each header/footer is stored with section index and type metadata for client-side cloning.
         /// </summary>
-        private static XElement RenderPaginatedHeaderFooterRegistry(
+        private static XElement? RenderPaginatedHeaderFooterRegistry(
             WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings,
             XElement bodyElement)
@@ -4169,7 +4171,7 @@ namespace Docxodus
             // If no sections found from annotations, get from document body
             if (sectionProperties.Count == 0)
             {
-                var mainDoc = wordDoc.MainDocumentPart.GetXDocument();
+                var mainDoc = wordDoc.MainDocumentPart!.GetXDocument();
                 var body = mainDoc.Root?.Element(W.body);
                 var sectPr = body?.Element(W.sectPr) ?? body?.Elements(W.p).LastOrDefault()?.Element(W.pPr)?.Element(W.sectPr);
                 if (sectPr != null)
@@ -4302,19 +4304,19 @@ namespace Docxodus
         /// <summary>
         /// Renders the header selected for a section after reference inheritance is resolved.
         /// </summary>
-        private static object RenderHeaderReference(
+        private static object? RenderHeaderReference(
             WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings,
-            XElement headerRef)
+            XElement? headerRef)
         {
             if (headerRef == null)
                 return null;
 
-            var headerId = (string)headerRef.Attribute(R.id);
+            var headerId = (string?)headerRef.Attribute(R.id);
             if (headerId == null)
                 return null;
 
-            var headerPart = wordDoc.MainDocumentPart.GetPartById(headerId) as HeaderPart;
+            var headerPart = wordDoc.MainDocumentPart!.GetPartById(headerId) as HeaderPart;
             if (headerPart == null)
                 return null;
 
@@ -4339,19 +4341,19 @@ namespace Docxodus
         /// <summary>
         /// Renders the footer selected for a section after reference inheritance is resolved.
         /// </summary>
-        private static object RenderFooterReference(
+        private static object? RenderFooterReference(
             WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings,
-            XElement footerRef)
+            XElement? footerRef)
         {
             if (footerRef == null)
                 return null;
 
-            var footerId = (string)footerRef.Attribute(R.id);
+            var footerId = (string?)footerRef.Attribute(R.id);
             if (footerId == null)
                 return null;
 
-            var footerPart = wordDoc.MainDocumentPart.GetPartById(footerId) as FooterPart;
+            var footerPart = wordDoc.MainDocumentPart!.GetPartById(footerId) as FooterPart;
             if (footerPart == null)
                 return null;
 
@@ -4374,7 +4376,7 @@ namespace Docxodus
 
         private static void LoadComments(WordprocessingDocument wordDoc, CommentTracker tracker)
         {
-            var commentsPart = wordDoc.MainDocumentPart.WordprocessingCommentsPart;
+            var commentsPart = wordDoc.MainDocumentPart!.WordprocessingCommentsPart;
             if (commentsPart == null)
                 return;
 
@@ -4391,9 +4393,9 @@ namespace Docxodus
                 tracker.Comments[id.Value] = new CommentInfo
                 {
                     Id = id.Value,
-                    Author = (string)comment.Attribute(W.author),
-                    Date = (string)comment.Attribute(W.date),
-                    Initials = (string)comment.Attribute(W.initials),
+                    Author = (string?)comment.Attribute(W.author),
+                    Date = (string?)comment.Attribute(W.date),
+                    Initials = (string?)comment.Attribute(W.initials),
                     SourceElement = comment,
                     ContentParagraphs = comment.Elements(W.p).ToList()
                 };
@@ -4411,7 +4413,7 @@ namespace Docxodus
         /// </summary>
         private static void LoadCommentTopology(WordprocessingDocument wordDoc, CommentTracker tracker)
         {
-            var extendedPart = wordDoc.MainDocumentPart.WordprocessingCommentsExPart;
+            var extendedPart = wordDoc.MainDocumentPart!.WordprocessingCommentsExPart;
             if (extendedPart == null || !tracker.Comments.Any())
                 return;
 
@@ -4423,21 +4425,21 @@ namespace Docxodus
             var commentsByParaId = new Dictionary<string, CommentInfo>(StringComparer.Ordinal);
             foreach (var comment in tracker.Comments.Values)
             {
-                var paraId = (string)comment.ContentParagraphs.LastOrDefault()?.Attribute(W14.paraId);
+                var paraId = (string?)comment.ContentParagraphs.LastOrDefault()?.Attribute(W14.paraId);
                 if (paraId != null && !commentsByParaId.ContainsKey(paraId))
                     commentsByParaId[paraId] = comment;
             }
 
             foreach (var commentEx in extendedRoot.Elements(w15 + "commentEx"))
             {
-                var paraId = (string)commentEx.Attribute(w15 + "paraId");
+                var paraId = (string?)commentEx.Attribute(w15 + "paraId");
                 if (paraId == null || !commentsByParaId.TryGetValue(paraId, out var comment))
                     continue;
 
                 comment.Resolved = Docxodus.Internal.CommentOps.ParseDone(
-                    (string)commentEx.Attribute(w15 + "done"));
+                    (string?)commentEx.Attribute(w15 + "done"));
 
-                var parentParaId = (string)commentEx.Attribute(w15 + "paraIdParent");
+                var parentParaId = (string?)commentEx.Attribute(w15 + "paraIdParent");
                 if (parentParaId != null
                     && commentsByParaId.TryGetValue(parentParaId, out var parent)
                     && parent.Id != comment.Id)
@@ -4447,14 +4449,14 @@ namespace Docxodus
             }
         }
 
-        private static CommentTracker GetCommentTracker(XElement element)
+        private static CommentTracker? GetCommentTracker(XElement element)
         {
             // Walk up to the document root to find the annotation
             var root = element.AncestorsAndSelf().LastOrDefault();
             return root?.Annotation<CommentTracker>();
         }
 
-        private static FootnoteNumberingTracker GetFootnoteNumberingTracker(XElement element)
+        private static FootnoteNumberingTracker? GetFootnoteNumberingTracker(XElement element)
         {
             // Walk up to the document root to find the annotation
             var root = element.AncestorsAndSelf().LastOrDefault();
@@ -4464,7 +4466,7 @@ namespace Docxodus
         private static void LoadAnnotations(WordprocessingDocument wordDoc, AnnotationTracker tracker)
         {
             // Look for the custom XML part with our namespace
-            var customXmlParts = wordDoc.MainDocumentPart.CustomXmlParts;
+            var customXmlParts = wordDoc.MainDocumentPart!.CustomXmlParts;
             if (customXmlParts == null)
                 return;
 
@@ -4483,21 +4485,21 @@ namespace Docxodus
                             // Annotation data is stored as attributes, not elements
                             var annotation = new DocumentAnnotation
                             {
-                                Id = (string)annotElement.Attribute("id"),
-                                LabelId = (string)annotElement.Attribute("labelId"),
-                                Label = (string)annotElement.Attribute("label"),
-                                Color = (string)annotElement.Attribute("color"),
-                                Author = (string)annotElement.Attribute("author")
+                                Id = (string?)annotElement.Attribute("id"),
+                                LabelId = (string?)annotElement.Attribute("labelId"),
+                                Label = (string?)annotElement.Attribute("label"),
+                                Color = (string?)annotElement.Attribute("color"),
+                                Author = (string?)annotElement.Attribute("author")
                             };
 
                             // BookmarkName is in a child range element
                             var rangeElement = annotElement.Element(ns + "range");
                             if (rangeElement != null)
                             {
-                                annotation.BookmarkName = (string)rangeElement.Attribute("bookmarkName");
+                                annotation.BookmarkName = (string?)rangeElement.Attribute("bookmarkName");
                             }
 
-                            var createdStr = (string)annotElement.Attribute("created");
+                            var createdStr = (string?)annotElement.Attribute("created");
                             if (!string.IsNullOrEmpty(createdStr) && DateTime.TryParse(createdStr, out var created))
                                 annotation.Created = created;
 
@@ -4505,11 +4507,11 @@ namespace Docxodus
                             var pageSpanElement = annotElement.Element(ns + "pageSpan");
                             if (pageSpanElement != null)
                             {
-                                var startPageStr = (string)pageSpanElement.Attribute("startPage");
+                                var startPageStr = (string?)pageSpanElement.Attribute("startPage");
                                 if (!string.IsNullOrEmpty(startPageStr) && int.TryParse(startPageStr, out var startPage))
                                     annotation.StartPage = startPage;
 
-                                var endPageStr = (string)pageSpanElement.Attribute("endPage");
+                                var endPageStr = (string?)pageSpanElement.Attribute("endPage");
                                 if (!string.IsNullOrEmpty(endPageStr) && int.TryParse(endPageStr, out var endPage))
                                     annotation.EndPage = endPage;
                             }
@@ -4520,7 +4522,7 @@ namespace Docxodus
                             {
                                 foreach (var item in metadataElement.Elements(ns + "item"))
                                 {
-                                    var key = (string)item.Attribute("key");
+                                    var key = (string?)item.Attribute("key");
                                     var value = item.Value;
                                     if (!string.IsNullOrEmpty(key))
                                         annotation.Metadata[key] = value;
@@ -4548,7 +4550,7 @@ namespace Docxodus
             }
         }
 
-        private static AnnotationTracker GetAnnotationTracker(XElement element)
+        private static AnnotationTracker? GetAnnotationTracker(XElement element)
         {
             // Walk up to the document root to find the tracker
             var root = element.AncestorsAndSelf().LastOrDefault();
@@ -4566,7 +4568,7 @@ namespace Docxodus
         /// A range may legally span block boundaries, which is why the boundaries render as
         /// independent markers rather than one wrapping element.
         /// </summary>
-        private static object ProcessCustomXmlRevisionRange(
+        private static object? ProcessCustomXmlRevisionRange(
             WmlToHtmlConverterSettings settings, XElement element)
         {
             if (!settings.RenderTrackedChanges)
@@ -4605,8 +4607,8 @@ namespace Docxodus
             if (settings.IncludeRevisionMetadata)
             {
                 // Only the range START carries CT_TrackChange identity; the end is a bare id.
-                var author = (string)element.Attribute(W.author);
-                var date = (string)element.Attribute(W.date);
+                var author = (string?)element.Attribute(W.author);
+                var date = (string?)element.Attribute(W.date);
                 if (author != null)
                 {
                     span.Add(new XAttribute("data-author", author));
@@ -4626,7 +4628,7 @@ namespace Docxodus
             return span;
         }
 
-        private static object ProcessCommentRangeStart(WmlToHtmlConverterSettings settings, XElement element)
+        private static object? ProcessCommentRangeStart(WmlToHtmlConverterSettings settings, XElement element)
         {
             if (!settings.RenderComments)
                 return null;
@@ -4645,7 +4647,7 @@ namespace Docxodus
             return null;
         }
 
-        private static object ProcessCommentRangeEnd(WmlToHtmlConverterSettings settings, XElement element)
+        private static object? ProcessCommentRangeEnd(WmlToHtmlConverterSettings settings, XElement element)
         {
             if (!settings.RenderComments)
                 return null;
@@ -4663,7 +4665,7 @@ namespace Docxodus
             return null;
         }
 
-        private static object ProcessCommentReference(WmlToHtmlConverterSettings settings, XElement element)
+        private static object? ProcessCommentReference(WmlToHtmlConverterSettings settings, XElement element)
         {
             if (!settings.RenderComments)
                 return null;
@@ -4761,7 +4763,7 @@ namespace Docxodus
             return presentation;
         }
 
-        private static XElement RenderCommentsSection(WordprocessingDocument wordDoc,
+        private static XElement? RenderCommentsSection(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings, CommentTracker tracker)
         {
             if (!settings.RenderComments || !tracker.Comments.Any())
@@ -4782,7 +4784,7 @@ namespace Docxodus
             // through a parent renders flat in the second.
             var repliesByParent = orderedComments
                 .Where(c => c.ParentId.HasValue && tracker.Comments.ContainsKey(c.ParentId.Value))
-                .GroupBy(c => c.ParentId.Value)
+                .GroupBy(c => c.ParentId!.Value)
                 .ToDictionary(g => g.Key, g => g.ToList());
             var renderedIds = new HashSet<int>();
 
@@ -4812,7 +4814,7 @@ namespace Docxodus
         /// parent (issue #540). <paramref name="renderedIds"/> spans the whole section so a
         /// malformed parent graph can never render a comment twice or loop.
         /// </summary>
-        private static XElement RenderCommentThread(WordprocessingDocument wordDoc,
+        private static XElement? RenderCommentThread(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings, CommentInfo comment, string prefix,
             Dictionary<int, List<CommentInfo>> repliesByParent, HashSet<int> renderedIds)
         {
@@ -4935,7 +4937,7 @@ namespace Docxodus
         }
 
         private static XElement RenderMarginCommentsColumn(WordprocessingDocument wordDoc,
-            WmlToHtmlConverterSettings settings, CommentTracker tracker, string prefix)
+            WmlToHtmlConverterSettings settings, CommentTracker? tracker, string prefix)
         {
             var marginColumn = new XElement(Xhtml.aside,
                 new XAttribute("class", prefix + "margin-column"));
@@ -4954,7 +4956,7 @@ namespace Docxodus
             // (issue #540); the guards mirror RenderCommentsSection.
             var repliesByParent = orderedComments
                 .Where(c => c.ParentId.HasValue && tracker.Comments.ContainsKey(c.ParentId.Value))
-                .GroupBy(c => c.ParentId.Value)
+                .GroupBy(c => c.ParentId!.Value)
                 .ToDictionary(g => g.Key, g => g.ToList());
             var renderedIds = new HashSet<int>();
 
@@ -4977,7 +4979,7 @@ namespace Docxodus
             return marginColumn;
         }
 
-        private static XElement RenderMarginCommentThread(WmlToHtmlConverterSettings settings,
+        private static XElement? RenderMarginCommentThread(WmlToHtmlConverterSettings settings,
             CommentInfo comment, string prefix,
             Dictionary<int, List<CommentInfo>> repliesByParent, HashSet<int> renderedIds)
         {
@@ -5126,13 +5128,13 @@ namespace Docxodus
             return style == null || (!style.ContainsKey("width") && !style.ContainsKey("display"));
         }
 
-        private static object ProcessTab(XElement element)
+        private static object? ProcessTab(XElement element)
         {
             var tabWidthAtt = element.Attribute(PtOpenXml.TabWidth);
             if (tabWidthAtt == null) return null;
 
-            var leader = (string) element.Attribute(PtOpenXml.Leader);
-            var alignment = (string) element.Attribute(PtOpenXml.TabAlignment) ?? "left";
+            var leader = (string?) element.Attribute(PtOpenXml.Leader);
+            var alignment = (string?) element.Attribute(PtOpenXml.TabAlignment) ?? "left";
             var tabWidth = (decimal) tabWidthAtt;
             var style = new Dictionary<string, string>();
             XElement span;
@@ -5197,7 +5199,7 @@ namespace Docxodus
             bool compactDirectionMark = false)
         {
             // Check for page break (w:br with w:type="page")
-            var breakType = (string)element.Attribute(W.type);
+            var breakType = (string?)element.Attribute(W.type);
 
             // In pagination mode, emit a page break marker div for page breaks.
             // NOTE: the empty XText child is load-bearing. Without a child node an empty
@@ -5226,7 +5228,7 @@ namespace Docxodus
                     new XText(string.Empty));
             }
 
-            XElement span = null;
+            XElement? span = null;
             var tabWidth = (decimal?) element.Attribute(PtOpenXml.TabWidth);
             if (tabWidth != null)
             {
@@ -5250,7 +5252,7 @@ namespace Docxodus
             // zero-metric span below creates one extra DOM span per line. Keep
             // the mark for bidi paragraphs; omit only the provably redundant
             // compact LTR case used for split-out break-only runs.
-            object directionMark = compactDirectionMark && !isBidi ? null : zeroWidthChar;
+            object? directionMark = compactDirectionMark && !isBidi ? null : zeroWidthChar;
             if (compactDirectionMark)
             {
                 // A bare <br> still inherits the paragraph's default font size. Chromium uses
@@ -5274,7 +5276,7 @@ namespace Docxodus
                 }
             }
 
-            return new object[]
+            return new object?[]
             {
                 breakElement,
                 directionMark,
@@ -5301,7 +5303,7 @@ namespace Docxodus
         // transformed to h:span elements rather than h:p elements and added to
         // the element (e.g., h:h2) created from the w:p element having the (first)
         // style separator (i.e., a w:specVanish element).
-        private static object ProcessParagraph(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
+        private static object? ProcessParagraph(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
             XElement element, bool suppressTrailingWhiteSpace, decimal currentMarginLeft, bool suppressLeadingWhiteSpace = false)
         {
             // Ignore this paragraph if the previous paragraph has a style separator.
@@ -5328,8 +5330,9 @@ namespace Docxodus
 
             while (HasStyleSeparator(element))
             {
-                element = element.ElementsAfterSelf(W.p).FirstOrDefault();
-                if (element == null) break;
+                var nextElement = element.ElementsAfterSelf(W.p).FirstOrDefault();
+                if (nextElement == null) break;
+                element = nextElement;
 
                 elementName = Xhtml.span;
                 isBidi = IsBidi(element);
@@ -5373,18 +5376,19 @@ namespace Docxodus
                         described.Add("Section properties changed");
                     }
 
-                    var existingClass = (string)paragraph.Attribute("class");
+                    var existingClass = (string?)paragraph.Attribute("class");
                     var combined = string.Join(" ", classes);
                     paragraph.SetAttributeValue("class",
                         existingClass != null ? existingClass + " " + combined : combined);
                     if (paragraph.Attribute("title") == null)
                         paragraph.Add(new XAttribute("title", string.Join("; ", described)));
 
-                    var marker = pPrChange ?? numberingChange ?? inlineSectPrChange;
+                    // Non-null: this block only runs when at least one of the three is set.
+                    var marker = (pPrChange ?? numberingChange ?? inlineSectPrChange)!;
                     if (settings.IncludeRevisionMetadata)
                     {
-                        var changeAuthor = (string)marker.Attribute(W.author);
-                        var changeDate = (string)marker.Attribute(W.date);
+                        var changeAuthor = (string?)marker.Attribute(W.author);
+                        var changeDate = (string?)marker.Attribute(W.date);
                         if (changeAuthor != null && paragraph.Attribute("data-author") == null)
                             paragraph.Add(new XAttribute("data-author", changeAuthor));
                         if (changeDate != null && paragraph.Attribute("data-date") == null)
@@ -5395,14 +5399,14 @@ namespace Docxodus
                 if (paraIns != null)
                 {
                     // Paragraph mark was inserted (paragraph was split from another)
-                    var existingClass = (string)paragraph.Attribute("class");
+                    var existingClass = (string?)paragraph.Attribute("class");
                     var newClass = (settings.RevisionCssClassPrefix ?? "rev-") + "para-ins";
                     paragraph.SetAttributeValue("class", existingClass != null ? existingClass + " " + newClass : newClass);
 
                     if (settings.IncludeRevisionMetadata)
                     {
-                        var author = (string)paraIns.Attribute(W.author);
-                        var date = (string)paraIns.Attribute(W.date);
+                        var author = (string?)paraIns.Attribute(W.author);
+                        var date = (string?)paraIns.Attribute(W.date);
                         if (author != null && paragraph.Attribute("data-author") == null)
                             paragraph.Add(new XAttribute("data-author", author));
                         if (date != null && paragraph.Attribute("data-date") == null)
@@ -5412,7 +5416,7 @@ namespace Docxodus
                 else if (paraDel != null)
                 {
                     // Paragraph mark was deleted (paragraph was merged with next)
-                    var existingClass = (string)paragraph.Attribute("class");
+                    var existingClass = (string?)paragraph.Attribute("class");
                     var newClass = (settings.RevisionCssClassPrefix ?? "rev-") + "para-del";
                     paragraph.SetAttributeValue("class", existingClass != null ? existingClass + " " + newClass : newClass);
 
@@ -5425,8 +5429,8 @@ namespace Docxodus
 
                     if (settings.IncludeRevisionMetadata)
                     {
-                        var author = (string)paraDel.Attribute(W.author);
-                        var date = (string)paraDel.Attribute(W.date);
+                        var author = (string?)paraDel.Attribute(W.author);
+                        var date = (string?)paraDel.Attribute(W.date);
                         if (author != null && paragraph.Attribute("data-author") == null)
                             paragraph.Add(new XAttribute("data-author", author));
                         if (date != null && paragraph.Attribute("data-date") == null)
@@ -5455,21 +5459,21 @@ namespace Docxodus
 
             // w:keepNext - keep this paragraph with the next one on the same page
             var keepNext = pPr.Element(W.keepNext);
-            if (keepNext != null && ((string)keepNext.Attribute(W.val) == null || keepNext.Attribute(W.val).ToBoolean() == true))
+            if (keepNext != null && ((string?)keepNext.Attribute(W.val) == null || keepNext.Attribute(W.val).ToBoolean() == true))
             {
                 htmlParagraph.Add(new XAttribute("data-keep-with-next", "true"));
             }
 
             // w:keepLines - keep all lines of this paragraph together on one page
             var keepLines = pPr.Element(W.keepLines);
-            if (keepLines != null && ((string)keepLines.Attribute(W.val) == null || keepLines.Attribute(W.val).ToBoolean() == true))
+            if (keepLines != null && ((string?)keepLines.Attribute(W.val) == null || keepLines.Attribute(W.val).ToBoolean() == true))
             {
                 htmlParagraph.Add(new XAttribute("data-keep-lines", "true"));
             }
 
             // w:pageBreakBefore - force a page break before this paragraph
             var pageBreakBefore = pPr.Element(W.pageBreakBefore);
-            if (pageBreakBefore != null && ((string)pageBreakBefore.Attribute(W.val) == null || pageBreakBefore.Attribute(W.val).ToBoolean() == true))
+            if (pageBreakBefore != null && ((string?)pageBreakBefore.Attribute(W.val) == null || pageBreakBefore.Attribute(W.val).ToBoolean() == true))
             {
                 htmlParagraph.Add(new XAttribute("data-page-break-before", "true"));
             }
@@ -5491,10 +5495,10 @@ namespace Docxodus
         // percent-suffixed form, e.g. "100%" or "50.5%". Returns null when the attribute is
         // missing or cannot be parsed. `isExplicitPercent` is true when the raw value carried
         // a trailing '%', meaning it is already a literal percentage (NOT fiftieths-of-a-percent).
-        private static decimal? ParseTblWidthValue(XAttribute widthAttr, out bool isExplicitPercent)
+        private static decimal? ParseTblWidthValue(XAttribute? widthAttr, out bool isExplicitPercent)
         {
             isExplicitPercent = false;
-            var raw = ((string)widthAttr)?.Trim();
+            var raw = ((string?)widthAttr)?.Trim();
             if (string.IsNullOrEmpty(raw))
                 return null;
             if (raw.EndsWith("%", StringComparison.Ordinal))
@@ -5520,7 +5524,7 @@ namespace Docxodus
             var tblW = element.Elements(W.tblPr).Elements(W.tblW).FirstOrDefault();
             if (tblW != null)
             {
-                var type = (string)tblW.Attribute(W.type);
+                var type = (string?)tblW.Attribute(W.type);
                 if (type == "pct")
                 {
                     var w = ParseTblWidthValue(tblW.Attribute(W._w), out var isExplicitPercent);
@@ -5555,7 +5559,7 @@ namespace Docxodus
             var tblInd = element.Elements(W.tblPr).Elements(W.tblInd).FirstOrDefault();
             if (tblInd != null)
             {
-                var tblIndType = (string)tblInd.Attribute(W.type);
+                var tblIndType = (string?)tblInd.Attribute(W.type);
                 if (tblIndType != null)
                 {
                     if (tblIndType == "dxa")
@@ -5626,8 +5630,8 @@ namespace Docxodus
                 // new XAttribute("cellpadding", 0),
                 tableDirection,
                 isBorderless ? new XAttribute("data-borderless", "true") : null,
-                settings.StampAnchors && (string)element.Attribute(PtOpenXml.Unid) != null
-                    ? new XAttribute("data-anchor", (string)element.Attribute(PtOpenXml.Unid))
+                settings.StampAnchors && (string?)element.Attribute(PtOpenXml.Unid) != null
+                    ? new XAttribute("data-anchor", (string)element.Attribute(PtOpenXml.Unid)!)
                     : null,
                 SourceAnchorIdentityAttribute(settings, element),
                 CreateColGroup(element),
@@ -5642,7 +5646,7 @@ namespace Docxodus
                 if (tblPrChange != null || tblGridChange != null)
                 {
                     var revisionPrefix = settings.RevisionCssClassPrefix ?? "rev-";
-                    var existingClass = (string)table.Attribute("class");
+                    var existingClass = (string?)table.Attribute("class");
                     var className = revisionPrefix + "table-format-change";
                     table.SetAttributeValue("class",
                         existingClass != null ? existingClass + " " + className : className);
@@ -5650,11 +5654,12 @@ namespace Docxodus
                         table.Add(new XAttribute("title", tblGridChange != null && tblPrChange == null
                             ? "Table column widths changed"
                             : "Table properties changed"));
-                    var marker = tblPrChange ?? tblGridChange;
+                    // Non-null: this block only runs when at least one of the two is set.
+                    var marker = (tblPrChange ?? tblGridChange)!;
                     if (settings.IncludeRevisionMetadata)
                     {
-                        var changeAuthor = (string)marker.Attribute(W.author);
-                        var changeDate = (string)marker.Attribute(W.date);
+                        var changeAuthor = (string?)marker.Attribute(W.author);
+                        var changeDate = (string?)marker.Attribute(W.date);
                         if (changeAuthor != null && table.Attribute("data-author") == null)
                             table.Add(new XAttribute("data-author", changeAuthor));
                         if (changeDate != null && table.Attribute("data-date") == null)
@@ -5662,9 +5667,9 @@ namespace Docxodus
                     }
                 }
             }
-            var jc = (string)element.Elements(W.tblPr).Elements(W.jc).Attributes(W.val).FirstOrDefault() ?? "left";
-            XAttribute dir = null;
-            XAttribute jcToUse = null;
+            var jc = (string?)element.Elements(W.tblPr).Elements(W.jc).Attributes(W.val).FirstOrDefault() ?? "left";
+            XAttribute? dir = null;
+            XAttribute? jcToUse = null;
             if (bidiVisual != null)
             {
                 dir = new XAttribute("dir", "rtl");
@@ -5698,7 +5703,7 @@ namespace Docxodus
         /// </remarks>
         private static bool IsFixedLayoutTable(XElement tableElement)
         {
-            var layout = (string)tableElement
+            var layout = (string?)tableElement
                 .Elements(W.tblPr)
                 .Elements(W.tblLayout)
                 .Attributes(W.type)
@@ -5709,7 +5714,7 @@ namespace Docxodus
                 return false;
 
             var tblW = tableElement.Elements(W.tblPr).Elements(W.tblW).FirstOrDefault();
-            var widthType = (string)tblW?.Attribute(W.type);
+            var widthType = (string?)tblW?.Attribute(W.type);
             if (widthType != "dxa")
                 return false;
             return tableElement.Elements(W.tblGrid).Elements(W.gridCol).Any();
@@ -5725,7 +5730,7 @@ namespace Docxodus
         /// to the first row, so emitting the grid is what makes <c>table-layout: fixed</c> mean
         /// the same thing here as in Word.
         /// </remarks>
-        private static XElement CreateColGroup(XElement tableElement)
+        private static XElement? CreateColGroup(XElement tableElement)
         {
             var cols = tableElement
                 .Elements(W.tblGrid)
@@ -5738,7 +5743,7 @@ namespace Docxodus
             return new XElement(Xhtml.colgroup,
                 cols.Select(w => new XElement(Xhtml.col,
                     new XAttribute("style", string.Format(
-                        NumberFormatInfo.InvariantInfo, "width: {0}pt;", w.Value / 20m)))));
+                        NumberFormatInfo.InvariantInfo, "width: {0}pt;", w!.Value / 20m)))));
         }
 
         /// <summary>
@@ -5761,7 +5766,7 @@ namespace Docxodus
                 var border = tblBorders.Element(side);
                 if (border != null)
                 {
-                    var val = (string)border.Attribute(W.val);
+                    var val = (string?)border.Attribute(W.val);
                     // If border value is something other than nil/none, table has borders
                     if (!string.IsNullOrEmpty(val) && val != "nil" && val != "none")
                         return false;
@@ -5773,20 +5778,21 @@ namespace Docxodus
         }
 
         [SuppressMessage("ReSharper", "PossibleNullReferenceException")]
-        private static object ProcessTableCell(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, XElement element)
+        private static object? ProcessTableCell(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, XElement element)
         {
             var style = new Dictionary<string, string>();
-            XAttribute colSpan = null;
-            XAttribute rowSpan = null;
+            XAttribute? colSpan = null;
+            XAttribute? rowSpan = null;
 
             var tcPr = element.Element(W.tcPr);
             if (tcPr != null)
             {
-                if ((string) tcPr.Elements(W.vMerge).Attributes(W.val).FirstOrDefault() == "restart")
+                if ((string?) tcPr.Elements(W.vMerge).Attributes(W.val).FirstOrDefault() == "restart")
                 {
-                    var currentRow = element.Parent.ElementsBeforeSelf(W.tr).Count();
+                    // A w:tc is always inside a w:tr inside a w:tbl.
+                    var currentRow = element.Parent!.ElementsBeforeSelf(W.tr).Count();
                     var currentCell = element.ElementsBeforeSelf(W.tc).Count();
-                    var tbl = element.Parent.Parent;
+                    var tbl = element.Parent!.Parent!;
                     int rowSpanCount = 1;
                     currentRow += 1;
                     while (true)
@@ -5799,7 +5805,7 @@ namespace Docxodus
                             break;
                         if (cell2.Elements(W.tcPr).Elements(W.vMerge).FirstOrDefault() == null)
                             break;
-                        if ((string) cell2.Elements(W.tcPr).Elements(W.vMerge).Attributes(W.val).FirstOrDefault() == "restart")
+                        if ((string?) cell2.Elements(W.tcPr).Elements(W.vMerge).Attributes(W.val).FirstOrDefault() == "restart")
                             break;
                         currentRow += 1;
                         rowSpanCount += 1;
@@ -5808,12 +5814,12 @@ namespace Docxodus
                 }
 
                 if (tcPr.Element(W.vMerge) != null &&
-                    (string) tcPr.Elements(W.vMerge).Attributes(W.val).FirstOrDefault() != "restart")
+                    (string?) tcPr.Elements(W.vMerge).Attributes(W.val).FirstOrDefault() != "restart")
                     return null;
 
                 if (tcPr.Element(W.vAlign) != null)
                 {
-                    var vAlignVal = (string) tcPr.Elements(W.vAlign).Attributes(W.val).FirstOrDefault();
+                    var vAlignVal = (string?) tcPr.Elements(W.vAlign).Attributes(W.val).FirstOrDefault();
                     if (vAlignVal == "top")
                         style.AddIfMissing("vertical-align", "top");
                     else if (vAlignVal == "center")
@@ -5825,7 +5831,7 @@ namespace Docxodus
                 }
                 style.AddIfMissing("vertical-align", "top");
 
-                if ((string) tcPr.Elements(W.tcW).Attributes(W.type).FirstOrDefault() == "dxa")
+                if ((string?) tcPr.Elements(W.tcW).Attributes(W.type).FirstOrDefault() == "dxa")
                 {
                     var width = ParseTblWidthValue(tcPr.Elements(W.tcW).Attributes(W._w).FirstOrDefault(), out var isExplicitPercent);
                     if (width != null && !isExplicitPercent)
@@ -5833,7 +5839,7 @@ namespace Docxodus
                         style.AddIfMissing("width", string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", width.Value/20m));
                     }
                 }
-                if ((string) tcPr.Elements(W.tcW).Attributes(W.type).FirstOrDefault() == "pct")
+                if ((string?) tcPr.Elements(W.tcW).Attributes(W.type).FirstOrDefault() == "pct")
                 {
                     var width = ParseTblWidthValue(tcPr.Elements(W.tcW).Attributes(W._w).FirstOrDefault(), out var isExplicitPercent);
                     if (width != null)
@@ -5861,8 +5867,8 @@ namespace Docxodus
             var cell = new XElement(Xhtml.td,
                 rowSpan,
                 colSpan,
-                settings.StampAnchors && (string)element.Attribute(PtOpenXml.Unid) != null
-                    ? new XAttribute("data-anchor", (string)element.Attribute(PtOpenXml.Unid))
+                settings.StampAnchors && (string?)element.Attribute(PtOpenXml.Unid) != null
+                    ? new XAttribute("data-anchor", (string)element.Attribute(PtOpenXml.Unid)!)
                     : null,
                 SourceAnchorIdentityAttribute(settings, element),
                 CreateBorderDivs(wordDoc, settings, element.Elements()));
@@ -5882,8 +5888,8 @@ namespace Docxodus
 
                     if (settings.IncludeRevisionMetadata)
                     {
-                        var author = (string)cellIns.Attribute(W.author);
-                        var date = (string)cellIns.Attribute(W.date);
+                        var author = (string?)cellIns.Attribute(W.author);
+                        var date = (string?)cellIns.Attribute(W.date);
                         if (author != null)
                             cell.Add(new XAttribute("data-author", author));
                         if (date != null)
@@ -5897,8 +5903,8 @@ namespace Docxodus
 
                     if (settings.IncludeRevisionMetadata)
                     {
-                        var author = (string)cellDel.Attribute(W.author);
-                        var date = (string)cellDel.Attribute(W.date);
+                        var author = (string?)cellDel.Attribute(W.author);
+                        var date = (string?)cellDel.Attribute(W.date);
                         if (author != null)
                             cell.Add(new XAttribute("data-author", author));
                         if (date != null)
@@ -5912,8 +5918,8 @@ namespace Docxodus
 
                     if (settings.IncludeRevisionMetadata)
                     {
-                        var author = (string)cellMerge.Attribute(W.author);
-                        var date = (string)cellMerge.Attribute(W.date);
+                        var author = (string?)cellMerge.Attribute(W.author);
+                        var date = (string?)cellMerge.Attribute(W.date);
                         if (author != null)
                             cell.Add(new XAttribute("data-author", author));
                         if (date != null)
@@ -5927,7 +5933,7 @@ namespace Docxodus
                 if (tcPrChange != null)
                 {
                     var revisionPrefix = settings.RevisionCssClassPrefix ?? "rev-";
-                    var existingClass = (string)cell.Attribute("class");
+                    var existingClass = (string?)cell.Attribute("class");
                     var className = revisionPrefix + "cell-format-change";
                     cell.SetAttributeValue("class",
                         existingClass != null ? existingClass + " " + className : className);
@@ -5935,8 +5941,8 @@ namespace Docxodus
                         cell.Add(new XAttribute("title", "Cell properties changed"));
                     if (settings.IncludeRevisionMetadata)
                     {
-                        var changeAuthor = (string)tcPrChange.Attribute(W.author);
-                        var changeDate = (string)tcPrChange.Attribute(W.date);
+                        var changeAuthor = (string?)tcPrChange.Attribute(W.author);
+                        var changeDate = (string?)tcPrChange.Attribute(W.date);
                         if (changeAuthor != null && cell.Attribute("data-author") == null)
                             cell.Add(new XAttribute("data-author", changeAuthor));
                         if (changeDate != null && cell.Attribute("data-date") == null)
@@ -5977,17 +5983,18 @@ namespace Docxodus
                 if (trPrChange != null || tblPrExChange != null)
                 {
                     var revisionPrefix = settings.RevisionCssClassPrefix ?? "rev-";
-                    var existingClass = (string)htmlRow.Attribute("class");
+                    var existingClass = (string?)htmlRow.Attribute("class");
                     var className = revisionPrefix + "row-format-change";
                     htmlRow.SetAttributeValue("class",
                         existingClass != null ? existingClass + " " + className : className);
                     if (htmlRow.Attribute("title") == null)
                         htmlRow.Add(new XAttribute("title", "Row properties changed"));
-                    var marker = trPrChange ?? tblPrExChange;
+                    // Non-null: this block only runs when at least one of the two is set.
+                    var marker = (trPrChange ?? tblPrExChange)!;
                     if (settings.IncludeRevisionMetadata)
                     {
-                        var changeAuthor = (string)marker.Attribute(W.author);
-                        var changeDate = (string)marker.Attribute(W.date);
+                        var changeAuthor = (string?)marker.Attribute(W.author);
+                        var changeDate = (string?)marker.Attribute(W.date);
                         if (changeAuthor != null && htmlRow.Attribute("data-author") == null)
                             htmlRow.Add(new XAttribute("data-author", changeAuthor));
                         if (changeDate != null && htmlRow.Attribute("data-date") == null)
@@ -6002,8 +6009,8 @@ namespace Docxodus
 
                     if (settings.IncludeRevisionMetadata)
                     {
-                        var author = (string)rowIns.Attribute(W.author);
-                        var date = (string)rowIns.Attribute(W.date);
+                        var author = (string?)rowIns.Attribute(W.author);
+                        var date = (string?)rowIns.Attribute(W.date);
                         if (author != null)
                             htmlRow.Add(new XAttribute("data-author", author));
                         if (date != null)
@@ -6017,8 +6024,8 @@ namespace Docxodus
 
                     if (settings.IncludeRevisionMetadata)
                     {
-                        var author = (string)rowDel.Attribute(W.author);
-                        var date = (string)rowDel.Attribute(W.date);
+                        var author = (string?)rowDel.Attribute(W.author);
+                        var date = (string?)rowDel.Attribute(W.date);
                         if (author != null)
                             htmlRow.Add(new XAttribute("data-author", author));
                         if (date != null)
@@ -6030,7 +6037,7 @@ namespace Docxodus
             return htmlRow;
         }
 
-        private static bool HasStyleSeparator(XElement element)
+        private static bool HasStyleSeparator(XElement? element)
         {
             return element != null && element.Elements(W.pPr).Elements(W.rPr).Any(e => GetBoolProp(e, W.specVanish));
         }
@@ -6047,7 +6054,7 @@ namespace Docxodus
         {
             var elementName = Xhtml.p;
 
-            var styleId = (string) element.Elements(W.pPr).Elements(W.pStyle).Attributes(W.val).FirstOrDefault();
+            var styleId = (string?) element.Elements(W.pPr).Elements(W.pStyle).Attributes(W.val).FirstOrDefault();
             if (styleId == null) return elementName;
 
             var style = GetStyle(styleId, wordDoc);
@@ -6063,14 +6070,14 @@ namespace Docxodus
             return elementName;
         }
 
-        private static XElement GetStyle(string styleId, WordprocessingDocument wordDoc)
+        private static XElement? GetStyle(string styleId, WordprocessingDocument wordDoc)
         {
-            var stylesPart = wordDoc.MainDocumentPart.StyleDefinitionsPart;
+            var stylesPart = wordDoc.MainDocumentPart!.StyleDefinitionsPart;
             if (stylesPart == null) return null;
 
             var styles = stylesPart.GetXDocument().Root;
             return styles != null
-                ? styles.Elements(W.style).FirstOrDefault(s => (string) s.Attribute(W.styleId) == styleId)
+                ? styles.Elements(W.style).FirstOrDefault(s => (string?) s.Attribute(W.styleId) == styleId)
                 : null;
         }
 
@@ -6082,7 +6089,7 @@ namespace Docxodus
                 .Elements()
                 .GroupAdjacent(e => {
                     var sectAnnotation = e.Annotation<SectionAnnotation>();
-                    return sectAnnotation != null ? sectAnnotation.SectionElement.ToString() : "";
+                    return sectAnnotation != null ? sectAnnotation.SectionElement!.ToString() : "";
                 });
 
             int sectionIndex = 0;
@@ -6090,13 +6097,13 @@ namespace Docxodus
                 .Select(g =>
                 {
                     var sectAnnotation = g.First().Annotation<SectionAnnotation>();
-                    XElement bidi = null;
-                    PageDimensions dims = null;
+                    XElement? bidi = null;
+                    PageDimensions? dims = null;
 
                     if (sectAnnotation != null)
                     {
                         bidi = sectAnnotation
-                            .SectionElement
+                            .SectionElement!
                             .Elements(W.bidi)
                             .FirstOrDefault(b => b.Attribute(W.val) == null || b.Attribute(W.val).ToBoolean() == true);
 
@@ -6132,7 +6139,11 @@ namespace Docxodus
                     // The section's start type (w:type). The paginated view needs it to know a
                     // "continuous" section keeps filling the page its predecessor started
                     // instead of opening a fresh one; absent means Word's default, nextPage.
-                    var sectionType = (string)sectAnnotation?.SectionElement.Element(W.type)?.Attribute(W.val);
+                    // SectionElement itself is non-null whenever a SectionAnnotation exists: both
+                    // constructors (see InitializeSectionAnnotation below) resolve it to either
+                    // the found w:sectPr or a synthesized default before the annotation is ever
+                    // attached, so only the `sectAnnotation?.` short-circuit is meaningful here.
+                    var sectionType = (string?)sectAnnotation?.SectionElement!.Element(W.type)?.Attribute(W.val);
                     if (sectionType != null)
                         div.Add(new XAttribute("data-section-type", sectionType));
 
@@ -6141,11 +6152,12 @@ namespace Docxodus
                     // so the count/gap are stamped for the paginator and the same geometry is
                     // applied inline for the continuous view. (Unequal explicit w:col widths
                     // collapse to the equal-column approximation.)
-                    var cols = sectAnnotation?.SectionElement.Element(W.cols);
+                    var cols = sectAnnotation?.SectionElement!.Element(W.cols);
                     var colsNum = (int?)cols?.Attribute(W.num) ?? 1;
                     if (colsNum > 1)
                     {
-                        var colGapPt = ((int?)cols.Attribute(W.space) ?? 720) / 20m;
+                        // colsNum > 1 above is only possible when cols is non-null.
+                        var colGapPt = ((int?)cols!.Attribute(W.space) ?? 720) / 20m;
                         var colGap = colGapPt.ToString("F1", NumberFormatInfo.InvariantInfo);
                         div.Add(new XAttribute("data-cols", colsNum));
                         div.Add(new XAttribute("data-col-gap", colGap));
@@ -6156,10 +6168,10 @@ namespace Docxodus
                     // The section's page numbering (w:pgNumType), which is what an unswitched
                     // PAGE field renders through. Emitted per attribute: absent means "continue
                     // the previous section" / "Word's default format", not a value.
-                    var pgNumType = sectAnnotation?.SectionElement.Element(W.pgNumType);
-                    if ((string)pgNumType?.Attribute(W.start) is { } pgStart)
+                    var pgNumType = sectAnnotation?.SectionElement!.Element(W.pgNumType);
+                    if ((string?)pgNumType?.Attribute(W.start) is { } pgStart)
                         div.Add(new XAttribute("data-page-num-start", pgStart));
-                    if ((string)pgNumType?.Attribute(W.fmt) is { } pgFmt)
+                    if ((string?)pgNumType?.Attribute(W.fmt) is { } pgFmt)
                         div.Add(new XAttribute("data-page-num-fmt", pgFmt));
 
                     sectionIndex++;
@@ -6345,8 +6357,8 @@ namespace Docxodus
             var style = DefineParagraphStyle(paragraph, elementName, suppressTrailingWhiteSpace, currentMarginLeft, isBidi, suppressLeadingWhiteSpace);
             var rtl = isBidi ? new XAttribute("dir", "rtl") : new XAttribute("dir", "ltr");
             var firstMark = isBidi ? new XEntity("#x200f") : null;
-            var anchorAttr = settings.StampAnchors && (string)paragraph.Attribute(PtOpenXml.Unid) != null
-                ? new XAttribute("data-anchor", (string)paragraph.Attribute(PtOpenXml.Unid))
+            var anchorAttr = settings.StampAnchors && (string?)paragraph.Attribute(PtOpenXml.Unid) != null
+                ? new XAttribute("data-anchor", (string)paragraph.Attribute(PtOpenXml.Unid)!)
                 : null;
             var sourceAnchorAttr = SourceAnchorIdentityAttribute(settings, paragraph);
 
@@ -6447,8 +6459,8 @@ namespace Docxodus
             }
         }
 
-        private static List<object> TransformElementsPrecedingTab(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
-            List<XElement> elementsPrecedingTab, XElement firstTabRun)
+        private static List<object?> TransformElementsPrecedingTab(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
+            List<XElement> elementsPrecedingTab, XElement? firstTabRun)
         {
             var tabElement = firstTabRun?.Elements(W.tab).FirstOrDefault();
             var tabWidth = tabElement != null
@@ -6464,7 +6476,8 @@ namespace Docxodus
             var precedingElementsWidth = elementsPrecedingTab
                 .Elements()
                 .Where(c => c.Attributes(PtOpenXml.TabWidth).Any())
-                .Select(e => (decimal) e.Attribute(PtOpenXml.TabWidth))
+                // The Where clause above already verified the attribute exists.
+                .Select(e => (decimal) e.Attribute(PtOpenXml.TabWidth)!)
                 .Sum();
             var totalWidth = precedingElementsWidth + tabWidth;
 
@@ -6473,7 +6486,7 @@ namespace Docxodus
                 .ToList();
 
             // Process the tab element to get leader characters
-            object tabSpan = null;
+            object? tabSpan = null;
             if (tabElement != null)
             {
                 tabSpan = ProcessTab(tabElement);
@@ -6491,8 +6504,11 @@ namespace Docxodus
                 if (tabSpan is XElement tabSpanElement)
                 {
                     var tabStyle = tabSpanElement.Annotation<Dictionary<string, string>>();
-                    tabStyle["flex-grow"] = "1";
-                    tabStyle["flex-shrink"] = "1";
+                    if (tabStyle != null)
+                    {
+                        tabStyle["flex-grow"] = "1";
+                        tabStyle["flex-shrink"] = "1";
+                    }
                 }
 
                 var span = new XElement(Xhtml.span, listMarkerAttr, precedingSpan, tabSpan);
@@ -6507,7 +6523,7 @@ namespace Docxodus
                     { "width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}in", totalWidth) }
                 };
                 span.AddAnnotation(spanStyle);
-                return new List<object> { span };
+                return new List<object?> { span };
             }
             else if (txElementsPrecedingTab.Count == 1)
             {
@@ -6515,10 +6531,13 @@ namespace Docxodus
                 if (element != null)
                 {
                     var spanStyle = element.Annotation<Dictionary<string, string>>();
-                    spanStyle.AddIfMissing("display", "inline-block");
-                    spanStyle.AddIfMissing("text-indent", "0");
-                    // Use min-width instead of width to allow content to expand naturally
-                    spanStyle.AddIfMissing("min-width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}in", totalWidth));
+                    if (spanStyle != null)
+                    {
+                        spanStyle.AddIfMissing("display", "inline-block");
+                        spanStyle.AddIfMissing("text-indent", "0");
+                        // Use min-width instead of width to allow content to expand naturally
+                        spanStyle.AddIfMissing("min-width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}in", totalWidth));
+                    }
                 }
                 // If we have a tab span with leaders, add it after the element
                 if (tabSpan != null)
@@ -6531,7 +6550,7 @@ namespace Docxodus
                         { "min-width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}in", totalWidth) }
                     };
                     wrapperSpan.AddAnnotation(wrapperStyle);
-                    return new List<object> { wrapperSpan };
+                    return new List<object?> { wrapperSpan };
                 }
             }
             else if (tabSpan != null)
@@ -6545,7 +6564,7 @@ namespace Docxodus
                     { "min-width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}in", totalWidth) }
                 };
                 wrapperSpan.AddAnnotation(wrapperStyle);
-                return new List<object> { wrapperSpan };
+                return new List<object?> { wrapperSpan };
             }
             return txElementsPrecedingTab;
         }
@@ -6555,7 +6574,7 @@ namespace Docxodus
         {
             var style = new Dictionary<string, string>();
 
-            var styleName = (string) paragraph.Attribute(PtOpenXml.StyleName);
+            var styleName = (string?) paragraph.Attribute(PtOpenXml.StyleName);
             if (styleName != null)
                 style.Add("PtStyleName", styleName);
 
@@ -6579,7 +6598,7 @@ namespace Docxodus
             CreateStyleFromShd(style, pPr.Element(W.shd), paragraph);
 
             // Pt.FontName
-            var font = (string) paragraph.Attributes(PtOpenXml.FontName).FirstOrDefault();
+            var font = (string?) paragraph.Attributes(PtOpenXml.FontName).FirstOrDefault();
             if (font != null)
                 CreateFontCssProperty(font, null, null, style);
 
@@ -6597,7 +6616,7 @@ namespace Docxodus
             return style;
         }
 
-        private static void CreateStyleFromInd(Dictionary<string, string> style, XElement ind, XName elementName,
+        private static void CreateStyleFromInd(Dictionary<string, string> style, XElement? ind, XName elementName,
             decimal currentMarginLeft, bool isBidi)
         {
             if (ind == null) return;
@@ -6639,11 +6658,11 @@ namespace Docxodus
             }
         }
 
-        private static void CreateStyleFromJc(Dictionary<string, string> style, XElement jc, bool isBidi)
+        private static void CreateStyleFromJc(Dictionary<string, string> style, XElement? jc, bool isBidi)
         {
             if (jc != null)
             {
-                var jcVal = (string)jc.Attributes(W.val).FirstOrDefault() ?? "left";
+                var jcVal = (string?)jc.Attributes(W.val).FirstOrDefault() ?? "left";
                 if (jcVal == "left")
                     style.AddIfMissing("text-align", isBidi ? "right" : "left");
                 else if (jcVal == "right")
@@ -6655,7 +6674,7 @@ namespace Docxodus
             }
         }
 
-        private static void CreateStyleFromSpacing(Dictionary<string, string> style, XElement spacing, XName elementName,
+        private static void CreateStyleFromSpacing(Dictionary<string, string> style, XElement? spacing, XName elementName,
             bool suppressTrailingWhiteSpace, bool suppressLeadingWhiteSpace = false)
         {
             if (spacing == null) return;
@@ -6670,7 +6689,7 @@ namespace Docxodus
                         : "0");
 
             // Per OOXML spec (ISO/IEC 29500), when lineRule is absent the default is "auto"
-            var lineRule = (string) spacing.Attribute(W.lineRule) ?? (spacing.Attribute(W.line) != null ? "auto" : null);
+            var lineRule = (string?) spacing.Attribute(W.lineRule) ?? (spacing.Attribute(W.line) != null ? "auto" : null);
             // Word also permits point-suffixed line values (for example, 12.95pt) in
             // compatibility-produced packages.  Normalize all line measures to twips before
             // deriving their CSS value, just as before/after spacing already does below.
@@ -6708,11 +6727,11 @@ namespace Docxodus
                         : "0");
         }
 
-        private static void CreateStyleFromTextAlignment(Dictionary<string, string> style, XElement textAlignment)
+        private static void CreateStyleFromTextAlignment(Dictionary<string, string> style, XElement? textAlignment)
         {
             if (textAlignment == null) return;
 
-            var verticalTextAlignment = (string)textAlignment.Attributes(W.val).FirstOrDefault();
+            var verticalTextAlignment = (string?)textAlignment.Attributes(W.val).FirstOrDefault();
             if (verticalTextAlignment == null || verticalTextAlignment == "auto") return;
 
             if (verticalTextAlignment == "top")
@@ -6777,7 +6796,7 @@ namespace Docxodus
          *
          */
 
-        private static object ConvertRun(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, XElement run)
+        private static object? ConvertRun(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, XElement run)
         {
             var rPr = run.Element(W.rPr);
 
@@ -6819,7 +6838,7 @@ namespace Docxodus
             var paragraphHasExactLineHeight = run.Ancestors(W.p)
                 .Select(p => p.Element(W.pPr)?.Element(W.spacing))
                 .Any(spacing => spacing != null &&
-                    (string)spacing.Attribute(W.lineRule) == "exact" &&
+                    (string?)spacing.Attribute(W.lineRule) == "exact" &&
                     spacing.Attribute(W.line) != null);
             if (isBreakOnlyRun && paragraphHasExactLineHeight)
                 return contentElements.Select(e => ProcessBreak(e, settings, compactDirectionMark: true));
@@ -6887,8 +6906,8 @@ namespace Docxodus
             // Wrap content in h:sup or h:sub elements as necessary.
             if (rPr.Element(W.vertAlign) != null)
             {
-                XElement newContent = null;
-                var vertAlignVal = (string)rPr.Elements(W.vertAlign).Attributes(W.val).FirstOrDefault();
+                XElement? newContent = null;
+                var vertAlignVal = (string?)rPr.Elements(W.vertAlign).Attributes(W.val).FirstOrDefault();
                 switch (vertAlignVal)
                 {
                     case "superscript":
@@ -6904,8 +6923,8 @@ namespace Docxodus
 
             var langAttribute = GetLangAttribute(run);
 
-            XEntity runStartMark;
-            XEntity runEndMark;
+            XEntity? runStartMark;
+            XEntity? runEndMark;
             DetermineRunMarks(run, rPr, style, out runStartMark, out runEndMark);
 
             if (style.Any() || langAttribute != null || runStartMark != null || isListMarker)
@@ -6940,8 +6959,8 @@ namespace Docxodus
 
                     if (settings.IncludeRevisionMetadata)
                     {
-                        var author = (string)rPrChange.Attribute(W.author);
-                        var date = (string)rPrChange.Attribute(W.date);
+                        var author = (string?)rPrChange.Attribute(W.author);
+                        var date = (string?)rPrChange.Attribute(W.date);
                         if (author != null)
                             formatChangeSpan.Add(new XAttribute("data-author", author));
                         if (date != null)
@@ -7086,7 +7105,7 @@ namespace Docxodus
                             else if (annotTracker.FirstSegmentRendered.Contains(annotationId))
                             {
                                 // Mark as continuation for CSS styling
-                                var existingClass = (string)highlightSpan.Attribute("class");
+                                var existingClass = (string?)highlightSpan.Attribute("class");
                                 highlightSpan.SetAttributeValue("class", existingClass + " " + prefix + "continuation");
                             }
 
@@ -7166,20 +7185,20 @@ namespace Docxodus
                 changes.Add(currentStrike ? "Strikethrough added" : "Strikethrough removed");
 
             // Check for font size change
-            var currentSz = (string)currentRPr.Elements(W.sz).Attributes(W.val).FirstOrDefault();
-            var previousSz = (string)previousRPr?.Elements(W.sz).Attributes(W.val).FirstOrDefault();
+            var currentSz = (string?)currentRPr.Elements(W.sz).Attributes(W.val).FirstOrDefault();
+            var previousSz = (string?)previousRPr?.Elements(W.sz).Attributes(W.val).FirstOrDefault();
             if (currentSz != previousSz)
                 changes.Add("Font size changed");
 
             // Check for font change
-            var currentFont = (string)currentRPr.Elements(W.rFonts).Attributes(W.ascii).FirstOrDefault();
-            var previousFont = (string)previousRPr?.Elements(W.rFonts).Attributes(W.ascii).FirstOrDefault();
+            var currentFont = (string?)currentRPr.Elements(W.rFonts).Attributes(W.ascii).FirstOrDefault();
+            var previousFont = (string?)previousRPr?.Elements(W.rFonts).Attributes(W.ascii).FirstOrDefault();
             if (currentFont != previousFont)
                 changes.Add("Font changed");
 
             // Check for color change
-            var currentColor = (string)currentRPr.Elements(W.color).Attributes(W.val).FirstOrDefault();
-            var previousColor = (string)previousRPr?.Elements(W.color).Attributes(W.val).FirstOrDefault();
+            var currentColor = (string?)currentRPr.Elements(W.color).Attributes(W.val).FirstOrDefault();
+            var previousColor = (string?)previousRPr?.Elements(W.color).Attributes(W.val).FirstOrDefault();
             if (currentColor != previousColor)
                 changes.Add("Color changed");
 
@@ -7198,12 +7217,12 @@ namespace Docxodus
             if (rPr == null)
                 return style;
 
-            var styleName = (string) run.Attribute(PtOpenXml.StyleName);
+            var styleName = (string?) run.Attribute(PtOpenXml.StyleName);
             if (styleName != null)
                 style.Add("PtStyleName", styleName);
 
             // W.bdr
-            if (rPr.Element(W.bdr) != null && (string) rPr.Elements(W.bdr).Attributes(W.val).FirstOrDefault() != "none")
+            if (rPr.Element(W.bdr) != null && (string?) rPr.Elements(W.bdr).Attributes(W.val).FirstOrDefault() != "none")
             {
                 style.AddIfMissing("border", "solid windowtext 1.0pt");
                 style.AddIfMissing("padding", "0");
@@ -7220,7 +7239,7 @@ namespace Docxodus
             }
 
             // W.highlight
-            var highlight = (string) rPr.Elements(W.highlight).Attributes(W.val).FirstOrDefault();
+            var highlight = (string?) rPr.Elements(W.highlight).Attributes(W.val).FirstOrDefault();
             if (highlight != null)
                 CreateColorProperty("background", highlight, style);
 
@@ -7235,20 +7254,20 @@ namespace Docxodus
             }
 
             // Get language type first (needed for font and font size)
-            var languageType = (string)run.Attribute(PtOpenXml.LanguageType);
+            var languageType = (string?)run.Attribute(PtOpenXml.LanguageType);
 
             // Pt.FontName
             var sym = run.Element(W.sym);
             var font = sym != null
-                ? (string) sym.Attributes(W.font).FirstOrDefault()
-                : (string) run.Attributes(PtOpenXml.FontName).FirstOrDefault();
+                ? (string?) sym.Attributes(W.font).FirstOrDefault()
+                : (string?) run.Attributes(PtOpenXml.FontName).FirstOrDefault();
             if (font != null)
             {
                 // For CJK text, get the east Asian language code for font fallback chain
-                string langCode = null;
+                string? langCode = null;
                 if (languageType == "eastAsia")
                 {
-                    langCode = (string)rPr.Elements(W.lang).Attributes(W.eastAsia).FirstOrDefault();
+                    langCode = (string?)rPr.Elements(W.lang).Attributes(W.eastAsia).FirstOrDefault();
                 }
                 CreateFontCssProperty(font, languageType, langCode, style);
             }
@@ -7287,7 +7306,7 @@ namespace Docxodus
                 style.AddIfMissing("display", "none");
 
             // W.u
-            if (rPr.Element(W.u) != null && (string) rPr.Elements(W.u).Attributes(W.val).FirstOrDefault() != "none")
+            if (rPr.Element(W.u) != null && (string?) rPr.Elements(W.u).Attributes(W.val).FirstOrDefault() != "none")
                 style.AddIfMissing("text-decoration", "underline");
 
             // W.i
@@ -7305,7 +7324,7 @@ namespace Docxodus
 
         private static decimal? GetFontSize(XElement e)
         {
-            var languageType = (string)e.Attribute(PtOpenXml.LanguageType);
+            var languageType = (string?)e.Attribute(PtOpenXml.LanguageType);
             if (e.Name == W.p)
             {
                 return GetFontSize(languageType, e.Elements(W.pPr).Elements(W.rPr).FirstOrDefault());
@@ -7317,7 +7336,7 @@ namespace Docxodus
             return null;
         }
 
-        private static decimal? GetFontSize(string languageType, XElement rPr)
+        private static decimal? GetFontSize(string? languageType, XElement? rPr)
         {
             if (rPr == null) return null;
             return languageType == "bidi"
@@ -7325,7 +7344,7 @@ namespace Docxodus
                 : (decimal?) rPr.Elements(W.sz).Attributes(W.val).FirstOrDefault();
         }
 
-        private static void DetermineRunMarks(XElement run, XElement rPr, Dictionary<string, string> style, out XEntity runStartMark, out XEntity runEndMark)
+        private static void DetermineRunMarks(XElement run, XElement? rPr, Dictionary<string, string> style, out XEntity? runStartMark, out XEntity? runEndMark)
         {
             runStartMark = null;
             runEndMark = null;
@@ -7342,7 +7361,7 @@ namespace Docxodus
             }
             if (!addDirectionalMarks) return;
 
-            var isRtl = rPr.Element(W.rtl) != null;
+            var isRtl = rPr?.Element(W.rtl) != null;
             if (isRtl)
             {
                 runStartMark = new XEntity("#x200f"); // RLM
@@ -7364,7 +7383,7 @@ namespace Docxodus
             }
         }
 
-        private static XAttribute GetLangAttribute(XElement run)
+        private static XAttribute? GetLangAttribute(XElement run)
         {
             // Get document default language from annotation (set during preprocessing)
             var docRoot = run.Document?.Root;
@@ -7374,15 +7393,15 @@ namespace Docxodus
             var rPr = run.Elements(W.rPr).FirstOrDefault();
             if (rPr == null)
                 return null;
-            var languageType = (string)run.Attribute(PtOpenXml.LanguageType);
+            var languageType = (string?)run.Attribute(PtOpenXml.LanguageType);
 
-            string lang = null;
+            string? lang = null;
             if (languageType == "western")
-                lang = (string) rPr.Elements(W.lang).Attributes(W.val).FirstOrDefault();
+                lang = (string?) rPr.Elements(W.lang).Attributes(W.val).FirstOrDefault();
             else if (languageType == "bidi")
-                lang = (string) rPr.Elements(W.lang).Attributes(W.bidi).FirstOrDefault();
+                lang = (string?) rPr.Elements(W.lang).Attributes(W.bidi).FirstOrDefault();
             else if (languageType == "eastAsia")
-                lang = (string) rPr.Elements(W.lang).Attributes(W.eastAsia).FirstOrDefault();
+                lang = (string?) rPr.Elements(W.lang).Attributes(W.eastAsia).FirstOrDefault();
 
             // Only add lang attribute if run's language differs from document default
             if (string.IsNullOrEmpty(lang) || lang == defaultLanguage)
@@ -7396,7 +7415,7 @@ namespace Docxodus
         /// </summary>
         private class DocumentLanguageAnnotation
         {
-            public string DefaultLanguage { get; set; }
+            required public string DefaultLanguage { get; set; }
         }
 
         /// <summary>
@@ -7438,7 +7457,7 @@ namespace Docxodus
                 var srgbClr = colorElement.Element(A.srgbClr);
                 if (srgbClr != null)
                 {
-                    var val = (string)srgbClr.Attribute("val");
+                    var val = (string?)srgbClr.Attribute("val");
                     if (!string.IsNullOrEmpty(val))
                     {
                         cache.Colors[colorName] = val;
@@ -7451,7 +7470,7 @@ namespace Docxodus
                 if (sysClr != null)
                 {
                     // Use lastClr if available (the saved color value)
-                    var lastClr = (string)sysClr.Attribute("lastClr");
+                    var lastClr = (string?)sysClr.Attribute("lastClr");
                     if (!string.IsNullOrEmpty(lastClr))
                     {
                         cache.Colors[colorName] = lastClr;
@@ -7459,7 +7478,7 @@ namespace Docxodus
                     }
 
                     // Fall back to system color name mapping
-                    var sysColorName = (string)sysClr.Attribute("val");
+                    var sysColorName = (string?)sysClr.Attribute("val");
                     if (!string.IsNullOrEmpty(sysColorName))
                     {
                         cache.Colors[colorName] = MapSystemColor(sysColorName);
@@ -7484,7 +7503,7 @@ namespace Docxodus
             {
                 if (element.Name == W.footnoteReference)
                 {
-                    var id = (string)element.Attribute(W.id);
+                    var id = (string?)element.Attribute(W.id);
                     if (id != null && !tracker.FootnoteIdToDisplayNumber.ContainsKey(id))
                     {
                         footnoteNumber++;
@@ -7494,7 +7513,7 @@ namespace Docxodus
                 }
                 else if (element.Name == W.endnoteReference)
                 {
-                    var id = (string)element.Attribute(W.id);
+                    var id = (string?)element.Attribute(W.id);
                     if (id != null && !tracker.EndnoteIdToDisplayNumber.ContainsKey(id))
                     {
                         endnoteNumber++;
@@ -7515,12 +7534,12 @@ namespace Docxodus
         {
             var body = wordDoc.MainDocumentPart?.GetXDocument().Root?.Element(W.body);
             var sectionFormat = body?.Descendants(W.sectPr)
-                .Select(sectPr => (string)sectPr.Element(notePrName)?.Element(W.numFmt)?.Attribute(W.val))
+                .Select(sectPr => (string?)sectPr.Element(notePrName)?.Element(W.numFmt)?.Attribute(W.val))
                 .FirstOrDefault(v => v != null);
             if (sectionFormat != null)
                 return sectionFormat;
 
-            var settingsFormat = (string)GetSettingsXDocumentOrDefault(wordDoc)?.Root
+            var settingsFormat = (string?)GetSettingsXDocumentOrDefault(wordDoc)?.Root
                 ?.Element(notePrName)?.Element(W.numFmt)?.Attribute(W.val);
             return settingsFormat ?? specDefault;
         }
@@ -7576,7 +7595,7 @@ namespace Docxodus
         /// Tint lightens toward white, shade darkens toward black.
         /// Values are hex strings (00-FF) where FF = no change, 00 = full effect.
         /// </summary>
-        private static string ApplyTintShade(string hexColor, string tintHex, string shadeHex)
+        private static string ApplyTintShade(string hexColor, string? tintHex, string? shadeHex)
         {
             if (string.IsNullOrEmpty(hexColor) || hexColor.Length != 6)
                 return hexColor;
@@ -7622,35 +7641,35 @@ namespace Docxodus
         /// Resolves a theme color to its hex value, applying tint/shade modifiers.
         /// Falls back to explicit color if theme color is not found.
         /// </summary>
-        private static string ResolveThemeColor(
-            XElement element,
+        private static string? ResolveThemeColor(
+            XElement? element,
             XName colorAttr,
             XName themeColorAttr,
             XName themeTintAttr,
             XName themeShadeAttr,
-            ThemeColorScheme scheme)
+            ThemeColorScheme? scheme)
         {
             if (element == null)
                 return null;
 
             // Get explicit color value as fallback
-            var explicitColor = (string)element.Attribute(colorAttr);
+            var explicitColor = (string?)element.Attribute(colorAttr);
 
             // If no theme scheme or no themeColor attribute, return explicit color
             if (scheme == null || scheme.Colors.Count == 0)
                 return explicitColor;
 
-            var themeColorName = (string)element.Attribute(themeColorAttr);
+            var themeColorName = (string?)element.Attribute(themeColorAttr);
             if (string.IsNullOrEmpty(themeColorName))
                 return explicitColor;
 
             // Look up theme color
-            if (!scheme.Colors.TryGetValue(themeColorName, out string themeColor))
+            if (!scheme.Colors.TryGetValue(themeColorName, out string? themeColor))
                 return explicitColor; // Fall back to explicit if theme color not found
 
             // Apply tint/shade modifiers
-            var tint = (string)element.Attribute(themeTintAttr);
-            var shade = (string)element.Attribute(themeShadeAttr);
+            var tint = (string?)element.Attribute(themeTintAttr);
+            var shade = (string?)element.Attribute(themeShadeAttr);
 
             return ApplyTintShade(themeColor, tint, shade);
         }
@@ -7658,7 +7677,7 @@ namespace Docxodus
         /// <summary>
         /// Gets the ThemeColorScheme annotation from the root element.
         /// </summary>
-        private static ThemeColorScheme GetThemeColorScheme(XElement element)
+        private static ThemeColorScheme? GetThemeColorScheme(XElement element)
         {
             var root = element.AncestorsAndSelf().Last();
             return root.Annotation<ThemeColorScheme>();
@@ -7671,7 +7690,7 @@ namespace Docxodus
         /// <summary>Gets the DocumentSettingsPart's XDocument, or null if the part is absent.
         /// DocumentSettingsPart is optional in OOXML — Word opens packages without
         /// word/settings.xml fine, so callers must not assume it is present.</summary>
-        private static XDocument GetSettingsXDocumentOrDefault(WordprocessingDocument wordDoc) =>
+        private static XDocument? GetSettingsXDocumentOrDefault(WordprocessingDocument wordDoc) =>
             wordDoc.MainDocumentPart?.DocumentSettingsPart?.GetXDocument();
 
         /// <summary>
@@ -7690,15 +7709,15 @@ namespace Docxodus
                 if (themeFontLang != null)
                 {
                     // Prefer w:val (western), then w:eastAsia, then w:bidi
-                    var lang = (string)themeFontLang.Attribute(W.val);
+                    var lang = (string?)themeFontLang.Attribute(W.val);
                     if (!string.IsNullOrEmpty(lang))
                         return lang;
 
-                    lang = (string)themeFontLang.Attribute(W.eastAsia);
+                    lang = (string?)themeFontLang.Attribute(W.eastAsia);
                     if (!string.IsNullOrEmpty(lang))
                         return lang;
 
-                    lang = (string)themeFontLang.Attribute(W.bidi);
+                    lang = (string?)themeFontLang.Attribute(W.bidi);
                     if (!string.IsNullOrEmpty(lang))
                         return lang;
                 }
@@ -7712,12 +7731,12 @@ namespace Docxodus
                 var defaultParaStyle = stylesXDoc.Root?
                     .Elements(W.style)
                     .FirstOrDefault(s =>
-                        (string)s.Attribute(W.type) == "paragraph" &&
+                        (string?)s.Attribute(W.type) == "paragraph" &&
                         s.Attribute(W._default).ToBoolean() == true);
 
                 if (defaultParaStyle != null)
                 {
-                    var lang = (string)defaultParaStyle
+                    var lang = (string?)defaultParaStyle
                         .Elements(W.rPr)
                         .Elements(W.lang)
                         .Attributes(W.val)
@@ -7736,10 +7755,10 @@ namespace Docxodus
             // Note: when implementing a paging version of the HTML transform, this needs to be done
             // for all content parts, not just the main document part.
 
-            var xd = wordDoc.MainDocumentPart.GetXDocument();
+            var xd = wordDoc.MainDocumentPart!.GetXDocument();
             foreach (var tbl in xd.Descendants(W.tbl))
                 AdjustTableBorders(tbl);
-            wordDoc.MainDocumentPart.PutXDocument();
+            wordDoc.MainDocumentPart!.PutXDocument();
         }
 
         private static void AdjustTableBorders(XElement tbl)
@@ -7876,24 +7895,24 @@ namespace Docxodus
             {"inset", 7 },
         };
 
-        private static void ResolveCellBorder(XElement border1, XElement border2)
+        private static void ResolveCellBorder(XElement? border1, XElement? border2)
         {
             if (border1 == null || border2 == null)
                 return;
-            if ((string)border1.Attribute(W.val) == "nil" || (string)border2.Attribute(W.val) == "nil")
+            if ((string?)border1.Attribute(W.val) == "nil" || (string?)border2.Attribute(W.val) == "nil")
                 return;
-            if ((string)border1.Attribute(W.sz) == "nil" || (string)border2.Attribute(W.sz) == "nil")
+            if ((string?)border1.Attribute(W.sz) == "nil" || (string?)border2.Attribute(W.sz) == "nil")
                 return;
 
-            var border1Val = (string)border1.Attribute(W.val);
+            var border1Val = (string?)border1.Attribute(W.val);
             var border1Weight = 1;
-            if (BorderNumber.ContainsKey(border1Val))
-                border1Weight = BorderNumber[border1Val];
+            if (BorderNumber.ContainsKey(border1Val!))
+                border1Weight = BorderNumber[border1Val!];
 
-            var border2Val = (string)border2.Attribute(W.val);
+            var border2Val = (string?)border2.Attribute(W.val);
             var border2Weight = 1;
-            if (BorderNumber.ContainsKey(border2Val))
-                border2Weight = BorderNumber[border2Val];
+            if (BorderNumber.ContainsKey(border2Val!))
+                border2Weight = BorderNumber[border2Val!];
 
             if (border1Weight != border2Weight)
             {
@@ -7919,13 +7938,13 @@ namespace Docxodus
                 return;
             }
 
-            var border1Type = (string)border1.Attribute(W.val);
-            var border2Type = (string)border2.Attribute(W.val);
-            if (BorderTypePriority.ContainsKey(border1Type) &&
-                BorderTypePriority.ContainsKey(border2Type))
+            var border1Type = (string?)border1.Attribute(W.val);
+            var border2Type = (string?)border2.Attribute(W.val);
+            if (BorderTypePriority.ContainsKey(border1Type!) &&
+                BorderTypePriority.ContainsKey(border2Type!))
             {
-                var border1Pri = BorderTypePriority[border1Type];
-                var border2Pri = BorderTypePriority[border2Type];
+                var border1Pri = BorderTypePriority[border1Type!];
+                var border2Pri = BorderTypePriority[border2Type!];
                 if (border1Pri < border2Pri)
                 {
                     BorderOverride(border2, border1);
@@ -7938,10 +7957,10 @@ namespace Docxodus
                 }
             }
 
-            var color1Str = (string)border1.Attribute(W.color);
+            var color1Str = (string?)border1.Attribute(W.color);
             if (color1Str == "auto")
                 color1Str = "000000";
-            var color2Str = (string)border2.Attribute(W.color);
+            var color2Str = (string?)border2.Attribute(W.color);
             if (color2Str == "auto")
                 color2Str = "000000";
             if (color1Str != null && color2Str != null && color1Str != color2Str)
@@ -7970,15 +7989,16 @@ namespace Docxodus
 
         private static void BorderOverride(XElement fromBorder, XElement toBorder)
         {
-            toBorder.Attribute(W.val).Value = fromBorder.Attribute(W.val).Value;
+            // w:val is required on a border element.
+            toBorder.Attribute(W.val)!.Value = fromBorder.Attribute(W.val)!.Value;
             if (fromBorder.Attribute(W.color) != null)
-                toBorder.SetAttributeValue(W.color, fromBorder.Attribute(W.color).Value);
+                toBorder.SetAttributeValue(W.color, fromBorder.Attribute(W.color)!.Value);
             if (fromBorder.Attribute(W.sz) != null)
-                toBorder.SetAttributeValue(W.sz, fromBorder.Attribute(W.sz).Value);
+                toBorder.SetAttributeValue(W.sz, fromBorder.Attribute(W.sz)!.Value);
             if (fromBorder.Attribute(W.themeColor) != null)
-                toBorder.SetAttributeValue(W.themeColor, fromBorder.Attribute(W.themeColor).Value);
+                toBorder.SetAttributeValue(W.themeColor, fromBorder.Attribute(W.themeColor)!.Value);
             if (fromBorder.Attribute(W.themeTint) != null)
-                toBorder.SetAttributeValue(W.themeTint, fromBorder.Attribute(W.themeTint).Value);
+                toBorder.SetAttributeValue(W.themeTint, fromBorder.Attribute(W.themeTint)!.Value);
         }
 
         private static void CalculateSpanWidthForTabs(WordprocessingDocument wordDoc)
@@ -7996,18 +8016,18 @@ namespace Docxodus
             if (sxd != null)
             {
                 // w:defaultTabStop is a direct child of w:settings (not nested).
-                var defaultTabStopValue = (string)sxd.Root?.Element(W.defaultTabStop)?.Attribute(W.val);
+                var defaultTabStopValue = (string?)sxd.Root?.Element(W.defaultTabStop)?.Attribute(W.val);
                 if (defaultTabStopValue != null)
                     defaultTabStop = WordprocessingMLUtil.StringToTwips(defaultTabStopValue);
             }
 
-            var pxd = wordDoc.MainDocumentPart.GetXDocument();
+            var pxd = wordDoc.MainDocumentPart!.GetXDocument();
             var root = pxd.Root;
             if (root == null) return;
 
             var newRoot = (XElement)CalculateSpanWidthTransform(root, defaultTabStop);
             root.ReplaceWith(newRoot);
-            wordDoc.MainDocumentPart.PutXDocument();
+            wordDoc.MainDocumentPart!.PutXDocument();
         }
 
         // TODO: Refactor. This method is way too long.
@@ -8121,7 +8141,7 @@ namespace Docxodus
 
                 if (currentElement.Name == W.tab)
                 {
-                    var runContainingTabToReplace = currentElement.Parent;
+                    var runContainingTabToReplace = currentElement.Parent!; // a w:tab always has a w:r parent
                     var fontNameAtt = runContainingTabToReplace.Attribute(PtOpenXml.pt + "FontName") ??
                                       runContainingTabToReplace.Ancestors(W.p).First().Attribute(PtOpenXml.pt + "FontName");
 
@@ -8129,7 +8149,7 @@ namespace Docxodus
 
                     var tabAfterText = tabs
                         .Elements(W.tab)
-                        .FirstOrDefault(t => WordprocessingMLUtil.StringToTwips((string)t.Attribute(W.pos)) > testAmount);
+                        .FirstOrDefault(t => WordprocessingMLUtil.StringToTwips((string)t.Attribute(W.pos)!) > testAmount);
 
                     if (tabAfterText == null)
                     {
@@ -8140,7 +8160,7 @@ namespace Docxodus
                         break;
                     }
 
-                    var tabVal = (string)tabAfterText.Attribute(W.val);
+                    var tabVal = (string?)tabAfterText.Attribute(W.val);
                     if (tabVal == "right" || tabVal == "end")
                     {
                         var textAfterElements = contentToMeasure
@@ -8165,7 +8185,7 @@ namespace Docxodus
                             new XElement(W.t, textAfterTab));
 
                         var widthOfTextAfterTab = CalcWidthOfRunInTwips(dummyRun2);
-                        var delta2 = WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)) - widthOfTextAfterTab - twipCounter;
+                        var delta2 = WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!) - widthOfTextAfterTab - twipCounter;
                         if (delta2 < 0)
                             delta2 = 0;
                         currentElement.Add(
@@ -8173,7 +8193,7 @@ namespace Docxodus
                                 string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}", (decimal)delta2 / 1440m)),
                             new XAttribute(PtOpenXml.TabAlignment, "right"),
                             GetLeader(tabAfterText));
-                        twipCounter = Math.Max(WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)), twipCounter + widthOfTextAfterTab);
+                        twipCounter = Math.Max(WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!), twipCounter + widthOfTextAfterTab);
 
                         var lastElement = textElementsToMeasure.LastOrDefault();
                         if (lastElement == null)
@@ -8213,7 +8233,7 @@ namespace Docxodus
                                 new XElement(W.t, mantissa));
 
                             var widthOfMantissa = CalcWidthOfRunInTwips(dummyRun4);
-                            var delta2 = WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)) - widthOfMantissa - twipCounter;
+                            var delta2 = WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!) - widthOfMantissa - twipCounter;
                             if (delta2 < 0)
                                 delta2 = 0;
                             currentElement.Add(
@@ -8229,7 +8249,7 @@ namespace Docxodus
                                 new XElement(W.t, decims));
 
                             var widthOfDecims = CalcWidthOfRunInTwips(dummyRun4);
-                            twipCounter = Math.Max(WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)) + widthOfDecims, twipCounter + widthOfMantissa + widthOfDecims);
+                            twipCounter = Math.Max(WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!) + widthOfDecims, twipCounter + widthOfMantissa + widthOfDecims);
 
                             var lastElement = textElementsToMeasure.LastOrDefault();
                             if (lastElement == null)
@@ -8249,7 +8269,7 @@ namespace Docxodus
                                 new XElement(W.t, textAfterTab));
 
                             var widthOfTextAfterTab = CalcWidthOfRunInTwips(dummyRun2);
-                            var delta2 = WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)) - widthOfTextAfterTab - twipCounter;
+                            var delta2 = WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!) - widthOfTextAfterTab - twipCounter;
                             if (delta2 < 0)
                                 delta2 = 0;
                             currentElement.Add(
@@ -8257,7 +8277,7 @@ namespace Docxodus
                                     string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}", (decimal)delta2 / 1440m)),
                                 new XAttribute(PtOpenXml.TabAlignment, "decimal"),
                                 GetLeader(tabAfterText));
-                            twipCounter = Math.Max(WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)), twipCounter + widthOfTextAfterTab);
+                            twipCounter = Math.Max(WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!), twipCounter + widthOfTextAfterTab);
 
                             var lastElement = textElementsToMeasure.LastOrDefault();
                             if (lastElement == null)
@@ -8270,7 +8290,7 @@ namespace Docxodus
                             continue;
                         }
                     }
-                    if ((string)tabAfterText.Attribute(W.val) == "center")
+                    if ((string?)tabAfterText.Attribute(W.val) == "center")
                     {
                         var textAfterElements = contentToMeasure
                             .Skip(currentElementIdx + 1);
@@ -8294,7 +8314,7 @@ namespace Docxodus
                             new XElement(W.t, textAfterTab));
 
                         var widthOfText = CalcWidthOfRunInTwips(dummyRun4);
-                        var delta2 = WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)) - (widthOfText / 2) - twipCounter;
+                        var delta2 = WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!) - (widthOfText / 2) - twipCounter;
                         if (delta2 < 0)
                             delta2 = 0;
                         currentElement.Add(
@@ -8302,7 +8322,7 @@ namespace Docxodus
                                 string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}", (decimal)delta2 / 1440m)),
                             new XAttribute(PtOpenXml.TabAlignment, "center"),
                             GetLeader(tabAfterText));
-                        twipCounter = Math.Max(WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)) + widthOfText / 2, twipCounter + widthOfText);
+                        twipCounter = Math.Max(WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!) + widthOfText / 2, twipCounter + widthOfText);
 
                         var lastElement = textElementsToMeasure.LastOrDefault();
                         if (lastElement == null)
@@ -8316,13 +8336,13 @@ namespace Docxodus
                     }
                     if (tabVal == "left" || tabVal == "start" || tabVal == "num")
                     {
-                        var delta = WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)) - twipCounter;
+                        var delta = WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!) - twipCounter;
                         currentElement.Add(
                             new XAttribute(PtOpenXml.TabWidth,
                                 string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}", (decimal)delta / 1440m)),
                             new XAttribute(PtOpenXml.TabAlignment, "left"),
                             GetLeader(tabAfterText));
-                        twipCounter = WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos));
+                        twipCounter = WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!);
 
                         currentElementIdx++;
                         if (currentElementIdx >= contentToMeasure.Length)
@@ -8336,7 +8356,7 @@ namespace Docxodus
                 {
                     // Measure text width to properly position subsequent tabs
                     // Uses estimation fallback when fonts are unavailable (Azure, WASM)
-                    var runContainingTabToReplace = currentElement.Parent;
+                    var runContainingTabToReplace = currentElement.Parent!; // a w:t always has a w:r parent
                     var paragraphForRun = runContainingTabToReplace.Ancestors(W.p).First();
                     var fontNameAtt = runContainingTabToReplace.Attribute(PtOpenXml.FontName) ??
                                       paragraphForRun.Attribute(PtOpenXml.FontName);
@@ -8372,9 +8392,9 @@ namespace Docxodus
                 element.Nodes().Select(n => CalculateSpanWidthTransform(n, defaultTabStop)));
         }
 
-        private static XAttribute GetLeader(XElement tabAfterText)
+        private static XAttribute? GetLeader(XElement tabAfterText)
         {
-            var leader = (string)tabAfterText.Attribute(W.leader);
+            var leader = (string?)tabAfterText.Attribute(W.leader);
             if (leader == null)
                 return null;
             return new XAttribute(PtOpenXml.Leader, leader);
@@ -8384,22 +8404,22 @@ namespace Docxodus
         {
             var lastTabElement = tabs
                 .Elements(W.tab)
-                .Where(t => (string)t.Attribute(W.val) != "clear" && (string)t.Attribute(W.val) != "bar")
-                .OrderBy(t => WordprocessingMLUtil.StringToTwips((string)t.Attribute(W.pos)))
+                .Where(t => (string?)t.Attribute(W.val) != "clear" && (string?)t.Attribute(W.val) != "bar")
+                .OrderBy(t => WordprocessingMLUtil.StringToTwips((string)t.Attribute(W.pos)!))
                 .LastOrDefault();
             if (lastTabElement != null)
             {
                 if (defaultTabStop == 0)
                     defaultTabStop = DefaultTabStopTwips;
-                var rangeStart = WordprocessingMLUtil.StringToTwips((string)lastTabElement.Attribute(W.pos)) / defaultTabStop + 1;
+                var rangeStart = WordprocessingMLUtil.StringToTwips((string)lastTabElement.Attribute(W.pos)!) / defaultTabStop + 1;
                 var tempTabs = new XElement(W.tabs,
-                    tabs.Elements().Where(t => (string)t.Attribute(W.val) != "clear" && (string)t.Attribute(W.val) != "bar"),
+                    tabs.Elements().Where(t => (string?)t.Attribute(W.val) != "clear" && (string?)t.Attribute(W.val) != "bar"),
                     Enumerable.Range(rangeStart, 100)
                     .Select(r => new XElement(W.tab,
                         new XAttribute(W.val, "left"),
                         new XAttribute(W.pos, r * defaultTabStop))));
                 tempTabs = new XElement(W.tabs,
-                    tempTabs.Elements().OrderBy(t => WordprocessingMLUtil.StringToTwips((string)t.Attribute(W.pos))));
+                    tempTabs.Elements().OrderBy(t => WordprocessingMLUtil.StringToTwips((string)t.Attribute(W.pos)!)));
                 return tempTabs;
             }
             else
@@ -8417,8 +8437,8 @@ namespace Docxodus
 
         private static int CalcWidthOfRunInTwips(XElement r, bool isListMarker = false)
         {
-            var fontName = (string)r.Attribute(PtOpenXml.pt + "FontName") ??
-                           (string)r.Ancestors(W.p).First().Attribute(PtOpenXml.pt + "FontName");
+            var fontName = (string?)r.Attribute(PtOpenXml.pt + "FontName") ??
+                           (string?)r.Ancestors(W.p).First().Attribute(PtOpenXml.pt + "FontName");
             if (fontName == null)
                 throw new DocxodusException("Internal Error, should have FontName attribute");
 
@@ -8436,9 +8456,11 @@ namespace Docxodus
                 .Select(t => (string) t)
                 .StringConcatenate();
 
+            // FormattingAssembler has already annotated every w:tab with PtOpenXml.TabWidth
+            // by the time this rendering path runs.
             var tabLength = r.DescendantsTrimmed(W.txbxContent)
                 .Where(e => e.Name == W.tab)
-                .Select(t => (decimal)t.Attribute(PtOpenXml.TabWidth))
+                .Select(t => (decimal)t.Attribute(PtOpenXml.TabWidth)!)
                 .Sum();
 
             if (runText.Length == 0 && tabLength == 0)
@@ -8524,7 +8546,7 @@ namespace Docxodus
         // the placeholder as NBSP states the intent rather than changing the emitted bytes.
         private static object InsertAppropriateNonbreakingSpacesTransform(XNode node)
         {
-            XElement element = node as XElement;
+            XElement? element = node as XElement;
             if (element != null)
             {
                 // child content of run to look for
@@ -8599,7 +8621,7 @@ namespace Docxodus
 
         private class SectionAnnotation
         {
-            public XElement SectionElement;
+            public XElement? SectionElement;
         }
 
         /// <summary>
@@ -8642,7 +8664,7 @@ namespace Docxodus
             /// Creates PageDimensions from a w:sectPr element.
             /// Returns US Letter defaults (8.5"x11" with 1" margins) if sectPr is null.
             /// </summary>
-            public static PageDimensions FromSectionProperties(XElement sectPr)
+            public static PageDimensions FromSectionProperties(XElement? sectPr)
             {
                 // Default to US Letter: 8.5" x 11" (612pt x 792pt) with 1" margins (72pt)
                 var dims = new PageDimensions
@@ -8664,9 +8686,9 @@ namespace Docxodus
                 var pgSz = sectPr.Element(W.pgSz);
                 if (pgSz != null)
                 {
-                    if (int.TryParse((string)pgSz.Attribute(W._w), out int w))
+                    if (int.TryParse((string?)pgSz.Attribute(W._w), out int w))
                         dims.PageWidthPt = w / 20.0;
-                    if (int.TryParse((string)pgSz.Attribute(W.h), out int h))
+                    if (int.TryParse((string?)pgSz.Attribute(W.h), out int h))
                         dims.PageHeightPt = h / 20.0;
                 }
 
@@ -8674,17 +8696,17 @@ namespace Docxodus
                 var pgMar = sectPr.Element(W.pgMar);
                 if (pgMar != null)
                 {
-                    if (int.TryParse((string)pgMar.Attribute(W.top), out int top))
+                    if (int.TryParse((string?)pgMar.Attribute(W.top), out int top))
                         dims.MarginTopPt = top / 20.0;
-                    if (int.TryParse((string)pgMar.Attribute(W.right), out int right))
+                    if (int.TryParse((string?)pgMar.Attribute(W.right), out int right))
                         dims.MarginRightPt = right / 20.0;
-                    if (int.TryParse((string)pgMar.Attribute(W.bottom), out int bottom))
+                    if (int.TryParse((string?)pgMar.Attribute(W.bottom), out int bottom))
                         dims.MarginBottomPt = bottom / 20.0;
-                    if (int.TryParse((string)pgMar.Attribute(W.left), out int left))
+                    if (int.TryParse((string?)pgMar.Attribute(W.left), out int left))
                         dims.MarginLeftPt = left / 20.0;
-                    if (int.TryParse((string)pgMar.Attribute(W.header), out int header))
+                    if (int.TryParse((string?)pgMar.Attribute(W.header), out int header))
                         dims.HeaderPt = header / 20.0;
-                    if (int.TryParse((string)pgMar.Attribute(W.footer), out int footer))
+                    if (int.TryParse((string?)pgMar.Attribute(W.footer), out int footer))
                         dims.FooterPt = footer / 20.0;
                 }
 
@@ -8694,7 +8716,7 @@ namespace Docxodus
 
         private static void AnnotateForSections(WordprocessingDocument wordDoc)
         {
-            var xd = wordDoc.MainDocumentPart.GetXDocument();
+            var xd = wordDoc.MainDocumentPart!.GetXDocument();
 
             var document = xd.Root;
             if (document == null) return;
@@ -8788,7 +8810,7 @@ namespace Docxodus
         {
             return pBdr.Elements().Any(side =>
             {
-                var val = (string)side.Attribute(W.val);
+                var val = (string?)side.Attribute(W.val);
                 return val != null && val != "nil" && val != "none";
             });
         }
@@ -8859,13 +8881,13 @@ namespace Docxodus
             var grouped = elements
                 .GroupAdjacent(e =>
                 {
-                    var abstractNumId = (string)e.Attribute(PtOpenXml.pt + "AbstractNumId");
+                    var abstractNumId = (string?)e.Attribute(PtOpenXml.pt + "AbstractNumId");
                     if (abstractNumId != null)
                         return "num:" + abstractNumId;
                     var contextualSpacing = e.Elements(W.pPr).Elements(W.contextualSpacing).FirstOrDefault();
                     if (contextualSpacing != null)
                     {
-                        var styleName = (string)e.Elements(W.pPr).Elements(W.pStyle).Attributes(W.val).FirstOrDefault();
+                        var styleName = (string?)e.Elements(W.pPr).Elements(W.pStyle).Attributes(W.val).FirstOrDefault();
                         if (styleName == null)
                             return "";
                         return "sty:" + styleName;
@@ -8892,7 +8914,7 @@ namespace Docxodus
 
         private class BorderMappingInfo
         {
-            public string CssName;
+            required public string CssName;
             public decimal CssSize;
         }
 
@@ -8924,7 +8946,7 @@ namespace Docxodus
             { "inset", new BorderMappingInfo() { CssName = "inset", CssSize = 4.5m }},
         };
 
-        private static void GenerateBorderStyle(XElement pBdr, XName sideXName, Dictionary<string, string> style, BorderType borderType)
+        private static void GenerateBorderStyle(XElement? pBdr, XName sideXName, Dictionary<string, string> style, BorderType borderType)
         {
             string whichSide;
             if (sideXName == W.top)
@@ -8953,7 +8975,7 @@ namespace Docxodus
                     style.Add("padding-" + whichSide, "5.4pt");
                 return;
             }
-            var type = (string)side.Attribute(W.val);
+            var type = (string?)side.Attribute(W.val);
             if (type == "nil" || type == "none")
             {
                 style.Add("border-" + whichSide + "-style", "none");
@@ -8969,7 +8991,8 @@ namespace Docxodus
             }
             else
             {
-                var sz = (int)side.Attribute(W.sz);
+                // w:sz is required once the border style isn't nil/none.
+                var sz = (int)side.Attribute(W.sz)!;
                 var space = (decimal?)side.Attribute(W.space) ?? 0;
                 // `w:color` is a CACHE of the last theme resolution, not the authority: when
                 // `w:themeColor` is present the theme entry (plus any tint/shade) is what the
@@ -8987,7 +9010,7 @@ namespace Docxodus
                 decimal borderWidthInPoints = Math.Max(1m, Math.Min(96m, Math.Max(2m, sz)) / 8m);
 
                 var borderStyle = "solid";
-                if (BorderStyleMap.ContainsKey(type))
+                if (type != null && BorderStyleMap.ContainsKey(type))
                 {
                     var borderInfo = BorderStyleMap[type];
                     borderStyle = borderInfo.CssName;
@@ -9113,7 +9136,7 @@ namespace Docxodus
             ShadeCache.Clear();
         }
 
-        private static void CreateStyleFromShd(Dictionary<string, string> style, XElement shd, XElement contextElement)
+        private static void CreateStyleFromShd(Dictionary<string, string> style, XElement? shd, XElement? contextElement)
         {
             if (shd == null)
                 return;
@@ -9128,7 +9151,7 @@ namespace Docxodus
             var fill = ResolveThemeColor(shd, W.fill, W.themeFill, W.themeFillTint, W.themeFillShade, themeScheme);
 
             if (ShadeMapper.TryGetValue(shadeType, out var shadeMapper))
-                color = shadeMapper(color, fill);
+                color = shadeMapper(color!, fill!);
             if (color != null)
             {
                 var cvtColor = ConvertColor(color);
@@ -9289,7 +9312,7 @@ namespace Docxodus
             { "cjk", "'Noto Serif CJK SC', 'Noto Sans CJK SC', 'Noto Sans CJK JP', 'Noto Sans CJK KR', 'Microsoft YaHei', 'SimSun', 'MS Gothic', 'Malgun Gothic'" }
         };
 
-        private static string NormalizeCjkLanguage(string langCode)
+        private static string? NormalizeCjkLanguage(string? langCode)
         {
             if (string.IsNullOrEmpty(langCode))
                 return null;
@@ -9343,7 +9366,7 @@ namespace Docxodus
             { "Lucida Console", @"'{0}', 'monospace'" },
         };
 
-        private static void CreateFontCssProperty(string font, string languageType, string langCode, Dictionary<string, string> style)
+        private static void CreateFontCssProperty(string font, string? languageType, string? langCode, Dictionary<string, string> style)
         {
             if (string.IsNullOrEmpty(font))
                 return;
@@ -9489,7 +9512,7 @@ namespace Docxodus
             W14.w14.NamespaceName,
         };
 
-        private static object ProcessAlternateContent(WordprocessingDocument wordDoc,
+        private static object? ProcessAlternateContent(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings, XElement alternateContent, decimal currentMarginLeft)
         {
             // Markup Compatibility requires readers to use the Fallback whenever none of the
@@ -9507,7 +9530,7 @@ namespace Docxodus
 
         private static bool IsSupportedMarkupChoice(XElement choice)
         {
-            var requires = (string)choice.Attribute("Requires");
+            var requires = (string?)choice.Attribute("Requires");
             if (string.IsNullOrWhiteSpace(requires))
                 return true;
 
@@ -9517,8 +9540,8 @@ namespace Docxodus
         }
 
 
-        public static XElement ProcessImage(WordprocessingDocument wordDoc,
-            XElement element, Func<ImageInfo, XElement> imageHandler, WmlToHtmlConverterSettings settings = null)
+        public static XElement? ProcessImage(WordprocessingDocument wordDoc,
+            XElement element, Func<ImageInfo, XElement?>? imageHandler, WmlToHtmlConverterSettings? settings = null)
         {
             if (element.Name == W.drawing)
             {
@@ -9557,8 +9580,8 @@ namespace Docxodus
         /// its Word paragraphs) rather than passing VML's absolute-positioning directives through
         /// to a browser, where they otherwise escape the document flow.
         /// </summary>
-        private static XElement ProcessTextBox(WordprocessingDocument wordDoc, XElement element,
-            WmlToHtmlConverterSettings settings)
+        private static XElement? ProcessTextBox(WordprocessingDocument wordDoc, XElement element,
+            WmlToHtmlConverterSettings? settings)
         {
             var textBoxContent = element.Descendants(W.txbxContent).FirstOrDefault();
             if (textBoxContent == null)
@@ -9577,8 +9600,13 @@ namespace Docxodus
                 .FirstOrDefault(e => e.Name == WP.inline || e.Name == WP.anchor);
             var vmlShape = element.Descendants(VML.shape).FirstOrDefault();
             var autoFit = HasAutoFitTextBox(element);
+            // ProcessImage's settings parameter defaults to null for callers with no pagination
+            // config, but AddDrawingTextBoxStyle dereferences settings.RenderPagination once the
+            // drawing has an anchor, and ConvertToHtmlTransform requires non-null settings
+            // throughout. This mirrors pre-existing behavior: a null settings here has always
+            // been able to NRE downstream when a text box is actually present.
             if (drawingContainer != null)
-                AddDrawingTextBoxStyle(style, wrapper, element, drawingContainer, settings, autoFit);
+                AddDrawingTextBoxStyle(style, wrapper, element, drawingContainer, settings!, autoFit);
             else if (vmlShape != null)
                 AddVmlTextBoxStyle(style, vmlShape);
 
@@ -9587,7 +9615,7 @@ namespace Docxodus
             {
                 if (child.Name == W.p)
                 {
-                    var paragraph = ConvertToHtmlTransform(wordDoc, settings, child, false, 0m) as XElement;
+                    var paragraph = ConvertToHtmlTransform(wordDoc, settings!, child, false, 0m) as XElement;
                     if (paragraph == null)
                         continue;
 
@@ -9660,7 +9688,7 @@ namespace Docxodus
 
                 foreach (var textBox in textBoxes)
                 {
-                    var relationshipId = (string)textBox.Attribute(ExternalTextBoxRelationshipId);
+                    var relationshipId = (string?)textBox.Attribute(ExternalTextBoxRelationshipId);
                     if (string.IsNullOrWhiteSpace(relationshipId))
                         continue;
 
@@ -9710,7 +9738,7 @@ namespace Docxodus
                    string.Equals(contentType, "text/xml", StringComparison.OrdinalIgnoreCase);
         }
 
-        private static XElement GetExternalTextBoxContent(OpenXmlPart part)
+        private static XElement? GetExternalTextBoxContent(OpenXmlPart part)
         {
             var root = part.GetXDocument().Root;
             if (root == null)
@@ -9756,7 +9784,7 @@ namespace Docxodus
             foreach (var sourceId in attributes.Select(attribute => attribute.Value)
                 .Distinct(StringComparer.Ordinal))
             {
-                string destinationId = null;
+                string? destinationId = null;
                 var hyperlink = sourcePart.HyperlinkRelationships
                     .FirstOrDefault(relationship => relationship.Id == sourceId);
                 if (hyperlink != null)
@@ -9868,15 +9896,17 @@ namespace Docxodus
             var shapeProperties = drawing.Descendants(WPS.spPr).FirstOrDefault();
             if (shapeProperties != null)
             {
-                var fill = (string)shapeProperties.Element(A.solidFill)?.Element(A.srgbClr)?.Attribute("val");
+                var fill = (string?)shapeProperties.Element(A.solidFill)?.Element(A.srgbClr)?.Attribute("val");
                 if (IsHexColor(fill))
                     style.AddIfMissing("background-color", "#" + fill);
 
                 var line = shapeProperties.Element(A.ln);
-                var lineColor = (string)line?.Element(A.solidFill)?.Element(A.srgbClr)?.Attribute("val");
+                var lineColor = (string?)line?.Element(A.solidFill)?.Element(A.srgbClr)?.Attribute("val");
                 if (IsHexColor(lineColor))
                 {
-                    var widthEmu = (long?)line.Attribute("w") ?? 12700L;
+                    // lineColor is only non-null (per IsHexColor's [NotNullWhen(true)]) when
+                    // line itself was non-null, since lineColor is derived via line?.Element(...).
+                    var widthEmu = (long?)line!.Attribute("w") ?? 12700L;
                     style.AddIfMissing("border", string.Format(NumberFormatInfo.InvariantInfo,
                         "{0:0.##}pt solid #{1}", widthEmu / 12700.0, lineColor));
                 }
@@ -9936,12 +9966,12 @@ namespace Docxodus
             }
         }
 
-        private static void AddAnchorAxisMetadata(XElement wrapper, XElement position, string axis)
+        private static void AddAnchorAxisMetadata(XElement wrapper, XElement? position, string axis)
         {
             if (position == null)
                 return;
 
-            var relativeFrom = (string)position.Attribute(NoNamespace.relativeFrom);
+            var relativeFrom = (string?)position.Attribute(NoNamespace.relativeFrom);
             if (!string.IsNullOrWhiteSpace(relativeFrom))
                 wrapper.Add(new XAttribute($"data-docx-anchor-{axis}-relative", relativeFrom));
 
@@ -9953,7 +9983,7 @@ namespace Docxodus
                 (long?)position.Element(WP.posOffset));
         }
 
-        private static void AddRelativeSizeMetadata(XElement wrapper, XElement relativeSize,
+        private static void AddRelativeSizeMetadata(XElement wrapper, XElement? relativeSize,
             XName percentageName, string dimension)
         {
             if (relativeSize == null ||
@@ -9961,7 +9991,7 @@ namespace Docxodus
                     NumberStyles.Integer, NumberFormatInfo.InvariantInfo, out var rawPercentage))
                 return;
 
-            var relativeFrom = (string)relativeSize.Attribute(NoNamespace.relativeFrom);
+            var relativeFrom = (string?)relativeSize.Attribute(NoNamespace.relativeFrom);
             if (string.IsNullOrWhiteSpace(relativeFrom))
                 return;
 
@@ -9981,7 +10011,7 @@ namespace Docxodus
 
         private static void AddVmlTextBoxStyle(Dictionary<string, string> style, XElement shape)
         {
-            var vmlStyle = (string)shape.Attribute("style");
+            var vmlStyle = (string?)shape.Attribute("style");
             if (!string.IsNullOrEmpty(vmlStyle))
             {
                 var tokens = vmlStyle.Split(';');
@@ -9993,10 +10023,10 @@ namespace Docxodus
                     style.AddIfMissing("height", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.##}pt", height));
             }
 
-            var fill = NormalizeVmlCssColor((string)shape.Attribute("fillcolor"));
+            var fill = NormalizeVmlCssColor((string?)shape.Attribute("fillcolor"));
             if (fill != null)
                 style.AddIfMissing("background-color", fill);
-            var stroke = NormalizeVmlCssColor((string)shape.Attribute("strokecolor"));
+            var stroke = NormalizeVmlCssColor((string?)shape.Attribute("strokecolor"));
             if (stroke != null)
                 style.AddIfMissing("border", "1pt solid " + stroke);
 
@@ -10010,7 +10040,7 @@ namespace Docxodus
 
         private static bool HasVmlTextBoxAutoFit(XElement element) =>
             element.Descendants(VML.textbox)
-                .Select(textBox => (string)textBox.Attribute("style"))
+                .Select(textBox => (string?)textBox.Attribute("style"))
                 .Any(style => style?.IndexOf("mso-fit-shape-to-text:t",
                     StringComparison.OrdinalIgnoreCase) >= 0);
 
@@ -10031,10 +10061,10 @@ namespace Docxodus
                     "{0:0.##}pt", emu.Value / 12700.0));
         }
 
-        private static bool IsHexColor(string color) =>
+        private static bool IsHexColor([NotNullWhen(true)] string? color) =>
             color != null && color.Length == 6 && color.All(Uri.IsHexDigit);
 
-        private static string NormalizeVmlCssColor(string color)
+        private static string? NormalizeVmlCssColor(string? color)
         {
             if (string.IsNullOrWhiteSpace(color))
                 return null;
@@ -10078,17 +10108,17 @@ namespace Docxodus
             element?.AncestorsAndSelf().Select(candidate => candidate.Annotation<OpenXmlPart>())
                 .FirstOrDefault(part => part != null) ??
             (element == null ? null : Internal.OwnedPartRelationships.FindOwner(wordDoc, element)?.Part) ??
-            wordDoc.MainDocumentPart;
+            wordDoc.MainDocumentPart!;
 
-        private static XElement ProcessDrawing(WordprocessingDocument wordDoc,
-            XElement element, Func<ImageInfo, XElement> imageHandler, WmlToHtmlConverterSettings settings = null)
+        private static XElement? ProcessDrawing(WordprocessingDocument wordDoc,
+            XElement element, Func<ImageInfo, XElement?> imageHandler, WmlToHtmlConverterSettings? settings = null)
         {
             var ownerPart = GetOwningPart(wordDoc, element);
             var containerElement = element.Elements()
                 .FirstOrDefault(e => e.Name == WP.inline || e.Name == WP.anchor);
             if (containerElement == null) return null;
 
-            string hyperlinkUri = null;
+            string? hyperlinkUri = null;
             var hyperlinkElement = element
                 .Elements(WP.inline)
                 .Elements(WP.docPr)
@@ -10096,7 +10126,7 @@ namespace Docxodus
                 .FirstOrDefault();
             if (hyperlinkElement != null)
             {
-                var rId = (string)hyperlinkElement.Attribute(R.id);
+                var rId = (string?)hyperlinkElement.Attribute(R.id);
                 if (rId != null)
                 {
                     var hyperlinkRel = ownerPart.HyperlinkRelationships.FirstOrDefault(hlr => hlr.Id == rId);
@@ -10111,15 +10141,15 @@ namespace Docxodus
                 .Attributes(NoNamespace.cx).FirstOrDefault();
             var extentCy = (int?)containerElement.Elements(WP.extent)
                 .Attributes(NoNamespace.cy).FirstOrDefault();
-            var altText = (string)containerElement.Elements(WP.docPr).Attributes(NoNamespace.descr).FirstOrDefault() ??
-                          ((string)containerElement.Elements(WP.docPr).Attributes(NoNamespace.name).FirstOrDefault() ?? "");
+            var altText = (string?)containerElement.Elements(WP.docPr).Attributes(NoNamespace.descr).FirstOrDefault() ??
+                          ((string?)containerElement.Elements(WP.docPr).Attributes(NoNamespace.name).FirstOrDefault() ?? "");
 
             var blipFill = containerElement.Elements(A.graphic)
                 .Elements(A.graphicData)
                 .Elements(Pic._pic).Elements(Pic.blipFill).FirstOrDefault();
             if (blipFill == null) return null;
 
-            var imageRid = (string)blipFill.Elements(A.blip).Attributes(R.embed).FirstOrDefault();
+            var imageRid = (string?)blipFill.Elements(A.blip).Attributes(R.embed).FirstOrDefault();
             if (imageRid == null) return null;
 
             var pp3 = ownerPart.Parts.FirstOrDefault(pp => pp.RelationshipId == imageRid);
@@ -10175,7 +10205,7 @@ namespace Docxodus
 
 #if !WASM_BUILD
                 // Try to decode bitmap for width/height, but allow graceful fallback
-                SKBitmap bitmap = null;
+                SKBitmap? bitmap = null;
                 try
                 {
                     bitmap = SKBitmap.Decode(imageBytes);
@@ -10252,7 +10282,7 @@ namespace Docxodus
         /// polygon degrades to its bounding box (identical for the rectangular polygons Word
         /// writes for photos); wrapTopAndBottom and wrapNone keep the existing placement.
         /// </summary>
-        private static XElement ApplyAnchorTextWrap(XElement imageHtml, XElement drawingContainer)
+        private static XElement? ApplyAnchorTextWrap(XElement? imageHtml, XElement drawingContainer)
         {
             if (imageHtml == null || drawingContainer == null || drawingContainer.Name != WP.anchor)
                 return imageHtml;
@@ -10286,9 +10316,9 @@ namespace Docxodus
         /// object's center measured against the governing section's column (or page) center.
         /// A centered object has no float equivalent and keeps its inline placement.
         /// </summary>
-        private static string GetAnchorFloatSide(XElement anchor, XElement wrap)
+        private static string? GetAnchorFloatSide(XElement anchor, XElement wrap)
         {
-            var wrapText = (string)wrap.Attribute(NoNamespace.wrapText);
+            var wrapText = (string?)wrap.Attribute(NoNamespace.wrapText);
             if (wrapText == "left")
                 return "right";
             if (wrapText == "right")
@@ -10313,7 +10343,7 @@ namespace Docxodus
 
             var sectPr = anchor.Annotation<SectionAnnotation>()?.SectionElement;
             var dims = PageDimensions.FromSectionProperties(sectPr);
-            var referencePt = (string)positionH?.Attribute(NoNamespace.relativeFrom) == "page"
+            var referencePt = (string?)positionH?.Attribute(NoNamespace.relativeFrom) == "page"
                 ? dims.PageWidthPt
                 : dims.ContentWidthPt;
 
@@ -10321,11 +10351,11 @@ namespace Docxodus
             return objectCenterEmu <= referencePt * 12700.0 / 2.0 ? "left" : "right";
         }
 
-        private static XElement ProcessPictureOrObject(WordprocessingDocument wordDoc,
-            XElement element, Func<ImageInfo, XElement> imageHandler, WmlToHtmlConverterSettings settings = null)
+        private static XElement? ProcessPictureOrObject(WordprocessingDocument wordDoc,
+            XElement element, Func<ImageInfo, XElement?> imageHandler, WmlToHtmlConverterSettings? settings = null)
         {
             var ownerPart = GetOwningPart(wordDoc, element);
-            var imageRid = (string)element.Elements(VML.shape).Elements(VML.imagedata).Attributes(R.id).FirstOrDefault();
+            var imageRid = (string?)element.Elements(VML.shape).Elements(VML.imagedata).Attributes(R.id).FirstOrDefault();
             if (imageRid == null) return null;
 
             try
@@ -10373,7 +10403,7 @@ namespace Docxodus
 
 #if !WASM_BUILD
                         // Try to decode bitmap, but allow graceful fallback
-                        SKBitmap bitmap = null;
+                        SKBitmap? bitmap = null;
                         try
                         {
                             bitmap = SKBitmap.Decode(imageBytes);

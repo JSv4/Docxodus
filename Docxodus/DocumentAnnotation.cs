@@ -1,6 +1,3 @@
-// Inherited OpenXmlPowerTools code that predates nullable annotations (issue #13).
-#nullable disable
-
 // Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
@@ -16,30 +13,31 @@ namespace Docxodus
     public class DocumentAnnotation
     {
         /// <summary>
-        /// Unique annotation identifier.
+        /// Unique annotation identifier. Null until assigned — either by the
+        /// caller, or by auto-generation on <see cref="DocxSession.AddAnnotation"/>.
         /// </summary>
-        public string Id { get; set; }
+        public string? Id { get; set; }
 
         /// <summary>
         /// Label category/type identifier (e.g., "CLAUSE_TYPE_A", "DATE_REF").
         /// Used for categorizing and filtering annotations.
         /// </summary>
-        public string LabelId { get; set; }
+        public string? LabelId { get; set; }
 
         /// <summary>
         /// Human-readable label text displayed in the UI.
         /// </summary>
-        public string Label { get; set; }
+        public string? Label { get; set; }
 
         /// <summary>
         /// Highlight color in hex format (e.g., "#FFEB3B").
         /// </summary>
-        public string Color { get; set; }
+        public string? Color { get; set; }
 
         /// <summary>
         /// Author who created the annotation.
         /// </summary>
-        public string Author { get; set; }
+        public string? Author { get; set; }
 
         /// <summary>
         /// Creation timestamp.
@@ -50,7 +48,7 @@ namespace Docxodus
         /// Internal bookmark name linking to document range.
         /// Format: _Docxodus_Ann_{Id}
         /// </summary>
-        public string BookmarkName { get; set; }
+        public string? BookmarkName { get; set; }
 
         /// <summary>
         /// Cached start page number (may be stale if document changed).
@@ -80,7 +78,7 @@ namespace Docxodus
         /// <summary>
         /// The annotated text content (populated when reading from document).
         /// </summary>
-        public string AnnotatedText { get; set; }
+        public string? AnnotatedText { get; set; }
 
         /// <summary>
         /// Creates a new DocumentAnnotation with default values.
@@ -111,7 +109,7 @@ namespace Docxodus
         /// <summary>
         /// Search for text and annotate the Nth occurrence.
         /// </summary>
-        public string SearchText { get; set; }
+        public string? SearchText { get; set; }
 
         /// <summary>
         /// Which occurrence to annotate (1-based). Default: 1
@@ -121,7 +119,7 @@ namespace Docxodus
         /// <summary>
         /// Use an existing bookmark by name instead of creating a new one.
         /// </summary>
-        public string ExistingBookmarkName { get; set; }
+        public string? ExistingBookmarkName { get; set; }
 
         /// <summary>
         /// Start paragraph index (0-based).

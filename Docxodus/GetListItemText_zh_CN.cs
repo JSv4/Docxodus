@@ -10,7 +10,7 @@ namespace Docxodus
 {
     public class ListItemTextGetter_zh_CN
     {
-        public static string? GetListItemText(string languageCultureName, int levelNumber, string numFmt)
+        public static string? GetListItemText(string languageCultureName, int levelNumber, string? numFmt)
         {
             string[] ccTDigitCharacters = new[] {
                 "",

@@ -1,6 +1,3 @@
-// Inherited OpenXmlPowerTools code that predates nullable annotations (issue #13).
-#nullable disable
-
 // Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
@@ -41,14 +38,14 @@ namespace Docxodus
         /// standalone and WASM output without a JS runtime dependency or a server-side Office
         /// process.
         /// </summary>
-        private static XElement ProcessChart(WordprocessingDocument wordDoc, XElement drawing)
+        private static XElement? ProcessChart(WordprocessingDocument wordDoc, XElement drawing)
         {
             var chartReference = drawing.Descendants(C.chart).FirstOrDefault();
-            var relationshipId = (string)chartReference?.Attribute(R.id);
+            var relationshipId = (string?)chartReference?.Attribute(R.id);
             if (string.IsNullOrWhiteSpace(relationshipId))
                 return null;
 
-            ChartPart chartPart;
+            ChartPart? chartPart;
             try
             {
                 chartPart = GetOwningPart(wordDoc, drawing)?.GetPartById(relationshipId) as ChartPart;
@@ -67,11 +64,12 @@ namespace Docxodus
             var plotArea = chart?.Element(C.plotArea);
             var plot = plotArea?.Elements()
                 .FirstOrDefault(element => SupportedChartPlots.ContainsKey(element.Name));
-            if (plot == null)
+            // plot can only be non-null if plotArea (and, transitively, chart) resolved above.
+            if (chart == null || plotArea == null || plot == null)
                 return null;
 
             var family = SupportedChartPlots[plot.Name];
-            var grouping = (string)plot.Element(C.grouping)?.Attribute("val")
+            var grouping = (string?)plot.Element(C.grouping)?.Attribute("val")
                 ?? (family == "bar" ? "clustered" : "standard");
 
             var container = drawing.Elements().FirstOrDefault(e => e.Name == WP.inline || e.Name == WP.anchor);
@@ -89,7 +87,8 @@ namespace Docxodus
             var theme = LoadThemeColorScheme(wordDoc);
             var series = plot.Elements(C.ser)
                 .Select((element, index) => ReadCachedChartSeries(element, index, theme))
-                .Where(item => item != null && item.Values.Count > 0)
+                .OfType<CachedChartSeries>()
+                .Where(item => item.Values.Count > 0)
                 .ToList();
             if (series.Count == 0)
                 return null;
@@ -104,7 +103,7 @@ namespace Docxodus
             var legend = chart.Element(C.legend);
             var showLegend = legend != null && !IsDeleted(legend);
             var legendFontSize = ReadChartFontSize(legend, 9 * 96 / 72.0);
-            var horizontal = family == "bar" && (string)plot.Element(C.barDir)?.Attribute("val") == "bar";
+            var horizontal = family == "bar" && (string?)plot.Element(C.barDir)?.Attribute("val") == "bar";
             var gapWidth = ReadIntAttribute(plot.Element(C.gapWidth), "val", 150, 0, 500);
             var overlap = ReadIntAttribute(plot.Element(C.overlap), "val", 0, -100, 100);
 
@@ -131,8 +130,8 @@ namespace Docxodus
                 _ => family,
             };
 
-            var altText = (string)container?.Element(WP.docPr)?.Attribute("descr")
-                ?? (string)container?.Element(WP.docPr)?.Attribute("name")
+            var altText = (string?)container?.Element(WP.docPr)?.Attribute("descr")
+                ?? (string?)container?.Element(WP.docPr)?.Attribute("name")
                 ?? title
                 ?? "Chart";
             var svg = new XElement(Svg + "svg",
@@ -211,11 +210,11 @@ namespace Docxodus
 
         private sealed class CachedChartSeries
         {
-            public string Name { get; init; }
+            required public string Name { get; init; }
 
-            public string Color { get; init; }
+            required public string Color { get; init; }
 
-            public Dictionary<int, double> Values { get; init; }
+            required public Dictionary<int, double> Values { get; init; }
         }
 
         private sealed class ChartScale
@@ -308,7 +307,7 @@ namespace Docxodus
             return niceFraction * Math.Pow(10, exponent);
         }
 
-        private static void RenderColumnChart(XElement svg, double width, double height, string title,
+        private static void RenderColumnChart(XElement svg, double width, double height, string? title,
             bool showLegend, IReadOnlyList<CachedChartSeries> series, IReadOnlyList<string> categories,
             int categoryCount, int gapWidth, int overlap, bool stacked, ChartScale scale,
             double categoryFontSize, double valueFontSize, string axisSuffix)
@@ -393,7 +392,7 @@ namespace Docxodus
             }
         }
 
-        private static void RenderHorizontalBarChart(XElement svg, double width, double height, string title,
+        private static void RenderHorizontalBarChart(XElement svg, double width, double height, string? title,
             bool showLegend, IReadOnlyList<CachedChartSeries> series, IReadOnlyList<string> categories,
             int categoryCount, int gapWidth, int overlap, bool stacked, ChartScale scale,
             double categoryFontSize, double valueFontSize, string axisSuffix)
@@ -477,7 +476,7 @@ namespace Docxodus
             }
         }
 
-        private static void RenderLineOrAreaChart(XElement svg, double width, double height, string title,
+        private static void RenderLineOrAreaChart(XElement svg, double width, double height, string? title,
             bool showLegend, IReadOnlyList<CachedChartSeries> series, IReadOnlyList<string> categories,
             int categoryCount, bool area, bool stacked, ChartScale scale,
             double categoryFontSize, double valueFontSize, string axisSuffix)
@@ -567,7 +566,7 @@ namespace Docxodus
         }
 
         private static IReadOnlyList<string> RenderPieChart(XElement svg, double width, double height,
-            string title, bool showLegend, XElement plot, CachedChartSeries series, int categoryCount,
+            string? title, bool showLegend, XElement plot, CachedChartSeries series, int categoryCount,
             bool doughnut, ThemeColorScheme theme)
         {
             var plotTop = string.IsNullOrWhiteSpace(title) ? 14 : 60;
@@ -699,7 +698,7 @@ namespace Docxodus
                 new XText(value)));
         }
 
-        private static CachedChartSeries ReadCachedChartSeries(XElement series, int index,
+        private static CachedChartSeries? ReadCachedChartSeries(XElement series, int index,
             ThemeColorScheme theme)
         {
             var values = ReadCachedPoints(series.Element(C.val));
@@ -722,7 +721,7 @@ namespace Docxodus
             // A date axis caches serial day numbers; surface them as dates, the way every
             // renderer with the embedded workbook would.
             var formatCode = cache?.Descendants(C.formatCode).FirstOrDefault()?.Value;
-            var isDate = formatCode != null && formatCode.Contains('y') &&
+            var isDate = cache != null && formatCode != null && formatCode.Contains('y') &&
                 (cache.Descendants(C.numCache).Any() || cache.Descendants(C.numLit).Any());
             var points = cache?.Descendants(C.pt)
                 .Select(point => new
@@ -749,7 +748,7 @@ namespace Docxodus
                 .ToList();
         }
 
-        private static Dictionary<int, double> ReadCachedPoints(XElement valueContainer)
+        private static Dictionary<int, double> ReadCachedPoints(XElement? valueContainer)
         {
             if (valueContainer == null)
                 return new Dictionary<int, double>();
@@ -764,10 +763,12 @@ namespace Docxodus
                                     CultureInfo.InvariantCulture, out _))
                 .GroupBy(point => point.Index)
                 .ToDictionary(group => group.Key, group =>
-                    double.Parse(group.First().Text, NumberStyles.Float, CultureInfo.InvariantCulture));
+                    // The Where clause above already verified Text parses as a double, so every
+                    // item reaching this group has a non-null, parseable Text.
+                    double.Parse(group.First().Text!, NumberStyles.Float, CultureInfo.InvariantCulture));
         }
 
-        private static string ReadChartTitle(XElement chart)
+        private static string? ReadChartTitle(XElement? chart)
         {
             var title = chart?.Element(C.title);
             if (title == null || IsDeleted(title))
@@ -778,26 +779,27 @@ namespace Docxodus
             return string.IsNullOrWhiteSpace(explicitText) ? "Chart Title" : explicitText;
         }
 
-        private static string ReadCachedText(XElement container) =>
+        private static string? ReadCachedText(XElement? container) =>
             container?.Descendants(C.v).Select(element => element.Value)
                 .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
 
-        private static string ReadChartColor(XElement shapeProperties, int seriesIndex,
+        private static string ReadChartColor(XElement? shapeProperties, int seriesIndex,
             ThemeColorScheme theme)
         {
             // A filled shape (bar, area, slice) colors via a:solidFill; a line series carries its
             // color on the stroke (a:ln/a:solidFill) instead.
             var fill = shapeProperties?.Element(A.solidFill)
                 ?? shapeProperties?.Element(A.ln)?.Element(A.solidFill);
-            var rgb = (string)fill?.Element(A.srgbClr)?.Attribute("val");
+            var rgb = (string?)fill?.Element(A.srgbClr)?.Attribute("val");
             var schemeColor = fill?.Element(A.schemeClr);
             if (!IsHexColor(rgb) && schemeColor != null)
             {
-                var name = (string)schemeColor.Attribute("val");
+                var name = (string?)schemeColor.Attribute("val");
                 if (!string.IsNullOrEmpty(name))
                     theme?.Colors.TryGetValue(name, out rgb);
                 if (IsHexColor(rgb))
-                    rgb = ApplyChartLuminosity(rgb, schemeColor);
+                    // IsHexColor(rgb) verified rgb is a non-null 6-digit hex string.
+                    rgb = ApplyChartLuminosity(rgb!, schemeColor);
             }
 
             if (!IsHexColor(rgb))
@@ -808,7 +810,9 @@ namespace Docxodus
                 };
                 rgb = defaults[seriesIndex % defaults.Length];
             }
-            return "#" + rgb.ToUpperInvariant();
+
+            // Either branch above leaves rgb as a verified hex string or a hardcoded default.
+            return "#" + rgb!.ToUpperInvariant();
         }
 
         private static string ApplyChartLuminosity(string color, XElement schemeColor)
@@ -824,28 +828,28 @@ namespace Docxodus
         }
 
         private static bool IsDeleted(XElement element) =>
-            string.Equals((string)element.Element(C.delete)?.Attribute("val"), "1",
+            string.Equals((string?)element.Element(C.delete)?.Attribute("val"), "1",
                 StringComparison.OrdinalIgnoreCase) ||
-            string.Equals((string)element.Element(C.delete)?.Attribute("val"), "true",
+            string.Equals((string?)element.Element(C.delete)?.Attribute("val"), "true",
                 StringComparison.OrdinalIgnoreCase);
 
-        private static int ReadIntAttribute(XElement element, string name, int fallback, int minimum, int maximum)
+        private static int ReadIntAttribute(XElement? element, string name, int fallback, int minimum, int maximum)
         {
-            return int.TryParse((string)element?.Attribute(name), NumberStyles.Integer,
+            return int.TryParse((string?)element?.Attribute(name), NumberStyles.Integer,
                        CultureInfo.InvariantCulture, out var value)
                 ? Math.Clamp(value, minimum, maximum)
                 : fallback;
         }
 
-        private static double? ReadDoubleAttribute(XElement element, string name)
+        private static double? ReadDoubleAttribute(XElement? element, string name)
         {
-            return double.TryParse((string)element?.Attribute(name), NumberStyles.Float,
+            return double.TryParse((string?)element?.Attribute(name), NumberStyles.Float,
                 CultureInfo.InvariantCulture, out var value) && double.IsFinite(value)
                 ? value
                 : null;
         }
 
-        private static double ReadChartFontSize(XElement textContainer, double fallback)
+        private static double ReadChartFontSize(XElement? textContainer, double fallback)
         {
             var size = textContainer?.Descendants(A.defRPr)
                 .Select(element => ReadDoubleAttribute(element, "sz"))

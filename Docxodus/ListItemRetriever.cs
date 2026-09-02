@@ -1,6 +1,3 @@
-// Inherited OpenXmlPowerTools code that predates nullable annotations (issue #13).
-#nullable disable
-
 // Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
@@ -15,8 +12,8 @@ namespace Docxodus
 {
     public class ListItemRetrieverSettings
     {
-        public static Dictionary<string, Func<string, int, string, string>> DefaultListItemTextImplementations =
-            new Dictionary<string, Func<string, int, string, string>>()
+        public static Dictionary<string, Func<string, int, string?, string?>> DefaultListItemTextImplementations =
+            new Dictionary<string, Func<string, int, string?, string?>>()
             {
                 {"fr-FR", ListItemTextGetter_fr_FR.GetListItemText},
                 {"tr-TR", ListItemTextGetter_tr_TR.GetListItemText},
@@ -24,7 +21,7 @@ namespace Docxodus
                 {"sv-SE", ListItemTextGetter_sv_SE.GetListItemText},
                 {"zh-CN", ListItemTextGetter_zh_CN.GetListItemText},
             };
-        public Dictionary<string, Func<string, int, string, string>> ListItemTextImplementations;
+        public Dictionary<string, Func<string, int, string?, string?>> ListItemTextImplementations;
         public ListItemRetrieverSettings()
         {
             ListItemTextImplementations = DefaultListItemTextImplementations;
@@ -36,36 +33,38 @@ namespace Docxodus
         public class ListItemSourceSet
         {
             public int NumId;                          // numId from the paragraph or style
-            public XElement Num;                       // num element from the numbering part
+            public XElement? Num;                       // num element from the numbering part
             public int AbstractNumId;                  // abstract numId
-            public XElement AbstractNum;               // abstractNum element
+            public XElement? AbstractNum;               // abstractNum element
 
             public ListItemSourceSet(XDocument numXDoc, XDocument styleXDoc, int numId)
             {
                 NumId = numId;
 
                 Num = numXDoc
-                    .Root
+                    .Root!
                     .Elements(W.num)
-                    .FirstOrDefault(n => (int)n.Attribute(W.numId) == numId);
+                    .FirstOrDefault(n => (int)n.Attribute(W.numId)! == numId);
 
-                AbstractNumId = (int)Num
+                // A paragraph/style's numId always resolves to a real w:num (and that num's
+                // abstractNumId to a real w:abstractNum) in a well-formed document.
+                AbstractNumId = (int)Num!
                     .Elements(W.abstractNumId)
                     .Attributes(W.val)
-                    .FirstOrDefault();
+                    .FirstOrDefault()!;
 
                 AbstractNum = numXDoc
                     .Root
                     .Elements(W.abstractNum)
-                    .Where(e => (int)e.Attribute(W.abstractNumId) == AbstractNumId)
+                    .Where(e => (int)e.Attribute(W.abstractNumId)! == AbstractNumId)
                     .FirstOrDefault();
             }
 
             public int? StartOverride(int ilvl)
             {
-                var lvlOverride = Num
+                var lvlOverride = Num!
                     .Elements(W.lvlOverride)
-                    .FirstOrDefault(nlo => (int)nlo.Attribute(W.ilvl) == ilvl);
+                    .FirstOrDefault(nlo => (int)nlo.Attribute(W.ilvl)! == ilvl);
                 if (lvlOverride != null)
                     return (int?)lvlOverride
                         .Elements(W.startOverride)
@@ -74,24 +73,24 @@ namespace Docxodus
                 return null;
             }
 
-            public XElement OverrideLvl(int ilvl)
+            public XElement? OverrideLvl(int ilvl)
             {
-                var lvlOverride = Num
+                var lvlOverride = Num!
                     .Elements(W.lvlOverride)
-                    .FirstOrDefault(nlo => (int)nlo.Attribute(W.ilvl) == ilvl);
+                    .FirstOrDefault(nlo => (int)nlo.Attribute(W.ilvl)! == ilvl);
                 if (lvlOverride != null)
                     return lvlOverride.Element(W.lvl);
                 return null;
             }
 
-            public XElement AbstractLvl(int ilvl)
+            public XElement? AbstractLvl(int ilvl)
             {
-                return AbstractNum
+                return AbstractNum!
                     .Elements(W.lvl)
-                    .FirstOrDefault(al => (int)al.Attribute(W.ilvl) == ilvl);
+                    .FirstOrDefault(al => (int)al.Attribute(W.ilvl)! == ilvl);
             }
 
-            public XElement Lvl(int ilvl)
+            public XElement? Lvl(int ilvl)
             {
                 var overrideLvl = OverrideLvl(ilvl);
                 if (overrideLvl != null)
@@ -103,8 +102,8 @@ namespace Docxodus
         public class ListItemSource
         {
             public ListItemSourceSet Main;
-            public string NumStyleLinkName;
-            public ListItemSourceSet NumStyleLink;
+            public string? NumStyleLinkName;
+            public ListItemSourceSet? NumStyleLink;
             public int Style_ilvl;
 
             // for list item sources that use numStyleLink, there are two abstractId values.
@@ -114,8 +113,8 @@ namespace Docxodus
             {
                 Main = new ListItemSourceSet(numXDoc, stylesXDoc, numId);
 
-                NumStyleLinkName = (string)Main
-                    .AbstractNum
+                NumStyleLinkName = (string?)Main
+                    .AbstractNum!
                     .Elements(W.numStyleLink)
                     .Attributes(W.val)
                     .FirstOrDefault();
@@ -123,9 +122,9 @@ namespace Docxodus
                 if (NumStyleLinkName != null)
                 {
                     var numStyleLinkNumId = (int?)stylesXDoc
-                        .Root
+                        .Root!
                         .Elements(W.style)
-                        .Where(s => (string)s.Attribute(W.styleId) == NumStyleLinkName)
+                        .Where(s => (string?)s.Attribute(W.styleId) == NumStyleLinkName)
                         .Elements(W.pPr)
                         .Elements(W.numPr)
                         .Elements(W.numId)
@@ -137,7 +136,7 @@ namespace Docxodus
                 }
             }
 
-            public XElement Lvl(int ilvl)
+            public XElement? Lvl(int ilvl)
             {
                 var lvl2 = Main.Lvl(ilvl);
                 if (lvl2 == null)
@@ -182,7 +181,7 @@ namespace Docxodus
             public int Start(int ilvl)
             {
                 var lvl = Lvl(ilvl);
-                var start = (int?)lvl.Elements(W.start).Attributes(W.val).FirstOrDefault();
+                var start = (int?)lvl!.Elements(W.start).Attributes(W.val).FirstOrDefault();
                 if (start != null)
                     return (int)start;
                 return 0;
@@ -202,8 +201,8 @@ namespace Docxodus
             public bool IsListItem;
             public bool IsZeroNumId;
 
-            public ListItemSource FromStyle;
-            public ListItemSource FromParagraph;
+            public ListItemSource? FromStyle;
+            public ListItemSource? FromParagraph;
 
             private int? mAbstractNumId = null;
 
@@ -225,7 +224,7 @@ namespace Docxodus
                 }
             }
 
-            public XElement Lvl(int ilvl)
+            public XElement? Lvl(int ilvl)
             {
                 if (FromParagraph != null)
                 {
@@ -241,12 +240,14 @@ namespace Docxodus
                     }
                     return lvl;
                 }
-                var lvl2 = FromStyle.Lvl(ilvl);
+                var lvl2 = FromStyle!.Lvl(ilvl);
                 if (lvl2 == null)
                 {
                     for (int i = ilvl - 1; i >= 0; i--)
                     {
-                        lvl2 = FromParagraph.Lvl(i);
+                        // FromParagraph is null in this branch (checked above); the paragraph-less
+                        // fallback must keep walking FromStyle's levels, not FromParagraph's.
+                        lvl2 = FromStyle.Lvl(i);
                         if (lvl2 != null)
                             break;
                     }
@@ -258,7 +259,7 @@ namespace Docxodus
             {
                 if (FromParagraph != null)
                     return FromParagraph.Start(ilvl);
-                return FromStyle.Start(ilvl);
+                return FromStyle!.Start(ilvl);
             }
 
             public int Start(int ilvl, bool takeOverride, out bool isOverride)
@@ -326,7 +327,7 @@ namespace Docxodus
                         mNumId = FromParagraph.Main.NumId;
                     else if (FromStyle != null)
                         mNumId = FromStyle.Main.NumId;
-                    return (int)mNumId;
+                    return (int)mNumId!;
                 }
             }
 
@@ -389,7 +390,7 @@ namespace Docxodus
         {
             // The following is an optimization - only determine ListItemInfo once for a
             // paragraph.
-            ListItemInfo listItemInfo = paragraph.Annotation<ListItemInfo>();
+            ListItemInfo? listItemInfo = paragraph.Annotation<ListItemInfo>();
             if (listItemInfo != null)
                 return listItemInfo;
             throw new DocxodusException("Attempting to retrieve ListItemInfo before initialization");
@@ -417,7 +418,7 @@ namespace Docxodus
 
             int? paragraphNumId = null;
 
-            XElement paragraphNumberingProperties = paragraph
+            XElement? paragraphNumberingProperties = paragraph
                 .Elements(W.pPr)
                 .Elements(W.numPr)
                 .FirstOrDefault();
@@ -438,7 +439,7 @@ namespace Docxodus
                 }
             }
 
-            string paragraphStyleName = GetParagraphStyleName(stylesXDoc, paragraph);
+            string? paragraphStyleName = GetParagraphStyleName(stylesXDoc, paragraph);
 
             var listItemInfo = GetListItemInfoFromCache(numXDoc, paragraphStyleName, paragraphNumId);
             if (listItemInfo != null)
@@ -447,7 +448,7 @@ namespace Docxodus
 
                 if (listItemInfo.FromParagraph != null)
                 {
-                    var para_ilvl = (int?)paragraphNumberingProperties
+                    var para_ilvl = (int?)paragraphNumberingProperties!
                         .Elements(W.ilvl)
                         .Attributes(W.val)
                         .FirstOrDefault();
@@ -456,7 +457,7 @@ namespace Docxodus
                         para_ilvl = 0;
 
                     var abstractNum = listItemInfo.FromParagraph.Main.AbstractNum;
-                    var multiLevelType = (string)abstractNum.Elements(W.multiLevelType).Attributes(W.val).FirstOrDefault();
+                    var multiLevelType = (string?)abstractNum!.Elements(W.multiLevelType).Attributes(W.val).FirstOrDefault();
                     if (multiLevelType == "singleLevel")
                         para_ilvl = 0;
 
@@ -466,7 +467,7 @@ namespace Docxodus
                 {
                     int this_ilvl = listItemInfo.FromStyle.Style_ilvl;
                     var abstractNum = listItemInfo.FromStyle.Main.AbstractNum;
-                    var multiLevelType = (string)abstractNum.Elements(W.multiLevelType).Attributes(W.val).FirstOrDefault();
+                    var multiLevelType = (string?)abstractNum!.Elements(W.multiLevelType).Attributes(W.val).FirstOrDefault();
                     if (multiLevelType == "singleLevel")
                         this_ilvl = 0;
 
@@ -511,14 +512,14 @@ namespace Docxodus
             if (listItemInfo.FromParagraph != null)
             {
                 var abstractNum = listItemInfo.FromParagraph.Main.AbstractNum;
-                var multiLevelType = (string)abstractNum.Elements(W.multiLevelType).Attributes(W.val).FirstOrDefault();
+                var multiLevelType = (string?)abstractNum!.Elements(W.multiLevelType).Attributes(W.val).FirstOrDefault();
                 if (multiLevelType == "singleLevel")
                     ilvlToSet = 0;
             }
             else if (listItemInfo.FromStyle != null)
             {
                 var abstractNum = listItemInfo.FromStyle.Main.AbstractNum;
-                var multiLevelType = (string)abstractNum.Elements(W.multiLevelType).Attributes(W.val).FirstOrDefault();
+                var multiLevelType = (string?)abstractNum!.Elements(W.multiLevelType).Attributes(W.val).FirstOrDefault();
                 if (multiLevelType == "singleLevel")
                     ilvlToSet = 0;
             }
@@ -530,9 +531,9 @@ namespace Docxodus
             AddListItemInfoIntoCache(numXDoc, paragraphStyleName, paragraphNumId, listItemInfo);
         }
 
-        private static string GetParagraphStyleName(XDocument stylesXDoc, XElement paragraph)
+        private static string? GetParagraphStyleName(XDocument stylesXDoc, XElement paragraph)
         {
-            var paragraphStyleName = (string)paragraph
+            var paragraphStyleName = (string?)paragraph
                  .Elements(W.pPr)
                  .Elements(W.pStyle)
                  .Attributes(W.val)
@@ -568,7 +569,7 @@ namespace Docxodus
             return false;
         }
 
-        private static ListItemSource InitializeParagraphListItemSource(XDocument numXDoc, XDocument stylesXDoc, XElement paragraph, XElement paragraphNumberingProperties, out int? ilvl, out bool? zeroNumId)
+        private static ListItemSource? InitializeParagraphListItemSource(XDocument numXDoc, XDocument stylesXDoc, XElement paragraph, XElement paragraphNumberingProperties, out int? ilvl, out bool? zeroNumId)
         {
             zeroNumId = null;
 
@@ -590,9 +591,9 @@ namespace Docxodus
             }
 
             var num = numXDoc
-                .Root
+                .Root!
                 .Elements(W.num)
-                .FirstOrDefault(n => (int)n.Attribute(W.numId) == numId);
+                .FirstOrDefault(n => (int)n.Attribute(W.numId)! == numId);
             if (num == null)
             {
                 zeroNumId = true;
@@ -609,23 +610,24 @@ namespace Docxodus
             return listItemSource;
         }
 
-        private static ListItemSource InitializeStyleListItemSource(XDocument numXDoc, XDocument stylesXDoc, XElement paragraph, string paragraphStyleName, 
+        private static ListItemSource? InitializeStyleListItemSource(XDocument numXDoc, XDocument stylesXDoc, XElement paragraph, string paragraphStyleName,
             out int? ilvl, out bool? zeroNumId)
         {
             zeroNumId = null;
             XElement pPr = FormattingAssembler.ParagraphStyleRollup(paragraph, stylesXDoc, GetDefaultParagraphStyleName(stylesXDoc));
             if (pPr != null)
             {
-                XElement styleNumberingProperties = pPr
+                XElement? styleNumberingProperties = pPr
                     .Elements(W.numPr)
                     .FirstOrDefault();
 
                 if (styleNumberingProperties != null && styleNumberingProperties.Element(W.numId) != null)
                 {
+                    // Presence of a w:numId child was just confirmed above.
                     int numId = (int)styleNumberingProperties
                         .Elements(W.numId)
                         .Attributes(W.val)
-                        .FirstOrDefault();
+                        .FirstOrDefault()!;
 
                     ilvl = (int?)styleNumberingProperties
                         .Elements(W.ilvl)
@@ -642,10 +644,10 @@ namespace Docxodus
                     }
 
                     // make sure that the numId is valid
-                    XElement num = numXDoc
-                        .Root
+                    XElement? num = numXDoc
+                        .Root!
                         .Elements(W.num)
-                        .Where(e => (int)e.Attribute(W.numId) == numId)
+                        .Where(e => (int)e.Attribute(W.numId)! == numId)
                         .FirstOrDefault();
 
                     if (num == null)
@@ -665,34 +667,34 @@ namespace Docxodus
             return null;
         }
 
-        private static string GetDefaultParagraphStyleName(XDocument stylesXDoc)
+        private static string? GetDefaultParagraphStyleName(XDocument stylesXDoc)
         {
-            XElement defaultParagraphStyle;
-            string defaultParagraphStyleName = null;
+            XElement? defaultParagraphStyle;
+            string? defaultParagraphStyleName = null;
 
-            StylesInfo stylesInfo = stylesXDoc.Annotation<StylesInfo>();
+            StylesInfo? stylesInfo = stylesXDoc.Annotation<StylesInfo>();
 
             if (stylesInfo != null)
                 defaultParagraphStyleName = stylesInfo.DefaultParagraphStyleName;
             else
             {
                 defaultParagraphStyle = stylesXDoc
-                    .Root
+                    .Root!
                     .Elements(W.style)
                     .FirstOrDefault(s =>
                     {
-                        if ((string)s.Attribute(W.type) != "paragraph")
+                        if ((string?)s.Attribute(W.type) != "paragraph")
                             return false;
                         var defaultAttribute = s.Attribute(W._default);
                         var isDefault = false;
                         if (defaultAttribute != null &&
-                            (bool)s.Attribute(W._default).ToBoolean())
+                            (bool)defaultAttribute.ToBoolean()!)
                             isDefault = true;
                         return isDefault;
                     });
                 defaultParagraphStyleName = null;
                 if (defaultParagraphStyle != null)
-                    defaultParagraphStyleName = (string)defaultParagraphStyle.Attribute(W.styleId);
+                    defaultParagraphStyleName = (string?)defaultParagraphStyle.Attribute(W.styleId);
                 stylesInfo = new StylesInfo()
                 {
                     DefaultParagraphStyleName = defaultParagraphStyleName,
@@ -702,15 +704,15 @@ namespace Docxodus
             return defaultParagraphStyleName;
         }
 
-        private static ListItemInfo GetListItemInfoFromCache(XDocument numXDoc, string styleName, int? numId)
+        private static ListItemInfo? GetListItemInfoFromCache(XDocument numXDoc, string? styleName, int? numId)
         {
             string key =
                 (styleName == null ? "" : styleName) +
                 "|" +
                 (numId == null ? "" : numId.ToString());
 
-            var numXDocRoot = numXDoc.Root;
-            Dictionary<string, ListItemInfo> listItemInfoCache =
+            var numXDocRoot = numXDoc.Root!;
+            Dictionary<string, ListItemInfo>? listItemInfoCache =
                 numXDocRoot.Annotation<Dictionary<string, ListItemInfo>>();
             if (listItemInfoCache == null)
             {
@@ -722,15 +724,15 @@ namespace Docxodus
             return null;
         }
 
-        private static void AddListItemInfoIntoCache(XDocument numXDoc, string styleName, int? numId, ListItemInfo listItemInfo)
+        private static void AddListItemInfoIntoCache(XDocument numXDoc, string? styleName, int? numId, ListItemInfo listItemInfo)
         {
             string key =
                 (styleName == null ? "" : styleName) +
                 "|" +
                 (numId == null ? "" : numId.ToString());
 
-            var numXDocRoot = numXDoc.Root;
-            Dictionary<string, ListItemInfo> listItemInfoCache =
+            var numXDocRoot = numXDoc.Root!;
+            Dictionary<string, ListItemInfo>? listItemInfoCache =
                 numXDocRoot.Annotation<Dictionary<string, ListItemInfo>>();
             if (listItemInfoCache == null)
             {
@@ -743,12 +745,12 @@ namespace Docxodus
 
         public class LevelNumbers
         {
-            public int[] LevelNumbersArray;
+            public int[] LevelNumbersArray = Array.Empty<int>();
         }
 
         private class StylesInfo
         {
-            public string DefaultParagraphStyleName;
+            public string? DefaultParagraphStyleName;
         }
 
         private class ParagraphInfo
@@ -758,7 +760,7 @@ namespace Docxodus
 
         private class ReverseAxis
         {
-            public XElement PreviousParagraph;
+            public XElement? PreviousParagraph;
         }
 
         /// <summary>
@@ -783,21 +785,22 @@ namespace Docxodus
             return GetParagraphLevel(paragraph);
         }
 
-        public static string RetrieveListItem(WordprocessingDocument wordDoc, XElement paragraph)
+        public static string? RetrieveListItem(WordprocessingDocument wordDoc, XElement paragraph)
         {
             return RetrieveListItem(wordDoc, paragraph, null);
         }
 
-        public static string RetrieveListItem(WordprocessingDocument wordDoc, XElement paragraph, ListItemRetrieverSettings settings)
+        public static string? RetrieveListItem(WordprocessingDocument wordDoc, XElement paragraph, ListItemRetrieverSettings? settings)
         {
-            if (wordDoc.MainDocumentPart.NumberingDefinitionsPart == null)
+            if (wordDoc.MainDocumentPart!.NumberingDefinitionsPart == null)
                 return null;
 
             var listItemInfo = paragraph.Annotation<ListItemInfo>();
             if (listItemInfo == null)
                 InitializeListItemRetriever(wordDoc, settings);
 
-            listItemInfo = paragraph.Annotation<ListItemInfo>();
+            // InitializeListItemRetriever always annotates the paragraph.
+            listItemInfo = paragraph.Annotation<ListItemInfo>()!;
             if (!listItemInfo.IsListItem)
                 return null;
 
@@ -808,7 +811,7 @@ namespace Docxodus
             if (numberingDefinitionsPart == null)
                 return null;
 
-            StyleDefinitionsPart styleDefinitionsPart = wordDoc
+            StyleDefinitionsPart? styleDefinitionsPart = wordDoc
                 .MainDocumentPart
                 .StyleDefinitionsPart;
 
@@ -821,7 +824,7 @@ namespace Docxodus
             var paragraphLevel = GetParagraphLevel(paragraph);
             var lvl = listItemInfo.Lvl(paragraphLevel);
 
-            string lvlText = (string)lvl.Elements(W.lvlText).Attributes(W.val).FirstOrDefault();
+            string? lvlText = (string?)lvl!.Elements(W.lvlText).Attributes(W.val).FirstOrDefault();
             if (lvlText == null)
                 return null;
 
@@ -840,7 +843,7 @@ namespace Docxodus
             {
                 // Use level 0's format string with current level's counter
                 var lvl0 = listItemInfo.Lvl(0);
-                lvlText = (string)lvl0.Elements(W.lvlText).Attributes(W.val).FirstOrDefault();
+                lvlText = (string?)lvl0!.Elements(W.lvlText).Attributes(W.val).FirstOrDefault();
                 if (lvlText == null)
                     return null;
                 // Create single-element array with current level's counter value
@@ -856,17 +859,17 @@ namespace Docxodus
 
         private static string GetLanguageIdentifier(XElement paragraph, XDocument stylesXDoc)
         {
-            var languageType = (string)paragraph
+            var languageType = (string?)paragraph
                 .DescendantsTrimmed(W.txbxContent)
                 .Where(d => d.Name == W.r)
                 .Attributes(PtOpenXml.LanguageType)
                 .FirstOrDefault();
 
-            string languageIdentifier = null;
+            string? languageIdentifier = null;
 
             if (languageType == null || languageType == "western")
             {
-                languageIdentifier = (string)paragraph
+                languageIdentifier = (string?)paragraph
                     .Elements(W.r)
                     .Elements(W.rPr)
                     .Elements(W.lang)
@@ -874,8 +877,8 @@ namespace Docxodus
                     .FirstOrDefault();
 
                 if (languageIdentifier == null)
-                    languageIdentifier = (string)stylesXDoc
-                        .Root
+                    languageIdentifier = (string?)stylesXDoc
+                        .Root!
                         .Elements(W.docDefaults)
                         .Elements(W.rPrDefault)
                         .Elements(W.rPr)
@@ -885,7 +888,7 @@ namespace Docxodus
             }
             else if (languageType == "eastAsia")
             {
-                languageIdentifier = (string)paragraph
+                languageIdentifier = (string?)paragraph
                     .Elements(W.r)
                     .Elements(W.rPr)
                     .Elements(W.lang)
@@ -893,8 +896,8 @@ namespace Docxodus
                     .FirstOrDefault();
 
                 if (languageIdentifier == null)
-                    languageIdentifier = (string)stylesXDoc
-                        .Root
+                    languageIdentifier = (string?)stylesXDoc
+                        .Root!
                         .Elements(W.docDefaults)
                         .Elements(W.rPrDefault)
                         .Elements(W.rPr)
@@ -904,7 +907,7 @@ namespace Docxodus
             }
             else if (languageType == "bidi")
             {
-                languageIdentifier = (string)paragraph
+                languageIdentifier = (string?)paragraph
                     .Elements(W.r)
                     .Elements(W.rPr)
                     .Elements(W.lang)
@@ -912,8 +915,8 @@ namespace Docxodus
                     .FirstOrDefault();
 
                 if (languageIdentifier == null)
-                    languageIdentifier = (string)stylesXDoc
-                        .Root
+                    languageIdentifier = (string?)stylesXDoc
+                        .Root!
                         .Elements(W.docDefaults)
                         .Elements(W.rPrDefault)
                         .Elements(W.rPr)
@@ -928,7 +931,7 @@ namespace Docxodus
             return languageIdentifier;
         }
 
-        private static void InitializeListItemRetriever(WordprocessingDocument wordDoc, ListItemRetrieverSettings settings)
+        private static void InitializeListItemRetriever(WordprocessingDocument wordDoc, ListItemRetrieverSettings? settings)
         {
             foreach (var part in wordDoc.ContentParts())
                 InitializeListItemRetrieverForPart(wordDoc, part, settings);
@@ -947,11 +950,11 @@ namespace Docxodus
 #endif
         }
 
-        private static void InitializeListItemRetrieverForPart(WordprocessingDocument wordDoc, OpenXmlPart part, ListItemRetrieverSettings settings)
+        private static void InitializeListItemRetrieverForPart(WordprocessingDocument wordDoc, OpenXmlPart part, ListItemRetrieverSettings? settings)
         {
             var mainXDoc = part.GetXDocument();
-            
-            var numPart = wordDoc.MainDocumentPart.NumberingDefinitionsPart;
+
+            var numPart = wordDoc.MainDocumentPart!.NumberingDefinitionsPart;
             if (numPart == null)
                 return;
             var numXDoc = numPart.GetXDocument();
@@ -961,12 +964,12 @@ namespace Docxodus
                 return;
             var stylesXDoc = stylesPart.GetXDocument();
 
-            var rootNode = mainXDoc.Root;
+            var rootNode = mainXDoc.Root!;
 
             InitializeListItemRetrieverForStory(numXDoc, stylesXDoc, rootNode);
 
             var textBoxes = mainXDoc
-                .Root
+                .Root!
                 .Descendants(W.txbxContent);
 
             foreach (var textBox in textBoxes)
@@ -985,7 +988,8 @@ namespace Docxodus
             var abstractNumIds = paragraphs
                 .Select(paragraph =>
                 {
-                    ListItemInfo listItemInfo = paragraph.Annotation<ListItemInfo>();
+                    // Every paragraph was just annotated by InitListItemInfo above.
+                    ListItemInfo listItemInfo = paragraph.Annotation<ListItemInfo>()!;
                     if (!listItemInfo.IsListItem)
                         return (int?)null;
                     return listItemInfo.AbstractNumId;
@@ -1009,7 +1013,7 @@ namespace Docxodus
                 var listItems = paragraphs
                     .Where(paragraph =>
                     {
-                        var listItemInfo = paragraph.Annotation<ListItemInfo>();
+                        var listItemInfo = paragraph.Annotation<ListItemInfo>()!;
                         if (!listItemInfo.IsListItem)
                             return false;
                         return listItemInfo.AbstractNumId == abstractNumId;
@@ -1017,7 +1021,7 @@ namespace Docxodus
                     .ToList();
 
                 // annotate paragraphs with previous paragraphs so that we can look backwards with good perf
-                XElement prevParagraph = null;
+                XElement? prevParagraph = null;
                 foreach (var paragraph in listItems)
                 {
                     ReverseAxis reverse = new ReverseAxis()
@@ -1029,8 +1033,8 @@ namespace Docxodus
                 }
 
                 var startOverrideAlreadyUsed = new List<int>();
-                List<int> previous = null;
-                ListItemInfo[] listItemInfoInEffectForStartOverride = new ListItemInfo[] {
+                List<int>? previous = null;
+                ListItemInfo?[] listItemInfoInEffectForStartOverride = new ListItemInfo?[] {
                     null,
                     null,
                     null,
@@ -1048,7 +1052,9 @@ namespace Docxodus
 
                 foreach (var paragraph in listItems)
                 {
-                    var listItemInfo = paragraph.Annotation<ListItemInfo>();
+                    // listItems was filtered above to only paragraphs with a non-null,
+                    // IsListItem-true annotation.
+                    var listItemInfo = paragraph.Annotation<ListItemInfo>()!;
                     var ilvl = GetParagraphLevel(paragraph);
 
                     // Word ties numbering to the paragraph mark. A paragraph whose pilcrow is
@@ -1067,7 +1073,7 @@ namespace Docxodus
                     var savedContinuationByLevel = paraMarkDeleted ? (bool[])continuationByLevel.Clone() : null;
 
                     listItemInfoInEffectForStartOverride[ilvl] = listItemInfo;
-                    ListItemInfo listItemInfoInEffect = null;
+                    ListItemInfo? listItemInfoInEffect = null;
                     if (ilvl > 0)
                         listItemInfoInEffect = listItemInfoInEffectForStartOverride[ilvl - 1];
                     var levelNumbers = new List<int>();
@@ -1083,7 +1089,7 @@ namespace Docxodus
                         if (level == ilvl)
                         {
                             var lvl = listItemInfo.Lvl(ilvl);
-                            var lvlRestart = (int?)lvl.Elements(W.lvlRestart).Attributes(W.val).FirstOrDefault();
+                            var lvlRestart = (int?)lvl!.Elements(W.lvlRestart).Attributes(W.val).FirstOrDefault();
                             if (lvlRestart != null)
                             {
                                 var previousPara = PreviousParagraphsForLvlRestart(paragraph, (int)lvlRestart)
@@ -1092,8 +1098,10 @@ namespace Docxodus
                                         var plvl = GetParagraphLevel(p);
                                         return plvl == ilvl;
                                     });
+                                // An earlier paragraph in this same list already had LevelNumbers
+                                // annotated by this loop, since paragraphs are processed in order.
                                 if (previousPara != null)
-                                    previous = previousPara.Annotation<LevelNumbers>().LevelNumbersArray.ToList();
+                                    previous = previousPara.Annotation<LevelNumbers>()!.LevelNumbersArray.ToList();
                             }
                         }
 
@@ -1184,8 +1192,8 @@ namespace Docxodus
                         // bullet must keep its OWN level's glyph/indent; treating it as a
                         // continuation collapses it to the parent bullet (the bug exposed once
                         // SetListLevel made source-list nesting actually take effect).
-                        var lvlDef = listItemInfo.Lvl(ilvl);
-                        var numFmt = (string)lvlDef.Elements(W.numFmt).Attributes(W.val).FirstOrDefault();
+                        var lvlDef = listItemInfo.Lvl(ilvl)!;
+                        var numFmt = (string?)lvlDef.Elements(W.numFmt).Attributes(W.val).FirstOrDefault();
                         bool isBulletLevel = numFmt is "bullet" or "none";
                         if (isBulletLevel)
                         {
@@ -1220,13 +1228,15 @@ namespace Docxodus
 
                     if (paraMarkDeleted)
                     {
+                        // savedStartOverrideAlreadyUsed/savedContinuationByLevel were captured
+                        // under this same paraMarkDeleted condition above, so both are non-null here.
                         // The deleted paragraph keeps its annotations (it still renders a
                         // number) but contributes nothing to what follows.
                         previous = savedPrevious;
                         startOverrideAlreadyUsed.Clear();
-                        startOverrideAlreadyUsed.AddRange(savedStartOverrideAlreadyUsed);
+                        startOverrideAlreadyUsed.AddRange(savedStartOverrideAlreadyUsed!);
                         listItemInfoInEffectForStartOverride[ilvl] = savedListItemInfoInEffect;
-                        Array.Copy(savedContinuationByLevel, continuationByLevel, continuationByLevel.Length);
+                        Array.Copy(savedContinuationByLevel!, continuationByLevel, continuationByLevel.Length);
                     }
                     else
                     {
@@ -1268,10 +1278,10 @@ namespace Docxodus
         }
 
         private static string FormatListItem(ListItemInfo lii, int[] levelNumbers, int ilvl,
-            string lvlText, XDocument styles, string languageCultureName, ListItemRetrieverSettings settings)
+            string lvlText, XDocument styles, string languageCultureName, ListItemRetrieverSettings? settings)
         {
             string[] formatTokens = GetFormatTokens(lvlText).ToArray();
-            XElement lvl = lii.Lvl(ilvl);
+            XElement lvl = lii.Lvl(ilvl)!;
             bool isLgl = lvl.Elements(W.isLgl).Any();
             string listItem = formatTokens.Select((t, l) =>
             {
@@ -1284,14 +1294,14 @@ namespace Docxodus
                 if (indentationLevel >= levelNumbers.Length)
                     indentationLevel = levelNumbers.Length - 1;
                 int levelNumber = levelNumbers[indentationLevel];
-                string levelText = null;
-                XElement rlvl = lii.Lvl(indentationLevel);
-                string numFmtForLevel = (string)rlvl.Elements(W.numFmt).Attributes(W.val).FirstOrDefault();
+                string? levelText = null;
+                XElement rlvl = lii.Lvl(indentationLevel)!;
+                string? numFmtForLevel = (string?)rlvl.Elements(W.numFmt).Attributes(W.val).FirstOrDefault();
                 if (numFmtForLevel == null)
                 {
                     var numFmtElement = rlvl.Elements(MC.AlternateContent).Elements(MC.Choice).Elements(W.numFmt).FirstOrDefault();
-                    if (numFmtElement != null && (string)numFmtElement.Attribute(W.val) == "custom")
-                        numFmtForLevel = (string)numFmtElement.Attribute(W.format);
+                    if (numFmtElement != null && (string?)numFmtElement.Attribute(W.val) == "custom")
+                        numFmtForLevel = (string?)numFmtElement.Attribute(W.format);
                 }
                 if (numFmtForLevel != "none")
                 {
@@ -1307,7 +1317,7 @@ namespace Docxodus
                     }
                 }
                 if (levelText == null)
-                    levelText = ListItemTextGetter_Default.GetListItemText(languageCultureName, levelNumber, numFmtForLevel);
+                    levelText = ListItemTextGetter_Default.GetListItemText(languageCultureName!, levelNumber, numFmtForLevel);
                 return levelText;
             }).StringConcatenate();
             return listItem;

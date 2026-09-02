@@ -1,6 +1,3 @@
-// Inherited OpenXmlPowerTools code that predates nullable annotations (issue #13).
-#nullable disable
-
 // Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
@@ -171,7 +168,7 @@ namespace Docxodus.HtmlToWml
                 InitialValue = (element, settings) => new CssExpression { Terms = new List<CssTerm> { new CssTerm { Value = "normal", Type = Docxodus.HtmlToWml.CSS.CssTermType.String } } },
                 ComputedValue = (element, assignedValue, settings) =>
                 {
-                    CssExpression valueForPercentage = null;
+                    CssExpression? valueForPercentage = null;
                     if (element.Parent != null)
                         valueForPercentage = GetComputedPropertyValue(null, element, "font-size", settings);
                     return ComputeAbsoluteLength(element, assignedValue, settings, valueForPercentage);
@@ -367,7 +364,7 @@ namespace Docxodus.HtmlToWml
                 InitialValue = (element, settings) => new CssExpression { Terms = new List<CssTerm> { new CssTerm { Value = "0", Type = Docxodus.HtmlToWml.CSS.CssTermType.Number, Unit = CssUnit.PT, } } },
                 ComputedValue = (element, assignedValue, settings) =>
                 {
-                    CssExpression valueForPercentage = null;
+                    CssExpression? valueForPercentage = null;
                     if (element.Parent != null)
                         valueForPercentage = GetComputedPropertyValue(null, element.Parent, "width", settings);
                     return ComputeAbsoluteLength(element, assignedValue, settings, valueForPercentage);
@@ -581,7 +578,7 @@ namespace Docxodus.HtmlToWml
                     },
                 ComputedValue = (element, assignedValue, settings) =>
                 {
-                    CssExpression valueForPercentage = null;
+                    CssExpression? valueForPercentage = null;
                     if (element.Parent != null)
                         valueForPercentage = GetComputedPropertyValue(null, element.Parent, "width", settings);
                     return ComputeAbsoluteLength(element, assignedValue, settings, valueForPercentage);
@@ -610,7 +607,7 @@ namespace Docxodus.HtmlToWml
                 InitialValue = (element, settings) => new CssExpression { Terms = new List<CssTerm> { new CssTerm { Value = "0", Type = Docxodus.HtmlToWml.CSS.CssTermType.Number, Unit = CssUnit.PT, } } },
                 ComputedValue = (element, assignedValue, settings) =>
                 {
-                    CssExpression valueForPercentage = null;
+                    CssExpression? valueForPercentage = null;
                     if (element.Parent != null)
                         valueForPercentage = GetComputedPropertyValue(null, element.Parent, "width", settings);
                     return ComputeAbsoluteLength(element, assignedValue, settings, valueForPercentage);
@@ -642,7 +639,7 @@ namespace Docxodus.HtmlToWml
                 InitialValue = (element, settings) => new CssExpression { Terms = new List<CssTerm> { new CssTerm { Value = "0", Type = Docxodus.HtmlToWml.CSS.CssTermType.Number, Unit = CssUnit.PT, } } },
                 ComputedValue = (element, assignedValue, settings) =>
                 {
-                    CssExpression valueForPercentage = null;
+                    CssExpression? valueForPercentage = null;
                     if (element.Parent != null)
                         valueForPercentage = GetComputedPropertyValue(null, element.Parent, "width", settings);
                     return ComputeAbsoluteLength(element, assignedValue, settings, valueForPercentage);
@@ -879,13 +876,13 @@ namespace Docxodus.HtmlToWml
                 {
                     if (element.Parent == null)
                     {
-                        double? pageWidth = (double?)settings.SectPr.Elements(W.pgSz).Attributes(W._w).FirstOrDefault();
+                        double? pageWidth = (double?)settings.SectPr!.Elements(W.pgSz).Attributes(W._w).FirstOrDefault();
                         if (pageWidth == null)
                             pageWidth = 12240;
-                        double? leftMargin = (double?)settings.SectPr.Elements(W.pgMar).Attributes(W.left).FirstOrDefault();
+                        double? leftMargin = (double?)settings.SectPr!.Elements(W.pgMar).Attributes(W.left).FirstOrDefault();
                         if (leftMargin == null)
                             leftMargin = 1440;
-                        double? rightMargin = (double?)settings.SectPr.Elements(W.pgMar).Attributes(W.left).FirstOrDefault();
+                        double? rightMargin = (double?)settings.SectPr!.Elements(W.pgMar).Attributes(W.left).FirstOrDefault();
                         if (rightMargin == null)
                             rightMargin = 1440;
                         double width = (double)(pageWidth - leftMargin - rightMargin) / 20;
@@ -902,16 +899,20 @@ namespace Docxodus.HtmlToWml
                         element.Name != XhtmlNoNamespace.table &&
                         assignedValue.IsAuto)
                     {
-                        PropertyInfo pi = PropertyInfoList.FirstOrDefault(p => p.Names.Contains("width"));
+                        // The compiler can't see through this self-referential closure that
+                        // PropertyInfoList is non-null here: GetComputedPropertyValue (the only
+                        // invoker of a ComputedValue lambda) is never called from a static
+                        // initializer, so this always runs after PropertyInfoList is assigned.
+                        PropertyInfo? pi = PropertyInfoList!.FirstOrDefault(p => p.Names.Contains("width"));
                         string display = GetComputedPropertyValue(pi, element, "display", settings).ToString();
                         if (display != "inline")
                         {
-                            CssExpression parentPropertyValue = GetComputedPropertyValue(pi, element.Parent, "width", settings);
+                            CssExpression parentPropertyValue = GetComputedPropertyValue(pi, element.Parent!, "width", settings);
                             return parentPropertyValue;
                         }
                     }
-                    CssExpression valueForPercentage = null;
-                    XElement elementToQuery = element.Parent;
+                    CssExpression? valueForPercentage = null;
+                    XElement? elementToQuery = element.Parent;
                     while (elementToQuery != null)
                     {
                         valueForPercentage = GetComputedPropertyValue(null, elementToQuery, "width", settings);
@@ -949,7 +950,7 @@ namespace Docxodus.HtmlToWml
                 InitialValue = (element, settings) => new CssExpression { Terms = new List<CssTerm> { new CssTerm { Value = "0", Type = Docxodus.HtmlToWml.CSS.CssTermType.Number, Unit = CssUnit.PT, } } },
                 ComputedValue = (element, assignedValue, settings) =>
                 {
-                    CssExpression valueForPercentage = null;
+                    CssExpression? valueForPercentage = null;
                     if (element.Parent != null)
                         valueForPercentage = GetComputedPropertyValue(null, element.Parent, "width", settings);
                     return ComputeAbsoluteLength(element, assignedValue, settings, valueForPercentage);
@@ -978,7 +979,7 @@ namespace Docxodus.HtmlToWml
                 InitialValue = (element, settings) => new CssExpression { Terms = new List<CssTerm> { new CssTerm { Value = "none", Type = Docxodus.HtmlToWml.CSS.CssTermType.String, } } },
                 ComputedValue = (element, assignedValue, settings) =>
                 {
-                    CssExpression valueForPercentage = null;
+                    CssExpression? valueForPercentage = null;
                     if (element.Parent != null)
                         valueForPercentage = GetComputedPropertyValue(null, element.Parent, "width", settings);
                     return ComputeAbsoluteLength(element, assignedValue, settings, valueForPercentage);
@@ -1009,7 +1010,7 @@ namespace Docxodus.HtmlToWml
                 InitialValue = (element, settings) => new CssExpression { Terms = new List<CssTerm> { new CssTerm { Value = "auto", Type = Docxodus.HtmlToWml.CSS.CssTermType.String, } } },
                 ComputedValue = (element, assignedValue, settings) =>
                 {
-                    CssExpression valueForPercentage = null;
+                    CssExpression? valueForPercentage = null;
                     if (element.Parent != null)
                         valueForPercentage = GetComputedPropertyValue(null, element.Parent, "height", settings);
                     return ComputeAbsoluteLength(element, assignedValue, settings, valueForPercentage);
@@ -1038,7 +1039,7 @@ namespace Docxodus.HtmlToWml
                 InitialValue = (element, settings) => new CssExpression { Terms = new List<CssTerm> { new CssTerm { Value = "0", Type = Docxodus.HtmlToWml.CSS.CssTermType.Number, Unit = CssUnit.PT, } } },
                 ComputedValue = (element, assignedValue, settings) =>
                 {
-                    CssExpression valueForPercentage = null;
+                    CssExpression? valueForPercentage = null;
                     if (element.Parent != null)
                         valueForPercentage = GetComputedPropertyValue(null, element.Parent, "height", settings);
                     return ComputeAbsoluteLength(element, assignedValue, settings, valueForPercentage);
@@ -1067,7 +1068,7 @@ namespace Docxodus.HtmlToWml
                 InitialValue = (element, settings) => new CssExpression { Terms = new List<CssTerm> { new CssTerm { Value = "none", Type = Docxodus.HtmlToWml.CSS.CssTermType.String, } } },
                 ComputedValue = (element, assignedValue, settings) =>
                 {
-                    CssExpression valueForPercentage = null;
+                    CssExpression? valueForPercentage = null;
                     if (element.Parent != null)
                         valueForPercentage = GetComputedPropertyValue(null, element.Parent, "height", settings);
                     return ComputeAbsoluteLength(element, assignedValue, settings, valueForPercentage);
@@ -1174,7 +1175,7 @@ namespace Docxodus.HtmlToWml
             out CssDocument defaultCssDoc,
             out CssDocument authorCssDoc,
             out CssDocument userCssDoc,
-            string annotatedHtmlDumpFileName)
+            string? annotatedHtmlDumpFileName)
         {
             int propertySequence = 1;
 
@@ -1275,12 +1276,12 @@ namespace Docxodus.HtmlToWml
       set the computed value
       return the computed value
 #endif
-        public static CssExpression GetComputedPropertyValue(PropertyInfo propertyInfo, XElement element, string propertyName,
+        public static CssExpression GetComputedPropertyValue(PropertyInfo? propertyInfo, XElement element, string propertyName,
             HtmlToWmlConverterSettings settings)
         {
             // if (property is already computed)
             //   return the computed value
-            Dictionary<string, CssExpression> computedValues = element.Annotation<Dictionary<string, CssExpression>>();
+            Dictionary<string, CssExpression>? computedValues = element.Annotation<Dictionary<string, CssExpression>>();
             if (computedValues == null)
             {
                 computedValues = new Dictionary<string, CssExpression>();
@@ -1300,7 +1301,7 @@ namespace Docxodus.HtmlToWml
                 if (propertyInfo == null)
                     throw new DocxodusException("all possible properties should be in the list");
             }
-            Dictionary<string, Property> propList = element.Annotation<Dictionary<string, Property>>();
+            Dictionary<string, Property>? propList = element.Annotation<Dictionary<string, Property>>();
             if (propList == null)
             {
                 CssExpression computedValue = GetInheritedOrInitializedValue(computedValues, propertyInfo, element, propertyName, false, settings);
@@ -1375,12 +1376,12 @@ namespace Docxodus.HtmlToWml
         }
 
         private static CssExpression ComputeAbsoluteLength(XElement element, CssExpression assignedValue, HtmlToWmlConverterSettings settings,
-            CssExpression lengthForPercentage)
+            CssExpression? lengthForPercentage)
         {
             if (assignedValue.Terms.Count != 1)
                 throw new DocxodusException("Should not have a unit with more than one term");
 
-            string value = assignedValue.Terms.First().Value;
+            string value = assignedValue.Terms.First().Value!;
             bool negative = assignedValue.Terms.First().Sign == '-';
 
             if (value == "thin")
@@ -1418,7 +1419,8 @@ namespace Docxodus.HtmlToWml
             if (unit == CssUnit.Percent)
             {
                 double ptSize;
-                if (!double.TryParse(lengthForPercentage.Terms.First().Value, NumberStyles.Float, CultureInfo.InvariantCulture, out ptSize))
+                // The unit == Percent && lengthForPercentage == null case already returned above.
+                if (!double.TryParse(lengthForPercentage!.Terms.First().Value, NumberStyles.Float, CultureInfo.InvariantCulture, out ptSize))
                     throw new DocxodusException("did not return a double?");
                 newPtSize = ptSize * decValue / 100d;
             }
@@ -1455,7 +1457,7 @@ namespace Docxodus.HtmlToWml
         {
             if (assignedValue.Terms.Count != 1)
                 throw new DocxodusException("Should not have a unit with more than one term, I think");
-            string value = assignedValue.Terms.First().Value;
+            string value = assignedValue.Terms.First().Value!;
             CssUnit? unit = assignedValue.Terms.First().Unit;
             if (unit == CssUnit.PT)
                 return assignedValue;
@@ -1465,7 +1467,7 @@ namespace Docxodus.HtmlToWml
             // todo what should the calculation be for computing larger / smaller?
             if (value == "larger" || value == "smaller")
             {
-                CssExpression parentFontSize = GetComputedPropertyValue(null, element.Parent, "font-size", settings);
+                CssExpression parentFontSize = GetComputedPropertyValue(null, element.Parent!, "font-size", settings);
                 double ptSize;
                 if (!double.TryParse(parentFontSize.Terms.First().Value, NumberStyles.Float, CultureInfo.InvariantCulture, out ptSize))
                     throw new DocxodusException("did not return a double?");
@@ -1508,7 +1510,7 @@ namespace Docxodus.HtmlToWml
             double? newPtSize = null;
             if (unit == CssUnit.EM || unit == CssUnit.EX || unit == CssUnit.Percent)
             {
-                CssExpression parentFontSize = GetComputedPropertyValue(null, element.Parent, "font-size", settings);
+                CssExpression parentFontSize = GetComputedPropertyValue(null, element.Parent!, "font-size", settings);
                 double ptSize;
                 if (!double.TryParse(parentFontSize.Terms.First().Value, NumberStyles.Float, CultureInfo.InvariantCulture, out ptSize))
                     throw new DocxodusException("did not return a double?");
@@ -1566,7 +1568,8 @@ namespace Docxodus.HtmlToWml
                         Property prop = new Property()
                         {
                             Name = declaration.Name.ToLower(),
-                            Expression = declaration.Expression,
+                            // Declaration()'s sole construction site always sets Expression.
+                            Expression = declaration.Expression!,
                             HighOrderSort = declaration.Important ? importantHighOrderSort : notImportantHighOrderSort,
                             IdAttributesInSelector = CountIdAttributesInSelector(selector),
                             AttributesInSelector = CountAttributesInSelector(selector),
@@ -1584,7 +1587,7 @@ namespace Docxodus.HtmlToWml
             XElement element)
         {
             int currentSimpleSelector = selector.SimpleSelectors.Count() - 1;
-            XElement currentElement = element;
+            XElement? currentElement = element;
             while (true)
             {
                 if (!DoesSimpleSelectorMatch(selector.SimpleSelectors[currentSimpleSelector], currentElement))
@@ -1653,9 +1656,9 @@ namespace Docxodus.HtmlToWml
                     {
                         if (simpleSelector.ID != null && simpleSelector.ID != "")
                         {
-                            string id = (string)element.Attribute("ID");
+                            string? id = (string?)element.Attribute("ID");
                             if (id == null)
-                                id = (string)element.Attribute("id");
+                                id = (string?)element.Attribute("id");
                             idMatch = simpleSelector.ID == id;
                         }
                         if (idMatch)
@@ -1677,13 +1680,15 @@ namespace Docxodus.HtmlToWml
 
         private static bool DoesAttributeMatch(Docxodus.HtmlToWml.CSS.CssAttribute attribute, XElement element)
         {
-            string attName = attribute.Operand.ToLower();
-            string attValue = (string)element.Attribute(attName);
+            // Attrib()'s sole construction site always sets Operand from a parsed identifier.
+            string attName = attribute.Operand!.ToLower();
+            string? attValue = (string?)element.Attribute(attName);
             if (attValue == null)
                 return false;
             if (attribute.Operator == null)
                 return true;
-            string value = attribute.Value;
+            // Attrib() defaults Value to "" and only ever sets it to a real (non-null) string.
+            string value = attribute.Value!;
             switch (attribute.Operator)
             {
                 case CssAttributeOperator.Equals:
@@ -1752,7 +1757,7 @@ namespace Docxodus.HtmlToWml
         {
             //if (property.Name == "direction")
             //    Console.WriteLine(1);
-            Dictionary<string, Property> propList = element.Annotation<Dictionary<string, Property>>();
+            Dictionary<string, Property>? propList = element.Annotation<Dictionary<string, Property>>();
             if (propList == null)
             {
                 propList = new Dictionary<string, Property>();
@@ -1784,7 +1789,7 @@ namespace Docxodus.HtmlToWml
 
         private static string[] ClassesOf(XElement element)
         {
-            string classesString = (string)element.Attribute("class");
+            string? classesString = (string?)element.Attribute("class");
             if (classesString == null)
                 return new string[0];
             return classesString.Split(' ');
@@ -1802,7 +1807,8 @@ namespace Docxodus.HtmlToWml
                 Property prop = new Property()
                 {
                     Name = declaration.Name.ToLower(),
-                    Expression = declaration.Expression,
+                    // Declaration()'s sole construction site always sets Expression.
+                    Expression = declaration.Expression!,
                     HighOrderSort = declaration.Important ? importantHighOrderSort : notImportantHighOrderSort,
                     IdAttributesInSelector = 0,
                     AttributesInSelector = 0,
@@ -1830,7 +1836,7 @@ namespace Docxodus.HtmlToWml
         {
             foreach (var element in xHtml.DescendantsAndSelf())
             {
-                XAttribute styleAtt = element.Attribute(XhtmlNoNamespace.style);
+                XAttribute? styleAtt = element.Attribute(XhtmlNoNamespace.style);
                 if (styleAtt != null)
                 {
                     string style = (string)styleAtt;
@@ -1845,7 +1851,7 @@ namespace Docxodus.HtmlToWml
                         Property.HighOrderPriority.StyleAttributeHigh,
                         ref propertySequence);
                 }
-                XAttribute dirAtt = element.Attribute(XhtmlNoNamespace.dir);
+                XAttribute? dirAtt = element.Attribute(XhtmlNoNamespace.dir);
                 if (dirAtt != null)
                 {
                     string dir = dirAtt.Value.ToLower();
@@ -1888,8 +1894,8 @@ namespace Docxodus.HtmlToWml
 
         private class ShorthandPropertiesInfo
         {
-            public string Name;
-            public string Pattern;
+            required public string Name;
+            required public string Pattern;
         }
 
         private static ShorthandPropertiesInfo[] ShorthandProperties = new[]
@@ -1931,7 +1937,7 @@ namespace Docxodus.HtmlToWml
 
         private static void ExpandShorthandPropertiesForElement(XElement element, HtmlToWmlConverterSettings settings)
         {
-            Dictionary<string, Property> propertyList = element.Annotation<Dictionary<string, Property>>();
+            Dictionary<string, Property>? propertyList = element.Annotation<Dictionary<string, Property>>();
             if (propertyList == null)
             {
                 propertyList = new Dictionary<string, Property>();
@@ -1942,9 +1948,9 @@ namespace Docxodus.HtmlToWml
                 Property p = kvp.Value;
                 if (p.Name == "border")
                 {
-                    CssExpression borderColor;
-                    CssExpression borderWidth;
-                    CssExpression borderStyle;
+                    CssExpression? borderColor;
+                    CssExpression? borderWidth;
+                    CssExpression? borderStyle;
                     if (p.Expression.Terms.Count == 1 && p.Expression.Terms.First().Value == "inherit")
                     {
                         borderColor = new CssExpression { Terms = new List<CssTerm> { new CssTerm { Value = "inherit", Type = CssTermType.String } } };
@@ -2025,9 +2031,9 @@ namespace Docxodus.HtmlToWml
                 }
                 if (p.Name == "border-top" || p.Name == "border-right" || p.Name == "border-bottom" || p.Name == "border-left")
                 {
-                    CssExpression borderColor;
-                    CssExpression borderWidth;
-                    CssExpression borderStyle;
+                    CssExpression? borderColor;
+                    CssExpression? borderWidth;
+                    CssExpression? borderStyle;
                     if (p.Expression.Terms.Count() == 1 && p.Expression.Terms.First().Value == "inherit")
                     {
                         borderColor = new CssExpression { Terms = new List<CssTerm> { new CssTerm { Value = "inherit", Type = CssTermType.String } } };
@@ -2106,9 +2112,9 @@ namespace Docxodus.HtmlToWml
 
                 if (p.Name == "list-style")
                 {
-                    CssExpression listStyleType;
-                    CssExpression listStylePosition;
-                    CssExpression listStyleImage;
+                    CssExpression? listStyleType;
+                    CssExpression? listStylePosition;
+                    CssExpression? listStyleImage;
                     if (p.Expression.Terms.Count == 1 && p.Expression.Terms.First().Value == "inherit")
                     {
                         listStyleType = new CssExpression { Terms = new List<CssTerm> { new CssTerm { Value = "inherit", Type = CssTermType.String } } };
@@ -2175,11 +2181,11 @@ namespace Docxodus.HtmlToWml
 
                 if (p.Name == "background")
                 {
-                    CssExpression backgroundColor;
-                    CssExpression backgroundImage;
-                    CssExpression backgroundRepeat;
-                    CssExpression backgroundAttachment;
-                    CssExpression backgroundPosition;
+                    CssExpression? backgroundColor;
+                    CssExpression? backgroundImage;
+                    CssExpression? backgroundRepeat;
+                    CssExpression? backgroundAttachment;
+                    CssExpression? backgroundPosition;
                     if (p.Expression.Terms.Count == 1 && p.Expression.Terms.First().Value == "inherit")
                     {
                         backgroundColor = new CssExpression { Terms = new List<CssTerm> { new CssTerm { Value = "inherit", Type = CssTermType.String } } };
@@ -2311,12 +2317,12 @@ namespace Docxodus.HtmlToWml
 
                 if (p.Name == "font")
                 {
-                    CssExpression fontStyle;
-                    CssExpression fontVarient;
-                    CssExpression fontWeight;
-                    CssExpression fontSize;
-                    CssExpression lineHeight;
-                    CssExpression fontFamily;
+                    CssExpression? fontStyle;
+                    CssExpression? fontVarient;
+                    CssExpression? fontWeight;
+                    CssExpression? fontSize;
+                    CssExpression? lineHeight;
+                    CssExpression? fontFamily;
                     if (p.Expression.Terms.Count() == 1 && p.Expression.Terms.First().Value == "inherit")
                     {
                         fontStyle = new CssExpression { Terms = new List<CssTerm> { new CssTerm { Value = "inherit", Type = CssTermType.String } } };
@@ -2575,9 +2581,9 @@ namespace Docxodus.HtmlToWml
         {
             if (term.IsColor)
                 return CssDataType.BackgroundColor;
-            if (BackgroundRepeatValues.Contains(term.Value.ToLower()))
+            if (BackgroundRepeatValues.Contains(term.Value!.ToLower()))
                 return CssDataType.BackgroundRepeat;
-            if (BackgroundAttachmentValues.Contains(term.Value.ToLower()))
+            if (BackgroundAttachmentValues.Contains(term.Value!.ToLower()))
                 return CssDataType.BackgroundAttachment;
             if (term.Function != null)
                 return CssDataType.BackgroundImage;
@@ -2589,7 +2595,7 @@ namespace Docxodus.HtmlToWml
                 term.Unit == CssUnit.PX ||
                 term.Unit == CssUnit.Percent)
                 return CssDataType.BackgroundPosition;
-            if (BackgroundPositionValues.Contains(term.Value.ToLower()))
+            if (BackgroundPositionValues.Contains(term.Value!.ToLower()))
                 return CssDataType.BackgroundPosition;
             return CssDataType.BackgroundPosition;
         }
@@ -2620,7 +2626,7 @@ namespace Docxodus.HtmlToWml
             {
                 return CssDataType.Color;
             }
-            if (BorderStyleValues.Contains(term.Value.ToLower()))
+            if (BorderStyleValues.Contains(term.Value!.ToLower()))
                 return CssDataType.BorderStyle;
             return CssDataType.BorderWidth;
         }
@@ -2645,9 +2651,9 @@ namespace Docxodus.HtmlToWml
 
         private static CssDataType GetDatatypeFromListStyleTerm(CssTerm term)
         {
-            if (ListStyleTypeValues.Contains(term.Value.ToLower()))
+            if (ListStyleTypeValues.Contains(term.Value!.ToLower()))
                 return CssDataType.ListStyleType;
-            if (ListStylePositionValues.Contains(term.Value.ToLower()))
+            if (ListStylePositionValues.Contains(term.Value!.ToLower()))
                 return CssDataType.ListStylePosition;
             return CssDataType.ListStyleImage;
         }
@@ -2681,13 +2687,13 @@ namespace Docxodus.HtmlToWml
 
         private static CssDataType GetDatatypeFromFontTerm(CssTerm term)
         {
-            if (FontStyleValues.Contains(term.Value.ToLower()))
+            if (FontStyleValues.Contains(term.Value!.ToLower()))
                 return CssDataType.FontStyle;
-            if (FontVarientValues.Contains(term.Value.ToLower()))
+            if (FontVarientValues.Contains(term.Value!.ToLower()))
                 return CssDataType.FontVarient;
-            if (FontWeightValues.Contains(term.Value.ToLower()))
+            if (FontWeightValues.Contains(term.Value!.ToLower()))
                 return CssDataType.FontWeight;
-            if (FontSizeMap.ContainsKey(term.Value.ToLower()))
+            if (FontSizeMap.ContainsKey(term.Value!.ToLower()))
                 return CssDataType.FontSize;
             if (term.Unit == CssUnit.CM ||
                 term.Unit == CssUnit.EM ||
@@ -2702,11 +2708,13 @@ namespace Docxodus.HtmlToWml
 
         public class PropertyInfo
         {
-            public string[] Names;
+            // Every one of the 42 entries in PropertyInfoList sets these four via object
+            // initializer; ComputedValue is genuinely optional (half the entries null it out).
+            required public string[] Names;
             public bool Inherits;
-            public Func<XElement, HtmlToWmlConverterSettings, bool> Includes;
-            public Func<XElement, HtmlToWmlConverterSettings, CssExpression> InitialValue;
-            public Func<XElement, CssExpression, HtmlToWmlConverterSettings, CssExpression> ComputedValue;
+            required public Func<XElement, HtmlToWmlConverterSettings, bool> Includes;
+            required public Func<XElement, HtmlToWmlConverterSettings, CssExpression> InitialValue;
+            public Func<XElement, CssExpression, HtmlToWmlConverterSettings, CssExpression>? ComputedValue;
         }
 
         private static void WriteXHtmlWithAnnotations(XElement element, StringBuilder sb)
@@ -2714,7 +2722,7 @@ namespace Docxodus.HtmlToWml
             int depth = element.Ancestors().Count() * 2;
             XElement dummyElement = new XElement(element.Name, element.Attributes());
             sb.Append(String.Format("{0}{1}", "".PadRight(depth), dummyElement) + Environment.NewLine);
-            Dictionary<string, Property> propList = element.Annotation<Dictionary<string, Property>>();
+            Dictionary<string, Property>? propList = element.Annotation<Dictionary<string, Property>>();
             if (propList != null)
             {
                 sb.Append("".PadRight(depth + 2) + "Properties from Stylesheets" + Environment.NewLine);
@@ -2729,7 +2737,7 @@ namespace Docxodus.HtmlToWml
                 }
                 sb.Append(Environment.NewLine);
             }
-            Dictionary<string, CssExpression> computedProperties = element.Annotation<Dictionary<string, CssExpression>>();
+            Dictionary<string, CssExpression>? computedProperties = element.Annotation<Dictionary<string, CssExpression>>();
             if (computedProperties != null)
             {
                 sb.Append("".PadRight(depth + 2) + "Computed Properties" + Environment.NewLine);
@@ -2762,19 +2770,19 @@ namespace Docxodus.HtmlToWml
             return sb.ToString();
         }
 
-        private static void DumpFunction(StringBuilder sb, int indent, CssFunction f)
+        private static void DumpFunction(StringBuilder sb, int indent, CssFunction? f)
         {
             Pr(sb, indent, "Function: {0}", f);
             if (f != null)
             {
                 indent++;
                 Pr(sb, indent, "Name: {0}", f.Name);
-                DumpExpression(sb, indent, f.Expression);
+                DumpExpression(sb, indent, f.Expression!);
                 indent--;
             }
         }
 
-        private static void DumpAttribute(StringBuilder sb, int indent, Docxodus.HtmlToWml.CSS.CssAttribute a)
+        private static void DumpAttribute(StringBuilder sb, int indent, Docxodus.HtmlToWml.CSS.CssAttribute? a)
         {
             Pr(sb, indent, "Attribute: {0}", a);
             if (a != null)
@@ -2788,7 +2796,7 @@ namespace Docxodus.HtmlToWml
             }
         }
 
-        private static void DumpSimpleSelector(StringBuilder sb, int indent, CssSimpleSelector s)
+        private static void DumpSimpleSelector(StringBuilder sb, int indent, CssSimpleSelector? s)
         {
             indent++;
             Pr(sb, indent, "SimpleSelector: {0}", s);
@@ -2852,7 +2860,8 @@ namespace Docxodus.HtmlToWml
             Pr(sb, indent, "Declaration >{0}<", d.ToString());
             indent++;
             Pr(sb, indent, "Name: {0}", d.Name);
-            DumpExpression(sb, indent, d.Expression);
+            // Declaration()'s sole construction site always sets Expression.
+            DumpExpression(sb, indent, d.Expression!);
             Pr(sb, indent, "Important: {0}", d.Important);
             indent--;
             indent--;
@@ -2873,7 +2882,7 @@ namespace Docxodus.HtmlToWml
             indent--;
         }
 
-        private static void Pr(StringBuilder sb, int indent, string format, object o)
+        private static void Pr(StringBuilder sb, int indent, string format, object? o)
         {
             if (o == null)
                 return;
@@ -2900,8 +2909,8 @@ namespace Docxodus.HtmlToWml
 
         public class Property : IComparable<Property>
         {
-            public string Name { get; set; }
-            public CssExpression Expression { get; set; }
+            required public string Name { get; set; }
+            required public CssExpression Expression { get; set; }
             public HighOrderPriority HighOrderSort { get; set; }
             public int IdAttributesInSelector { get; set; }
             public int AttributesInSelector { get; set; }
@@ -2922,30 +2931,31 @@ namespace Docxodus.HtmlToWml
                 UserHigh = 10,
             };
 
-            int System.IComparable<Property>.CompareTo(Property other)
+            int System.IComparable<Property>.CompareTo(Property? other)
             {
                 // if this is less than other, return -1
                 // if this is greater than other, return 1
 
+                Property o = other!;
                 int gt = 1;
                 int lt = -1;
-                if (this.HighOrderSort < other.HighOrderSort)
+                if (this.HighOrderSort < o.HighOrderSort)
                     return lt;
-                if (this.HighOrderSort > other.HighOrderSort)
+                if (this.HighOrderSort > o.HighOrderSort)
                     return gt;
-                if (this.IdAttributesInSelector < other.IdAttributesInSelector)
+                if (this.IdAttributesInSelector < o.IdAttributesInSelector)
                     return lt;
-                if (this.IdAttributesInSelector > other.IdAttributesInSelector)
+                if (this.IdAttributesInSelector > o.IdAttributesInSelector)
                     return gt;
-                if (this.AttributesInSelector < other.AttributesInSelector)
+                if (this.AttributesInSelector < o.AttributesInSelector)
                     return lt;
-                if (this.AttributesInSelector > other.AttributesInSelector)
+                if (this.AttributesInSelector > o.AttributesInSelector)
                     return gt;
-                if (this.ElementNamesInSelector < other.ElementNamesInSelector)
+                if (this.ElementNamesInSelector < o.ElementNamesInSelector)
                     return lt;
-                if (this.ElementNamesInSelector > other.ElementNamesInSelector)
+                if (this.ElementNamesInSelector > o.ElementNamesInSelector)
                     return gt;
-                return this.SequenceNumber.CompareTo(other.SequenceNumber);
+                return this.SequenceNumber.CompareTo(o.SequenceNumber);
             }
         }
 
@@ -2980,28 +2990,31 @@ namespace Docxodus.HtmlToWml
             if (color.Terms.Count() == 1)
             {
                 CssTerm term = color.Terms.First();
-                if (term.Type == CssTermType.Function && term.Function.Name.ToUpper() == "RGB" && term.Function.Expression.Terms.Count == 3)
+                // Paired with Type == Function, both set together by the same Term() branch.
+                if (term.Type == CssTermType.Function && term.Function!.Name.ToUpper() == "RGB" && term.Function.Expression!.Terms.Count == 3)
                 {
+                    // RGB arguments are always Number-type terms, never Function -- Value is non-null.
                     List<CssTerm> lt = term.Function.Expression.Terms;
                     if (lt.First().Unit == CssUnit.Percent)
                     {
-                        string v1 = lt.First().Value;
-                        string v2 = lt.ElementAt(1).Value;
-                        string v3 = lt.ElementAt(2).Value;
+                        string v1 = lt.First().Value!;
+                        string v2 = lt.ElementAt(1).Value!;
+                        string v3 = lt.ElementAt(2).Value!;
                         string colorInHex = String.Format("{0:x2}{1:x2}{2:x2}", (int)((float.Parse(v1) / 100.0) * 255),
                             (int)((float.Parse(v2) / 100.0) * 255), (int)((float.Parse(v3) / 100.0) * 255));
                         return colorInHex;
                     }
                     else
                     {
-                        string v1 = lt.First().Value;
-                        string v2 = lt.ElementAt(1).Value;
-                        string v3 = lt.ElementAt(2).Value;
+                        string v1 = lt.First().Value!;
+                        string v2 = lt.ElementAt(1).Value!;
+                        string v3 = lt.ElementAt(2).Value!;
                         string colorInHex = String.Format("{0:x2}{1:x2}{2:x2}", int.Parse(v1), int.Parse(v2), int.Parse(v3));
                         return colorInHex;
                     }
                 }
-                string value = term.Value;
+                // Type != Function here (handled above), so Value is non-null.
+                string value = term.Value!;
                 if (value.Substring(0, 1) == "#" && value.Length == 4)
                 {
                     string e = ConvertSingleDigit(value.Substring(1, 1)) +

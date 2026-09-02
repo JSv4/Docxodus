@@ -380,6 +380,25 @@ namespace Docxodus.Tests
                 Assert.Equal("As stated in Article {__1} and this Section {__1.1}, this is described in Exhibit 4.", innerText);
             }
         }
+
+        [Fact]
+        public void CanCountMatchesInDrawingMlContentWithoutCallback()
+        {
+            // Regression test: Match(content, regex) passes a null replacement AND a null
+            // callback into the PowerPoint/DrawingML (a:p) content path, which used to invoke
+            // the callback unconditionally instead of checking for null first.
+            var paragraph = XElement.Parse(
+                @"<a:p xmlns:a=""http://schemas.openxmlformats.org/drawingml/2006/main"">
+                    <a:r><a:t>Hello world</a:t></a:r>
+                  </a:p>");
+
+            var content = new[] { paragraph };
+            var regex = new Regex("world");
+
+            int count = OpenXmlRegex.Match(content, regex);
+
+            Assert.Equal(1, count);
+        }
     }
 }
 

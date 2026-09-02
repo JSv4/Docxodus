@@ -1,6 +1,3 @@
-// Inherited OpenXmlPowerTools code that predates nullable annotations (issue #13).
-#nullable disable
-
 // Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
@@ -85,7 +82,7 @@ namespace Docxodus
             // without changing the emitted HTML.
             if (!settings.SkipFormattingPartsSimplification)
             {
-                if (doc.MainDocumentPart.StyleDefinitionsPart != null)
+                if (doc.MainDocumentPart!.StyleDefinitionsPart != null)
                     SimplifyMarkupForPart(doc.MainDocumentPart.StyleDefinitionsPart, settings);
                 if (doc.MainDocumentPart.StylesWithEffectsPart != null)
                     SimplifyMarkupForPart(doc.MainDocumentPart.StylesWithEffectsPart, settings);
@@ -93,17 +90,17 @@ namespace Docxodus
 
             if (settings.RemoveComments)
             {
-                WordprocessingCommentsPart commentsPart = doc.MainDocumentPart.WordprocessingCommentsPart;
+                WordprocessingCommentsPart? commentsPart = doc.MainDocumentPart!.WordprocessingCommentsPart;
                 if (commentsPart != null) doc.MainDocumentPart.DeletePart(commentsPart);
 
-                WordprocessingCommentsExPart commentsExPart = doc.MainDocumentPart.WordprocessingCommentsExPart;
+                WordprocessingCommentsExPart? commentsExPart = doc.MainDocumentPart.WordprocessingCommentsExPart;
                 if (commentsExPart != null) doc.MainDocumentPart.DeletePart(commentsExPart);
             }
         }
 
         private static void RemoveRsidInfoInSettings(WordprocessingDocument doc)
         {
-            DocumentSettingsPart part = doc.MainDocumentPart.DocumentSettingsPart;
+            DocumentSettingsPart? part = doc.MainDocumentPart!.DocumentSettingsPart;
             if (part == null) return;
 
             XDocument settingsXDoc = part.GetXDocument();
@@ -115,7 +112,7 @@ namespace Docxodus
 
         private static void RemoveElementsForDocumentComparison(WordprocessingDocument doc)
         {
-            OpenXmlPart part = doc.ExtendedFilePropertiesPart;
+            OpenXmlPart? part = doc.ExtendedFilePropertiesPart;
             if (part != null)
             {
                 XDocument appPropsXDoc = part.GetXDocument();
@@ -133,16 +130,17 @@ namespace Docxodus
                 part.PutXDocument();
             }
 
-            XDocument mainXDoc = doc.MainDocumentPart.GetXDocument();
+            XDocument mainXDoc = doc.MainDocumentPart!.GetXDocument();
             List<XElement> bookmarkStart = mainXDoc
                 .Descendants(W.bookmarkStart)
-                .Where(b => (string) b.Attribute(W.name) == "_GoBack")
+                .Where(b => (string?) b.Attribute(W.name) == "_GoBack")
                 .ToList();
             foreach (XElement item in bookmarkStart)
             {
+                // w:bookmarkStart/w:bookmarkEnd always carry w:id per the WordprocessingML schema.
                 IEnumerable<XElement> bookmarkEnd = mainXDoc
                     .Descendants(W.bookmarkEnd)
-                    .Where(be => (int) be.Attribute(W.id) == (int) item.Attribute(W.id));
+                    .Where(be => (int) be.Attribute(W.id)! == (int) item.Attribute(W.id)!);
                 bookmarkEnd.Remove();
             }
 
@@ -165,7 +163,7 @@ namespace Docxodus
             // After transforming to single character runs, Rsid info will be invalid, so
             // remove from the part.
             XDocument xDoc = part.GetXDocument();
-            var newRoot = (XElement) RemoveRsidTransform(xDoc.Root);
+            var newRoot = (XElement) RemoveRsidTransform(xDoc.Root!)!;
             newRoot = (XElement) SingleCharacterRunTransform(newRoot);
             xDoc.Elements().First().ReplaceWith(newRoot);
             part.PutXDocument();
@@ -185,7 +183,7 @@ namespace Docxodus
         private static object RemoveCustomXmlAndContentControlsTransform(
             XNode node, SimplifyMarkupSettings simplifyMarkupSettings)
         {
-            XElement element = node as XElement;
+            XElement? element = node as XElement;
             if (element != null)
             {
                 if (simplifyMarkupSettings.RemoveSmartTags &&
@@ -213,7 +211,7 @@ namespace Docxodus
             return node;
         }
 
-        private static object RemoveRsidTransform(XNode node)
+        private static object? RemoveRsidTransform(XNode node)
         {
             var element = node as XElement;
             if (element == null) return node;
@@ -248,7 +246,7 @@ namespace Docxodus
                 element.Nodes().Select(n => MergeAdjacentRunsTransform(n)));
         }
 
-        private static object RemoveEmptyRunsAndRunPropertiesTransform(
+        private static object? RemoveEmptyRunsAndRunPropertiesTransform(
             XNode node)
         {
             var element = node as XElement;
@@ -314,7 +312,7 @@ namespace Docxodus
         // - collapse fldSimple
         // - remove fldSimple, fldData, fldChar, instrText.
 
-        private static object SimplifyMarkupTransform(
+        private static object? SimplifyMarkupTransform(
             XNode node,
             SimplifyMarkupSettings settings,
             SimplifyMarkupParameters parameters)
@@ -345,9 +343,10 @@ namespace Docxodus
                  (element.Name == W.bookmarkEnd)))
                 return null;
 
+            // w:bookmarkStart/w:bookmarkEnd always carry w:id per the WordprocessingML schema.
             if (settings.RemoveGoBackBookmark &&
-                (((element.Name == W.bookmarkStart) && ((int) element.Attribute(W.id) == parameters.GoBackId)) ||
-                 ((element.Name == W.bookmarkEnd) && ((int) element.Attribute(W.id) == parameters.GoBackId))))
+                (((element.Name == W.bookmarkStart) && ((int) element.Attribute(W.id)! == parameters.GoBackId)) ||
+                 ((element.Name == W.bookmarkEnd) && ((int) element.Attribute(W.id)! == parameters.GoBackId))))
                 return null;
 
             if (settings.RemoveWebHidden &&
@@ -366,9 +365,10 @@ namespace Docxodus
                  (element.Name == W.annotationRef)))
                 return null;
 
+            // w:rStyle always carries w:val per the WordprocessingML schema.
             if (settings.RemoveComments &&
                 (element.Name == W.rStyle) &&
-                (element.Attribute(W.val).Value == "CommentReference"))
+                (element.Attribute(W.val)!.Value == "CommentReference"))
                 return null;
 
             if (settings.RemoveEndAndFootNotes &&
@@ -396,7 +396,7 @@ namespace Docxodus
                 element.Nodes().Select(n => SimplifyMarkupTransform(n, settings, parameters)));
         }
 
-        private static XDocument Normalize(XDocument source, XmlSchemaSet schema)
+        private static XDocument Normalize(XDocument source, XmlSchemaSet? schema)
         {
             var havePsvi = false;
 
@@ -441,8 +441,8 @@ namespace Docxodus
                 {
                     if (havePsvi)
                     {
-                        IXmlSchemaInfo schemaInfo = a.GetSchemaInfo();
-                        XmlSchemaType schemaType = schemaInfo != null ? schemaInfo.SchemaType : null;
+                        IXmlSchemaInfo? schemaInfo = a.GetSchemaInfo();
+                        XmlSchemaType? schemaType = schemaInfo != null ? schemaInfo.SchemaType : null;
                         XmlTypeCode? typeCode = schemaType != null ? schemaType.TypeCode : (XmlTypeCode?) null;
 
                         switch (typeCode)
@@ -468,7 +468,7 @@ namespace Docxodus
                 });
         }
 
-        private static XNode NormalizeNode(XNode node, bool havePsvi)
+        private static XNode? NormalizeNode(XNode node, bool havePsvi)
         {
             // trim comments and processing instructions from normalized tree
             if (node is XComment || node is XProcessingInstruction)
@@ -486,8 +486,8 @@ namespace Docxodus
         {
             if (havePsvi)
             {
-                IXmlSchemaInfo schemaInfo = element.GetSchemaInfo();
-                XmlSchemaType schemaType = schemaInfo != null ? schemaInfo.SchemaType : null;
+                IXmlSchemaInfo? schemaInfo = element.GetSchemaInfo();
+                XmlSchemaType? schemaType = schemaInfo != null ? schemaInfo.SchemaType : null;
                 XmlTypeCode? typeCode = schemaType != null ? schemaType.TypeCode : (XmlTypeCode?) null;
 
                 switch (typeCode)
@@ -597,26 +597,29 @@ namespace Docxodus
                 var doc = (WordprocessingDocument) part.OpenXmlPackage;
                 if (settings.RemoveGoBackBookmark)
                 {
-                    XElement goBackBookmark = doc
-                        .MainDocumentPart
+                    XElement? goBackBookmark = doc
+                        .MainDocumentPart!
                         .GetXDocument()
                         .Descendants(W.bookmarkStart)
-                        .FirstOrDefault(bm => (string) bm.Attribute(W.name) == "_GoBack");
+                        .FirstOrDefault(bm => (string?) bm.Attribute(W.name) == "_GoBack");
+                    // w:bookmarkStart always carries w:id per the WordprocessingML schema.
                     if (goBackBookmark != null)
-                        parameters.GoBackId = (int) goBackBookmark.Attribute(W.id);
+                        parameters.GoBackId = (int) goBackBookmark.Attribute(W.id)!;
                 }
             }
 
             XDocument xdoc = part.GetXDocument();
-            XElement newRoot = xdoc.Root;
+            XElement newRoot = xdoc.Root!;
 
             // Need to do this first to enable simplifying hyperlinks.
             if (settings.RemoveContentControls || settings.RemoveSmartTags)
                 newRoot = (XElement) RemoveCustomXmlAndContentControlsTransform(newRoot, settings);
 
             // This may touch many elements, so needs to be its own transform.
+            // newRoot is always a document/part root, never itself one of the element names
+            // these Transform methods null out, so the top-level call never returns null.
             if (settings.RemoveRsidInfo)
-                newRoot = (XElement) RemoveRsidTransform(newRoot);
+                newRoot = (XElement) RemoveRsidTransform(newRoot)!;
 
             // Each pass below REBUILDS the whole tree, so a pass that cannot possibly change
             // anything is a full allocation of the document for nothing — and on a large,
@@ -636,11 +639,11 @@ namespace Docxodus
             while (true)
             {
                 if (ContainsAny(newRoot, simplifyTargets))
-                    newRoot = (XElement) SimplifyMarkupTransform(newRoot, settings, parameters);
+                    newRoot = (XElement) SimplifyMarkupTransform(newRoot, settings, parameters)!;
 
                 // Remove runs and run properties that have become empty due to previous transforms.
                 if (HasEmptyRunOrProperties(newRoot))
-                    newRoot = (XElement) RemoveEmptyRunsAndRunPropertiesTransform(newRoot);
+                    newRoot = (XElement) RemoveEmptyRunsAndRunPropertiesTransform(newRoot)!;
 
                 // Merge adjacent runs that have identical run properties.
                 newRoot = (XElement) MergeAdjacentRunsTransform(newRoot);
@@ -683,7 +686,9 @@ namespace Docxodus
                 };
 
                 XDocument newXDoc = Normalize(new XDocument(newRoot), null);
-                newRoot = newXDoc.Root;
+                // Normalize's only content node here is newRoot itself run through
+                // NormalizeElement, which always yields a non-null XElement.
+                newRoot = newXDoc.Root!;
                 if (newRoot != null)
                     foreach (XAttribute nsAttr in nsAttrs)
                         if (newRoot.Attribute(nsAttr.Name) == null)
@@ -705,7 +710,7 @@ namespace Docxodus
             if (element.Name == W.r)
             {
                 IEnumerable<XElement> runChildren = element.Elements().Where(e => e.Name != W.rPr);
-                XElement rPr = element.Element(W.rPr);
+                XElement? rPr = element.Element(W.rPr);
                 return runChildren.Select(rc => new XElement(W.r, rPr, rc));
             }
 
