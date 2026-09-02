@@ -1,7 +1,8 @@
 # WASM Performance Optimization Plan
 
 **Created:** December 2025
-**Status:** All Phases Complete (Phase 3 added ~50% speedup)
+**Status:** All Phases Complete (Phase 3 added ~50% speedup); Phase 5 (runtime tier,
+September 2026) added a further 3.5–4.3× at steady state
 
 ## Executive Summary
 
@@ -223,13 +224,32 @@ public Dictionary<string, XElement> CachedParagraphStyleRollups;
 | ConvertDocxToHtmlWithPagination | 1.65s | 752ms | **54% faster** |
 | ConvertDocxToHtmlComplete | 1.49s | 667ms | **55% faster** |
 
+## Phase 5: Runtime Tier — Profile-Guided AOT ✅ COMPLETE (September 2026)
+
+Phases 1–4 made the algorithms cheaper; the remaining gap was the platform. The browser
+build ran everything on the Mono interpreter (tiered by the jiterpreter), which left a warm
+compare, conversion or editor refresh **5–10× slower than the same call in a warm native
+process**. The fix compiles ahead of time exactly the methods a representative workload
+executes — a Mono AOT profile recorded in the browser — and leaves the rest on the
+interpreter, which delivers full-AOT speed at a fraction of full AOT's size:
+
+| Operation | Interpreter | Profile-guided AOT | Warm native |
+|-----------|-------------|--------------------|-------------|
+| DocxDiff compare, 147 KB legal form | 5.90 s | **1.43 s** | 0.82 s |
+| DOCX→HTML, 42 KB (HC031) | 893 ms | **235 ms** | 150 ms |
+| Editor refresh (ReplaceText + block re-render) | 55.9 ms | **15.3 ms** | 5.6 ms |
+
+Mechanism, measured frontier (including full AOT), payload cost (+1.2 MB brotli), and the
+re-recording procedure are in [wasm-packaging.md](wasm-packaging.md#runtime-tier-jiterpreter--profile-guided-aot);
+`npm/tests/wasm-steady-state.spec.ts` is the instrument.
+
 ## Success Metrics
 
-| Metric | Before | After Phase 2 | After Phase 3 |
-|--------|--------|---------------|---------------|
-| 8-page doc conversion | 3.00s | ~2.7s | **~1.15s** |
-| Code complexity | High | Medium | Low |
-| API surface | Large | Small | Small |
+| Metric | Before | After Phase 2 | After Phase 3 | After Phase 5 |
+|--------|--------|---------------|---------------|---------------|
+| 8-page doc conversion | 3.00s | ~2.7s | ~1.15s | **~0.3s** |
+| Code complexity | High | Medium | Low | Low |
+| API surface | Large | Small | Small | Small |
 
 ## Related Documents
 

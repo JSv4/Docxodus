@@ -11,9 +11,12 @@ echo "Building Docxodus WASM..."
 echo "Project: $WASM_PROJECT"
 echo "Output: $WASM_DIST"
 
-# Publish in Release mode for trimming and smaller size
+# Publish in Release mode for trimming and smaller size. Extra arguments go straight to
+# dotnet publish, so a variant build is one command and no edit to this script — e.g.
+# scripts/record-aot-profile.sh builds the AOT-profiler flavour with
+# `-p:RunAOTCompilation=false -p:WasmProfilers=aot`.
 cd "$WASM_PROJECT"
-dotnet publish -c Release
+dotnet publish -c Release "$@"
 
 # Source AppBundle location (publish output differs from build)
 APPBUNDLE="$WASM_PROJECT/bin/Release/net10.0/browser-wasm/AppBundle"
@@ -94,7 +97,7 @@ fi
 
 # Precompress every framework asset with Brotli (quality 11) so hosts that support
 # content negotiation (nginx brotli_static, Caddy precompressed, Netlify, Vercel,
-# Cloudflare Pages) can serve ~3.3 MB over the wire instead of ~13 MB. The .br
+# Cloudflare Pages) can serve ~4.8 MB over the wire instead of ~21 MB. The .br
 # siblings ship in the npm package; hosts that ignore them serve the raw files
 # exactly as before. gzip is deliberately NOT precompressed — gzip-capable hosts
 # compress on the fly, while brotli-11 is too slow for that.
@@ -134,10 +137,11 @@ echo "Total WASM directory size:"
 du -sh "$WASM_DIST"
 
 # Wire-size budget gate. The brotli total is what a negotiation-capable host actually
-# sends to boot the runtime. Budget 4.0 MB (measured ~3.3 MB after trimming) — if this
-# trips, something re-rooted an assembly or a dependency grew; see
+# sends to boot the runtime. Budget 5.0 MB (measured ~4.8 MB: ~3.6 MB of trimmed IL and
+# runtime plus ~1.2 MB of profile-guided AOT code) — if this trips, something re-rooted
+# an assembly, a dependency grew, or a re-recorded AOT profile got much wider; see
 # docs/architecture/wasm-packaging.md before raising it.
-WIRE_BUDGET_BYTES=$((4 * 1024 * 1024))
+WIRE_BUDGET_BYTES=$((5 * 1024 * 1024))
 WIRE_BYTES=$(cat "$WASM_DIST/_framework/.wire-size")
 rm -f "$WASM_DIST/_framework/.wire-size"
 echo ""
