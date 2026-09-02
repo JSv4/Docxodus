@@ -28,7 +28,7 @@ namespace Docxodus
             "artonde", "nittonde"
         };
 
-		public static string? GetListItemText(string languageCultureName, int levelNumber, string numFmt)
+		public static string? GetListItemText(string languageCultureName, int levelNumber, string? numFmt)
 		{
 			switch (numFmt)
 			{

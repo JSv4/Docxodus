@@ -482,10 +482,10 @@ namespace Docxodus
                         ListItemRetriever.ListItemInfo? lif = p.Annotation<ListItemRetriever.ListItemInfo>();
                         if (lif != null && lif.IsListItem && lif.Lvl(ListItemRetriever.GetParagraphLevel(p)) != null)
                         {
-                            string? numFmtForLevel = (string?)lif.Lvl(ListItemRetriever.GetParagraphLevel(p)).Elements(W.numFmt).Attributes(W.val).FirstOrDefault();
+                            string? numFmtForLevel = (string?)lif.Lvl(ListItemRetriever.GetParagraphLevel(p))!.Elements(W.numFmt).Attributes(W.val).FirstOrDefault();
                             if (numFmtForLevel == null)
                             {
-                                var numFmtElement = lif.Lvl(ListItemRetriever.GetParagraphLevel(p)).Elements(MC.AlternateContent).Elements(MC.Choice).Elements(W.numFmt).FirstOrDefault();
+                                var numFmtElement = lif.Lvl(ListItemRetriever.GetParagraphLevel(p))!.Elements(MC.AlternateContent).Elements(MC.Choice).Elements(W.numFmt).FirstOrDefault();
                                 if (numFmtElement != null && (string?)numFmtElement.Attribute(W.val) == "custom")
                                     numFmtForLevel = (string?)numFmtElement.Attribute(W.format);
                             }
