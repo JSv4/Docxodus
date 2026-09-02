@@ -169,6 +169,68 @@ The AOT-compiled `dotnet.native.wasm` is a different binary from the interpreter
 the trim canaries in `trim-validation.spec.ts` and the whole Playwright suite are what prove
 the tier did not change behaviour; both ran green on the AOT bundle before it shipped.
 
+### `Jiterpreter table N is not yet initialized` on the console
+
+The AOT bundle logs a short burst of these during boot, and only during boot:
+
+```
+MONO_WASM: Jiterpreter table 3 is not yet initialized
+MONO_WASM: Jiterpreter table 12 is not yet initialized
+MONO_WASM: Jiterpreter table 31 is not yet initialized
+...
+```
+
+It is **cosmetic runtime noise, not a Docxodus fault and not a broken tier** — but it is worth
+understanding, because a genuinely broken jiterpreter looks exactly the same in the console.
+
+The jiterpreter reserves 38 slices of the WebAssembly indirect function table: one for compiled
+traces, one for `do_jit_call` thunks, and 36 for *interp_entry* thunks — the wrappers that
+handle a call crossing **from AOT-compiled native code into an interpreted method**. There is
+one interp_entry table per call shape, which is what the number in the message decodes to:
+
+| Table | Shape |
+|---|---|
+| 0 | compiled traces |
+| 1 | `do_jit_call` thunks |
+| 2–10 | static, `void` return, 0–8 arguments |
+| 11–19 | static, returns a value, 0–8 arguments |
+| 20–28 | instance, `void` return, 0–8 arguments |
+| 29–37 | instance, returns a value, 0–8 arguments |
+
+The runtime allocates all 38 in `jiterpreter_allocate_tables()`, which `start_runtime()` calls
+on the line *after* `mono_wasm_load_runtime()` returns. Runtime startup itself crosses the
+AOT→interp boundary a handful of times, and each first crossing for a given method builds its
+entry thunk eagerly (`interp_create_method_pointer_llvmonly` in `interp/interp.c`, which caches
+the result on `imethod->jit_entry`). Those few crossings happen while the tables are still
+zeroed, so `mono_jiterp_allocate_table_entry` prints the message and returns 0 — and the caller
+falls back to the runtime's generic entry wrapper, which is the pre-jiterpreter path and is
+explicitly handled: *"Compiling a trampoline can fail for various reasons, so in that case we
+will fall back to the pre-existing ones below."* The cost is that those specific startup methods
+never get a specialized thunk. Everything after `start_runtime()` — i.e. every method the
+workload touches — allocates normally.
+
+This is why it arrived with the AOT tier and was never seen on the interpreter build: with no
+AOT code there are no AOT→interp transitions to wrap. Measured on this bundle (HC031, Chromium,
+2026-09):
+
+| | Boot-time messages | During workload | Jiterpreter stats after the workload | DOCX→HTML |
+|---|---|---|---|---|
+| Interpreter build (`RunAOTCompilation=false`) | 0 | 0 | `567 KB jitted; 500 traces; 0 jit_calls; 0 interp_entries` | 853 ms |
+| Shipped profile-guided AOT | 9 | 0 | `6.6 KB jitted; 8 traces; 6 jit_calls; 11 interp_entries` | 249 ms |
+
+Nine is deterministic across runs, and the tables *do* get allocated: the same boot logs
+`Allocated 122881 function table entries for jiterpreter`, and interp_entry thunks are compiled
+normally afterwards.
+
+**The failure mode this hides.** If `jiterpreter_allocate_tables()` ever threw — a future SDK
+growing the reservation past what `WebAssembly.Table.grow` will give, say — *no* table would be
+initialized, every trace and thunk would silently fall back to the interpreter, and the console
+would show the same message with different numbers. `npm/tests/wasm-steady-state.spec.ts` pins
+the difference: the allocation line must be present, the messages must name only interp_entry
+tables (never table 0 or 1), and none may appear after boot. There is no supported knob that
+reorders the two calls, so the noise itself stays; silencing it would mean
+`--jiterpreter-interp-entry-enabled=0`, which turns the thunks off rather than fixing anything.
+
 ## Compression and serving
 
 `build-wasm.sh` writes a brotli-11 `.br` sibling next to every `_framework` asset. The

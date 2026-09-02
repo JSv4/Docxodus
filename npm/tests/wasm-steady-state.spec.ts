@@ -71,6 +71,63 @@ test.describe('WASM steady-state (issue #652)', () => {
     expect(stats.jittedBytes).toBeLessThan(status.wasmBytesLimit / 2);
   });
 
+  // The AOT bundle prints a handful of "Jiterpreter table N is not yet initialized" lines
+  // while booting: the runtime allocates the 38 function-table slices in
+  // jiterpreter_allocate_tables(), which start_runtime() calls on the line AFTER
+  // mono_wasm_load_runtime() returns, and runtime startup itself crosses the AOT->interp
+  // boundary a few times before that. Each such crossing builds its entry thunk eagerly, finds
+  // the table still zeroed, and falls back to the runtime's generic entry wrapper. Cosmetic —
+  // see docs/architecture/wasm-packaging.md.
+  //
+  // A jiterpreter that is genuinely broken logs the SAME message, so this pins the difference
+  // rather than the noise: the allocation must have completed, the fallbacks must be confined
+  // to boot, and they must never name the trace (0) or do_jit_call (1) tables — those two carry
+  // the whole tier, and losing them would drop the engine back to the plain interpreter with
+  // nothing but console output to say so.
+  test('the jiterpreter function tables are allocated, and only boot-time interp_entry thunks fall back', async ({ page }) => {
+    test.setTimeout(300000);
+    const logs: { afterBoot: boolean; text: string }[] = [];
+    let afterBoot = false;
+    page.on('console', (m) => logs.push({ afterBoot, text: m.text() }));
+
+    await page.goto('/test-harness.html?jiterpStats=1');
+    await waitForDocxodus(page);
+    afterBoot = true;
+
+    // jiterpreter_allocate_tables() reserves traceTableSize + jitCallTableSize +
+    // 36 * interpEntryTableSize + 1 entries and logs the total under --jiterpreter-stats-enabled.
+    // Its absence means the call threw and NO table was initialized.
+    const allocated = logs
+      .map((l) => /Allocated (\d+) function table entries for jiterpreter/.exec(l.text))
+      .find((m) => m !== null);
+    expect(allocated, 'jiterpreter function-table allocation line (did allocate_tables throw?)')
+      .toBeTruthy();
+    // 38 slices at minimum one entry each, plus the spare. Anything smaller means the loop
+    // over the interp_entry tables did not run to completion.
+    expect(Number(allocated![1])).toBeGreaterThan(38);
+
+    // Enough work to drive the tiering heuristics well past startup.
+    const input = loadWorkloadInput({
+      warmup: 0,
+      iterations: { compareSmall: 3, compareHeavy: 0, convert: 2, convertHeavy: 0, sessionRefresh: 20 },
+    });
+    await page.evaluate(runWasmWorkload, input);
+
+    const uninitialized = logs
+      .map((l) => ({ l, m: /Jiterpreter table (\d+) is not yet initialized/.exec(l.text) }))
+      .filter((x) => x.m !== null)
+      .map((x) => ({ afterBoot: x.l.afterBoot, table: Number(x.m![1]) }));
+    console.log(`interp_entry fallbacks: ${JSON.stringify(uninitialized)}`);
+
+    // Tables 0 (traces) and 1 (do_jit_call) are allocated first and must never be reported.
+    expect(uninitialized.filter((u) => u.table <= 1)).toEqual([]);
+    // Every fallback belongs to startup; once the tables exist, allocation always succeeds.
+    expect(uninitialized.filter((u) => u.afterBoot)).toEqual([]);
+    // 36 interp_entry tables; a handful of boot crossings is expected (9 on the 2026-09 AOT
+    // bundle), a flood is not.
+    expect(uninitialized.length).toBeLessThanOrEqual(36);
+  });
+
   test('steady-state latency of the representative workload', async ({ page }) => {
     test.setTimeout(900000);
     await page.goto('/test-harness.html');
