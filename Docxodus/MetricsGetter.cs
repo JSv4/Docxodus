@@ -1,6 +1,3 @@
-// Inherited OpenXmlPowerTools code that predates nullable annotations (issue #13).
-#nullable disable
-
 // Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
@@ -29,7 +26,7 @@ namespace Docxodus
 
     public class MetricsGetter
     {
-        public static XElement GetMetrics(string fileName, MetricsGetterSettings settings)
+        public static XElement? GetMetrics(string fileName, MetricsGetterSettings settings)
         {
             FileInfo fi = new FileInfo(fileName);
             if (!fi.Exists)
@@ -90,7 +87,7 @@ namespace Docxodus
                 }
             }
             var metrics = new XElement(H.Metrics,
-                new XAttribute(H.FileName, wmlDoc.FileName),
+                new XAttribute(H.FileName, wmlDoc.FileName ?? ""),
                 new XAttribute(H.FileType, "WordprocessingML"),
                 new XAttribute(H.Error, "Unknown error, metrics not determined"));
             return metrics;
@@ -232,9 +229,9 @@ namespace Docxodus
             return new Uri("http://broken-link/");
         }
 
-        private static XElement GetWmlMetrics(string fileName, bool invalidHyperlink, WordprocessingDocument wDoc, MetricsGetterSettings settings)
+        private static XElement GetWmlMetrics(string? fileName, bool invalidHyperlink, WordprocessingDocument wDoc, MetricsGetterSettings settings)
         {
-            var parts = new XElement(H.Parts,
+            XElement? parts = new XElement(H.Parts,
                 wDoc.GetAllParts().Select(part =>
                 {
                     return GetMetricsForWmlPart(part, settings);
@@ -242,7 +239,7 @@ namespace Docxodus
             if (!parts.HasElements)
                 parts = null;
             var metrics = new XElement(H.Metrics,
-                new XAttribute(H.FileName, fileName),
+                new XAttribute(H.FileName, fileName ?? ""),
                 new XAttribute(H.FileType, "WordprocessingML"),
                 GetStyleHierarchy(wDoc),
                 GetMiscWmlMetrics(wDoc, invalidHyperlink),
@@ -367,18 +364,18 @@ namespace Docxodus
                         IncrementMetric(metricCountDictionary, H.SubDocument);
                     else if (e.Name == VML.imagedata || e.Name == VML.fill || e.Name == VML.stroke || e.Name == A.blip)
                     {
-                        var relId = (string)e.Attribute(R.embed);
+                        var relId = (string?)e.Attribute(R.embed);
                         if (relId != null)
                             ValidateImageExists(part, relId, metricCountDictionary);
-                        relId = (string)e.Attribute(R.pict);
+                        relId = (string?)e.Attribute(R.pict);
                         if (relId != null)
                             ValidateImageExists(part, relId, metricCountDictionary);
-                        relId = (string)e.Attribute(R.id);
+                        relId = (string?)e.Attribute(R.id);
                         if (relId != null)
                             ValidateImageExists(part, relId, metricCountDictionary);
                     }
 
-                    if (part.Uri == wDoc.MainDocumentPart.Uri)
+                    if (part.Uri == wDoc.MainDocumentPart!.Uri)
                     {
                         elementCount++;
                         if (e.Name == W.p)
@@ -409,10 +406,10 @@ namespace Docxodus
             {
                 if (d.Name == W.saveThroughXslt)
                 {
-                    string rid = (string)d.Attribute(R.id);
+                    string? rid = (string?)d.Attribute(R.id);
                     var tempExternalRelationship = wDoc
-                        .MainDocumentPart
-                        .DocumentSettingsPart
+                        .MainDocumentPart!
+                        .DocumentSettingsPart!
                         .ExternalRelationships
                         .FirstOrDefault(h => h.Id == rid);
                     if (tempExternalRelationship == null)
@@ -447,8 +444,8 @@ namespace Docxodus
                             sb.Append(PtUtils.MakeValidXml(err.Description.Substring(0, 300) + " ... elided ...") + Environment.NewLine);
                         else
                             sb.Append(PtUtils.MakeValidXml(err.Description) + Environment.NewLine);
-                        sb.Append("  in part " + PtUtils.MakeValidXml(err.Part.Uri.ToString()) + Environment.NewLine);
-                        sb.Append("  at " + PtUtils.MakeValidXml(err.Path.XPath) + Environment.NewLine);
+                        sb.Append("  in part " + PtUtils.MakeValidXml(err.Part!.Uri.ToString()) + Environment.NewLine);
+                        sb.Append("  at " + PtUtils.MakeValidXml(err.Path!.XPath) + Environment.NewLine);
                         return sb.ToString();
                     })));
             }
@@ -482,21 +479,22 @@ namespace Docxodus
                     .Select(p =>
                     {
                         ListItemRetriever.RetrieveListItem(wDoc, p, null);
-                        ListItemRetriever.ListItemInfo lif = p.Annotation<ListItemRetriever.ListItemInfo>();
+                        ListItemRetriever.ListItemInfo? lif = p.Annotation<ListItemRetriever.ListItemInfo>();
                         if (lif != null && lif.IsListItem && lif.Lvl(ListItemRetriever.GetParagraphLevel(p)) != null)
                         {
-                            string numFmtForLevel = (string)lif.Lvl(ListItemRetriever.GetParagraphLevel(p)).Elements(W.numFmt).Attributes(W.val).FirstOrDefault();
+                            string? numFmtForLevel = (string?)lif.Lvl(ListItemRetriever.GetParagraphLevel(p))!.Elements(W.numFmt).Attributes(W.val).FirstOrDefault();
                             if (numFmtForLevel == null)
                             {
-                                var numFmtElement = lif.Lvl(ListItemRetriever.GetParagraphLevel(p)).Elements(MC.AlternateContent).Elements(MC.Choice).Elements(W.numFmt).FirstOrDefault();
-                                if (numFmtElement != null && (string)numFmtElement.Attribute(W.val) == "custom")
-                                    numFmtForLevel = (string)numFmtElement.Attribute(W.format);
+                                var numFmtElement = lif.Lvl(ListItemRetriever.GetParagraphLevel(p))!.Elements(MC.AlternateContent).Elements(MC.Choice).Elements(W.numFmt).FirstOrDefault();
+                                if (numFmtElement != null && (string?)numFmtElement.Attribute(W.val) == "custom")
+                                    numFmtForLevel = (string?)numFmtElement.Attribute(W.format);
                             }
                             return numFmtForLevel;
                         }
                         return null;
                     })
                     .Where(s => s != null)
+                    .Select(s => s!)
                     .Distinct())
                     .ToList();
             }
@@ -689,25 +687,26 @@ namespace Docxodus
             }
         }
 
-        private static object GetStyleHierarchy(WordprocessingDocument document)
+        private static object? GetStyleHierarchy(WordprocessingDocument document)
         {
-            var stylePart = document.MainDocumentPart.StyleDefinitionsPart;
+            var stylePart = document.MainDocumentPart!.StyleDefinitionsPart;
             if (stylePart == null)
                 return null;
             var xd = stylePart.GetXDocument();
-            var stylesWithPath = xd.Root
+            var stylesWithPath = xd.Root!
                 .Elements(W.style)
                 .Select(s =>
                 {
-                    var styleString = (string)s.Attribute(W.styleId);
+                    // w:styleId is required by the WordprocessingML schema on every w:style.
+                    var styleString = (string)s.Attribute(W.styleId)!;
                     var thisStyle = s;
                     while (true)
                     {
-                        var baseStyle = (string)thisStyle.Elements(W.basedOn).Attributes(W.val).FirstOrDefault();
+                        var baseStyle = (string?)thisStyle.Elements(W.basedOn).Attributes(W.val).FirstOrDefault();
                         if (baseStyle == null)
                             break;
                         styleString = baseStyle + "/" + styleString;
-                        thisStyle = xd.Root.Elements(W.style).FirstOrDefault(ts => ts.Attribute(W.styleId).Value == baseStyle);
+                        thisStyle = xd.Root.Elements(W.style).FirstOrDefault(ts => (string)ts.Attribute(W.styleId)! == baseStyle);
                         if (thisStyle == null)
                             break;
                     }
@@ -719,21 +718,21 @@ namespace Docxodus
             foreach (var item in stylesWithPath)
             {
                 var styleChain = item.Split('/');
-                XElement elementToAddTo = styleHierarchy;
+                XElement? elementToAddTo = styleHierarchy;
                 foreach (var inChain in styleChain.PtSkipLast(1))
-                    elementToAddTo = elementToAddTo.Elements(H.Style).FirstOrDefault(z => z.Attribute(H.Id).Value == inChain);
+                    elementToAddTo = elementToAddTo!.Elements(H.Style).FirstOrDefault(z => (string)z.Attribute(H.Id)! == inChain);
                 var styleToAdd = styleChain.Last();
-                elementToAddTo.Add(
+                elementToAddTo!.Add(
                     new XElement(H.Style,
                         new XAttribute(H.Id, styleChain.Last()),
-                        new XAttribute(H.Type, (string)xd.Root.Elements(W.style).First(z => z.Attribute(W.styleId).Value == styleToAdd).Attribute(W.type))));
+                        new XAttribute(H.Type, (string?)xd.Root.Elements(W.style).First(z => (string)z.Attribute(W.styleId)! == styleToAdd).Attribute(W.type) ?? "")));
             }
             return styleHierarchy;
         }
 
-        private static XElement GetMetricsForWmlPart(OpenXmlPart part, MetricsGetterSettings settings)
+        private static XElement? GetMetricsForWmlPart(OpenXmlPart part, MetricsGetterSettings settings)
         {
-            XElement contentControls = null;
+            XElement? contentControls = null;
             if (part is MainDocumentPart ||
                 part is HeaderPart ||
                 part is FooterPart ||
@@ -741,8 +740,8 @@ namespace Docxodus
                 part is EndnotesPart)
             {
                 var xd = part.GetXDocument();
-                contentControls = (XElement)GetContentControlsTransform(xd.Root, settings);
-                if (!contentControls.HasElements)
+                contentControls = (XElement?)GetContentControlsTransform(xd.Root!, settings);
+                if (contentControls?.HasElements != true)
                     contentControls = null;
             }
             var partMetrics = new XElement(H.Part,
@@ -754,24 +753,26 @@ namespace Docxodus
             return null;
         }
 
-        private static object GetContentControlsTransform(XNode node, MetricsGetterSettings settings)
+        private static object? GetContentControlsTransform(XNode node, MetricsGetterSettings settings)
         {
-            XElement element = node as XElement;
+            XElement? element = node as XElement;
             if (element != null)
             {
-                if (element == element.Document.Root)
+                if (element == element.Document!.Root)
                     return new XElement(H.ContentControls,
                         element.Nodes().Select(n => GetContentControlsTransform(n, settings)));
 
                 if (element.Name == W.sdt)
                 {
-                    var tag = (string)element.Elements(W.sdtPr).Elements(W.tag).Attributes(W.val).FirstOrDefault();
-                    XAttribute tagAttr = tag != null ? new XAttribute(H.Tag, tag) : null;
+                    var tag = (string?)element.Elements(W.sdtPr).Elements(W.tag).Attributes(W.val).FirstOrDefault();
+                    XAttribute? tagAttr = tag != null ? new XAttribute(H.Tag, tag) : null;
 
-                    var alias = (string)element.Elements(W.sdtPr).Elements(W.alias).Attributes(W.val).FirstOrDefault();
-                    XAttribute aliasAttr = alias != null ? new XAttribute(H.Alias, alias) : null;
+                    var alias = (string?)element.Elements(W.sdtPr).Elements(W.alias).Attributes(W.val).FirstOrDefault();
+                    XAttribute? aliasAttr = alias != null ? new XAttribute(H.Alias, alias) : null;
 
-                    var xPathAttr = new XAttribute(H.XPath, element.GetXPath());
+                    // element is never the document root here (that case returns earlier above),
+                    // so it always has a parent and GetXPath() always returns non-null for it.
+                    var xPathAttr = new XAttribute(H.XPath, element.GetXPath()!);
 
                     var isText = element.Elements(W.sdtPr).Elements(W.text).Any();
                     var isBibliography = element.Elements(W.sdtPr).Elements(W.bibliography).Any();
@@ -796,7 +797,7 @@ namespace Docxodus
                         ! isEquation && 
                         ! isGroup && 
                         ! isPicture);
-                    string type = null;
+                    string? type = null;
                     if (isText        ) type = "Text";
                     if (isBibliography) type = "Bibliography";
                     if (isCitation    ) type = "Citation";
@@ -809,7 +810,9 @@ namespace Docxodus
                     if (isGroup       ) type = "Group";
                     if (isPicture     ) type = "Picture";
                     if (isRichText    ) type = "RichText";
-                    var typeAttr = new XAttribute(H.Type, type);
+                    // isRichText's own fallback disjunct (all other is* flags false) guarantees
+                    // exactly one of the twelve branches above always fires.
+                    var typeAttr = new XAttribute(H.Type, type!);
 
                     return new XElement(H.ContentControl,
                         typeAttr,

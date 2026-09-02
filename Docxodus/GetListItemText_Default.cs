@@ -54,7 +54,7 @@ namespace Docxodus
             "sixtieth", "seventieth", "eightieth", "ninetieth"
         };
 
-        public static string GetListItemText(string languageCultureName, int levelNumber, string numFmt)
+        public static string GetListItemText(string languageCultureName, int levelNumber, string? numFmt)
         {
             if (numFmt == "none")
             {

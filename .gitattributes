@@ -28,3 +28,6 @@
 *.pptx binary
 
 
+
+# Recorded Mono AOT profile (scripts/record-aot-profile.sh); opaque bytes, never normalized.
+*.aotprofile binary

@@ -4,6 +4,67 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **REDLINE THEATER (`docs/demo/redline.html`) — the agent protocol as the demo.** Three
+  counsel negotiate a Master Services Agreement, and every edit that lands is dispatched
+  from a real JSON-RPC 2.0 `tools/call` frame in the shape `docxodus-mcp` accepts over
+  stdio, streamed on a wire console beside the document. Nothing renders a diff: the
+  session records in `render_inline` mode, so each call writes native `w:ins`/`w:del`
+  into the live package and the editor repaints only the block that changed — what you
+  watch is the file that downloads, attributed per counsel because the three reviewers
+  are three values of the session's revision author. The finale proves the result rather
+  than asserting it: `proveRedlineReversibility` plus a `docxDiffGetRevisions` pass
+  confirm accept-all reaches the negotiated final and reject-all restores the baseline
+  with zero content differences, with reject-path package divergences classified against
+  a closed set of parts that review comments legitimately explain. One scripted call is
+  *expected to be refused* — list membership has no reversible tracked-change encoding,
+  so the engine declines it rather than writing a mark reject-all could not undo. That
+  closed-set classification is also what found the note-insertion defect fixed in #625:
+  a footnote's definition survived reject-all, and because `/word/footnotes.xml` is not
+  a part a comment can explain, the demo reported the redline unreversible instead of
+  absorbing it into a pattern match. Act II footnotes the negotiated cap again now, so
+  the proof exercises that path on every run.
+  The page carries a second mode, **diff stress**, because "redline" means two things
+  here and only one was on screen: where the negotiation RECORDS its markup, the stress
+  meter RECOMPUTES the redline from scratch after every edit and times it, appending a
+  clause per frame so the input grows under the engine. Three selectable pipeline depths
+  measure ~143 ms (`docxDiffGetRevisions`), ~170 ms (`docxDiffCompareProducts` → package +
+  revisions) and ~324 ms (plus `convertDocxToHtml`) — that is 68× to 157× the cost of the
+  ~2 ms mutation path measured through the same endpoint, so a redline-per-edit loop runs
+  between roughly 3 and 7 frames per second rather than at any animation rate. The panel
+  reports the ratio it just measured, not a number written into the page, which is how it
+  picked up three successive engine improvements — the read-amplification fix from the
+  DocxDiff stress work, the normalizer gating, and the read-identity change — without a
+  line of its own changing. `benchmarks/docxdiff-stress/FINDINGS.md` remains the authority on engine
+  performance; this mode is the watchable version of the same question.
+  A browser MCP endpoint (`docs/demo/mcp-wire.js`) reimplements the server's front half
+  (envelope parsing, (tool, action) routing, the `content[].text` + `isError` result
+  shape, business failures as tool results rather than protocol errors) over `DocxSession`
+  via WASM; `docs/demo/tools/redline-theater.test.mjs` parses the real
+  `tools/mcp-server/ToolCatalog.cs` so that correspondence is checked rather than
+  claimed, and `npm/tests/demo-redline.spec.ts` guards the run, the attribution, the
+  proof and a latency budget. Demo content only — not shipped in the npm package.
+
+### Fixed
+
+- `OpenXmlRegex.Match` no longer throws a `NullReferenceException` when called without a callback
+  on PowerPoint/DrawingML content (the `a:p`/`p:p` namespaced path) — it now returns the match
+  count like the Wordprocessing path already did.
+- The `WmlDocument(WmlDocument, params XElement[])` replacement-part constructor now throws a
+  clear `DocxodusException` when a replacement part's `pt:Uri` attribute does not match any part
+  in the package, instead of a `NullReferenceException`.
+- `MetricsGetter.GetDocxMetrics`/`GetWmlMetrics` no longer throw an `ArgumentNullException` for a
+  byte-array-loaded `WmlDocument` (no file path) — the `FileName` label in the returned metrics
+  now defaults to an empty string instead of the underlying `null`.
+- A style-only list item (numbering inherited from its paragraph style rather than direct
+  paragraph properties) whose resolved level has no definition anywhere in its abstract numbering
+  no longer throws a `NullReferenceException` while computing the list item text — it now falls
+  back within the style's own levels correctly, matching every other "not found" path in list-item
+  resolution.
+
+## [11.0.0] - 2026-09-01
+
 ### Removed
 
 - **`WmlComparer` — the legacy comparison engine — is gone (BREAKING).** `DocxDiff` has been the
@@ -379,6 +440,26 @@ All notable changes to this project will be documented in this file.
   is housekeeping rather than a fix — but the guard is no longer defeated by its own call site,
   which matters on documents where the index is not small.
 ### Changed
+- **The browser build is 3.5–4.3× faster at steady state: the hot code is now AOT-compiled,
+  guided by a recorded profile** (issue #652). The WASM runtime executes .NET on the Mono
+  interpreter (with the jiterpreter compiling hot traces), and once warm it was still 5–10× slower
+  than the same call in a native process — a compare that takes 17 ms natively took 126 ms in the
+  browser, a 147 KB legal form took 5.9 s to compare and 4.6 s to render, an editor keystroke's
+  re-render took 56 ms. Full AOT would close the gap but compiles ~90k methods into a 48 MB
+  binary (9.7 MB over the wire, 2.6× the payload budget). Instead the build now ships a *profile*:
+  `scripts/record-aot-profile.sh` runs the representative workload — DocxDiff compare, DOCX→HTML,
+  and the editor's per-mutation refresh — in a real browser under the Mono AOT profiler, and the
+  publish compiles only the ~6k methods that workload executes (`profile-only`), leaving everything
+  else on the interpreter. Measured on the same inputs: compare 126 → 30 ms and 5.9 → 1.4 s,
+  render 893 → 235 ms and 4.6 → 1.3 s, editor refresh 56 → 15 ms — within 1.5–2.7× of warm
+  native, and no slower than full AOT. The cost is +1.2 MB brotli (3.6 → 4.8 MB) and +6.8 MB
+  uncompressed (14.7 → 21.2 MB), paid once per cache; the build-time wire budget moves from
+  4 MB to 5 MB accordingly. `npm/tests/wasm-steady-state.spec.ts` is the instrument (it also
+  pins that the jiterpreter is active in the shipped configuration), and the whole Playwright
+  suite ran against the AOT bundle. Two SDK gotchas are recorded in
+  `docs/architecture/wasm-packaging.md`: the documented `AOTProfilePath` property silently
+  yields *full* AOT (use `WasmAotProfilePath`), and the runtime's default profiler hand-off
+  method no longer exists in .NET 10.
 - **The engine selector's compare profile now treats input revisions the way Word's Compare does:
   accepted first, not preserved.** Word's Compare dialog says it outright — "Word will treat them as
   accepted" — and its outputs confirm it: text an input had struck through is absent from the result
@@ -397,46 +478,6 @@ All notable changes to this project will be documented in this file.
   inserted bullet list tight), while document defaults remain the stock backfill — matching what
   Word emits for this shape. Previously the output had no style definitions, so inserted content
   styled through `pStyle` lost its formatting.
-- **REDLINE THEATER (`docs/demo/redline.html`) — the agent protocol as the demo.** Three
-  counsel negotiate a Master Services Agreement, and every edit that lands is dispatched
-  from a real JSON-RPC 2.0 `tools/call` frame in the shape `docxodus-mcp` accepts over
-  stdio, streamed on a wire console beside the document. Nothing renders a diff: the
-  session records in `render_inline` mode, so each call writes native `w:ins`/`w:del`
-  into the live package and the editor repaints only the block that changed — what you
-  watch is the file that downloads, attributed per counsel because the three reviewers
-  are three values of the session's revision author. The finale proves the result rather
-  than asserting it: `proveRedlineReversibility` plus a `docxDiffGetRevisions` pass
-  confirm accept-all reaches the negotiated final and reject-all restores the baseline
-  with zero content differences, with reject-path package divergences classified against
-  a closed set of parts that review comments legitimately explain. One scripted call is
-  *expected to be refused* — list membership has no reversible tracked-change encoding,
-  so the engine declines it rather than writing a mark reject-all could not undo. That
-  closed-set classification is also what found the note-insertion defect fixed in #625:
-  a footnote's definition survived reject-all, and because `/word/footnotes.xml` is not
-  a part a comment can explain, the demo reported the redline unreversible instead of
-  absorbing it into a pattern match. Act II footnotes the negotiated cap again now, so
-  the proof exercises that path on every run.
-  The page carries a second mode, **diff stress**, because "redline" means two things
-  here and only one was on screen: where the negotiation RECORDS its markup, the stress
-  meter RECOMPUTES the redline from scratch after every edit and times it, appending a
-  clause per frame so the input grows under the engine. Three selectable pipeline depths
-  measure ~143 ms (`docxDiffGetRevisions`), ~170 ms (`docxDiffCompareProducts` → package +
-  revisions) and ~324 ms (plus `convertDocxToHtml`) — that is 68× to 157× the cost of the
-  ~2 ms mutation path measured through the same endpoint, so a redline-per-edit loop runs
-  between roughly 3 and 7 frames per second rather than at any animation rate. The panel
-  reports the ratio it just measured, not a number written into the page, which is how it
-  picked up three successive engine improvements — the read-amplification fix from the
-  DocxDiff stress work, the normalizer gating, and the read-identity change — without a
-  line of its own changing. `benchmarks/docxdiff-stress/FINDINGS.md` remains the authority on engine
-  performance; this mode is the watchable version of the same question.
-  A browser MCP endpoint (`docs/demo/mcp-wire.js`) reimplements the server's front half
-  (envelope parsing, (tool, action) routing, the `content[].text` + `isError` result
-  shape, business failures as tool results rather than protocol errors) over `DocxSession`
-  via WASM; `docs/demo/tools/redline-theater.test.mjs` parses the real
-  `tools/mcp-server/ToolCatalog.cs` so that correspondence is checked rather than
-  claimed, and `npm/tests/demo-redline.spec.ts` guards the run, the attribution, the
-  proof and a latency budget. Demo content only — not shipped in the npm package.
-
 ### Changed
 - **The corpus differential's consolidate rows now observe their calls (#632).** The N-way half of
   the differential recorded its warnings and order-variance channels as `n/a` on two premises that

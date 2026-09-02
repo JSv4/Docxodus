@@ -1,6 +1,3 @@
-// Inherited OpenXmlPowerTools code that predates nullable annotations (issue #13).
-#nullable disable
-
 // Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
@@ -140,11 +137,11 @@ namespace Docxodus
             return null;
         }
 
-        public static XDocument GetXDocument(this OpenXmlPart part)
+        public static XDocument GetXDocument(this OpenXmlPart? part)
         {
             if (part == null) throw new ArgumentNullException("part");
 
-            XDocument partXDocument = part.Annotation<XDocument>();
+            XDocument? partXDocument = part.Annotation<XDocument>();
             if (partXDocument != null) return partXDocument;
 
             using (Stream partStream = part.GetStream())
@@ -165,12 +162,12 @@ namespace Docxodus
             return partXDocument;
         }
 
-        public static XDocument GetXDocument(this OpenXmlPart part, out XmlNamespaceManager namespaceManager)
+        public static XDocument GetXDocument(this OpenXmlPart? part, out XmlNamespaceManager? namespaceManager)
         {
             if (part == null) throw new ArgumentNullException("part");
 
             namespaceManager = part.Annotation<XmlNamespaceManager>();
-            XDocument partXDocument = part.Annotation<XDocument>();
+            XDocument? partXDocument = part.Annotation<XDocument>();
             if (partXDocument != null)
             {
                 if (namespaceManager != null) return partXDocument;
@@ -208,7 +205,7 @@ namespace Docxodus
             }
         }
 
-        public static void PutXDocument(this OpenXmlPart part)
+        public static void PutXDocument(this OpenXmlPart? part)
         {
             if (part == null) throw new ArgumentNullException("part");
 
@@ -227,7 +224,7 @@ namespace Docxodus
             }
         }
 
-        public static void PutXDocumentWithFormatting(this OpenXmlPart part)
+        public static void PutXDocumentWithFormatting(this OpenXmlPart? part)
         {
             if (part == null) throw new ArgumentNullException("part");
 
@@ -246,7 +243,7 @@ namespace Docxodus
             }
         }
 
-        public static void PutXDocument(this OpenXmlPart part, XDocument document)
+        public static void PutXDocument(this OpenXmlPart? part, XDocument document)
         {
             if (part == null) throw new ArgumentNullException("part");
             if (document == null) throw new ArgumentNullException("document");
@@ -270,7 +267,7 @@ namespace Docxodus
         /// XML serialization of every part on every restore, which on a real document is the bulk
         /// of an undo. Anything that reads the part's STREAM must use the flushing overload.
         /// </remarks>
-        public static void SetXDocumentCache(this OpenXmlPart part, XDocument document)
+        public static void SetXDocumentCache(this OpenXmlPart? part, XDocument document)
         {
             if (part == null) throw new ArgumentNullException("part");
             if (document == null) throw new ArgumentNullException("document");
@@ -284,7 +281,7 @@ namespace Docxodus
             XmlReader reader = xDocument.CreateReader();
             XDocument newXDoc = XDocument.Load(reader);
 
-            XElement rootElement = xDocument.Elements().FirstOrDefault();
+            XElement rootElement = xDocument.Elements().FirstOrDefault()!;
             rootElement.ReplaceWith(newXDoc.Root);
 
             XmlNameTable nameTable = reader.NameTable;
@@ -371,9 +368,9 @@ namespace Docxodus
 
         public static IEnumerable<OpenXmlPart> ContentParts(this WordprocessingDocument doc)
         {
-            yield return doc.MainDocumentPart;
+            yield return doc.MainDocumentPart!;
 
-            foreach (var hdr in doc.MainDocumentPart.HeaderParts)
+            foreach (var hdr in doc.MainDocumentPart!.HeaderParts)
                 yield return hdr;
 
             foreach (var ftr in doc.MainDocumentPart.FooterParts)
@@ -479,7 +476,7 @@ namespace Docxodus
             }
         }
 
-        private static XProcessingInstruction GetProcessingInstruction(string path)
+        private static XProcessingInstruction? GetProcessingInstruction(string path)
         {
             var fi = new FileInfo(path);
             if (Util.IsWordprocessingML(fi.Extension))
@@ -553,7 +550,7 @@ namespace Docxodus
                 xmlDoc.Load(xmlReader);
                 if (document.Declaration != null)
                 {
-                    XmlDeclaration dec = xmlDoc.CreateXmlDeclaration(document.Declaration.Version,
+                    XmlDeclaration dec = xmlDoc.CreateXmlDeclaration(document.Declaration.Version!,
                         document.Declaration.Encoding, document.Declaration.Standalone);
                     xmlDoc.InsertBefore(dec, xmlDoc.FirstChild);
                 }
@@ -566,7 +563,7 @@ namespace Docxodus
             XDocument xDoc = new XDocument();
             using (XmlWriter xmlWriter = xDoc.CreateWriter())
                 document.WriteTo(xmlWriter);
-            XmlDeclaration decl =
+            XmlDeclaration? decl =
                 document.ChildNodes.OfType<XmlDeclaration>().FirstOrDefault();
             if (decl != null)
                 xDoc.Declaration = new XDeclaration(decl.Version, decl.Encoding,
@@ -595,15 +592,18 @@ namespace Docxodus
 
             using (Package package = Package.Open(outputPath, FileMode.Create))
             {
+                // The pkg:name/contentType/xmlData/binaryData attributes and the rel:Id/Type/
+                // Target/TargetMode attributes below are always present: this reads back exactly
+                // the Flat OPC shape GetContentsAsXml (above) writes for every part and relationship.
                 // add all parts (but not relationships)
-                foreach (var xmlPart in doc.Root
+                foreach (var xmlPart in doc.Root!
                     .Elements()
                     .Where(p =>
-                        (string)p.Attribute(pkg + "contentType") !=
+                        (string)p.Attribute(pkg + "contentType")! !=
                         "application/vnd.openxmlformats-package.relationships+xml"))
                 {
-                    string name = (string)xmlPart.Attribute(pkg + "name");
-                    string contentType = (string)xmlPart.Attribute(pkg + "contentType");
+                    string name = (string)xmlPart.Attribute(pkg + "name")!;
+                    string contentType = (string)xmlPart.Attribute(pkg + "contentType")!;
                     if (contentType.EndsWith("xml"))
                     {
                         Uri u = new Uri(name, UriKind.Relative);
@@ -611,7 +611,7 @@ namespace Docxodus
                             CompressionOption.SuperFast);
                         using (Stream str = part.GetStream(FileMode.Create))
                         using (XmlWriter xmlWriter = XmlWriter.Create(str))
-                            xmlPart.Element(pkg + "xmlData")
+                            xmlPart.Element(pkg + "xmlData")!
                                 .Elements()
                                 .First()
                                 .WriteTo(xmlWriter);
@@ -625,7 +625,7 @@ namespace Docxodus
                         using (BinaryWriter binaryWriter = new BinaryWriter(str))
                         {
                             string base64StringInChunks =
-                                (string)xmlPart.Element(pkg + "binaryData");
+                                (string)xmlPart.Element(pkg + "binaryData")!;
                             char[] base64CharArray = base64StringInChunks
                                 .Where(c => c != '\r' && c != '\n').ToArray();
                             byte[] byteArray =
@@ -638,8 +638,8 @@ namespace Docxodus
 
                 foreach (var xmlPart in doc.Root.Elements())
                 {
-                    string name = (string)xmlPart.Attribute(pkg + "name");
-                    string contentType = (string)xmlPart.Attribute(pkg + "contentType");
+                    string name = (string)xmlPart.Attribute(pkg + "name")!;
+                    string contentType = (string)xmlPart.Attribute(pkg + "contentType")!;
                     if (contentType ==
                         "application/vnd.openxmlformats-package.relationships+xml")
                     {
@@ -649,11 +649,11 @@ namespace Docxodus
                             foreach (XElement xmlRel in
                                 xmlPart.Descendants(rel + "Relationship"))
                             {
-                                string id = (string)xmlRel.Attribute("Id");
-                                string type = (string)xmlRel.Attribute("Type");
-                                string target = (string)xmlRel.Attribute("Target");
+                                string id = (string)xmlRel.Attribute("Id")!;
+                                string type = (string)xmlRel.Attribute("Type")!;
+                                string target = (string)xmlRel.Attribute("Target")!;
                                 string targetMode =
-                                    (string)xmlRel.Attribute("TargetMode");
+                                    (string)xmlRel.Attribute("TargetMode")!;
                                 if (targetMode == "External")
                                     package.CreateRelationship(
                                         new Uri(target, UriKind.Absolute),
@@ -676,11 +676,11 @@ namespace Docxodus
                             foreach (XElement xmlRel in
                                 xmlPart.Descendants(rel + "Relationship"))
                             {
-                                string id = (string)xmlRel.Attribute("Id");
-                                string type = (string)xmlRel.Attribute("Type");
-                                string target = (string)xmlRel.Attribute("Target");
+                                string id = (string)xmlRel.Attribute("Id")!;
+                                string type = (string)xmlRel.Attribute("Type")!;
+                                string target = (string)xmlRel.Attribute("Target")!;
                                 string targetMode =
-                                    (string)xmlRel.Attribute("TargetMode");
+                                    (string)xmlRel.Attribute("TargetMode")!;
                                 if (targetMode == "External")
                                     fromPart.CreateRelationship(
                                         new Uri(target, UriKind.Absolute),
@@ -743,14 +743,14 @@ namespace Docxodus
 
     public static class XmlUtil
     {
-        public static XAttribute GetXmlSpaceAttribute(string value)
+        public static XAttribute? GetXmlSpaceAttribute(string value)
         {
             return (value.Length > 0) && ((value[0] == ' ') || (value[value.Length - 1] == ' '))
                 ? new XAttribute(XNamespace.Xml + "space", "preserve")
                 : null;
         }
 
-        public static XAttribute GetXmlSpaceAttribute(char value)
+        public static XAttribute? GetXmlSpaceAttribute(char value)
         {
             return value == ' ' ? new XAttribute(XNamespace.Xml + "space", "preserve") : null;
         }
@@ -798,7 +798,7 @@ namespace Docxodus
 
             var tabLength = r.DescendantsTrimmed(W.txbxContent)
                 .Where(e => e.Name == W.tab)
-                .Select(t => (decimal)t.Attribute(PtOpenXml.TabWidth))
+                .Select(t => (decimal?)t.Attribute(PtOpenXml.TabWidth) ?? 0)
                 .Sum();
 
             if (runText.Length == 0 && tabLength == 0)
@@ -855,7 +855,7 @@ namespace Docxodus
             return int.Parse(twipsOrPoints);
         }
 
-        public static int? AttributeToTwips(XAttribute attribute)
+        public static int? AttributeToTwips(XAttribute? attribute)
         {
             if (attribute == null)
             {
@@ -938,7 +938,7 @@ namespace Docxodus
 
         private static string SortableDate(XElement e, XName name)
         {
-            XAttribute a = e.Attribute(name);
+            XAttribute? a = e.Attribute(name);
             return a != null ? ((DateTime) a).ToString("s") : string.Empty;
         }
 
@@ -972,14 +972,14 @@ namespace Docxodus
                     return XNode.DeepEquals(first.Element(W.rPr), second.Element(W.rPr));
 
                 case 3:
-                    return (string) first.Attribute(W.author) == (string) second.Attribute(W.author)
+                    return (string?) first.Attribute(W.author) == (string?) second.Attribute(W.author)
                            && SortableDate(first, W.date) == SortableDate(second, W.date)
-                           && (string) first.Attribute(W.id) == (string) second.Attribute(W.id)
+                           && (string?) first.Attribute(W.id) == (string?) second.Attribute(W.id)
                            && SameRunProperties(first.Elements().Elements(W.rPr),
                                second.Elements().Elements(W.rPr));
 
                 default:
-                    return (string) first.Attribute(W.author) == (string) second.Attribute(W.author)
+                    return (string?) first.Attribute(W.author) == (string?) second.Attribute(W.author)
                            && SortableDate(first, W.date) == SortableDate(second, W.date)
                            && SameRunProperties(first.Elements(W.r).Elements(W.rPr),
                                second.Elements(W.r).Elements(W.rPr));
@@ -994,7 +994,7 @@ namespace Docxodus
             var groupedAdjacentRunsWithIdenticalFormatting = new List<List<XElement>>();
             foreach (XElement ce in runContainer.Elements())
             {
-                List<XElement> last = groupedAdjacentRunsWithIdenticalFormatting.Count > 0
+                List<XElement>? last = groupedAdjacentRunsWithIdenticalFormatting.Count > 0
                     ? groupedAdjacentRunsWithIdenticalFormatting[groupedAdjacentRunsWithIdenticalFormatting.Count - 1]
                     : null;
                 if (last != null && CanCoalesceAdjacent(last[last.Count - 1], ce)) last.Add(ce);
@@ -1015,7 +1015,7 @@ namespace Docxodus
                                 .Select(d => d.Value)
                                 .StringConcatenate())
                         .StringConcatenate();
-                    XAttribute xs = XmlUtil.GetXmlSpaceAttribute(textValue);
+                    XAttribute? xs = XmlUtil.GetXmlSpaceAttribute(textValue);
 
                     if (g[0].Name == W.r)
                     {
@@ -1038,7 +1038,7 @@ namespace Docxodus
 
                     if (g[0].Name == W.ins)
                     {
-                        XElement firstR = g[0].Element(W.r);
+                        XElement? firstR = g[0].Element(W.r);
                         return new XElement(W.ins,
                             g[0].Attributes(),
                             new XElement(W.r,
@@ -1049,7 +1049,7 @@ namespace Docxodus
 
                     if (g[0].Name == W.del)
                     {
-                        XElement firstR = g[0].Element(W.r);
+                        XElement? firstR = g[0].Element(W.r);
                         return new XElement(W.del,
                             g[0].Attributes(),
                             new XElement(W.r,
@@ -1546,7 +1546,7 @@ listSeparator
 
         public static object WmlOrderElementsPerStandard(XNode node)
         {
-            XElement element = node as XElement;
+            XElement? element = node as XElement;
             if (element != null)
             {
                 if (element.Name == W.pPr)
@@ -1744,11 +1744,11 @@ listSeparator
 
         public static bool? GetBoolProp(XElement rPr, XName propertyName)
         {
-            XElement propAtt = rPr.Element(propertyName);
+            XElement? propAtt = rPr.Element(propertyName);
             if (propAtt == null)
                 return null;
 
-            XAttribute val = propAtt.Attribute(W.val);
+            XAttribute? val = propAtt.Attribute(W.val);
             if (val == null)
                 return true;
 
@@ -1766,15 +1766,15 @@ listSeparator
             if (s == "off")
                 return false;
 
-            return (bool) propAtt.Attribute(W.val);
+            return (bool) val;
         }
     }
 
     public class FieldInfo
     {
-        public string FieldType;
-        public string[] Switches;
-        public string[] Arguments;
+        public string FieldType = "";
+        public string[] Switches = Array.Empty<string>();
+        public string[] Arguments = Array.Empty<string>();
     }
 
     public static class FieldParser
@@ -1896,7 +1896,7 @@ listSeparator
 
             if (field.Length == 0)
                 return emptyField;
-            string fieldType = field.TrimStart().Split(' ').FirstOrDefault();
+            string? fieldType = field.TrimStart().Split(' ').FirstOrDefault();
             if (fieldType == null || fieldType.ToUpper() != "HYPERLINK" || fieldType.ToUpper() != "REF")
                 return emptyField;
             string[] tokens = GetTokens(field);
@@ -1914,9 +1914,9 @@ listSeparator
 
     class ContentPartRelTypeIdTuple
     {
-        public OpenXmlPart ContentPart { get; set; }
-        public string RelationshipType { get; set; }
-        public string RelationshipId { get; set; }
+        required public OpenXmlPart ContentPart { get; set; }
+        required public string RelationshipType { get; set; }
+        required public string RelationshipId { get; set; }
     }
 
     // This class is used to prevent duplication of images
@@ -1924,7 +1924,9 @@ listSeparator
     {
         private string ContentType { get; set; }
         private byte[] Image { get; set; }
-        public OpenXmlPart ImagePart { get; set; }
+        // Set later by the destination-document builder once the image has been copied there
+        // (see DocumentBuilder.cs), not by this constructor, which only captures the source bytes.
+        public OpenXmlPart? ImagePart { get; set; }
         public List<ContentPartRelTypeIdTuple> ContentPartRelTypeIdList = new List<ContentPartRelTypeIdTuple>();
 
         public ImageData(ImagePart part)
@@ -1976,7 +1978,9 @@ listSeparator
     {
         private string ContentType { get; set; }
         private byte[] Media { get; set; }
-        public DataPart DataPart { get; set; }
+        // Set later by the destination-document builder once the media has been copied there,
+        // not by this constructor, which only captures the source bytes.
+        public DataPart? DataPart { get; set; }
         public List<ContentPartRelTypeIdTuple> ContentPartRelTypeIdList = new List<ContentPartRelTypeIdTuple>();
 
         public MediaData(DataPart part)
@@ -2036,7 +2040,7 @@ listSeparator
                     if (!entry.Name.EndsWith(".rels"))
                         continue;
                     bool replaceEntry = false;
-                    XDocument entryXDoc = null;
+                    XDocument? entryXDoc = null;
                     using (var entryStream = entry.Open())
                     {
                         try
@@ -2046,10 +2050,10 @@ listSeparator
                             {
                                 var urisToCheck = entryXDoc
                                     .Descendants(relNs + "Relationship")
-                                    .Where(r => r.Attribute("TargetMode") != null && (string)r.Attribute("TargetMode") == "External");
+                                    .Where(r => r.Attribute("TargetMode") != null && (string?)r.Attribute("TargetMode") == "External");
                                 foreach (var rel in urisToCheck)
                                 {
-                                    var target = (string)rel.Attribute("Target");
+                                    var target = (string?)rel.Attribute("Target");
                                     if (target != null)
                                     {
                                         try
@@ -2059,7 +2063,7 @@ listSeparator
                                         catch (UriFormatException)
                                         {
                                             Uri newUri = invalidUriHandler(target);
-                                            rel.Attribute("Target").Value = newUri.ToString();
+                                            rel.Attribute("Target")!.Value = newUri.ToString();
                                             replaceEntry = true;
                                         }
                                     }

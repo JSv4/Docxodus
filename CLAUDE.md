@@ -41,7 +41,7 @@ are kept for the day each file migrates.
 **`Docxodus.csproj` and `Docxodus.Tests.csproj` both override it to `false`**, so the core
 library and the test project do *not* fail on warnings. The CLI tools, MCP server,
 python-host and WASM project do inherit it. Current baseline: the library builds with
-**133 warnings**, the test project with **716** (mostly StyleCop `SA1633`/`SA1636` file
+**122 warnings**, the test project with **705** (mostly StyleCop `SA1633`/`SA1636` file
 headers and `SA1206` using-order). Don't add to either baseline. Measure with
 `--no-incremental` — a warm incremental build reports zero because nothing recompiles.
 
@@ -115,6 +115,7 @@ dotnet build Docxodus.sln                       # needs the wasm-tools workload
 dotnet build Docxodus/Docxodus.csproj           # library only, no workload needed
 dotnet build -c Release Docxodus.sln
 ./scripts/build-wasm.sh                         # WASM target (sets WASM_BUILD, excludes SkiaSharp)
+./scripts/record-aot-profile.sh                 # re-record wasm/DocxodusWasm/docxodus.aotprofile (~4 min)
 cd npm && npm run build                         # build-wasm.sh + tsc + esbuild bundles
 ```
 
@@ -226,7 +227,8 @@ Editor internals: `editor_block_drag_handles.md`, `editor_inline_formatting_on_e
 `move_detection_implementation_plan.md`. Smoke-test contracts: `s1_smoke_test_features.md`,
 `epic_435_acceptance_smoke.md`.
 
-WASM/browser work: `wasm-packaging.md` (trimming, Brotli, size budget, measured payload),
+WASM/browser work: `wasm-packaging.md` (trimming, profile-guided AOT, Brotli, size budget,
+measured payload and speed frontier),
 `wasm-optimization-plan.md`, `skiasharp-removal-plan.md`, `ui_responsiveness.md`,
 `profiling-results.md`. Python wrapper: `python_docxodus.md`.
 

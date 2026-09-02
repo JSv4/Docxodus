@@ -47,9 +47,22 @@
     <DebuggerSupport Condition="'$(Configuration)' == 'Release'">false</DebuggerSupport>
     <EventSourceSupport Condition="'$(Configuration)' == 'Release'">false</EventSourceSupport>
 
-    <!-- AOT Compilation DISABLED for smaller bundle size -->
-    <!-- JIT/interpreter mode is slower at startup but bundle is ~50% smaller -->
-    <!-- <RunAOTCompilation Condition="'$(Configuration)' == 'Release'">true</RunAOTCompilation> -->
+    <!-- Profile-guided AOT (issue #652). The browser build runs on the Mono interpreter
+         (tiered by the jiterpreter), 5-10x slower than warm native at steady state. Full AOT
+         closes that gap but compiles ~90k methods: 60 MB raw / 9.7 MB brotli, 2.6x the wire
+         budget. With a profile the AOT compiler gets `profile-only`: only the ~6k methods the
+         representative workload actually executes (DocxDiff compare, DOCX->HTML, editor
+         refresh) are compiled, everything else stays on the interpreter, and the result is
+         as fast as full AOT (3.5-4.3x over the interpreter, 1.5-2.7x warm native) for +6.5 MB
+         raw / +1.2 MB brotli. Measured frontier: docs/architecture/wasm-packaging.md.
+
+         WasmAotProfilePath, not the documented AOTProfilePath: the SDK passes both to the
+         AOT task under one case-insensitive parameter and the (empty) item wins, so
+         AOTProfilePath silently yields full AOT. Re-record the profile with
+         scripts/record-aot-profile.sh when the hot paths move; a stale profile costs speed,
+         never correctness. -->
+    <RunAOTCompilation Condition="'$(Configuration)' == 'Release'">true</RunAOTCompilation>
+    <WasmAotProfilePath>$(MSBuildThisFileDirectory)docxodus.aotprofile</WasmAotProfilePath>
 
     <!-- Define WASM_BUILD to enable SkiaSharp-free code paths in Docxodus -->
     <DefineConstants>$(DefineConstants);WASM_BUILD</DefineConstants>
@@ -89,5 +102,13 @@
     <TrimmableAssembly Include="DocumentFormat.OpenXml" />
     <TrimmableAssembly Include="DocumentFormat.OpenXml.Framework" />
     <TrimmerRootDescriptor Include="ILLink.Descriptors.xml" />
+  </ItemGroup>
+
+  <!-- The AOT-profiler flavour (scripts/record-aot-profile.sh publishes with
+       WasmProfilers=aot) hands its data to JavaScriptExports.DumpAotProfileData, which nothing
+       references statically and full trimming therefore removes. Root it for that flavour
+       only; the shipped build is unaffected. -->
+  <ItemGroup Condition="$(WasmProfilers.Contains('aot'))">
+    <TrimmerRootDescriptor Include="ILLink.Descriptors.AotProfiler.xml" />
   </ItemGroup>
 </Project>

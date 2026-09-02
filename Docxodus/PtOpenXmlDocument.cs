@@ -1,6 +1,3 @@
-// Inherited OpenXmlPowerTools code that predates nullable annotations (issue #13).
-#nullable disable
-
 // Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
@@ -50,6 +47,7 @@ Here is creating a new WmlDocument:
 */
 
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Xml.Linq;
@@ -77,13 +75,13 @@ namespace Docxodus
         internal const string NotWordprocessingMessage =
             "Docxodus handles WordprocessingML (.docx/.docm/.dotx/.dotm) only; this package is SpreadsheetML or PresentationML.";
 
-        public string FileName { get; set; }
+        public string? FileName { get; set; }
         public byte[] DocumentByteArray { get; set; }
 
         public static DocxodusDocument FromFileName(string fileName)
         {
             byte[] bytes = File.ReadAllBytes(fileName);
-            Type type;
+            Type? type;
             try
             {
                 type = GetDocumentType(bytes);
@@ -105,9 +103,9 @@ namespace Docxodus
             throw new PowerToolsDocumentException("Not an Open XML document.");
         }
 
-        public static DocxodusDocument FromDocument(DocxodusDocument doc)
+        public static DocxodusDocument? FromDocument(DocxodusDocument doc)
         {
-            Type type = doc.GetDocumentType();
+            Type? type = doc.GetDocumentType();
             if (type == typeof(WordprocessingDocument))
                 return new WmlDocument(doc);
             if (type == typeof(SpreadsheetDocument) || type == typeof(PresentationDocument))
@@ -158,9 +156,10 @@ namespace Docxodus
             }
         }
 
-        private void ConvertToTransitional(string fileName, byte[] tempByteArray)
+        [MemberNotNull(nameof(DocumentByteArray))]
+        private void ConvertToTransitional(string? fileName, byte[] tempByteArray)
         {
-            Type type;
+            Type? type;
             try
             {
                 type = GetDocumentType(tempByteArray);
@@ -221,14 +220,14 @@ namespace Docxodus
             }
         }
 
-        public DocxodusDocument(string fileName, MemoryStream memStream)
+        public DocxodusDocument(string? fileName, MemoryStream memStream)
         {
             FileName = fileName;
             DocumentByteArray = new byte[memStream.Length];
             Array.Copy(memStream.GetBuffer(), DocumentByteArray, memStream.Length);
         }
 
-        public DocxodusDocument(string fileName, MemoryStream memStream, bool convertToTransitional)
+        public DocxodusDocument(string? fileName, MemoryStream memStream, bool convertToTransitional)
         {
             if (convertToTransitional)
             {
@@ -267,19 +266,19 @@ namespace Docxodus
             stream.Write(DocumentByteArray, 0, DocumentByteArray.Length);
         }
 
-        public Type GetDocumentType()
+        public Type? GetDocumentType()
         {
             return GetDocumentType(DocumentByteArray);
         }
 
-        private static Type GetDocumentType(byte[] bytes)
+        private static Type? GetDocumentType(byte[] bytes)
         {
             using (MemoryStream stream = new MemoryStream())
             {
                 stream.Write(bytes, 0, bytes.Length);
                 using (Package package = Package.Open(stream, FileMode.Open))
                 {
-                    PackageRelationship relationship = package.GetRelationshipsByType("http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument").FirstOrDefault();
+                    PackageRelationship? relationship = package.GetRelationshipsByType("http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument").FirstOrDefault();
                     if (relationship == null)
                         relationship = package.GetRelationshipsByType("http://purl.oclc.org/ooxml/officeDocument/relationships/officeDocument").FirstOrDefault();
                     if (relationship != null)
@@ -352,7 +351,7 @@ namespace Docxodus
                 throw new PowerToolsDocumentException("Not a Wordprocessing document.");
         }
 
-        public WmlDocument(string fileName, byte[] byteArray)
+        public WmlDocument(string? fileName, byte[] byteArray)
             : base(byteArray)
         {
             FileName = fileName;
@@ -360,7 +359,7 @@ namespace Docxodus
                 throw new PowerToolsDocumentException("Not a Wordprocessing document.");
         }
 
-        public WmlDocument(string fileName, byte[] byteArray, bool convertToTransitional)
+        public WmlDocument(string? fileName, byte[] byteArray, bool convertToTransitional)
             : base(byteArray, convertToTransitional)
         {
             FileName = fileName;
@@ -368,12 +367,12 @@ namespace Docxodus
                 throw new PowerToolsDocumentException("Not a Wordprocessing document.");
         }
 
-        public WmlDocument(string fileName, MemoryStream memStream)
+        public WmlDocument(string? fileName, MemoryStream memStream)
             : base(fileName, memStream)
         {
         }
 
-        public WmlDocument(string fileName, MemoryStream memStream, bool convertToTransitional)
+        public WmlDocument(string? fileName, MemoryStream memStream, bool convertToTransitional)
             : base(fileName, memStream, convertToTransitional)
         {
         }
@@ -381,9 +380,9 @@ namespace Docxodus
 
     public class OpenXmlMemoryStreamDocument : IDisposable
     {
-        private DocxodusDocument Document;
-        private MemoryStream DocMemoryStream;
-        private Package DocPackage;
+        private DocxodusDocument? Document;
+        private MemoryStream? DocMemoryStream;
+        private Package? DocPackage;
 
         public OpenXmlMemoryStreamDocument(DocxodusDocument doc)
         {
@@ -439,7 +438,7 @@ namespace Docxodus
 
         public Package GetPackage()
         {
-            return DocPackage;
+            return DocPackage!;
         }
 
         public WordprocessingDocument GetWordprocessingDocument()
@@ -448,8 +447,8 @@ namespace Docxodus
             {
                 if (GetDocumentType() != typeof(WordprocessingDocument))
                     throw new PowerToolsDocumentException("Not a Wordprocessing document.");
-                DropDanglingRelationships(DocPackage);
-                return WordprocessingDocument.Open(DocPackage);
+                DropDanglingRelationships(DocPackage!);
+                return WordprocessingDocument.Open(DocPackage!);
             }
             catch (Exception e)
             {
@@ -497,9 +496,9 @@ namespace Docxodus
             }
             return !package.PartExists(target);
         }
-        public Type GetDocumentType()
+        public Type? GetDocumentType()
         {
-            PackageRelationship relationship = DocPackage.GetRelationshipsByType("http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument").FirstOrDefault();
+            PackageRelationship? relationship = DocPackage!.GetRelationshipsByType("http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument").FirstOrDefault();
             if (relationship == null)
                 relationship = DocPackage.GetRelationshipsByType("http://purl.oclc.org/ooxml/officeDocument/relationships/officeDocument").FirstOrDefault();
             if (relationship == null)
@@ -531,13 +530,13 @@ namespace Docxodus
         public DocxodusDocument GetModifiedDocument()
         {
             FinalizePackage();
-            return new DocxodusDocument((Document == null) ? null : Document.FileName, DocMemoryStream);
+            return new DocxodusDocument((Document == null) ? null : Document.FileName, DocMemoryStream!);
         }
 
         public WmlDocument GetModifiedWmlDocument()
         {
             FinalizePackage();
-            return new WmlDocument((Document == null) ? null : Document.FileName, DocMemoryStream);
+            return new WmlDocument((Document == null) ? null : Document.FileName, DocMemoryStream!);
         }
 
         // Disposes the live package and applies the shared output ZIP policy (compression from
@@ -547,9 +546,10 @@ namespace Docxodus
         // its physical ZIP layout.
         private void FinalizePackage()
         {
-            ((IDisposable)DocPackage)?.Dispose();
+            ((IDisposable?)DocPackage)?.Dispose();
             DocPackage = null;
-            ZipPackageOutputNormalizer.NormalizeInPlace(DocMemoryStream);
+            // Only DocPackage is cleared above; DocMemoryStream stays live until Dispose.
+            ZipPackageOutputNormalizer.NormalizeInPlace(DocMemoryStream!);
         }
 
         public void Close()
@@ -571,7 +571,7 @@ namespace Docxodus
         {
             if (disposing)
             {
-                ((IDisposable)DocPackage)?.Dispose();
+                ((IDisposable?)DocPackage)?.Dispose();
                 DocMemoryStream?.Dispose();
             }
             if (DocPackage == null && DocMemoryStream == null)
