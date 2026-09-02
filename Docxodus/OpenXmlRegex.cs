@@ -523,7 +523,7 @@ namespace Docxodus
                             // Grouped by GroupAdjacent above, which routed every run without an
                             // A.t element into the DontConsolidate group already handled above.
                             string textValue = g.Select(r => r.Element(A.t)!.Value).StringConcatenate();
-                            XAttribute xs = XmlUtil.GetXmlSpaceAttribute(textValue);
+                            XAttribute? xs = XmlUtil.GetXmlSpaceAttribute(textValue);
                             return new XElement(A.r,
                                 g.First().Elements(A.rPr),
                                 new XElement(A.t, xs, textValue));
