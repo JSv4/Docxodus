@@ -1,0 +1,101 @@
+===== CONSOLIDATE PARITY SCOREBOARD (DocxDiff.Consolidate vs WmlComparer.Consolidate) =====
+Total: 84   reproduce-PASS: 84   DEVIATION: 0   FAIL: 0
+
+  [WC001 ] 10 pass + 0 deviation + 0 fail / 10
+  [WC002 ] 74 pass + 0 deviation + 0 fail / 74
+
+FAILING cases (undocumented — must be empty for the floor to hold):
+
+DOCUMENTED DEVIATIONS (deliberate IR-native supersession — visible, adjudicated):
+
+REPRODUCING cases:
+  PASS  RC-0010
+  PASS  RC-0020
+  PASS  RC-0030
+  PASS  RC-0040
+  PASS  RC-0050
+  PASS  RC-0060
+  PASS  RC-0070
+  PASS  RC-0080
+  PASS  RC-0090
+  PASS  RC-0100
+  PASS  WCB-1000
+  PASS  WCB-1010
+  PASS  WCB-1020
+  PASS  WCB-1030
+  PASS  WCB-1040
+  PASS  WCB-1050
+  PASS  WCB-1060
+  PASS  WCB-1070
+  PASS  WCB-1080
+  PASS  WCB-1090
+  PASS  WCB-1100
+  PASS  WCB-1110
+  PASS  WCB-1120
+  PASS  WCB-1140
+  PASS  WCB-1150
+  PASS  WCB-1160
+  PASS  WCB-1170
+  PASS  WCB-1180
+  PASS  WCB-1190
+  PASS  WCB-1200
+  PASS  WCB-1210
+  PASS  WCB-1220
+  PASS  WCB-1230
+  PASS  WCB-1240
+  PASS  WCB-1250
+  PASS  WCB-1260
+  PASS  WCB-1270
+  PASS  WCB-1280
+  PASS  WCB-1290
+  PASS  WCB-1300
+  PASS  WCB-1310
+  PASS  WCB-1320
+  PASS  WCB-1330
+  PASS  WCB-1340
+  PASS  WCB-1350
+  PASS  WCB-1360
+  PASS  WCB-1370
+  PASS  WCB-1380
+  PASS  WCB-1390
+  PASS  WCB-1400
+  PASS  WCB-1410
+  PASS  WCB-1420
+  PASS  WCB-1430
+  PASS  WCB-1440
+  PASS  WCB-1450
+  PASS  WCB-1460
+  PASS  WCB-1470
+  PASS  WCB-1480
+  PASS  WCB-1490
+  PASS  WCB-1500
+  PASS  WCB-1510
+  PASS  WCB-1520
+  PASS  WCB-1530
+  PASS  WCB-1540
+  PASS  WCB-1550
+  PASS  WCB-1560
+  PASS  WCB-1570
+  PASS  WCB-1580
+  PASS  WCB-1590
+  PASS  WCB-1600
+  PASS  WCB-1610
+  PASS  WCB-1620
+  PASS  WCB-1630
+  PASS  WCB-1640
+  PASS  WCB-1650
+  PASS  WCB-1660
+  PASS  WCB-1670
+  PASS  WCB-1680
+  PASS  WCB-1690
+  PASS  WCB-1700
+  PASS  WCB-1710
+  PASS  WCB-1720
+  PASS  WCB-1730
+  PASS  WCB-1740
+
+HEADLINE DEVIATION (corpus-wide, by design — see class summary):
+  legacy juxtaposition-vs-ours-inline-merge shape divergences: 84 of 84 cases (legacy retains original + revisor-label boxes; ours merges inline). legacy threw on 0 case(s).
+
+
+xUnit.net 00:01:59.70]   Finished:    Docxodus.Tests

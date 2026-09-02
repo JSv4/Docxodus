@@ -1,5 +1,11 @@
 # WmlComparer.cs - Gaps and Deficiencies
 
+> **Historical (v11.0.0).** This document describes `WmlComparer`, the legacy comparison engine,
+> which was removed in v11.0.0. It is kept because it records design decisions and Word-behaviour
+> findings that `DocxDiff` inherited or deliberately diverged from — not because the code still
+> exists. For the shipping engine see `ir_diff_engine.md`; for the parity evidence gathered before
+> removal see `wmlcomparer_parity_baseline/`.
+
 This document catalogs known gaps, limitations, and areas for improvement in the WmlComparer (document comparison engine).
 
 > **Update (v6.x / M2.5):** Several gaps below were closed in the v6.x line and are no longer accurate — the corrections are inline. Most are also addressed structurally by the new **IR diff engine** (`DocxDiff`), which is anchor-addressed and emits the edit script as data; see [`ir_diff_engine.md`](./ir_diff_engine.md). As of v8.0.0, `DocxDiff` is the default comparison engine; `WmlComparer` is the older engine, feature-frozen and kept only for callers that explicitly select it.

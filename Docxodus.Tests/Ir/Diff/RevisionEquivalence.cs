@@ -10,18 +10,17 @@ using Docxodus.Ir.Diff;
 namespace Docxodus.Tests.Ir.Diff;
 
 /// <summary>
-/// The SHARED semantic-equivalence core for comparing the two revision engines' output, extracted from the
-/// M2.3 Task 2 differential harness (<see cref="IrVsWmlComparerTests"/>) so the Task 3 generative fuzzer
-/// (<see cref="IrDiffFuzzTests"/>) reuses the IDENTICAL normalization + combined char-bag contract rather
-/// than re-deriving it. The Task 2 harness keeps its richer cause-bucketing private; this class holds the
-/// two primitives both sites need:
+/// The semantic-equivalence core for reasoning about revision-set content, originally the shared half of
+/// the differential harness that compared the IR engine against WmlComparer. That harness went with the
+/// legacy engine in v11.0.0; the generative fuzzer (<see cref="IrDiffFuzzTests"/>) still needs these two
+/// primitives, so they outlive it:
 /// <list type="number">
 /// <item><see cref="Normalize"/> — the precise text normalization (collapse whitespace runs to one space,
 /// trim, drop-if-empty; CASE PRESERVED).</item>
 /// <item><see cref="RevisionBag"/> — per-kind normalized-text multisets plus the granularity-independent
 /// COMBINED Inserted+Deleted char bag, with <see cref="RevisionBag.MultisetsEqual"/> /
-/// <see cref="RevisionBag.IsCombinedCharBagEquivalent"/> the two equivalence relations the fuzzer's
-/// differential gate rides on.</item>
+/// <see cref="RevisionBag.IsCombinedCharBagEquivalent"/> the two equivalence relations available to
+/// callers comparing two revision sets.</item>
 /// </list>
 /// </summary>
 internal static class RevisionEquivalence
@@ -30,7 +29,7 @@ internal static class RevisionEquivalence
     /// The comparison normalization, applied identically to both engines' revision text: every run of
     /// whitespace collapses to a single ASCII space, the result is trimmed, an empty result yields the
     /// empty string (callers drop empties). <b>Case is preserved</b> — a case change is a real content edit.
-    /// This is byte-for-byte the Task 2 normalization contract.
+    /// This is byte-for-byte the normalization contract the differential harness used.
     /// </summary>
     public static string Normalize(string? text)
     {
@@ -59,7 +58,7 @@ internal static class RevisionEquivalence
 
     /// <summary>
     /// Per-kind multisets of normalized revision text plus the combined Inserted+Deleted char bag. Both
-    /// engines map into this shape via <see cref="FromIr"/> / <see cref="FromWmlComparer"/>; equivalence is
+    /// A revision set maps into this shape via <see cref="FromIr"/>; equivalence is
     /// pure set algebra over it.
     /// </summary>
     public sealed class RevisionBag
@@ -81,23 +80,6 @@ internal static class RevisionEquivalence
                 b.Add(r.Type, r.Text);
             return b;
         }
-
-        public static RevisionBag FromWmlComparer(IEnumerable<WmlComparer.WmlComparerRevision> revs)
-        {
-            var b = new RevisionBag();
-            foreach (var r in revs)
-                b.Add(MapKind(r.RevisionType), r.Text);
-            return b;
-        }
-
-        private static IrRevisionType MapKind(WmlComparer.WmlComparerRevisionType t) => t switch
-        {
-            WmlComparer.WmlComparerRevisionType.Inserted => IrRevisionType.Inserted,
-            WmlComparer.WmlComparerRevisionType.Deleted => IrRevisionType.Deleted,
-            WmlComparer.WmlComparerRevisionType.Moved => IrRevisionType.Moved,
-            WmlComparer.WmlComparerRevisionType.FormatChanged => IrRevisionType.FormatChanged,
-            _ => throw new ArgumentOutOfRangeException(nameof(t), t, "Unknown WmlComparerRevisionType"),
-        };
 
         private void Add(IrRevisionType kind, string? rawText)
         {

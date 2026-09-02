@@ -34,7 +34,7 @@ public class PreAcceptInputRevisionsTests
         var validator = new DocumentFormat.OpenXml.Validation.OpenXmlValidator();
         return validator.Validate(wd).Count(e =>
             e.ErrorType == DocumentFormat.OpenXml.Validation.ValidationErrorType.Schema &&
-            !OxPt.WcTests.ExpectedErrors.Contains(e.Description));
+            !Docxodus.Tests.CorpusValidation.ExpectedErrors.Contains(e.Description));
     }
 
     // ---- oracle (b): the flag IS the wrapper ----------------------------------------------------

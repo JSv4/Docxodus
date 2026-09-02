@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 
 using System;
 using System.Collections.Generic;
@@ -546,7 +546,13 @@ public class IrSplitMergeTests
 
     private static List<IrRevision> FixtureRevisions(string l, string r)
     {
-        var settings = IrWmlComparerAdapter.MapSettings(new WmlComparerSettings()) with { DetectSplitMerge = true };
+        // Compat granularity: these fixtures' expected shapes were characterized at the legacy engine's
+        // coarser grain, which the renderer still reproduces on request.
+        var settings = new IrDiffSettings
+        {
+            RevisionGranularity = RevisionGranularity.WmlComparerCompatible,
+            DetectSplitMerge = true,
+        };
         var left = IrReader.Read(new WmlDocument(Path.Combine("../../../../TestFiles/", l)), WcCorpus.ReadOpts);
         var right = IrReader.Read(new WmlDocument(Path.Combine("../../../../TestFiles/", r)), WcCorpus.ReadOpts);
         var script = IrEditScriptBuilder.Build(left, right, settings);
@@ -622,7 +628,7 @@ public class IrSplitMergeTests
     /// (WC-1140/1150/1460/1660/1670/1750/1760 all pin it).
     /// <para>The oracle's SEVEN revisions here are not a finer reading of the same edit: WmlComparer
     /// mis-aligns this fixture, reporting content as INSERTED that is present unchanged on both sides, plus
-    /// two revisions with null text. <see cref="IrParityScoreboardTests"/> already adjudicates WC-1450 as a
+    /// two revisions with null text. the removed parity scoreboard already adjudicates WC-1450 as a
     /// documented coarser-grain deviation and holds the ratchet floor for it, so a second hard-count copy
     /// of the same case here only re-litigated a settled decision. This test now pins the ENGINE truth —
     /// what the redline actually says about the document — which is the property that would regress if the
@@ -656,7 +662,13 @@ public class IrSplitMergeTests
     [Fact]
     public void WC1450_duplicate_content_body_does_not_collapse_to_delete_plus_insert()
     {
-        var settings = IrWmlComparerAdapter.MapSettings(new WmlComparerSettings()) with { DetectSplitMerge = true };
+        // Compat granularity: these fixtures' expected shapes were characterized at the legacy engine's
+        // coarser grain, which the renderer still reproduces on request.
+        var settings = new IrDiffSettings
+        {
+            RevisionGranularity = RevisionGranularity.WmlComparerCompatible,
+            DetectSplitMerge = true,
+        };
         var left = IrReader.Read(
             new WmlDocument(Path.Combine("../../../../TestFiles/", "WC/WC023-Table-4-Row-Image-Before.docx")),
             WcCorpus.ReadOpts);

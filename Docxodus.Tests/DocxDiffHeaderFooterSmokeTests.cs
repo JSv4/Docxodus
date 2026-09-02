@@ -247,7 +247,7 @@ public class DocxDiffHeaderFooterSmokeTests
         var validator = new OpenXmlValidator();
         return validator.Validate(wd)
             .Where(e => e.ErrorType == DocumentFormat.OpenXml.Validation.ValidationErrorType.Schema &&
-                        !OxPt.WcTests.ExpectedErrors.Contains(e.Description))
+                        !Docxodus.Tests.CorpusValidation.ExpectedErrors.Contains(e.Description))
             .Select(e => $"{e.Part?.Uri}: {e.Description}")
             .ToList();
     }

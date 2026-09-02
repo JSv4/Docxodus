@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 
 using System;
 using System.Collections.Generic;
@@ -42,7 +42,7 @@ public class IrSplitThresholdSweepTests
     {
         // Cache the IR reads — each (left, right) pair is read once and re-diffed per grid cell (the
         // aligner + renderer are pure functions of the documents + settings).
-        var rows = IrParityScoreboardTests.WC003_Compare_Rows().ToList();
+        var rows = WcCompareCorpusRows.Rows().ToList();
         var docs = new Dictionary<string, IrDocument>(StringComparer.Ordinal);
         IrDocument Read(string rel)
         {
@@ -52,7 +52,7 @@ public class IrSplitThresholdSweepTests
             return doc;
         }
 
-        var baseSettings = IrWmlComparerAdapter.MapSettings(new WmlComparerSettings());
+        var baseSettings = new IrDiffSettings { RevisionGranularity = RevisionGranularity.WmlComparerCompatible };
         var passes = new int[CoverageGrid.Length, SlackGrid.Length];
 
         for (int ci = 0; ci < CoverageGrid.Length; ci++)

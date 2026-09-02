@@ -1,5 +1,11 @@
 # Native Move Markup Architecture
 
+> **Historical (v11.0.0).** This document describes `WmlComparer`, the legacy comparison engine,
+> which was removed in v11.0.0. It is kept because it records design decisions and Word-behaviour
+> findings that `DocxDiff` inherited or deliberately diverged from — not because the code still
+> exists. For the shipping engine see `ir_diff_engine.md`; for the parity evidence gathered before
+> removal see `wmlcomparer_parity_baseline/`.
+
 > **Status: IMPLEMENTED** (November 2025)
 
 ## Overview

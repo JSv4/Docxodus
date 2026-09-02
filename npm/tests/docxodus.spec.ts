@@ -560,14 +560,16 @@ test.describe('Docxodus WASM Tests', () => {
         expect(compRevisions.revisions).toBeDefined();
         expect(compRevisions.revisions.length).toBeGreaterThan(0);
 
-        // Verify the revision structure includes move fields (even if null for non-moves)
+        // Verify the revision wire shape. Since v11.0.0 a move is ONE grouped entry rather
+        // than a source/destination pair, so moveGroupId/isMoveSource are gone; every entry
+        // instead carries an addressable id, a family, and a resolution status.
         for (const rev of compRevisions.revisions) {
-          // MoveGroupId and IsMoveSource fields should exist in the response
-          expect('MoveGroupId' in rev || 'moveGroupId' in rev).toBe(true);
-          expect('IsMoveSource' in rev || 'isMoveSource' in rev).toBe(true);
+          expect(typeof rev.id).toBe('string');
+          expect(typeof rev.family).toBe('string');
+          expect(typeof rev.resolutionStatus).toBe('string');
         }
 
-        console.log(`Verified ${compRevisions.revisions.length} revisions have move fields in schema`);
+        console.log(`Verified ${compRevisions.revisions.length} revisions have the expected schema`);
       }
     });
   });

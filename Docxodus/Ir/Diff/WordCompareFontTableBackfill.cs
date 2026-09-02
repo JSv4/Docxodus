@@ -81,15 +81,50 @@ internal static class WordCompareFontTableBackfill
     /// metadata — Word never copies an input fontTable verbatim; it regenerates every declaration from its
     /// installed-font metadata, so a degraded input declaration (family="auto", zeroed panose) must not
     /// survive into the output or LibreOffice substitutes the font differently than it does for Word's
-    /// own compare output.</summary>
-    public static void Backfill(MainDocumentPart main)
+    /// own compare output. Either way the output table is then the UNION with the REVISED document's:
+    /// a font only the right's fontTable declares (a right-side alias like "Times New Roman (Body CS)"
+    /// matches no installed face) is appended verbatim — without its declaration LibreOffice has no
+    /// substitution hint for right-sourced content naming it and falls back to a different-metric family,
+    /// repaginating the rendered output. Word's compare output carries exactly this union.</summary>
+    public static void Backfill(MainDocumentPart main, MainDocumentPart? rightMain = null)
     {
         if (main.FontTablePart is null)
             BackfillFontTable(main);
         else
             NormalizeCarriedFontTable(main.FontTablePart);
+        if (rightMain?.FontTablePart is not null && main.FontTablePart is not null)
+            MergeRightOnlyFonts(main.FontTablePart, rightMain.FontTablePart);
         if (main.WebSettingsPart is null)
             BackfillWebSettings(main);
+    }
+
+    /// <summary>Append every <c>w:font</c> the right's fontTable declares under a name the output's
+    /// table lacks, verbatim minus relationship-backed embedded-font children (their r:ids belong to
+    /// the right package). Existing output declarations always win.</summary>
+    private static void MergeRightOnlyFonts(FontTablePart output, FontTablePart right)
+    {
+        var outDoc = output.GetXDocument();
+        var outRoot = outDoc.Root;
+        var rightRoot = right.GetXDocument().Root;
+        if (outRoot is null || rightRoot is null)
+            return;
+
+        var present = new HashSet<string>(
+            outRoot.Elements(W + "font").Select(f => (string?)f.Attribute(W + "name")).OfType<string>(),
+            StringComparer.Ordinal);
+        var changed = false;
+        foreach (var font in rightRoot.Elements(W + "font"))
+        {
+            var name = (string?)font.Attribute(W + "name");
+            if (string.IsNullOrEmpty(name) || !present.Add(name))
+                continue;
+            var clone = new XElement(font);
+            clone.Elements().Where(e => e.Name.LocalName.StartsWith("embed", StringComparison.Ordinal)).Remove();
+            outRoot.Add(clone);
+            changed = true;
+        }
+        if (changed)
+            output.PutXDocument();
     }
 
     /// <summary>

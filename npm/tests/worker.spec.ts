@@ -344,10 +344,15 @@ test.describe("Docxodus Web Worker Tests", () => {
       expect(result.revisions).toBeDefined();
       expect(result.revisions.length).toBeGreaterThan(0);
 
-      // Check revision structure
+      // Check revision structure. Since v11.0.0 getRevisions returns the session's own
+      // RevisionListEntry shape, whose markup-level kind field is `type` (not `revisionType`),
+      // alongside an addressable id, a grouped family, and a resolution status.
       const firstRevision = result.revisions[0];
+      expect(firstRevision.id).toBeDefined();
       expect(firstRevision.author).toBeDefined();
-      expect(firstRevision.revisionType).toBeDefined();
+      expect(firstRevision.type).toBeDefined();
+      expect(firstRevision.family).toBeDefined();
+      expect(firstRevision.resolutionStatus).toBeDefined();
 
       console.log(`Extracted ${result.revisions.length} revisions`);
     }, { timeout: 60000 });

@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 
 using System;
 using System.IO;
@@ -786,9 +786,15 @@ public class DocxDiffPreserveInputRevisionsTests
     }
 
     [Fact]
-    public void DocxCompare_docxdiff_branch_enables_preserve()
+    public void DocxCompare_front_door_preaccepts_without_preserve()
     {
-        // The engine-selector mapping (CLI/bench path) opts into Word-parity preservation.
-        Assert.True(DocxCompare.ToDocxDiffSettings(new WmlComparerSettings()).PreserveInputRevisions);
+        // The front-door policy (CLI/WASM/bench path) models Word's COMPARE, which treats input
+        // revisions as accepted and re-detects the delta under the compare author ("Word will treat
+        // them as accepted"); preservation is Word's COMBINE behavior and stays an explicit opt-in
+        // on the raw DocxDiff API.
+        var applied = DocxCompare.ApplyFrontDoorRevisionPolicy(null);
+        Assert.True(applied.PreAcceptInputRevisions);
+        Assert.False(applied.PreserveInputRevisions);
+        Assert.False(new DocxDiffSettings().PreserveInputRevisions);
     }
 }

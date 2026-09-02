@@ -36,8 +36,7 @@ import type {
   DocxodusWasmExports,
   ConversionOptions,
   CompareOptions,
-  GetRevisionsOptions,
-  Revision,
+  RevisionListEntry,
   RevisionType,
   DocumentMetadata,
   SectionMetadata,
@@ -48,7 +47,6 @@ import type {
   RedlineReversibilityProof,
   SemanticChangeSet,
 } from "./types.js";
-import { ComparisonEngine } from "./types.js";
 
 // Worker-local state
 let wasmExports: DocxodusWasmExports | null = null;
@@ -365,23 +363,19 @@ function handleCompare(
 
   try {
     let result: Uint8Array;
-    const engine = options?.engine ?? ComparisonEngine.DocxDiff;
 
-    if (options?.detailThreshold !== undefined || options?.caseInsensitive) {
+    if (options?.caseInsensitive) {
       result = exports.DocumentComparer.CompareDocumentsWithOptions(
         request.originalBytes,
         request.modifiedBytes,
         options?.authorName ?? "Docxodus",
-        options?.detailThreshold ?? 0.15,
-        options?.caseInsensitive ?? false,
-        engine
+        options.caseInsensitive
       );
     } else {
       result = exports.DocumentComparer.CompareDocuments(
         request.originalBytes,
         request.modifiedBytes,
-        options?.authorName ?? "Docxodus",
-        engine
+        options?.authorName ?? "Docxodus"
       );
     }
 
@@ -406,14 +400,12 @@ function handleCompareToHtml(
 
   try {
     const renderTrackedChanges = options?.renderTrackedChanges ?? true;
-    const engine = options?.engine ?? ComparisonEngine.DocxDiff;
 
     const result = exports.DocumentComparer.CompareDocumentsToHtmlWithOptions(
       request.originalBytes,
       request.modifiedBytes,
       options?.authorName ?? "Docxodus",
-      renderTrackedChanges,
-      engine
+      renderTrackedChanges
     );
 
     if (isErrorResponse(result)) {
@@ -431,52 +423,17 @@ function handleCompareToHtml(
  */
 function handleGetRevisions(
   request: WorkerGetRevisionsRequest
-): { revisions?: Revision[]; error?: string } {
+): { revisions?: RevisionListEntry[]; error?: string } {
   const exports = ensureInitialized();
-  const options = request.options;
-
   try {
-    const detectMoves = options?.detectMoves ?? true;
-    const moveSimilarityThreshold = options?.moveSimilarityThreshold ?? 0.8;
-    const moveMinimumWordCount = options?.moveMinimumWordCount ?? 3;
-    const caseInsensitive = options?.caseInsensitive ?? false;
-
-    const result = exports.DocumentComparer.GetRevisionsJsonWithOptions(
-      request.documentBytes,
-      detectMoves,
-      moveSimilarityThreshold,
-      moveMinimumWordCount,
-      caseInsensitive
-    );
+    const result = exports.DocumentComparer.GetRevisionsJson(request.documentBytes);
 
     if (isErrorResponse(result)) {
       return parseError(result);
     }
 
-    const parsed = JSON.parse(result);
-    const revisions = (parsed.Revisions || parsed.revisions || []).map(
-      (r: any): Revision => ({
-        author: r.Author || r.author,
-        date: r.Date || r.date,
-        revisionType: r.RevisionType || r.revisionType,
-        text: r.Text || r.text,
-        moveGroupId: r.MoveGroupId ?? r.moveGroupId,
-        isMoveSource: r.IsMoveSource ?? r.isMoveSource,
-        formatChange: r.FormatChange || r.formatChange
-          ? {
-              oldProperties:
-                r.FormatChange?.OldProperties ||
-                r.formatChange?.oldProperties,
-              newProperties:
-                r.FormatChange?.NewProperties ||
-                r.formatChange?.newProperties,
-              changedPropertyNames:
-                r.FormatChange?.ChangedPropertyNames ||
-                r.formatChange?.changedPropertyNames,
-            }
-          : undefined,
-      })
-    );
+    // The payload is the session's own revision wire shape, so it needs no remapping.
+    const revisions = JSON.parse(result) as RevisionListEntry[];
 
     return { revisions };
   } catch (error) {

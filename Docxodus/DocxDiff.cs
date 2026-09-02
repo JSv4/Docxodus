@@ -905,6 +905,13 @@ public sealed class DocxDiffSettings
     public bool CrossParagraphTokenDiff { get; set; } = true;
 
     /// <summary>Map this public settings object onto the internal <c>IrDiffSettings</c>.</summary>
+    /// <summary>
+    /// Shallow copy, so a facade can layer its own policy on top of caller-supplied settings without
+    /// mutating the caller's object (<see cref="DocxCompare.ApplyFrontDoorRevisionPolicy"/>). Shallow is
+    /// correct here: every member is a value type or an immutable/never-mutated reference.
+    /// </summary>
+    internal DocxDiffSettings Clone() => (DocxDiffSettings)MemberwiseClone();
+
     internal IrDiffSettings ToIrDiffSettings()
     {
         // Resolve the revision date: an explicit value always wins; otherwise derive from Deterministic.
