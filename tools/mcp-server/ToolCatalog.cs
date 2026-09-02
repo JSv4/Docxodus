@@ -11,10 +11,15 @@ namespace Docxodus.McpServer;
 internal sealed record ToolDefinition(string Name, string Description, string InputSchemaJson);
 
 /// <summary>
-/// The tool surface this server advertises: three lifecycle tools (open/save/close) plus eighteen
-/// read or grouped-intent tools. Grouped tools accept an <c>action</c> discriminator and
-/// action-specific arguments. See <c>docs/architecture/docx_agent_server.md</c> for the full contract, the
-/// mapping of every action onto the underlying Docxodus API, and the documented capability gaps.
+/// The tool surface this server advertises: three session-lifecycle tools (open/save/close), four
+/// read/preview tools, twelve grouped-intent mutation tools, and three sessionless operations.
+/// Grouped tools accept an <c>action</c> discriminator and action-specific arguments. See
+/// <c>docs/architecture/docx_agent_server.md</c> for the full contract, the mapping of every action
+/// onto the underlying Docxodus API, and the documented capability gaps.
+///
+/// <para>This list is the inventory of record. <c>tools/mcp-server/README.md</c> restates it for
+/// MCP hosts, and <c>McpToolInventoryDocumentationTests</c> holds the two in step, so adding or
+/// removing a definition here fails the build's tests until the README moves with it.</para>
 /// </summary>
 internal static class ToolCatalog
 {
