@@ -5,6 +5,7 @@ using System.Linq;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using Docxodus;
+using Docxodus.Internal;
 using Xunit;
 
 namespace Docxodus.Tests
@@ -168,6 +169,26 @@ namespace Docxodus.Tests
             Assert.Empty(DanglingFragmentTargets(html));
             // The 94 cited footnotes keep their arrows; the orphan gets none.
             Assert.Equal(94, LinksTargeting(html, "#fn-ref-").Count);
+        }
+
+        [Fact]
+        public void AnIncrementalBlockRenderKeepsAMarkerWhoseDefinitionIsOutsideTheFragment()
+        {
+            // The completeness sweep asks "is the target id in this output?", which is only a fair
+            // question of a whole document. The editor's incremental render builds a shell holding
+            // just the requested blocks, so a citing paragraph rendered on its own has no notes
+            // section to point at — and stripping its href there silently removed the citation's
+            // navigation from the live DOM on every keystroke commit.
+            using var session = new DocxSession(DocxSession.CreateBlankDocxBytes());
+            session.ReplaceText(session.ListBlocks().Body[0].Id, "AAA");
+            Assert.True(session.InsertFootnote(session.ListBlocks().Body[0].Id, 3, "A note.").Success);
+
+            var citing = session.ListBlocks().Body[0].Id;
+            var html = HtmlConversionOps.RenderBlockHtml(
+                session, citing, new HtmlConversionOptions { RenderFootnotesAndEndnotes = true });
+
+            Assert.Contains("class=\"footnote-ref\"", html);
+            Assert.Contains("href=\"#fn-", html);
         }
 
         [Fact]

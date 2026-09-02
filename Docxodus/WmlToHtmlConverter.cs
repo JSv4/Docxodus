@@ -299,6 +299,20 @@ namespace Docxodus
         /// </summary>
         internal bool SkipFormattingPartsSimplification;
 
+        /// <summary>
+        /// This conversion covers a FRAGMENT of the package rather than the whole document —
+        /// the incremental block render (<see cref="Internal.HtmlConversionOps"/>) builds a shell
+        /// whose body holds only the cloned blocks the caller asked for.
+        ///
+        /// <para>A cross-reference that leaves the fragment is expected there, not broken: a citing
+        /// paragraph rendered on its own legitimately links to a note definition that is simply not
+        /// in this output. Completeness checks over the finished tree — <see
+        /// cref="RemoveUnresolvableNoteLinks"/> — are therefore skipped, because on a fragment they
+        /// would strip navigation the surrounding document does resolve. Internal-only; the
+        /// full-document render leaves it false. Default: false.</para>
+        /// </summary>
+        internal bool RendersDocumentFragment;
+
         public WmlToHtmlConverterSettings()
         {
             PageTitle = "";
@@ -1040,7 +1054,10 @@ namespace Docxodus
             XElement xhtml = (XElement)ConvertToHtmlTransform(wordDoc, htmlConverterSettings,
                 rootElement, false, 0m)!;
 
-            RemoveUnresolvableNoteLinks(xhtml);
+            // Only a whole-document render can answer "is the target in this output?" — see
+            // RendersDocumentFragment.
+            if (!htmlConverterSettings.RendersDocumentFragment)
+                RemoveUnresolvableNoteLinks(xhtml);
 
             ReifyStylesAndClasses(htmlConverterSettings, xhtml, wordDoc);
 

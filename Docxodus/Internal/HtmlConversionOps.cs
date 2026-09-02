@@ -860,6 +860,10 @@ internal static class HtmlConversionOps
             // python-docx doc) and only strips rsids, which never reach the HTML. Skip it — the
             // resolved formatting, and thus the rendered block, are identical to the full render.
             SkipFormattingPartsSimplification = true,
+            // The shell's body holds only the requested blocks, so a note marker here links to a
+            // definition that is genuinely elsewhere in the package. Without this the converter's
+            // dangling-link sweep would strip the marker's href on every incremental re-render.
+            RendersDocumentFragment = true,
         };
 
     /// <summary>Extract the rendered block (located by its stamped data-anchor) from the full
