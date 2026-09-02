@@ -103,8 +103,17 @@ public class WmlToHtmlConverterFontAltNameTests
         var declarations = AllFontFamilyDeclarations(Convert());
 
         // Calibri has no w:altName. It must keep its plain stack — the generic fallback only —
-        // rather than acquire an invented alternate.
+        // rather than acquire an invented alternate. Asserted as "never followed by another quoted
+        // family", not just "the plain form appears somewhere", so a stray correct occurrence
+        // elsewhere in the stylesheet cannot carry the test.
         Assert.Contains("'Calibri', sans-serif", declarations, StringComparison.Ordinal);
+        var invented = declarations
+            .Split('\n')
+            .Where(line => line.Contains("'Calibri', '", StringComparison.Ordinal))
+            .ToList();
+        Assert.True(
+            invented.Count == 0,
+            "Calibri acquired an alternate it never declared: " + string.Join(" | ", invented.Take(3)));
     }
 
     [Fact]
