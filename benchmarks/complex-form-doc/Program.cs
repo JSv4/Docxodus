@@ -150,6 +150,12 @@ Bench("redline -> HTML with tracked-change markup", () =>
     File.WriteAllText(Path.Combine(outDir, "redline.html"), WmlToHtmlConverter.ToHtmlString(html, indent: false));
 });
 
+Console.WriteLine();
+Console.WriteLine(FailedChecks == 0
+    ? "ALL CHECKS PASSED"
+    : $"{FailedChecks} CHECK(S) FAILED (see [check] lines above)");
+return FailedChecks == 0 ? 0 : 2;
+
 // ---------- helpers ----------
 
 static void Bench(string label, Action act)
