@@ -20,9 +20,36 @@
     <script type="module">
         import { dotnet } from './_framework/dotnet.js';
 
-        const { getAssemblyExports, getConfig } = await dotnet
-            .withDiagnosticTracing(false)
-            .create();
+        // Runtime knobs for the build-configuration specs, opt-in by query string so every
+        // other spec boots exactly what ships:
+        //   ?aotProfile=1 — arm the Mono AOT profiler. Only valid on a profiler build
+        //                   (<WasmProfilers>aot</WasmProfilers>; scripts/record-aot-profile.sh);
+        //                   the runtime throws on a build without it. The profile is emitted
+        //                   when DocumentComparer.Warmup is first compiled — a method the harness
+        //                   never calls on its own — and lands in INTERNAL.aotProfileData.
+        //                   sendTo is spelled out because the runtime's default names a type
+        //                   (Interop/Runtime) the method no longer lives on in .NET 10.
+        //   ?jiterpStats=1 — boot with --jiterpreter-stats-enabled so that
+        //                   INTERNAL.jiterpreter_dump_stats() prints. The jiterpreter reads its
+        //                   options once, at startup, so this cannot be switched on afterwards.
+        const params = new URLSearchParams(location.search);
+        let builder = dotnet.withDiagnosticTracing(false);
+        if (params.get('jiterpStats') === '1') {
+            builder = builder.withRuntimeOptions(['--jiterpreter-stats-enabled']);
+        }
+        if (params.get('aotProfile') === '1') {
+            builder = builder.withConfig({
+                aotProfilerOptions: {
+                    writeAt: 'DocxodusWasm.DocumentComparer::Warmup',
+                    sendTo: 'System.Runtime.InteropServices.JavaScript.JavaScriptExports::DumpAotProfileData',
+                }
+            });
+        }
+        const runtime = await builder.create();
+        const { getAssemblyExports, getConfig } = runtime;
+        // The runtime API object: INTERNAL.jiterpreter_* (wasm-steady-state.spec.ts) and
+        // INTERNAL.aotProfileData (aot-profile-record.spec.ts).
+        window.DocxodusRuntime = runtime;
 
         const config = getConfig();
         const exports = await getAssemblyExports(config.mainAssemblyName);

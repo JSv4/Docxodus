@@ -379,6 +379,26 @@ All notable changes to this project will be documented in this file.
   is housekeeping rather than a fix — but the guard is no longer defeated by its own call site,
   which matters on documents where the index is not small.
 ### Changed
+- **The browser build is 3.5–4.3× faster at steady state: the hot code is now AOT-compiled,
+  guided by a recorded profile** (issue #652). The WASM runtime executes .NET on the Mono
+  interpreter (with the jiterpreter compiling hot traces), and once warm it was still 5–10× slower
+  than the same call in a native process — a compare that takes 17 ms natively took 126 ms in the
+  browser, a 147 KB legal form took 5.9 s to compare and 4.6 s to render, an editor keystroke's
+  re-render took 56 ms. Full AOT would close the gap but compiles ~90k methods into a 48 MB
+  binary (9.7 MB over the wire, 2.6× the payload budget). Instead the build now ships a *profile*:
+  `scripts/record-aot-profile.sh` runs the representative workload — DocxDiff compare, DOCX→HTML,
+  and the editor's per-mutation refresh — in a real browser under the Mono AOT profiler, and the
+  publish compiles only the ~6k methods that workload executes (`profile-only`), leaving everything
+  else on the interpreter. Measured on the same inputs: compare 126 → 30 ms and 5.9 → 1.4 s,
+  render 893 → 235 ms and 4.6 → 1.3 s, editor refresh 56 → 15 ms — within 1.5–2.7× of warm
+  native, and no slower than full AOT. The cost is +1.2 MB brotli (3.6 → 4.8 MB) and +6.8 MB
+  uncompressed (14.7 → 21.2 MB), paid once per cache; the build-time wire budget moves from
+  4 MB to 5 MB accordingly. `npm/tests/wasm-steady-state.spec.ts` is the instrument (it also
+  pins that the jiterpreter is active in the shipped configuration), and the whole Playwright
+  suite ran against the AOT bundle. Two SDK gotchas are recorded in
+  `docs/architecture/wasm-packaging.md`: the documented `AOTProfilePath` property silently
+  yields *full* AOT (use `WasmAotProfilePath`), and the runtime's default profiler hand-off
+  method no longer exists in .NET 10.
 - **The engine selector's compare profile now treats input revisions the way Word's Compare does:
   accepted first, not preserved.** Word's Compare dialog says it outright — "Word will treat them as
   accepted" — and its outputs confirm it: text an input had struck through is absent from the result
