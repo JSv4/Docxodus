@@ -1013,6 +1013,14 @@ namespace Docxodus
                 rootElement.AddAnnotation(themeColorScheme);
             }
 
+            // The font table's declared fallbacks. Annotated onto EVERY story root, not just the
+            // main one: a header's content resolves annotations through its own part root, so
+            // annotating the body alone would silently skip the running stories.
+            var fontAltNames = LoadFontAltNames(wordDoc);
+            rootElement.AddAnnotation(fontAltNames);
+            foreach (var storyRoot in EnumerateStoryRoots(wordDoc))
+                storyRoot.AddAnnotation(fontAltNames);
+
             // Build footnote/endnote numbering tracker for sequential display numbers
             var footnoteTracker = new FootnoteNumberingTracker();
             if (htmlConverterSettings.RenderFootnotesAndEndnotes)
@@ -6679,7 +6687,7 @@ namespace Docxodus
             // Pt.FontName
             var font = (string?) paragraph.Attributes(PtOpenXml.FontName).FirstOrDefault();
             if (font != null)
-                CreateFontCssProperty(font, null, null, style);
+                CreateFontCssProperty(font, null, null, style, paragraph);
 
             DefineFontSize(style, paragraph);
             DefineLineHeight(style, paragraph);
@@ -7348,7 +7356,7 @@ namespace Docxodus
                 {
                     langCode = (string?)rPr.Elements(W.lang).Attributes(W.eastAsia).FirstOrDefault();
                 }
-                CreateFontCssProperty(font, languageType, langCode, style);
+                CreateFontCssProperty(font, languageType, langCode, style, run);
             }
 
             // W.sz
@@ -7509,6 +7517,61 @@ namespace Docxodus
         /// <summary>
         /// Loads the theme color scheme from the document's ThemePart.
         /// </summary>
+        /// <summary>
+        /// The document's own declared fallback for each font family: <c>w:altName</c> from
+        /// <c>word/fontTable.xml</c>, keyed by the family it stands in for.
+        /// </summary>
+        /// <remarks>
+        /// ECMA-376 §17.8.3.1 defines <c>w:altName</c> as the family to use when the primary one is
+        /// not available, and real documents lean on it for names no font vendor ships. The NVCA
+        /// charter declares <c>(normal text)</c> — Word's UI label for the theme font, written into
+        /// numbering as if it were a family — and <c>TimesNewRomanPSMT</c>, a PostScript spelling,
+        /// each with <c>altName="Times New Roman"</c>, plus <c>SimSun</c> → <c>宋体</c>. Emitting only
+        /// the primary name left the renderer asking for families that cannot exist, which
+        /// standalone export reports as <c>font_unavailable</c> (issue #670).
+        /// </remarks>
+        internal sealed class FontAltNames
+        {
+            public Dictionary<string, string> ByFamily { get; } =
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        /// <summary>Root elements of every non-body story the converter renders.</summary>
+        private static IEnumerable<XElement> EnumerateStoryRoots(WordprocessingDocument wordDoc)
+        {
+            var main = wordDoc.MainDocumentPart;
+            if (main is null) yield break;
+            foreach (var header in main.HeaderParts)
+                if (header.GetXDocument().Root is { } root) yield return root;
+            foreach (var footer in main.FooterParts)
+                if (footer.GetXDocument().Root is { } root) yield return root;
+            if (main.FootnotesPart?.GetXDocument().Root is { } footnotes) yield return footnotes;
+            if (main.EndnotesPart?.GetXDocument().Root is { } endnotes) yield return endnotes;
+            if (main.WordprocessingCommentsPart?.GetXDocument().Root is { } comments) yield return comments;
+        }
+
+        private static FontAltNames LoadFontAltNames(WordprocessingDocument wordDoc)
+        {
+            var altNames = new FontAltNames();
+
+            var fontTablePart = wordDoc.MainDocumentPart?.FontTablePart;
+            if (fontTablePart == null)
+                return altNames;
+
+            foreach (var font in fontTablePart.GetXDocument().Root?.Elements(W.font)
+                ?? Enumerable.Empty<XElement>())
+            {
+                var name = (string?)font.Attribute(W.name);
+                var alt = (string?)font.Element(W.altName)?.Attribute(W.val);
+                if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(alt)) continue;
+                // A self-referential entry adds nothing and would duplicate the family in the stack.
+                if (string.Equals(name, alt, StringComparison.OrdinalIgnoreCase)) continue;
+                altNames.ByFamily[name!] = alt!;
+            }
+
+            return altNames;
+        }
+
         private static ThemeColorScheme LoadThemeColorScheme(WordprocessingDocument wordDoc)
         {
             var cache = new ThemeColorScheme();
@@ -9445,12 +9508,20 @@ namespace Docxodus
             { "Lucida Console", @"'{0}', 'monospace'" },
         };
 
-        private static void CreateFontCssProperty(string font, string? languageType, string? langCode, Dictionary<string, string> style)
+        private static void CreateFontCssProperty(string font, string? languageType, string? langCode,
+            Dictionary<string, string> style, XElement owner)
         {
             if (string.IsNullOrEmpty(font))
                 return;
 
             var fontParts = new List<string> { $"'{font}'" };
+
+            // The document's own declared stand-in comes first among the fallbacks: a family the
+            // package itself says to substitute is a better answer than anything inferred from the
+            // name. See FontAltNames.
+            var altNames = owner.AncestorsAndSelf().Last().Annotation<FontAltNames>();
+            if (altNames != null && altNames.ByFamily.TryGetValue(font, out var altName))
+                fontParts.Add($"'{altName}'");
 
             // Add CJK fallback chain for East Asian content
             if (languageType == "eastAsia")
