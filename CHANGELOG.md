@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- `OpenXmlRegex.Match` no longer throws a `NullReferenceException` when called without a callback
+  on PowerPoint/DrawingML content (the `a:p`/`p:p` namespaced path) — it now returns the match
+  count like the Wordprocessing path already did.
+- The `WmlDocument(WmlDocument, params XElement[])` replacement-part constructor now throws a
+  clear `DocxodusException` when a replacement part's `pt:Uri` attribute does not match any part
+  in the package, instead of a `NullReferenceException`.
+
 ## [11.0.0] - 2026-09-01
 
 ### Removed

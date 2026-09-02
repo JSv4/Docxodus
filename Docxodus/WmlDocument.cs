@@ -1,6 +1,3 @@
-// Inherited OpenXmlPowerTools code that predates nullable annotations (issue #13).
-#nullable disable
-
 // Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
@@ -20,17 +17,17 @@ namespace Docxodus
     {
         private WmlDocument ParentWmlDocument;
 
-        public PtWordprocessingCommentsPart WordprocessingCommentsPart
+        public PtWordprocessingCommentsPart? WordprocessingCommentsPart
         {
             get
             {
                 using (MemoryStream ms = new MemoryStream(ParentWmlDocument.DocumentByteArray))
                 using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, false))
                 {
-                    WordprocessingCommentsPart commentsPart = wDoc.MainDocumentPart.WordprocessingCommentsPart;
+                    WordprocessingCommentsPart? commentsPart = wDoc.MainDocumentPart!.WordprocessingCommentsPart;
                     if (commentsPart == null)
                         return null;
-                    XElement partElement = commentsPart.GetXDocument().Root;
+                    XElement partElement = commentsPart.GetXDocument().Root!;
                     var childNodes = partElement.Nodes().ToList();
                     foreach (var item in childNodes)
                         item.Remove();
@@ -74,11 +71,11 @@ namespace Docxodus
                 using (MemoryStream ms = new MemoryStream(this.DocumentByteArray))
                 using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, false))
                 {
-                    XElement partElement = wDoc.MainDocumentPart.GetXDocument().Root;
+                    XElement partElement = wDoc.MainDocumentPart!.GetXDocument().Root!;
                     var childNodes = partElement.Nodes().ToList();
                     foreach (var item in childNodes)
                         item.Remove();
-                    return new PtMainDocumentPart(this, wDoc.MainDocumentPart.Uri, partElement.Name, partElement.Attributes(), childNodes);
+                    return new PtMainDocumentPart(this, wDoc.MainDocumentPart!.Uri, partElement.Name, partElement.Attributes(), childNodes);
                 }
             }
         }
@@ -97,11 +94,13 @@ namespace Docxodus
                 {
                     foreach (var replacementPart in replacementParts)
                     {
-                        XAttribute uriAttribute = replacementPart.Attribute(PtOpenXml.Uri);
+                        XAttribute? uriAttribute = replacementPart.Attribute(PtOpenXml.Uri);
                         if (uriAttribute == null)
                             throw new DocxodusException("Replacement part does not contain a Uri as an attribute");
                         String uri = uriAttribute.Value;
                         var part = package.GetParts().FirstOrDefault(p => p.Uri.ToString() == uri);
+                        if (part == null)
+                            throw new DocxodusException($"Replacement part Uri '{uri}' does not match any part in the package");
                         using (Stream partStream = part.GetStream(FileMode.Create, FileAccess.Write))
                         using (XmlWriter partXmlWriter = XmlWriter.Create(partStream))
                             replacementPart.Save(partXmlWriter);

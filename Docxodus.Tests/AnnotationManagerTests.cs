@@ -334,6 +334,7 @@ namespace Docxodus.Tests
             var htmlString = html.ToString();
 
             // Debug: Check if the bookmark anchor is in HTML
+            Assert.NotNull(retrievedAnnotation.BookmarkName);
             Assert.Contains(retrievedAnnotation.BookmarkName, htmlString);
 
             Assert.Contains("annot-highlight", htmlString);
