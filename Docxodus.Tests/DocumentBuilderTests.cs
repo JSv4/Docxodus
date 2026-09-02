@@ -8,6 +8,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Xml.Linq;
+using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Validation;
 using DocumentFormat.OpenXml.Wordprocessing;
@@ -763,6 +764,67 @@ namespace OxPt
                 var styles = wDoc.MainDocumentPart.StyleDefinitionsPart.GetXDocument().Root.Elements(W.docDefaults).ToArray();
                 Assert.Single(styles);
             }
+        }
+
+        [Fact]
+        public void DB0017_EmbeddedFontTable_FontPartSurvivesMerge()
+        {
+            // Regression test: CopyFontTable located the destination's own already-copied
+            // relationship with Parts.FirstOrDefault(...), whose return type (IdPartPair) is a
+            // struct, then compared the result to null. FirstOrDefault() on a struct sequence
+            // returns default(IdPartPair) on a miss, never null, so "already copied, skip" was
+            // always taken and the actual font-copy logic beneath it was unreachable -
+            // DocumentBuilder never embedded a font, for any source document, ever.
+            byte[] fontBytes = { 1, 2, 3, 4, 5, 6, 7, 8 };
+            WmlDocument source = BuildDocWithEmbeddedFont("hello", "rIdEmbedded1", fontBytes);
+
+            List<Source> sources = new List<Source>()
+            {
+                new Source(source, true),
+            };
+            WmlDocument result = DocumentBuilder.BuildDocument(sources);
+
+            using (var stream = new MemoryStream(result.DocumentByteArray))
+            using (WordprocessingDocument wDoc = WordprocessingDocument.Open(stream, false))
+            {
+                var fontTablePart = wDoc.MainDocumentPart!.FontTablePart;
+                Assert.NotNull(fontTablePart);
+                var fontPart = fontTablePart.FontParts.SingleOrDefault();
+                Assert.NotNull(fontPart);
+                using (var fontStream = fontPart.GetStream())
+                using (var ms = new MemoryStream())
+                {
+                    fontStream.CopyTo(ms);
+                    Assert.Equal(fontBytes, ms.ToArray());
+                }
+            }
+        }
+
+        private static WmlDocument BuildDocWithEmbeddedFont(string text, string relId, byte[] fontBytes)
+        {
+            using var stream = new MemoryStream();
+            using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+            {
+                var main = doc.AddMainDocumentPart();
+                main.Document = new Document(new Body(new Paragraph(new Run(new Text(text)))));
+                var fontTable = main.AddNewPart<FontTablePart>();
+                var fontPart = fontTable.AddFontPart("application/x-font-ttf", relId);
+                using (var fontStream = fontPart.GetStream(FileMode.Create))
+                    fontStream.Write(fontBytes, 0, fontBytes.Length);
+                using (var writer = new StreamWriter(fontTable.GetStream(FileMode.Create)))
+                {
+                    writer.Write(
+                        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
+                        "<w:fonts xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" " +
+                        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">" +
+                        "<w:font w:name=\"Custom Embedded Font\">" +
+                        $"<w:embedRegular r:id=\"{relId}\"/>" +
+                        "</w:font>" +
+                        "</w:fonts>");
+                }
+                doc.Save();
+            }
+            return new WmlDocument("embedded-font.docx", stream.ToArray());
         }
 
         [Theory]

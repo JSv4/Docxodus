@@ -27,9 +27,9 @@ nullable-checked by default, so a new file needs no directive. The inherited
 OpenXmlPowerTools core has fully migrated (issue #645): no file under `Docxodus/`
 carries a `#nullable disable` header anymore. `grep -l "^#nullable disable" Docxodus/*.cs`
 should return nothing — reintroducing the header on a new or refactored file is a
-regression, not a shortcut. `CS8632` still sits in the project's `NoWarn` list; issue
-#651 tracks retiring it now that no opted-out file needs the inert `?` annotations it
-was covering.
+regression, not a shortcut. `Docxodus.csproj` no longer has a `NoWarn` property at all
+(issue #651) — `CS8632`, `CS8073` and `CA2200` are gone along with the last opted-out
+file that could fire them.
 
 ### Warnings
 
