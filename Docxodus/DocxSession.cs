@@ -6601,6 +6601,9 @@ public sealed partial class DocxSession : IDisposable
                 // Serialize every projected part, even one with no Unid. This makes normal saves
                 // deterministic across a package checkpoint reopen (and also guarantees cached
                 // settings/story edits are never skipped merely because that part has no anchor).
+                // Rewriting a part is not the same as CHANGING it: PutXDocument preserves the
+                // part's byte-order-mark convention, so a part whose XML did not change comes back
+                // byte-identical (issue #668).
                 part.PutXDocument();
             }
             _doc!.Save();
