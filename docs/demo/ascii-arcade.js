@@ -1609,12 +1609,45 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
     }
   }
 
+  /** The data URI the editor will emit for a frame's media: the converter
+   *  base64-encodes the package part verbatim, so this is the same string. */
+  function dataUrlOf(bytes, mime = 'image/png') {
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    }
+    return `data:${mime};base64,${btoa(binary)}`;
+  }
+
+  /** Load and decode a frame's image, as the exact data URI the editor will
+   *  render for it, BEFORE the document is touched.
+   *
+   *  The editor patches the new source onto the <img> already on screen rather
+   *  than swapping the element, and Chromium and Firefox then keep the previous
+   *  frame up until the new one is ready. WebKit does not: it paints the box
+   *  empty for any frame in which a changed source is still decoding, which at
+   *  game frame rate is a white strobe. Warming the same URI first puts it in
+   *  the image cache, so the editor's element completes synchronously and the
+   *  screen never shows a gap. A decode failure is not fatal — the element
+   *  loads the source itself, exactly as before. */
+  function prewarmImage(frame) {
+    const url = frame.imageDataUrl ?? dataUrlOf(frame.imageBytes);
+    const probe = new Image();
+    probe.src = url;
+    return typeof probe.decode === 'function' ? probe.decode().catch(() => {}) : Promise.resolve();
+  }
+
   function loop() {
     if (!playing) return;
     const started = performance.now();
     const dt = Math.min(0.2, (started - lastWall) / 1000);
     lastWall = started;
-    let image = null;
+    const halt = (e) => {
+      playing = false;
+      ui.stats.textContent = 'halted: ' + e.message;
+      throw e;
+    };
+    let pendingPaint = null;
     try {
       if (mode === 'intro') {
         introT += dt;
@@ -1628,30 +1661,38 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
       } else {
         cart.tick(dt, input);
         input.endTick();
-        image = drawFrame();
+        const frame = cart.render();
+        // A native-image frame is decoded before it enters the document (see
+        // prewarmImage); text frames paint synchronously as they always have.
+        if (frame.imageBytes) pendingPaint = prewarmImage(frame).then(() => paintImage(frame, cart.label));
+        else paintGrid(frame, cart.label);
       }
     } catch (e) {
-      playing = false;
-      ui.stats.textContent = 'halted: ' + e.message;
-      throw e;
+      halt(e);
     }
-    const delay = Math.max(0, interval - (performance.now() - started));
-    const schedule = () => {
-      if (!playing) return;
-      timer = setTimeout(loop, delay);
+    const finish = (image) => {
+      const delay = Math.max(0, interval - (performance.now() - started));
+      const schedule = () => {
+        if (!playing) return;
+        timer = setTimeout(loop, delay);
+      };
+      // The refresh is complete but image decode/presentation is asynchronous,
+      // and `complete` is false while a patched source is still pending. Never
+      // write the next frame before the browser has decoded this one and
+      // offered it to a paint frame; this makes the displayed FPS equal the
+      // document FPS rather than flooding the element with intermediate
+      // sources no player can see. (After prewarmImage this is normally an
+      // immediate cache hit, and the wait costs one animation frame.)
+      if (image instanceof HTMLImageElement) {
+        const afterDecode = () => requestAnimationFrame(schedule);
+        if (image.complete && image.naturalWidth > 0) afterDecode();
+        else image.decode().catch(() => {}).then(afterDecode);
+      } else {
+        schedule();
+      }
     };
-    // Replacing a data-URI <img> is a completed document refresh but image
-    // decode/presentation is asynchronous. Never overwrite one native image
-    // with the next before the browser has decoded it and offered it to a
-    // paint frame; this makes the displayed FPS equal the document FPS rather
-    // than flooding the DOM with intermediate sources no player can see.
-    if (image instanceof HTMLImageElement) {
-      const afterDecode = () => requestAnimationFrame(schedule);
-      if (image.complete && image.naturalWidth > 0) afterDecode();
-      else image.decode().catch(() => {}).then(afterDecode);
-    } else {
-      schedule();
-    }
+    if (pendingPaint) pendingPaint.then(finish, halt);
+    else finish(null);
   }
 
   /** Re-read the game world from the document. Called on every resume: the

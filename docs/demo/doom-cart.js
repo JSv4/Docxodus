@@ -764,10 +764,15 @@ export function doomCart(options = {}) {
       rgba[i] = fb[i + 2]; rgba[i + 1] = fb[i + 1]; rgba[i + 2] = fb[i]; rgba[i + 3] = 255;
     }
     imageContext.putImageData(imageData, 0, 0);
-    const binary = atob(imageCanvas.toDataURL('image/png').split(',')[1]);
+    // The canvas hands the PNG over as a data URI already. Keep that string
+    // next to the bytes: it is exactly what the editor will render for this
+    // media, and the arcade decodes it ahead of the document refresh so WebKit
+    // never paints the frame's box empty while the new source is pending.
+    const dataUrl = imageCanvas.toDataURL('image/png');
+    const binary = atob(dataUrl.split(',')[1]);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return bytes;
+    return { bytes, dataUrl };
   }
 
   function begin() {
@@ -833,8 +838,10 @@ export function doomCart(options = {}) {
   function render() {
     if (status === 'playing' && handle) {
       paintedFrames++;
+      const png = framebufferPng(handle.framebuffer);
       return {
-        imageBytes: framebufferPng(handle.framebuffer),
+        imageBytes: png.bytes,
+        imageDataUrl: png.dataUrl,
         imageOptions: {
           widthPoints: 451,
           heightPoints: 338.25,

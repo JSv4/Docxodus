@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Editor: replacing an image no longer flashes white in Firefox and Safari.** When a block's
+  fresh render differed from its live DOM node only in `<img>` attributes — a host replacing an
+  image's media through the session, most visibly the arcade's Doom cartridge writing a new
+  framebuffer PNG every frame — the incremental reconciler swapped the whole paragraph node.
+  Firefox and WebKit paint a freshly inserted `<img>` as an empty box until its data URI is
+  decoded, so every frame strobed white before it landed (Chromium finishes the load before it
+  paints, which is why the strobe was engine-specific). The reconciler now proves the delta is
+  image-only and patches `src` (and any other attribute) on the `<img>` already on screen, which
+  keeps the previous bitmap visible until the new one is ready in Chromium and Firefox. WebKit
+  additionally paints the box empty while a changed source is still decoding, so the arcade now
+  decodes each frame's data URI in a detached `Image` before it calls `refresh()`, which makes
+  the patched element complete synchronously from the image cache (the cartridge hands the
+  arcade the canvas's own data URI alongside the PNG bytes). Unchanged blocks, wrappers and
+  everything else keep the existing swap path.
+
 ## [11.0.0] - 2026-09-01
 
 ### Removed
