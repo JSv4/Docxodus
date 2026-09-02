@@ -39,6 +39,20 @@ jobs:
           dotnet build tools/docx2html/docx2html.csproj -c Release --no-restore
           dotnet build tools/docx2oc/docx2oc.csproj -c Release --no-restore
 
+      # These projects are deliberately outside Docxodus.sln, so nothing else compiles
+      # them. Without this step a breaking change to the library rots them silently
+      # (issue #662: the benchmark harness sat un-buildable on main for a week).
+      - name: Build out-of-solution tools and benchmarks
+        run: |
+          dotnet build benchmarks/complex-form-doc/ComplexFormBenchmark.csproj -c Release
+          dotnet build benchmarks/docxdiff-stress/DocxDiffStress.csproj -c Release
+          dotnet build tools/delivery/delivery.csproj -c Release
+          dotnet build tools/diffharness/diffharness.csproj -c Release
+          dotnet build tools/manifest-fuzz/afl/aflharness.csproj -c Release
+          dotnet build tools/manifest-fuzz/fuzzer/fuzzer.csproj -c Release
+          dotnet build tools/manifest-fuzz/replay/replay.csproj -c Release
+          dotnet build tools/screenshots/redline/redline-screenshot.csproj -c Release
+
       - name: Run tests
         env:
           DOCXODUS_EVAL_ARTIFACTS: ${{ github.workspace }}/eval-artifacts
