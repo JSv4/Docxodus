@@ -32,6 +32,13 @@ All notable changes to this project will be documented in this file.
   the patched element complete synchronously from the image cache (the cartridge hands the
   arcade the canvas's own data URI alongside the PNG bytes). Unchanged blocks, wrappers and
   everything else keep the existing swap path.
+- The Freedoom autopilot test (`npm/tests/demo-arcade-freedoom.spec.ts`) no longer fails on a
+  loaded CI runner. Its wait for the first pickup was budgeted in wall-clock seconds, but the
+  autopilot's journey costs a fixed number of rendered frames — so a machine rendering ~6 frames a
+  second instead of ~22 ran out of clock with the autopilot alive, planning, and still closing on
+  its target. The wait is now budgeted in frames, and the flight recorder tracks the BFS path
+  length so a slow run is distinguishable from a stuck one at a glance.
+
 - `WmlToHtmlConverter` no longer emits a return-arrow hyperlink for a footnote or endnote
   definition that no story cites. Word keeps such orphaned definitions and the converter still
   renders them for package fidelity, but the arrow used to target an id nothing had emitted, so
