@@ -6,6 +6,13 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- The Freedoom autopilot test (`npm/tests/demo-arcade-freedoom.spec.ts`) no longer fails on a
+  loaded CI runner. Its wait for the first pickup was budgeted in wall-clock seconds, but the
+  autopilot's journey costs a fixed number of rendered frames — so a machine rendering ~6 frames a
+  second instead of ~22 ran out of clock with the autopilot alive, planning, and still closing on
+  its target. The wait is now budgeted in frames, and the flight recorder tracks the BFS path
+  length so a slow run is distinguishable from a stuck one at a glance.
+
 - The complex-form benchmark harness (`benchmarks/complex-form-doc`) compiles again. Removing the
   legacy comparison engine deleted the harness's terminal summary along with its legacy stage,
   leaving the `int`-returning entry point with a path that never returned (`CS0161`). The summary
