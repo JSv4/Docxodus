@@ -96,7 +96,9 @@ public class DocxCompareTests
         // returns the source bytes unchanged, same validation error), so the guard bought nothing but a
         // full comparison and went with the engine that motivated it. This pins the honest replacement
         // behavior: the shortcut is taken, and invalid input survives rather than being silently
-        // rewritten. Repairing it is tracked as issue #642.
+        // rewritten. Issue #642 settled that as the deliberate position — see "Office Math: revision
+        // wrappers nested inside m:r" in docs/ooxml_corner_cases.md for the reasoning and for where a
+        // repair would belong if a consumer is ever found that needs one.
         var source = new WmlDocument(Path.GetFullPath(Path.Combine(
             "../../../../TestFiles", "WC", "WC012-Math-After.docx")));
         var samePackage = new WmlDocument(source);

@@ -988,6 +988,73 @@ single author; the leak when the flag is off.
 
 ---
 
+## Office Math: revision wrappers nested inside `m:r` are invalid, and Docxodus preserves them
+
+**Status:** Deliberate — not repaired (decided 2026-09-02, issue #642)
+
+### The behavior
+
+A small set of older Word documents place a tracked-revision wrapper (`w:ins`/`w:del`) *directly
+inside* an Office Math run, as `m:r`'s child. The schema does not allow it: `m:r`'s content model
+is `m:rPr?`, `w:rPr?`, then the text elements, and revision marking on a math run belongs inside
+`w:rPr`. `OpenXmlValidator` reports exactly one finding per occurrence:
+
+```text
+[Schema] The element has invalid child element 'w:ins'.
+  List of possible elements expected: <m:rPr>.
+  path: /w:document[1]/w:body[1]/w:p[2]/m:oMathPara[1]/m:oMath[1]/m:r[2]
+```
+
+### Minimal reproducer
+
+`TestFiles/WC/WC012-Math-After.docx` carries the shape verbatim:
+
+```xml
+<m:r>
+  <w:ins w:id="0" w:author="Eric White" w:date="2016-04-21T19:17:00Z">
+    <w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr>
+    <m:t>2</m:t>
+  </w:ins>
+</m:r>
+```
+
+### Consumer comparison
+
+| Consumer | Result |
+|---|---|
+| `OpenXmlValidator` | 1 schema finding |
+| LibreOffice 25.8 | loads and renders the document without complaint |
+| `DocxDiff` / `DocxCompare` | returns the input's bytes unchanged, finding included |
+| `WmlComparer` (removed in v11.0.0) | emitted a repaired package — 0 findings, different bytes |
+
+### The decision
+
+**Docxodus preserves the shape rather than rewriting it.** Repairing it would mean silently
+changing bytes a caller did not ask us to change, in a package that no consumer we can test is
+actually choking on. `WmlComparer` did repair it, but only as a side effect of rebuilding the whole
+document from its own model — the same whole-package reserialization that made it drop content
+elsewhere (it also took this document's validator findings from 80 to 29 on unrelated markup). That
+is not a property worth reconstructing deliberately.
+
+The consequence is stated rather than implicit: an invalid input stays invalid on the way out, and
+Docxodus is not a document-repair tool. A caller that needs the shape normalized should validate its
+inputs before feeding them in. If a consumer is ever found that genuinely fails on this markup, the
+right home for a repair is `StrictOoxmlNormalizer`, so every entry point benefits rather than only
+comparison.
+
+This also explains why `DocxCompare.CanReturnExactNoOp` is now plain byte equality. Through v10 it
+deliberately refused the exact-clone shortcut for this shape, so the document would be routed
+through the repairing legacy path instead. With no engine repairing it, that guard only bought a
+full comparison that returned the same bytes and the same finding.
+
+### Tests
+
+`Docxodus.Tests/DocxCompareTests.cs` —
+`ByteIdenticalMalformedMathRevision_PassesThroughUnrepaired` pins the behavior: the shortcut is
+taken, and the schema finding survives on both sides.
+
+---
+
 ## Headers/footers: a first/even part can outlive its `w:titlePg` / `w:evenAndOddHeaders` flag
 
 ### The behavior
