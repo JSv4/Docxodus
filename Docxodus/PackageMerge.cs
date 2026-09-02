@@ -1,15 +1,10 @@
-#nullable disable
-
 // Package-merge plumbing extracted verbatim from the removed WmlComparer (v11.0.0). These helpers
 // copy styles, numbering definitions and related package parts BETWEEN two packages; none of them
 // compare anything. DocxDiff's markup renderers have always called them, so they outlive the
 // comparison engine they happened to live inside.
-//
-// Carried over unchanged, #nullable disable included: this is a MOVE, so that a regression here can
-// only come from a later edit, never from the extraction. Removing the header is a separate change
-// (see the nullable-debt note in CLAUDE.md).
 
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -40,25 +35,24 @@ internal static class PackageMerge
 
         internal static void CopyMissingStylesFromOneDocToAnother(WordprocessingDocument wDocFrom, WordprocessingDocument wDocTo)
         {
-            var revisionsStylesXDoc = wDocTo.MainDocumentPart.StyleDefinitionsPart.GetXDocument();
-            var afterStylesXDoc = wDocFrom.MainDocumentPart.StyleDefinitionsPart.GetXDocument();
-            foreach (var style in afterStylesXDoc.Root.Elements(W.style))
+            var revisionsStylesXDoc = wDocTo.MainDocumentPart!.StyleDefinitionsPart!.GetXDocument();
+            var afterStylesXDoc = wDocFrom.MainDocumentPart!.StyleDefinitionsPart!.GetXDocument();
+            foreach (var style in afterStylesXDoc.Root!.Elements(W.style))
             {
-                var type = (string)style.Attribute(W.type);
-                var styleId = (string)style.Attribute(W.styleId);
+                var type = (string?)style.Attribute(W.type);
+                var styleId = (string?)style.Attribute(W.styleId);
                 var styleInRevDoc = revisionsStylesXDoc
-                    .Root
+                    .Root!
                     .Elements(W.style)
-                    .FirstOrDefault(st => (string)st.Attribute(W.type) == type &&
-                                          (string)st.Attribute(W.styleId) == styleId);
+                    .FirstOrDefault(st => (string?)st.Attribute(W.type) == type &&
+                                          (string?)st.Attribute(W.styleId) == styleId);
                 if (styleInRevDoc != null)
                     continue;
                 var cloned = new XElement(style);
-                if (cloned.Attribute(W._default) != null)
-                    cloned.Attribute(W._default).Remove();
-                revisionsStylesXDoc.Root.Add(cloned);
+                cloned.Attribute(W._default)?.Remove();
+                revisionsStylesXDoc.Root!.Add(cloned);
             }
-            wDocTo.MainDocumentPart.StyleDefinitionsPart.PutXDocument();
+            wDocTo.MainDocumentPart!.StyleDefinitionsPart!.PutXDocument();
         }
 
         /// <summary>
@@ -85,15 +79,15 @@ internal static class PackageMerge
         /// <paramref name="alignedNumIdPairs"/> keeps the legacy content-dedup behavior for the
         /// WmlComparer and Consolidate call sites.</para></summary>
         internal static Dictionary<int, int> CopyMissingNumberingFromOneDocToAnother(WordprocessingDocument wDocFrom, WordprocessingDocument wDocTo,
-            IReadOnlyCollection<(int FromNumId, int ToNumId)> alignedNumIdPairs = null,
-            IReadOnlySet<int> usedFromNumIds = null)
+            IReadOnlyCollection<(int FromNumId, int ToNumId)>? alignedNumIdPairs = null,
+            IReadOnlySet<int>? usedFromNumIds = null)
         {
             var numIdMap = new Dictionary<int, int>();
-            var fromNumberingPart = wDocFrom.MainDocumentPart.NumberingDefinitionsPart;
+            var fromNumberingPart = wDocFrom.MainDocumentPart!.NumberingDefinitionsPart;
             if (fromNumberingPart == null)
                 return numIdMap;
 
-            var toNumberingPart = wDocTo.MainDocumentPart.NumberingDefinitionsPart;
+            var toNumberingPart = wDocTo.MainDocumentPart!.NumberingDefinitionsPart;
             XDocument toNumberingXDoc;
 
             if (toNumberingPart == null)
@@ -124,13 +118,13 @@ internal static class PackageMerge
             }
 
             // Find the maximum IDs in the destination document to avoid conflicts
-            int maxAbstractNumId = toNumberingXDoc.Root
+            int maxAbstractNumId = toNumberingXDoc.Root!
                 .Elements(W.abstractNum)
                 .Select(e => (int?)e.Attribute(W.abstractNumId) ?? 0)
                 .DefaultIfEmpty(0)
                 .Max();
 
-            int maxNumId = toNumberingXDoc.Root
+            int maxNumId = toNumberingXDoc.Root!
                 .Elements(W.num)
                 .Select(e => (int?)e.Attribute(W.numId) ?? 0)
                 .DefaultIfEmpty(0)
@@ -140,7 +134,7 @@ internal static class PackageMerge
             var abstractNumIdMap = new Dictionary<int, int>();
 
             // Copy abstractNum elements, reusing existing definitions with matching content
-            foreach (var abstractNum in fromNumberingXDoc.Root.Elements(W.abstractNum))
+            foreach (var abstractNum in fromNumberingXDoc.Root!.Elements(W.abstractNum))
             {
                 var fromAbstractNumId = GetIntAttribute(abstractNum, W.abstractNumId);
                 if (fromAbstractNumId == null)
@@ -149,7 +143,7 @@ internal static class PackageMerge
                 var normalizedFrom = NormalizeAbstractNumForComparison(abstractNum);
 
                 // First, check if ANY existing abstractNum has matching content (regardless of ID)
-                var matchingByContent = toNumberingXDoc.Root
+                var matchingByContent = toNumberingXDoc.Root!
                     .Elements(W.abstractNum)
                     .FirstOrDefault(e => XNode.DeepEquals(NormalizeAbstractNumForComparison(e), normalizedFrom));
 
@@ -165,7 +159,7 @@ internal static class PackageMerge
                 }
 
                 // No matching content found - check if the ID is already taken
-                var existingWithSameId = toNumberingXDoc.Root
+                var existingWithSameId = toNumberingXDoc.Root!
                     .Elements(W.abstractNum)
                     .FirstOrDefault(e => GetIntAttribute(e, W.abstractNumId) == fromAbstractNumId);
 
@@ -186,11 +180,11 @@ internal static class PackageMerge
                 cloned.SetAttributeValue(W.abstractNumId, targetId);
                 abstractNumIdMap[fromAbstractNumId.Value] = targetId;
 
-                WordprocessingMLUtil.InsertNumberingChildInOrder(toNumberingXDoc.Root, cloned);
+                WordprocessingMLUtil.InsertNumberingChildInOrder(toNumberingXDoc.Root!, cloned);
             }
 
             // Copy num elements that don't exist in destination
-            foreach (var num in fromNumberingXDoc.Root.Elements(W.num))
+            foreach (var num in fromNumberingXDoc.Root!.Elements(W.num))
             {
                 var fromNumId = GetIntAttribute(num, W.numId);
                 var fromAbstractNumIdRef = GetIntAttribute(num.Element(W.abstractNumId), W.val);
@@ -202,7 +196,7 @@ internal static class PackageMerge
                     ? mapped
                     : fromAbstractNumIdRef.Value;
 
-                var existingNum = toNumberingXDoc.Root
+                var existingNum = toNumberingXDoc.Root!
                     .Elements(W.num)
                     .FirstOrDefault(e => GetIntAttribute(e, W.numId) == fromNumId);
 
@@ -223,7 +217,7 @@ internal static class PackageMerge
                     var abstractNumIdElement = cloned.Element(W.abstractNumId);
                     if (abstractNumIdElement != null)
                         abstractNumIdElement.SetAttributeValue(W.val, mappedAbstractNumId);
-                    WordprocessingMLUtil.InsertNumberingChildInOrder(toNumberingXDoc.Root, cloned);
+                    WordprocessingMLUtil.InsertNumberingChildInOrder(toNumberingXDoc.Root!, cloned);
                     numIdMap[fromNumId.Value] = maxNumId;
                 }
                 else
@@ -236,7 +230,7 @@ internal static class PackageMerge
                         if (abstractNumIdElement != null)
                             abstractNumIdElement.SetAttributeValue(W.val, mappedAbstractNumId);
                     }
-                    WordprocessingMLUtil.InsertNumberingChildInOrder(toNumberingXDoc.Root, cloned);
+                    WordprocessingMLUtil.InsertNumberingChildInOrder(toNumberingXDoc.Root!, cloned);
                 }
             }
 
@@ -269,31 +263,31 @@ internal static class PackageMerge
         private static Dictionary<int, int> CopyNumberingPreservingListIdentity(
             XDocument fromNumberingXDoc, XDocument toNumberingXDoc,
             IReadOnlyCollection<(int FromNumId, int ToNumId)> alignedNumIdPairs,
-            IReadOnlySet<int> usedFromNumIds)
+            IReadOnlySet<int>? usedFromNumIds)
         {
             var numIdMap = new Dictionary<int, int>();
 
             // Seed the id high-water marks with BOTH sides' maxima so a freshly-allocated id can
             // never collide with a source id processed later in the loop.
-            int maxAbstractNumId = toNumberingXDoc.Root
+            int maxAbstractNumId = toNumberingXDoc.Root!
                 .Elements(W.abstractNum)
-                .Concat(fromNumberingXDoc.Root.Elements(W.abstractNum))
+                .Concat(fromNumberingXDoc.Root!.Elements(W.abstractNum))
                 .Select(e => (int?)e.Attribute(W.abstractNumId) ?? 0)
                 .DefaultIfEmpty(0)
                 .Max();
 
-            int maxNumId = toNumberingXDoc.Root
+            int maxNumId = toNumberingXDoc.Root!
                 .Elements(W.num)
-                .Concat(fromNumberingXDoc.Root.Elements(W.num))
+                .Concat(fromNumberingXDoc.Root!.Elements(W.num))
                 .Select(e => (int?)e.Attribute(W.numId) ?? 0)
                 .DefaultIfEmpty(0)
                 .Max();
 
-            static XElement FindAbstract(XDocument numberingXDoc, int id) => numberingXDoc.Root
+            static XElement? FindAbstract(XDocument numberingXDoc, int id) => numberingXDoc.Root!
                 .Elements(W.abstractNum)
                 .FirstOrDefault(e => GetIntAttribute(e, W.abstractNumId) == id);
 
-            static XElement FindNum(XDocument numberingXDoc, int id) => numberingXDoc.Root
+            static XElement? FindNum(XDocument numberingXDoc, int id) => numberingXDoc.Root!
                 .Elements(W.num)
                 .FirstOrDefault(e => GetIntAttribute(e, W.numId) == id);
 
@@ -313,7 +307,7 @@ internal static class PackageMerge
                 if (allowContentDedup)
                 {
                     var normalized = NormalizeAbstractNumForComparison(fromAbstract);
-                    var matchingByContent = toNumberingXDoc.Root
+                    var matchingByContent = toNumberingXDoc.Root!
                         .Elements(W.abstractNum)
                         .FirstOrDefault(e => XNode.DeepEquals(NormalizeAbstractNumForComparison(e), normalized));
                     var matchingId = matchingByContent == null
@@ -331,12 +325,12 @@ internal static class PackageMerge
                     : ++maxAbstractNumId;
                 var clonedAbstract = new XElement(fromAbstract);
                 clonedAbstract.SetAttributeValue(W.abstractNumId, targetId);
-                WordprocessingMLUtil.InsertNumberingChildInOrder(toNumberingXDoc.Root, clonedAbstract);
+                WordprocessingMLUtil.InsertNumberingChildInOrder(toNumberingXDoc.Root!, clonedAbstract);
                 cache[fromAbstractId] = targetId;
                 return targetId;
             }
 
-            foreach (var num in fromNumberingXDoc.Root.Elements(W.num).ToList())
+            foreach (var num in fromNumberingXDoc.Root!.Elements(W.num).ToList())
             {
                 var fromNumId = GetIntAttribute(num, W.numId);
                 var fromAbstractRef = GetIntAttribute(num.Element(W.abstractNumId), W.val);
@@ -410,7 +404,7 @@ internal static class PackageMerge
                 var abstractNumIdElement = clonedNum.Element(W.abstractNumId);
                 if (abstractNumIdElement != null)
                     abstractNumIdElement.SetAttributeValue(W.val, targetAbstractId);
-                WordprocessingMLUtil.InsertNumberingChildInOrder(toNumberingXDoc.Root, clonedNum);
+                WordprocessingMLUtil.InsertNumberingChildInOrder(toNumberingXDoc.Root!, clonedNum);
             }
 
             return numIdMap;
@@ -419,7 +413,7 @@ internal static class PackageMerge
         /// <summary>
         /// Safely extracts an integer value from an XAttribute.
         /// </summary>
-        private static int? GetIntAttribute(XElement element, XName attributeName)
+        private static int? GetIntAttribute(XElement? element, XName attributeName)
         {
             if (element == null)
                 return null;
@@ -481,7 +475,7 @@ internal static class PackageMerge
 
             public bool TryGetDestination(
                 PackagePart sourcePart, PackagePart sourceOwner, PackageRelationship sourceRelationship,
-                out PackagePart destinationPart) =>
+                [NotNullWhen(true)] out PackagePart? destinationPart) =>
                 _destinationsBySourceKey.TryGetValue(
                     GetKey(sourcePart, sourceOwner, sourceRelationship), out destinationPart);
 
@@ -654,7 +648,7 @@ internal static class PackageMerge
         }
 
         private static bool TryGetInternalTargetPart(
-            PackagePart sourceOwner, PackageRelationship relationship, out PackagePart targetPart)
+            PackagePart sourceOwner, PackageRelationship relationship, [NotNullWhen(true)] out PackagePart? targetPart)
         {
             try
             {
@@ -755,7 +749,7 @@ internal static class PackageMerge
             bool changed = false;
             foreach (var ext in dataXDoc.Descendants(dsp + "dataModelExt").ToList())
             {
-                var relId = (string)ext.Attribute("relId");
+                var relId = (string?)ext.Attribute("relId");
                 if (string.IsNullOrEmpty(relId) || !topLevelSourcePart.RelationshipExists(relId))
                     continue;
                 var rel = topLevelSourcePart.GetRelationship(relId);
