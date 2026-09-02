@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Documented, as a deliberate position rather than an accident, that Docxodus preserves
+  schema-invalid tracked-revision markup nested inside an Office Math run (`w:ins`/`w:del` as a
+  direct child of `m:r`) instead of silently rewriting it. `WmlComparer` repaired that shape as a
+  side effect of rebuilding the whole package — the same reserialization that made it drop content
+  elsewhere — and nothing replaced the repair when the engine was removed in v11.0.0. No consumer
+  we can test fails on the shape: LibreOffice renders it, and the only symptom is one validator
+  finding the input already carried. See "Office Math: revision wrappers nested inside `m:r`" in
+  `docs/ooxml_corner_cases.md` for the reasoning and for where a repair would belong if one is ever
+  warranted.
+
 ### Fixed
 
 - The complex-form benchmark harness (`benchmarks/complex-form-doc`) compiles again. Removing the
