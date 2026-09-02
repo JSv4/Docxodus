@@ -8,6 +8,9 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Xml.Linq;
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
 using Docxodus;
 using Xunit;
 
@@ -68,6 +71,39 @@ namespace OxPt
 
             Assert.NotNull(metrics);
             Assert.Equal("", (string?)metrics.Attribute(H.FileName));
+        }
+
+        [Fact]
+        public void MG003_ReferenceToNullImage_DanglingBlipRelationship_IsCounted()
+        {
+            // Regression test: ValidateImageExists located the referenced part with
+            // Parts.FirstOrDefault(...), whose return type (IdPartPair) is a struct, then
+            // compared the result to null. FirstOrDefault() on a struct sequence returns
+            // default(IdPartPair) on a miss, never null, so the comparison was always false
+            // and ReferenceToNullImage could never be incremented, even for a document with a
+            // genuinely dangling image relationship.
+            XNamespace a = "http://schemas.openxmlformats.org/drawingml/2006/main";
+            XNamespace r = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+            using var stream = new MemoryStream();
+            using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+            {
+                var mainPart = doc.AddMainDocumentPart();
+                mainPart.Document = new Document(new Body(new Paragraph(new Run(new Text("hello")))));
+                doc.Save();
+
+                var xDoc = mainPart.GetXDocument();
+                xDoc.Root!.Element(W.body)!.Add(
+                    new XElement(a + "blip", new XAttribute(r + "embed", "rIdDoesNotExist")));
+                mainPart.PutXDocument();
+            }
+
+            WmlDocument wmlDocument = new WmlDocument("dangling-image.docx", stream.ToArray());
+            XElement metrics = MetricsGetter.GetDocxMetrics(wmlDocument, new MetricsGetterSettings());
+
+            XElement? referenceToNullImage = metrics.Descendants(H.ReferenceToNullImage).FirstOrDefault();
+            Assert.NotNull(referenceToNullImage);
+            Assert.Equal(1, (int)referenceToNullImage!.Attribute(H.Val)!);
         }
     }
 }

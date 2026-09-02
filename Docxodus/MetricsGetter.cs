@@ -463,7 +463,8 @@ namespace Docxodus
         private static void ValidateImageExists(OpenXmlPart part, string relId, Dictionary<XName, int> metrics)
         {
             var imagePart = part.Parts.FirstOrDefault(ipp => ipp.RelationshipId == relId);
-            if (imagePart == null)
+            // IdPartPair is a struct: not-found is default(IdPartPair), not null.
+            if (imagePart.OpenXmlPart == null)
                 IncrementMetric(metrics, H.ReferenceToNullImage);
         }
 
