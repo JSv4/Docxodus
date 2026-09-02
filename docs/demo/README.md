@@ -28,32 +28,35 @@ instead of sitting at one fixed size that would measure nothing.
 
 ![DIFF STRESS](../images/demo/diff-stress.gif)
 
-The meter in that GIF reads slower than the table below, and should: capturing it
-runs a screenshot recorder at 10fps against the same CPU, and the clip starts
-after a full negotiation has already grown the document. Both are the confound
-described further down — the stress p50 measures the machine and the input as much
-as the engine. The GIF is there to show the loop running, not to be read off.
+The meter in that GIF reads slower than the table below — 132 ms where the table
+says 74 — and should: capturing it runs a screenshot recorder at 10fps against the
+same CPU, and the clip starts after a full negotiation has already grown the
+document. Both are the confound described further down; the stress p50 measures the
+machine and the input as much as the engine. The GIF is there to show the loop
+running, not to be read off.
 
 Three depths, because "how fast is the diff engine" has three honest answers:
 
 | depth | engine calls | measured |
 |---|---|---|
-| `revisions` | `docxDiffGetRevisions` | ~7.1 diffs/s, p50 **143 ms** |
-| `redline` | `docxDiffCompareProducts` → redline package + revisions | ~5.8 diffs/s, p50 **170 ms** |
-| `full + HTML` | the above, then `convertDocxToHtml` with tracked changes | ~3.0 diffs/s, p50 **324 ms** |
+| `revisions` | `docxDiffGetRevisions` | ~19 diffs/s, p50 **52 ms** |
+| `redline` | `docxDiffCompareProducts` → redline package + revisions | ~13 diffs/s, p50 **74 ms** |
+| `full + HTML` | the above, then `convertDocxToHtml` with tracked changes | ~7 diffs/s, p50 **141 ms** |
 
-Against a mutation costing ~2–3 ms through the same MCP endpoint, that is **68× to
-157×**, and the panel reports the ratio it just measured rather than the one
+Against a mutation costing ~2 ms through the same MCP endpoint, that is **33× to
+78×**, and the panel reports the ratio it just measured rather than the one
 written here. So the honest answer to "can we animate a diff per edit at 60fps"
-is no, and was never going to be: a redline-per-edit loop lives between 3 and 7
-frames per second on a document this size. That gap is the entire argument for
+is still no — but it is a much closer no than it was. A redline-per-edit loop now
+lives between 7 and 19 frames per second on a document this size, where a month of
+engine work ago it was 2 to 6. The shallow depth is inside the range a viewer
+reads as motion rather than as a series of updates. That gap is the entire argument for
 recording a redline when you are the one making the edits, and for computing one
 when somebody hands you a document they changed. Both emit the same native
 markup; the meter shows what each costs to get there.
 
 The `redline` depth uses `docxDiffCompareProducts` rather than `docxDiffCompare`
 followed by `docxDiffGetRevisions`, because one memoized alignment pass yielding
-both products measured **126 ms against 181 ms** for the two calls separately —
+both products measured **51 ms against 85 ms** for the two calls separately —
 about a third saved, which is what that API is for. That pair is measured the
 controlled way described below, not read off the panel.
 
@@ -75,18 +78,25 @@ not, and saying which is which is the whole point of keeping the list:
   on the path every depth shares. (#629 landed alongside it, but its snapshot reuse
   is across comparisons and this loop makes one comparison per frame, so it has
   nothing to reuse — the panel would not see it.)
-- **The current refresh has no attribution, and that is the honest answer.** The
-  table above was re-read after #620 merged its `WmlToHtmlConverter` /
-  `MarkupSimplifier` speedup, and every row came out 5–15% *slower* than the #627
-  reading. Nothing in that merge could do it: `revisions` never calls the converter
-  at all. Decomposing says the opposite — the conversion stage on its own
-  (`full` − `redline`, controlled) went 154 ms → 143 ms, cheaper, exactly as #620
-  intends, while the compare stage read dearer with no cause in the diff. The
-  reading that changed is the machine, on a different day: the #627 figures were
-  one measuring session, these are the pooled median of nine, and 5–15% is inside
-  the spread this container shows on fixed inputs. Refreshed anyway, because the
-  table's job is to say what the panel will show a viewer, not to hold the best
-  number ever recorded.
+- **A refresh with no attribution, which is sometimes the honest answer.** The table
+  was re-read after #620 merged its `WmlToHtmlConverter` / `MarkupSimplifier`
+  speedup, and every row came out 5–15% *slower*. Nothing in that merge could do it:
+  `revisions` never calls the converter at all. Decomposing said the opposite — the
+  conversion stage on its own (`full` − `redline`, controlled) went 154 ms → 143 ms,
+  cheaper, exactly as #620 intends, while the compare stage read dearer with no cause
+  in the diff. The reading that changed was the machine, on a different day. Kept as
+  a worked example of a movement that fits nothing and should be labelled as such.
+- **#653 compiles the browser build's hot paths ahead of time from a recorded
+  profile, and it is the largest movement this page has recorded: everything roughly
+  halved.** `revisions` 143 → 52 ms, `redline` 170 → 74, `full + HTML` 324 → 141;
+  `docxDiffCompareProducts` on fixed inputs 125 → 51 ms, and the conversion stage in
+  isolation 144 → 60. Both methods agreed and the controlled figures were pooled over
+  two sessions, because a claimed 2× deserves more than the one session that made an
+  earlier baseline look better than it was. Uniform across depths again, but this
+  time the shared thing is not a code path — it is the .NET execution underneath all
+  of them, which is what ahead-of-time compilation buys and why even the ratio
+  against the recording path moved (68–157× down to 33–78×: recording got faster
+  too).
 
 Those attributions are what the shape of the movement suggests, not what the panel
 proves; it measures the total, and the commit messages are the authority on cause.
