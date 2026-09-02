@@ -10153,7 +10153,6 @@ namespace Docxodus
             if (imageRid == null) return null;
 
             var pp3 = ownerPart.Parts.FirstOrDefault(pp => pp.RelationshipId == imageRid);
-            if (pp3 == null) return null;
 
             // Broken packages can point drawing image markup at any relationship target (for
             // example custom XML). Treat a non-image target the same as a missing image instead
@@ -10361,7 +10360,6 @@ namespace Docxodus
             try
             {
                 var pp = ownerPart.Parts.FirstOrDefault(pp2 => pp2.RelationshipId == imageRid);
-                if (pp == null) return null;
 
                 // VML <v:imagedata> can be malformed in exactly the same way as DrawingML:
                 // tolerate a relationship to a non-image part and simply omit the unusable image.
