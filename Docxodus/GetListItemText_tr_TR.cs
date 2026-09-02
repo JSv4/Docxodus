@@ -60,7 +60,7 @@ namespace Docxodus
             "altmışıncı", "yetmişinci", "sekseninci", "doksanıncı"
         };
 
-        public static string GetListItemText(string languageCultureName, int levelNumber, string numFmt)
+        public static string GetListItemText(string languageCultureName, int levelNumber, string? numFmt)
         {
             #region
             if (numFmt == "decimal")
