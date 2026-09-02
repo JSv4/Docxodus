@@ -63,6 +63,13 @@ All notable changes to this project will be documented in this file.
   no longer throws a `NullReferenceException` while computing the list item text — it now falls
   back within the style's own levels correctly, matching every other "not found" path in list-item
   resolution.
+- `FormattingAssembler`'s list-item marker synthesis no longer throws when a list item's abstract
+  numbering ID doesn't resolve — the `pt:AbstractNumId` attribute is now omitted for that item
+  instead of crashing the whole document's formatting assembly.
+- `FormattingAssembler.AssembleFormatting` no longer throws a `NullReferenceException` when
+  resolving theme fonts for a paragraph whose accumulated properties don't carry a paragraph-mark
+  run-properties element (`w:rPr`) — it now skips theme-font resolution for that paragraph mark
+  instead of crashing.
 
 ## [11.0.0] - 2026-09-01
 

@@ -1,11 +1,9 @@
-// Inherited OpenXmlPowerTools code that predates nullable annotations (issue #13).
-#nullable disable
-
 // Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Text;
 using System.Xml.Linq;
@@ -55,9 +53,9 @@ namespace Docxodus
             // throughout (and ClearStyles writes it), so ensure it exists up front — a styles-less
             // package then resolves everything to built-in defaults instead of throwing. The
             // synthesized part stays in wDoc, consistent with this method's in-place mutation.
-            Internal.StyleFactory.EnsureStylesPart(wDoc.MainDocumentPart);
+            var stylesPart = Internal.StyleFactory.EnsureStylesPart(wDoc.MainDocumentPart!);
 
-            XDocument sXDoc = wDoc.MainDocumentPart.StyleDefinitionsPart.GetXDocument();
+            XDocument sXDoc = stylesPart.GetXDocument();
 
             // The assembler info (style indexes + rolled-up style caches) is derived from the
             // styles part alone, so it is cached ON the styles XDocument and reused across
@@ -65,8 +63,8 @@ namespace Docxodus
             // render converts through one long-lived shell, and rebuilding these per render was
             // a fixed cost on every keystroke commit. The style count guards the cache: callers
             // that add styles between conversions (StyleFactory) get a fresh index.
-            int styleCount = sXDoc.Root.Elements(W.style).Count();
-            FormattingAssemblerInfo fai = sXDoc.Annotation<FormattingAssemblerInfo>();
+            int styleCount = sXDoc.Root!.Elements(W.style).Count();
+            FormattingAssemblerInfo? fai = sXDoc.Annotation<FormattingAssemblerInfo>();
             if (fai == null || fai.IndexedStyleCount != styleCount)
             {
                 sXDoc.RemoveAnnotations<FormattingAssemblerInfo>();
@@ -81,8 +79,8 @@ namespace Docxodus
                     if (style.Attribute(W._default).ToBoolean() != true)
                         continue;
 
-                    var styleType = (string)style.Attribute(W.type);
-                    var styleId = (string)style.Attribute(W.styleId);
+                    var styleType = (string?)style.Attribute(W.type);
+                    var styleId = (string?)style.Attribute(W.styleId);
 
                     switch (styleType)
                     {
@@ -105,11 +103,12 @@ namespace Docxodus
             foreach (var part in wDoc.ContentParts())
             {
                 var pxd = part.GetXDocument();
-                FixNonconformantHexValues(pxd.Root);
-                AnnotateWithGlobalDefaults(wDoc, pxd.Root, settings);
-                AnnotateTablesWithTableStyles(wDoc, pxd.Root);
-                AnnotateParagraphs(fai, wDoc, pxd.Root, settings);
-                AnnotateRuns(fai, wDoc, pxd.Root, settings);
+                var root = pxd.Root!;
+                FixNonconformantHexValues(root);
+                AnnotateWithGlobalDefaults(wDoc, root, settings);
+                AnnotateTablesWithTableStyles(wDoc, root);
+                AnnotateParagraphs(fai, wDoc, root, settings);
+                AnnotateRuns(fai, wDoc, root, settings);
             }
             NormalizeListItems(fai, wDoc, settings);
             if (settings.ClearStyles)
@@ -117,10 +116,13 @@ namespace Docxodus
             foreach (var part in wDoc.ContentParts())
             {
                 var pxd = part.GetXDocument();
-                pxd.Root.Descendants().Attributes().Where(a => a.IsNamespaceDeclaration).Remove();
+                pxd.Root!.Descendants().Attributes().Where(a => a.IsNamespaceDeclaration).Remove();
+                // NormalizePropsForPart can replace pxd.Root outright (OrderElementsPerStandard),
+                // so it must be re-fetched afterward rather than reused from before the call.
                 FormattingAssembler.NormalizePropsForPart(pxd, settings);
-                var newRoot = (XElement)CleanupTransform(pxd.Root);
-                pxd.Root.ReplaceWith(newRoot);
+                var root = pxd.Root!;
+                var newRoot = (XElement)CleanupTransform(root)!;
+                root.ReplaceWith(newRoot);
                 part.PutXDocument();
             }
         }
@@ -136,11 +138,11 @@ namespace Docxodus
 
             foreach (var style in stylesXDoc.Root.Elements(W.style))
             {
-                var styleId = (string)style.Attribute(W.styleId);
+                var styleId = (string?)style.Attribute(W.styleId);
                 if (string.IsNullOrEmpty(styleId))
                     continue;
 
-                var styleType = (string)style.Attribute(W.type);
+                var styleType = (string?)style.Attribute(W.type);
 
                 // Index by type for type-specific lookups
                 switch (styleType)
@@ -166,7 +168,7 @@ namespace Docxodus
                     continue;
                 if (tblLook.Attribute(W.val) == null)
                     continue;
-                string hexValue = tblLook.Attribute(W.val).Value;
+                string hexValue = tblLook.Attribute(W.val)!.Value;
                 int val = int.Parse(hexValue, System.Globalization.NumberStyles.HexNumber);
                 tblLook.Add(new XAttribute(W.firstRow, (val & 0x0020) != 0 ? "1" : "0"));
                 tblLook.Add(new XAttribute(W.lastRow, (val & 0x0040) != 0 ? "1" : "0"));
@@ -181,7 +183,7 @@ namespace Docxodus
                     continue;
                 if (cnfStyle.Attribute(W.val) == null)
                     continue;
-                var va = cnfStyle.Attribute(W.val).Value.ToArray();
+                var va = cnfStyle.Attribute(W.val)!.Value.ToArray();
                 cnfStyle.Add(new XAttribute(W.firstRow, va[0]));
                 cnfStyle.Add(new XAttribute(W.lastRow, va[1]));
                 cnfStyle.Add(new XAttribute(W.firstColumn, va[2]));
@@ -197,9 +199,9 @@ namespace Docxodus
             }
         }
 
-        private static object CleanupTransform(XNode node)
+        private static object? CleanupTransform(XNode node)
         {
-            XElement element = node as XElement;
+            XElement? element = node as XElement;
             if (element != null)
             {
                 if (element.Name == W.tabs && element.Element(W.tab) == null)
@@ -210,9 +212,12 @@ namespace Docxodus
 
                 // a cleaner solution would be to not include the w:ins and w:del elements when rolling up the paragraph run properties into
                 // the run properties.
-                if ((element.Name == W.ins || element.Name == W.del) && element.Parent.Name == W.rPr)
+                // Every element reached here is visited via recursion from the document root, so
+                // it always has a parent; a w:ins/w:del directly under w:rPr always has a
+                // grandparent too (w:rPr is never itself the root).
+                if ((element.Name == W.ins || element.Name == W.del) && element.Parent!.Name == W.rPr)
                 {
-                    if (element.Parent.Parent.Name == W.r || element.Parent.Parent.Name == W.rPrChange)
+                    if (element.Parent!.Parent!.Name == W.r || element.Parent!.Parent!.Name == W.rPrChange)
                         return null;
                 }
 
@@ -225,10 +230,11 @@ namespace Docxodus
 
         private static void ClearStyles(WordprocessingDocument wDoc)
         {
-            var stylePart = wDoc.MainDocumentPart.StyleDefinitionsPart;
+            // Called only from AssembleFormatting, after EnsureStylesPart has already run.
+            var stylePart = wDoc.MainDocumentPart!.StyleDefinitionsPart!;
             var sXDoc = stylePart.GetXDocument();
 
-            var newRoot = new XElement(sXDoc.Root.Name,
+            var newRoot = new XElement(sXDoc.Root!.Name,
                 sXDoc.Root.Attributes(),
                 sXDoc.Root.Elements().Select(e =>
                 {
@@ -257,7 +263,7 @@ namespace Docxodus
             if (globalpPr != null)
                 globalpPr.ReplaceWith(new XElement(W.pPr));
 
-            sXDoc.Root.ReplaceWith(newRoot);
+            sXDoc.Root!.ReplaceWith(newRoot);
 
             stylePart.PutXDocument();
         }
@@ -267,12 +273,13 @@ namespace Docxodus
             foreach (var part in wDoc.ContentParts())
             {
                 var pxd = part.GetXDocument();
-                XElement newRoot = (XElement)NormalizeListItemsTransform(fai, wDoc, pxd.Root, settings);
+                var root = pxd.Root!;
+                XElement newRoot = (XElement)NormalizeListItemsTransform(fai, wDoc, root, settings);
                 if (newRoot.Attribute(XNamespace.Xmlns + "pt14") == null)
                     newRoot.Add(new XAttribute(XNamespace.Xmlns + "pt14", PtOpenXml.pt.NamespaceName));
                 if (newRoot.Attribute(XNamespace.Xmlns + "mc") == null)
                     newRoot.Add(new XAttribute(XNamespace.Xmlns + "mc", MC.mc.NamespaceName));
-                pxd.Root.ReplaceWith(newRoot);
+                root.ReplaceWith(newRoot);
             }
         }
 
@@ -286,13 +293,13 @@ namespace Docxodus
                     var li = ListItemRetriever.RetrieveListItem(wDoc, element, settings.ListItemRetrieverSettings);
                     if (li != null)
                     {
-                        ListItemRetriever.ListItemInfo listItemInfo = element.Annotation<ListItemRetriever.ListItemInfo>();
+                        ListItemRetriever.ListItemInfo? listItemInfo = element.Annotation<ListItemRetriever.ListItemInfo>();
 
                         var newParaProps = new XElement(W.pPr,
                             element.Elements(W.pPr).Elements().Where(e => e.Name != W.numPr)
                         );
 
-                        XElement listItemRunProps = null;
+                        XElement? listItemRunProps = null;
                         List<XAttribute> listItemHtmlAttributes = new List<XAttribute>();
                         int? abstractNumId = null;
                         if (listItemInfo != null)
@@ -301,19 +308,19 @@ namespace Docxodus
 
                             var paraStyleRunProps = CharStyleRollup(fai, wDoc, element);
 
-                            var paragraphStyleName = (string)element
+                            var paragraphStyleName = (string?)element
                                 .Elements(W.pPr)
                                 .Elements(W.pStyle)
                                 .Attributes(W.val)
                                 .FirstOrDefault();
 
-                            string defaultStyleName = (string)wDoc
-                                    .MainDocumentPart
-                                    .StyleDefinitionsPart
+                            string? defaultStyleName = (string?)wDoc
+                                    .MainDocumentPart!
+                                    .StyleDefinitionsPart!
                                     .GetXDocument()
-                                    .Root
+                                    .Root!
                                     .Elements(W.style)
-                                    .Where(s => (string)s.Attribute(W.type) == "paragraph" && s.Attribute(W._default).ToBoolean() == true)
+                                    .Where(s => (string?)s.Attribute(W.type) == "paragraph" && s.Attribute(W._default).ToBoolean() == true)
                                     .Attributes(W.styleId)
                                     .FirstOrDefault();
 
@@ -321,8 +328,8 @@ namespace Docxodus
                                 paragraphStyleName = defaultStyleName;
 
                             XDocument stylesXDoc = wDoc
-                                .MainDocumentPart
-                                .StyleDefinitionsPart
+                                .MainDocumentPart!
+                                .StyleDefinitionsPart!
                                 .GetXDocument();
 
                             // put together run props for list item.
@@ -343,13 +350,16 @@ namespace Docxodus
 
                             // Use effective level for continuation patterns (deeper-level items that continue a flat list)
                             var effectiveLevel = ListItemRetriever.GetEffectiveLevel(element);
-                            var listItemLvl = listItemInfo.Lvl(effectiveLevel);
+                            // Lvl() returns null only for a level index the list doesn't define;
+                            // effectiveLevel/paragraphLevel come from the same resolved list this
+                            // listItemInfo describes, so the level is always present here.
+                            var listItemLvl = listItemInfo.Lvl(effectiveLevel)!;
                             var listItemLvlRunProps = listItemLvl.Elements(W.rPr).FirstOrDefault();
                             listItemRunProps = MergeStyleElement(listItemLvlRunProps, mergedRunProps);
 
-                            string numFmt = null;
-                            string format = null;
-                            numFmt = (string)listItemLvl.Elements(W.numFmt).Attributes(W.val).FirstOrDefault();
+                            string? numFmt = null;
+                            string? format = null;
+                            numFmt = (string?)listItemLvl.Elements(W.numFmt).Attributes(W.val).FirstOrDefault();
 
                             if (numFmt == null)
                             {
@@ -359,8 +369,8 @@ namespace Docxodus
                                     var choice = mcAlternativeContent.Element(MC.Choice);
                                     if (choice != null)
                                     {
-                                        numFmt = (string)choice.Elements(W.numFmt).Attributes(W.val).FirstOrDefault();
-                                        format = (string)choice.Elements(W.numFmt).Attributes(W.format).FirstOrDefault();
+                                        numFmt = (string?)choice.Elements(W.numFmt).Attributes(W.val).FirstOrDefault();
+                                        format = (string?)choice.Elements(W.numFmt).Attributes(W.format).FirstOrDefault();
                                     }
                                 }
                             }
@@ -380,8 +390,8 @@ namespace Docxodus
                                 var pPr = element.Element(PtOpenXml.pPr);
                                 if (pPr != null)
                                 {
-                                    XElement bidiel = pPr.Element(W.bidi);
-                                    bool bidi = bidiel != null && (bidiel.Attribute(W.val) == null || bidiel.Attribute(W.val).ToBoolean() == true);
+                                    XElement? bidiel = pPr.Element(W.bidi);
+                                    bool bidi = bidiel != null && (bidiel.Attribute(W.val) == null || bidiel.Attribute(W.val)!.ToBoolean() == true);
                                     if (bidi)
                                     {
                                         listItemRunProps = MergeStyleElement(new XElement(W.rPr,
@@ -422,7 +432,7 @@ namespace Docxodus
                                         new XAttribute(PtOpenXml.HtmlStyle, "list-style-type: upper-roman;")
                                     );
                                 }
-                                else if (numFmt == "custom" && format.StartsWith("0"))
+                                else if (numFmt == "custom" && format?.StartsWith("0") == true)
                                 {
                                     listItemHtmlAttributes.Add(
                                         new XAttribute(PtOpenXml.HtmlStyle, "list-style-type: decimal-leading-zero;")
@@ -432,7 +442,9 @@ namespace Docxodus
                         }
 
                         var paragraphLevel = ListItemRetriever.GetParagraphLevel(element);
-                        ListItemRetriever.LevelNumbers levelNums = element.Annotation<ListItemRetriever.LevelNumbers>();
+                        // Set alongside ListItemInfo by the same retrieval pass (RetrieveListItem
+                        // succeeded above, so both annotations are present).
+                        ListItemRetriever.LevelNumbers levelNums = element.Annotation<ListItemRetriever.LevelNumbers>()!;
                         string levelNumsString = levelNums
                             .LevelNumbersArray
                             .Take(paragraphLevel + 1)
@@ -440,25 +452,26 @@ namespace Docxodus
                             .StringConcatenate()
                             .TrimEnd('.');
 
-                        ListItemRetriever.ListItemInfo listItemInfo2 = element.Annotation<ListItemRetriever.ListItemInfo>();
+                        ListItemRetriever.ListItemInfo? listItemInfo2 = element.Annotation<ListItemRetriever.ListItemInfo>();
 
                         var listItemRun = new XElement(W.r,
                             new XAttribute(PtOpenXml.ListItemRun, levelNumsString),
-                            listItemInfo2 != null ? new XAttribute(PtOpenXml.AbstractNumId, listItemInfo2.AbstractNumId) : null,
+                            listItemInfo2?.AbstractNumId is int abstractNumIdValue ? new XAttribute(PtOpenXml.AbstractNumId, abstractNumIdValue) : null,
                             element.Attribute(PtOpenXml.FontName),
                             element.Attribute(PtOpenXml.LanguageType),
                             listItemRunProps,
                             new XElement(W.t,
                                 new XAttribute(XNamespace.Xml + "space", "preserve"),
                                 li));
-                        XElement previousListItemRun = null;
+                        XElement? previousListItemRun = null;
 
                         AdjustFontAttributes(wDoc, listItemRun, null, listItemRunProps, settings);
 
                         // Use effective level for suffix and justification (consistent with list item formatting)
-                        var lvl = listItemInfo.Lvl(ListItemRetriever.GetEffectiveLevel(element));
-                        XElement suffix = new XElement(W.tab);
-                        var su = (string)lvl.Elements(W.suff).Attributes(W.val).FirstOrDefault();
+                        // li non-null implies listItemInfo non-null (same annotation pass).
+                        var lvl = listItemInfo!.Lvl(ListItemRetriever.GetEffectiveLevel(element))!;
+                        XElement? suffix = new XElement(W.tab);
+                        var su = (string?)lvl.Elements(W.suff).Attributes(W.val).FirstOrDefault();
                         if (su == "space")
                             suffix = new XElement(W.t,
                                 new XAttribute(XNamespace.Xml + "space", "preserve"),
@@ -466,10 +479,11 @@ namespace Docxodus
                         else if (su == "nothing")
                             suffix = null;
 
-                        var jc = (string)lvl.Elements(W.lvlJc).Attributes(W.val).FirstOrDefault();
+                        var jc = (string?)lvl.Elements(W.lvlJc).Attributes(W.val).FirstOrDefault();
                         if (jc == "right")
                         {
-                            var accumulatedParaProps = element.Element(PtOpenXml.pPr);
+                            // Stamped by AnnotateParagraphs/AnnotateRuns earlier in the pipeline.
+                            var accumulatedParaProps = element.Element(PtOpenXml.pPr)!;
 
                             var hangingAtt = accumulatedParaProps.Elements(W.ind).Attributes(W.hanging).FirstOrDefault();
                             if (hangingAtt == null)
@@ -493,7 +507,8 @@ namespace Docxodus
                         }
                         else if (jc == "center")
                         {
-                            var accumulatedParaProps = element.Element(PtOpenXml.pPr);
+                            // Stamped by AnnotateParagraphs/AnnotateRuns earlier in the pipeline.
+                            var accumulatedParaProps = element.Element(PtOpenXml.pPr)!;
 
                             var hangingAtt = accumulatedParaProps.Elements(W.ind).Attributes(W.hanging).FirstOrDefault();
                             if (hangingAtt == null)
@@ -515,9 +530,9 @@ namespace Docxodus
                                 hangingAtt.Value = hanging.ToString();
                             }
                         }
-                        AddTabAtLeftIndent(element.Element(PtOpenXml.pPr));
+                        AddTabAtLeftIndent(element.Element(PtOpenXml.pPr)!);
 
-                        XElement tabRun = suffix != null ?
+                        XElement? tabRun = suffix != null ?
                                 new XElement(W.r,
                                     new XAttribute(PtOpenXml.ListItemRun, levelNumsString),
                                     listItemRunProps,
@@ -525,8 +540,8 @@ namespace Docxodus
 
                         bool isDeleted = false;
                         bool isInserted = false;
-                        XAttribute authorAtt = null;
-                        XAttribute dateAtt = null;
+                        XAttribute? authorAtt = null;
+                        XAttribute? dateAtt = null;
 
                         var paraDelElement = newParaProps
                             .Elements(W.rPr)
@@ -641,7 +656,7 @@ namespace Docxodus
                             .Elements(W.numPr)
                             .Elements(W.numberingChange)
                             .FirstOrDefault();
-                        var originalMarker = (string)numberingChange?.Attribute(W.original);
+                        var originalMarker = (string?)numberingChange?.Attribute(W.original);
                         bool hasVisibleNumberingChange =
                             !string.IsNullOrEmpty(originalMarker) &&
                             !string.Equals(originalMarker, li, StringComparison.Ordinal);
@@ -653,7 +668,7 @@ namespace Docxodus
                         else if (!isInserted && hasVisibleNumberingChange)
                         {
                             var highestId = wDoc
-                                .MainDocumentPart
+                                .MainDocumentPart!
                                 .GetXDocument()
                                 .Descendants()
                                 .Attributes(W.id)
@@ -661,12 +676,14 @@ namespace Docxodus
                                 .DefaultIfEmpty(0)
                                 .Max();
 
-                            var originalRun = CloneListItemRunWithMarker(listItemRun, originalMarker);
+                            // hasVisibleNumberingChange is true only when originalMarker is
+                            // non-empty and numberingChange (its source) is non-null.
+                            var originalRun = CloneListItemRunWithMarker(listItemRun, originalMarker!);
                             previousListItemRun = new XElement(W.del,
                                 new XAttribute(W.id, highestId + 1),
-                                numberingChange.Attribute(W.author),
+                                numberingChange!.Attribute(W.author),
                                 numberingChange.Attribute(W.date),
-                                (XElement)TransformToDeleted(originalRun));
+                                (XElement)TransformToDeleted(originalRun)!);
                             listItemRun = new XElement(W.ins,
                                 new XAttribute(W.id, highestId + 2),
                                 numberingChange.Attribute(W.author),
@@ -678,7 +695,7 @@ namespace Docxodus
                         {
                             // convert listItemRun and tabRun to their deleted equivalents
                             var highestId = wDoc
-                                .MainDocumentPart
+                                .MainDocumentPart!
                                 .GetXDocument()
                                 .Descendants()
                                 .Attributes(W.id)
@@ -696,12 +713,12 @@ namespace Docxodus
                                 new XAttribute(W.id, highestId + 1),
                                 authorAtt,
                                 dateAtt,
-                                (XElement)TransformToDeleted(listItemRun));
+                                (XElement)TransformToDeleted(listItemRun)!);
                             tabRun = new XElement(W.del,
                                 new XAttribute(W.id, highestId + 2),
                                 authorAtt,
                                 dateAtt,
-                                (XElement)TransformToDeleted(tabRun));
+                                (XElement?)TransformToDeleted(tabRun));
                         }
                         else
                         {
@@ -709,7 +726,7 @@ namespace Docxodus
                             {
                                 // convert listItemRun and tabRun to their inserted equivalents
                                 var highestId = wDoc
-                                    .MainDocumentPart
+                                    .MainDocumentPart!
                                     .GetXDocument()
                                     .Descendants()
                                     .Attributes(W.id)
@@ -740,7 +757,10 @@ namespace Docxodus
                             element.Attribute(PtOpenXml.FontName),
                             element.Attribute(PtOpenXml.LanguageType),
                             element.Attribute(PtOpenXml.Unid),
-                            new XAttribute(PtOpenXml.AbstractNumId, abstractNumId),
+                            // li (the retrieved list item text) and listItemInfo (the source of
+                            // abstractNumId) come from the same earlier annotation pass, so
+                            // li != null implies listItemInfo != null and abstractNumId was set.
+                            new XAttribute(PtOpenXml.AbstractNumId, abstractNumId!),
                             listItemHtmlAttributes,
                             newParaProps,
                             previousListItemRun,
@@ -798,9 +818,9 @@ namespace Docxodus
             return clone;
         }
 
-        private static object TransformToDeleted(XNode node)
+        private static object? TransformToDeleted(XNode? node)
         {
-            XElement element = node as XElement;
+            XElement? element = node as XElement;
             if (element != null)
             {
                 if (element.Name == W.t)
@@ -820,14 +840,14 @@ namespace Docxodus
 
             // todo need to handle W.start
             if (pPr.Attribute(W.left) != null)
-                left = (int)pPr.Attribute(W.left);
+                left = (int)pPr.Attribute(W.left)!;
             var tabs = pPr.Element(W.tabs);
             if (tabs == null)
             {
                 tabs = new XElement(W.tabs);
                 pPr.Add(tabs);
             }
-            var tabAtLeft = tabs.Elements(W.tab).FirstOrDefault(t => WordprocessingMLUtil.StringToTwips((string)t.Attribute(W.pos)) == left);
+            var tabAtLeft = tabs.Elements(W.tab).FirstOrDefault(t => WordprocessingMLUtil.StringToTwips((string)t.Attribute(W.pos)!) == left);
             if (tabAtLeft == null)
             {
                 tabs.Add(
@@ -850,48 +870,50 @@ namespace Docxodus
 
         public static void NormalizePropsForPart(XDocument pxd, FormattingAssemblerSettings settings)
         {
+            var root = pxd.Root!;
             if (settings.CreateHtmlConverterAnnotationAttributes)
             {
-                pxd.Root.Descendants().Attributes().Where(d => d.Name.Namespace == PtOpenXml.pt &&
+                root.Descendants().Attributes().Where(d => d.Name.Namespace == PtOpenXml.pt &&
                     !PtNamesToKeep.Contains(d.Name)).Remove();
-                if (pxd.Root.Attribute(XNamespace.Xmlns + "pt14") == null)
-                    pxd.Root.Add(new XAttribute(XNamespace.Xmlns + "pt14", PtOpenXml.pt.NamespaceName));
-                if (pxd.Root.Attribute(XNamespace.Xmlns + "mc") == null)
-                    pxd.Root.Add(new XAttribute(XNamespace.Xmlns + "mc", MC.mc.NamespaceName));
-                XAttribute mci = pxd.Root.Attribute(MC.Ignorable);
+                if (root.Attribute(XNamespace.Xmlns + "pt14") == null)
+                    root.Add(new XAttribute(XNamespace.Xmlns + "pt14", PtOpenXml.pt.NamespaceName));
+                if (root.Attribute(XNamespace.Xmlns + "mc") == null)
+                    root.Add(new XAttribute(XNamespace.Xmlns + "mc", MC.mc.NamespaceName));
+                XAttribute? mci = root.Attribute(MC.Ignorable);
                 if (mci != null)
                 {
-                    if (!pxd.Root.Attribute(MC.Ignorable).Value.Contains("pt14"))
+                    if (!mci.Value.Contains("pt14"))
                     {
-                        var ig = pxd.Root.Attribute(MC.Ignorable).Value + " pt14";
+                        var ig = mci.Value + " pt14";
                         mci.Value = ig;
                     }
                 }
                 else
                 {
-                    pxd.Root.Add(new XAttribute(MC.Ignorable, "pt14"));
+                    root.Add(new XAttribute(MC.Ignorable, "pt14"));
                 }
             }
             else
             {
-                pxd.Root.Descendants().Attributes().Where(d => d.Name.Namespace == PtOpenXml.pt).Remove();
+                root.Descendants().Attributes().Where(d => d.Name.Namespace == PtOpenXml.pt).Remove();
             }
-            var runProps = pxd.Root.Descendants(PtOpenXml.rPr).ToList();
+            var runProps = root.Descendants(PtOpenXml.rPr).ToList();
             foreach (var item in runProps)
             {
                 XElement newRunProps = new XElement(W.rPr,
                     item.Attributes(),
                     item.Elements());
-                XElement parent = item.Parent;
+                // Always has a parent: it's a descendant reached via root.Descendants().
+                XElement parent = item.Parent!;
                 if (parent.Name == W.p)
                 {
-                    XElement existingParaProps = parent.Element(W.pPr);
+                    XElement? existingParaProps = parent.Element(W.pPr);
                     if (existingParaProps == null)
                     {
                         existingParaProps = new XElement(W.pPr);
                         parent.Add(existingParaProps);
                     }
-                    XElement existingRunProps = existingParaProps.Element(W.rPr);
+                    XElement? existingRunProps = existingParaProps.Element(W.rPr);
                     if (existingRunProps != null)
                     {
                         if (!settings.RemoveStyleNamesFromParagraphAndRunProperties)
@@ -906,7 +928,7 @@ namespace Docxodus
                 }
                 else
                 {
-                    XElement existingRunProps = parent.Element(W.rPr);
+                    XElement? existingRunProps = parent.Element(W.rPr);
                     if (existingRunProps != null)
                     {
                         if (!settings.RemoveStyleNamesFromParagraphAndRunProperties)
@@ -920,16 +942,18 @@ namespace Docxodus
                         parent.Add(newRunProps);
                 }
             }
-            var paraProps = pxd.Root.Descendants(PtOpenXml.pPr).ToList();
+            var paraProps = root.Descendants(PtOpenXml.pPr).ToList();
             foreach (var item in paraProps)
             {
-                var paraRunProps = item.Parent.Elements(W.pPr).Elements(W.rPr).FirstOrDefault();
-                var merged = MergeStyleElement(item.Element(W.rPr), paraRunProps);
+                // Always has a parent: it's a descendant reached via root.Descendants().
+                var itemParent = item.Parent!;
+                var paraRunProps = itemParent.Elements(W.pPr).Elements(W.rPr).FirstOrDefault();
+                var merged = MergeStyleElement(item.Element(W.rPr), paraRunProps)!;
                 if (!settings.RemoveStyleNamesFromParagraphAndRunProperties)
                 {
                     if (merged.Element(W.rStyle) == null)
                     {
-                        merged.Add(paraRunProps.Element(W.rStyle));
+                        merged.Add(paraRunProps?.Element(W.rStyle));
                     }
                 }
 
@@ -937,8 +961,8 @@ namespace Docxodus
                     item.Attributes(),
                     item.Elements().Where(e => e.Name != W.rPr),
                     merged);
-                XElement para = item.Parent;
-                XElement existingParaProps = para.Element(W.pPr);
+                XElement para = itemParent;
+                XElement? existingParaProps = para.Element(W.pPr);
                 if (existingParaProps != null)
                 {
                     if (!settings.RemoveStyleNamesFromParagraphAndRunProperties)
@@ -951,54 +975,57 @@ namespace Docxodus
                 else
                     para.Add(newParaProps);
             }
-            var tblProps = pxd.Root.Descendants(PtOpenXml.tblPr).ToList();
+            var tblProps = root.Descendants(PtOpenXml.tblPr).ToList();
             foreach (var item in tblProps)
             {
                 XElement newTblProps = new XElement(item);
                 newTblProps.Name = W.tblPr;
-                XElement table = item.Parent;
-                XElement existingTableProps = table.Element(W.tblPr);
+                // Always has a parent: it's a descendant reached via root.Descendants().
+                XElement table = item.Parent!;
+                XElement? existingTableProps = table.Element(W.tblPr);
                 if (existingTableProps != null)
                     existingTableProps.ReplaceWith(newTblProps);
                 else
                     table.AddFirst(newTblProps);
             }
-            var trProps = pxd.Root.Descendants(PtOpenXml.trPr).ToList();
+            var trProps = root.Descendants(PtOpenXml.trPr).ToList();
             foreach (var item in trProps)
             {
                 XElement newTrProps = new XElement(item);
                 newTrProps.Name = W.trPr;
-                XElement row = item.Parent;
-                XElement existingRowProps = row.Element(W.trPr);
+                // Always has a parent: it's a descendant reached via root.Descendants().
+                XElement row = item.Parent!;
+                XElement? existingRowProps = row.Element(W.trPr);
                 if (existingRowProps != null)
                     existingRowProps.ReplaceWith(newTrProps);
                 else
                     row.AddFirst(newTrProps);
             }
-            var tcProps = pxd.Root.Descendants(PtOpenXml.tcPr).ToList();
+            var tcProps = root.Descendants(PtOpenXml.tcPr).ToList();
             foreach (var item in tcProps)
             {
                 XElement newTcProps = new XElement(item);
                 newTcProps.Name = W.tcPr;
-                XElement row = item.Parent;
-                XElement existingRowProps = row.Element(W.tcPr);
+                // Always has a parent: it's a descendant reached via root.Descendants().
+                XElement row = item.Parent!;
+                XElement? existingRowProps = row.Element(W.tcPr);
                 if (existingRowProps != null)
                     existingRowProps.ReplaceWith(newTcProps);
                 else
                     row.AddFirst(newTcProps);
             }
-            pxd.Root.Descendants(W.numPr).Remove();
+            root.Descendants(W.numPr).Remove();
             if (settings.RemoveStyleNamesFromParagraphAndRunProperties)
             {
-                pxd.Root.Descendants(W.pStyle).Where(ps => ps.Parent.Name == W.pPr).Remove();
-                pxd.Root.Descendants(W.rStyle).Where(ps => ps.Parent.Name == W.rPr).Remove();
+                root.Descendants(W.pStyle).Where(ps => ps.Parent!.Name == W.pPr).Remove();
+                root.Descendants(W.rStyle).Where(ps => ps.Parent!.Name == W.rPr).Remove();
             }
-            pxd.Root.Descendants(W.tblStyle).Where(ps => ps.Parent.Name == W.tblPr).Remove();
-            pxd.Root.Descendants().Where(d => d.Name.Namespace == PtOpenXml.pt).Remove();
+            root.Descendants(W.tblStyle).Where(ps => ps.Parent!.Name == W.tblPr).Remove();
+            root.Descendants().Where(d => d.Name.Namespace == PtOpenXml.pt).Remove();
             if (settings.OrderElementsPerStandard)
             {
-                XElement newRoot = (XElement)WordprocessingMLUtil.WmlOrderElementsPerStandard(pxd.Root);
-                pxd.Root.ReplaceWith(newRoot);
+                XElement newRoot = (XElement)WordprocessingMLUtil.WmlOrderElementsPerStandard(root)!;
+                root.ReplaceWith(newRoot);
             }
         }
 
@@ -1016,24 +1043,24 @@ namespace Docxodus
 
         private static void AnnotateWithGlobalDefaults(WordprocessingDocument wDoc, XElement rootElement, FormattingAssemblerSettings settings)
         {
-            XElement globalDefaultParaProps = null;
-            XElement globalDefaultParaPropsAsDefined = null;
-            XElement globalDefaultRunProps = null;
-            XElement globalDefaultRunPropsAsDefined = null;
-            XDocument sXDoc = wDoc.MainDocumentPart.StyleDefinitionsPart.GetXDocument();
-            var defaultParaStyleName = (string)sXDoc
-                .Root
+            XElement? globalDefaultParaProps = null;
+            XElement? globalDefaultParaPropsAsDefined = null;
+            XElement? globalDefaultRunProps = null;
+            XElement? globalDefaultRunPropsAsDefined = null;
+            XDocument sXDoc = wDoc.MainDocumentPart!.StyleDefinitionsPart!.GetXDocument();
+            var defaultParaStyleName = (string?)sXDoc
+                .Root!
                 .Elements(W.style)
-                .Where(st => (string)st.Attribute(W.type) == "paragraph" && st.Attribute(W._default).ToBoolean() == true)
+                .Where(st => (string?)st.Attribute(W.type) == "paragraph" && st.Attribute(W._default).ToBoolean() == true)
                 .Attributes(W.styleId)
                 .FirstOrDefault();
-            var defaultCharStyleName = (string)sXDoc
+            var defaultCharStyleName = (string?)sXDoc
                 .Root
                 .Elements(W.style)
-                .Where(st => (string)st.Attribute(W.type) == "character" && st.Attribute(W._default).ToBoolean() == true)
+                .Where(st => (string?)st.Attribute(W.type) == "character" && st.Attribute(W._default).ToBoolean() == true)
                 .Attributes(W.styleId)
                 .FirstOrDefault();
-            XElement docDefaults = sXDoc.Root.Element(W.docDefaults);
+            XElement? docDefaults = sXDoc.Root.Element(W.docDefaults);
             if (docDefaults != null)
             {
                 globalDefaultParaPropsAsDefined = docDefaults.Elements(W.pPrDefault).Elements(W.pPr)
@@ -1097,13 +1124,13 @@ namespace Docxodus
                 {
                     if (d.Name == W.p)
                     {
-                        var pStyle = (string)d.Elements(W.pPr).Elements(W.pStyle).Attributes(W.val).FirstOrDefault();
+                        var pStyle = (string?)d.Elements(W.pPr).Elements(W.pStyle).Attributes(W.val).FirstOrDefault();
                         if (pStyle == null)
                             pStyle = defaultParaStyleName;
                         if (pStyle != null)
                         {
                             if (d.Attribute(PtOpenXml.StyleName) != null)
-                                d.Attribute(PtOpenXml.StyleName).Value = pStyle;
+                                d.Attribute(PtOpenXml.StyleName)!.Value = pStyle;
                             else
                                 d.Add(new XAttribute(PtOpenXml.StyleName, pStyle));
                         }
@@ -1111,13 +1138,13 @@ namespace Docxodus
                     }
                     else
                     {
-                        var rStyle = (string)d.Elements(W.rPr).Elements(W.rStyle).Attributes(W.val).FirstOrDefault();
+                        var rStyle = (string?)d.Elements(W.rPr).Elements(W.rStyle).Attributes(W.val).FirstOrDefault();
                         if (rStyle == null)
                             rStyle = defaultCharStyleName;
                         if (rStyle != null)
                         {
                             if (d.Attribute(PtOpenXml.StyleName) != null)
-                                d.Attribute(PtOpenXml.StyleName).Value = rStyle;
+                                d.Attribute(PtOpenXml.StyleName)!.Value = rStyle;
                             else
                                 d.Add(new XAttribute(PtOpenXml.StyleName, rStyle));
                         }
@@ -1149,10 +1176,10 @@ namespace Docxodus
 
         private static void AnnotateTablesWithTableStyles(WordprocessingDocument wDoc, XElement rootElement)
         {
-            XDocument sXDoc = wDoc.MainDocumentPart.StyleDefinitionsPart.GetXDocument();
+            XDocument sXDoc = wDoc.MainDocumentPart!.StyleDefinitionsPart!.GetXDocument();
             foreach (var tbl in rootElement.Descendants(W.tbl))
             {
-                string tblStyleName = (string)tbl.Elements(W.tblPr).Elements(W.tblStyle).Attributes(W.val).FirstOrDefault();
+                string? tblStyleName = (string?)tbl.Elements(W.tblPr).Elements(W.tblStyle).Attributes(W.val).FirstOrDefault();
                 if (tblStyleName != null)
                 {
                     XElement style = TableStyleRollup(wDoc, tblStyleName);
@@ -1163,8 +1190,8 @@ namespace Docxodus
 
                     // merge tblPr in table style with tblPr of the table
                     // annnotate in PowerTools namespace
-                    XElement tblPr2 = style.Element(W.tblPr);
-                    XElement tblPr3 = MergeStyleElement(tbl.Element(W.tblPr), tblPr2, true);
+                    XElement? tblPr2 = style.Element(W.tblPr);
+                    XElement? tblPr3 = MergeStyleElement(tbl.Element(W.tblPr), tblPr2, true);
                     if (tblPr3 != null)
                     {
                         XElement newTblPr = new XElement(tblPr3);
@@ -1192,7 +1219,7 @@ namespace Docxodus
                                 var newTcPrPt = new XElement(tcPrPt);
                                 newTcPrPt.Name = PtOpenXml.tcPr;
                                 if (tcPrPtExists)
-                                    cell.Element(PtOpenXml.tcPr).ReplaceWith(newTcPrPt);
+                                    cell.Element(PtOpenXml.tcPr)!.ReplaceWith(newTcPrPt);
                                 else
                                     cell.Add(newTcPrPt);
                             }
@@ -1203,11 +1230,11 @@ namespace Docxodus
                     // as appropriate per the cnfStyle element, then replacing the row and cell properties
                     foreach (var row in tbl.Elements(W.tr))
                     {
-                        XElement trPr2 = null;
+                        XElement? trPr2 = null;
                         trPr2 = style.Element(W.trPr);
                         if (trPr2 == null)
                             trPr2 = new XElement(W.trPr);
-                        XElement rowCnf = row.Elements(W.trPr).Elements(W.cnfStyle).FirstOrDefault();
+                        XElement? rowCnf = row.Elements(W.trPr).Elements(W.cnfStyle).FirstOrDefault();
                         if (rowCnf != null)
                         {
                             foreach (var ot in TableStyleOverrideTypes)
@@ -1215,13 +1242,13 @@ namespace Docxodus
                                 XName attName = TableStyleOverrideXNameMap[ot];
                                 if (rowCnf != null && rowCnf.Attribute(attName).ToBoolean() == true)
                                 {
-                                    XElement o = style
+                                    XElement? o = style
                                         .Elements(W.tblStylePr)
-                                        .Where(tsp => (string)tsp.Attribute(W.type) == ot)
+                                        .Where(tsp => (string?)tsp.Attribute(W.type) == ot)
                                         .FirstOrDefault();
                                     if (o != null)
                                     {
-                                        XElement ottrPr = o.Element(W.trPr);
+                                        XElement? ottrPr = o.Element(W.trPr);
                                         trPr2 = MergeStyleElement(ottrPr, trPr2);
                                     }
                                 }
@@ -1245,12 +1272,12 @@ namespace Docxodus
                         {
                             foreach (var row in tbl.Elements(W.tr))
                             {
-                                XElement rowCnf = row.Elements(W.trPr).Elements(W.cnfStyle).FirstOrDefault();
+                                XElement? rowCnf = row.Elements(W.trPr).Elements(W.cnfStyle).FirstOrDefault();
                                 if (rowCnf != null && rowCnf.Attribute(attName).ToBoolean() == true)
                                 {
-                                    XElement o = style
+                                    XElement? o = style
                                         .Elements(W.tblStylePr)
-                                        .Where(tsp => (string)tsp.Attribute(W.type) == ot)
+                                        .Where(tsp => (string?)tsp.Attribute(W.type) == ot)
                                         .FirstOrDefault();
                                     if (o != null)
                                     {
@@ -1266,7 +1293,7 @@ namespace Docxodus
                                             var newTcPrPt = new XElement(tcPrPt);
                                             newTcPrPt.Name = PtOpenXml.pt + "tcPr";
                                             if (tcPrPtExists)
-                                                cell.Element(PtOpenXml.pt + "tcPr").ReplaceWith(newTcPrPt);
+                                                cell.Element(PtOpenXml.pt + "tcPr")!.ReplaceWith(newTcPrPt);
                                             else
                                                 cell.Add(newTcPrPt);
                                         }
@@ -1365,12 +1392,12 @@ namespace Docxodus
 
         private static void ApplyCndFmtToCell(XElement style, string ot, XName attName, XElement cell)
         {
-            XElement cellCnf = cell.Elements(W.tcPr).Elements(W.cnfStyle).FirstOrDefault();
+            XElement? cellCnf = cell.Elements(W.tcPr).Elements(W.cnfStyle).FirstOrDefault();
             if (cellCnf != null && cellCnf.Attribute(attName).ToBoolean() == true)
             {
-                XElement o = style
+                XElement? o = style
                     .Elements(W.tblStylePr)
-                    .Where(tsp => (string)tsp.Attribute(W.type) == ot)
+                    .Where(tsp => (string?)tsp.Attribute(W.type) == ot)
                     .FirstOrDefault();
                 if (o != null)
                 {
@@ -1384,7 +1411,7 @@ namespace Docxodus
                     var newTcPrPt = new XElement(tcPrPt);
                     newTcPrPt.Name = PtOpenXml.pt + "tcPr";
                     if (tcPrPtExists)
-                        cell.Element(PtOpenXml.pt + "tcPr").ReplaceWith(newTcPrPt);
+                        cell.Element(PtOpenXml.pt + "tcPr")!.ReplaceWith(newTcPrPt);
                     else
                         cell.Add(newTcPrPt);
                 }
@@ -1401,10 +1428,12 @@ namespace Docxodus
             }
             foreach (var row in tbl.Elements(W.tr))
             {
-                XElement tblPrEx = row.Element(W.tblPrEx);
+                XElement? tblPrEx = row.Element(W.tblPrEx);
                 foreach (var cell in row.Elements(W.tc))
                 {
-                    var ptTcPr = cell.Element(PtOpenXml.pt + "tcPr");
+                    // AddTcPrPtToEveryCell (called earlier in this pipeline) stamps a pt:tcPr on
+                    // every cell.
+                    var ptTcPr = cell.Element(PtOpenXml.pt + "tcPr")!;
                     if (tblPrEx != null && tblPrEx.Element(W.tblBorders) != null)
                     {
                         ptTcPr.Elements(W.tcBorders).Remove();
@@ -1424,7 +1453,7 @@ namespace Docxodus
                     else
                         cell.Add(newTcPr);
 
-                    XElement rightCell = cell.ElementsAfterSelf().FirstOrDefault();
+                    XElement? rightCell = cell.ElementsAfterSelf().FirstOrDefault();
                     if (rightCell != null)
                     {
                         RationalizeLeftAndRightCellBorders(cell, rightCell);
@@ -1433,18 +1462,18 @@ namespace Docxodus
             }
         }
 
-        private static void RationalizeLeftAndRightCellBorders(XElement leftCell, XElement rightCell)
+        private static void RationalizeLeftAndRightCellBorders(XElement? leftCell, XElement? rightCell)
         {
             if (leftCell == null || rightCell == null)
             {
                 return;
             }
-            XElement leftTcBorders = leftCell.Elements(W.tcPr).Elements(W.tcBorders).FirstOrDefault();
-            XElement rightTcBorders = rightCell.Elements(W.tcPr).Elements(W.tcBorders).FirstOrDefault();
+            XElement? leftTcBorders = leftCell.Elements(W.tcPr).Elements(W.tcBorders).FirstOrDefault();
+            XElement? rightTcBorders = rightCell.Elements(W.tcPr).Elements(W.tcBorders).FirstOrDefault();
             if (leftTcBorders != null && rightTcBorders != null)
             {
-                XElement rightBorderOfLeft = leftTcBorders.Element(W.right);
-                XElement leftBorderOfRight = rightTcBorders.Element(W.left);
+                XElement? rightBorderOfLeft = leftTcBorders.Element(W.right);
+                XElement? leftBorderOfRight = rightTcBorders.Element(W.left);
                 if (rightBorderOfLeft == null && leftBorderOfRight != null)
                 {
                     leftTcBorders.Add(new XElement(W.right, leftBorderOfRight.Attributes()));
@@ -1455,8 +1484,8 @@ namespace Docxodus
                 }
                 else if (rightBorderOfLeft != null && leftBorderOfRight != null)
                 {
-                    string rightBorderOfLeftVal = (string)rightBorderOfLeft.Attribute(W.val);
-                    string leftBorderOfRightVal = (string)leftBorderOfRight.Attribute(W.val);
+                    string? rightBorderOfLeftVal = (string?)rightBorderOfLeft.Attribute(W.val);
+                    string? leftBorderOfRightVal = (string?)leftBorderOfRight.Attribute(W.val);
                     if (rightBorderOfLeftVal == "nil")
                     {
                         rightBorderOfLeft.ReplaceWith(new XElement(W.right, leftBorderOfRight.Attributes()));
@@ -1567,7 +1596,7 @@ namespace Docxodus
             {
                 int rowCount = tbl.Elements(W.tr).Count();
                 int lastRow = rowCount - 1;
-                XElement insideV = null;
+                XElement? insideV = null;
                 foreach (var row in tbl.Elements(W.tr))
                 {
                     var rowCnfStyle = row.Elements(W.trPr).Elements(W.cnfStyle).FirstOrDefault();
@@ -1579,7 +1608,7 @@ namespace Docxodus
                             var cndType = TableStyleOverrideXNameRevMap[attName];
                             var cndStyle = style
                                 .Elements(W.tblStylePr)
-                                .FirstOrDefault(tsp => (string)tsp.Attribute(W.type) == cndType);
+                                .FirstOrDefault(tsp => (string?)tsp.Attribute(W.type) == cndType);
                             if (cndStyle != null)
                             {
                                 var styleTcBorders = cndStyle.Elements(W.tcPr).Elements(W.tcBorders).FirstOrDefault();
@@ -1596,19 +1625,21 @@ namespace Docxodus
                                         int colIdx = 0;
                                         foreach (var cell in row.Elements(W.tc))
                                         {
+                                            // AddTcPrPtToEveryCell (called earlier in this pipeline)
+                                            // stamps a pt:tcPr with an empty w:tcBorders on every cell.
                                             var tcBorders = cell.Elements(PtOpenXml.pt + "tcPr").Elements(W.tcBorders).FirstOrDefault();
                                             if (colIdx == 0)
                                             {
-                                                ResolveInsideWithExisting(tcBorders, insideV, W.right);
+                                                ResolveInsideWithExisting(tcBorders!, insideV, W.right);
                                             }
                                             else if (colIdx == lastCol)
                                             {
-                                                ResolveInsideWithExisting(tcBorders, insideV, W.left);
+                                                ResolveInsideWithExisting(tcBorders!, insideV, W.left);
                                             }
                                             else
                                             {
-                                                ResolveInsideWithExisting(tcBorders, insideV, W.left);
-                                                ResolveInsideWithExisting(tcBorders, insideV, W.right);
+                                                ResolveInsideWithExisting(tcBorders!, insideV, W.left);
+                                                ResolveInsideWithExisting(tcBorders!, insideV, W.right);
                                             }
                                             colIdx++;
                                         }
@@ -1637,7 +1668,7 @@ namespace Docxodus
                                 var cndType = TableStyleOverrideXNameRevMap[attName];
                                 var cndStyle = style
                                     .Elements(W.tblStylePr)
-                                    .FirstOrDefault(tsp => (string)tsp.Attribute(W.type) == cndType);
+                                    .FirstOrDefault(tsp => (string?)tsp.Attribute(W.type) == cndType);
                                 if (cndStyle != null)
                                 {
                                     var insideH = cndStyle.Elements(W.tcPr).Elements(W.tcBorders).Elements(W.insideH).FirstOrDefault();
@@ -1646,16 +1677,16 @@ namespace Docxodus
                                         var tcBorders = cell.Elements(PtOpenXml.pt + "tcPr").Elements(W.tcBorders).FirstOrDefault();
                                         if (rowIdx == 0)
                                         {
-                                            ResolveInsideWithExisting(tcBorders, insideH, W.bottom);
+                                            ResolveInsideWithExisting(tcBorders!, insideH, W.bottom);
                                         }
                                         else if (rowIdx == lastRow)
                                         {
-                                            ResolveInsideWithExisting(tcBorders, insideH, W.top);
+                                            ResolveInsideWithExisting(tcBorders!, insideH, W.top);
                                         }
                                         else
                                         {
-                                            ResolveInsideWithExisting(tcBorders, insideH, W.bottom);
-                                            ResolveInsideWithExisting(tcBorders, insideH, W.top);
+                                            ResolveInsideWithExisting(tcBorders!, insideH, W.bottom);
+                                            ResolveInsideWithExisting(tcBorders!, insideH, W.top);
                                         }
                                     }
                                 }
@@ -1692,16 +1723,16 @@ namespace Docxodus
                         }
                         if (cellIdx == 0)
                         {
-                            ResolveInsideWithExisting(tcBorders, tblInsideV, W.right);
+                            ResolveInsideWithExisting(tcBorders!, tblInsideV, W.right);
                         }
                         else if (cellIdx == lastCell)
                         {
-                            ResolveInsideWithExisting(tcBorders, tblInsideV, W.left);
+                            ResolveInsideWithExisting(tcBorders!, tblInsideV, W.left);
                         }
                         else
                         {
-                            ResolveInsideWithExisting(tcBorders, tblInsideV, W.left);
-                            ResolveInsideWithExisting(tcBorders, tblInsideV, W.right);
+                            ResolveInsideWithExisting(tcBorders!, tblInsideV, W.left);
+                            ResolveInsideWithExisting(tcBorders!, tblInsideV, W.right);
                         }
                         cellIdx++;
                     }
@@ -1719,7 +1750,7 @@ namespace Docxodus
                         foreach (var cell in row.Elements(W.tc))
                         {
                             var tcBorders = cell.Elements(PtOpenXml.pt + "tcPr").Elements(W.tcBorders).FirstOrDefault();
-                            ResolveInsideWithExisting(tcBorders, tblInsideH, W.bottom);
+                            ResolveInsideWithExisting(tcBorders!, tblInsideH, W.bottom);
                         }
                     }
                     else if (rowIdx1 == lastRow1)
@@ -1727,7 +1758,7 @@ namespace Docxodus
                         foreach (var cell in row.Elements(W.tc))
                         {
                             var tcBorders = cell.Elements(PtOpenXml.pt + "tcPr").Elements(W.tcBorders).FirstOrDefault();
-                            ResolveInsideWithExisting(tcBorders, tblInsideH, W.top);
+                            ResolveInsideWithExisting(tcBorders!, tblInsideH, W.top);
                         }
                     }
                     else
@@ -1735,8 +1766,8 @@ namespace Docxodus
                         foreach (var cell in row.Elements(W.tc))
                         {
                             var tcBorders = cell.Elements(PtOpenXml.pt + "tcPr").Elements(W.tcBorders).FirstOrDefault();
-                            ResolveInsideWithExisting(tcBorders, tblInsideH, W.top);
-                            ResolveInsideWithExisting(tcBorders, tblInsideH, W.bottom);
+                            ResolveInsideWithExisting(tcBorders!, tblInsideH, W.top);
+                            ResolveInsideWithExisting(tcBorders!, tblInsideH, W.bottom);
                         }
                     }
                     rowIdx1++;
@@ -1749,8 +1780,8 @@ namespace Docxodus
             if (tcBorders.Element(whichSide) != null)
             {
                 var newInsideH = ResolveInsideBorder(inside, tcBorders.Element(whichSide));
-                tcBorders.Element(whichSide).ReplaceAttributes(
-                    newInsideH.Attributes());
+                tcBorders.Element(whichSide)!.ReplaceAttributes(
+                    newInsideH!.Attributes());
             }
             else
             {
@@ -1797,7 +1828,9 @@ namespace Docxodus
             {"inset", 25 },
         };
 
-        private static XElement ResolveInsideBorder(XElement inside1, XElement sideToReplace)
+        [return: NotNullIfNotNull(nameof(inside1))]
+        [return: NotNullIfNotNull(nameof(sideToReplace))]
+        private static XElement? ResolveInsideBorder(XElement? inside1, XElement? sideToReplace)
         {
             if (inside1 == null && sideToReplace == null)
                 return null;
@@ -1812,25 +1845,26 @@ namespace Docxodus
             if (sideToReplace.Name == W.left ||
                 sideToReplace.Name == W.right)
             {
-                if ((string)inside1.Attribute(W.val) == "nil")
+                if ((string?)inside1.Attribute(W.val) == "nil")
                     return inside1;
-                if ((string)sideToReplace.Attribute(W.val) == "nil")
+                if ((string?)sideToReplace.Attribute(W.val) == "nil")
                     return sideToReplace;
             }
             else
             {
-                if ((string)inside1.Attribute(W.val) == "nil")
+                if ((string?)inside1.Attribute(W.val) == "nil")
                     return sideToReplace;
-                if ((string)sideToReplace.Attribute(W.val) == "nil")
+                if ((string?)sideToReplace.Attribute(W.val) == "nil")
                     return inside1;
             }
 
-            var inside1Val = (string)inside1.Attribute(W.val);
+            // w:val is required on a border element.
+            var inside1Val = (string)inside1.Attribute(W.val)!;
             var border1Weight = 1;
             if (BorderNumber.ContainsKey(inside1Val))
                 border1Weight = BorderNumber[inside1Val];
 
-            var sideToReplaceVal = (string)sideToReplace.Attribute(W.val);
+            var sideToReplaceVal = (string)sideToReplace.Attribute(W.val)!;
             var sideToReplaceWeight = 1;
             if (BorderNumber.ContainsKey(sideToReplaceVal))
                 sideToReplaceWeight = BorderNumber[sideToReplaceVal];
@@ -1870,10 +1904,10 @@ namespace Docxodus
             if (((int?)sideToReplace.Attribute(W.sz) ?? 0) > ((int?)inside1.Attribute(W.sz) ?? 0))
                 return sideToReplace;
 
-            var color1str = (string)inside1.Attribute(W.color);
+            var color1str = (string?)inside1.Attribute(W.color);
             if (color1str == "auto")
                 color1str = "000000";
-            var color2str = (string)sideToReplace.Attribute(W.color);
+            var color2str = (string?)sideToReplace.Attribute(W.color);
             if (color2str == "auto")
                 color2str = "000000";
             if (color1str != null && color2str != null && color1str != color2str)
@@ -1995,12 +2029,16 @@ namespace Docxodus
             {W.lastRow, "lastRow"},
         };
 
-        private static XElement MergeStyleElement(XElement higherPriorityElement, XElement lowerPriorityElement)
+        [return: NotNullIfNotNull(nameof(higherPriorityElement))]
+        [return: NotNullIfNotNull(nameof(lowerPriorityElement))]
+        private static XElement? MergeStyleElement(XElement? higherPriorityElement, XElement? lowerPriorityElement)
         {
             return MergeStyleElement(higherPriorityElement, lowerPriorityElement, null);
         }
 
-        private static XElement MergeStyleElement(XElement higherPriorityElement, XElement lowerPriorityElement, bool? highPriIsDirectFormatting)
+        [return: NotNullIfNotNull(nameof(higherPriorityElement))]
+        [return: NotNullIfNotNull(nameof(lowerPriorityElement))]
+        private static XElement? MergeStyleElement(XElement? higherPriorityElement, XElement? lowerPriorityElement, bool? highPriIsDirectFormatting)
         {
             // If, when in the process of merging, the source element doesn't have a
             // corresponding element in the merged element, then include the source element
@@ -2063,8 +2101,8 @@ namespace Docxodus
                 .Select(e =>
                 {
                     // test is here to prevent unnecessary recursion to make debugging easier
-                    var h = higherPriorityElement.Elements(W.tblStylePr).FirstOrDefault(tsp => (string)tsp.Attribute(W.type) == e);
-                    var l = lowerPriorityElement.Elements(W.tblStylePr).FirstOrDefault(tsp => (string)tsp.Attribute(W.type) == e);
+                    var h = higherPriorityElement.Elements(W.tblStylePr).FirstOrDefault(tsp => (string?)tsp.Attribute(W.type) == e);
+                    var l = lowerPriorityElement.Elements(W.tblStylePr).FirstOrDefault(tsp => (string?)tsp.Attribute(W.type) == e);
                     if (h == null && l == null)
                         return null;
                     if (h == null && l != null)
@@ -2093,7 +2131,9 @@ namespace Docxodus
             return newMergedElement;
         }
 
-        private static XElement LangMerge(XElement hLang, XElement lLang)
+        [return: NotNullIfNotNull(nameof(hLang))]
+        [return: NotNullIfNotNull(nameof(lLang))]
+        private static XElement? LangMerge(XElement? hLang, XElement? lLang)
         {
             if (hLang == null && lLang == null)
                 return null;
@@ -2101,10 +2141,11 @@ namespace Docxodus
                 return hLang;
             if (lLang != null && hLang == null)
                 return lLang;
+            // Both are non-null: the three preceding checks covered every other combination.
             return new XElement(W.lang,
-                hLang.Attribute(W.val) != null ? hLang.Attribute(W.val) : lLang.Attribute(W.val),
-                hLang.Attribute(W.bidi) != null ? hLang.Attribute(W.bidi) : lLang.Attribute(W.bidi),
-                hLang.Attribute(W.eastAsia) != null ? hLang.Attribute(W.eastAsia) : lLang.Attribute(W.eastAsia));
+                hLang!.Attribute(W.val) != null ? hLang.Attribute(W.val) : lLang!.Attribute(W.val),
+                hLang.Attribute(W.bidi) != null ? hLang.Attribute(W.bidi) : lLang!.Attribute(W.bidi),
+                hLang.Attribute(W.eastAsia) != null ? hLang.Attribute(W.eastAsia) : lLang!.Attribute(W.eastAsia));
         }
 
         private enum IndAttType
@@ -2117,7 +2158,9 @@ namespace Docxodus
             None,
         };
 
-        private static XElement IndMerge(XElement higherPriorityElement, XElement lowerPriorityElement)
+        [return: NotNullIfNotNull(nameof(higherPriorityElement))]
+        [return: NotNullIfNotNull(nameof(lowerPriorityElement))]
+        private static XElement? IndMerge(XElement? higherPriorityElement, XElement? lowerPriorityElement)
         {
             if (higherPriorityElement == null && lowerPriorityElement == null)
                 return null;
@@ -2126,8 +2169,9 @@ namespace Docxodus
             if (lowerPriorityElement != null && higherPriorityElement == null)
                 return lowerPriorityElement;
 
-            XElement hpe = new XElement(higherPriorityElement);
-            XElement lpe = new XElement(lowerPriorityElement);
+            // Both are non-null: the three preceding checks covered every other combination.
+            XElement hpe = new XElement(higherPriorityElement!);
+            XElement lpe = new XElement(lowerPriorityElement!);
 
             if (hpe.Attribute(W.firstLine) != null)
                 lpe.Attributes(W.hanging).Remove();
@@ -2155,7 +2199,7 @@ namespace Docxodus
                 .Where(a => !highPriAttNames.Contains(a.Name))
                 .ToList();
 
-            var mergedElement = new XElement(higherPriorityElement.Name,
+            var mergedElement = new XElement(higherPriorityElement!.Name,
                 highPriAtts,
                 lowPriAtts);
 
@@ -2165,7 +2209,9 @@ namespace Docxodus
         // merge child tab elements
         // they are additive, with the exception that if there are two elements at the same location,
         // we need to take the higher, and not take the lower.
-        private static XElement TabsMerge(XElement higherPriorityElement, XElement lowerPriorityElement)
+        [return: NotNullIfNotNull(nameof(higherPriorityElement))]
+        [return: NotNullIfNotNull(nameof(lowerPriorityElement))]
+        private static XElement? TabsMerge(XElement? higherPriorityElement, XElement? lowerPriorityElement)
         {
             if (higherPriorityElement != null && lowerPriorityElement == null)
                 return higherPriorityElement;
@@ -2173,18 +2219,19 @@ namespace Docxodus
                 return lowerPriorityElement;
             if (higherPriorityElement == null && lowerPriorityElement == null)
                 return null;
-            var hps = higherPriorityElement.Elements().Select(e =>
+            // Both are non-null: the three preceding checks covered every other combination.
+            var hps = higherPriorityElement!.Elements().Select(e =>
                 new
                 {
-                    Pos = WordprocessingMLUtil.StringToTwips((string)e.Attribute(W.pos)),
+                    Pos = WordprocessingMLUtil.StringToTwips((string)e.Attribute(W.pos)!),
                     Pri = 1,
                     Element = e,
                 }
             );
-            var lps = lowerPriorityElement.Elements().Select(e =>
+            var lps = lowerPriorityElement!.Elements().Select(e =>
                 new
                 {
-                    Pos = WordprocessingMLUtil.StringToTwips((string)e.Attribute(W.pos)),
+                    Pos = WordprocessingMLUtil.StringToTwips((string)e.Attribute(W.pos)!),
                     Pri = 2,
                     Element = e,
                 }
@@ -2192,13 +2239,15 @@ namespace Docxodus
             var newTabElements = hps.Concat(lps)
                 .GroupBy(s => s.Pos)
                 .Select(g => g.OrderBy(s => s.Pri).First().Element)
-                .Where(e => (string)e.Attribute(W.val) != "clear")
-                .OrderBy(e => WordprocessingMLUtil.StringToTwips((string)e.Attribute(W.pos)));
+                .Where(e => (string?)e.Attribute(W.val) != "clear")
+                .OrderBy(e => WordprocessingMLUtil.StringToTwips((string)e.Attribute(W.pos)!));
             var newTabs = new XElement(W.tabs, newTabElements);
             return newTabs;
         }
 
-        private static XElement SpacingMerge(XElement hn, XElement ln)
+        [return: NotNullIfNotNull(nameof(hn))]
+        [return: NotNullIfNotNull(nameof(ln))]
+        private static XElement? SpacingMerge(XElement? hn, XElement? ln)
         {
             if (hn == null && ln == null)
                 return null;
@@ -2206,16 +2255,17 @@ namespace Docxodus
                 return hn;
             if (hn == null && ln != null)
                 return ln;
+            // Both are non-null: the three preceding checks covered every other combination.
             var mn1 = new XElement(W.spacing,
-                hn.Attributes(),
-                ln.Attributes().Where(a => hn.Attribute(a.Name) == null));
+                hn!.Attributes(),
+                ln!.Attributes().Where(a => hn.Attribute(a.Name) == null));
             return mn1;
         }
 
         private static IEnumerable<XElement> TableStyleStack(WordprocessingDocument wDoc, string tblStyleName)
         {
-            XDocument sXDoc = wDoc.MainDocumentPart.StyleDefinitionsPart.GetXDocument();
-            string currentStyle = tblStyleName;
+            XDocument sXDoc = wDoc.MainDocumentPart!.StyleDefinitionsPart!.GetXDocument();
+            string? currentStyle = tblStyleName;
             // Cycle guard: see ParaStyleParaPropsStack. A self- or mutually-basedOn table style
             // terminates here instead of looping forever.
             var visitedTableStyles = new HashSet<string>(StringComparer.Ordinal);
@@ -2223,21 +2273,23 @@ namespace Docxodus
             {
                 if (currentStyle == null || !visitedTableStyles.Add(currentStyle))
                     yield break;
-                XElement style = sXDoc
-                    .Root
-                    .Elements(W.style).Where(s => (string)s.Attribute(W.type) == "table" &&
-                        (string)s.Attribute(W.styleId) == currentStyle)
+                XElement? style = sXDoc
+                    .Root!
+                    .Elements(W.style).Where(s => (string?)s.Attribute(W.type) == "table" &&
+                        (string?)s.Attribute(W.styleId) == currentStyle)
                     .FirstOrDefault();
                 if (style == null)
                     yield break;
                 yield return style;
-                currentStyle = (string)style.Elements(W.basedOn).Attributes(W.val).FirstOrDefault();
+                currentStyle = (string?)style.Elements(W.basedOn).Attributes(W.val).FirstOrDefault();
                 if (currentStyle == null)
                     yield break;
             }
         }
 
-        private static XElement FontMerge(XElement higherPriorityFont, XElement lowerPriorityFont)
+        [return: NotNullIfNotNull(nameof(higherPriorityFont))]
+        [return: NotNullIfNotNull(nameof(lowerPriorityFont))]
+        private static XElement? FontMerge(XElement? higherPriorityFont, XElement? lowerPriorityFont)
         {
             XElement rFonts;
 
@@ -2245,9 +2297,8 @@ namespace Docxodus
                 return lowerPriorityFont;
             if (lowerPriorityFont == null)
                 return higherPriorityFont;
-            if (higherPriorityFont == null && lowerPriorityFont == null)
-                return null;
 
+            // Both are non-null: the two preceding checks covered every other combination.
             rFonts = new XElement(W.rFonts,
                 (higherPriorityFont.Attribute(W.ascii) != null || higherPriorityFont.Attribute(W.asciiTheme) != null) ?
                     new[] { higherPriorityFont.Attribute(W.ascii), higherPriorityFont.Attribute(W.asciiTheme) } :
@@ -2278,15 +2329,16 @@ namespace Docxodus
 
         private static void AnnotateParagraph(FormattingAssemblerInfo fai, WordprocessingDocument wDoc, XElement para, FormattingAssemblerSettings settings)
         {
-            XElement localParaProps = para.Element(W.pPr);
+            XElement? localParaProps = para.Element(W.pPr);
             if (localParaProps == null)
             {
                 localParaProps = new XElement(W.pPr);
             }
 
             // get para table props, to be merged.
-            XElement tablepPr = null;
+            XElement? tablepPr = null;
 
+            // Every paragraph lives inside one of these block-level containers.
             var blockLevelContentContainer = para
                 .Ancestors()
                 .FirstOrDefault(a => a.Name == W.body ||
@@ -2295,13 +2347,13 @@ namespace Docxodus
                     a.Name == W.ftr ||
                     a.Name == W.hdr ||
                     a.Name == W.footnote ||
-                    a.Name == W.endnote);
+                    a.Name == W.endnote)!;
             if (blockLevelContentContainer.Name == W.tbl)
             {
                 XElement tbl = blockLevelContentContainer;
-                XElement style = tbl.Element(PtOpenXml.pt + "style");
-                XElement cellCnf = para.Ancestors(W.tc).Take(1).Elements(W.tcPr).Elements(W.cnfStyle).FirstOrDefault();
-                XElement rowCnf = para.Ancestors(W.tr).Take(1).Elements(W.trPr).Elements(W.cnfStyle).FirstOrDefault();
+                XElement? style = tbl.Element(PtOpenXml.pt + "style");
+                XElement? cellCnf = para.Ancestors(W.tc).Take(1).Elements(W.tcPr).Elements(W.cnfStyle).FirstOrDefault();
+                XElement? rowCnf = para.Ancestors(W.tr).Take(1).Elements(W.trPr).Elements(W.cnfStyle).FirstOrDefault();
 
                 if (style != null)
                 {
@@ -2317,45 +2369,45 @@ namespace Docxodus
                         if ((cellCnf != null && cellCnf.Attribute(attName).ToBoolean() == true) ||
                             (rowCnf != null && rowCnf.Attribute(attName).ToBoolean() == true))
                         {
-                            XElement o = style
+                            XElement? o = style
                                 .Elements(W.tblStylePr)
-                                .Where(tsp => (string)tsp.Attribute(W.type) == ot)
+                                .Where(tsp => (string?)tsp.Attribute(W.type) == ot)
                                 .FirstOrDefault();
                             if (o != null)
                             {
-                                XElement otpPr = o.Element(W.pPr);
+                                XElement? otpPr = o.Element(W.pPr);
                                 tablepPr = MergeStyleElement(otpPr, tablepPr);
                             }
                         }
                     }
                 }
             }
-            var stylesPart = wDoc.MainDocumentPart.StyleDefinitionsPart;
-            XDocument sXDoc = null;
+            var stylesPart = wDoc.MainDocumentPart!.StyleDefinitionsPart;
+            XDocument? sXDoc = null;
             if (stylesPart != null)
                 sXDoc = stylesPart.GetXDocument();
 
-            ListItemRetriever.ListItemInfo lif = para.Annotation<ListItemRetriever.ListItemInfo>();
+            ListItemRetriever.ListItemInfo? lif = para.Annotation<ListItemRetriever.ListItemInfo>();
 
             XElement rolledParaProps = ParagraphStyleRollupInternal(para, sXDoc, fai.DefaultParagraphStyleName, fai);
             if (lif != null && lif.IsZeroNumId)
                 rolledParaProps.Elements(W.ind).Remove();
-            XElement toggledParaProps = MergeStyleElement(rolledParaProps, tablepPr);
-            XElement mergedParaProps = MergeStyleElement(localParaProps, toggledParaProps);
+            XElement? toggledParaProps = MergeStyleElement(rolledParaProps, tablepPr);
+            XElement? mergedParaProps = MergeStyleElement(localParaProps, toggledParaProps);
 
-            string li = ListItemRetriever.RetrieveListItem(wDoc, para, settings.ListItemRetrieverSettings);
+            string? li = ListItemRetriever.RetrieveListItem(wDoc, para, settings.ListItemRetrieverSettings);
             if (lif != null && lif.IsListItem)
             {
                 if (settings.RestrictToSupportedNumberingFormats)
                 {
                     // Use effective level for continuation patterns (deeper-level items that continue a flat list)
-                    var effectiveLvl = lif.Lvl(ListItemRetriever.GetEffectiveLevel(para));
-                    string numFmtForLevel = (string)effectiveLvl.Elements(W.numFmt).Attributes(W.val).FirstOrDefault();
+                    var effectiveLvl = lif.Lvl(ListItemRetriever.GetEffectiveLevel(para))!;
+                    string? numFmtForLevel = (string?)effectiveLvl.Elements(W.numFmt).Attributes(W.val).FirstOrDefault();
                     if (numFmtForLevel == null)
                     {
                         var numFmtElement = effectiveLvl.Elements(MC.AlternateContent).Elements(MC.Choice).Elements(W.numFmt).FirstOrDefault();
-                        if (numFmtElement != null && (string)numFmtElement.Attribute(W.val) == "custom")
-                            numFmtForLevel = (string)numFmtElement.Attribute(W.format);
+                        if (numFmtElement != null && (string?)numFmtElement.Attribute(W.val) == "custom")
+                            numFmtForLevel = (string?)numFmtElement.Attribute(W.format);
                     }
                     bool isLgl = effectiveLvl.Elements(W.isLgl).Any();
                     if (isLgl && numFmtForLevel != "decimalZero")
@@ -2367,7 +2419,7 @@ namespace Docxodus
                 // Use effective level for continuation patterns to get correct indentation
                 int paragraphLevel = ListItemRetriever.GetEffectiveLevel(para);
                 var numberingParaProps = lif
-                    .Lvl(paragraphLevel)
+                    .Lvl(paragraphLevel)!
                     .Elements(W.pPr)
                     .FirstOrDefault();
                 if (numberingParaProps == null)
@@ -2393,7 +2445,8 @@ namespace Docxodus
                 // if a paragraph contains a numPr with a numId=0, in other words, it is NOT a numbered item, then the indentation from the style
                 // hierarchy is ignored.
 
-                ListItemRetriever.ListItemInfo lii = para.Annotation<ListItemRetriever.ListItemInfo>();
+                // Already confirmed present by the enclosing lif.IsListItem check.
+                ListItemRetriever.ListItemInfo lii = para.Annotation<ListItemRetriever.ListItemInfo>()!;
                 if (lii.FromParagraph != null)
                 {
                     // order
@@ -2422,8 +2475,8 @@ namespace Docxodus
             // merge mergedParaProps with existing accumulatedParaProps, with mergedParaProps as high pri
             // replace accumulatedParaProps with newly merged
 
-            XElement accumulatedParaProps = para.Element(PtOpenXml.pt + "pPr");
-            XElement newAccumulatedParaProps = MergeStyleElement(mergedParaProps, accumulatedParaProps);
+            XElement? accumulatedParaProps = para.Element(PtOpenXml.pt + "pPr");
+            XElement newAccumulatedParaProps = MergeStyleElement(mergedParaProps, accumulatedParaProps)!;
 
             AdjustFontAttributes(wDoc, para, newAccumulatedParaProps, newAccumulatedParaProps.Element(W.rPr), settings);
             newAccumulatedParaProps.Name = PtOpenXml.pt + "pPr";
@@ -2456,7 +2509,7 @@ namespace Docxodus
         /// Rolls up paragraph style properties from the style hierarchy.
         /// Public overload for external callers (e.g., ListItemRetriever).
         /// </summary>
-        public static XElement ParagraphStyleRollup(XElement paragraph, XDocument stylesXDoc, string defaultParagraphStyleName)
+        public static XElement ParagraphStyleRollup(XElement paragraph, XDocument stylesXDoc, string? defaultParagraphStyleName)
         {
             return ParagraphStyleRollupInternal(paragraph, stylesXDoc, defaultParagraphStyleName, null);
         }
@@ -2478,9 +2531,9 @@ namespace Docxodus
                 return new XElement(direct);
 
             var stylesXDoc = stylesPart.GetXDocument();
-            var defaultParagraphStyleName = (string)stylesXDoc.Root?
+            var defaultParagraphStyleName = (string?)stylesXDoc.Root?
                 .Elements(W.style)
-                .FirstOrDefault(s => (string)s.Attribute(W.type) == "paragraph"
+                .FirstOrDefault(s => (string?)s.Attribute(W.type) == "paragraph"
                     && s.Attribute(W._default).ToBoolean() == true)?
                 .Attribute(W.styleId);
             var defaults = stylesXDoc.Root?
@@ -2529,12 +2582,12 @@ namespace Docxodus
             var stylesXDoc = stylesPart.GetXDocument();
             var fai = new FormattingAssemblerInfo();
             IndexStylesDocument(stylesXDoc, fai);
-            foreach (var style in stylesXDoc.Root.Elements(W.style))
+            foreach (var style in stylesXDoc.Root!.Elements(W.style))
             {
                 if (style.Attribute(W._default).ToBoolean() != true)
                     continue;
-                var styleType = (string)style.Attribute(W.type);
-                var styleId = (string)style.Attribute(W.styleId);
+                var styleType = (string?)style.Attribute(W.type);
+                var styleId = (string?)style.Attribute(W.styleId);
                 if (styleType == "paragraph") fai.DefaultParagraphStyleName = styleId;
                 else if (styleType == "character") fai.DefaultCharacterStyleName = styleId;
                 else if (styleType == "table") fai.DefaultTableStyleName = styleId;
@@ -2593,9 +2646,9 @@ namespace Docxodus
         /// Optimization #2: Caches results for non-list-item paragraphs by style name.
         /// Internal version with FormattingAssemblerInfo for caching support.
         /// </summary>
-        private static XElement ParagraphStyleRollupInternal(XElement paragraph, XDocument stylesXDoc, string defaultParagraphStyleName, FormattingAssemblerInfo fai)
+        private static XElement ParagraphStyleRollupInternal(XElement paragraph, XDocument? stylesXDoc, string? defaultParagraphStyleName, FormattingAssemblerInfo? fai)
         {
-            var paraStyle = (string)paragraph
+            var paraStyle = (string?)paragraph
                 .Elements(W.pPr)
                 .Elements(W.pStyle)
                 .Attributes(W.val)
@@ -2640,7 +2693,7 @@ namespace Docxodus
         /// Builds a stack of paragraph properties from the style inheritance chain.
         /// Optimization #1: Uses pre-indexed style lookups for O(1) access.
         /// </summary>
-        private static IEnumerable<XElement> ParaStyleParaPropsStack(XDocument stylesXDoc, string paraStyleName, XElement para, FormattingAssemblerInfo fai = null)
+        private static IEnumerable<XElement> ParaStyleParaPropsStack(XDocument stylesXDoc, string? paraStyleName, XElement para, FormattingAssemblerInfo? fai = null)
         {
             if (stylesXDoc == null)
                 yield break;
@@ -2656,7 +2709,7 @@ namespace Docxodus
                     yield break;
 
                 // Optimization #1: Use indexed lookup if available, otherwise fall back to linear search
-                XElement paraStyle;
+                XElement? paraStyle;
                 if (fai != null && fai.ParagraphStyleIndex.TryGetValue(localParaStyleName, out paraStyle))
                 {
                     // Found via index - O(1)
@@ -2664,9 +2717,9 @@ namespace Docxodus
                 else
                 {
                     // Fall back to linear search - O(n)
-                    paraStyle = stylesXDoc.Root.Elements(W.style).FirstOrDefault(s =>
-                        (string)s.Attribute(W.type) == "paragraph" &&
-                        (string)s.Attribute(W.styleId) == localParaStyleName);
+                    paraStyle = stylesXDoc.Root!.Elements(W.style).FirstOrDefault(s =>
+                        (string?)s.Attribute(W.type) == "paragraph" &&
+                        (string?)s.Attribute(W.styleId) == localParaStyleName);
                 }
 
                 if (paraStyle == null)
@@ -2681,7 +2734,7 @@ namespace Docxodus
                             paraStyle.Element(W.rPr));
                         yield return elementToYield2;
                     }
-                    localParaStyleName = (string)(paraStyle
+                    localParaStyleName = (string?)(paraStyle
                         .Elements(W.basedOn)
                         .Attributes(W.val)
                         .FirstOrDefault());
@@ -2689,8 +2742,8 @@ namespace Docxodus
                 }
 
                 var elementToYield = new XElement(W.pPr,
-                    paraStyle.Element(W.pPr).Attributes(),
-                    paraStyle.Element(W.pPr).Elements(),
+                    paraStyle.Element(W.pPr)!.Attributes(),
+                    paraStyle.Element(W.pPr)!.Elements(),
                     paraStyle.Element(W.rPr));
                 yield return (elementToYield);
 
@@ -2701,10 +2754,10 @@ namespace Docxodus
                     {
                         // Use effective level for continuation patterns (deeper-level items that continue a flat list)
                         var effectiveLevel = ListItemRetriever.GetEffectiveLevel(para);
-                        XElement lipPr = listItemInfo.Lvl(effectiveLevel).Element(W.pPr);
+                        XElement? lipPr = listItemInfo.Lvl(effectiveLevel)!.Element(W.pPr);
                         if (lipPr == null)
                             lipPr = new XElement(W.pPr);
-                        XElement lirPr = listItemInfo.Lvl(effectiveLevel).Element(W.rPr);
+                        XElement? lirPr = listItemInfo.Lvl(effectiveLevel)!.Element(W.rPr);
 
                         var elementToYield2 = new XElement(W.pPr,
                             lipPr.Attributes(),
@@ -2714,7 +2767,7 @@ namespace Docxodus
                     }
                 }
 
-                localParaStyleName = (string)paraStyle
+                localParaStyleName = (string?)paraStyle
                     .Elements(W.basedOn)
                     .Attributes(W.val)
                     .FirstOrDefault();
@@ -2737,7 +2790,7 @@ namespace Docxodus
 
         private static void AnnotateRunProperties(FormattingAssemblerInfo fai, WordprocessingDocument wDoc, XElement runOrPara, FormattingAssemblerSettings settings)
         {
-            XElement localRunProps = null;
+            XElement? localRunProps = null;
             if (runOrPara.Name == W.p)
             {
                 var rPr = runOrPara.Elements(W.pPr).Elements(W.rPr).FirstOrDefault();
@@ -2756,7 +2809,8 @@ namespace Docxodus
             }
 
             // get run table props, to be merged.
-            XElement tablerPr = null;
+            XElement? tablerPr = null;
+            // Every run/paragraph lives inside one of these block-level containers.
             var blockLevelContentContainer = runOrPara
                 .Ancestors()
                 .FirstOrDefault(a => a.Name == W.body ||
@@ -2765,13 +2819,13 @@ namespace Docxodus
                     a.Name == W.ftr ||
                     a.Name == W.hdr ||
                     a.Name == W.footnote ||
-                    a.Name == W.endnote);
+                    a.Name == W.endnote)!;
             if (blockLevelContentContainer.Name == W.tbl)
             {
                 XElement tbl = blockLevelContentContainer;
-                XElement style = tbl.Element(PtOpenXml.pt + "style");
-                XElement cellCnf = runOrPara.Ancestors(W.tc).Take(1).Elements(W.tcPr).Elements(W.cnfStyle).FirstOrDefault();
-                XElement rowCnf = runOrPara.Ancestors(W.tr).Take(1).Elements(W.trPr).Elements(W.cnfStyle).FirstOrDefault();
+                XElement? style = tbl.Element(PtOpenXml.pt + "style");
+                XElement? cellCnf = runOrPara.Ancestors(W.tc).Take(1).Elements(W.tcPr).Elements(W.cnfStyle).FirstOrDefault();
+                XElement? rowCnf = runOrPara.Ancestors(W.tr).Take(1).Elements(W.trPr).Elements(W.cnfStyle).FirstOrDefault();
 
                 if (style != null)
                 {
@@ -2785,13 +2839,13 @@ namespace Docxodus
                         if ((cellCnf != null && cellCnf.Attribute(attName).ToBoolean() == true) ||
                             (rowCnf != null && rowCnf.Attribute(attName).ToBoolean() == true))
                         {
-                            XElement o = style
+                            XElement? o = style
                                 .Elements(W.tblStylePr)
-                                .Where(tsp => (string)tsp.Attribute(W.type) == ot)
+                                .Where(tsp => (string?)tsp.Attribute(W.type) == ot)
                                 .FirstOrDefault();
                             if (o != null)
                             {
-                                XElement otrPr = o.Element(W.rPr);
+                                XElement? otrPr = o.Element(W.rPr);
                                 tablerPr = MergeStyleElement(otrPr, tablerPr);
                             }
                         }
@@ -2802,8 +2856,8 @@ namespace Docxodus
             var toggledRunProps = ToggleMergeRunProps(rolledRunProps, tablerPr);
             var currentRunProps = runOrPara.Element(PtOpenXml.rPr); // this is already stored on the run from previous aggregation of props
             var mergedRunProps = MergeStyleElement(toggledRunProps, currentRunProps);
-            var newMergedRunProps = MergeStyleElement(localRunProps, mergedRunProps);
-            XElement pPr = null;
+            var newMergedRunProps = MergeStyleElement(localRunProps, mergedRunProps)!;
+            XElement? pPr = null;
             if (runOrPara.Name == W.p)
                 pPr = runOrPara.Element(PtOpenXml.pPr);
             AdjustFontAttributes(wDoc, runOrPara, pPr, newMergedRunProps, settings);
@@ -2821,15 +2875,13 @@ namespace Docxodus
 
         private static XElement CharStyleRollup(FormattingAssemblerInfo fai, WordprocessingDocument wDoc, XElement runOrPara)
         {
-            var sXDoc = wDoc.MainDocumentPart.StyleDefinitionsPart.GetXDocument();
-
-            string charStyle = null;
-            string paraStyle = null;
-            XElement rPr = null;
-            XElement pPr = null;
-            XElement pStyle = null;
-            XElement rStyle = null;
-            CachedParaInfo cpi = null; // CachedParaInfo is an optimization for the case where a paragraph contains thousands of runs.
+            string? charStyle = null;
+            string? paraStyle = null;
+            XElement? rPr = null;
+            XElement? pPr = null;
+            XElement? pStyle = null;
+            XElement? rStyle = null;
+            CachedParaInfo? cpi = null; // CachedParaInfo is an optimization for the case where a paragraph contains thousands of runs.
 
             if (runOrPara.Name == W.p)
             {
@@ -2841,7 +2893,7 @@ namespace Docxodus
                     pPr = runOrPara.Element(W.pPr);
                     if (pPr != null)
                     {
-                        paraStyle = (string)pPr.Elements(W.pStyle).Attributes(W.val).FirstOrDefault();
+                        paraStyle = (string?)pPr.Elements(W.pStyle).Attributes(W.val).FirstOrDefault();
                     }
                     else
                     {
@@ -2868,12 +2920,12 @@ namespace Docxodus
                 rStyle = rPr.Element(W.rStyle);
                 if (rStyle != null)
                 {
-                    charStyle = (string)rStyle.Attribute(W.val);
+                    charStyle = (string?)rStyle.Attribute(W.val);
                 }
                 else
                 {
                     if (runOrPara.Name == W.r)
-                        charStyle = (string)runOrPara
+                        charStyle = (string?)runOrPara
                             .Ancestors(W.p)
                             .Take(1)
                             .Elements(W.pPr)
@@ -2881,7 +2933,7 @@ namespace Docxodus
                             .Attributes(W.val)
                             .FirstOrDefault();
                     else
-                        charStyle = (string)runOrPara
+                        charStyle = (string?)runOrPara
                             .Elements(W.pPr)
                             .Elements(W.pStyle)
                             .Attributes(W.val)
@@ -2898,7 +2950,7 @@ namespace Docxodus
                     if (cpi != null)
                         charStyle = cpi.ParagraphStyleName;
                     else
-                        charStyle = (string)runOrPara.Ancestors(W.p).First().Elements(W.pPr).Elements(W.pStyle).Attributes(W.val).FirstOrDefault();
+                        charStyle = (string?)runOrPara.Ancestors(W.p).First().Elements(W.pPr).Elements(W.pStyle).Attributes(W.val).FirstOrDefault();
                 }
                 if (charStyle == null)
                 {
@@ -2907,11 +2959,11 @@ namespace Docxodus
             }
 
             // A run always must have an ancestor paragraph.
-            XElement para = null;
+            XElement para;
             var rolledUpParaStyleRunProps = new XElement(W.rPr);
             if (runOrPara.Name == W.r)
             {
-                para = runOrPara.Ancestors(W.p).FirstOrDefault();
+                para = runOrPara.Ancestors(W.p).FirstOrDefault()!;
             }
             else
             {
@@ -2932,7 +2984,7 @@ namespace Docxodus
                 pStyle = pPr.Element(W.pStyle);
                 if (pStyle != null)
                 {
-                    paraStyle = (string)pStyle.Attribute(W.val);
+                    paraStyle = (string?)pStyle.Attribute(W.val);
                 }
                 else
                 {
@@ -2944,7 +2996,7 @@ namespace Docxodus
 
             string key = (paraStyle == null ? "[null]" : paraStyle) + "~|~" +
                 (charStyle == null ? "[null]" : charStyle);
-            XElement rolledRunProps = null;
+            XElement? rolledRunProps = null;
 
             if (fai.RolledCharacterStyles.ContainsKey(key))
                 rolledRunProps = fai.RolledCharacterStyles[key];
@@ -2984,10 +3036,10 @@ namespace Docxodus
         /// Builds a stack of run properties from the paragraph style inheritance chain.
         /// Optimization #1: Uses pre-indexed style lookups for O(1) access.
         /// </summary>
-        private static IEnumerable<XElement> ParaStyleRunPropsStack(WordprocessingDocument wDoc, string paraStyleName, FormattingAssemblerInfo fai = null)
+        private static IEnumerable<XElement> ParaStyleRunPropsStack(WordprocessingDocument wDoc, string? paraStyleName, FormattingAssemblerInfo? fai = null)
         {
             var localParaStyleName = paraStyleName;
-            var sXDoc = wDoc.MainDocumentPart.StyleDefinitionsPart.GetXDocument();
+            var sXDoc = wDoc.MainDocumentPart!.StyleDefinitionsPart!.GetXDocument();
             var rValue = new Stack<XElement>();
             // Cycle guard: see ParaStyleParaPropsStack.
             var visitedParaStyles = new HashSet<string>(StringComparer.Ordinal);
@@ -2997,7 +3049,7 @@ namespace Docxodus
                     return rValue;
 
                 // Optimization #1: Use indexed lookup if available, otherwise fall back to linear search
-                XElement paraStyle;
+                XElement? paraStyle;
                 if (fai != null && fai.ParagraphStyleIndex.TryGetValue(localParaStyleName, out paraStyle))
                 {
                     // Found via index - O(1)
@@ -3005,10 +3057,10 @@ namespace Docxodus
                 else
                 {
                     // Fall back to linear search - O(n)
-                    paraStyle = sXDoc.Root.Elements(W.style).FirstOrDefault(s =>
+                    paraStyle = sXDoc.Root!.Elements(W.style).FirstOrDefault(s =>
                     {
-                        return (string)s.Attribute(W.type) == "paragraph" &&
-                            (string)s.Attribute(W.styleId) == localParaStyleName;
+                        return (string?)s.Attribute(W.type) == "paragraph" &&
+                            (string?)s.Attribute(W.styleId) == localParaStyleName;
                     });
                 }
 
@@ -3018,9 +3070,9 @@ namespace Docxodus
                 }
                 if (paraStyle.Element(W.rPr) != null)
                 {
-                    rValue.Push(paraStyle.Element(W.rPr));
+                    rValue.Push(paraStyle.Element(W.rPr)!);
                 }
-                localParaStyleName = (string)paraStyle
+                localParaStyleName = (string?)paraStyle
                     .Elements(W.basedOn)
                     .Attributes(W.val)
                     .FirstOrDefault();
@@ -3032,11 +3084,14 @@ namespace Docxodus
         /// Builds a stack of run properties from the character style inheritance chain.
         /// Optimization #1: Uses pre-indexed style lookups for O(1) access.
         /// </summary>
-        private static IEnumerable<XElement> CharStyleStack(WordprocessingDocument wDoc, string charStyleName, FormattingAssemblerInfo fai = null)
+        private static IEnumerable<XElement?> CharStyleStack(WordprocessingDocument wDoc, string? charStyleName, FormattingAssemblerInfo? fai = null)
         {
             var localCharStyleName = charStyleName;
-            var sXDoc = wDoc.MainDocumentPart.StyleDefinitionsPart.GetXDocument();
-            var rValue = new Stack<XElement>();
+            var sXDoc = wDoc.MainDocumentPart!.StyleDefinitionsPart!.GetXDocument();
+            // A style with a basedOn chain but no own w:rPr pushes a null placeholder while it
+            // keeps walking that chain — MergeStyleElement (the sole consumer, via Aggregate)
+            // already treats a null stack entry as "no contribution at this level."
+            var rValue = new Stack<XElement?>();
             // Cycle guard: see ParaStyleParaPropsStack.
             var visitedCharStyles = new HashSet<string>(StringComparer.Ordinal);
             while (localCharStyleName != null)
@@ -3044,8 +3099,8 @@ namespace Docxodus
                 if (!visitedCharStyles.Add(localCharStyleName))
                     return rValue;
 
-                XElement basedOn = null;
-                XElement charStyle = null;
+                XElement? basedOn = null;
+                XElement? charStyle = null;
 
                 // Optimization #1: Use indexed lookup if available
                 if (fai != null)
@@ -3066,17 +3121,17 @@ namespace Docxodus
                 if (charStyle == null)
                 {
                     // first look for character style
-                    charStyle = sXDoc.Root.Elements(W.style).FirstOrDefault(s =>
+                    charStyle = sXDoc.Root!.Elements(W.style).FirstOrDefault(s =>
                     {
-                        return (string)s.Attribute(W.type) == "character" &&
-                            (string)s.Attribute(W.styleId) == localCharStyleName;
+                        return (string?)s.Attribute(W.type) == "character" &&
+                            (string?)s.Attribute(W.styleId) == localCharStyleName;
                     });
                     // if not found, look for paragraph style
                     if (charStyle == null)
                     {
                         charStyle = sXDoc.Root.Elements(W.style).FirstOrDefault(s =>
                         {
-                            return (string)s.Attribute(W.styleId) == localCharStyleName;
+                            return (string?)s.Attribute(W.styleId) == localCharStyleName;
                         });
                     }
                 }
@@ -3090,7 +3145,7 @@ namespace Docxodus
                     basedOn = charStyle.Element(W.basedOn);
                     if (basedOn != null)
                     {
-                        localCharStyleName = (string)basedOn.Attribute(W.val);
+                        localCharStyleName = (string?)basedOn.Attribute(W.val);
                     }
                     else
                     {
@@ -3102,13 +3157,15 @@ namespace Docxodus
                 basedOn = charStyle.Element(W.basedOn);
                 if (basedOn != null)
                 {
-                    localCharStyleName = (string)basedOn.Attribute(W.val);
+                    localCharStyleName = (string?)basedOn.Attribute(W.val);
                 }
             }
             return rValue;
         }
 
-        private static XElement ToggleMergeRunProps(XElement higherPriorityElement, XElement lowerPriorityElement)
+        [return: NotNullIfNotNull(nameof(higherPriorityElement))]
+        [return: NotNullIfNotNull(nameof(lowerPriorityElement))]
+        private static XElement? ToggleMergeRunProps(XElement? higherPriorityElement, XElement? lowerPriorityElement)
         {
             if (lowerPriorityElement == null)
                 return higherPriorityElement;
@@ -3200,24 +3257,24 @@ namespace Docxodus
 
         public class CharStyleAttributes
         {
-            public string AsciiFont;
-            public string HAnsiFont;
-            public string EastAsiaFont;
-            public string CsFont;
-            public string Hint;
+            public string? AsciiFont;
+            public string? HAnsiFont;
+            public string? EastAsiaFont;
+            public string? CsFont;
+            public string? Hint;
             public bool Rtl;
 
-            public string LatinLang;
-            public string BidiLang;
-            public string EastAsiaLang;
+            public string? LatinLang;
+            public string? BidiLang;
+            public string? EastAsiaLang;
 
             public Dictionary<XName, bool?> ToggleProperties;
-            public Dictionary<XName, XElement> Properties;
+            public Dictionary<XName, XElement?> Properties;
 
-            public CharStyleAttributes(XElement pPr, XElement rPr)
+            public CharStyleAttributes(XElement? pPr, XElement? rPr)
             {
                 ToggleProperties = new Dictionary<XName, bool?>();
-                Properties = new Dictionary<XName, XElement>();
+                Properties = new Dictionary<XName, XElement?>();
 
                 if (rPr == null)
                     return;
@@ -3240,29 +3297,29 @@ namespace Docxodus
                 }
                 else
                 {
-                    this.AsciiFont = (string)(rFonts.Attribute(W.ascii));
-                    this.HAnsiFont = (string)(rFonts.Attribute(W.hAnsi));
-                    this.EastAsiaFont = (string)(rFonts.Attribute(W.eastAsia));
-                    this.CsFont = (string)(rFonts.Attribute(W.cs));
-                    this.Hint = (string)(rFonts.Attribute(W.hint));
+                    this.AsciiFont = (string?)(rFonts.Attribute(W.ascii));
+                    this.HAnsiFont = (string?)(rFonts.Attribute(W.hAnsi));
+                    this.EastAsiaFont = (string?)(rFonts.Attribute(W.eastAsia));
+                    this.CsFont = (string?)(rFonts.Attribute(W.cs));
+                    this.Hint = (string?)(rFonts.Attribute(W.hint));
                 }
-                XElement csel = this.Properties[W.cs];
-                bool cs = csel != null && (csel.Attribute(W.val) == null || csel.Attribute(W.val).ToBoolean() == true);
-                XElement rtlel = this.Properties[W.rtl];
-                bool rtl = rtlel != null && (rtlel.Attribute(W.val) == null || rtlel.Attribute(W.val).ToBoolean() == true);
+                XElement? csel = this.Properties[W.cs];
+                bool cs = csel != null && (csel.Attribute(W.val) == null || csel.Attribute(W.val)!.ToBoolean() == true);
+                XElement? rtlel = this.Properties[W.rtl];
+                bool rtl = rtlel != null && (rtlel.Attribute(W.val) == null || rtlel.Attribute(W.val)!.ToBoolean() == true);
                 var bidi = false;
                 if (pPr != null)
                 {
-                    XElement bidiel = pPr.Element(W.bidi);
-                    bidi = bidiel != null && (bidiel.Attribute(W.val) == null || bidiel.Attribute(W.val).ToBoolean() == true);
+                    XElement? bidiel = pPr.Element(W.bidi);
+                    bidi = bidiel != null && (bidiel.Attribute(W.val) == null || bidiel.Attribute(W.val)!.ToBoolean() == true);
                 }
                 Rtl = cs || rtl || bidi;
                 var lang = rPr.Element(W.lang);
                 if (lang != null)
                 {
-                    LatinLang = (string)lang.Attribute(W.val);
-                    BidiLang = (string)lang.Attribute(W.bidi);
-                    EastAsiaLang = (string)lang.Attribute(W.eastAsia);
+                    LatinLang = (string?)lang.Attribute(W.val);
+                    BidiLang = (string?)lang.Attribute(W.bidi);
+                    EastAsiaLang = (string?)lang.Attribute(W.eastAsia);
                 }
             }
 
@@ -3270,7 +3327,7 @@ namespace Docxodus
             {
                 if (rPr.Element(propertyName) == null)
                     return null;
-                var s = (string)rPr.Element(propertyName).Attribute(W.val);
+                var s = (string?)rPr.Element(propertyName)!.Attribute(W.val);
                 if (s == null)
                     return true;
                 if (s == "1")
@@ -3285,10 +3342,10 @@ namespace Docxodus
                     return true;
                 if (s == "off")
                     return false;
-                return (bool)(rPr.Element(propertyName).Attribute(W.val));
+                return (bool)(rPr.Element(propertyName)!.Attribute(W.val)!);
             }
 
-            private static XElement GetXmlProperty(XElement rPr, XName propertyName)
+            private static XElement? GetXmlProperty(XElement rPr, XName propertyName)
             {
                 return rPr.Element(propertyName);
             }
@@ -3420,51 +3477,50 @@ namespace Docxodus
             '\x06F9',
         };
 
-        private static void AdjustFontAttributes(WordprocessingDocument wDoc, XElement paraOrRun, XElement pPr,
-            XElement rPr, FormattingAssemblerSettings settings)
+        private static void AdjustFontAttributes(WordprocessingDocument wDoc, XElement paraOrRun, XElement? pPr,
+            XElement? rPr, FormattingAssemblerSettings settings)
         {
-            XDocument themeXDoc = null;
-            if (wDoc.MainDocumentPart.ThemePart != null)
-                themeXDoc = wDoc.MainDocumentPart.ThemePart.GetXDocument();
+            XDocument? themeXDoc = null;
+            var themePart = wDoc.MainDocumentPart!.ThemePart;
+            if (themePart != null)
+                themeXDoc = themePart.GetXDocument();
 
-            XElement fontScheme = null;
-            XElement majorFont = null;
-            XElement minorFont = null;
+            XElement? fontScheme = null;
+            XElement? majorFont = null;
+            XElement? minorFont = null;
             if (themeXDoc != null)
             {
-                fontScheme = themeXDoc.Root.Element(A.themeElements).Element(A.fontScheme);
-                majorFont = fontScheme.Element(A.majorFont);
-                minorFont = fontScheme.Element(A.minorFont);
+                fontScheme = themeXDoc.Root!.Element(A.themeElements)?.Element(A.fontScheme);
+                majorFont = fontScheme?.Element(A.majorFont);
+                minorFont = fontScheme?.Element(A.minorFont);
             }
-            var rFonts = rPr.Element(W.rFonts);
+            var rFonts = rPr?.Element(W.rFonts);
             if (rFonts == null)
             {
                 return;
             }
-            var asciiTheme = (string)rFonts.Attribute(W.asciiTheme);
-            var hAnsiTheme = (string)rFonts.Attribute(W.hAnsiTheme);
-            var eastAsiaTheme = (string)rFonts.Attribute(W.eastAsiaTheme);
-            var cstheme = (string)rFonts.Attribute(W.cstheme);
-            string ascii = null;
-            string hAnsi = null;
-            string eastAsia = null;
-            string cs = null;
+            var asciiTheme = (string?)rFonts.Attribute(W.asciiTheme);
+            var hAnsiTheme = (string?)rFonts.Attribute(W.hAnsiTheme);
+            var eastAsiaTheme = (string?)rFonts.Attribute(W.eastAsiaTheme);
+            var cstheme = (string?)rFonts.Attribute(W.cstheme);
+            string? ascii = null;
+            string? hAnsi = null;
+            string? eastAsia = null;
+            string? cs = null;
 
-            XElement minorLatin = null;
-            string minorLatinTypeface = null;
-            XElement majorLatin = null;
-            string majorLatinTypeface = null;
+            string? minorLatinTypeface = null;
+            string? majorLatinTypeface = null;
 
             if (minorFont != null)
             {
-                minorLatin = minorFont.Element(A.latin);
-                minorLatinTypeface = (string)minorLatin.Attribute("typeface");
+                var minorLatin = minorFont.Element(A.latin);
+                minorLatinTypeface = (string?)minorLatin?.Attribute("typeface");
             }
 
             if (majorFont != null)
             {
-                majorLatin = majorFont.Element(A.latin);
-                majorLatinTypeface = (string)majorLatin.Attribute("typeface");
+                var majorLatin = majorFont.Element(A.latin);
+                majorLatinTypeface = (string?)majorLatin?.Attribute("typeface");
             }
             if (asciiTheme != null)
             {
@@ -3503,11 +3559,11 @@ namespace Docxodus
             {
                 if (cstheme.StartsWith("minor") && minorFont != null)
                 {
-                    cs = (string)minorFont.Element(A.cs).Attribute("typeface");
+                    cs = (string?)minorFont.Element(A.cs)?.Attribute("typeface");
                 }
                 else if (cstheme.StartsWith("major") && majorFont != null)
                 {
-                    cs = (string)majorFont.Element(A.cs).Attribute("typeface");
+                    cs = (string?)majorFont.Element(A.cs)?.Attribute("typeface");
                 }
             }
 
@@ -3573,28 +3629,28 @@ namespace Docxodus
                 charToExamine = str[0];
 
             var ft = DetermineFontTypeFromCharacter(charToExamine, csa);
-            string fontType = null;
-            string languageType = null;
+            string? fontType = null;
+            string? languageType = null;
             switch (ft)
             {
                 case FontType.Ascii:
-                    fontType = (string)rFonts.Attribute(W.ascii);
+                    fontType = (string?)rFonts.Attribute(W.ascii);
                     languageType = "western";
                     break;
                 case FontType.HAnsi:
-                    fontType = (string)rFonts.Attribute(W.hAnsi);
+                    fontType = (string?)rFonts.Attribute(W.hAnsi);
                     languageType = "western";
                     break;
                 case FontType.EastAsia:
                     if (settings.RestrictToSupportedLanguages)
                         throw new UnsupportedLanguageException("EastAsia languages are not supported");
-                    fontType = (string)rFonts.Attribute(W.eastAsia);
+                    fontType = (string?)rFonts.Attribute(W.eastAsia);
                     languageType = "eastAsia";
                     break;
                 case FontType.CS:
                     if (settings.RestrictToSupportedLanguages)
                         throw new UnsupportedLanguageException("Complex script (RTL) languages are not supported");
-                    fontType = (string)rFonts.Attribute(W.cs);
+                    fontType = (string?)rFonts.Attribute(W.cs);
                     languageType = "bidi";
                     break;
             }
@@ -3608,7 +3664,8 @@ namespace Docxodus
                 }
                 else
                 {
-                    paraOrRun.Attribute(PtOpenXml.FontName).Value = fontType.ToString();
+                    // Re-fetched, not the same reference narrowed by the != null check above.
+                    paraOrRun.Attribute(PtOpenXml.FontName)!.Value = fontType.ToString();
                 }
             }
             if (languageType != null)
@@ -3620,7 +3677,8 @@ namespace Docxodus
                 }
                 else
                 {
-                    paraOrRun.Attribute(PtOpenXml.LanguageType).Value = languageType;
+                    // Re-fetched, not the same reference narrowed by the != null check above.
+                    paraOrRun.Attribute(PtOpenXml.LanguageType)!.Value = languageType;
                 }
             }
         }
@@ -4186,9 +4244,9 @@ namespace Docxodus
 
         private class FormattingAssemblerInfo
         {
-            public string DefaultParagraphStyleName;
-            public string DefaultCharacterStyleName;
-            public string DefaultTableStyleName;
+            public string? DefaultParagraphStyleName;
+            public string? DefaultCharacterStyleName;
+            public string? DefaultTableStyleName;
             /// <summary>Style-element count at index time — cache guard (see AssembleFormatting).</summary>
             public int IndexedStyleCount;
             public Dictionary<string, XElement> RolledCharacterStyles;
@@ -4215,8 +4273,8 @@ namespace Docxodus
         // CachedParaInfo is an optimization for the case where a paragraph contains thousands of runs.
         private class CachedParaInfo
         {
-            public string ParagraphStyleName;
-            public XElement ParagraphProperties;
+            public string? ParagraphStyleName;
+            public XElement? ParagraphProperties;
         }
 
         public class UnsupportedNumberingFormatException : Exception

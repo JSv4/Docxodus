@@ -670,7 +670,7 @@ namespace Docxodus
             }
         }
 
-        private static string GetFontFromFontType(FormattingAssembler.CharStyleAttributes csa, FormattingAssembler.FontType ft)
+        private static string? GetFontFromFontType(FormattingAssembler.CharStyleAttributes csa, FormattingAssembler.FontType ft)
         {
             switch (ft)
             {
