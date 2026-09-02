@@ -27,9 +27,9 @@ nullable-checked by default, so a new file needs no directive. The inherited
 OpenXmlPowerTools core has fully migrated (issue #645): no file under `Docxodus/`
 carries a `#nullable disable` header anymore. `grep -l "^#nullable disable" Docxodus/*.cs`
 should return nothing — reintroducing the header on a new or refactored file is a
-regression, not a shortcut. `CS8632` still sits in the project's `NoWarn` list; issue
-#651 tracks retiring it now that no opted-out file needs the inert `?` annotations it
-was covering.
+regression, not a shortcut. `Docxodus.csproj` no longer has a `NoWarn` property at all
+(issue #651) — `CS8632`, `CS8073` and `CA2200` are gone along with the last opted-out
+file that could fire them.
 
 ### Warnings
 
@@ -37,7 +37,7 @@ was covering.
 **`Docxodus.csproj` and `Docxodus.Tests.csproj` both override it to `false`**, so the core
 library and the test project do *not* fail on warnings. The CLI tools, MCP server,
 python-host and WASM project do inherit it. Current baseline: the library builds with
-**113 warnings**, the test project with **689** (mostly StyleCop `SA1633`/`SA1636` file
+**113 warnings**, the test project with **690** (mostly StyleCop `SA1633`/`SA1636` file
 headers and `SA1206` using-order). Don't add to either baseline. Measure with
 `--no-incremental` — a warm incremental build reports zero because nothing recompiles.
 

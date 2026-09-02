@@ -49,6 +49,17 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- The complex-form benchmark harness (`benchmarks/complex-form-doc`) compiles again. Removing the
+  legacy comparison engine deleted the harness's terminal summary along with its legacy stage,
+  leaving the `int`-returning entry point with a path that never returned (`CS0161`). The summary
+  line and the `0`/`2` exit code are restored, and CI now compiles every out-of-solution tool and
+  benchmark so this class of rot cannot go unnoticed again.
+- The complex-form benchmark's `README.md` and `FINDINGS.md` no longer describe the removed legacy
+  engine as a live stage. The README's stage table is now keyed on the exact labels the harness
+  prints, `FINDINGS.md` is refreshed from a recorded current-`main` run with its stable assertions
+  separated from indicative timings, and a test asserts the README and `Program.cs` name the same
+  set of stages so they cannot drift apart again.
+
 - `OpenXmlRegex.Match` no longer throws a `NullReferenceException` when called without a callback
   on PowerPoint/DrawingML content (the `a:p`/`p:p` namespaced path) — it now returns the match
   count like the Wordprocessing path already did.
@@ -70,6 +81,23 @@ All notable changes to this project will be documented in this file.
   resolving theme fonts for a paragraph whose accumulated properties don't carry a paragraph-mark
   run-properties element (`w:rPr`) — it now skips theme-font resolution for that paragraph mark
   instead of crashing.
+- `DocumentBuilder.CopyFontTable` no longer treats every embedded font in a merged document as
+  already present in the output — a relationship lookup returning a value type was compared to
+  `null`, which is always true for that type, so the actual font-copy logic beneath it was
+  unreachable. No `DocumentBuilder` merge has ever embedded a font.
+- `DocumentBuilder`'s image, OLE-object, and chart-data relationship copying no longer misses the
+  case where a reference points at an *external* relationship rather than a same-package part —
+  the same always-true value-type comparison meant the external-relationship fallback in
+  `CopyRelatedImage`, the OLE-object copy loop, and `CopyChartObjects` could never run.
+- `DocumentBuilder`'s chart (`c:chart`) and chart-drawing (`c:userShapes`) part copying no longer
+  crashes when a referenced relationship doesn't resolve — same root cause, but these two paths
+  had no fallback at all, so a document with a stray reference could abort the whole merge instead
+  of the reference being skipped.
+- `MetricsGetter`'s `ReferenceToNullImage` metric can now actually be reported — the same
+  value-type/`null` comparison meant it could never increment, even for a document with a
+  genuinely dangling image relationship.
+- `DocumentBuilder`'s three `catch (DocumentBuilderInternalException) { throw dbie; }` rethrows
+  now preserve the original stack trace (`throw;`) instead of resetting it to the rethrow point.
 
 ## [11.0.0] - 2026-09-01
 
