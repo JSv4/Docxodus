@@ -18,6 +18,14 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `WmlToHtmlConverter` no longer emits a return-arrow hyperlink for a footnote or endnote
+  definition that no story cites. Word keeps such orphaned definitions and the converter still
+  renders them for package fidelity, but the arrow used to target an id nothing had emitted, so
+  standalone export reported `fragment_target_unavailable` for markup the converter authored
+  itself — enough to fail an export under a strict unsupported-content policy. Note navigation is
+  now resolved against the finished output: an unresolvable return arrow is dropped, and the
+  mirror case — a cited note whose definition is missing from the part — keeps its visible marker
+  but loses its dead `href` rather than becoming another dangling link.
 - `tools/mcp-server/README.md` now describes the tool surface the server actually advertises. It
   claimed three lifecycle tools plus eighteen grouped-intent tools against a `ToolCatalog` of 22,
   and omitted `docxodus_preview`, `docxodus_links`, `docxodus_images`,

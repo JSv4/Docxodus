@@ -299,6 +299,20 @@ namespace Docxodus
         /// </summary>
         internal bool SkipFormattingPartsSimplification;
 
+        /// <summary>
+        /// This conversion covers a FRAGMENT of the package rather than the whole document —
+        /// the incremental block render (<see cref="Internal.HtmlConversionOps"/>) builds a shell
+        /// whose body holds only the cloned blocks the caller asked for.
+        ///
+        /// <para>A cross-reference that leaves the fragment is expected there, not broken: a citing
+        /// paragraph rendered on its own legitimately links to a note definition that is simply not
+        /// in this output. Completeness checks over the finished tree — <see
+        /// cref="RemoveUnresolvableNoteLinks"/> — are therefore skipped, because on a fragment they
+        /// would strip navigation the surrounding document does resolve. Internal-only; the
+        /// full-document render leaves it false. Default: false.</para>
+        /// </summary>
+        internal bool RendersDocumentFragment;
+
         public WmlToHtmlConverterSettings()
         {
             PageTitle = "";
@@ -1040,6 +1054,11 @@ namespace Docxodus
             XElement xhtml = (XElement)ConvertToHtmlTransform(wordDoc, htmlConverterSettings,
                 rootElement, false, 0m)!;
 
+            // Only a whole-document render can answer "is the target in this output?" — see
+            // RendersDocumentFragment.
+            if (!htmlConverterSettings.RendersDocumentFragment)
+                RemoveUnresolvableNoteLinks(xhtml);
+
             ReifyStylesAndClasses(htmlConverterSettings, xhtml, wordDoc);
 
             // Remove insignificant whitespace between inline elements in paragraphs.
@@ -1560,6 +1579,66 @@ namespace Docxodus
         /// from rendering as visible spaces between inline elements.
         /// This matches LibreOffice's HTML output behavior.
         /// </summary>
+        /// <summary>
+        /// Drops the note navigation links whose target this conversion never emitted.
+        ///
+        /// <para>The two halves of a note's navigation are authored by different code paths over
+        /// different sources: the marker (<c>#fn-N</c>) comes from a <c>w:footnoteReference</c> in a
+        /// rendered story, and the return arrow (<c>#fn-ref-N</c>) comes from a <c>w:footnote</c>
+        /// definition in <c>footnotes.xml</c>. Neither part guarantees the other exists. Word keeps
+        /// orphaned definitions — <c>TestFiles/NVCA-Model-COI.docx</c> carries an uncited
+        /// <c>w:endnote</c> — and the converter renders them for package fidelity, which left a
+        /// return arrow pointing at an id nothing had emitted (issue #667). Standalone export then
+        /// reported <c>fragment_target_unavailable</c> for markup this converter authored itself,
+        /// and under a strict unsupported-content policy that fails the export.</para>
+        ///
+        /// <para>Resolving this against the finished tree rather than against the numbering tracker
+        /// is deliberate: it asks the only question that matters — is the target id in the output? —
+        /// and so stays correct for references in stories the tracker does not scan, such as headers
+        /// and footers.</para>
+        ///
+        /// <para>The two directions are not repaired the same way. A return arrow is pure navigation
+        /// chrome, so an unresolvable one is removed outright. A marker carries the note's visible
+        /// number, which is document content, so it only loses its <c>href</c> and stays as an inert
+        /// label.</para>
+        /// </summary>
+        private static void RemoveUnresolvableNoteLinks(XElement xhtml)
+        {
+            var noteLinks = xhtml.Descendants(Xhtml.a)
+                .Select(a => (Anchor: a, Href: (string?)a.Attribute("href")))
+                .Where(l => l.Href != null && (
+                    l.Href.StartsWith("#fn-", StringComparison.Ordinal) ||
+                    l.Href.StartsWith("#en-", StringComparison.Ordinal)))
+                .ToList();
+            if (noteLinks.Count == 0)
+                return;
+
+            var emittedIds = new HashSet<string>(
+                xhtml.Descendants().Select(e => (string?)e.Attribute("id")).OfType<string>(),
+                StringComparer.Ordinal);
+
+            foreach (var (anchor, href) in noteLinks)
+            {
+                if (emittedIds.Contains(href!.Substring(1)))
+                    continue;
+
+                var isReturnArrow = href.StartsWith("#fn-ref-", StringComparison.Ordinal) ||
+                                    href.StartsWith("#en-ref-", StringComparison.Ordinal);
+                if (isReturnArrow)
+                {
+                    // RenderFootnoteItem appends the arrow as a separator space followed by the
+                    // anchor; take the space with it so an orphaned note keeps no trailing gap.
+                    if (anchor.PreviousNode is XText separator && separator.Value == " ")
+                        separator.Remove();
+                    anchor.Remove();
+                }
+                else
+                {
+                    anchor.Attribute("href")!.Remove();
+                }
+            }
+        }
+
         private static void NormalizeInlineWhitespace(XElement root)
         {
             // Elements that contain inline content where whitespace between children matters
