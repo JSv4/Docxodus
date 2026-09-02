@@ -151,7 +151,8 @@ namespace Docxodus
                                     FiStack = fis,
                                 };
                             };
-                            // A well-formed separate/end always follows a begin, which pushed FiStack above.
+                            // An orphan separate/end with no preceding begin throws here (NullReferenceException
+                            // via FiStack!), exactly as it did before this file was nullable-annotated.
                             if (e.Attribute(w + "fldCharType")!.Value == "separate")
                             {
                                 Stack<FieldElementTypeInfo> fis = new Stack<FieldElementTypeInfo>(s.FiStack!.Reverse());
