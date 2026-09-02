@@ -876,13 +876,13 @@ namespace Docxodus.HtmlToWml
                 {
                     if (element.Parent == null)
                     {
-                        double? pageWidth = (double?)settings.SectPr.Elements(W.pgSz).Attributes(W._w).FirstOrDefault();
+                        double? pageWidth = (double?)settings.SectPr!.Elements(W.pgSz).Attributes(W._w).FirstOrDefault();
                         if (pageWidth == null)
                             pageWidth = 12240;
-                        double? leftMargin = (double?)settings.SectPr.Elements(W.pgMar).Attributes(W.left).FirstOrDefault();
+                        double? leftMargin = (double?)settings.SectPr!.Elements(W.pgMar).Attributes(W.left).FirstOrDefault();
                         if (leftMargin == null)
                             leftMargin = 1440;
-                        double? rightMargin = (double?)settings.SectPr.Elements(W.pgMar).Attributes(W.left).FirstOrDefault();
+                        double? rightMargin = (double?)settings.SectPr!.Elements(W.pgMar).Attributes(W.left).FirstOrDefault();
                         if (rightMargin == null)
                             rightMargin = 1440;
                         double width = (double)(pageWidth - leftMargin - rightMargin) / 20;
@@ -1175,7 +1175,7 @@ namespace Docxodus.HtmlToWml
             out CssDocument defaultCssDoc,
             out CssDocument authorCssDoc,
             out CssDocument userCssDoc,
-            string annotatedHtmlDumpFileName)
+            string? annotatedHtmlDumpFileName)
         {
             int propertySequence = 1;
 

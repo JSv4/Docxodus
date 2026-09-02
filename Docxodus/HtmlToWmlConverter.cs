@@ -1,6 +1,3 @@
-// Inherited OpenXmlPowerTools code that predates nullable annotations (issue #13).
-#nullable disable
-
 // Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
@@ -20,18 +17,21 @@ namespace Docxodus
 {
     public class HtmlToWmlConverterSettings
     {
-        public string MajorLatinFont;
-        public string MinorLatinFont;
+        // Genuinely optional: GetDefaultSettings() populates every field below except
+        // BaseUriForImages, but this is a public mutable settings bag that external NuGet
+        // callers can also construct directly, so none of these are guaranteed set.
+        public string? MajorLatinFont;
+        public string? MinorLatinFont;
         public double DefaultFontSize;
-        public XElement DefaultSpacingElement;
-        public XElement DefaultSpacingElementForParagraphsInTables;
-        public XElement SectPr;
-        public string DefaultBlockContentMargin;
-        public string BaseUriForImages;
+        public XElement? DefaultSpacingElement;
+        public XElement? DefaultSpacingElementForParagraphsInTables;
+        public XElement? SectPr;
+        public string? DefaultBlockContentMargin;
+        public string? BaseUriForImages;
 
-        public Twip PageWidthTwips { get { return (long)SectPr.Elements(W.pgSz).Attributes(W._w).FirstOrDefault(); } }
-        public Twip PageMarginLeftTwips { get { return (long)SectPr.Elements(W.pgMar).Attributes(W.left).FirstOrDefault(); } }
-        public Twip PageMarginRightTwips { get { return (long)SectPr.Elements(W.pgMar).Attributes(W.right).FirstOrDefault(); } }
+        public Twip PageWidthTwips { get { return (long)SectPr!.Elements(W.pgSz).Attributes(W._w).FirstOrDefault()!; } }
+        public Twip PageMarginLeftTwips { get { return (long)SectPr!.Elements(W.pgMar).Attributes(W.left).FirstOrDefault()!; } }
+        public Twip PageMarginRightTwips { get { return (long)SectPr!.Elements(W.pgMar).Attributes(W.right).FirstOrDefault()!; } }
         public Emu PageWidthEmus { get { return Emu.TwipsToEmus(PageWidthTwips); } }
         public Emu PageMarginLeftEmus { get { return Emu.TwipsToEmus(PageMarginLeftTwips); } }
         public Emu PageMarginRightEmus { get { return Emu.TwipsToEmus(PageMarginRightTwips); } }
@@ -300,7 +300,7 @@ ABMkAAB3b3JkL3N0eWxlcy54bWxQSwECLQAUAAYACAAAACEATbb2nsIBAACiBAAAEgAAAAAAAAAA
 AAAAAABELQAAd29yZC9mb250VGFibGUueG1sUEsBAi0AFAAGAAgAAAAhAE5wytZwAQAAxQIAABAA
 AAAAAAAAAAAAAAAANi8AAGRvY1Byb3BzL2FwcC54bWxQSwUGAAAAAAwADAAJAwAA3DEAAAAA";
 
-        private static WmlDocument s_EmptyDocument = null;
+        private static WmlDocument? s_EmptyDocument = null;
 
         public static WmlDocument EmptyDocument
         {
@@ -326,7 +326,7 @@ AAAAAAAAAAAAAAAANi8AAGRvY1Byb3BzL2FwcC54bWxQSwUGAAAAAAwADAAJAwAA3DEAAAAA";
                 ms.Write(wmlDocument.DocumentByteArray, 0, wmlDocument.DocumentByteArray.Length);
                 using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, false))
                 {
-                    string majorLatinFont, minorLatinFont;
+                    string? majorLatinFont, minorLatinFont;
                     double defaultFontSize;
                     GetDefaultFontInfo(wDoc, out majorLatinFont, out minorLatinFont, out defaultFontSize);
                     settings.MajorLatinFont = majorLatinFont;
@@ -351,8 +351,8 @@ AAAAAAAAAAAAAAAANi8AAGRvY1Byb3BzL2FwcC54bWxQSwUGAAAAAAwADAAJAwAA3DEAAAAA";
                         new XAttribute(W.line, 240),
                         new XAttribute(W.lineRule, "auto"));
 
-                    XDocument mXDoc = wDoc.MainDocumentPart.GetXDocument();
-                    XElement existingSectPr = mXDoc.Root.Descendants(W.sectPr).FirstOrDefault();
+                    XDocument mXDoc = wDoc.MainDocumentPart!.GetXDocument();
+                    XElement existingSectPr = mXDoc.Root!.Descendants(W.sectPr).FirstOrDefault()!;
                     settings.SectPr = new XElement(W.sectPr,
                         existingSectPr.Elements(W.pgSz),
                         existingSectPr.Elements(W.pgMar));
@@ -361,16 +361,16 @@ AAAAAAAAAAAAAAAANi8AAGRvY1Byb3BzL2FwcC54bWxQSwUGAAAAAAwADAAJAwAA3DEAAAAA";
             return settings;
         }
 
-        private static void GetDefaultFontInfo(WordprocessingDocument wDoc, out string majorLatinFont, out string minorLatinFont, out double defaultFontSize)
+        private static void GetDefaultFontInfo(WordprocessingDocument wDoc, out string? majorLatinFont, out string? minorLatinFont, out double defaultFontSize)
         {
-            if (wDoc.MainDocumentPart.ThemePart != null)
+            if (wDoc.MainDocumentPart!.ThemePart != null)
             {
-                XElement fontScheme = wDoc.MainDocumentPart.ThemePart.GetXDocument().Root.Elements(A.themeElements).Elements(A.fontScheme).FirstOrDefault();
+                XElement? fontScheme = wDoc.MainDocumentPart.ThemePart.GetXDocument().Root!.Elements(A.themeElements).Elements(A.fontScheme).FirstOrDefault();
                 if (fontScheme != null)
                 {
-                    majorLatinFont = (string)fontScheme.Elements(A.majorFont).Elements(A.latin).Attributes(NoNamespace.typeface).FirstOrDefault();
-                    minorLatinFont = (string)fontScheme.Elements(A.minorFont).Elements(A.latin).Attributes(NoNamespace.typeface).FirstOrDefault();
-                    string defaultFontSizeString = (string)wDoc.MainDocumentPart.StyleDefinitionsPart.GetXDocument().Root.Elements(W.docDefaults)
+                    majorLatinFont = (string?)fontScheme.Elements(A.majorFont).Elements(A.latin).Attributes(NoNamespace.typeface).FirstOrDefault();
+                    minorLatinFont = (string?)fontScheme.Elements(A.minorFont).Elements(A.latin).Attributes(NoNamespace.typeface).FirstOrDefault();
+                    string? defaultFontSizeString = (string?)wDoc.MainDocumentPart.StyleDefinitionsPart?.GetXDocument().Root?.Elements(W.docDefaults)
                         .Elements(W.rPrDefault).Elements(W.rPr).Elements(W.sz).Attributes(W.val).FirstOrDefault();
                     if (defaultFontSizeString != null)
                     {
