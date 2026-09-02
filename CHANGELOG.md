@@ -16,6 +16,15 @@ All notable changes to this project will be documented in this file.
   is now emitted immediately after the primary, ahead of the inferred generic fallback, for body
   and running stories alike. A family with no declared alternate is left exactly as it was rather
   than guessed at from its name.
+- Saving a `DocxSession` no longer rewrites OPC parts whose XML did not change. A single tracked
+  text replacement on `TestFiles/NVCA-Model-COI.docx` altered the payload of 23 of the package's 44
+  parts — every header and footer, both note parts, styles and settings — even though only
+  `word/document.xml` and `word/settings.xml` had any semantic change. The difference on the other
+  21 was three bytes: the writer that serializes a part imposed a UTF-8 byte-order mark on parts
+  that had none. Part serialization now preserves whatever byte-order-mark convention a part
+  already had, so an untouched part comes back byte-identical and a package diff shows the edit
+  instead of burying it. This holds for every transport, because they all save through the same
+  serializer.
 
 ### Changed
 

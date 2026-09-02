@@ -205,6 +205,42 @@ namespace Docxodus
             }
         }
 
+        /// <summary>
+        /// Writer settings that keep <paramref name="part"/>'s existing byte-order-mark
+        /// convention.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="XmlWriter"/>'s default UTF-8 encoding emits a BOM; Word's parts generally
+        /// carry none. Serializing under the default therefore added three bytes to the front of
+        /// every part it touched, which is a payload change to a part whose XML did not change at
+        /// all — enough to make a one-word edit look like it rewrote 23 of a document's 44 parts
+        /// (issue #668). A BOM is not part of the XML infoset and OPC readers accept either form,
+        /// so the honest rule is to leave the convention as it was found rather than to impose one.
+        /// </remarks>
+        private static XmlWriterSettings PreservingWriterSettings(OpenXmlPart part)
+        {
+            bool hasByteOrderMark;
+            using (Stream partStream = part.GetStream(FileMode.Open, FileAccess.Read))
+            {
+                Span<byte> head = stackalloc byte[3];
+                int read = 0;
+                while (read < head.Length)
+                {
+                    int n = partStream.Read(head[read..]);
+                    if (n == 0) break;
+                    read += n;
+                }
+
+                hasByteOrderMark = read == head.Length
+                    && head[0] == 0xEF && head[1] == 0xBB && head[2] == 0xBF;
+            }
+
+            return new XmlWriterSettings
+            {
+                Encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: hasByteOrderMark),
+            };
+        }
+
         public static void PutXDocument(this OpenXmlPart? part)
         {
             if (part == null) throw new ArgumentNullException("part");
@@ -212,15 +248,10 @@ namespace Docxodus
             XDocument partXDocument = part.GetXDocument();
             if (partXDocument != null)
             {
-#if true
+                XmlWriterSettings settings = PreservingWriterSettings(part);
                 using (Stream partStream = part.GetStream(FileMode.Create, FileAccess.Write))
-                using (XmlWriter partXmlWriter = XmlWriter.Create(partStream))
+                using (XmlWriter partXmlWriter = XmlWriter.Create(partStream, settings))
                     partXDocument.Save(partXmlWriter);
-#else
-                byte[] array = Encoding.UTF8.GetBytes(partXDocument.ToString(SaveOptions.DisableFormatting));
-                using (MemoryStream ms = new MemoryStream(array))
-                    part.FeedData(ms);
-#endif
             }
         }
 
@@ -248,8 +279,9 @@ namespace Docxodus
             if (part == null) throw new ArgumentNullException("part");
             if (document == null) throw new ArgumentNullException("document");
 
+            XmlWriterSettings settings = PreservingWriterSettings(part);
             using (Stream partStream = part.GetStream(FileMode.Create, FileAccess.Write))
-            using (XmlWriter partXmlWriter = XmlWriter.Create(partStream))
+            using (XmlWriter partXmlWriter = XmlWriter.Create(partStream, settings))
                 document.Save(partXmlWriter);
 
             part.RemoveAnnotations<XDocument>();
