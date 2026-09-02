@@ -6,6 +6,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Validation;
@@ -168,6 +169,60 @@ public class DocxSessionPartPayloadIdentityTests
             changed.Any(name => name.StartsWith("word/header", StringComparison.Ordinal)),
             "the edited header was not written; changed: " + string.Join(", ", changed));
         Assert.DoesNotContain("word/document.xml", changed);
+    }
+
+    [Fact]
+    public void MarkupDetailOutsideTheXmlInfosetIsNormalizedRatherThanPreserved()
+    {
+        // The boundary of the invariant, stated rather than assumed. A part is preserved because
+        // the round-trip through LINQ-to-XML reproduces it, not because the write is skipped — so
+        // anything the XML infoset does not carry is normalized. Empty-element spelling IS carried
+        // (`<w:x></w:x>` survives as long form), which covers what OOXML producers actually emit;
+        // whitespace INSIDE a tag is not.
+        var before = File.ReadAllBytes(NvcaPath);
+
+        var doctored = WithRewrittenHeader(before, xml =>
+            new Regex(@"<(w:[A-Za-z]+)([^>/]*?)\s*/>").Replace(
+                xml, m => $"<{m.Groups[1].Value}{m.Groups[2].Value}></{m.Groups[1].Value}>", 1));
+        byte[] afterLongForm;
+        using (var session = new DocxSession(doctored)) afterLongForm = session.Save();
+
+        // Long-form empty elements survive: this is the case a naive reading of "reserialized"
+        // would expect to break, and it does not.
+        Assert.DoesNotContain("word/header1.xml", ChangedParts(doctored, afterLongForm));
+
+        var spaced = WithRewrittenHeader(before, xml =>
+            new Regex(@"<(w:[A-Za-z]+)([^>/]*?)\s*/>").Replace(
+                xml, m => $"<{m.Groups[1].Value}{m.Groups[2].Value}  />", 1));
+        byte[] afterSpaced;
+        using (var session = new DocxSession(spaced)) afterSpaced = session.Save();
+
+        // Insignificant whitespace inside a tag is not part of the infoset and does not survive.
+        // No OOXML producer emits it; recording the limit is the point.
+        Assert.Contains("word/header1.xml", ChangedParts(spaced, afterSpaced));
+    }
+
+    private static byte[] WithRewrittenHeader(byte[] docx, Func<string, string> rewrite)
+    {
+        using var output = new MemoryStream();
+        using (var source = new MemoryStream(docx))
+        using (var sourceZip = new ZipArchive(source, ZipArchiveMode.Read))
+        using (var targetZip = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            foreach (var entry in sourceZip.Entries)
+            {
+                using var entryStream = entry.Open();
+                using var buffer = new MemoryStream();
+                entryStream.CopyTo(buffer);
+                var payload = buffer.ToArray();
+                if (entry.FullName == "word/header1.xml")
+                    payload = Encoding.UTF8.GetBytes(rewrite(Encoding.UTF8.GetString(payload)));
+                using var target = targetZip.CreateEntry(entry.FullName).Open();
+                target.Write(payload, 0, payload.Length);
+            }
+        }
+
+        return output.ToArray();
     }
 
     [Fact]
