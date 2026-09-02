@@ -58,10 +58,12 @@ async function startAutopilot(page: Page) {
       while (q.length) {
         const [x, y] = q.shift()!;
         if (isTarget(rows[y][x])) {
-          let k = x + ',' + y, pk = prev.get(k);
-          while (pk && prev.get(pk) !== null) { k = pk; pk = prev.get(k)!; }
+          let k = x + ',' + y, pk = prev.get(k), dist = 0;
+          while (pk && prev.get(pk) !== null) { k = pk; pk = prev.get(k)!; dist++; }
           const [fx, fy] = k.split(',').map(Number);
-          return { fx, fy };
+          // dist is the whole remaining path, not the one-cell step: it is the only
+          // number that tells "slow but closing" from "moving and getting nowhere".
+          return { fx, fy, dist };
         }
         for (const [nx, ny] of [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]]) {
           const kk = nx + ',' + ny;
@@ -74,12 +76,13 @@ async function startAutopilot(page: Page) {
       return null;
     };
 
-    let goal: { fx: number; fy: number } | null = null;
+    let goal: { fx: number; fy: number; dist: number } | null = null;
     let stuck = 0;
     // Black-box flight recorder for the timeout diagnosis issue #492 asked
     // for: enough to tell "no path found" from "path found but never stepped"
     // from "pinned in combat" without re-running anything.
-    const diag = { ticks: 0, bfsCalls: 0, bfsNull: 0, combatTicks: 0, alive: true };
+    const diag = { ticks: 0, bfsCalls: 0, bfsNull: 0, combatTicks: 0, alive: true,
+      firstDist: -1, lastDist: -1, minDist: Infinity };
     // No-progress fallback: sustained fire with no damage dealt means the foe
     // is behind a wall (awake but unhittable) — ignore its kind for a while
     // and let navigation resume; the game's own boredom timer will put it
@@ -142,6 +145,9 @@ async function startAutopilot(page: Page) {
         // here silently ended the run and left the test to burn its whole
         // 240s budget on a dead autopilot (issue #492) — retry instead.
         if (!goal) { diag.bfsNull++; return; }
+        if (diag.firstDist < 0) diag.firstDist = goal.dist;
+        diag.lastDist = goal.dist;
+        diag.minDist = Math.min(diag.minDist, goal.dist);
       }
       const tx = goal.fx + 0.5 - s.player.x, ty = goal.fy + 0.5 - s.player.y;
       const cross = s.player.dx * ty - s.player.dy * tx;
@@ -214,22 +220,51 @@ test.describe('Freedoom E1M1 inside a Word document', () => {
     await page.keyboard.up('ArrowLeft');
   });
 
+  // The autopilot's journey is measured in FRAMES, not seconds: it advances the
+  // player a fraction of a cell per rendered frame, so what it costs to walk to a
+  // sigil is a frame count, and only the wall-clock price of those frames varies
+  // with the machine. Budgeting the wait in seconds therefore made the test's
+  // difficulty a property of the runner (issue #492): a loaded CI box rendered ~6
+  // frames a second instead of ~22, and the same journey ran out of clock with the
+  // autopilot alive, planning, and still closing on its target.
+  //
+  // Measured: the pickup takes 440–570 frames — unthrottled, at 6× CPU throttle, and
+  // at 12×, which is harsher than any CI box has been seen at. The budget is a ~4×
+  // margin over that, so a genuinely stuck autopilot still fails; it just fails for
+  // being stuck rather than for being on a slow machine.
+  //
+  // The wall clock below is only a backstop against a hung page, not the budget: it
+  // covers any machine managing 2 fps, and the worst CI has been observed at is 5.8.
+  const PICKUP_FRAME_BUDGET = 2500;
+
   test('autopilot navigates the real geometry and collects a Freedoom pickup spot', async ({ page }) => {
-    test.setTimeout(300000);
+    test.setTimeout(360000);
     await bootFreedoom(page);
     const sigils0 = await page.evaluate(() => (window as any).__arcade.game().sigilsLeft as number);
     expect(sigils0).toBe(5);
+    const startedAt = Date.now();
     await startAutopilot(page);
+    let spentItsBudget = false;
     try {
       await page.waitForFunction(
-        (n0) => (window as any).__autopilot.status().sigilsLeft < n0,
-        sigils0,
-        { timeout: 240000, polling: 500 },
+        ([n0, budget]) => {
+          const a = (window as any).__arcade;
+          return a.game().sigilsLeft < n0 || a.frames() >= budget;
+        },
+        [sigils0, PICKUP_FRAME_BUDGET],
+        { timeout: 300000, polling: 500 },
       );
-    } catch (err) {
+      spentItsBudget = await page.evaluate(
+        (n0) => (window as any).__arcade.game().sigilsLeft >= n0, sigils0);
+    } catch {
+      spentItsBudget = true;
+    }
+    if (spentItsBudget) {
       // Issue #492: a bare timeout said nothing about WHY the autopilot made
       // no progress. Dump the flight recorder and the terrain around the
-      // player so one occurrence is enough to diagnose.
+      // player so one occurrence is enough to diagnose. firstDist/minDist/lastDist
+      // are the discriminating numbers: a shrinking path is a slow run, a flat one
+      // is a stuck one.
       const state = await page.evaluate(() => {
         const a = (window as any).__arcade;
         const s = a.game();
@@ -250,8 +285,11 @@ test.describe('Freedoom E1M1 inside a Word document', () => {
           mapAroundPlayer: rows,
         };
       });
+      const seconds = (Date.now() - startedAt) / 1000;
       throw new Error(
-        `autopilot made no pickup before timeout (${(err as Error).message}); state: ${JSON.stringify(state, null, 2)}`,
+        `autopilot made no pickup within ${PICKUP_FRAME_BUDGET} frames ` +
+          `(rendered ${state.frames} in ${seconds.toFixed(0)}s, ` +
+          `${(state.frames / seconds).toFixed(1)} fps); state: ${JSON.stringify(state, null, 2)}`,
       );
     }
     await page.evaluate(() => (window as any).__autopilot.stop());
