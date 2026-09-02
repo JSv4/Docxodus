@@ -113,8 +113,24 @@ fixed-input measurement showed no regression, while the stress readout appeared
 to move by a third. The controlled one was right.) The rows above are therefore
 each a median of three full 40-frame runs on one container, refreshed together so
 they describe one machine on one build rather than an accumulation of readings. To compare builds, use a fixed
-input and medians of many — which is what the harness below does properly. The rigorous
-headless counterpart — the same question asked of a 147 KB certificate of
+input and medians of many — which is what the harness below does properly.
+
+**The ratio column survives what the millisecond columns do not, and that is the most
+useful thing measured here.** Two pooled measurements of the same build family — three
+40-frame stress runs plus two controlled sessions each — came out 21–28% apart on every
+absolute figure (`revisions` 52 → 41 ms, `redline` 74 → 55, `full + HTML` 141 → 101) while
+the ratios against the recording path barely moved: 33 → 34×, 45 → 45×, 78 → 80×. Nothing
+in the engine changed between them to explain a quarter; what changed is how fast the
+container was that hour. The mutation path scaled by the same factor as the diff path, so
+the ratio held. That gives a sharper test than "is the movement uniform across depths":
+**when the absolutes move and the ratio holds, it is the machine; when the ratio itself
+moves, the two paths changed by different amounts and something real happened** — which is
+exactly how #653 announced itself, dragging 68–157× down to 33–78×. The table keeps its
+original pooled figures rather than being refreshed to the newer ones, because chasing the
+faster reading would just be chasing weather, and the panel recomputes the ratio live
+anyway.
+
+The rigorous headless counterpart — the same question asked of a 147 KB certificate of
 incorporation, with stage attribution and allocation figures — lives in
 `benchmarks/docxdiff-stress/FINDINGS.md`. That harness is the authority on engine
 performance; this mode is the one you can watch.
