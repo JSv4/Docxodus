@@ -1,6 +1,3 @@
-// Inherited OpenXmlPowerTools code that predates nullable annotations (issue #13).
-#nullable disable
-
 // Copyright (c) Microsoft. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
@@ -76,7 +73,7 @@ namespace Docxodus
                         // Use existing bookmark - verify it exists
                         var mainDoc = wordDoc.MainDocumentPart.GetXDocument();
                         var existingBookmark = mainDoc.Descendants(W.bookmarkStart)
-                            .FirstOrDefault(b => (string)b.Attribute(W.name) == range.ExistingBookmarkName);
+                            .FirstOrDefault(b => (string?)b.Attribute(W.name) == range.ExistingBookmarkName);
 
                         if (existingBookmark == null)
                         {
@@ -284,7 +281,7 @@ namespace Docxodus
         /// <param name="doc">The document to read.</param>
         /// <param name="annotationId">The annotation ID.</param>
         /// <returns>The annotation, or null if not found.</returns>
-        public static DocumentAnnotation GetAnnotation(WmlDocument doc, string annotationId)
+        public static DocumentAnnotation? GetAnnotation(WmlDocument doc, string annotationId)
         {
             if (doc == null) throw new ArgumentNullException(nameof(doc));
             if (string.IsNullOrEmpty(annotationId)) throw new ArgumentNullException(nameof(annotationId));
@@ -356,7 +353,7 @@ namespace Docxodus
                     foreach (var (annotationId, (startPage, endPage)) in pageSpans)
                     {
                         var annotationElement = root.Elements(Ann + "annotation")
-                            .FirstOrDefault(a => (string)a.Attribute("id") == annotationId);
+                            .FirstOrDefault(a => (string?)a.Attribute("id") == annotationId);
 
                         if (annotationElement != null)
                         {
@@ -404,7 +401,7 @@ namespace Docxodus
         /// <param name="doc">The document containing the annotation.</param>
         /// <param name="annotationId">The annotation ID.</param>
         /// <returns>The text content, or null if not found.</returns>
-        public static string GetAnnotatedText(WmlDocument doc, string annotationId)
+        public static string? GetAnnotatedText(WmlDocument doc, string annotationId)
         {
             if (doc == null) throw new ArgumentNullException(nameof(doc));
             if (string.IsNullOrEmpty(annotationId)) throw new ArgumentNullException(nameof(annotationId));
@@ -429,7 +426,7 @@ namespace Docxodus
             return annotations;
         }
 
-        private static DocumentAnnotation GetAnnotationInternal(WordprocessingDocument wordDoc, string annotationId)
+        private static DocumentAnnotation? GetAnnotationInternal(WordprocessingDocument wordDoc, string annotationId)
         {
             var annotation = Docxodus.Internal.AnnotationsCustomXml.FindById(wordDoc, annotationId);
             if (annotation is not null)
@@ -443,7 +440,7 @@ namespace Docxodus
         private static void RemoveAnnotationFromCustomXml(WordprocessingDocument wordDoc, string annotationId)
             => Docxodus.Internal.AnnotationsCustomXml.Remove(wordDoc, annotationId);
 
-        private static CustomXmlPart FindAnnotationsCustomXmlPart(WordprocessingDocument wordDoc)
+        private static CustomXmlPart? FindAnnotationsCustomXmlPart(WordprocessingDocument wordDoc)
             => Docxodus.Internal.AnnotationsCustomXml.Find(wordDoc);
 
         private static CustomXmlPart GetOrCreateAnnotationsCustomXmlPart(WordprocessingDocument wordDoc)
@@ -489,8 +486,8 @@ namespace Docxodus
 
             // Find which text elements contain the start and end positions
             int currentPos = 0;
-            XElement startTextElement = null;
-            XElement endTextElement = null;
+            XElement? startTextElement = null;
+            XElement? endTextElement = null;
             int startOffsetInElement = 0;
             int endOffsetInElement = 0;
 
@@ -527,7 +524,7 @@ namespace Docxodus
             var existingIds = mainDoc.Descendants(W.bookmarkStart)
                 .Select(b => (int?)b.Attribute(W.id))
                 .Where(id => id.HasValue)
-                .Select(id => id.Value)
+                .Select(id => id!.Value)
                 .ToHashSet();
 
             int newId = 1;
@@ -703,14 +700,14 @@ namespace Docxodus
             var existingIds = mainDoc.Descendants(W.bookmarkStart)
                 .Select(b => (int?)b.Attribute(W.id))
                 .Where(id => id.HasValue)
-                .Select(id => id.Value)
+                .Select(id => id!.Value)
                 .ToHashSet();
 
             int newId = 1;
             while (existingIds.Contains(newId)) newId++;
 
             // Determine where to insert bookmark start
-            XElement startInsertPoint;
+            XElement? startInsertPoint;
             if (range.StartRunIndex.HasValue)
             {
                 var runs = startPara.Elements(W.r).ToList();
@@ -734,7 +731,7 @@ namespace Docxodus
                 startPara.AddFirst(bookmarkStart);
 
             // Determine where to insert bookmark end
-            XElement endInsertPoint;
+            XElement? endInsertPoint;
             if (range.EndRunIndex.HasValue)
             {
                 var runs = endPara.Elements(W.r).ToList();
@@ -764,14 +761,14 @@ namespace Docxodus
             var mainDoc = wordDoc.MainDocumentPart.GetXDocument();
 
             var bookmarkStart = mainDoc.Descendants(W.bookmarkStart)
-                .FirstOrDefault(b => (string)b.Attribute(W.name) == bookmarkName);
+                .FirstOrDefault(b => (string?)b.Attribute(W.name) == bookmarkName);
 
             if (bookmarkStart == null) return;
 
-            var bookmarkId = (string)bookmarkStart.Attribute(W.id);
+            var bookmarkId = (string?)bookmarkStart.Attribute(W.id);
 
             var bookmarkEnd = mainDoc.Descendants(W.bookmarkEnd)
-                .FirstOrDefault(b => (string)b.Attribute(W.id) == bookmarkId);
+                .FirstOrDefault(b => (string?)b.Attribute(W.id) == bookmarkId);
 
             bookmarkStart.Remove();
             bookmarkEnd?.Remove();
@@ -779,18 +776,18 @@ namespace Docxodus
             wordDoc.MainDocumentPart.PutXDocument();
         }
 
-        private static string GetTextInBookmark(WordprocessingDocument wordDoc, string bookmarkName)
+        private static string? GetTextInBookmark(WordprocessingDocument wordDoc, string? bookmarkName)
         {
             if (string.IsNullOrEmpty(bookmarkName)) return null;
 
             var mainDoc = wordDoc.MainDocumentPart.GetXDocument();
 
             var bookmarkStart = mainDoc.Descendants(W.bookmarkStart)
-                .FirstOrDefault(b => (string)b.Attribute(W.name) == bookmarkName);
+                .FirstOrDefault(b => (string?)b.Attribute(W.name) == bookmarkName);
 
             if (bookmarkStart == null) return null;
 
-            var bookmarkId = (string)bookmarkStart.Attribute(W.id);
+            var bookmarkId = (string?)bookmarkStart.Attribute(W.id);
 
             // Collect all text between bookmark start and end
             var inBookmark = false;
@@ -798,13 +795,13 @@ namespace Docxodus
 
             foreach (var element in mainDoc.Descendants())
             {
-                if (element.Name == W.bookmarkStart && (string)element.Attribute(W.name) == bookmarkName)
+                if (element.Name == W.bookmarkStart && (string?)element.Attribute(W.name) == bookmarkName)
                 {
                     inBookmark = true;
                     continue;
                 }
 
-                if (element.Name == W.bookmarkEnd && (string)element.Attribute(W.id) == bookmarkId)
+                if (element.Name == W.bookmarkEnd && (string?)element.Attribute(W.id) == bookmarkId)
                 {
                     break;
                 }
@@ -895,7 +892,7 @@ namespace Docxodus
             var existingIds = mainDoc.Descendants(W.bookmarkStart)
                 .Select(b => (int?)b.Attribute(W.id))
                 .Where(id => id.HasValue)
-                .Select(id => id.Value)
+                .Select(id => id!.Value)
                 .ToHashSet();
 
             int newId = 1;
@@ -1009,8 +1006,8 @@ namespace Docxodus
 
             // Find which text elements contain the start and end positions
             int currentPos = 0;
-            XElement startTextElement = null;
-            XElement endTextElement = null;
+            XElement? startTextElement = null;
+            XElement? endTextElement = null;
             int startOffsetInElement = 0;
             int endOffsetInElement = 0;
 
@@ -1047,7 +1044,7 @@ namespace Docxodus
             var existingIds = mainDoc.Descendants(W.bookmarkStart)
                 .Select(b => (int?)b.Attribute(W.id))
                 .Where(id => id.HasValue)
-                .Select(id => id.Value)
+                .Select(id => id!.Value)
                 .ToHashSet();
 
             int newId = 1;
@@ -1083,14 +1080,14 @@ namespace Docxodus
             var existingIds = mainDoc.Descendants(W.bookmarkStart)
                 .Select(b => (int?)b.Attribute(W.id))
                 .Where(id => id.HasValue)
-                .Select(id => id.Value)
+                .Select(id => id!.Value)
                 .ToHashSet();
 
             int newId = 1;
             while (existingIds.Contains(newId)) newId++;
 
-            XElement targetElement = null;
-            XElement rangeEndElement = null;
+            XElement? targetElement = null;
+            XElement? rangeEndElement = null;
 
             switch (target.ElementType)
             {
@@ -1215,7 +1212,7 @@ namespace Docxodus
             wordDoc.MainDocumentPart.PutXDocument();
         }
 
-        private static XElement FindLiveElement(XDocument mainDoc, DocumentElement element)
+        private static XElement? FindLiveElement(XDocument mainDoc, DocumentElement element)
         {
             var body = mainDoc.Root?.Element(W.body);
             if (body == null) return null;
@@ -1235,7 +1232,7 @@ namespace Docxodus
                 var elementType = match.Groups[1].Value;
                 var index = int.Parse(match.Groups[2].Value);
 
-                XName elementName = elementType switch
+                XName? elementName = elementType switch
                 {
                     "p" => W.p,
                     "r" => W.r,

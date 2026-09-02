@@ -12,6 +12,9 @@ All notable changes to this project will be documented in this file.
 - The `WmlDocument(WmlDocument, params XElement[])` replacement-part constructor now throws a
   clear `DocxodusException` when a replacement part's `pt:Uri` attribute does not match any part
   in the package, instead of a `NullReferenceException`.
+- `MetricsGetter.GetDocxMetrics`/`GetWmlMetrics` no longer throw an `ArgumentNullException` for a
+  byte-array-loaded `WmlDocument` (no file path) — the `FileName` label in the returned metrics
+  now defaults to an empty string instead of the underlying `null`.
 
 ## [11.0.0] - 2026-09-01
 
