@@ -27,6 +27,23 @@ All notable changes to this project will be documented in this file.
   resolving theme fonts for a paragraph whose accumulated properties don't carry a paragraph-mark
   run-properties element (`w:rPr`) — it now skips theme-font resolution for that paragraph mark
   instead of crashing.
+- `DocumentBuilder.CopyFontTable` no longer treats every embedded font in a merged document as
+  already present in the output — a relationship lookup returning a value type was compared to
+  `null`, which is always true for that type, so the actual font-copy logic beneath it was
+  unreachable. No `DocumentBuilder` merge has ever embedded a font.
+- `DocumentBuilder`'s image, OLE-object, and chart-data relationship copying no longer misses the
+  case where a reference points at an *external* relationship rather than a same-package part —
+  the same always-true value-type comparison meant the external-relationship fallback in
+  `CopyRelatedImage`, the OLE-object copy loop, and `CopyChartObjects` could never run.
+- `DocumentBuilder`'s chart (`c:chart`) and chart-drawing (`c:userShapes`) part copying no longer
+  crashes when a referenced relationship doesn't resolve — same root cause, but these two paths
+  had no fallback at all, so a document with a stray reference could abort the whole merge instead
+  of the reference being skipped.
+- `MetricsGetter`'s `ReferenceToNullImage` metric can now actually be reported — the same
+  value-type/`null` comparison meant it could never increment, even for a document with a
+  genuinely dangling image relationship.
+- `DocumentBuilder`'s three `catch (DocumentBuilderInternalException) { throw dbie; }` rethrows
+  now preserve the original stack trace (`throw;`) instead of resetting it to the rethrow point.
 
 ## [11.0.0] - 2026-09-01
 
