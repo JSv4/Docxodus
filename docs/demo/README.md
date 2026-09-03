@@ -240,6 +240,17 @@ it with `python tools/generate-demo-guide.py` from the repository root.
 
 ## Publish
 
+The pages load the library from jsDelivr at an exact version, so the pin can
+only move *after* npm publishes and the CDN serves it. Move every pin in one
+change — the pages, this README, `docs/npm-package.md`, `npm/README.md`,
+`npm/examples/embed.html`, and `RELEASE_ENGINE` in
+`npm/tests/social-demo.spec.ts` — and `tools/engine-pin.test.mjs` (run by
+`npm run test:demo-logic`, and so by every Playwright run) fails if one of them
+is left behind, if the version drops below the arcade's
+`IMAGE_ENGINE_MINIMUM`, or, under `DOCXODUS_CHECK_CDN=1`, if the CDN does not
+serve it yet. That guard exists because a stale pin is invisible to the browser
+specs: every one of them overrides `?engine=` to the locally built bundle.
+
 1. Publish `docxodus@11.0.0` and confirm
    `https://cdn.jsdelivr.net/npm/docxodus@11.0.0/dist/embed.bundle.js` returns JavaScript.
 2. In GitHub **Settings → Pages**, choose **GitHub Actions** as the publishing source.

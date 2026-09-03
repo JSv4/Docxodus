@@ -1394,6 +1394,18 @@ export function introFrame(t) {
 // ─── The editor-hosted driver ─────────────────────────────────────────
 
 /**
+ * The oldest published engine whose SINGLE-BLOCK render carries a block's
+ * inline image, and therefore the oldest one an image-bearing cartridge (Doom)
+ * can be seen on. Up to and including 10.0.0 the incremental renderer cloned
+ * the block's XML into a throwaway shell without copying the referenced media
+ * part, and its converter settings carried no image handler, so
+ * WmlToHtmlConverter omitted the w:drawing and the frame paragraph refreshed
+ * blank. `docs/demo/tools/engine-pin.test.mjs` holds the demo pages' jsDelivr
+ * pin at or above this, so the arcade cannot ship pointed at a blind engine.
+ */
+export const IMAGE_ENGINE_MINIMUM = '11.0.0';
+
+/**
  * Seed the Arcade into a ribbon-hosted editor's session and run the game loop
  * against it. Owns the dock (cartridge switch, pause/resume, restart, pace,
  * telemetry) and the keyboard: game keys are claimed only while playing.
@@ -1437,8 +1449,10 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
   // converter settings carry no image handler, so WmlToHtmlConverter omits the
   // w:drawing and the paragraph refreshes to blank. The image is genuinely in
   // the package the whole time — Save and reopen shows it — which is exactly
-  // what makes the failure invisible from the outside. So prove the surface
-  // once, rather than painting frames no one can see.
+  // what makes the failure invisible from the outside. The page's own pin is
+  // 11.0.0, which carries the fix; the probe survives for an ?engine= override
+  // aimed at an older release. So prove the surface once, rather than painting
+  // frames no one can see.
   let imageSurfaceProven = false;
   let imageFramesPainted = 0;
   let lastSurface = 'runs';
@@ -1573,9 +1587,11 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
     else if (!imageSurfaceProven && imageFramesPainted >= 3) {
       const why =
         'this engine renders a single block without its inline image, so the frame '
-        + 'is in the .docx but never on screen — the image-bearing cartridges need a '
-        + 'docxodus newer than 10.0.0 (Save still downloads the frame; ?cart=e1m1, '
-        + '?cart=dungeon and ?cart=platformer paint runs and work here).';
+        + 'is in the .docx but never on screen — the image-bearing cartridges need '
+        + `docxodus ${IMAGE_ENGINE_MINIMUM} or newer, so check the ?engine= override `
+        + `(this page pins ${IMAGE_ENGINE_MINIMUM}, which carries the fix). `
+        + 'Save still downloads the frame, and '
+        + '?cart=e1m1, ?cart=dungeon and ?cart=platformer paint runs and work here.';
       // Not every drawFrame call is inside the loop's try — the cartridge
       // switch and restart buttons repaint directly — so say it here rather
       // than relying on a catch that only one of the three call sites has.
