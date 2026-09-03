@@ -95,6 +95,19 @@ both split halves in one batched call. Measured (HC031, warm): text commit 102 �
 Enter 137 → 41 ms, bold 108 → 52 ms, insert row 1.25 s → 85 ms, delete block 1.2 s → 24 ms,
 undo/redo ~1.2 s → 124/54 ms. Standing instrument:
 `npm/tests/editor-latency-bench.spec.ts`.
+**Image-only substitutions patch in place.** A substituted unit whose fresh render differs
+from the live node only in `<img>` attributes (a host replacing an image's media through
+the session — the arcade's Doom cartridge does it every frame) keeps its DOM node: the
+reconciler proves the delta with `imageOnlyDelta` (`npm/src/editor-image-patch.ts`),
+rewrites the attributes on the `<img>` already on screen, and restamps the signature.
+Firefox and WebKit paint a freshly inserted `<img>` as an empty box until its data URI is
+decoded, so the node swap strobed white at frame rate there; an in-place `src` change keeps
+the previous bitmap up until the next is ready in Chromium and Firefox. WebKit still paints
+the box empty while a changed source decodes, so a host driving frames should decode the
+same data URI in a detached `Image` before calling `refresh()` (the arcade's `prewarmImage`),
+which makes the patched element complete synchronously from the image cache. Any other
+difference takes the swap path unchanged. Pinned by `editor-image-patch-unit.spec.ts` +
+`editor-image-in-place.spec.ts`.
 
 ### M2.6 — Incremental STRUCTURAL repaint (reconcile replaces remount)  · effort L · ✅ **DONE**
 **Problem:** every structural op (insert table/row/col, footnote/endnote, delete block,

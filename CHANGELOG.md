@@ -6,6 +6,16 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `WmlToHtmlConverter` now carries a font's document-declared alternate into the CSS font stack.
+  ECMA-376's `w:altName` in `word/fontTable.xml` is exactly "use this family when the primary one
+  is unavailable", and real documents lean on it for names no vendor ships:
+  `TestFiles/NVCA-Model-COI.docx` declares `(normal text)` — Word's UI label for the theme font,
+  written into numbering as if it were a family — and the PostScript spelling `TimesNewRomanPSMT`,
+  each with `altName="Times New Roman"`. Emitting only the primary name asked the renderer for
+  families that cannot exist, which standalone export reports as `font_unavailable`. The alternate
+  is now emitted immediately after the primary, ahead of the inferred generic fallback, for body
+  and running stories alike. A family with no declared alternate is left exactly as it was rather
+  than guessed at from its name.
 - Saving a `DocxSession` no longer rewrites OPC parts whose XML did not change. A single tracked
   text replacement on `TestFiles/NVCA-Model-COI.docx` altered the payload of 23 of the package's 44
   parts — every header and footer, both note parts, styles and settings — even though only
@@ -73,6 +83,20 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **Editor: replacing an image no longer flashes white in Firefox and Safari.** When a block's
+  fresh render differed from its live DOM node only in `<img>` attributes — a host replacing an
+  image's media through the session, most visibly the arcade's Doom cartridge writing a new
+  framebuffer PNG every frame — the incremental reconciler swapped the whole paragraph node.
+  Firefox and WebKit paint a freshly inserted `<img>` as an empty box until its data URI is
+  decoded, so every frame strobed white before it landed (Chromium finishes the load before it
+  paints, which is why the strobe was engine-specific). The reconciler now proves the delta is
+  image-only and patches `src` (and any other attribute) on the `<img>` already on screen, which
+  keeps the previous bitmap visible until the new one is ready in Chromium and Firefox. WebKit
+  additionally paints the box empty while a changed source is still decoding, so the arcade now
+  decodes each frame's data URI in a detached `Image` before it calls `refresh()`, which makes
+  the patched element complete synchronously from the image cache (the cartridge hands the
+  arcade the canvas's own data URI alongside the PNG bytes). Unchanged blocks, wrappers and
+  everything else keep the existing swap path.
 - The Freedoom autopilot test (`npm/tests/demo-arcade-freedoom.spec.ts`) no longer fails on a
   loaded CI runner. Its wait for the first pickup was budgeted in wall-clock seconds, but the
   autopilot's journey costs a fixed number of rendered frames — so a machine rendering ~6 frames a
@@ -144,6 +168,28 @@ All notable changes to this project will be documented in this file.
   genuinely dangling image relationship.
 - `DocumentBuilder`'s three `catch (DocumentBuilderInternalException) { throw dbie; }` rethrows
   now preserve the original stack trace (`throw;`) instead of resetting it to the rethrow point.
+- **The demo site's engine pin moves to `docxodus@11.0.0`, which is what makes DOOM visible
+  again.** `docs/demo/` loaded 11.0.0's predecessor from jsDelivr, and on that engine the
+  arcade's DOOM cartridge boots, plays and writes real 320×200 frames into the document while
+  showing nothing: the single-block render that repaints the frame paragraph cloned its XML into
+  a throwaway shell with neither a copy of the referenced media part nor an image handler, so
+  `WmlToHtmlConverter` correctly omitted the `w:drawing`. The library fix shipped in 11.0.0; the
+  visible failure was the pin. All the pins move together — the demo pages, `docs/demo/README.md`,
+  `docs/npm-package.md`, `npm/README.md`, `npm/examples/embed.html`, the copy-pasteable CDN
+  examples in `npm/src/embed.ts` and `npm/src/index.ts`, and `RELEASE_ENGINE` in
+  `npm/tests/social-demo.spec.ts`.
+
+  A stale pin is invisible to the browser specs, because every one of them overrides `?engine=`
+  to the locally built bundle — which is exactly why this shipped. So the pin is now under test
+  on its own: `docs/demo/tools/engine-pin.test.mjs` (in `npm run test:demo-logic`, and so in
+  every Playwright run's `pretest`) reads the checked-in files and fails when the pins disagree
+  with each other, when they drop below the arcade's exported `IMAGE_ENGINE_MINIMUM` — the
+  oldest engine whose incremental render carries an inline image — or when `RELEASE_ENGINE`
+  drifts from the pages it guards. Under `DOCXODUS_CHECK_CDN=1` it also asks jsDelivr whether the
+  pinned bundle is actually published, the failure mode of re-pinning ahead of a release.
+  `paintImage`'s capability probe stays for anyone who points `?engine=` at an older engine, and
+  now names the version needed rather than a hardcoded one.
+  Demo-content change (`docs/demo/`), not npm surface.
 
 ## [11.0.0] - 2026-09-01
 

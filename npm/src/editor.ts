@@ -36,6 +36,7 @@ import {
 import { TrackedChangeMode } from "./types.js";
 import type { CommentListEntry, HeaderFooterKind, NumberFormat } from "./types.js";
 import { diffUnits, needsRemount, tokenOf, unidOf } from "./editor-reconcile.js";
+import { imageOnlyDelta, patchImageAttributes } from "./editor-image-patch.js";
 import type { RenderPlan, RenderUnit, UnitDiff } from "./editor-reconcile.js";
 
 /** The subset of WASM bridge exports the editor needs (as exposed on `window.Docxodus`). */
@@ -3651,6 +3652,22 @@ export class DocxEditor {
     for (const [nj, oi] of subOldByNew) {
       const freshRoot = fresh.get(nj)!;
       const oldWrapper = this.unitWrapperOf(oldNodes[oi]);
+      // A render that differs from the live node ONLY in <img> attributes (a host replacing
+      // an image's media through the session — the arcade's Doom cartridge does it every
+      // frame) patches those attributes on the elements already on screen instead of
+      // swapping nodes. Firefox and WebKit paint a freshly inserted <img> as an empty box
+      // until its data URI is decoded, so a per-frame swap strobes white between frames;
+      // an in-place src change keeps the previous bitmap up until the new one is ready.
+      // The live node stays wired, so only its signature stamp needs refreshing. Any
+      // other difference (or a border-wrapper change) falls through to the swap below.
+      const leaf = freshRoot.hasAttribute("data-anchor");
+      const imagePairs = imageOnlyDelta(leaf ? oldNodes[oi] : oldWrapper, freshRoot);
+      if (imagePairs) {
+        for (const [live, next] of imagePairs) patchImageAttributes(live, next);
+        const sig = units[nj].sig;
+        if (sig) oldNodes[oi].setAttribute("data-render-sig", sig);
+        continue;
+      }
       if (!freshRoot.hasAttribute("data-anchor")) {
         oldWrapper.replaceWith(freshRoot); // wrapper-shaped render (table) ⇄ wrapper
       } else if (oldWrapper === oldNodes[oi]) {
