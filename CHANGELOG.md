@@ -18,7 +18,9 @@ All notable changes to this project will be documented in this file.
   stays open until some later closing tag is spent on it. The browser then builds a different tree
   from the one we emitted: a footnote beginning with a reference mark and a tab had its whole text
   reparented inside the tab's fixed-width box and rendered a couple of characters per line. Empty
-  non-void elements are now closed at the tree's edge, so every serialization site is covered.
+  non-void elements are now closed at the tree's edge, so every serialization site is covered. The
+  committed `HC026` tab snapshot had encoded the defect — a paragraph reading
+  `Tab [tab] with first line indent set.` rendered one word per line — and is re-baselined here.
 
 - The epic #435 MCP acceptance smoke and its reopen validation now assert the revision list
   the engine actually produces, and CI runs both on every pull request (#687). Their committed
