@@ -20,14 +20,26 @@ All notable changes to this project will be documented in this file.
   from the content at either end), with the document-final pair supported structurally because
   Word always pairs the two final paragraph marks. The rule runs once after the spine (so the gap
   fill sees the whole region) and once after the gap fill (so a blank beside a paragraph the gap
-  fill paired as edited keeps its retained mark). Accept ≡ right and reject ≡ left hold unchanged.
-- `DocxDiff`'s trailing-region paragraph-mark chain now pairs marks backwards from the final pair
-  only through paragraphs that are empty on *both* sides, the final pair included. The chain used
-  to open on any empty↔empty candidate and keep going while either side was empty, which paired a
-  base blank with the next document's last wordful paragraph (or a trailing blank on each side
-  behind a wordful final paragraph) and turned that paragraph's mark into a shared, unmarked one.
-  Word's compare output leaves such a paragraph tracked-inserted ahead of the deletions and the
-  base blank tracked-deleted; the tail now matches it. In the same region grammar, a base story
+  fill paired as edited keeps its retained mark). A blank that follows an edited paragraph now
+  pairs with the blank across from it even when the next document restyled it (retained mark plus
+  `w:pPrChange`, as Word writes it), where the gap passes used to leave a deleted blank followed
+  by an inserted one. Trailing blanks of a region take their support from the pair *after* them
+  only when the region's paragraph counts balance, the same rule the paragraph-mark chain below
+  follows, and that chain then continues backwards from such a pair. Accept ≡ right and
+  reject ≡ left hold unchanged.
+- `DocxDiff`'s trailing-region paragraph-mark chain no longer opens behind a final paragraph
+  pair with a wordful member. The chain pairs further marks backwards from the story-final pair
+  when it meets an empty paragraph on both sides, but when the final pair itself joins a base
+  blank to a wordful next paragraph (or the reverse) the words sit between that mark and the
+  previous one, and Word pairs nothing further: a trailing blank on each side stays
+  tracked-inserted ahead of the deletions and tracked-deleted after them, instead of turning
+  into a shared, unmarked mark. Inside the document (a region that ends at a shared paragraph
+  or table rather than at the story end) the chain opens only when both sides hold the same
+  number of paragraphs, or when one side is nothing but the trailing blank — the shape Word's
+  output follows in over 95% of such regions: a 3-vs-3 region before a shared table shares its
+  two trailing blank marks, a 2-vs-3 region keeps every mark on its own side, and a run of
+  deletions ending in a blank shares that blank with the lone blank across from it. In the same
+  region grammar, a base story
   that ends with a table compared against a next story that ends with an *empty* paragraph now
   places that final paragraph mark after the deleted table, exactly as the already-handled wordful
   case does; before, the mark was emitted with the other insertions and the document ended with the

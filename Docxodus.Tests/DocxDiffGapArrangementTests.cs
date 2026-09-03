@@ -144,16 +144,85 @@ public class DocxDiffGapArrangementTests
     {
         // base [W1, E1, E2, E3] → next [N1, E1', E2']: no blank anchors on its own evidence, so the
         // whole region is one trailing replace and the tail chain runs backwards from the structural
-        // final pair through empty↔empty members only: E3 ↔ E2' (shared), E2 ↔ E1' (shared), then
-        // E1 ↔ N1 stops the chain because N1 is wordful — N1 stays a plain ¶INS ahead of the
-        // deletions and the surplus E1 stays ¶DEL (the reference output's tail for this shape is
-        // exactly [deleted wordful…, deleted blank, shared final blank]).
+        // final pair: E3 ↔ E2' (shared), E2 ↔ E1' (empty↔empty opens the chain), E1 ↔ N1 (continues
+        // while one side is empty) — N1's inserted runs fuse into W1's ¶DEL paragraph and every
+        // paired pilcrow is shared. Accept coalesces the fused runs forward onto the first shared
+        // pilcrow (= next), reject drops the inserted runs and restores W1's mark (= base).
         var left = Doc("shared head", "alpha bravo charlie", "", "", "");
         var right = Doc("shared head", "delta echo foxtrot", "", "");
         var result = DocxDiff.Compare(left, right);
 
         var shape = BodyShape(result);
-        Assert.Equal(new[] { "RET", "INS:INS", "DEL:DEL", "EMPTY_DEL:DEL", "EMPTY:-", "EMPTY:-" }, shape);
+        Assert.Equal(new[] { "RET", "MIXED:DEL", "EMPTY:-", "EMPTY:-", "EMPTY:-" }, shape);
+        AssertRoundTrip(result, left, right);
+    }
+
+    [Fact]
+    public void WordfulFinalPair_BlocksTailChain_BlanksStayMarked()
+    {
+        // base [W1, E1, E2] → next [N1, E1', N2]: the structural final pair is E2 ↔ N2 with a
+        // WORDFUL next member, so no earlier pilcrow can pair — N2's words sit between its pilcrow
+        // and E1's. The empty↔empty candidate E1 ↔ E1' therefore does NOT open a chain: E1' stays
+        // ¶INS ahead of the deletions and E1 stays ¶DEL, while N2's runs fuse at the head (into W1's
+        // ¶DEL paragraph) and E2 keeps the shared final pilcrow — the reference output's shape.
+        var left = Doc("shared head", "alpha bravo charlie", "", "");
+        var right = Doc("shared head", "delta echo foxtrot", "", "golf hotel india");
+        var result = DocxDiff.Compare(left, right);
+
+        var shape = BodyShape(result);
+        Assert.Equal(new[] { "RET", "INS:INS", "EMPTY_INS:INS", "MIXED:DEL", "EMPTY_DEL:DEL", "EMPTY:-" }, shape);
+        AssertRoundTrip(result, left, right);
+    }
+
+    [Fact]
+    public void RestyledBlankAfterEditedParagraph_PairsWithFormatChange()
+    {
+        // base [W1, E, W2] → next [W1', E(centered), W2']: the blank follows an EDITED pair, so it
+        // pairs with the blank across from it although the next side restyled it — a retained mark
+        // carrying the next side's pPr with a pPrChange (as Word writes it), never a deleted blank
+        // followed by an inserted one.
+        var left = Doc(("alpha bravo charlie delta", null), ("", null), ("echo foxtrot golf hotel", null));
+        var right = Doc(("alpha bravo charlie ZULU", null), ("", "center"), ("echo foxtrot golf YANKEE", null));
+        var result = DocxDiff.Compare(left, right);
+
+        var shape = BodyShape(result);
+        Assert.Equal(3, shape.Length);
+        Assert.Equal("EMPTY:-", shape[1]);
+        var blank = BodyParas(result)[1];
+        Assert.NotNull(blank.Element(W + "pPr")?.Element(W + "pPrChange"));
+        Assert.Equal("center", (string?)blank.Element(W + "pPr")?.Element(W + "jc")?.Attribute(W + "val"));
+        AssertRoundTrip(result, left, right);
+    }
+
+    [Fact]
+    public void InteriorRegion_TrailingBlanks_ShareOnlyWhenParagraphCountsMatch()
+    {
+        // Interior regions end at the shared "tail" paragraph. Equal counts (3 vs 3: [W1, E, E] vs
+        // [N1, N2, E]) open the backward chain: E ↔ E shared, then E ↔ N2 (one side empty) shared with
+        // N2's runs fused into W1's ¶DEL paragraph. Unequal counts (2 vs 3: [W1, E] vs [N1, E, E])
+        // block it: every mark stays on its own side, inserts first.
+        var equalLeft = Doc("alpha bravo charlie", "", "", "shared tail words");
+        var equalRight = Doc("delta echo foxtrot", "golf hotel india", "", "shared tail words");
+        var equal = BodyShape(DocxDiff.Compare(equalLeft, equalRight));
+        Assert.Equal(new[] { "INS:INS", "MIXED:DEL", "EMPTY:-", "EMPTY:-", "RET" }, equal);
+        AssertRoundTrip(DocxDiff.Compare(equalLeft, equalRight), equalLeft, equalRight);
+
+        var unequalLeft = Doc("alpha bravo charlie", "", "shared tail words");
+        var unequalRight = Doc("delta echo foxtrot", "", "", "shared tail words");
+        var unequal = BodyShape(DocxDiff.Compare(unequalLeft, unequalRight));
+        Assert.Equal(new[] { "INS:INS", "EMPTY_INS:INS", "EMPTY_INS:INS", "DEL:DEL", "EMPTY_DEL:DEL", "RET" }, unequal);
+        AssertRoundTrip(DocxDiff.Compare(unequalLeft, unequalRight), unequalLeft, unequalRight);
+    }
+
+    [Fact]
+    public void InteriorRegion_OneSideOnlyABlank_SharesIt()
+    {
+        // [W1, W2, E] vs [E] before the shared tail: the next side is nothing but the trailing blank,
+        // so it shares the base's trailing blank mark (the deletions stay ahead of it).
+        var left = Doc("alpha bravo charlie", "delta echo foxtrot", "", "shared tail words");
+        var right = Doc("", "shared tail words");
+        var result = DocxDiff.Compare(left, right);
+        Assert.Equal(new[] { "DEL:DEL", "DEL:DEL", "EMPTY:-", "RET" }, BodyShape(result));
         AssertRoundTrip(result, left, right);
     }
 
