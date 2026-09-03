@@ -649,11 +649,13 @@ public class DocxSessionEditorParityTests
             run.Element(W + "fldChar") is { } fc ? "fld:" + (string?)fc.Attribute(W + "fldCharType")
             : run.Element(W + "instrText") is { } it ? "instr:" + it.Value.Trim()
             : "t:" + (run.Element(W + "t")?.Value ?? "");
-        Assert.Equal("t:> ", Sig(runs[0]));
-        Assert.Equal("t:Draft", Sig(runs[1]));
+        // The head insert sat against the plain "Draft" run, so it extends that run rather than
+        // adding a sibling — a separate run's leading "> " would force the converter to emit the
+        // space as &#160;. The tail insert sat against the NUMPAGES end field, so it stays its own
+        // run outside the field. Both keep the bold of the run they joined / followed.
+        Assert.Equal("t:> Draft", Sig(runs[0]));
         Assert.Equal("fld:end", Sig(runs[^2]));
         Assert.Equal("t: (rev A)", Sig(runs[^1]));
-        // The inserted runs inherit the bold of the run they follow / precede.
         Assert.NotNull(runs[0].Element(W + "rPr")?.Element(W + "b"));
         Assert.NotNull(runs[^1].Element(W + "rPr")?.Element(W + "b"));
         Assert.Equal("> DraftPage 1 of 1 (rev A)", session.Project().AnchorIndex[footerPara].TextPreview);
@@ -665,5 +667,28 @@ public class DocxSessionEditorParityTests
         var last = XElement.Parse(session.Raw.GetXml(footerPara)).Elements().Last();
         Assert.Equal(W + "ins", last.Name);
         Assert.Equal("!", last.Element(W + "r")?.Element(W + "t")?.Value);
+    }
+
+    [Fact]
+    public void DEP043_ZeroLengthInsert_AtPlainRunBoundary_ExtendsTheRun()
+    {
+        // Appending text after an ordinary run extends that run rather than dropping a sibling
+        // beside it. A separate run whose text begins with a space forces the converter to render
+        // that space as a non-breaking one (a run boundary is where HTML would collapse it), so a
+        // plainly typed " world" came back with a &#160;. Coalescing keeps one run, one space.
+        using var session = new DocxSession(BuildTwoParagraphsWithSection());
+        var para = FirstBodyParagraph(session);
+        Assert.True(session.ReplaceText(para, "Hello").Success);
+        var end = session.Project().AnchorIndex[para].TextPreview!.Length;
+
+        var appended = session.ReplaceTextAtSpan(para, end, 0, " world");
+        Assert.True(appended.Success, appended.Error?.Message);
+
+        var runs = XElement.Parse(session.Raw.GetXml(para)).Elements(W + "r").ToList();
+        Assert.Single(runs);
+        var text = runs[0].Element(W + "t");
+        Assert.Equal("Hello world", text?.Value);
+        Assert.Equal("preserve", (string?)text?.Attribute(XNamespace.Xml + "space"));
+        Assert.Equal("Hello world", session.Project().AnchorIndex[para].TextPreview);
     }
 }

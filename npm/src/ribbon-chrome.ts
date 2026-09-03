@@ -598,6 +598,11 @@ export const RIBBON_CSS = `
    bottom sheet because there is no room to hang a popover off a button. */
 /* A 320px phone cannot hold the product name AND the file actions, and the file
    actions are what a user came for. The strip also scrolls, so nothing is stranded. */
+/* Touch targets grow with the LAYOUT, not the pointer alone: a phone-width chrome is driven
+   by a thumb whether or not the browser reports a coarse pointer (an emulated narrow viewport
+   does not), so the compact strip adopts the same 40px control floor the coarse-pointer media
+   query sets, keeping every icon button at a real tap size. */
+.dxr[data-chrome="compact"] { --dxr-tap: 40px; }
 .dxr[data-chrome="compact"] .dxr-titlebar {
   gap: 6px;
   padding: 5px 8px 0;

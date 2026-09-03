@@ -286,6 +286,16 @@ function createScopedEditorExports(
     bridge.RenderHtmlForReview = (...args) =>
       scopeDocumentStyles(renderHtmlForReview(...args), rootSelector);
   }
+  // The editor's first paint prefers `RenderEditorHtml` when the bundle has it (it carries the
+  // comment markup the plain `RenderHtml` omits). It is a whole-document render too, so its
+  // stylesheet's `body`/`span` rules restyle the host page unless it is scoped like the others.
+  // The per-block editor renders (`RenderEditorBlockHtml` / `RenderEditorBlocksHtml`) return body
+  // fragments without a stylesheet, so they need no scoping.
+  const renderEditorHtml = bridge.RenderEditorHtml;
+  if (renderEditorHtml) {
+    bridge.RenderEditorHtml = (...args) =>
+      scopeDocumentStyles(renderEditorHtml(...args), rootSelector);
+  }
   return {
     DocxSessionBridge: bridge,
     DocumentConverter: {

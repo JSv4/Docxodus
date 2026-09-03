@@ -60,6 +60,20 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **The editor's first paint no longer restyles the host page.** The embed wrapper scopes the
+  converter's stylesheet (its `body`/`span` rules) for every whole-document render, but the
+  editor's comment-aware first paint reaches for a new render method, `RenderEditorHtml`, that
+  the wrapper did not cover — so `body { margin: 20px }` leaked onto the host `<body>`. The
+  wrapper now scopes `RenderEditorHtml` alongside `RenderHtml` and `RenderHtmlForReview`.
+- **Typing at a run boundary keeps an ordinary space.** A pure insertion against an ordinary
+  text run now extends that run instead of dropping a separate run beside it. A separate run
+  whose text begins or ends with a space forces the converter to render that space as `&#160;`
+  (a run boundary is where HTML collapses whitespace), so a plainly typed leading space came
+  back non-breaking; the insertion still opens its own run when it must step outside a field or
+  when tracked changes are on.
+- **Compact chrome grows its touch targets by layout, not pointer.** The phone-width ribbon now
+  adopts the 40px control floor whether or not the browser reports a coarse pointer, so an
+  emulated narrow viewport gets real tap targets.
 - **Disposing a session no longer rewrites its archive.** A package opened for editing writes
   its whole zip back into the backing stream when it closes, re-deflating every part touched
   since it was opened. `DocxSession.Dispose`, the render shell, and a snapshot restore all

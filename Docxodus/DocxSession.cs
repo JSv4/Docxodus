@@ -5442,8 +5442,62 @@ public sealed partial class DocxSession : IDisposable
 
         // Step out of a complex field: `after` inside a field means "after the field's end run";
         // `before` inside one means "before its begin run".
+        var afterBeforeFieldStep = after;
+        var beforeBeforeFieldStep = before;
         if (after is not null) after = FieldEndRunOrSelf(after);
         if (before is not null) before = FieldBeginRunOrSelf(before);
+
+        // Coalesce into the adjacent run rather than fragmenting the paragraph. Appending "foo"
+        // after a run should extend that run's text, not drop a sibling run beside it: a separate
+        // run whose text has a leading or trailing space forces the converter to emit that space
+        // as &#160; (a run boundary is where HTML would otherwise collapse it), so a plain typed
+        // space came back as a non-breaking one. Merge only into a run we did NOT step out of a
+        // field to reach (its identity is unchanged by the step above), that is a direct child of
+        // the paragraph holding only text, and only with tracked changes off — a tracked insertion
+        // needs its own w:ins run. The rPr already came from this same run, so formatting matches.
+        if (_trackedChanges != TrackedChangeMode.RenderInline)
+        {
+            XElement? mergeInto = null;
+            bool appendAtEnd = false;
+            if (after is not null && ReferenceEquals(after, afterBeforeFieldStep)
+                && ReferenceEquals(after.Parent, element) && IsPlainTextRun(after))
+            {
+                mergeInto = after;
+                appendAtEnd = true;
+            }
+            else if (before is not null && ReferenceEquals(before, beforeBeforeFieldStep)
+                && ReferenceEquals(before.Parent, element) && IsPlainTextRun(before))
+            {
+                mergeInto = before;
+                appendAtEnd = false;
+            }
+
+            if (mergeInto is not null)
+            {
+                _history.RecordPreOp(TakeSnapshot());
+                try
+                {
+                    var text = appendAtEnd
+                        ? mergeInto.Elements(W.t).Last()
+                        : mergeInto.Elements(W.t).First();
+                    text.SetAttributeValue(XNamespace.Xml + "space", "preserve");
+                    text.Value = appendAtEnd ? text.Value + replace : replace + text.Value;
+                    InvalidateProjectionCache();
+                    return new EditResult
+                    {
+                        Success = true,
+                        Modified = new[] { target.Anchor },
+                        Patch = PatchFor(target),
+                    };
+                }
+                catch (Exception ex)
+                {
+                    LastInternalError = ex;
+                    RollbackFailedOp();
+                    return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+                }
+            }
+        }
 
         _history.RecordPreOp(TakeSnapshot());
         try
@@ -5480,6 +5534,17 @@ public sealed partial class DocxSession : IDisposable
 
     /// <summary>If <paramref name="run"/> sits inside a complex field (between a <c>begin</c> and
     /// its <c>end</c> <c>w:fldChar</c> among its siblings), the field's <c>end</c> run; else the run.</summary>
+    /// <summary>
+    /// True when <paramref name="run"/> is an ordinary text run — a <c>w:r</c> carrying only its
+    /// optional <c>w:rPr</c> and one or more <c>w:t</c>, with no field char, break, tab, drawing,
+    /// symbol or other run content. Only such a run can safely absorb inserted text by extending
+    /// a <c>w:t</c>; anything else keeps the insertion in its own sibling run.
+    /// </summary>
+    private static bool IsPlainTextRun(XElement run) =>
+        run.Name == W.r
+        && run.Elements().All(e => e.Name == W.rPr || e.Name == W.t)
+        && run.Elements(W.t).Any();
+
     private static XElement FieldEndRunOrSelf(XElement run)
     {
         int depth = 0;
