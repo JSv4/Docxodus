@@ -1822,13 +1822,16 @@ internal static class IrMarkupRenderer
         var rightCells = rightRowSrc.Elements(W.tc).ToList();
         var leftCells = leftRowSrc?.Elements(W.tc).ToList();
         // A monotone cell-op sequence is renderable whenever every output (right) cell is represented once
-        // and no left-only deletion is present.  This includes an ordinary-grid insertion at the head or in
-        // the middle: build from the accepted right grid, mark only the right-only cell w:cellIns, and let
-        // tblGridChange restore the old grid on reject.  Left-only cells remain a conservative whole-table
-        // fallback until the delete/merge topology path is made grid-aware.
+        // and every left cell is represented once. This includes an ordinary-grid insertion at the head or
+        // in the middle — build from the accepted right grid, mark only the right-only cell w:cellIns, and
+        // let tblGridChange restore the old grid on reject — and a left-only cell (a column the next row
+        // no longer has, or a narrower row paired positionally with a wider one): that cell is emitted in
+        // its place as the base cell with w:tcPr/w:cellDel and its content struck, so accept removes it
+        // and reject restores it. Word's compare output keeps such a surplus base cell in the merged row
+        // with its content deleted rather than lowering the whole table to a delete + insert pair.
         if (rowOp.CellOps.Count(c => c.RightCellAnchor != null) != rightCells.Count ||
-            rowOp.CellOps.Any(c => c.RightCellAnchor == null) ||
-            (leftCells != null && rowOp.CellOps.Count(c => c.LeftCellAnchor != null) != leftCells.Count))
+            (leftCells != null && rowOp.CellOps.Count(c => c.LeftCellAnchor != null) != leftCells.Count) ||
+            (leftCells == null && rowOp.CellOps.Any(c => c.RightCellAnchor == null)))
             return false;
 
         var newRow = new XElement(W.tr);
@@ -1839,6 +1842,17 @@ internal static class IrMarkupRenderer
         int leftIndex = 0;
         foreach (var cellOp in rowOp.CellOps)
         {
+            if (cellOp.RightCellAnchor == null)
+            {
+                // Left-only cell: the base cell survives in place, whole-marked deleted (cellDel + struck
+                // content). leftCells is non-null here — the guard above rejects this op without a left row.
+                if (leftIndex >= leftCells!.Count)
+                    return false;
+                var deletedCell = StripUnids(new XElement(leftCells[leftIndex++]));
+                MarkWholeCell(deletedCell, RevKind.Del, state);
+                newRow.Add(deletedCell);
+                continue;
+            }
             if (rightIndex >= rightCells.Count)
                 return false;
             var cellSrc = rightCells[rightIndex++];

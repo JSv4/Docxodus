@@ -224,6 +224,35 @@ public class DocxDiffGapArrangementTests
     }
 
     [Fact]
+    public void PairedRows_SurplusBaseCell_StaysInRowAsDeletedCell()
+    {
+        // base row [c1, c2, c3] → next row [c1, C2']: the rows pair, the first two cells pair, and the
+        // third cell has no next counterpart. The table stays ONE modified table: the surplus base
+        // cell is emitted in place, whole-marked deleted (w:tcPr/w:cellDel + struck content), so
+        // accept removes it (= next) and reject restores it (= base). It used to lower the whole
+        // table to a deleted table followed by an inserted one.
+        var left = TableDoc("shared head", "before table", new[] { "cell one", "cell two", "cell three" }, "after table");
+        var right = TableDoc("shared head", "before table", new[] { "cell one", "cell TWO" }, "after table");
+        var result = DocxDiff.Compare(left, right);
+
+        using (var stream = new MemoryStream(result.DocumentByteArray))
+        using (var word = WordprocessingDocument.Open(stream, false))
+        {
+            var body = word.MainDocumentPart!.Document!.Body!;
+            var table = Assert.Single(body.Elements<DocumentFormat.OpenXml.Wordprocessing.Table>());
+            var row = Assert.Single(table.Elements<DocumentFormat.OpenXml.Wordprocessing.TableRow>());
+            var cells = row.Elements<DocumentFormat.OpenXml.Wordprocessing.TableCell>().ToList();
+            Assert.Equal(3, cells.Count);
+            Assert.Null(cells[0].TableCellProperties?.GetFirstChild<DocumentFormat.OpenXml.Wordprocessing.CellDeletion>());
+            Assert.Null(cells[1].TableCellProperties?.GetFirstChild<DocumentFormat.OpenXml.Wordprocessing.CellDeletion>());
+            Assert.NotNull(cells[2].TableCellProperties?.GetFirstChild<DocumentFormat.OpenXml.Wordprocessing.CellDeletion>());
+            Assert.Equal("cell three", string.Concat(cells[2].Descendants<DocumentFormat.OpenXml.Wordprocessing.DeletedText>().Select(t => t.Text)));
+        }
+        Assert.Equal(BodyTextOf(right), BodyTextOf(RevisionProcessor.AcceptRevisions(result)));
+        Assert.Equal(BodyTextOf(left), BodyTextOf(RevisionProcessor.RejectRevisions(result)));
+    }
+
+    [Fact]
     public void TrailingReplace_AcrossDeletedTable_AcceptStaysPilcrowExact()
     {
         // base [W1, TBL, W2] → next [N1]: the trailing replace fuses N1's runs at the head and the

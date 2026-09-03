@@ -32,6 +32,13 @@ All notable changes to this project will be documented in this file.
   places that final paragraph mark after the deleted table, exactly as the already-handled wordful
   case does; before, the mark was emitted with the other insertions and the document ended with the
   deleted table.
+- `DocxDiff` renders a paired table row whose base side has more cells than the next side as one
+  modified row instead of lowering the entire table to a deleted table followed by an inserted one.
+  The surplus base cell now stays in its place with `w:tcPr/w:cellDel` and struck content, which
+  accept removes and reject restores, mirroring the right-only `w:cellIns` case the renderer already
+  handled. Word's compare output keeps such a cell in the merged row with its content deleted, so
+  two unrelated tables paired positionally, or a row that lost a column, no longer double the
+  table on the page.
 - `WmlToHtmlConverter` now carries a font's document-declared alternate into the CSS font stack.
   ECMA-376's `w:altName` in `word/fontTable.xml` is exactly "use this family when the primary one
   is unavailable", and real documents lean on it for names no vendor ships:
