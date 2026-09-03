@@ -2,14 +2,24 @@
   {
     "id": "reopen_saved_output",
     "name": "docxodus_open",
-    "arguments": { "path": "smoke-output.docx", "trackedChanges": "accept" },
-    "capture": { "session_id": "sessionId" }
+    "arguments": {
+      "path": "smoke-output.docx",
+      "trackedChanges": "accept"
+    },
+    "capture": {
+      "session_id": "sessionId"
+    }
   },
   {
     "id": "package_reopens_with_intact_structure",
     "name": "docxodus_get_content",
-    "arguments": { "sessionId": "$session_id", "format": "info" },
-    "capture": { "reopened_anchors": "editSummary.totalAnchors" },
+    "arguments": {
+      "sessionId": "$session_id",
+      "format": "info"
+    },
+    "capture": {
+      "reopened_anchors": "editSummary.totalAnchors"
+    },
     "expect": {
       "version": 0,
       "sectionInfo.pageNumberFormat": "lowerRoman",
@@ -18,27 +28,103 @@
     }
   },
   {
+    "id": "inspect_name_clause",
+    "name": "docxodus_search",
+    "arguments": {
+      "sessionId": "$session_id",
+      "mode": "text",
+      "query": "The name of this corporation is",
+      "maxResults": 2
+    },
+    "capture": {
+      "name_anchor": "matches.1.enclosingAnchor.id"
+    }
+  },
+  {
+    "id": "inspect_certification",
+    "name": "docxodus_search",
+    "arguments": {
+      "sessionId": "$session_id",
+      "mode": "text",
+      "query": "DOES HEREBY CERTIFY",
+      "maxResults": 1
+    },
+    "capture": {
+      "certify_anchor": "matches.0.enclosingAnchor.id"
+    }
+  },
+  {
     "id": "tracked_edits_persisted_as_revisions",
     "name": "docxodus_track_changes",
-    "arguments": { "sessionId": "$session_id", "action": "list" },
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "list"
+    },
     "expect": {
-      "revisions.length": 4,
-      "revisions.0.type": "insert",
-      "revisions.0.text": "The undersigned further certifies that this Restated Certificate has been duly adopted in accordance with Sections 242 and 245 of the DGCL.\u00b6",
-      "revisions.1.type": "delete",
-      "revisions.1.text": "[_______________]",
-      "revisions.2.type": "insert",
-      "revisions.2.text": "Northstar Robotics, Inc.",
-      "revisions.2.author": "Smoke Counsel",
-      "revisions.3.type": "format",
-      "revisions.3.text": "Northstar Robotics, Inc."
+      "revisions.length": 6
+    },
+    "expectMembers": {
+      "revisions": [
+        {
+          "type": "insert",
+          "text": "",
+          "author": "Smoke Counsel",
+          "partUri": "/word/document.xml",
+          "scope": "body",
+          "anchorId": "$certify_anchor"
+        },
+        {
+          "type": "insert",
+          "text": "The undersigned further certifies that this Restated Certificate has been duly adopted in accordance with Sections 242 and 245 of the DGCL.\u00b6",
+          "author": "Smoke Counsel",
+          "partUri": "/word/document.xml",
+          "scope": "body"
+        },
+        {
+          "type": "delete",
+          "text": "[_______________]",
+          "author": "Smoke Counsel",
+          "partUri": "/word/document.xml",
+          "scope": "body",
+          "anchorId": "$name_anchor"
+        },
+        {
+          "type": "insert",
+          "text": "Northstar Robotics, Inc.",
+          "author": "Smoke Counsel",
+          "partUri": "/word/document.xml",
+          "scope": "body",
+          "anchorId": "$name_anchor"
+        },
+        {
+          "type": "format",
+          "text": "Northstar Robotics, Inc.",
+          "author": "Smoke Counsel",
+          "partUri": "/word/document.xml",
+          "scope": "body",
+          "anchorId": "$name_anchor"
+        },
+        {
+          "type": "insert",
+          "text": " Adopted by written consent of the stockholders.\u00b6",
+          "author": "Smoke Counsel",
+          "partUri": "/word/footnotes.xml",
+          "scope": "fn"
+        }
+      ]
     }
   },
   {
     "id": "comment_persisted",
     "name": "docxodus_comment",
-    "arguments": { "sessionId": "$session_id", "action": "list" },
-    "expect": { "comments.length": 1, "comments.0.author": "Smoke Counsel" }
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "list"
+    },
+    "expect": {
+      "comments.length": 1,
+      "comments.0.author": "Smoke Counsel"
+    }
   },
   {
     "id": "bookmark_persisted",
@@ -48,12 +134,18 @@
       "mode": "bookmark",
       "query": "SmokeDelawareRationale"
     },
-    "expect": { "matches.length": 1 }
+    "expect": {
+      "matches.length": 1
+    }
   },
   {
     "id": "hyperlink_persisted_as_external_relationship",
     "name": "docxodus_links",
-    "arguments": { "sessionId": "$session_id", "action": "list_hyperlinks", "scope": "body" },
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "list_hyperlinks",
+      "scope": "body"
+    },
     "expect": {
       "hyperlinks.length": 1,
       "hyperlinks.0.kind": "external",
@@ -63,9 +155,17 @@
   {
     "id": "table_persisted",
     "name": "docxodus_search",
-    "arguments": { "sessionId": "$session_id", "mode": "kind", "query": "tbl" },
-    "expect": { "matches.length": 1 },
-    "capture": { "table_anchor": "matches.0.id" }
+    "arguments": {
+      "sessionId": "$session_id",
+      "mode": "kind",
+      "query": "tbl"
+    },
+    "expect": {
+      "matches.length": 1
+    },
+    "capture": {
+      "table_anchor": "matches.0.id"
+    }
   },
   {
     "id": "table_grid_is_addressable",
@@ -75,13 +175,23 @@
       "action": "get_metadata",
       "tableAnchorId": "$table_anchor"
     },
-    "expect": { "metadata.rows.length": 2, "metadata.columns.length": 2 }
+    "expect": {
+      "metadata.rows.length": 2,
+      "metadata.columns.length": 2
+    }
   },
   {
     "id": "footnote_persisted",
     "name": "docxodus_search",
-    "arguments": { "sessionId": "$session_id", "mode": "text", "query": "Adopted by written consent", "scope": "all" },
-    "expect": { "matches.length": 1 }
+    "arguments": {
+      "sessionId": "$session_id",
+      "mode": "text",
+      "query": "Adopted by written consent",
+      "scope": "all"
+    },
+    "expect": {
+      "matches.length": 1
+    }
   },
   {
     "id": "inserted_paragraph_persisted_and_findable",
@@ -92,7 +202,9 @@
       "query": "The undersigned further certifies",
       "scope": "body"
     },
-    "expect": { "matches.length": 1 }
+    "expect": {
+      "matches.length": 1
+    }
   },
   {
     "id": "rolled_back_text_never_persisted",
@@ -103,7 +215,9 @@
       "query": "must be rolled back",
       "scope": "all"
     },
-    "expect": { "matches.length": 0 }
+    "expect": {
+      "matches.length": 0
+    }
   },
   {
     "id": "refused_text_never_persisted",
@@ -114,11 +228,15 @@
       "query": "must never reach the document",
       "scope": "all"
     },
-    "expect": { "matches.length": 0 }
+    "expect": {
+      "matches.length": 0
+    }
   },
   {
     "id": "close",
     "name": "docxodus_close",
-    "arguments": { "sessionId": "$session_id" }
+    "arguments": {
+      "sessionId": "$session_id"
+    }
   }
 ]

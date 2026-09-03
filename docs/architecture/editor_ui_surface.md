@@ -29,8 +29,19 @@ exports and how much chrome they turn on:
 | `docs/demo/player.html` | `createRibbonEditor` from jsDelivr, on tap | pinned `compact`, no hint |
 
 Every screenshot is the [NVCA Model Certificate of Incorporation](https://nvca.org/model-legal-documents/)
-(346 blocks, 94 footnote citations, 4 sections, 48 rendered pages) opened unmodified, captured by
+(234 body blocks, 94 footnote citations, 4 sections, 53 rendered pages) opened unmodified, captured by
 `tools/screenshots/editor/capture.mjs` from the shipped surface.
+
+Those are measurements, not targets, and they are now
+`npm/tests/editor-paginated-charter.spec.ts` rather than a sentence — the page count sat at 48
+here for a long time while the editor rendered something else, because nothing failed when prose
+went stale (issue #688). Two things about that count are worth knowing before treating a change in
+it as a regression. Pagination depends on font metrics, so the count is measured at a fixed viewport with
+the fixture's own fonts. And the paginated editor does not fragment paragraphs across pages
+(`fragmentParagraphs: false` in `mountPaginated`): a fragment has one addressable head, and the
+editor's model is one addressable node per anchor, so a paragraph that does not fit moves whole.
+On this document fragmentation is worth a single page, so it is not the lever behind a materially
+different number.
 
 The yardstick for what belongs here is *the ninety percent of Word people actually use*: the
 Home tab's font and paragraph groups, styles, find and replace, tables, links and pictures,

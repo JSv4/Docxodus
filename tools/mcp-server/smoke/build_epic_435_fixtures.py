@@ -1,29 +1,96 @@
 #!/usr/bin/env python3
-"""Generate the epic #435 acceptance workflow for `mcp_probe.py`.
+"""Generate the epic #435 acceptance fixtures for `mcp_probe.py`.
 
-The preview, the apply, and the retry must send a *byte-identical* step array —
-that is what the transaction fingerprint is computed over, and a retry whose
-fingerprint differs is a `transaction_conflict` rather than a replay. Writing the
-array once and emitting it three times is the point of generating this file
-instead of hand-maintaining the JSON.
+Two files come out of here, and both are generated for the same reason: a
+contract stated twice drifts.
 
-Run:  python3 tools/mcp-server/smoke/build_epic_435_workflow.py
+`epic-435-workflow.json` — the preview, the apply, and the retry must send a
+*byte-identical* step array. That is what the transaction fingerprint is
+computed over, and a retry whose fingerprint differs is a
+`transaction_conflict` rather than a replay. Writing the array once and
+emitting it three times is the point of generating the file.
+
+`epic-435-validation.json` — reopens the saved package and re-asserts what
+persisted, including the same revision list the workflow audits live. That list
+was maintained by hand in both places and went stale in both (#687), so it now
+has a single declaration, `REVISION_MEMBERS`.
+
+Run:  python3 tools/mcp-server/smoke/build_epic_435_fixtures.py
 """
 
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 TRANSACTION_ID = "epic435-smoke-restated-certificate"
+AUTHOR = "Smoke Counsel"
 CORPORATION = "Northstar Robotics, Inc."
 PLACEHOLDER = "[_______________]"
 RENDERER = "epic435-smoke-renderer-1"
 HISTORY_SENTINEL = "History cursor sentinel — this paragraph exists only on redo."
+CERTIFICATION = (
+    "The undersigned further certifies that this Restated Certificate "
+    "has been duly adopted in accordance with Sections 242 and 245 of the DGCL."
+)
+FOOTNOTE = "Adopted by written consent of the stockholders."
+
+BODY = "/word/document.xml"
+NOTES = "/word/footnotes.xml"
 
 
 def step(tool: str, **args: object) -> dict:
     return {"tool": tool, "args": args}
+
+
+def revision(text: str, kind: str = "insert", **fields: object) -> dict:
+    return {"type": kind, "text": text, "author": AUTHOR, **fields}
+
+
+# The five tracked steps below settle into exactly six revisions, and *which* six
+# is the contract this smoke guards. Two of them come from the single
+# `insert_footnote` step: the reference run in the body — a genuine tracked
+# insertion that carries no text, because `w:footnoteReference` has none to
+# carry — and the note body over in word/footnotes.xml. The engine's enumeration
+# ORDER is not part of the contract, so these are matched as members rather than
+# by index (#687); `expectMembers` still demands exactly one entry per member,
+# so a duplicated or vanished revision fails just as loudly.
+REVISION_MEMBERS = [
+    revision("", partUri=BODY, scope="body", anchorId="$certify_anchor"),
+    revision(CERTIFICATION + "¶", partUri=BODY, scope="body"),
+    revision(PLACEHOLDER, "delete", partUri=BODY, scope="body", anchorId="$name_anchor"),
+    revision(CORPORATION, partUri=BODY, scope="body", anchorId="$name_anchor"),
+    revision(CORPORATION, "format", partUri=BODY, scope="body", anchorId="$name_anchor"),
+    revision(" " + FOOTNOTE + "¶", partUri=NOTES, scope="fn"),
+]
+
+# Both runs discover the two anchors REVISION_MEMBERS keys on the same way, from
+# text that neither the edit script nor the save disturbs.
+ANCHOR_DISCOVERY = [
+    {
+        "id": "inspect_name_clause",
+        "name": "docxodus_search",
+        "arguments": {
+            "sessionId": "$session_id",
+            "mode": "text",
+            "query": "The name of this corporation is",
+            "maxResults": 2,
+        },
+        "capture": {"name_anchor": "matches.1.enclosingAnchor.id"},
+    },
+    {
+        "id": "inspect_certification",
+        "name": "docxodus_search",
+        "arguments": {
+            "sessionId": "$session_id",
+            "mode": "text",
+            "query": "DOES HEREBY CERTIFY",
+            "maxResults": 1,
+        },
+        "capture": {"certify_anchor": "matches.0.enclosingAnchor.id"},
+    },
+]
 
 
 # The substantive tracked edit: a counsel filling in and annotating a restated
@@ -44,21 +111,20 @@ TRACKED_STEPS = [
         action="insert_paragraph",
         anchorId="$certify_anchor",
         position="after",
-        markdown="The undersigned further certifies that this Restated Certificate "
-        "has been duly adopted in accordance with Sections 242 and 245 of the DGCL.",
+        markdown=CERTIFICATION,
     ),
     step(
         "docxodus_create",
         action="insert_footnote",
         anchorId="$certify_anchor",
         characterOffset=19,
-        markdown="Adopted by written consent of the stockholders.",
+        markdown=FOOTNOTE,
     ),
     step(
         "docxodus_comment",
         action="add",
         anchorId="$name_anchor",
-        author="Smoke Counsel",
+        author=AUTHOR,
         initials="SC",
         markdown="Confirm the exact legal name against the charter before filing.",
     ),
@@ -158,28 +224,7 @@ def workflow() -> list[dict]:
             },
             "expect": {"version": 0, "sectionInfo.pageNumberFormat": "lowerRoman"},
         },
-        {
-            "id": "inspect_name_clause",
-            "name": "docxodus_search",
-            "arguments": {
-                "sessionId": "$session_id",
-                "mode": "text",
-                "query": "The name of this corporation is",
-                "maxResults": 2,
-            },
-            "capture": {"name_anchor": "matches.1.enclosingAnchor.id"},
-        },
-        {
-            "id": "inspect_certification",
-            "name": "docxodus_search",
-            "arguments": {
-                "sessionId": "$session_id",
-                "mode": "text",
-                "query": "DOES HEREBY CERTIFY",
-                "maxResults": 1,
-            },
-            "capture": {"certify_anchor": "matches.0.enclosingAnchor.id"},
-        },
+        *ANCHOR_DISCOVERY,
         {
             "id": "inspect_list_item",
             "name": "docxodus_search",
@@ -704,16 +749,8 @@ def workflow() -> list[dict]:
             "id": "audit_applied_text_present_in_revisions",
             "name": "docxodus_track_changes",
             "arguments": {"sessionId": "$session_id", "action": "list"},
-            "expect": {
-                "revisions.length": 4,
-                "revisions.1.type": "delete",
-                "revisions.1.text": PLACEHOLDER,
-                "revisions.2.type": "insert",
-                "revisions.2.text": CORPORATION,
-                "revisions.2.author": "Smoke Counsel",
-                "revisions.3.type": "format",
-                "revisions.3.text": CORPORATION,
-            },
+            "expect": {"revisions.length": len(REVISION_MEMBERS)},
+            "expectMembers": {"revisions": REVISION_MEMBERS},
         },
         {
             # Regression guard for the defect this smoke found: text inserted under
@@ -923,11 +960,163 @@ def workflow() -> list[dict]:
     return calls
 
 
-def main() -> None:
-    target = Path(__file__).with_name("epic-435-workflow.json")
-    target.write_text(json.dumps(workflow(), indent=2) + "\n", encoding="utf-8")
-    print(f"wrote {target} ({len(workflow())} calls)")
+def validation() -> list[dict]:
+    """Reopen the saved package and assert what survived the round trip.
+
+    Independent of the workflow's session: this run reopens `smoke-output.docx`
+    from scratch and re-discovers its anchors, so what it proves is that the
+    edits are in the *package*, not in a live session's memory.
+    """
+    return [
+        {
+            "id": "reopen_saved_output",
+            "name": "docxodus_open",
+            "arguments": {"path": "smoke-output.docx", "trackedChanges": "accept"},
+            "capture": {"session_id": "sessionId"},
+        },
+        {
+            "id": "package_reopens_with_intact_structure",
+            "name": "docxodus_get_content",
+            "arguments": {"sessionId": "$session_id", "format": "info"},
+            "capture": {"reopened_anchors": "editSummary.totalAnchors"},
+            "expect": {
+                "version": 0,
+                "sectionInfo.pageNumberFormat": "lowerRoman",
+                "sectionInfo.headerRefs.0.kind": "first",
+                "sectionInfo.footerRefs.0.kind": "even",
+            },
+        },
+        *ANCHOR_DISCOVERY,
+        {
+            "id": "tracked_edits_persisted_as_revisions",
+            "name": "docxodus_track_changes",
+            "arguments": {"sessionId": "$session_id", "action": "list"},
+            "expect": {"revisions.length": len(REVISION_MEMBERS)},
+            "expectMembers": {"revisions": REVISION_MEMBERS},
+        },
+        {
+            "id": "comment_persisted",
+            "name": "docxodus_comment",
+            "arguments": {"sessionId": "$session_id", "action": "list"},
+            "expect": {"comments.length": 1, "comments.0.author": AUTHOR},
+        },
+        {
+            "id": "bookmark_persisted",
+            "name": "docxodus_search",
+            "arguments": {
+                "sessionId": "$session_id",
+                "mode": "bookmark",
+                "query": "SmokeDelawareRationale",
+            },
+            "expect": {"matches.length": 1},
+        },
+        {
+            "id": "hyperlink_persisted_as_external_relationship",
+            "name": "docxodus_links",
+            "arguments": {
+                "sessionId": "$session_id",
+                "action": "list_hyperlinks",
+                "scope": "body",
+            },
+            "expect": {
+                "hyperlinks.length": 1,
+                "hyperlinks.0.kind": "external",
+                "hyperlinks.0.target": "https://delcode.delaware.gov/title8/c001/",
+            },
+        },
+        {
+            "id": "table_persisted",
+            "name": "docxodus_search",
+            "arguments": {"sessionId": "$session_id", "mode": "kind", "query": "tbl"},
+            "expect": {"matches.length": 1},
+            "capture": {"table_anchor": "matches.0.id"},
+        },
+        {
+            "id": "table_grid_is_addressable",
+            "name": "docxodus_table",
+            "arguments": {
+                "sessionId": "$session_id",
+                "action": "get_metadata",
+                "tableAnchorId": "$table_anchor",
+            },
+            "expect": {"metadata.rows.length": 2, "metadata.columns.length": 2},
+        },
+        {
+            "id": "footnote_persisted",
+            "name": "docxodus_search",
+            "arguments": {
+                "sessionId": "$session_id",
+                "mode": "text",
+                "query": "Adopted by written consent",
+                "scope": "all",
+            },
+            "expect": {"matches.length": 1},
+        },
+        {
+            "id": "inserted_paragraph_persisted_and_findable",
+            "name": "docxodus_search",
+            "arguments": {
+                "sessionId": "$session_id",
+                "mode": "text",
+                "query": "The undersigned further certifies",
+                "scope": "body",
+            },
+            "expect": {"matches.length": 1},
+        },
+        {
+            "id": "rolled_back_text_never_persisted",
+            "name": "docxodus_search",
+            "arguments": {
+                "sessionId": "$session_id",
+                "mode": "text",
+                "query": "must be rolled back",
+                "scope": "all",
+            },
+            "expect": {"matches.length": 0},
+        },
+        {
+            "id": "refused_text_never_persisted",
+            "name": "docxodus_search",
+            "arguments": {
+                "sessionId": "$session_id",
+                "mode": "text",
+                "query": "must never reach the document",
+                "scope": "all",
+            },
+            "expect": {"matches.length": 0},
+        },
+        {
+            "id": "close",
+            "name": "docxodus_close",
+            "arguments": {"sessionId": "$session_id"},
+        },
+    ]
+
+
+def main() -> int:
+    check = "--check" in sys.argv[1:]
+    stale = []
+    for name, calls in (
+            ("epic-435-workflow.json", workflow()),
+            ("epic-435-validation.json", validation())):
+        target = Path(__file__).with_name(name)
+        rendered = json.dumps(calls, indent=2) + "\n"
+        if check:
+            # Asserts the committed fixture is what this generator emits, without
+            # consulting git — a working tree mid-edit is not the question.
+            current = target.read_text(encoding="utf-8") if target.exists() else None
+            print(f"{'stale' if current != rendered else 'fresh'}: {target}")
+            if current != rendered:
+                stale.append(target)
+            continue
+        target.write_text(rendered, encoding="utf-8")
+        print(f"wrote {target} ({len(calls)} calls)")
+    if stale:
+        print(
+            "regenerate with: python3 tools/mcp-server/smoke/"
+            f"{Path(__file__).name}", file=sys.stderr)
+    return 1 if stale else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

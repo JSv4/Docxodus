@@ -241,6 +241,42 @@ def main() -> int:
                 if unresolved:
                     assertion["unresolved"] = unresolved
                 assertions.append(assertion)
+            # Order-independent membership. A revision or match list's *contents* are
+            # the contract; the order the engine happens to enumerate them in is not,
+            # so pinning entries by absolute index made these fixtures fail on a
+            # reordering that changed nothing about the document (#687). Each expected
+            # member must match exactly one not-yet-claimed entry, which keeps the
+            # assertion as strict as an indexed one: a duplicated or missing entry
+            # still fails.
+            for path, members in substitute(
+                    call.get("expectMembers", {}), variables).items():
+                try:
+                    collection = capture_path(decoded, path)
+                    unresolved = (
+                        None if isinstance(collection, list)
+                        else f"TypeError: {path} is not a list")
+                except (KeyError, IndexError, TypeError, ValueError) as error:
+                    collection, unresolved = None, f"{type(error).__name__}: {error}"
+                claimed: set[int] = set()
+                for member in members:
+                    matched = [
+                        index
+                        for index, item in enumerate(collection or [])
+                        if index not in claimed
+                        and isinstance(item, dict)
+                        and all(item.get(k) == v for k, v in member.items())
+                    ]
+                    if len(matched) == 1:
+                        claimed.add(matched[0])
+                    assertion = {
+                        "path": path,
+                        "expected": member,
+                        "actual": {"matchedIndices": matched},
+                        "passed": unresolved is None and len(matched) == 1,
+                    }
+                    if unresolved:
+                        assertion["unresolved"] = unresolved
+                    assertions.append(assertion)
             if assertions:
                 entry["assertions"] = assertions
             responses.append(entry)
