@@ -195,12 +195,14 @@ public class DocxDiffGapArrangementTests
     }
 
     [Fact]
-    public void InteriorRegion_TrailingBlanks_ShareOnlyWhenParagraphCountsMatch()
+    public void InteriorRegion_TrailingBlanks_ChainWhileBaseMemberIsEmpty()
     {
-        // Interior regions end at the shared "tail" paragraph. Equal counts (3 vs 3: [W1, E, E] vs
-        // [N1, N2, E]) open the backward chain: E ↔ E shared, then E ↔ N2 (one side empty) shared with
-        // N2's runs fused into W1's ¶DEL paragraph. Unequal counts (2 vs 3: [W1, E] vs [N1, E, E])
-        // block it: every mark stays on its own side, inserts first.
+        // Interior regions end at the shared "tail" paragraph. [W1, E, E] vs [N1, N2, E]: the backward
+        // chain opens on E ↔ E, continues through E ↔ N2 (base member empty; N2's runs fuse into W1's
+        // ¶DEL paragraph) and stops at W1 ↔ N1 with one paragraph left on each side, so it survives.
+        // [W1, E] vs [N1, E, E]: after the E ↔ E opener the next candidate is a WORDFUL base member
+        // facing an EMPTY next member, which cancels the chain — every mark stays on its own side,
+        // inserts first — exactly the reference output's shape for a 2-vs-3 region.
         var equalLeft = Doc("alpha bravo charlie", "", "", "shared tail words");
         var equalRight = Doc("delta echo foxtrot", "golf hotel india", "", "shared tail words");
         var equal = BodyShape(DocxDiff.Compare(equalLeft, equalRight));
@@ -217,8 +219,9 @@ public class DocxDiffGapArrangementTests
     [Fact]
     public void InteriorRegion_OneSideOnlyABlank_SharesIt()
     {
-        // [W1, W2, E] vs [E] before the shared tail: the next side is nothing but the trailing blank,
-        // so it shares the base's trailing blank mark (the deletions stay ahead of it).
+        // [W1, W2, E] vs [E] before the shared tail: the chain opens on the blanks and the next side
+        // is exhausted, so the opener survives — the blank mark is shared and the deletions stay
+        // ahead of it.
         var left = Doc("alpha bravo charlie", "delta echo foxtrot", "", "shared tail words");
         var right = Doc("", "shared tail words");
         var result = DocxDiff.Compare(left, right);

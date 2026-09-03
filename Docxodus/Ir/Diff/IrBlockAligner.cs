@@ -2128,10 +2128,10 @@ internal static class IrBlockAligner
     /// </summary>
     /// <remarks>
     /// <para>A blank in-place pair (<paramref name="leftMatch"/>-linked, not a move) is SUPPORTED when
-    /// a diagonal neighbour — the block before it on both sides, or (when the region's paragraph
-    /// counts balance, see the inline note) the block after it on both sides — is itself paired in
-    /// place, and (when that neighbour is another blank pair) is supported in turn: a run of blanks
-    /// borrows its support from the content at either end. The document-final
+    /// a diagonal neighbour — the block before it on both sides, or (when the blank run touches the
+    /// preceding pair on both sides, see the inline note) the block after it on both sides — is
+    /// itself paired in place, and (when that neighbour is another blank pair) is supported in turn:
+    /// a run of blanks borrows its support from the content at either end. The document-final
     /// pair is supported structurally: Word always pairs the two final pilcrows. Every other blank pair
     /// is released — at the spine stage (<paramref name="toFreePool"/>) back to the free pool, since the
     /// gap fill may legitimately re-pair it beside a Modified neighbour the spine could not yet see;
@@ -2187,16 +2187,14 @@ internal static class IrBlockAligner
                 if (supported[li])
                     continue;
                 int rj = leftMatch[li];
-                // Support from the PRECEDING pair, the structural final pair, or — for a blank run at
-                // the END of a region, where the block after it is a pair on both sides — from that
-                // following pair, but only when the region's paragraph counts balance: Word shares
-                // the trailing blank marks of a region when both sides hold the same number of
-                // paragraphs, or when one side is nothing but those blanks (a 2-vs-3 region before a
-                // shared table keeps every blank marked; a 3-vs-3 region shares them; identical
-                // blank runs always match). The renderer's backward pilcrow chain then continues from
-                // such a pair through the rest of the region.
+                // Support from the PRECEDING pair, the structural final pair, or — for a run of blank
+                // pairs that reaches back to the preceding in-place block on BOTH sides with nothing
+                // free between — from the pair after it (identical blank runs always match). A
+                // trailing blank run with free content before it on either side is the renderer's
+                // backward pilcrow chain's to form or refuse: Word's rule there depends on what that
+                // content is (see EmitGapArranged), which the aligner does not model.
                 if ((li == nLeft - 1 && rj == nRight - 1) || SupportsFrom(li - 1, rj - 1) ||
-                    (SupportsFrom(li + 1, rj + 1) && RegionCountsBalanceBefore(li, rj)))
+                    (SupportsFrom(li + 1, rj + 1) && BlankRunTouchesPrecedingPair(li, rj)))
                 {
                     supported[li] = true;
                     changed = true;
@@ -2204,10 +2202,9 @@ internal static class IrBlockAligner
             }
         }
 
-        // The gap before a trailing blank run: walk back over the run's own blank pairs, then count
-        // the free (unpaired, non-table) blocks on each side up to the previous in-place block. Equal
-        // counts, or a side with none, balance.
-        bool RegionCountsBalanceBefore(int li, int rj)
+        // Walk back over the run's own blank pairs; the run touches the preceding pair when the block
+        // before it is in place (or the document start) on both sides — nothing free in between.
+        bool BlankRunTouchesPrecedingPair(int li, int rj)
         {
             int l = li, r = rj;
             while (l > 0 && r > 0 && isBlankPair[l - 1] && leftMatch[l - 1] == r - 1)
@@ -2215,14 +2212,7 @@ internal static class IrBlockAligner
                 l--;
                 r--;
             }
-            int gapL = 0, gapR = 0;
-            for (int i = l - 1; i >= 0 && !InPlaceLeft(i); i--)
-                if (leftBlocks[i] is not IrTable)
-                    gapL++;
-            for (int j = r - 1; j >= 0 && !InPlaceRight(j); j--)
-                if (rightBlocks[j] is not IrTable)
-                    gapR++;
-            return gapL == gapR || gapL == 0 || gapR == 0;
+            return (l == 0 || InPlaceLeft(l - 1)) && (r == 0 || InPlaceRight(r - 1));
         }
 
         foreach (int li in blankPairs)

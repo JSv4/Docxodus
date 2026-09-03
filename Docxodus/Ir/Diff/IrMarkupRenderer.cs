@@ -843,7 +843,7 @@ internal static class IrMarkupRenderer
         while (lastRenderableIndex >= 0 && IsSectionBreakOp(opList[lastRenderableIndex], state))
             lastRenderableIndex--;
 
-        void FlushGap(bool storyEnd, bool seededByBlankPair = false)
+        void FlushGap(bool storyEnd)
         {
             if (pendingInserts.Count == 0 && pendingDeletes.Count == 0)
                 return;
@@ -855,7 +855,7 @@ internal static class IrMarkupRenderer
             pendingInserts.Clear();
             pendingDeletes.Clear();
 
-            EmitGapArranged(insGroups, delGroups, storyEnd, seededByBlankPair, state, sink);
+            EmitGapArranged(insGroups, delGroups, storyEnd, state, sink);
         }
         for (int i = 0; i < opList.Count; i++)
         {
@@ -868,10 +868,7 @@ internal static class IrMarkupRenderer
                     pendingInserts.Add(op);
                 continue;
             }
-            // A shared BLANK paragraph pair closing a region is the region's trailing pilcrow pair
-            // (the aligner keeps it only when the region's counts balance); the backward chain
-            // continues from it through the gap exactly as from an empty↔empty opener of its own.
-            FlushGap(storyEnd: i > lastRenderableIndex, seededByBlankPair: IsSharedBlankParagraphOp(op, state));
+            FlushGap(storyEnd: i > lastRenderableIndex);
             RenderBlockOp(op, state, sink);
         }
         FlushGap(storyEnd: true);
@@ -941,19 +938,8 @@ internal static class IrMarkupRenderer
     /// story end, empty-opening chain), then per-pair emission with fusion and shared unmarked
     /// pilcrows; everything outside a pair stays a fully marked ¶INS / ¶DEL block, inserts first.
     /// </summary>
-    /// <summary>An in-place (Equal / format-only Modify) op whose paragraphs are both visibly empty —
-    /// a shared blank pilcrow pair the aligner formed at the end of a region.</summary>
-    private static bool IsSharedBlankParagraphOp(IrEditOp op, RenderState state)
-    {
-        if (op.Kind is not (IrEditOpKind.EqualBlock or IrEditOpKind.ModifyBlock) ||
-            op.LeftAnchor is null || op.RightAnchor is null)
-            return false;
-        return SourceElement(op.LeftAnchor, state.Left) is { } l && l.Name == W.p && !ParagraphHasVisibleContent(l) &&
-               SourceElement(op.RightAnchor, state.RightSource) is { } r && r.Name == W.p && !ParagraphHasVisibleContent(r);
-    }
-
     private static void EmitGapArranged(
-        List<GapGroup> insGroups, List<GapGroup> delGroups, bool storyEnd, bool seededByBlankPair,
+        List<GapGroup> insGroups, List<GapGroup> delGroups, bool storyEnd,
         RenderState state, List<XElement> sink)
     {
         // ---- pilcrow pairing. B/N = index into delGroups/insGroups; -1 = virtual (that side ends
@@ -1026,56 +1012,100 @@ internal static class IrMarkupRenderer
                 return;
             }
         }
-        // The structural pair does not by itself open a chain: further pairs OPEN only on an
-        // empty↔empty candidate and CONTINUE while at least one side is empty. A structural pair
-        // with a WORDFUL member on either side blocks the chain outright (decoded from Word's
-        // compare output): behind a wordful final paragraph the words sit between that pilcrow and
-        // the previous one, so no earlier pilcrow can pair — a base blank there stays ¶DEL and a
-        // next blank stays ¶INS ahead of the deletions, even when the two blanks would otherwise
-        // have been an empty↔empty opener.
-        // In an INTERIOR region (one that ends at a shared block rather than the story end) the
-        // chain opens only when the two sides hold the same number of paragraphs, or when one side
-        // is nothing but the trailing blank (decoded from Word's compare output across the
-        // reference corpus, over interior regions ending with a blank on both sides: equal counts
-        // share the trailing blank in 300 of 301, a one-paragraph side shares it in 21 of 24, any
-        // other unequal pair keeps the marks on their own sides in 7 of 10 — e.g. a 3-vs-3 region
-        // before a shared table shares its two trailing blanks, a 2-vs-3 region before a shared
-        // table keeps every mark, a run of deletions ending in a blank shares that blank with the
-        // lone blank across from it). Whole tables are not paragraphs for this count. The story end
-        // keeps its own grammar: the final pilcrows always pair.
-        // A region closed by an aligner-paired blank pilcrow pair is already past its opener: the
-        // chain is open and continues backwards while one side is empty (the aligner kept that
-        // pair only under the same balanced-counts rule, so the gate is not re-applied here).
-        bool chain = seededByBlankPair && !storyEnd;
-        bool blocked = pairs.Count == 1 &&
-            (delGroups[pairs[0].B].Wordful || insGroups[pairs[0].N].Wordful);
-        if (!storyEnd && !chain)
+        if (storyEnd)
         {
-            int delParas = ParagraphGroupCount(delGroups);
-            int insParas = ParagraphGroupCount(insGroups);
-            if (delParas != insParas && Math.Min(delParas, insParas) != 1)
-                blocked = true;
-        }
-        while (!blocked && bi >= 0 && ni >= 0)
-        {
-            if (!delGroups[bi].IsPlainParagraph || !insGroups[ni].IsPlainParagraph)
-                break;
-            bool baseEmpty = !delGroups[bi].Wordful;
-            bool nextEmpty = !insGroups[ni].Wordful;
-            if (!chain)
+            // STORY END. The structural pair does not by itself open a chain: further pairs OPEN only
+            // on an empty↔empty candidate and CONTINUE while at least one side is empty. A structural
+            // pair with a WORDFUL member on either side blocks the chain outright (decoded from Word's
+            // compare output): behind a wordful final paragraph the words sit between that pilcrow
+            // and the previous one, so no earlier pilcrow can pair.
+            bool chain = false;
+            bool blocked = pairs.Count == 1 &&
+                (delGroups[pairs[0].B].Wordful || insGroups[pairs[0].N].Wordful);
+            while (!blocked && bi >= 0 && ni >= 0)
             {
-                if (baseEmpty && nextEmpty)
-                    chain = true;
-                else
+                if (!delGroups[bi].IsPlainParagraph || !insGroups[ni].IsPlainParagraph)
                     break;
+                bool baseEmpty = !delGroups[bi].Wordful;
+                bool nextEmpty = !insGroups[ni].Wordful;
+                if (!chain)
+                {
+                    if (baseEmpty && nextEmpty)
+                        chain = true;
+                    else
+                        break;
+                }
+                else if (!(baseEmpty || nextEmpty))
+                {
+                    break;
+                }
+                pairs.Add((bi, ni));
+                bi--;
+                ni--;
             }
-            else if (!(baseEmpty || nextEmpty))
+        }
+        else
+        {
+            // INTERIOR region (it ends at a shared block, not the story end). Decoded from Word's
+            // compare output across every such region of the reference corpus that ends with a blank
+            // on both sides (331 of 334 follow it): the chain OPENS on that empty↔empty pair and walks
+            // backwards while the BASE member is empty — a wordful NEXT member is fine, its runs fuse
+            // into the first deleted paragraph — but a wordful base member facing an empty next member
+            // CANCELS the whole chain (Word keeps every mark: the base paragraph stays ¶DEL whole and
+            // the next blanks ¶INS). At a wordful↔wordful stop the chain survives only when the
+            // paragraphs left over before it balance; a fused next member needs a deleted paragraph
+            // to host its runs, or the chain is cancelled too. A table or break carrier on either side
+            // simply stops the walk.
+            if (bi >= 0 && ni >= 0 && delGroups[bi].IsPlainParagraph && insGroups[ni].IsPlainParagraph &&
+                !delGroups[bi].Wordful && !insGroups[ni].Wordful)
             {
-                break;
+                var chainPairs = new List<(int B, int N)>();
+                bool keep = true, fusion = false, stoppedAtWordful = false;
+                int cb = bi, cn = ni;
+                chainPairs.Add((cb, cn));
+                cb--;
+                cn--;
+                while (cb >= 0 && cn >= 0)
+                {
+                    if (!delGroups[cb].IsPlainParagraph || !insGroups[cn].IsPlainParagraph)
+                        break;
+                    if (!delGroups[cb].Wordful)
+                    {
+                        if (insGroups[cn].Wordful)
+                            fusion = true;
+                        chainPairs.Add((cb, cn));
+                        cb--;
+                        cn--;
+                        continue;
+                    }
+                    if (!insGroups[cn].Wordful)
+                    {
+                        keep = false;
+                        break;
+                    }
+                    stoppedAtWordful = true;
+                    break;
+                }
+                if (keep && fusion)
+                    keep = cb >= 0 && delGroups[0].IsPlainParagraph && delGroups[0].Wordful;
+                if (keep && stoppedAtWordful)
+                {
+                    int remainingBase = 0, remainingNext = 0;
+                    for (int k = 0; k <= cb; k++)
+                        if (!IsWholeTableGroup(delGroups[k]))
+                            remainingBase++;
+                    for (int k = 0; k <= cn; k++)
+                        if (!IsWholeTableGroup(insGroups[k]))
+                            remainingNext++;
+                    keep = remainingBase == remainingNext;
+                }
+                if (keep)
+                {
+                    pairs.AddRange(chainPairs);
+                    bi = cb;
+                    ni = cn;
+                }
             }
-            pairs.Add((bi, ni));
-            bi--;
-            ni--;
         }
         pairs.Reverse(); // head-most first
 
@@ -1181,17 +1211,6 @@ internal static class IrMarkupRenderer
             sink.AddRange(insGroups[k].Elements);
         for (int k = bStart; k < delGroups.Count; k++)
             sink.AddRange(delGroups[k].Elements);
-    }
-
-    /// <summary>Number of gap groups that are not whole tables — the region's paragraph count on
-    /// that side, as the interior chain gate compares it.</summary>
-    private static int ParagraphGroupCount(List<GapGroup> groups)
-    {
-        int n = 0;
-        foreach (var g in groups)
-            if (!IsWholeTableGroup(g))
-                n++;
-        return n;
     }
 
     /// <summary>A gap group that renders exactly one whole table — the shape the virtual structural
