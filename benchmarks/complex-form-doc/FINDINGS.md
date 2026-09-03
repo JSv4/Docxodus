@@ -4,9 +4,9 @@
 
 | | |
 |---|---|
-| Commit | `18eb50ea` (main) |
-| Date | 2026-09-02 |
-| Runtime | .NET SDK 10.0.301, Linux x64, Release build |
+| Commit | `9474a170` (main) |
+| Date | 2026-09-03 |
+| Runtime | .NET SDK 10.0.400, Linux x64, Release build |
 | Input | `TestFiles/NVCA-Model-COI.docx`, 147,622 bytes |
 | Input SHA-256 | `d75600769c12724990de48149d7a2bb161f3522daa54b1783672f93697d87d29` |
 | Edit script | `edits/nvca-coi.json` (8 edits) |
@@ -39,17 +39,23 @@ threshold is asserted on them — they exist to catch order-of-magnitude drift.
 
 | Stage | Time | Output |
 |---|---|---|
-| `html (footnotes+headers rendered)` | 1,569 ms | 214,469 chars |
-| `markdown projection` | 542 ms | 462 anchors, all 94 footnotes projected inline |
-| `DocxDiff compatibility probe` | 108 ms | 0 warnings |
-| `no-edit session round-trip` | 725 ms | — |
-| `tracked session: full edit script` | 3,814 ms | 8/8 edits applied, 11 native revisions, author `Series A Counsel` |
-| `clean session: same edit script untracked` | 1,793 ms | — |
-| `DocxDiff.Compare` | 1,397 ms | — |
-| `DocxDiff.GetRevisions` | 721 ms | 20 revisions |
-| `DocxDiff edit script + semantic changes` | 2,659 ms | 46,460 / 67,164 chars |
-| `DocxDiff round-trip invariants` | 1,960 ms | — |
-| `redline -> HTML with tracked-change markup` | 1,095 ms | — |
+| `html (footnotes+headers rendered)` | 1,469 ms | — |
+| `markdown projection` | 384 ms | 214,469 chars, 462 anchors, all 94 footnotes projected inline |
+| `DocxDiff compatibility probe` | 71 ms | 0 warnings |
+| `no-edit session round-trip` | 365 ms | — |
+| `tracked session: full edit script` | 3,723 ms | 8/8 edits applied, 11 native revisions, author `Series A Counsel` |
+| `clean session: same edit script untracked` | 1,182 ms | — |
+| `DocxDiff.Compare` | 667 ms | — |
+| `DocxDiff.GetRevisions` | 285 ms | 20 revisions |
+| `DocxDiff edit script + semantic changes` | 1,397 ms | 46,460 / 67,164 chars |
+| `DocxDiff round-trip invariants` | 779 ms | — |
+| `redline -> HTML with tracked-change markup` | 499 ms | — |
+
+The harness prints a stage's own detail line before its timing line, so read the two
+together per row above rather than in program output order — the earlier table here paired
+the markdown projection's size with the HTML stage. Times are from a different machine than
+the 2026-09-02 run and are uniformly lower; nothing changed by an order of magnitude, which
+is all these numbers are for.
 
 Revision counts are one-run observations of a specific edit script against a specific
 document; they are reported, not asserted. The 8-edit script yields 11 tracked-session
@@ -58,29 +64,38 @@ granularity over the same edits).
 
 ## Open issues this benchmark surfaced
 
-1. **`DocxSession.DeleteBlock` leaves orphaned footnote definitions.** Deleting a
-   paragraph whose text carries a footnote reference removes the reference but leaves
-   the footnote body in `word/footnotes.xml`. Word renders nothing (the note is
-   unreferenced), but the text still ships inside the file — for legal workflows this is
-   a confidentiality-adjacent leak: "deleted" drafting commentary survives in the
-   package. Options: prune unreferenced notes on delete, prune on `Save()`, or expose a
-   `CompactFootnotes`-style op; whichever is chosen should be revision-aware (a tracked
-   delete must keep the note until the revision is accepted).
-
-2. **Formatting-only edits that cross a field envelope surface as delete+insert pairs
+1. **Formatting-only edits that cross a field envelope surface as delete+insert pairs
    in the native redline.** Italicizing a span that intersects a cross-reference field
    produces a full del+ins of the field region rather than a formatting revision —
    correct OOXML, but noisy for a human reviewer. The semantic changeset already
    classifies it precisely (`run_formatting` modify on the exact token span plus a
    `field` envelope change), so this is a markup-shaping improvement, not a diff bug.
 
-3. **`DocxDiffRevision` has no useful `ToString()`** — logging a revision prints the type
+2. **`DocxDiffRevision` has no useful `ToString()`** — logging a revision prints the type
    name. Minor, but it makes agent traces harder to read.
 
-4. **Two tracked-changes knobs are easy to conflate.** The projection-side knob
+3. **Two tracked-changes knobs are easy to conflate.** The projection-side knob
    (`ProjectionSettings.TrackedChanges`) is separate from the mutation-recording knob
    (`SetTrackedChanges`): an agent that records tracked edits and then projects sees
    clean text unless it also sets the projection mode.
+
+## Fixed since this benchmark reported them
+
+**`DocxSession.DeleteBlock` left orphaned footnote definitions** (fixed by #591). Deleting a
+paragraph whose text carried a footnote reference removed the reference but left the
+footnote body in `word/footnotes.xml`. Word rendered nothing, the note being unreferenced,
+but the text still shipped inside the file — for legal workflows a confidentiality-adjacent
+leak, where "deleted" drafting commentary survives in the package.
+
+`Docxodus/Internal/NoteReferenceOps.cs` now prunes definitions whose last reference an op
+removed, through the same Word-faithful pruner revision resolution has used since #516. It
+is revision-aware, as the finding asked: a tracked delete keeps the note until the revision
+is accepted. `Docxodus.Tests/DocxSessionNotePruneTests.cs` holds the regression net —
+`DS640`–`DS649` cover `DeleteBlock`, shared references, pre-existing danglers, endnotes,
+tracked deletion, range and section deletes, table row/column deletes and undo on built
+fixtures, and `DS650` re-proves the case as this benchmark reported it, by deleting a
+footnote-bearing paragraph of `TestFiles/NVCA-Model-COI.docx` and asserting the charter's
+94 note definitions become 93 with no new validator finding.
 
 ## Historical: the 2026-08-26 run (superseded)
 

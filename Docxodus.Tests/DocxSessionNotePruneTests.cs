@@ -1,5 +1,6 @@
 #nullable enable
 
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Xml.Linq;
@@ -16,7 +17,8 @@ namespace Docxodus.Tests;
 /// part via the same Word-faithful pruner revision resolution has used since issue #516 —
 /// scoped strictly to ids the op itself unreferenced, so a pre-existing dangling note is
 /// untouched and the part (with its Word-reserved separator notes) always survives.
-/// Test IDs use the DS64x range.
+/// Test IDs use the DS64x range; DS650 re-proves the same property on the real form
+/// document the defect was originally found on.
 /// </summary>
 public class DocxSessionNotePruneTests
 {
@@ -43,12 +45,17 @@ public class DocxSessionNotePruneTests
             .First(t => t.Anchor.Scope == "body" && t.Anchor.Kind is "p" or "h"
                 && t.TextPreview.Contains(contains)).Anchor.Id;
 
-    private static void AssertSchemaValid(byte[] bytes)
+    private static List<string> SchemaFindings(byte[] bytes)
     {
         using var ms = new MemoryStream(bytes);
         using var wDoc = WordprocessingDocument.Open(ms, false);
-        var errors = new OpenXmlValidator().Validate(wDoc)
+        return new OpenXmlValidator().Validate(wDoc)
             .Select(e => $"{e.Path?.XPath}: {e.Description}").ToList();
+    }
+
+    private static void AssertSchemaValid(byte[] bytes)
+    {
+        var errors = SchemaFindings(bytes);
         Assert.True(errors.Count == 0, "OOXML schema errors:\n" + string.Join("\n", errors));
     }
 
@@ -301,5 +308,52 @@ public class DocxSessionNotePruneTests
         Assert.Equal(new[] { 1, 2, 7 }, UserNoteIds(footnotes, W + "footnote"));
         Assert.Contains("Solo note.",
             footnotes.Descendants(W + "t").Select(t => (string)t));
+    }
+
+    /// <summary>
+    /// The defect this suite closes was found by the complex-form-doc benchmark on a real
+    /// charter, not on a built fixture: 94 footnotes, every one cited exactly once, and a
+    /// deleted paragraph left its commentary sitting in the package. The programmatic
+    /// fixtures above pin the pruner's edge cases; this one pins the case that was actually
+    /// reported, so `benchmarks/complex-form-doc/FINDINGS.md` can cite coverage on the same
+    /// document it observed the defect on.
+    /// </summary>
+    [Fact]
+    public void DS650_DeleteBlock_PrunesTheOrphanedFootnoteOnTheRealCharter()
+    {
+        var bytes = File.ReadAllBytes(
+            Path.Combine("../../../../TestFiles/", "NVCA-Model-COI.docx"));
+        var before = UserNoteIds(PartXml(bytes, m => m.FootnotesPart), W + "footnote");
+        Assert.Equal(94, before.Length);
+
+        using var session = new DocxSession(bytes);
+        // An optional-provision paragraph that cites one note, carries no bookmark endpoint,
+        // and is the only place in the charter this wording appears. Its note holds drafting
+        // commentary a delete must not leave behind — the confidentiality-adjacent leak the
+        // benchmark called out.
+        var anchor = AnchorByPreview(
+            session, "Notwithstanding anything in Section 2.3.1 to the contrary");
+        var result = session.DeleteBlock(anchor);
+        Assert.True(result.Success, result.Error?.Message);
+
+        var saved = session.Save();
+        var after = UserNoteIds(PartXml(saved, m => m.FootnotesPart), W + "footnote");
+        var pruned = before.Except(after).ToArray();
+        Assert.Single(pruned);
+        Assert.Equal(93, after.Length);
+
+        // The pruned definition is reported alongside the block it belonged to.
+        Assert.Contains(result.Removed, a => a.Kind == "fn");
+
+        // A real charter carries validator findings of its own — Word writes attributes the
+        // published schema never declared. The contract is that the delete adds none, not
+        // that the document was ever clean. Counted rather than matched, because every
+        // finding is reported at an XPath a removed paragraph renumbers.
+        var baseline = SchemaFindings(bytes).Count;
+        var findings = SchemaFindings(saved);
+        Assert.True(
+            findings.Count <= baseline,
+            $"delete added OOXML findings ({baseline} -> {findings.Count}):\n"
+            + string.Join("\n", findings));
     }
 }
