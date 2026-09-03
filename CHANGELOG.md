@@ -39,6 +39,16 @@ All notable changes to this project will be documented in this file.
   handled. Word's compare output keeps such a cell in the merged row with its content deleted, so
   two unrelated tables paired positionally, or a row that lost a column, no longer double the
   table on the page.
+- `DocxDiff` keeps a paired paragraph's right-side `w:pStyle` when the style is one that inserted
+  content already imports. Word expresses a paired paragraph's format change within the style
+  universe the output resolves: a right-only style is brought in only by wholly inserted
+  paragraphs, but once one of them has imported it, a retained or edited paragraph naming the same
+  style keeps the reference (there is nothing to lower to direct properties). The renderer used to
+  test only the left document's style definitions, so a whole-document rewrite whose final
+  paragraph pair adopted the right's heading or list style — or an edited title paragraph in a
+  document whose inserted body uses the same title style — rendered with the default paragraph
+  style while the definition it needed sat, imported, in the output styles part.
+
 - `WmlToHtmlConverter` now carries a font's document-declared alternate into the CSS font stack.
   ECMA-376's `w:altName` in `word/fontTable.xml` is exactly "use this family when the primary one
   is unavailable", and real documents lean on it for names no vendor ships:

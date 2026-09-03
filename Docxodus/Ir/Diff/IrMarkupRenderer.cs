@@ -244,6 +244,7 @@ internal static class IrMarkupRenderer
 
         var state = new RenderState(irLeft, irRight, settings);
         state.LeftStyleIds = ReadStyleIds(left);
+        state.InsertedParagraphStyleIds = CollectInsertedParagraphStyleIds(script, state);
 
         // Word-parity input-revision preservation (PreserveInputRevisions): map each accepted working-copy
         // body block back to its ORIGINAL source element. A revision-free LEFT keeps the established path:
@@ -5649,9 +5650,10 @@ internal static class IrMarkupRenderer
     /// (the original is never mutated); pass-through when the style resolves or no registry exists.</summary>
     private static XElement? DropUnresolvableForCompare(XElement? pPr, RenderState state)
     {
-        if (pPr is null || state.LeftStyleIds is not { } known)
+        if (pPr is null || state.LeftStyleIds is null)
             return pPr;
-        if (pPr.Element(W.pStyle) is not { } pStyle || (string?)pStyle.Attribute(W.val) is not { } id || known.Contains(id))
+        if (pPr.Element(W.pStyle) is not { } pStyle || (string?)pStyle.Attribute(W.val) is not { } id ||
+            state.PairedParagraphStyleResolves(id))
             return pPr;
         var clone = new XElement(pPr);
         clone.Elements(W.pStyle).Remove();
@@ -7113,11 +7115,52 @@ internal static class IrMarkupRenderer
     /// for a paired paragraph; only wholly-inserted paragraphs import their styles).</summary>
     private static void DropUnresolvableStyleRef(XElement pPr, RenderState state)
     {
-        if (state.LeftStyleIds is not { } known)
+        if (state.LeftStyleIds is null)
             return;
         var pStyle = pPr.Element(W.pStyle);
-        if (pStyle is not null && (string?)pStyle.Attribute(W.val) is { } id && !known.Contains(id))
+        if (pStyle is not null && (string?)pStyle.Attribute(W.val) is { } id && !state.PairedParagraphStyleResolves(id))
             pStyle.Remove();
+    }
+
+    /// <summary>The paragraph style ids the body's wholly inserted blocks name (see
+    /// <see cref="RenderState.InsertedParagraphStyleIds"/>), read from their right-side source
+    /// elements; null when there are none or provenance is unavailable.</summary>
+    private static HashSet<string>? CollectInsertedParagraphStyleIds(IrEditScript script, RenderState state)
+    {
+        HashSet<string>? ids = null;
+        void AddFrom(XElement? source)
+        {
+            if (source is null)
+                return;
+            foreach (var paragraph in source.DescendantsAndSelf(W.p))
+            {
+                if ((string?)paragraph.Element(W.pPr)?.Element(W.pStyle)?.Attribute(W.val) is { Length: > 0 } styleId)
+                    (ids ??= new HashSet<string>(StringComparer.Ordinal)).Add(styleId);
+            }
+        }
+        // Inserted content nests: a wholly inserted block, an inserted ROW of a paired table, or an
+        // inserted block inside a paired CELL all bring their paragraphs' styles into the output.
+        void Walk(IEnumerable<IrEditOp> ops)
+        {
+            foreach (var op in ops)
+            {
+                if (op.Kind == IrEditOpKind.InsertBlock)
+                    AddFrom(SourceElement(op.RightAnchor, state.RightSource));
+                if (op.TableDiff is not { } tableDiff)
+                    continue;
+                foreach (var row in tableDiff.RowOps)
+                {
+                    if (row.Kind == IrRowOpKind.InsertRow)
+                        AddFrom(SourceElement(row.RightRowAnchor, state.RightSource));
+                    else if (row.CellOps is { } cellOps)
+                        foreach (var cell in cellOps)
+                            if (cell.BlockOps is { } blockOps)
+                                Walk(blockOps);
+                }
+            }
+        }
+        Walk(script.Operations);
+        return ids;
     }
 
     /// <summary>
@@ -8300,10 +8343,24 @@ internal static class IrMarkupRenderer
         public string? AuthorOverride { get; set; }
 
         /// <summary>Style ids defined in the LEFT document's styles part. A PAIRED paragraph's
-        /// right-side <c>w:pStyle</c> referencing a style outside this set is dropped when stamped
-        /// as current (<see cref="DropUnresolvableStyleRef"/>) — Word expresses a paired
-        /// paragraph's format change within the left style universe. Null disables the check.</summary>
+        /// right-side <c>w:pStyle</c> referencing a style outside this set — and outside
+        /// <see cref="InsertedParagraphStyleIds"/> — is dropped when stamped as current
+        /// (<see cref="DropUnresolvableStyleRef"/>) — Word expresses a paired paragraph's format
+        /// change within the style universe the output resolves. Null disables the check.</summary>
         public HashSet<string>? LeftStyleIds { get; set; }
+
+        /// <summary>Paragraph style ids named by the body's wholly INSERTED blocks (their paragraphs
+        /// and the paragraphs of inserted tables). Decoded from Word's compare output: only inserted
+        /// paragraphs bring a right-only style definition into the result, but once one has, a PAIRED
+        /// paragraph naming that same style keeps its <c>w:pStyle</c> too — the reference resolves in
+        /// the output, so Word has no reason to lower it to direct properties. Null = no inserted styles.</summary>
+        public HashSet<string>? InsertedParagraphStyleIds { get; set; }
+
+        /// <summary>Whether a paired paragraph's right-side <c>w:pStyle</c> resolves in the output's
+        /// style universe: the LEFT definitions plus the right-only styles inserted content imports.</summary>
+        public bool PairedParagraphStyleResolves(string styleId) =>
+            (LeftStyleIds?.Contains(styleId) ?? true) ||
+            (InsertedParagraphStyleIds?.Contains(styleId) ?? false);
 
         /// <summary>Accepted-working-element → ORIGINAL right body element(s) map for
         /// <c>PreserveInputRevisions</c> (see <see cref="IrMarkupRenderer.BuildPreservedOriginalIndex"/>).
