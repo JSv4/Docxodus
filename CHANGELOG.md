@@ -6,6 +6,16 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `WmlToHtmlConverter` now carries a font's document-declared alternate into the CSS font stack.
+  ECMA-376's `w:altName` in `word/fontTable.xml` is exactly "use this family when the primary one
+  is unavailable", and real documents lean on it for names no vendor ships:
+  `TestFiles/NVCA-Model-COI.docx` declares `(normal text)` — Word's UI label for the theme font,
+  written into numbering as if it were a family — and the PostScript spelling `TimesNewRomanPSMT`,
+  each with `altName="Times New Roman"`. Emitting only the primary name asked the renderer for
+  families that cannot exist, which standalone export reports as `font_unavailable`. The alternate
+  is now emitted immediately after the primary, ahead of the inferred generic fallback, for body
+  and running stories alike. A family with no declared alternate is left exactly as it was rather
+  than guessed at from its name.
 - Saving a `DocxSession` no longer rewrites OPC parts whose XML did not change. A single tracked
   text replacement on `TestFiles/NVCA-Model-COI.docx` altered the payload of 23 of the package's 44
   parts — every header and footer, both note parts, styles and settings — even though only
