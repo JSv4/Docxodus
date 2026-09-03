@@ -14,6 +14,12 @@
  * `data-dxr-list` does the same job for the `<input list>` → `<datalist id>`
  * link, which is by-id and cannot use a data attribute directly.
  *
+ * ── Shape ───────────────────────────────────────────────────────────────────
+ * Word's: a title bar, a tab strip (Home · Insert · Layout · References ·
+ * Review · View, plus the contextual Table and Header & Footer tabs), the panel
+ * for the active tab, the document with its comment gutter, and a status bar
+ * that carries the anchor rail, the page/word counts and the zoom control.
+ *
  * ── Responsiveness ──────────────────────────────────────────────────────────
  * Layout keys off `data-chrome` on the root ("full" | "compact"), which
  * `ribbon.ts` sets from a ResizeObserver on the ROOT rather than from viewport
@@ -23,8 +29,11 @@
  */
 
 /** Bumped whenever RIBBON_CSS changes, so a stale injected stylesheet is replaced. */
-export const RIBBON_STYLE_VERSION = "9";
+export const RIBBON_STYLE_VERSION = "10";
 export const RIBBON_STYLE_ATTR = "data-docxodus-ribbon-styles";
+
+/** Width of the comment gutter the surface reserves beside the sheet, in px. */
+export const COMMENT_GUTTER_WIDTH = 264;
 
 /**
  * The ribbon stylesheet. Every rule is scoped under `.dxr` so injecting it is
@@ -53,7 +62,7 @@ export const RIBBON_CSS = `
   --dxr-data: #0f766e;
   --dxr-danger: #dc2626;
   --dxr-danger-wash: #fef2f2;
-  --dxr-desk: #f1f5f9;
+  --dxr-desk: #eef2f6;
   --dxr-ui: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --dxr-serif: Georgia, "Times New Roman", serif;
   --dxr-mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace;
@@ -62,7 +71,8 @@ export const RIBBON_CSS = `
   --dxr-shadow-lg: 0 4px 6px rgba(15, 23, 42, .05), 0 10px 15px rgba(15, 23, 42, .04);
   --dxr-shadow-xl: 0 8px 16px rgba(15, 23, 42, .06), 0 20px 25px rgba(15, 23, 42, .05);
   --dxr-ease: cubic-bezier(.4, 0, .2, 1);
-  --dxr-tap: 30px;
+  --dxr-tap: 28px;
+  --dxr-gutter: ${COMMENT_GUTTER_WIDTH}px;
 
   position: relative;
   display: flex;
@@ -102,7 +112,7 @@ export const RIBBON_CSS = `
    mask dissolves content at exactly those edges — the horizontal twin of
    .dxr-scroll's gradient veils — and lifts entirely once the strip fits, so
    nothing is ever faded unless there is more behind it. */
-.dxr-titlebar, .dxr-tabs, .dxr-panel, .dxr-rail { --dxr-fade-l: 0px; --dxr-fade-r: 0px; }
+.dxr-titlebar, .dxr-tabs, .dxr-panel, .dxr-rail, .dxr-findbar { --dxr-fade-l: 0px; --dxr-fade-r: 0px; }
 .dxr [data-fade] {
   -webkit-mask-image: linear-gradient(to right,
     transparent, #000 var(--dxr-fade-l),
@@ -177,7 +187,7 @@ export const RIBBON_CSS = `
 .dxr-tabs {
   display: flex;
   gap: 1px;
-  padding: 6px 10px 0;
+  padding: 4px 10px 0;
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -186,7 +196,7 @@ export const RIBBON_CSS = `
    tab is a 2px accent underline sitting on the panel's own hairline. */
 .dxr-tab {
   flex: 0 0 auto;
-  padding: 7px 14px 8px;
+  padding: 6px 13px 7px;
   border: none;
   background: none;
   color: var(--dxr-muted);
@@ -202,8 +212,9 @@ export const RIBBON_CSS = `
   font-weight: 600;
   box-shadow: inset 0 -2px 0 var(--dxr-accent);
 }
-/* Contextual tab — present only while the caret is inside a table. */
+/* Contextual tabs — present only while the caret is in a table / a header or footer story. */
 .dxr-tab[data-contextual] { color: var(--dxr-accent); }
+.dxr-tab[data-contextual]::before { content: "\\2022"; margin-right: 6px; opacity: .6; }
 .dxr-tab[hidden] { display: none; }
 
 /* ── Ribbon panels ────────────────────────────────────────────────────────── */
@@ -212,7 +223,7 @@ export const RIBBON_CSS = `
 .dxr-panel {
   display: none;
   align-items: stretch;
-  padding: 7px 10px 8px;
+  padding: 6px 10px 7px;
   overflow-x: auto;
   overscroll-behavior-x: contain;
 }
@@ -223,8 +234,8 @@ export const RIBBON_CSS = `
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  padding: 0 13px;
+  gap: 4px;
+  padding: 0 12px;
   border-right: 1px solid var(--dxr-rule);
 }
 .dxr-group:last-child { border-right: none; }
@@ -237,6 +248,7 @@ export const RIBBON_CSS = `
   text-transform: uppercase;
 }
 .dxr-row { display: flex; gap: 3px; align-items: center; }
+.dxr-row + .dxr-row { margin-top: 1px; }
 
 /* ── Controls ─────────────────────────────────────────────────────────────── */
 /* One button family, house-style: every control is a ghost — no borders, no
@@ -245,13 +257,13 @@ export const RIBBON_CSS = `
    surface has exactly one accent-colored action. */
 .dxr button, .dxr label.dxr-btn {
   min-height: var(--dxr-tap);
-  padding: 5px 9px;
+  padding: 4px 8px;
   border: none;
   border-radius: 6px;
   background: none;
   color: var(--dxr-ink);
   font: inherit;
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 500;
   line-height: 1.15;
   cursor: pointer;
@@ -262,7 +274,7 @@ export const RIBBON_CSS = `
 .dxr button:hover, .dxr label.dxr-btn:hover { background: #f1f5f9; }
 .dxr button:active { background: #e2e8f0; }
 .dxr button:disabled { opacity: .38; cursor: default; background: none; }
-.dxr button.dxr-on { color: var(--dxr-accent); background: var(--dxr-wash-on); }
+.dxr button.dxr-on, .dxr button[aria-pressed="true"] { color: var(--dxr-accent); background: var(--dxr-wash-on); }
 .dxr-quick button, .dxr-quick label.dxr-btn { padding: 4px 10px; font-size: 12.5px; }
 /* Save — the house primary: flat accent, sm shadow, the 1px lift on hover. */
 .dxr-quick button[data-dxr="save"]:not(:disabled) {
@@ -282,7 +294,7 @@ export const RIBBON_CSS = `
   transform: translateY(0);
 }
 /* Icon controls sit quieter than text ones until touched (house IconButton). */
-.dxr button.dxr-icon { min-width: var(--dxr-tap); text-align: center; color: var(--dxr-muted); }
+.dxr button.dxr-icon { min-width: var(--dxr-tap); padding: 4px 6px; text-align: center; color: var(--dxr-muted); }
 .dxr button.dxr-icon:hover:not(:disabled) { color: var(--dxr-ink); }
 .dxr button.dxr-icon.dxr-on { color: var(--dxr-accent); }
 /* Icons are inline SVG drawn from the same shapes the control acts on (text lines,
@@ -291,9 +303,9 @@ export const RIBBON_CSS = `
 .dxr button svg { display: block; margin: 0 auto; fill: currentColor; }
 .dxr button.dxr-wide { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
 .dxr button.dxr-danger:hover { color: var(--dxr-danger); background: var(--dxr-danger-wash); }
-.dxr select, .dxr input[type="number"], .dxr input[type="text"] {
+.dxr select, .dxr input[type="number"], .dxr input[type="text"], .dxr input[type="search"], .dxr input[type="url"] {
   min-height: var(--dxr-tap);
-  padding: 4px 6px;
+  padding: 3px 6px;
   border: 1px solid var(--dxr-rule);
   border-radius: 6px;
   background: var(--dxr-sheet);
@@ -307,29 +319,72 @@ export const RIBBON_CSS = `
   outline: 2px solid var(--dxr-accent);
   outline-offset: 1px;
 }
-.dxr [data-dxr="fontsize"] { width: 62px; }
-.dxr [data-dxr="fontfamily"] { max-width: 132px; }
-.dxr [data-dxr="pgstart"] { width: 64px; }
+.dxr [data-dxr="fontsize"] { width: 58px; }
+.dxr [data-dxr="fontfamily"] { width: 138px; }
+.dxr [data-dxr="style"] { width: 148px; }
+.dxr [data-dxr="pgstart"], .dxr [data-dxr="spacebefore"], .dxr [data-dxr="spaceafter"],
+.dxr [data-dxr="specialindentval"] { width: 62px; }
+.dxr [data-dxr="linespacing"], .dxr [data-dxr="listmenu"], .dxr [data-dxr="highlight"],
+.dxr [data-dxr="markup"], .dxr [data-dxr="zoom"], .dxr [data-dxr="margins"],
+.dxr [data-dxr="orientation"], .dxr [data-dxr="pagesize"], .dxr [data-dxr="specialindent"] { max-width: 150px; }
 .dxr-toggle {
   display: inline-flex;
   gap: 5px;
   align-items: center;
+  min-height: var(--dxr-tap);
   color: var(--dxr-ink);
   font-size: 12.5px;
   white-space: nowrap;
   cursor: pointer;
 }
+.dxr-toggle input[type="checkbox"] { accent-color: var(--dxr-accent); margin: 0; }
 .dxr-note { color: var(--dxr-muted); font-size: 11.5px; }
+.dxr-kbd { color: var(--dxr-faint); font-family: var(--dxr-mono); font-size: 10px; }
 
-/* ── Anchor rail ──────────────────────────────────────────────────────────────
+/* Colour swatch buttons: the button shows the current colour as a bar under its glyph and
+   opens the native picker that sits (visually hidden) inside it. */
+.dxr-swatch { position: relative; display: inline-flex; flex-direction: column; align-items: center; gap: 2px; }
+.dxr-swatch > button { padding-bottom: 6px; }
+.dxr-swatch .dxr-swatch-bar {
+  position: absolute; left: 7px; right: 7px; bottom: 4px; height: 3px; border-radius: 2px;
+  background: var(--dxr-swatch, #1e293b); pointer-events: none;
+}
+.dxr-swatch input[type="color"] {
+  position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; border: 0; padding: 0;
+}
+.dxr-swatch [data-dxr="highlight"] {
+  min-height: var(--dxr-tap);
+}
+.dxr-hl-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -2px; margin-right: 4px; border: 1px solid rgba(15,23,42,.15); }
+
+/* ── Find & replace bar ───────────────────────────────────────────────────── */
+.dxr-findbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  overflow-x: auto;
+  border-top: 1px solid var(--dxr-rule);
+  background: var(--dxr-chrome);
+  scrollbar-width: none;
+}
+.dxr-findbar[hidden] { display: none; }
+.dxr-findbar > *, .dxr-findbar [data-dxr="replacegroup"] { flex: 0 0 auto; white-space: nowrap; }
+.dxr-findbar [data-dxr="replacegroup"] { display: inline-flex; align-items: center; gap: 6px; }
+.dxr-findbar input[type="search"], .dxr-findbar input[type="text"] { width: 180px; }
+.dxr-findbar .dxr-findcount { min-width: 5ch; color: var(--dxr-muted); font-family: var(--dxr-mono); font-size: 11.5px; }
+
+/* ── Status bar (carries the anchor rail) ─────────────────────────────────────
    The addressing spine made permanent chrome. Every block in this editor is
    addressable as kind:scope:unid, and the model of record is a live WASM session —
    so the surface states both, live, instead of hiding them behind devtools. It also
-   reports each command's real cost, which is what a smoke test needs to see. */
+   reports each command's real cost, which is what a smoke test needs to see. Word's
+   own status-bar cells (page, words, zoom) sit on the same strip. */
 .dxr-rail {
   display: flex;
   align-items: center;
-  height: 25px;
+  flex: 0 0 auto;
+  height: 26px;
   padding: 0 10px;
   overflow-x: auto;
   background: #fafafa;
@@ -344,12 +399,12 @@ export const RIBBON_CSS = `
   display: flex;
   align-items: baseline;
   gap: 6px;
-  padding: 0 13px;
+  padding: 0 12px;
   border-right: 1px solid var(--dxr-rule);
   white-space: nowrap;
 }
 .dxr-rail .dxr-cell:first-child { padding-left: 0; }
-.dxr-rail .dxr-cell:last-child { border-right: none; }
+.dxr-rail .dxr-cell.dxr-cell-end { margin-left: auto; border-right: none; padding-right: 0; }
 .dxr-rail .dxr-k {
   color: var(--dxr-faint);
   font-family: var(--dxr-ui);
@@ -359,7 +414,11 @@ export const RIBBON_CSS = `
 }
 .dxr-rail .dxr-v { color: var(--dxr-data); }
 .dxr-rail .dxr-v.dxr-flash { animation: dxr-railflash .45s ease-out; }
+.dxr-rail .dxr-v.dxr-plain { color: var(--dxr-ink); font-family: var(--dxr-ui); font-size: 11.5px; }
 @keyframes dxr-railflash { from { background: #ccfbf1; } to { background: transparent; } }
+.dxr-zoom { display: inline-flex; align-items: center; gap: 2px; }
+.dxr-zoom button { min-height: 22px; min-width: 22px; padding: 0 5px; font-size: 13px; color: var(--dxr-muted); }
+.dxr-zoom select { min-height: 22px; padding: 0 4px; font-size: 11.5px; }
 
 /* ── Hint ─────────────────────────────────────────────────────────────────── */
 .dxr-hint {
@@ -411,7 +470,10 @@ export const RIBBON_CSS = `
   margin-top: -26px;
   background: linear-gradient(to top, var(--dxr-desk), transparent);
 }
-.dxr[data-chrome] .dxr-surface { margin: 26px auto; padding: 0 16px 96px; }
+.dxr[data-chrome] .dxr-surface { position: relative; margin: 26px auto; padding: 0 16px 96px; }
+/* The comment gutter sits to the right of the sheet; the surface reserves its width so the
+   page shifts left rather than the bubbles covering it — Word's markup area. */
+.dxr[data-chrome="full"] .dxr-surface[data-comments="on"] { padding-right: calc(var(--dxr-gutter) + 8px); }
 .dxr-surface [contenteditable="true"]:focus {
   outline: 2px solid var(--dxr-accent);
   outline-offset: 2px;
@@ -419,77 +481,65 @@ export const RIBBON_CSS = `
 }
 @media (hover: hover) { .dxr-surface [contenteditable="true"]:hover { background: var(--dxr-wash); } }
 
-/* Header/footer bands: stories live in their own OOXML parts outside the body,
-   so they dock as their own regions. Styled from the same tokens as the ribbon
-   so the surface reads as one instrument rather than two apps. */
+/* Header/footer bands (continuous view): the top and bottom margin of the sheet, drawn the way
+   Word draws a header that is being edited — a dashed rule with a small tag in the margin. */
 .dxr-surface .docx-hf-band {
   /* Docked outside the zoomed sheet, so it takes the page's on-screen width from the
      custom property the viewport publishes rather than stretching to the whole surface. */
+  position: relative;
   width: min(100%, var(--docx-sheet-width, 100%));
-  margin: 0 auto 14px;
-  padding: 9px 72px 13px;
-  border: 1px solid var(--dxr-rule);
-  border-left: 2px solid #5eead4;
-  border-radius: 6px;
+  margin: 0 auto;
+  padding: 34px 72px 12px;
   background: var(--dxr-sheet);
-  box-shadow: var(--dxr-shadow-sm);
+  border-radius: 3px 3px 0 0;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .08), 0 12px 24px rgba(15, 23, 42, .06);
 }
-.dxr-surface .docx-hf-band + .docx-body-flow { margin-top: 0; }
-.dxr-surface .docx-hf-band[data-hf-band="footer"] { margin: 14px auto 0; }
-.dxr-surface .docx-hf-chrome {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
-  margin: 0 0 7px -60px;
-  color: var(--dxr-muted);
-  font-size: 9.5px;
-  font-weight: 600;
-  letter-spacing: .11em;
-  text-transform: uppercase;
+.dxr-surface .docx-hf-band[data-hf-band="footer"] { padding: 12px 72px 34px; border-radius: 0 0 3px 3px; }
+/* The band and the sheet are one piece of paper: kill the sheet's own top/bottom corners and
+   let the dashed rule separate the stories from the body. */
+.dxr-surface .docx-hf-band + .docx-body-flow { margin-top: 0; border-radius: 0; box-shadow: none; }
+.dxr-surface .docx-hf-band[data-hf-band="footer"] { margin-top: 0; }
+.dxr[data-chrome] .dxr-surface[data-view="continuous"] .docx-hf-band ~ .docx-body-flow { box-shadow: none; }
+.dxr[data-chrome] .dxr-surface[data-view="continuous"]:has(.docx-hf-band) .docx-body-flow { padding: 18px 0; }
+.dxr-surface .docx-hf-band::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: 0; border-bottom: 1px dashed var(--dxr-rule-strong);
 }
-.dxr-surface .docx-hf-chrome select, .dxr-surface .docx-hf-chrome input {
-  padding: 3px 5px;
-  border: 1px solid var(--dxr-rule);
-  border-radius: 6px;
-  background: var(--dxr-sheet);
-  color: var(--dxr-ink);
-  font: inherit;
-  font-family: var(--dxr-ui);
-  font-size: 12.5px;
-  font-weight: 400;
-  letter-spacing: normal;
-  text-transform: none;
+.dxr-surface .docx-hf-band[data-hf-band="footer"]::after { top: 0; bottom: auto; border-bottom: 0; border-top: 1px dashed var(--dxr-rule-strong); }
+.dxr-surface .docx-hf-band:hover::after, .dxr-surface .docx-hf-band[data-hf-active]::after { border-color: var(--dxr-accent); }
+.dxr-surface .docx-hf-tag {
+  position: absolute; left: 72px; bottom: -9px; z-index: 2;
+  display: flex; align-items: center; gap: 8px;
+  padding: 1px 7px; border: 1px solid var(--dxr-rule-strong); border-radius: 4px;
+  background: #fff; color: var(--dxr-muted);
+  font-family: var(--dxr-ui); font-size: 9.5px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase;
 }
-.dxr-surface .docx-hf-chrome input[data-hf-pagestart] { width: 64px; }
-.dxr-surface .docx-hf-label { font-weight: 600; }
-.dxr-surface .docx-hf-warning {
-  margin: 0 0 8px -60px;
-  padding: 7px 9px;
-  border: 1px solid #fde68a;
-  border-left: 2px solid #d97706;
-  border-radius: 6px;
-  background: #fffbeb;
-  color: #92400e;
-  font-size: 12px;
-  line-height: 1.45;
+.dxr-surface .docx-hf-band[data-hf-band="footer"] .docx-hf-tag { bottom: auto; top: -9px; }
+.dxr-surface .docx-hf-band[data-hf-active] .docx-hf-tag { border-color: var(--dxr-accent); color: var(--dxr-accent); }
+.dxr-surface .docx-hf-kinds { display: inline-flex; gap: 2px; }
+.dxr-surface .docx-hf-kinds button {
+  min-height: 0; padding: 1px 6px; border-radius: 3px; font-family: var(--dxr-ui); font-size: 9.5px; font-weight: 600;
+  letter-spacing: .06em; text-transform: uppercase; color: var(--dxr-muted); background: none;
 }
-.dxr-surface .docx-hf-warning button {
-  margin-left: 6px;
-  padding: 2px 8px;
-  border-color: #fde68a;
-  background: #fff;
-  font-size: 12px;
+.dxr-surface .docx-hf-kinds button[data-on] { background: var(--dxr-wash-on); color: var(--dxr-accent); }
+.dxr-surface .docx-hf-inherited { font-weight: 400; letter-spacing: normal; text-transform: none; font-style: italic; }
+.dxr-surface .docx-hf-placeholder { color: var(--dxr-faint); font-style: italic; cursor: text; }
+/* Bands only: a page host's height is the band the paginator reserved, and a floor here would
+   read as "the story grew" and trigger a needless re-paginate. */
+.dxr-surface .docx-hf-band .docx-hf-body { min-height: 1.4em; }
+/* Page view: the page's own header/footer area is click-to-edit. */
+.dxr-surface .page-header[data-hf-page], .dxr-surface .page-footer[data-hf-page] { cursor: text; }
+.dxr-surface .page-header[data-hf-page]:hover, .dxr-surface .page-footer[data-hf-page]:hover {
+  outline: 1px dashed var(--dxr-rule-strong); outline-offset: 2px;
 }
-.dxr-surface .docx-hf-placeholder { color: var(--dxr-faint); font-style: italic; }
-.dxr-surface .docx-hf-inherited {
-  color: var(--dxr-muted);
-  font-style: italic;
-  font-weight: 400;
-  letter-spacing: normal;
-  text-transform: none;
+.dxr-surface .page-header[data-hf-active], .dxr-surface .page-footer[data-hf-active] {
+  outline: 1px dashed var(--dxr-accent); outline-offset: 2px; z-index: 5; background: #fff;
 }
-.dxr-surface .docx-hf-band[data-hf-inherited] { border-style: dashed; }
+.dxr-surface [data-hf-active][data-hf-label]::before {
+  content: attr(data-hf-label); position: absolute; left: -2px; top: -18px;
+  padding: 1px 6px; border: 1px solid var(--dxr-accent); border-radius: 4px; background: #fff; color: var(--dxr-accent);
+  font-family: var(--dxr-ui); font-size: 9px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; line-height: 1.4;
+}
+.dxr-surface .page-footer[data-hf-active][data-hf-label]::before { top: auto; bottom: -18px; }
 /* The sheet IS the page. The editor's viewport sizes .docx-body-flow to the section's page
    width and its section wrappers to the authored text column, so the horizontal gutters here
    are the document's own w:sectPr margins, not a padding this chrome invents; only the
@@ -503,25 +553,6 @@ export const RIBBON_CSS = `
   background: var(--dxr-sheet);
   box-shadow: 0 1px 3px rgba(15, 23, 42, .08), 0 12px 24px rgba(15, 23, 42, .06);
 }
-
-/* ── Review: comment threads ──────────────────────────────────────────────── */
-.dxr-threads {
-  display: flex; flex-direction: column; gap: 4px;
-  max-height: 92px; overflow-y: auto; min-width: 260px; padding-right: 2px;
-}
-.dxr-thread {
-  display: flex; align-items: center; gap: 6px;
-  font-size: 11px; line-height: 1.3; padding: 3px 6px;
-  border: 1px solid var(--dxr-rule); border-radius: 4px; background: var(--dxr-chrome-sunk);
-}
-.dxr-thread[data-resolved] { opacity: 0.55; }
-.dxr-thread[data-reply] { margin-left: 14px; }
-.dxr-thread .dxr-tauthor { font-weight: 600; white-space: nowrap; }
-.dxr-thread .dxr-ttext {
-  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px;
-}
-.dxr-thread button { flex: none; }
-.dxr-group.dxr-grow { flex: 1; min-width: 0; }
 
 /* ── Table size picker ────────────────────────────────────────────────────── */
 .dxr-pop {
@@ -554,6 +585,12 @@ export const RIBBON_CSS = `
   margin-top: 8px;
   font-size: 12px;
 }
+/* Small prompt popovers (link URL, page setup), anchored under their button. */
+.dxr-pop form { display: flex; flex-direction: column; gap: 8px; min-width: 260px; font-size: 12.5px; }
+.dxr-pop form label { display: flex; flex-direction: column; gap: 3px; color: var(--dxr-muted); font-size: 11.5px; }
+.dxr-pop form .dxr-row { justify-content: flex-end; }
+.dxr-pop form button[type="submit"] { background: var(--dxr-accent); color: #fff; }
+.dxr-pop form button[type="submit"]:hover { background: var(--dxr-accent-hover); }
 
 /* ── Compact chrome (the mobile-first base) ───────────────────────────────────
    One scrolling strip per tab instead of a multi-row ribbon: group labels turn
@@ -575,7 +612,7 @@ export const RIBBON_CSS = `
 .dxr[data-chrome="compact"] .dxr-quick label.dxr-btn { padding: 4px 8px; }
 .dxr[data-chrome="compact"] .dxr-status { display: none; }
 .dxr[data-chrome="compact"] .dxr-tabs { padding: 5px 8px 0; }
-.dxr[data-chrome="compact"] .dxr-tab { padding: 6px 12px 7px; font-size: 12px; }
+.dxr[data-chrome="compact"] .dxr-tab { padding: 6px 11px 7px; font-size: 12px; }
 .dxr[data-chrome="compact"] .dxr-panel {
   align-items: center;
   gap: 4px;
@@ -593,14 +630,17 @@ export const RIBBON_CSS = `
 .dxr[data-chrome="compact"] .dxr-note { display: none; }
 .dxr[data-chrome="compact"] .dxr-rail { display: none; }
 .dxr[data-chrome="compact"] .dxr-hint { display: none; }
+.dxr[data-chrome="compact"] .dxr-row + .dxr-row { margin-top: 0; }
 /* Compact trims the chrome around the page, never the page: the document's own column width
    is what the viewport's fit-to-width zoom scales, so a phone shows a whole smaller page
    instead of a narrower one that breaks its lines somewhere Word never would. */
 .dxr[data-chrome="compact"] .dxr-surface { margin: 12px auto; padding: 0 10px 64px; }
 .dxr[data-chrome="compact"] .dxr-surface[data-view="continuous"] .docx-body-flow { padding: 22px 0; }
-.dxr[data-chrome="compact"] .dxr-surface .docx-hf-band { padding: 9px 18px 13px; }
-.dxr[data-chrome="compact"] .dxr-surface .docx-hf-chrome,
-.dxr[data-chrome="compact"] .dxr-surface .docx-hf-warning { margin-left: 0; }
+.dxr[data-chrome="compact"] .dxr-surface .docx-hf-band { padding: 26px 18px 10px; }
+.dxr[data-chrome="compact"] .dxr-surface .docx-hf-band[data-hf-band="footer"] { padding: 10px 18px 26px; }
+.dxr[data-chrome="compact"] .dxr-surface .docx-hf-tag { left: 18px; }
+/* No room for a markup column on a phone: comments stay highlighted, bubbles step aside. */
+.dxr[data-chrome="compact"] .docx-comment-gutter, .dxr[data-chrome="compact"] .docx-comment-leaders { display: none; }
 /* A popover anchored to a button has nowhere to go on a narrow surface, so the
    picker docks to the bottom edge where a thumb already is. */
 .dxr[data-chrome="compact"] .dxr-pop[data-open] {
@@ -819,13 +859,39 @@ export const RIBBON_CSS = `
 const ICON_ALIGN = (bars: string) =>
   `<svg width="15" height="13" viewBox="0 0 15 13" aria-hidden="true">${bars}</svg>`;
 
+/** Word's highlighter palette (ST_HighlightColor) with its screen colours, in Word's order. */
+export const HIGHLIGHT_COLORS: ReadonlyArray<{ value: string; label: string; css: string }> = [
+  { value: "yellow", label: "Yellow", css: "#ffff00" },
+  { value: "green", label: "Bright green", css: "#00ff00" },
+  { value: "cyan", label: "Turquoise", css: "#00ffff" },
+  { value: "magenta", label: "Pink", css: "#ff00ff" },
+  { value: "blue", label: "Blue", css: "#0000ff" },
+  { value: "red", label: "Red", css: "#ff0000" },
+  { value: "darkBlue", label: "Dark blue", css: "#000080" },
+  { value: "darkCyan", label: "Teal", css: "#008080" },
+  { value: "darkGreen", label: "Green", css: "#008000" },
+  { value: "darkMagenta", label: "Violet", css: "#800080" },
+  { value: "darkRed", label: "Dark red", css: "#800000" },
+  { value: "darkYellow", label: "Dark yellow", css: "#808000" },
+  { value: "darkGray", label: "Gray 50%", css: "#808080" },
+  { value: "lightGray", label: "Gray 25%", css: "#c0c0c0" },
+  { value: "black", label: "Black", css: "#000000" },
+];
+
+/** The fonts every Word install has; the document's own fonts are added on top at open. */
+export const COMMON_FONTS: readonly string[] = [
+  "Calibri", "Cambria", "Arial", "Times New Roman", "Georgia", "Garamond", "Verdana",
+  "Tahoma", "Trebuchet MS", "Book Antiqua", "Century Gothic", "Courier New", "Consolas",
+  "Segoe UI", "Helvetica",
+];
+
 /**
  * The ribbon's DOM, as one template.
  *
  * `data-dxr` names are the addressing contract (see the module header); the
  * behavioural attributes (`data-cmd`, `data-align`, `data-indent`, `data-list`,
- * `data-tt`) are what `ribbon.ts` delegates on, so adding a control here that
- * follows an existing convention needs no wiring change.
+ * `data-tt`, `data-hf`, `data-rev`, `data-cmt`) are what `ribbon.ts` delegates on,
+ * so adding a control here that follows an existing convention needs no wiring change.
  */
 export const RIBBON_HTML = `
 <div class="dxr-chrome">
@@ -849,25 +915,22 @@ export const RIBBON_HTML = `
     <button type="button" class="dxr-tab" role="tab" data-tab="home" aria-selected="true">Home</button>
     <button type="button" class="dxr-tab" role="tab" data-tab="insert" aria-selected="false">Insert</button>
     <button type="button" class="dxr-tab" role="tab" data-tab="layout" aria-selected="false">Layout</button>
+    <button type="button" class="dxr-tab" role="tab" data-tab="references" aria-selected="false">References</button>
     <button type="button" class="dxr-tab" role="tab" data-tab="review" aria-selected="false">Review</button>
+    <button type="button" class="dxr-tab" role="tab" data-tab="view" aria-selected="false">View</button>
     <button type="button" class="dxr-tab" role="tab" data-tab="table" data-contextual aria-selected="false" hidden>Table</button>
+    <button type="button" class="dxr-tab" role="tab" data-tab="headerfooter" data-contextual aria-selected="false" hidden>Header &amp; Footer</button>
   </div>
 
   <div class="dxr-ribbon" data-dxr="ribbon" aria-disabled="true">
     <!-- HOME ──────────────────────────────────────────────────────────────── -->
     <div class="dxr-panel" data-panel="home" data-active>
       <div class="dxr-group">
-        <span class="dxr-glabel">Text</span>
+        <span class="dxr-glabel">Font</span>
         <div class="dxr-row">
-          <button type="button" class="dxr-icon" data-cmd="bold" title="Bold (Ctrl+B)"><b>B</b></button>
-          <button type="button" class="dxr-icon" data-cmd="italic" title="Italic (Ctrl+I)"><i>I</i></button>
-          <button type="button" class="dxr-icon" data-cmd="underline" title="Underline (Ctrl+U)"><u>U</u></button>
-          <button type="button" class="dxr-icon" data-cmd="strike" title="Strikethrough"><s>S</s></button>
-          <button type="button" class="dxr-icon" data-cmd="code" title="Inline code">&lt;/&gt;</button>
-          <button type="button" class="dxr-icon" data-cmd="superscript" title="Superscript">x&#178;</button>
-          <button type="button" class="dxr-icon" data-cmd="subscript" title="Subscript">x&#8322;</button>
-        </div>
-        <div class="dxr-row">
+          <select data-dxr="fontfamily" title="Font family — applies to the selection">
+            <option value="">Font&#8230;</option>
+          </select>
           <input data-dxr="fontsize" data-dxr-list="fontsizes" type="number" min="1" max="1638" step="0.5"
                  placeholder="pt" title="Font size in points — type any value or pick a preset" />
           <datalist data-dxr="fontsizes">
@@ -876,30 +939,52 @@ export const RIBBON_HTML = `
             <option>20</option><option>24</option><option>28</option><option>36</option>
             <option>48</option><option>72</option><option>96</option>
           </datalist>
-          <select data-dxr="fontfamily" title="Font family — applies to the selection">
-            <option value="">Font&#8230;</option>
-            <option>Calibri</option><option>Times New Roman</option><option>Arial</option>
-            <option>Georgia</option><option>Cambria</option><option>Courier New</option>
-            <option>Verdana</option><option>Garamond</option>
-          </select>
+          <button type="button" class="dxr-icon" data-dxr="fontgrow" title="Increase font size (Ctrl+])">A<sup>&#9650;</sup></button>
+          <button type="button" class="dxr-icon" data-dxr="fontshrink" title="Decrease font size (Ctrl+[)">A<sub>&#9660;</sub></button>
+          <button type="button" class="dxr-icon" data-dxr="clearformat" title="Clear all formatting">A&#10008;</button>
+        </div>
+        <div class="dxr-row">
+          <button type="button" class="dxr-icon" data-cmd="bold" title="Bold (Ctrl+B)"><b>B</b></button>
+          <button type="button" class="dxr-icon" data-cmd="italic" title="Italic (Ctrl+I)"><i>I</i></button>
+          <button type="button" class="dxr-icon" data-cmd="underline" title="Underline (Ctrl+U)"><u>U</u></button>
+          <button type="button" class="dxr-icon" data-cmd="strike" title="Strikethrough"><s>S</s></button>
+          <button type="button" class="dxr-icon" data-cmd="superscript" title="Superscript">x&#178;</button>
+          <button type="button" class="dxr-icon" data-cmd="subscript" title="Subscript">x&#8322;</button>
+          <button type="button" class="dxr-icon" data-dxr="smallcaps" title="Small caps" aria-pressed="false"
+                  style="font-variant: small-caps;">Aa</button>
+          <button type="button" class="dxr-icon" data-cmd="code" title="Inline code">&lt;/&gt;</button>
+          <span class="dxr-swatch" title="Font color">
+            <button type="button" class="dxr-icon" data-dxr="fontcolorbtn" aria-label="Font color"><b>A</b></button>
+            <span class="dxr-swatch-bar" data-dxr="fontcolorbar"></span>
+            <input type="color" data-dxr="fontcolor" value="#1e293b" aria-label="Pick a font color" />
+          </span>
+          <span class="dxr-swatch" title="Text highlight color">
+            <select data-dxr="highlight" aria-label="Text highlight color">
+              <option value="">&#9998; Highlight</option>
+              <option value="none">No color</option>
+            </select>
+          </span>
         </div>
       </div>
 
       <div class="dxr-group">
         <span class="dxr-glabel">Paragraph</span>
         <div class="dxr-row">
-          <button type="button" class="dxr-icon" data-align="left" title="Align left">${ICON_ALIGN(
-            '<rect x="0" y="0" width="15" height="1.6"/><rect x="0" y="3.8" width="9" height="1.6"/><rect x="0" y="7.6" width="15" height="1.6"/><rect x="0" y="11.4" width="9" height="1.6"/>',
-          )}</button>
-          <button type="button" class="dxr-icon" data-align="center" title="Align center">${ICON_ALIGN(
-            '<rect x="0" y="0" width="15" height="1.6"/><rect x="3" y="3.8" width="9" height="1.6"/><rect x="0" y="7.6" width="15" height="1.6"/><rect x="3" y="11.4" width="9" height="1.6"/>',
-          )}</button>
-          <button type="button" class="dxr-icon" data-align="right" title="Align right">${ICON_ALIGN(
-            '<rect x="0" y="0" width="15" height="1.6"/><rect x="6" y="3.8" width="9" height="1.6"/><rect x="0" y="7.6" width="15" height="1.6"/><rect x="6" y="11.4" width="9" height="1.6"/>',
-          )}</button>
-          <button type="button" class="dxr-icon" data-align="justify" title="Justify">${ICON_ALIGN(
-            '<rect x="0" y="0" width="15" height="1.6"/><rect x="0" y="3.8" width="15" height="1.6"/><rect x="0" y="7.6" width="15" height="1.6"/><rect x="0" y="11.4" width="15" height="1.6"/>',
-          )}</button>
+          <button type="button" class="dxr-icon" data-list="bullet" title="Bullets">&#8226;&#8801;</button>
+          <button type="button" class="dxr-icon" data-list="decimal" title="Numbering">1.&#8801;</button>
+          <select data-dxr="listmenu" title="Numbering format">
+            <option value="">List style&#8230;</option>
+            <option value="bullet">&#8226; Bullet</option>
+            <option value="decimal">1. 2. 3.</option>
+            <option value="decimalParenthesis">(1) (2) (3)</option>
+            <option value="lowerLetter">a. b. c.</option>
+            <option value="lowerLetterParenthesis">(a) (b) (c)</option>
+            <option value="upperLetter">A. B. C.</option>
+            <option value="lowerRoman">i. ii. iii.</option>
+            <option value="lowerRomanParenthesis">(i) (ii) (iii)</option>
+            <option value="upperRoman">I. II. III.</option>
+            <option value="none">No list</option>
+          </select>
           <button type="button" class="dxr-icon" data-indent="-720" title="Decrease indent">${ICON_ALIGN(
             '<rect x="0" y="0" width="15" height="1.6"/><rect x="6" y="3.8" width="9" height="1.6"/><rect x="6" y="7.6" width="9" height="1.6"/><rect x="0" y="11.4" width="15" height="1.6"/><path d="M4.6 4.2v4.6L0.6 6.5z"/>',
           )}</button>
@@ -908,14 +993,32 @@ export const RIBBON_HTML = `
           )}</button>
         </div>
         <div class="dxr-row">
-          <button type="button" data-list="bullet" title="Bullet list">Bullets</button>
-          <button type="button" data-list="decimal" title="Numbered list">Numbered</button>
-          <button type="button" data-pagebreak title="Start this block on a new page">Page break</button>
+          <button type="button" class="dxr-icon" data-align="left" title="Align left (Ctrl+L)">${ICON_ALIGN(
+            '<rect x="0" y="0" width="15" height="1.6"/><rect x="0" y="3.8" width="9" height="1.6"/><rect x="0" y="7.6" width="15" height="1.6"/><rect x="0" y="11.4" width="9" height="1.6"/>',
+          )}</button>
+          <button type="button" class="dxr-icon" data-align="center" title="Center (Ctrl+E)">${ICON_ALIGN(
+            '<rect x="0" y="0" width="15" height="1.6"/><rect x="3" y="3.8" width="9" height="1.6"/><rect x="0" y="7.6" width="15" height="1.6"/><rect x="3" y="11.4" width="9" height="1.6"/>',
+          )}</button>
+          <button type="button" class="dxr-icon" data-align="right" title="Align right (Ctrl+R)">${ICON_ALIGN(
+            '<rect x="0" y="0" width="15" height="1.6"/><rect x="6" y="3.8" width="9" height="1.6"/><rect x="0" y="7.6" width="15" height="1.6"/><rect x="6" y="11.4" width="9" height="1.6"/>',
+          )}</button>
+          <button type="button" class="dxr-icon" data-align="justify" title="Justify (Ctrl+J)">${ICON_ALIGN(
+            '<rect x="0" y="0" width="15" height="1.6"/><rect x="0" y="3.8" width="15" height="1.6"/><rect x="0" y="7.6" width="15" height="1.6"/><rect x="0" y="11.4" width="15" height="1.6"/>',
+          )}</button>
+          <select data-dxr="linespacing" title="Line spacing">
+            <option value="">&#8597; Spacing&#8230;</option>
+            <option value="1">1.0</option>
+            <option value="1.15">1.15</option>
+            <option value="1.5">1.5</option>
+            <option value="2">2.0</option>
+            <option value="2.5">2.5</option>
+            <option value="3">3.0</option>
+          </select>
         </div>
       </div>
 
       <div class="dxr-group">
-        <span class="dxr-glabel">Block</span>
+        <span class="dxr-glabel">Styles</span>
         <div class="dxr-row">
           <select data-dxr="style" title="Paragraph style">
             <option value="">Style&#8230;</option>
@@ -930,17 +1033,64 @@ export const RIBBON_HTML = `
           <button type="button" data-dxr="delblock" class="dxr-danger" title="Delete the block the caret is in">Delete block</button>
         </div>
       </div>
+
+      <div class="dxr-group">
+        <span class="dxr-glabel">Editing</span>
+        <div class="dxr-row">
+          <button type="button" data-dxr="findtoggle" title="Find (Ctrl+F)">&#128269; Find</button>
+        </div>
+        <div class="dxr-row">
+          <button type="button" data-dxr="replacetoggle" title="Find and replace (Ctrl+H)">Replace</button>
+        </div>
+      </div>
     </div>
 
     <!-- INSERT ────────────────────────────────────────────────────────────── -->
     <div class="dxr-panel" data-panel="insert">
       <div class="dxr-group">
-        <span class="dxr-glabel">Table</span>
+        <span class="dxr-glabel">Pages</span>
+        <div class="dxr-row">
+          <button type="button" data-pagebreak title="Start this block on a new page (Ctrl+Enter)">Page break</button>
+        </div>
+      </div>
+      <div class="dxr-group">
+        <span class="dxr-glabel">Tables</span>
         <div class="dxr-row">
           <button type="button" data-dxr="table" title="Insert a table — pick its size on the grid">&#9638; Table</button>
         </div>
       </div>
-
+      <div class="dxr-group">
+        <span class="dxr-glabel">Illustrations</span>
+        <div class="dxr-row">
+          <label class="dxr-btn" tabindex="0" title="Insert a picture from a file">&#128444; Picture<input data-dxr="picturefile" type="file" accept="image/png,image/jpeg,image/gif,image/bmp,image/webp,image/tiff" hidden /></label>
+        </div>
+      </div>
+      <div class="dxr-group">
+        <span class="dxr-glabel">Links</span>
+        <div class="dxr-row">
+          <button type="button" data-dxr="link" title="Link the selected text to a URL (Ctrl+K)">&#128279; Link</button>
+          <button type="button" data-dxr="unlink" title="Remove the link at the caret">Unlink</button>
+        </div>
+      </div>
+      <div class="dxr-group">
+        <span class="dxr-glabel">Comments</span>
+        <div class="dxr-row">
+          <button type="button" data-dxr="insertcomment" title="Comment on the selection">&#128172; Comment</button>
+        </div>
+      </div>
+      <div class="dxr-group">
+        <span class="dxr-glabel">Header &amp; Footer</span>
+        <div class="dxr-row">
+          <button type="button" data-dxr="gotoheader" title="Edit the header">Header</button>
+          <button type="button" data-dxr="gotofooter" title="Edit the footer">Footer</button>
+          <select data-dxr="pagenummenu" title="Add a page number to the footer">
+            <option value=""># Page number&#8230;</option>
+            <option value="currentPage">Page number</option>
+            <option value="totalPages">Total pages</option>
+            <option value="pageOf">Page X of Y</option>
+          </select>
+        </div>
+      </div>
       <div class="dxr-group">
         <span class="dxr-glabel">Rules</span>
         <div class="dxr-row">
@@ -956,25 +1106,52 @@ export const RIBBON_HTML = `
           <button type="button" data-dxr="hrClear" title="Remove the rule or paragraph border">Clear</button>
         </div>
       </div>
-
-      <div class="dxr-group">
-        <span class="dxr-glabel">References</span>
-        <div class="dxr-row">
-          <button type="button" data-dxr="footnote" title="Cite a new footnote at the caret">Footnote</button>
-          <button type="button" data-dxr="endnote" title="Cite a new endnote at the caret">Endnote</button>
-        </div>
-      </div>
     </div>
 
     <!-- LAYOUT ────────────────────────────────────────────────────────────── -->
     <div class="dxr-panel" data-panel="layout">
       <div class="dxr-group">
-        <span class="dxr-glabel">View</span>
+        <span class="dxr-glabel">Page setup</span>
         <div class="dxr-row">
-          <label class="dxr-toggle"><input data-dxr="paginated" type="checkbox" /> Page view</label>
+          <select data-dxr="margins" title="Page margins for this section">
+            <option value="">Margins&#8230;</option>
+            <option value="1440,1440,1440,1440">Normal — 1&quot; all round</option>
+            <option value="720,720,720,720">Narrow — 0.5&quot; all round</option>
+            <option value="1440,1440,1080,1080">Moderate — 1&quot; top/bottom, 0.75&quot; sides</option>
+            <option value="1440,1440,2880,2880">Wide — 1&quot; top/bottom, 2&quot; sides</option>
+          </select>
+          <select data-dxr="orientation" title="Page orientation for this section">
+            <option value="">Orientation&#8230;</option>
+            <option value="portrait">Portrait</option>
+            <option value="landscape">Landscape</option>
+          </select>
         </div>
         <div class="dxr-row">
-          <label class="dxr-toggle"><input data-dxr="headerfooter" type="checkbox" /> Header &amp; footer bands</label>
+          <select data-dxr="pagesize" title="Paper size for this section">
+            <option value="">Size&#8230;</option>
+            <option value="12240,15840">Letter — 8.5 &times; 11&quot;</option>
+            <option value="12240,20160">Legal — 8.5 &times; 14&quot;</option>
+            <option value="11906,16838">A4 — 210 &times; 297 mm</option>
+            <option value="15840,24480">Tabloid — 11 &times; 17&quot;</option>
+          </select>
+          <span class="dxr-note" data-dxr="pagesetupnote"></span>
+        </div>
+      </div>
+
+      <div class="dxr-group">
+        <span class="dxr-glabel">Paragraph</span>
+        <div class="dxr-row">
+          <label class="dxr-toggle">Before <input data-dxr="spacebefore" type="number" min="0" step="1" placeholder="pt" title="Space before the paragraph, in points" /></label>
+          <label class="dxr-toggle">After <input data-dxr="spaceafter" type="number" min="0" step="1" placeholder="pt" title="Space after the paragraph, in points" /></label>
+        </div>
+        <div class="dxr-row">
+          <select data-dxr="specialindent" title="First-line or hanging indent">
+            <option value="">Special&#8230;</option>
+            <option value="none">(none)</option>
+            <option value="firstLine">First line</option>
+            <option value="hanging">Hanging</option>
+          </select>
+          <label class="dxr-toggle">by <input data-dxr="specialindentval" type="number" min="0" step="0.1" value="0.5" title="Indent amount, in inches" /> in</label>
         </div>
       </div>
 
@@ -1000,42 +1177,115 @@ export const RIBBON_HTML = `
         </div>
       </div>
 
-      <!-- The field lands in the running footer (Word's convention, and where the band
-           puts it), so it belongs with the section's numbering rather than under Insert,
-           whose controls all act at the caret. -->
+      <div class="dxr-group">
+        <span class="dxr-glabel">View</span>
+        <div class="dxr-row">
+          <label class="dxr-toggle"><input data-dxr="paginated" type="checkbox" /> Page view</label>
+        </div>
+        <div class="dxr-row">
+          <label class="dxr-toggle"><input data-dxr="headerfooter" type="checkbox" checked /> Headers &amp; footers</label>
+        </div>
+      </div>
+    </div>
+
+    <!-- REFERENCES ───────────────────────────────────────────────────────── -->
+    <div class="dxr-panel" data-panel="references">
+      <div class="dxr-group">
+        <span class="dxr-glabel">Table of contents</span>
+        <div class="dxr-row">
+          <button type="button" data-dxr="toc" title="Insert a table of contents built from the document's headings">&#9776; Table of Contents</button>
+        </div>
+      </div>
+      <div class="dxr-group">
+        <span class="dxr-glabel">Footnotes</span>
+        <div class="dxr-row">
+          <button type="button" data-dxr="footnote" title="Cite a new footnote at the caret">Insert Footnote</button>
+          <button type="button" data-dxr="endnote" title="Cite a new endnote at the caret">Insert Endnote</button>
+        </div>
+      </div>
       <div class="dxr-group">
         <span class="dxr-glabel">Footer fields</span>
         <div class="dxr-row">
           <button type="button" data-dxr="pagenum" title="Add a page-number field to the footer">Page number</button>
           <button type="button" data-dxr="totalpages" title="Add a total-pages field to the footer">Total pages</button>
         </div>
-        <div class="dxr-row">
-          <span class="dxr-note">Added to the footer story.</span>
-        </div>
       </div>
     </div>
 
-    <!-- REVIEW ────────────────────────────────────────────────────────────
-         Comment authoring over the session's native comment family (issue #580):
-         the button comments the selection (the whole block when collapsed), and
-         the thread list is live session truth with resolve/reopen per thread. -->
+    <!-- REVIEW ────────────────────────────────────────────────────────────── -->
     <div class="dxr-panel" data-panel="review">
       <div class="dxr-group">
         <span class="dxr-glabel">Comments</span>
         <div class="dxr-row">
-          <input data-dxr="commenttext" type="text" placeholder="Comment text&#8230;"
-                 title="The comment body; markdown is honored" />
-          <button type="button" data-dxr="comment"
-                  title="Comment on the selection, or on the whole block when nothing is selected">&#128172; Comment</button>
+          <button type="button" data-dxr="comment" title="Comment on the selection (Ctrl+Alt+M)">&#128172; New Comment</button>
+          <button type="button" data-dxr="commentdelete" class="dxr-danger" title="Delete the active comment thread">Delete</button>
+          <button type="button" data-dxr="commentprev" class="dxr-icon" title="Previous comment">&#9650;</button>
+          <button type="button" data-dxr="commentnext" class="dxr-icon" title="Next comment">&#9660;</button>
         </div>
         <div class="dxr-row">
-          <span class="dxr-note">Comments the selected text; the whole block when the caret is collapsed.</span>
+          <button type="button" data-dxr="commentresolve" title="Resolve or reopen the active thread">Resolve</button>
+          <label class="dxr-toggle"><input data-dxr="showcomments" type="checkbox" checked /> Show comments</label>
+          <span class="dxr-note" data-dxr="commentcount"></span>
         </div>
       </div>
-      <div class="dxr-group dxr-grow">
-        <span class="dxr-glabel">Threads</span>
-        <div class="dxr-threads" data-dxr="threads" aria-live="polite">
-          <span class="dxr-note">No comments yet.</span>
+      <div class="dxr-group">
+        <span class="dxr-glabel">Tracking</span>
+        <div class="dxr-row">
+          <label class="dxr-toggle"><input data-dxr="trackchanges" type="checkbox" /> Track changes</label>
+        </div>
+        <div class="dxr-row">
+          <select data-dxr="markup" title="How revisions are shown">
+            <option value="all">All markup</option>
+            <option value="none">No markup</option>
+          </select>
+          <input data-dxr="author" type="text" placeholder="Author" title="Name stamped on your comments and revisions" style="width: 110px;" />
+        </div>
+      </div>
+      <div class="dxr-group">
+        <span class="dxr-glabel">Changes</span>
+        <div class="dxr-row">
+          <button type="button" data-rev="accept" title="Accept the change at the caret">&#10003; Accept</button>
+          <button type="button" data-rev="reject" title="Reject the change at the caret">&#10007; Reject</button>
+          <button type="button" data-rev="prev" class="dxr-icon" title="Previous change">&#9650;</button>
+          <button type="button" data-rev="next" class="dxr-icon" title="Next change">&#9660;</button>
+        </div>
+        <div class="dxr-row">
+          <button type="button" data-rev="acceptall" title="Accept every tracked change">Accept all</button>
+          <button type="button" data-rev="rejectall" title="Reject every tracked change">Reject all</button>
+          <span class="dxr-note" data-dxr="revcount"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- VIEW ──────────────────────────────────────────────────────────────── -->
+    <div class="dxr-panel" data-panel="view">
+      <div class="dxr-group">
+        <span class="dxr-glabel">Views</span>
+        <div class="dxr-row">
+          <button type="button" data-dxr="viewpage" title="Page view — real page boxes, headers and footers in the margins">&#128441; Page view</button>
+          <button type="button" data-dxr="viewweb" title="Continuous view — one sheet, no page breaks">&#9776; Continuous</button>
+        </div>
+      </div>
+      <div class="dxr-group">
+        <span class="dxr-glabel">Zoom</span>
+        <div class="dxr-row">
+          <select data-dxr="zoom" title="Zoom">
+            <option value="0.5">50%</option>
+            <option value="0.75">75%</option>
+            <option value="0.9">90%</option>
+            <option value="1" selected>100%</option>
+            <option value="1.25">125%</option>
+            <option value="1.5">150%</option>
+            <option value="2">200%</option>
+          </select>
+          <button type="button" data-dxr="zoomfit" title="Fit the page to the window">Fit width</button>
+        </div>
+      </div>
+      <div class="dxr-group">
+        <span class="dxr-glabel">Show</span>
+        <div class="dxr-row">
+          <label class="dxr-toggle"><input data-dxr="showrail" type="checkbox" checked /> Status bar</label>
+          <label class="dxr-toggle"><input data-dxr="showhint" type="checkbox" checked /> Editing hint</label>
         </div>
       </div>
     </div>
@@ -1060,21 +1310,118 @@ export const RIBBON_HTML = `
           <button type="button" data-tt="delCol" class="dxr-danger" title="Delete this column">Delete column</button>
         </div>
       </div>
+      <div class="dxr-group">
+        <span class="dxr-glabel">Merge</span>
+        <div class="dxr-row">
+          <button type="button" data-tt="mergeRight" title="Merge this cell with the one to its right">Merge right</button>
+          <button type="button" data-tt="mergeDown" title="Merge this cell with the one below">Merge down</button>
+          <button type="button" data-tt="unmerge" title="Split a merged cell back into its cells">Split</button>
+        </div>
+      </div>
+      <div class="dxr-group">
+        <span class="dxr-glabel">Design</span>
+        <div class="dxr-row">
+          <button type="button" data-tt="borders" title="Draw all borders">Borders</button>
+          <button type="button" data-tt="noborders" title="Remove all borders">No borders</button>
+          <span class="dxr-swatch" title="Cell shading">
+            <button type="button" class="dxr-icon" data-dxr="shadebtn" aria-label="Cell shading">&#9638;</button>
+            <span class="dxr-swatch-bar" data-dxr="shadebar" style="--dxr-swatch: #fef08a;"></span>
+            <input type="color" data-dxr="shade" value="#fef08a" aria-label="Pick a cell shading" />
+          </span>
+          <button type="button" data-tt="noshade" title="Remove cell shading">No shading</button>
+        </div>
+        <div class="dxr-row">
+          <label class="dxr-toggle"><input data-dxr="repeatheader" type="checkbox" /> Repeat header row</label>
+          <button type="button" data-tt="delTable" class="dxr-danger" title="Delete the whole table">Delete table</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- HEADER & FOOTER (contextual) ────────────────────────────────────────
+         Word's Header & Footer Tools: the two option checkboxes, page-number fields,
+         navigation between the stories, and Close. -->
+    <div class="dxr-panel" data-panel="headerfooter">
+      <div class="dxr-group">
+        <span class="dxr-glabel">Options</span>
+        <div class="dxr-row">
+          <label class="dxr-toggle"><input data-dxr="hfFirst" type="checkbox" /> Different first page</label>
+        </div>
+        <div class="dxr-row">
+          <label class="dxr-toggle"><input data-dxr="hfEven" type="checkbox" /> Different odd &amp; even pages</label>
+        </div>
+      </div>
+      <div class="dxr-group">
+        <span class="dxr-glabel">Insert</span>
+        <div class="dxr-row">
+          <button type="button" data-hf="pagenum" title="Insert the page number at the end of this line">Page number</button>
+          <button type="button" data-hf="totalpages" title="Insert the total page count">Total pages</button>
+          <button type="button" data-hf="pageof" title="Insert &quot;Page X of Y&quot;">Page X of Y</button>
+        </div>
+      </div>
+      <div class="dxr-group">
+        <span class="dxr-glabel">Navigation</span>
+        <div class="dxr-row">
+          <button type="button" data-hf="header" title="Go to the header">Go to Header</button>
+          <button type="button" data-hf="footer" title="Go to the footer">Go to Footer</button>
+        </div>
+        <div class="dxr-row">
+          <span class="dxr-note" data-dxr="hfstory">Header</span>
+        </div>
+      </div>
+      <div class="dxr-group">
+        <span class="dxr-glabel">Close</span>
+        <div class="dxr-row">
+          <button type="button" data-hf="close" title="Return to the document body (Esc)">&#10005; Close Header and Footer</button>
+        </div>
+      </div>
     </div>
   </div>
 
-  <!-- Anchor rail — live engine state, not decoration. -->
-  <div class="dxr-rail" data-dxr-rail>
-    <span class="dxr-cell"><span class="dxr-k">anchor</span><span class="dxr-v" data-dxr="railAnchor">&#8212;</span></span>
-    <span class="dxr-cell"><span class="dxr-k">blocks</span><span class="dxr-v" data-dxr="railBlocks">&#8212;</span></span>
-    <span class="dxr-cell"><span class="dxr-k">session</span><span class="dxr-v" data-dxr="railSession">&#8212;</span></span>
-    <span class="dxr-cell"><span class="dxr-k">last op</span><span class="dxr-v" data-dxr="railOp">&#8212;</span></span>
+  <!-- Find & replace strip, under the ribbon. -->
+  <div class="dxr-findbar" data-dxr="findbar" hidden>
+    <input data-dxr="findtext" type="search" placeholder="Find" aria-label="Find" />
+    <button type="button" class="dxr-icon" data-dxr="findprev" title="Previous match (Shift+Enter)">&#9650;</button>
+    <button type="button" class="dxr-icon" data-dxr="findnext" title="Next match (Enter)">&#9660;</button>
+    <span class="dxr-findcount" data-dxr="findcount"></span>
+    <label class="dxr-toggle"><input data-dxr="findcase" type="checkbox" /> Match case</label>
+    <span data-dxr="replacegroup">
+      <input data-dxr="replacetext" type="text" placeholder="Replace with" aria-label="Replace with" />
+      <button type="button" data-dxr="replaceone" title="Replace this match">Replace</button>
+      <button type="button" data-dxr="replaceall" title="Replace every match">Replace all</button>
+    </span>
+    <span class="dxr-spacer" style="flex:1"></span>
+    <button type="button" class="dxr-icon" data-dxr="findclose" title="Close (Esc)">&#10005;</button>
   </div>
 </div>
 
 <div class="dxr-scroll" data-dxr-scroll>
   <p class="dxr-hint" data-dxr-hint></p>
-  <div class="dxr-surface" data-dxr="editor" data-dxr-surface data-view="continuous"></div>
+  <div class="dxr-surface" data-dxr="editor" data-dxr-surface data-view="continuous" data-comments="on"></div>
+</div>
+
+<!-- Status bar — live engine state (the anchor rail), Word's page/word cells, and zoom. -->
+<div class="dxr-rail" data-dxr-rail>
+  <span class="dxr-cell"><span class="dxr-k">anchor</span><span class="dxr-v" data-dxr="railAnchor">&#8212;</span></span>
+  <span class="dxr-cell"><span class="dxr-k">blocks</span><span class="dxr-v" data-dxr="railBlocks">&#8212;</span></span>
+  <span class="dxr-cell"><span class="dxr-k">session</span><span class="dxr-v" data-dxr="railSession">&#8212;</span></span>
+  <span class="dxr-cell"><span class="dxr-k">last op</span><span class="dxr-v" data-dxr="railOp">&#8212;</span></span>
+  <span class="dxr-cell"><span class="dxr-v dxr-plain" data-dxr="pageinfo">&#8212;</span></span>
+  <span class="dxr-cell"><span class="dxr-v dxr-plain" data-dxr="wordcount">&#8212;</span></span>
+  <span class="dxr-cell dxr-cell-end">
+    <span class="dxr-zoom">
+      <button type="button" data-dxr="zoomout" title="Zoom out" aria-label="Zoom out">&#8722;</button>
+      <select data-dxr="zoomlevel" title="Zoom" aria-label="Zoom level">
+        <option value="0.5">50%</option>
+        <option value="0.75">75%</option>
+        <option value="0.9">90%</option>
+        <option value="1" selected>100%</option>
+        <option value="1.25">125%</option>
+        <option value="1.5">150%</option>
+        <option value="2">200%</option>
+      </select>
+      <button type="button" data-dxr="zoomin" title="Zoom in" aria-label="Zoom in">+</button>
+    </span>
+  </span>
 </div>
 
 <!-- Table size picker, anchored to the Insert tab's Table button. -->
@@ -1093,6 +1440,17 @@ export const RIBBON_HTML = `
       <label class="dxr-toggle"><input data-dxr="gridborderless" type="checkbox" checked /> Borderless</label>
     </span>
   </div>
+</div>
+
+<!-- Link popover, anchored to the Insert tab's Link button. -->
+<div class="dxr-pop" data-dxr="linkpop">
+  <form data-dxr="linkform">
+    <label>Address <input data-dxr="linkurl" type="url" placeholder="https://" required /></label>
+    <div class="dxr-row">
+      <button type="button" data-dxr="linkcancel">Cancel</button>
+      <button type="submit">Insert link</button>
+    </div>
+  </form>
 </div>
 
 <div class="dxr-loader" data-dxr="loader" aria-live="polite" hidden>
@@ -1120,7 +1478,7 @@ export const RIBBON_HTML = `
 
 /** The default hint copy, shown above the document in full chrome. */
 export const RIBBON_HINT_HTML =
-  "Click any paragraph, heading, table cell, footnote or header/footer line to edit it. " +
+  "Click any paragraph, heading, table cell, footnote, header or footer to edit it. " +
   "<kbd>Enter</kbd> splits a block, <kbd>Backspace</kbd> at the start merges it into the previous one, " +
-  "<kbd>Ctrl</kbd>+<kbd>Z</kbd> undoes. Only the block you changed re-renders — everything else keeps " +
-  "full fidelity, and <b>Save</b> writes a lossless .docx.";
+  "<kbd>Ctrl</kbd>+<kbd>Z</kbd> undoes. Select text and press <b>New Comment</b> to annotate it. Only the block you " +
+  "changed re-renders — everything else keeps full fidelity, and <b>Save</b> writes a lossless .docx.";

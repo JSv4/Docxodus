@@ -1717,6 +1717,17 @@ class SectionInfo:
     columns: int
     header_part_uris: tuple[str, ...]
     footer_part_uris: tuple[str, ...]
+    #: Header distance from the page's top edge (``w:pgMar/@w:header``); Word's default 720
+    #: when the attribute is absent.
+    header_distance_twips: int = 720
+    #: Footer distance from the page's bottom edge (``w:pgMar/@w:footer``); Word's default 720.
+    footer_distance_twips: int = 720
+    #: Word's "Different first page" flag — ``True`` when the governing ``w:sectPr`` carries an
+    #: on-valued ``w:titlePg``. Toggle with :meth:`DocxSession.set_header_footer_kind_enabled`.
+    title_page: bool = False
+    #: Word's "Different odd & even pages" flag — ``True`` when the settings part carries an
+    #: on-valued ``w:evenAndOddHeaders``. Document-global, so every section reports the same value.
+    even_and_odd_headers: bool = False
     #: Header references in declaration order, each with its ``w:type``. Describes exactly
     #: the parts :attr:`header_part_uris` lists, plus the kind each supplies.
     header_refs: tuple[HeaderFooterRef, ...] = ()
@@ -1745,6 +1756,11 @@ class SectionInfo:
             columns=int(d["columns"]),
             header_part_uris=tuple(d["headerPartUris"]),
             footer_part_uris=tuple(d["footerPartUris"]),
+            # .get with Word's defaults: an older host that predates these still decodes.
+            header_distance_twips=int(d.get("headerDistanceTwips", 720)),
+            footer_distance_twips=int(d.get("footerDistanceTwips", 720)),
+            title_page=bool(d.get("titlePage", False)),
+            even_and_odd_headers=bool(d.get("evenAndOddHeaders", False)),
             # .get: an older host that predates the refs still decodes.
             header_refs=tuple(HeaderFooterRef._from_wire(r) for r in d.get("headerRefs", ())),
             footer_refs=tuple(HeaderFooterRef._from_wire(r) for r in d.get("footerRefs", ())),
@@ -1758,6 +1774,42 @@ class SectionInfo:
                 else None
             ),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class PageSetupOp:
+    """Page geometry for :meth:`DocxSession.set_page_setup` — the ``w:pgSz`` / ``w:pgMar`` of
+    the governing ``w:sectPr``, i.e. what Word's *Page Setup* dialog writes.
+
+    Every field is tri-state: ``None`` leaves that attribute exactly as it is. All values are
+    twips (1440 = 1 inch). ``landscape=True`` without an explicit size swaps a portrait-shaped
+    page's width and height (``False`` swaps back), matching Word's orientation toggle; with an
+    explicit size only ``w:orient`` is written. Read the current values back from
+    :class:`SectionInfo`.
+    """
+
+    page_width_twips: int | None = None
+    page_height_twips: int | None = None
+    landscape: bool | None = None
+    margin_top_twips: int | None = None
+    margin_bottom_twips: int | None = None
+    margin_left_twips: int | None = None
+    margin_right_twips: int | None = None
+    header_distance_twips: int | None = None
+    footer_distance_twips: int | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        if self.page_width_twips is not None: out["pageWidthTwips"] = self.page_width_twips
+        if self.page_height_twips is not None: out["pageHeightTwips"] = self.page_height_twips
+        if self.landscape is not None: out["landscape"] = self.landscape
+        if self.margin_top_twips is not None: out["marginTopTwips"] = self.margin_top_twips
+        if self.margin_bottom_twips is not None: out["marginBottomTwips"] = self.margin_bottom_twips
+        if self.margin_left_twips is not None: out["marginLeftTwips"] = self.margin_left_twips
+        if self.margin_right_twips is not None: out["marginRightTwips"] = self.margin_right_twips
+        if self.header_distance_twips is not None: out["headerDistanceTwips"] = self.header_distance_twips
+        if self.footer_distance_twips is not None: out["footerDistanceTwips"] = self.footer_distance_twips
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -2271,8 +2323,15 @@ class FormatOp:
     """Set of formatting changes to apply.
 
     Each field is tri-state: ``True`` to turn on, ``False`` to turn off, ``None``
-    to leave unchanged. Strings (``color``, ``run_style``) are passed through;
-    ``None`` means "don't change", empty string means "clear".
+    to leave unchanged. Strings (``color``, ``run_style``, ``vert_align``, ``font_family``,
+    ``highlight``) are passed through; ``None`` means "don't change", empty string means
+    "clear". ``font_size_pts`` is in points (``<= 0`` clears the explicit size).
+
+    ``highlight`` is one of Word's sixteen ``ST_HighlightColor`` swatch names (``yellow``,
+    ``green``, ``cyan``, ``magenta``, ``blue``, ``red``, ``darkBlue``, ``darkCyan``,
+    ``darkGreen``, ``darkMagenta``, ``darkRed``, ``darkYellow``, ``darkGray``, ``lightGray``,
+    ``black``, ``white``); ``""``/``"none"`` clears and any other value fails the op.
+    ``caps`` and ``small_caps`` are one either/or slot: setting one ``True`` removes the other.
     """
 
     bold: bool | None = None
@@ -2282,6 +2341,12 @@ class FormatOp:
     code: bool | None = None
     color: str | None = None
     run_style: str | None = None
+    vert_align: str | None = None
+    font_size_pts: float | None = None
+    font_family: str | None = None
+    highlight: str | None = None
+    caps: bool | None = None
+    small_caps: bool | None = None
 
     def to_wire(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
@@ -2292,6 +2357,12 @@ class FormatOp:
         if self.code is not None: out["code"] = self.code
         if self.color is not None: out["color"] = self.color
         if self.run_style is not None: out["runStyle"] = self.run_style
+        if self.vert_align is not None: out["vertAlign"] = self.vert_align
+        if self.font_size_pts is not None: out["fontSizePts"] = self.font_size_pts
+        if self.font_family is not None: out["fontFamily"] = self.font_family
+        if self.highlight is not None: out["highlight"] = self.highlight
+        if self.caps is not None: out["caps"] = self.caps
+        if self.small_caps is not None: out["smallCaps"] = self.small_caps
         return out
 
 
@@ -3121,8 +3192,9 @@ class CommentListEntry:
     absent); ``text`` is the flattened body (paragraphs joined by a space, the
     ``w:annotationRef`` mark excluded). ``parent_anchor_id`` and ``resolved`` are
     populated only when the comment has a ``commentsExtended.xml`` entry; ``None``
-    distinguishes a legacy/flat comment from an explicitly reopened one. The numeric
-    ``w:id`` is deliberately not surfaced — comments are addressed by anchor everywhere.
+    distinguishes a legacy/flat comment from an explicitly reopened one. ``id`` is the
+    numeric ``w:id`` — the value rendered comment markup carries as ``data-comment-id``;
+    mutations still address comments by anchor.
     """
 
     anchor_id: str
@@ -3132,11 +3204,14 @@ class CommentListEntry:
     text: str = ""
     parent_anchor_id: str | None = None
     resolved: bool | None = None
+    #: The comment's numeric ``w:comment/@w:id``; ``-1`` only from a host that predates it.
+    id: int = -1
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "CommentListEntry":
         return cls(
             anchor_id=d["anchorId"],
+            id=int(d.get("id", -1)),
             author=d.get("author", "unknown"),
             initials=d.get("initials"),
             date=d.get("date"),

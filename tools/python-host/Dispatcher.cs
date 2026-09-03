@@ -128,6 +128,10 @@ internal static class Dispatcher
             Handle(args), Str(args, "anchorId"), ParsePageNumberingOp(args, "op")),
         "clear_page_numbering" => DocxSessionOps.ClearPageNumbering(
             Handle(args), Str(args, "anchorId")),
+        "set_header_footer_kind_enabled" => DocxSessionOps.SetHeaderFooterKindEnabled(
+            Handle(args), Str(args, "anchorId"), Str(args, "kind"), OptBool(args, "enabled") ?? true),
+        "set_page_setup" => DocxSessionOps.SetPageSetup(
+            Handle(args), Str(args, "anchorId"), ParsePageSetupOp(args, "op")),
 
         // Reference fields (issue #607): the switches never cross the wire — typed options only.
         "insert_table_of_contents" => DocxSessionOps.InsertTableOfContents(
@@ -793,6 +797,13 @@ internal static class Dispatcher
         return DocxSessionJson.ParsePageNumberingOp(op);
     }
 
+    private static PageSetupOp ParsePageSetupOp(JsonElement args, string name)
+    {
+        if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var op))
+            return new PageSetupOp();
+        return DocxSessionJson.ParsePageSetupOp(op);
+    }
+
     private static Position ParsePos(JsonElement args, string name) =>
         DocxSessionJson.ParsePos(Str(args, name));
 
@@ -982,6 +993,7 @@ internal static class Dispatcher
         or "insert_paragraph" or "split_paragraph" or "merge_paragraphs"
         or "set_header_text" or "set_footer_text" or "insert_page_number_field"
         or "ensure_header_footer_visible" or "set_page_numbering" or "clear_page_numbering"
+        or "set_header_footer_kind_enabled" or "set_page_setup"
         or "insert_table_of_contents" or "insert_table_of_figures" or "insert_table_of_authorities"
         or "insert_footnote" or "insert_endnote" or "insert_cross_reference"
         or "add_comment" or "add_comment_reply" or "update_comment"

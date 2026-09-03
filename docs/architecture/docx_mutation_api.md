@@ -723,8 +723,10 @@ WASM/npm, and stdio/`docx-scalpel`.
 |---|---|
 | `SetHeaderText(anchorId, HeaderFooterKind, markdown)` | Set the running header story for the section that owns `anchorId`. |
 | `SetFooterText(anchorId, HeaderFooterKind, markdown)` | Same, for the footer. |
-| `InsertPageNumberField(anchorId, PageNumberField = CurrentPage)` | Append a `PAGE`/`NUMPAGES` field to a paragraph (usually a header/footer one). |
+| `InsertPageNumberField(anchorId, PageNumberField = CurrentPage)` | Append a `PAGE`/`NUMPAGES` field to a paragraph (usually a header/footer one). `PageNumberField.PageOfTotal` appends Word's "Page X of Y" gallery entry instead — the text `Page `, a `PAGE` field, ` of `, a `NUMPAGES` field, every run inheriting the paragraph's last run properties — because the pieces cannot be composed from the single-field form (text after a field cannot be appended without rewriting the field's result run). Wire `pageOfTotal` / MCP `page_of_total` / `docx-scalpel` `PAGE_OF_TOTAL`. |
 | `EnsureHeaderFooterVisible(anchorId, HeaderFooterKind)` | Make the section's first/even stories actually render (`w:titlePg` / `w:evenAndOddHeaders`). |
+| `SetHeaderFooterKindEnabled(anchorId, HeaderFooterKind, enabled)` | Word's "Different first page" / "Different odd & even pages" checkboxes as one verb: `true` is `EnsureHeaderFooterVisible`; `false` removes the flag (`w:titlePg` from the governing `w:sectPr` for `First`, `w:evenAndOddHeaders` from the settings part for `Even`) and leaves the story parts in place, exactly as Word does when the box is cleared. `Default` has no flag, so disabling it is `InvalidPageSetup`. A flag already in the requested state is a successful no-op with **no undo step**. Read the flags from `SectionInfo.TitlePage` / `SectionInfo.EvenAndOddHeaders`. |
+| `SetPageSetup(anchorId, PageSetupOp)` | Page size, orientation, margins and header/footer distance on the governing `w:sectPr` — see [Page setup](#page-setup). |
 
 **Why `EnsureHeaderFooterVisible` exists.** `SetHeaderText`/`SetFooterText` set the visibility
 flags *while writing content*, which covers authoring a story from scratch. It does not cover a
@@ -894,16 +896,62 @@ defaulted, because "continues the previous section in Word's default format" is 
 different claim from "starts at 1 in decimal" — a UI that cannot tell them apart writes
 attributes the document never had.
 
+### Page setup
+
+`SetPageSetup(bodyAnchor, PageSetupOp)` writes the governing `w:sectPr`'s `w:pgSz`
+(`@w:w`, `@w:h`, `@w:orient`) and `w:pgMar` (`@w:top`, `@w:bottom`, `@w:left`, `@w:right`,
+`@w:header`, `@w:footer`) — what Word's *Page Setup* dialog writes. Every `PageSetupOp` field
+(`PageWidthTwips`, `PageHeightTwips`, `Landscape`, `MarginTopTwips`, `MarginBottomTwips`,
+`MarginLeftTwips`, `MarginRightTwips`, `HeaderDistanceTwips`, `FooterDistanceTwips`) is
+tri-state: null leaves that attribute alone. Elements are created in their `CT_SectPr` slots
+via `InsertSectPrChildInOrder` when absent, and a body with no `w:sectPr` gets a trailing one
+synthesized — the same `EditGoverningSectPr` body the page-numbering verbs share.
+
+**Orientation follows Word's toggle, not a bare attribute write.** `Landscape = true` with no
+explicit size swaps width and height when the page is currently portrait-shaped and writes
+`w:orient="landscape"`; `false` removes the attribute and swaps back when the page is
+landscape-shaped. With an explicit size the dimensions are written as given and only the
+attribute changes, so a caller who already knows the target sheet is not second-guessed.
+
+**Validation is against the effective section, not the op in isolation.** The op is merged
+over the current `w:pgSz`/`w:pgMar` (Word's Letter / 1-inch / 0.5-inch defaults for absent
+attributes) and the result must satisfy: width and height positive, margins and header/footer
+distances non-negative, `left + right < width`, `top + bottom < height`. A violation is
+`EditErrorCode.InvalidPageSetup`, leaves the document untouched and records no undo step.
+Values the section already has are a successful no-op that consumes no undo history — the
+same reasoning as `SetPageNumbering`: a dialog that commits on every change must not evict the
+user's real edits from the bounded ring.
+
+**Read-back.** `SectionInfo` gains `HeaderDistanceTwips` / `FooterDistanceTwips` (wire
+`headerDistanceTwips`/`footerDistanceTwips`, Word's 720 when absent) alongside the existing
+size and margin fields, plus the two story flags `TitlePage` (`w:titlePg` on the governing
+`sectPr`) and `EvenAndOddHeaders` (`w:evenAndOddHeaders` in settings, so document-global) —
+wire `titlePage`/`evenAndOddHeaders`, `docx-scalpel` `title_page`/`even_and_odd_headers`.
+Both flags are read as `CT_OnOff`, so an explicit `w:val="0"` reads as off.
+
+Rippled through `DocxSessionOps.SetPageSetup`/`SetHeaderFooterKindEnabled` → WASM
+`DocxSessionBridge` + npm `DocxSession.setPageSetup`/`setHeaderFooterKindEnabled` → stdio
+`set_page_setup`/`set_header_footer_kind_enabled` + `docx-scalpel` `set_page_setup`
+(a `PageSetupOp` or keyword fields) / `set_header_footer_kind_enabled`. Neither is exposed
+through the MCP server, like `SetPageNumbering`. Coverage: `DocxSessionEditorParityTests`
+DEP020–DEP036.
+
 ### The editor region
 
-The browser `DocxEditor` ships the visual affordance as **docked bands** — see
-`docs/architecture/ir_editor_feasibility.md` § "Header/footer editing region". Story
-paragraphs there are ordinary editable blocks addressed by their `p:hdr1:<unid>` anchors,
-which every text/format mutation on this page already accepts.
+The browser `DocxEditor` ships the visual affordance two ways — see
+`docs/architecture/editor_ui_surface.md` § "Headers and footers": in the continuous view as
+**bands** drawn as the sheet's top and bottom margins, and in page view **in place**, where a
+click on a page's header or footer area swaps that page's inert clone for the live story and a
+commit re-clones it onto every page showing the same story. Story paragraphs are ordinary
+editable blocks addressed by their `p:hdr1:<unid>` anchors, which every text/format mutation
+on this page already accepts.
 
-The band chrome carries the section's page-number **format** and **start-at** controls
-(`setPageNumbering`/`clearPageNumbering`/`pageNumbering` on `DocxEditor`). They sit on both
-bands and show the same values, because they describe the section rather than either story.
+The ribbon's contextual Header & Footer tab carries Word's two checkboxes
+(`setHeaderFooterKindEnabled` → `SetHeaderFooterKindEnabled`), the page-number fields
+(`insertPageNumber` → `InsertPageNumberField`, including `pageOfTotal`), and go-to/close; the
+section's page-number **format** and **start-at** controls live on the Layout tab
+(`setPageNumbering`/`clearPageNumbering`/`pageNumbering` on `DocxEditor`), because they
+describe the section rather than either story.
 
 ### Not yet
 
@@ -1294,7 +1342,7 @@ server's `docxodus_comment` tool.
 | `UpdateComment(cmtAnchorId, markdown)` | Replace the body paragraphs; `w:id`/`w:author`/`w:initials`/`w:date` are untouched, and the old last paragraph's `w14:paraId` is re-stamped on the new last paragraph so Word's `commentsExtended` reply/resolve metadata stays attached across a body edit. |
 | `SetCommentResolved(cmtAnchorId, resolved)` | Set Word's per-comment `w15:done` state (`true` resolves, `false` reopens). Calling it on a legacy flat comment upgrades that comment with the extension metadata without changing its body anchor or definition identity. |
 | `RemoveComment(cmtAnchorId)` | Kind-guarded delegate to `DeleteBlock`'s `cmt` teardown: definition + marker triple (wrapper run included) everywhere in the package, plus threading pruning (below). |
-| `ListComments()` | Read-only: `CommentListEntry(DefAnchorId, Author, Initials?, Date?, Text)` in comments-part order, with additive init-only `ParentAnchorId?` and `Resolved?` properties (the existing five-argument CLR constructor/deconstructor remains intact). `ParentAnchorId` maps `paraIdParent` back to the parent's stable `cmt` anchor. Both additive fields are absent/null when no `commentEx` entry exists, distinguishing a legacy flat comment from an explicitly reopened one. `Date` is the raw `w:date` string; `Text` is the flattened body (`annotationRef` runs excluded). The numeric `w:id` is never surfaced — comments are addressed by anchor. |
+| `ListComments()` | Read-only: `CommentListEntry(DefAnchorId, Author, Initials?, Date?, Text)` in comments-part order, with the required init-only `Id` (the numeric `w:comment/@w:id` — wire `id`, `docx-scalpel` `id`) and the additive init-only `ParentAnchorId?` and `Resolved?` properties (the existing five-argument CLR constructor/deconstructor remains intact). `Id` exists for the renderer's sake: the HTML converter stamps that number as `data-comment-id` on every highlight span and marker, so it is how a rendered range is matched back to its entry; mutations still address comments by anchor. `ParentAnchorId` maps `paraIdParent` back to the parent's stable `cmt` anchor. Both additive fields are absent/null when no `commentEx` entry exists, distinguishing a legacy flat comment from an explicitly reopened one. `Date` is the raw `w:date` string; `Text` is the flattened body (`annotationRef` runs excluded). |
 
 `Created` from `AddComment`, `AddCommentToRevision`, or `AddCommentReply` = the definition anchor (kind `cmt`) + its paragraph anchors
 (kind `p`, scope `cmt`) — which are ordinary editable blocks, so `ReplaceText` on a comment
@@ -1477,13 +1525,32 @@ silently.
 
 ## ApplyFormat — substring and TextMatch overloads
 
-Three entry points for character-formatting (bold/italic/underline/strike/code/color/runStyle):
+Three entry points for character-formatting (bold/italic/underline/strike/code/color/runStyle,
+vertAlign, fontSizePts, fontFamily, highlight, caps, smallCaps):
 
 ```
 session.ApplyFormat(anchor, span, op)              // explicit CharSpan (use null for whole paragraph)
 session.ApplyFormatToSubstring(anchor, str, op)    // find first occurrence of str, format it
 session.ApplyFormat(textMatch, op)                 // exact span from a Grep result
 ```
+
+`FormatOp` fields are tri-state (null = leave unchanged). Three of them carry rules beyond
+on/off:
+
+- `Highlight` writes `w:highlight`, whose value is `ST_HighlightColor` — Word's closed set of
+  sixteen swatch names (`yellow`, `green`, `cyan`, `magenta`, `blue`, `red`, `darkBlue`,
+  `darkCyan`, `darkGreen`, `darkMagenta`, `darkRed`, `darkYellow`, `darkGray`, `lightGray`,
+  `black`, `white`), matched case-insensitively and written in canonical casing. `""` or
+  `"none"` clears. Anything else fails the op the way an invalid `VertAlign` does
+  (`InternalError` carrying the message, op rolled back) rather than being written: Word ignores
+  an unknown token silently, so accepting it could only mean a highlight that never shows.
+  Free-form colour is `w:shd`, which this op does not write.
+- `Caps` / `SmallCaps` write `w:caps` / `w:smallCaps`. Word's Font dialog treats them as one
+  either/or slot, so setting either true removes the other; an op setting both true resolves to
+  `SmallCaps`.
+
+Tracked mode (`ApplyFormatToRunTracked`) delegates to the same writer, so every field records
+into the run's `w:rPrChange` baseline identically.
 
 The substring + `TextMatch` overloads exist because computing a `CharSpan` by hand is fragile when an auto-number prefix (`# Fourth The total…`) shifts the visible text relative to the run-text indices the `CharSpan` overload expects — see issue #138. Both convenience overloads just resolve to a `CharSpan` and call the underlying overload.
 
@@ -1750,6 +1817,8 @@ Multiple matches in the same paragraph are applied in **reverse document order**
 ### When to reach for the span-addressed variant
 
 If the agent has computed five `[___]` placeholder matches in the same paragraph from `Grep` and wants to fill each with a different value, `ReplaceTextRange` would only see "five identical `[___]` needles" and replace each with the first value (or all with the same value). `ReplaceTextAtSpan` (or `ReplaceMatch`) addresses each match by its exact coordinates so the disambiguation is unambiguous. Apply spans in **reverse offset order** in this case for the same reason — earlier spans stay valid after later edits.
+
+A **zero-length** span is a pure insertion. When it sits on a run boundary (the end of one run's text, the start of another's, offset 0, or the end of the paragraph) the text lands as a **new run** that copies the neighbouring run's formatting — and steps outside any complex field whose chrome surrounds the boundary, so text inserted after `Page {PAGE} of {NUMPAGES}` follows the field's `end` run rather than joining the NUMPAGES result Word would discard on its next field update. A zero-length span strictly inside a run's text is refused with `offset_out_of_range`; use a one-character span there (the browser editor does exactly this as its fallback).
 
 ### Recipe: enumerate-and-fill via Grep + ReplaceMatch
 
@@ -2023,7 +2092,7 @@ Errors are grouped by what the agent should do in response, not by where in the 
 | Fix the markdown payload (the message names what's wrong) | `MalformedMarkdown`, `UnsupportedMarkdownSyntax`, `AnchorTokenInPayload` |
 | Call the dedicated op the message names (`InsertTable`, `InsertFootnote`/`InsertEndnote`, `AddComment`, `InsertImage`), or fall back to `Raw.InsertXml` | `TableInsertNotSupported`, `FootnoteRefNotSupported`, `CommentMarkerNotSupported`, `ImageInsertNotSupported` |
 | Re-query `ListStyles()` for a current style id, or `GetListMembership()` for the valid numbering level | `UnknownStyle`, `InvalidListLevel` |
-| Fix the op's field values (the message names the constraint OOXML can't express) | `InvalidPageNumbering`, `InvalidParagraphFormat`, `InvalidListStartValue`, `InvalidTableStyling`, `InvalidTableMerge` |
+| Fix the op's field values (the message names the constraint OOXML can't express) | `InvalidPageNumbering`, `InvalidPageSetup`, `InvalidParagraphFormat`, `InvalidListStartValue`, `InvalidTableStyling`, `InvalidTableMerge` |
 | Use `Raw.GetXml(anchor)` as a template, mutate, resubmit | `MalformedXml`, `DisallowedNamespace`, `IncompatibleElementType`, `ValidationFailed` |
 | Stop, reopen, or accept "no more history" | `SessionDisposed`, `NothingToUndo`, `NothingToRedo` |
 | Should not happen; treat as a bug. Op is rolled back, safe to retry once or report. Full exception is on `session.LastInternalError` | `InternalError` |
@@ -2194,6 +2263,13 @@ that diffs a view against the session.
 - **`MarkdownPatch.Markdown` is currently the full re-projection.** The `ScopeAnchorId` field correctly identifies the smallest enclosing block, but the payload is the whole document re-projected. A future optimization (per the spec's open questions) is to emit only the markdown for the named scope. Cheap mitigation: callers that care can splice using their cached projection.
 - **Snapshot granularity is per-part XML clone.** For documents with very large embedded images or huge tables, per-element diffs would be more memory-efficient. Deferred until measured to be a problem.
 - **Closing a session mid-flight from JS.** The WASM bridge holds sessions in a static dictionary keyed by handle; if a JS caller drops a `DocxSession` without calling `close()`, the .NET-side session is not eligible for GC. The npm wrapper exposes `Symbol.dispose` for TypeScript 5.2+ `using` blocks; older runtimes need explicit `.close()`.
+- **What closing does.** `Dispose` releases the render shell and the session package without
+  writing either back: a package opened for editing rewrites its whole archive into the
+  backing stream when it closes, and a session being discarded has no reader for that
+  rewrite. The package is dropped for the garbage collector rather than disposed, and only
+  the stream is closed. The same discard runs when a snapshot restore replaces the package.
+  Anything a caller wants to keep must come from `Save` before `Dispose`, which was already
+  the contract.
 - **`Save()` strips internal `PtOpenXml:Unid` attributes by default.** The projector assigns a Unid to every descendant of every projected scope; persisting them grows large documents by hundreds of KB of attribute noise (a 148 KB NVCA Model COI round-tripped at 588 KB before this default flipped). Anchor ids therefore do **not** survive `Save` → re-open by default — a fresh session re-assigns Unids and gets new ids. Set `DocxSessionSettings.PersistAnchorIds = true` to keep the ids (which keeps the bloat). This resolves Open Question #1 in `markdown_projection.md` in favor of "clean OOXML out by default, opt in to anchor stability."
 
 ## Related

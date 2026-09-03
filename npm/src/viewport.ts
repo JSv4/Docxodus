@@ -99,6 +99,20 @@ export class DocumentViewport {
     );
   }
 
+  /**
+   * Change the author-pinned zoom and re-apply it. Fit-to-width still caps it: a page wider
+   * than the host never magnifies past what fits, so "100%" on a phone is the fit zoom.
+   */
+  setScale(scale: number): void {
+    this.options.scale = Math.max(0.1, Math.min(4, scale));
+    this.refresh();
+  }
+
+  /** The author-pinned zoom (the value a zoom control shows), before fit-to-width caps it. */
+  get requestedScale(): number {
+    return this.options.scale;
+  }
+
   /** The zoom currently applied (1 = 100%). Reported by the ribbon's anchor rail. */
   get scale(): number {
     if (!this.root) return this.options.scale;

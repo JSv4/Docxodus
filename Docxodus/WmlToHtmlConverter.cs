@@ -184,6 +184,15 @@ namespace Docxodus
         public bool IncludeCommentMetadata;
 
         /// <summary>
+        /// If true, wrap every PAGE / NUMPAGES field result in a <c>&lt;span data-field="PAGE"&gt;</c>
+        /// (plus <c>data-field-format</c> for a <c>\*</c> switch) exactly as paginated rendering does,
+        /// regardless of <see cref="RenderPagination"/>. Lets a client that paginates a block render
+        /// itself — the browser editor editing a running story inside the page boxes — substitute
+        /// each page's real number. Default false: only paginated mode stamps the marker.
+        /// </summary>
+        public bool StampPageNumberFields;
+
+        /// <summary>
         /// If not None, render document with page containers in PDF.js style.
         /// Default: None (continuous scrolling layout).
         /// </summary>
@@ -334,6 +343,7 @@ namespace Docxodus
             CommentRenderMode = CommentRenderMode.EndnoteStyle;
             CommentCssClassPrefix = "comment-";
             IncludeCommentMetadata = true;
+            StampPageNumberFields = false;
             RenderPagination = PaginationMode.None;
             PaginationScale = 1.0;
             PaginationCssClassPrefix = "page-";
@@ -373,6 +383,7 @@ namespace Docxodus
             CommentRenderMode = htmlConverterSettings.CommentRenderMode;
             CommentCssClassPrefix = htmlConverterSettings.CommentCssClassPrefix;
             IncludeCommentMetadata = htmlConverterSettings.IncludeCommentMetadata;
+            StampPageNumberFields = htmlConverterSettings.StampPageNumberFields;
             RenderPagination = htmlConverterSettings.RenderPagination;
             PaginationScale = htmlConverterSettings.PaginationScale;
             PaginationCssClassPrefix = htmlConverterSettings.PaginationCssClassPrefix;
@@ -467,6 +478,15 @@ namespace Docxodus
         /// If true, include comment metadata (author, date) as data attributes
         /// </summary>
         public bool IncludeCommentMetadata;
+
+        /// <summary>
+        /// If true, wrap every PAGE / NUMPAGES field result in a <c>&lt;span data-field="PAGE"&gt;</c>
+        /// (plus <c>data-field-format</c> for a <c>\*</c> switch) exactly as paginated rendering does,
+        /// regardless of <see cref="RenderPagination"/>. Lets a client that paginates a block render
+        /// itself — the browser editor editing a running story inside the page boxes — substitute
+        /// each page's real number. Default false: only paginated mode stamps the marker.
+        /// </summary>
+        public bool StampPageNumberFields;
 
         /// <summary>
         /// If not None, render document with page containers in PDF.js style.
@@ -571,6 +591,7 @@ namespace Docxodus
             CommentRenderMode = CommentRenderMode.EndnoteStyle;
             CommentCssClassPrefix = "comment-";
             IncludeCommentMetadata = true;
+            StampPageNumberFields = false;
             RenderPagination = PaginationMode.None;
             PaginationScale = 1.0;
             PaginationCssClassPrefix = "page-";
@@ -1074,6 +1095,8 @@ namespace Docxodus
             // (newlines/indentation) doesn't create visible spaces between adjacent elements.
             NormalizeInlineWhitespace(xhtml);
 
+            EnsureEmptyElementsSerializeAsPairs(xhtml);
+
             // Note: the xhtml returned by ConvertToHtmlTransform contains objects of type
             // XEntity.  PtOpenXmlUtil.cs define the XEntity class.  See
             // http://blogs.msdn.com/ericwhite/archive/2010/01/21/writing-entity-references-using-linq-to-xml.aspx
@@ -1083,6 +1106,32 @@ namespace Docxodus
             // must do it correctly, or entities will not be serialized properly.
 
             return xhtml;
+        }
+
+        /// <summary>HTML's void elements — the only ones a browser accepts in self-closing form.</summary>
+        private static readonly HashSet<string> HtmlVoidElements = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param",
+            "source", "track", "wbr",
+        };
+
+        /// <summary>
+        /// Give every empty non-void element an empty text node so it serializes as
+        /// <c>&lt;span&gt;&lt;/span&gt;</c> rather than XHTML's <c>&lt;span /&gt;</c>. Consumers parse
+        /// this output as HTML (a browser's <c>DOMParser</c>, <c>innerHTML</c>, the paginator), and
+        /// the HTML parser treats <c>&lt;span /&gt;</c> as an OPEN tag — everything that follows nests
+        /// inside it. A complex field's begin / separate / end runs are exactly such empty spans, so
+        /// a footer authored as "Page {PAGE} of {NUMPAGES}" parsed with " of " and the second field
+        /// swallowed by the first one's chrome, and per-page substitution then wiped them.
+        /// </summary>
+        private static void EnsureEmptyElementsSerializeAsPairs(XElement root)
+        {
+            foreach (var element in root.DescendantsAndSelf())
+            {
+                if (!element.IsEmpty) continue;
+                if (HtmlVoidElements.Contains(element.Name.LocalName)) continue;
+                element.Add(string.Empty);
+            }
         }
 
         /// <summary>
@@ -9603,9 +9652,10 @@ namespace Docxodus
 
                     // Mark PAGE/NUMPAGES results so the paginator can substitute each page's real
                     // number: a header/footer is cloned onto every page, so the field's single
-                    // cached result would otherwise read the same on all of them. Paginated mode
-                    // only — it is the only consumer, and every other mode's HTML stays untouched.
-                    if (settings.RenderPagination == PaginationMode.Paginated
+                    // cached result would otherwise read the same on all of them. Paginated mode,
+                    // or a caller that paginates a block render itself (StampPageNumberFields) —
+                    // every other mode's HTML stays untouched.
+                    if ((settings.RenderPagination == PaginationMode.Paginated || settings.StampPageNumberFields)
                         && Internal.PageNumberFieldInstr.TryParse(instrText) is { } pageField)
                     {
                         return new XElement(Xhtml.span,

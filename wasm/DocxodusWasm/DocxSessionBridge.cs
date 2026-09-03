@@ -280,6 +280,54 @@ public static partial class DocxSessionBridge
         }
     }
 
+    // ─── Editor render profile (comments-aware) ─────────────────────────
+    //
+    // The three RenderEditor* exports take the editor's whole render profile as ONE JSON object:
+    // { cssPrefix?: string, fabricateClasses?: bool, paginated?: bool, scale?: number,
+    //   renderTrackedChanges?: bool, comments?: bool }
+    // (defaults "docx-", false, false, 1, false, false). With comments:true the output carries
+    // the converter's Inline comment markup — `comment-highlight` spans with data-comment-id
+    // around commented runs and `comment-marker` anchors at the reference — using the same
+    // "comment-" class prefix the editor's first paint passes to ConvertDocxToHtmlComplete. With
+    // comments:false they are byte-identical to RenderHtml / RenderBlocksHtml / RenderBlockHtml
+    // (the *ForReview variants when renderTrackedChanges is set). Same error conventions as the
+    // methods they extend.
+
+    /// <summary>Full-document editor render — <see cref="RenderHtml"/> plus comment markup.</summary>
+    [JSExport]
+    public static string RenderEditorHtml(int h, string optionsJson)
+    {
+        try { return DocxSessionOps.RenderEditorHtml(h, optionsJson); }
+        catch (System.Exception ex)
+        {
+            return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}";
+        }
+    }
+
+    /// <summary>Batch block editor render — <see cref="RenderBlocksHtml"/> plus comment markup;
+    /// returns the same JSON object (anchor id → HTML or null; <c>{"error": …}</c> on failure).</summary>
+    [JSExport]
+    public static string RenderEditorBlocksHtml(int h, string anchorIdsJson, string optionsJson)
+    {
+        try { return DocxSessionOps.RenderEditorBlocksHtml(h, anchorIdsJson, optionsJson); }
+        catch (System.Exception ex)
+        {
+            return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}";
+        }
+    }
+
+    /// <summary>Single-block editor render — <see cref="RenderBlockHtml"/> plus comment markup;
+    /// HTML starts with '&lt;', an error object with '{'.</summary>
+    [JSExport]
+    public static string RenderEditorBlockHtml(int h, string anchorId, string optionsJson)
+    {
+        try { return DocxSessionOps.RenderEditorBlockHtml(h, anchorId, optionsJson); }
+        catch (System.Exception ex)
+        {
+            return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}";
+        }
+    }
+
     /// <summary>
     /// Render a preview shadow with the façade's own preview profile, so a browser preview and a
     /// stdio/MCP preview of the same batch describe the same document. The editor's
@@ -538,6 +586,30 @@ public static partial class DocxSessionBridge
     [JSExport]
     public static string EnsureHeaderFooterVisible(int h, string anchor, string kind) =>
         DocxSessionOps.EnsureHeaderFooterVisible(h, anchor, DocxSessionJson.ParseHeaderFooterKind(kind));
+
+    /// <summary>Word's "Different first page" / "Different odd &amp; even pages" checkboxes:
+    /// switch the <paramref name="kind"/> ("first" | "even") story of the section owning
+    /// <paramref name="anchor"/> on (<see cref="EnsureHeaderFooterVisible"/>) or off (removes
+    /// <c>w:titlePg</c> / <c>w:evenAndOddHeaders</c>; the story parts survive). Disabling "default"
+    /// fails with <c>invalid_page_setup</c>. A flag already in the requested state is a no-op that
+    /// records no undo step. Read the flags from <c>GetSectionInfo</c>'s <c>titlePage</c> /
+    /// <c>evenAndOddHeaders</c>.</summary>
+    [JSExport]
+    public static string SetHeaderFooterKindEnabled(int h, string anchor, string kind, bool enabled) =>
+        DocxSessionOps.SetHeaderFooterKindEnabled(h, anchor, kind, enabled);
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.SetPageSetup"/> — page size, orientation, margins and
+    /// header/footer distance (<c>w:pgSz</c> / <c>w:pgMar</c>) of the section owning
+    /// <paramref name="anchor"/>. <paramref name="opJson"/> is
+    /// <c>{ pageWidthTwips?, pageHeightTwips?, landscape?, marginTopTwips?, marginBottomTwips?,
+    /// marginLeftTwips?, marginRightTwips?, headerDistanceTwips?, footerDistanceTwips? }</c>; omitted
+    /// fields are left unchanged. Invalid geometry fails with <c>invalid_page_setup</c> and touches
+    /// nothing; values already in place are a no-op without an undo step.
+    /// </summary>
+    [JSExport]
+    public static string SetPageSetup(int h, string anchor, string opJson) =>
+        DocxSessionOps.SetPageSetup(h, anchor, opJson);
 
     /// <summary>
     /// Create a footnote with body <paramref name="markdown"/> and cite it from the body paragraph

@@ -93,6 +93,7 @@ from .types import (
     MutationBatchStep,
     MutationPreconditions,
     NumberFormat,
+    PageSetupOp,
     ParagraphFormatOp,
     PageCitation,
     PageCitationRequest,
@@ -1587,8 +1588,12 @@ class DocxSession:
         format: NumberFormat | None = None,
     ) -> EditResult:
         """Append a page-number field to the paragraph ``anchor_id`` (typically a header/footer
-        paragraph). ``CURRENT_PAGE`` emits a ``PAGE`` field, ``TOTAL_PAGES`` a ``NUMPAGES`` field.
-        Returns the affected paragraph anchor in ``EditResult.modified``.
+        paragraph). ``CURRENT_PAGE`` emits a ``PAGE`` field, ``TOTAL_PAGES`` a ``NUMPAGES`` field,
+        and ``PAGE_OF_TOTAL`` Word's "Page X of Y" gallery entry — the text ``Page ``, a ``PAGE``
+        field, `` of `` and a ``NUMPAGES`` field, every run inheriting the paragraph's last run
+        formatting (the pieces cannot be composed from the single-field form: text after a field
+        cannot be appended without rewriting the field's result). Returns the affected paragraph
+        anchor in ``EditResult.modified``.
 
         ``format`` writes the field's own ``\\*`` general-formatting switch (``PAGE \\* roman`` →
         ``i, ii, iii``). Omitting it — the default — emits a plain field, which is what Word inserts
@@ -1757,6 +1762,73 @@ class DocxSession:
                 "ensure_header_footer_visible",
                 {"anchorId": anchor_id, "kind": kind.value},
             )
+        )
+
+    def set_header_footer_kind_enabled(
+        self, anchor_id: str, kind: HeaderFooterKind, enabled: bool
+    ) -> EditResult:
+        """Word's "Different first page" / "Different odd & even pages" checkboxes as one verb:
+        switch the ``kind`` story of the section owning ``anchor_id`` on or off.
+
+        ``enabled=True`` is exactly :meth:`ensure_header_footer_visible`; ``enabled=False``
+        removes the flag that selects the story — ``w:titlePg`` from the governing ``w:sectPr``
+        for ``FIRST``, the document-global ``w:evenAndOddHeaders`` for ``EVEN`` — and leaves the
+        story parts in place, which is what Word does when the checkbox is cleared (re-enabling
+        brings the content straight back). Disabling ``DEFAULT`` fails with
+        ``EditErrorCode.INVALID_PAGE_SETUP``: that story has no flag.
+
+        A flag already in the requested state is a successful no-op that records no undo step.
+        Read the current state from :attr:`SectionInfo.title_page` /
+        :attr:`SectionInfo.even_and_odd_headers`.
+        """
+        return EditResult._from_wire(
+            self._call(
+                "set_header_footer_kind_enabled",
+                {"anchorId": anchor_id, "kind": kind.value, "enabled": bool(enabled)},
+            )
+        )
+
+    def set_page_setup(
+        self,
+        anchor_id: str,
+        op: PageSetupOp | None = None,
+        *,
+        page_width_twips: int | None = None,
+        page_height_twips: int | None = None,
+        landscape: bool | None = None,
+        margin_top_twips: int | None = None,
+        margin_bottom_twips: int | None = None,
+        margin_left_twips: int | None = None,
+        margin_right_twips: int | None = None,
+        header_distance_twips: int | None = None,
+        footer_distance_twips: int | None = None,
+    ) -> EditResult:
+        """Set the page geometry (``w:pgSz`` / ``w:pgMar``) of the section that owns
+        ``anchor_id`` — Word's *Page Setup* dialog: page size, orientation, margins and
+        header/footer distance. Pass a :class:`PageSetupOp` or the equivalent keyword fields;
+        ``None`` leaves that attribute unchanged. All values are twips (1440 = 1 inch).
+
+        ``landscape=True`` without an explicit size swaps a portrait-shaped page's width and
+        height (``False`` swaps back), matching Word's orientation toggle. Invalid geometry — a
+        non-positive size, a negative margin, or opposing margins that leave no room — fails with
+        ``EditErrorCode.INVALID_PAGE_SETUP`` and touches nothing. Values the section already has
+        are a successful no-op that consumes no undo history. Read the result back with
+        :meth:`get_section_info`.
+        """
+        fields = PageSetupOp(
+            page_width_twips=page_width_twips,
+            page_height_twips=page_height_twips,
+            landscape=landscape,
+            margin_top_twips=margin_top_twips,
+            margin_bottom_twips=margin_bottom_twips,
+            margin_left_twips=margin_left_twips,
+            margin_right_twips=margin_right_twips,
+            header_distance_twips=header_distance_twips,
+            footer_distance_twips=footer_distance_twips,
+        ).to_wire()
+        wire = {**(op.to_wire() if op is not None else {}), **fields}
+        return EditResult._from_wire(
+            self._call("set_page_setup", {"anchorId": anchor_id, "op": wire})
         )
 
     # -- Footnotes / endnotes ---------------------------------------------

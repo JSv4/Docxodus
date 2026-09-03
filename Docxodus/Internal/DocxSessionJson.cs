@@ -13,6 +13,23 @@ namespace Docxodus.Internal;
 /// All output is camelCase; clients that prefer snake_case (e.g. Python dataclasses)
 /// convert during deserialization.
 /// </summary>
+/// <summary>
+/// The browser editor's render profile as one value — see
+/// <see cref="DocxSessionJson.ParseEditorRenderOptions"/> and
+/// <see cref="DocxSessionOps.RenderEditorHtml"/>. <see cref="Comments"/> selects the converter's
+/// Inline comment mode (highlight spans + reference markers); every other field mirrors the
+/// positional arguments of the older <c>RenderHtml</c>/<c>RenderBlocksHtml</c> bridges.
+/// </summary>
+internal sealed record EditorRenderOptions
+{
+    public string CssPrefix { get; init; } = "docx-";
+    public bool FabricateClasses { get; init; }
+    public bool Paginated { get; init; }
+    public double Scale { get; init; } = 1.0;
+    public bool RenderTrackedChanges { get; init; }
+    public bool Comments { get; init; }
+}
+
 internal static class DocxSessionJson
 {
     // ─── Parsers ────────────────────────────────────────────────────────
@@ -203,7 +220,8 @@ internal static class DocxSessionJson
     public static PageNumberField ParsePageNumberField(string? s) =>
         (s?.ToLowerInvariant()) switch
         {
-            "totalpages" or "numpages" => PageNumberField.TotalPages,
+            "totalpages" or "total_pages" or "numpages" => PageNumberField.TotalPages,
+            "pageoftotal" or "page_of_total" => PageNumberField.PageOfTotal,
             _ => PageNumberField.CurrentPage,
         };
 
@@ -429,6 +447,65 @@ internal static class DocxSessionJson
             VertAlign = TryGetString(root, "vertAlign", null),
             FontSizePts = TryGetDoubleNullable(root, "fontSizePts"),
             FontFamily = TryGetString(root, "fontFamily", null),
+            Highlight = TryGetString(root, "highlight", null),
+            Caps = TryGetBoolNullable(root, "caps"),
+            SmallCaps = TryGetBoolNullable(root, "smallCaps"),
+        };
+    }
+
+    /// <summary>
+    /// Parse a <see cref="PageSetupOp"/> from <c>{ pageWidthTwips?, pageHeightTwips?, landscape?,
+    /// marginTopTwips?, marginBottomTwips?, marginLeftTwips?, marginRightTwips?,
+    /// headerDistanceTwips?, footerDistanceTwips? }</c>. An omitted field stays null ("leave this
+    /// attribute unchanged").
+    /// </summary>
+    public static PageSetupOp ParsePageSetupOp(string json)
+    {
+        if (string.IsNullOrEmpty(json)) return new PageSetupOp();
+        using var doc = JsonDocument.Parse(json);
+        return ParsePageSetupOp(doc.RootElement);
+    }
+
+    /// <summary>Element overload — the stdio host already holds a parsed request body.</summary>
+    public static PageSetupOp ParsePageSetupOp(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object) return new PageSetupOp();
+        return new PageSetupOp
+        {
+            PageWidthTwips = TryGetIntNullable(root, "pageWidthTwips"),
+            PageHeightTwips = TryGetIntNullable(root, "pageHeightTwips"),
+            Landscape = TryGetBoolNullable(root, "landscape"),
+            MarginTopTwips = TryGetIntNullable(root, "marginTopTwips"),
+            MarginBottomTwips = TryGetIntNullable(root, "marginBottomTwips"),
+            MarginLeftTwips = TryGetIntNullable(root, "marginLeftTwips"),
+            MarginRightTwips = TryGetIntNullable(root, "marginRightTwips"),
+            HeaderDistanceTwips = TryGetIntNullable(root, "headerDistanceTwips"),
+            FooterDistanceTwips = TryGetIntNullable(root, "footerDistanceTwips"),
+        };
+    }
+
+    /// <summary>
+    /// Parse the browser editor's render profile — one JSON object instead of a positional
+    /// argument per setting, so adding a setting no longer changes a bridge signature:
+    /// <c>{ cssPrefix?, fabricateClasses?, paginated?, scale?, renderTrackedChanges?, comments? }</c>.
+    /// Defaults match the editor's first-paint call (<c>"docx-"</c>, no fabricated classes,
+    /// continuous, scale 1, revisions and comments off).
+    /// </summary>
+    public static EditorRenderOptions ParseEditorRenderOptions(string? json)
+    {
+        var options = new EditorRenderOptions();
+        if (string.IsNullOrWhiteSpace(json)) return options;
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        if (root.ValueKind != JsonValueKind.Object) return options;
+        return options with
+        {
+            CssPrefix = TryGetString(root, "cssPrefix", options.CssPrefix)!,
+            FabricateClasses = TryGetBoolNullable(root, "fabricateClasses") ?? options.FabricateClasses,
+            Paginated = TryGetBoolNullable(root, "paginated") ?? options.Paginated,
+            Scale = TryGetDoubleNullable(root, "scale") ?? options.Scale,
+            RenderTrackedChanges = TryGetBoolNullable(root, "renderTrackedChanges") ?? options.RenderTrackedChanges,
+            Comments = TryGetBoolNullable(root, "comments") ?? options.Comments,
         };
     }
 
@@ -2116,6 +2193,7 @@ internal static class DocxSessionJson
             if (i > 0) sb.Append(',');
             var c = comments[i];
             sb.Append("{\"anchorId\":").Append(JsonString(c.DefAnchorId))
+              .Append(",\"id\":").Append(c.Id)
               .Append(",\"author\":").Append(JsonString(c.Author));
             if (c.Initials is not null) sb.Append(",\"initials\":").Append(JsonString(c.Initials));
             if (c.Date is not null) sb.Append(",\"date\":").Append(JsonString(c.Date));
@@ -2388,6 +2466,10 @@ internal static class DocxSessionJson
           .Append(",\"marginBottomTwips\":").Append(info.MarginBottomTwips)
           .Append(",\"marginLeftTwips\":").Append(info.MarginLeftTwips)
           .Append(",\"marginRightTwips\":").Append(info.MarginRightTwips)
+          .Append(",\"headerDistanceTwips\":").Append(info.HeaderDistanceTwips)
+          .Append(",\"footerDistanceTwips\":").Append(info.FooterDistanceTwips)
+          .Append(",\"titlePage\":").Append(info.TitlePage ? "true" : "false")
+          .Append(",\"evenAndOddHeaders\":").Append(info.EvenAndOddHeaders ? "true" : "false")
           .Append(",\"columns\":").Append(info.Columns)
           .Append(",\"headerPartUris\":[");
         for (int i = 0; i < info.HeaderPartUris.Count; i++)

@@ -237,6 +237,75 @@ internal static class DocxSessionOps
             RenderTrackedChanges = renderTrackedChanges,
         };
 
+    // ─── Editor render profile (comments-aware) ─────────────────────────
+    //
+    // The browser editor's renders take their profile as ONE JSON object (see
+    // EditorRenderOptions) rather than a positional argument per setting, and add native comment
+    // markup — the converter's Inline mode: `comment-highlight` spans around every run inside a
+    // comment range and `comment-marker` anchors at the reference — so the editor can show and
+    // address comments in place. RenderHtml / RenderBlockHtml / RenderBlocksHtml above are left
+    // exactly as they are: their outputs are pinned by the block-fidelity tests, and with
+    // `comments: false` these render byte-identically to them.
+
+    /// <summary>
+    /// Full-document render with the editor profile in <paramref name="optionsJson"/>
+    /// (<see cref="DocxSessionJson.ParseEditorRenderOptions"/>). Same as <see cref="RenderHtml"/>
+    /// plus, when <c>comments</c> is true, Inline comment rendering with the <c>comment-</c> class
+    /// prefix the editor's first paint uses.
+    /// </summary>
+    public static string RenderEditorHtml(int handle, string optionsJson)
+    {
+        var o = DocxSessionJson.ParseEditorRenderOptions(optionsJson);
+        return HtmlConversionOps.ConvertToHtml(SessionRegistry.Get(handle), new HtmlConversionOptions
+        {
+            CssClassPrefix = o.CssPrefix,
+            FabricateCssClasses = o.FabricateClasses,
+            PaginationMode = o.Paginated ? 1 : 0,
+            PaginationScale = o.Scale,
+            RenderHeadersAndFooters = o.Paginated,
+            RenderFootnotesAndEndnotes = true,
+            RenderTrackedChanges = o.RenderTrackedChanges,
+            StampAnchors = true,
+            CommentRenderMode = o.Comments ? (int)CommentRenderMode.Inline : -1,
+            CommentCssClassPrefix = EditorCommentCssPrefix,
+        });
+    }
+
+    /// <summary>Batch block render with the editor profile — <see cref="RenderBlocksHtml"/> plus
+    /// comment markup when <c>comments</c> is true. Same JSON-object result shape.</summary>
+    public static string RenderEditorBlocksHtml(int handle, string anchorIdsJson, string optionsJson) =>
+        HtmlConversionOps.RenderBlocksHtml(handle, anchorIdsJson,
+            EditorBlockRenderOptions(DocxSessionJson.ParseEditorRenderOptions(optionsJson)));
+
+    /// <summary>Single-block render with the editor profile — <see cref="RenderBlockHtml"/> plus
+    /// comment markup when <c>comments</c> is true.</summary>
+    public static string RenderEditorBlockHtml(int handle, string anchorId, string optionsJson) =>
+        HtmlConversionOps.RenderBlockHtml(SessionRegistry.Get(handle), anchorId,
+            EditorBlockRenderOptions(DocxSessionJson.ParseEditorRenderOptions(optionsJson)));
+
+    /// <summary>The comment CSS class prefix the editor's first paint passes to
+    /// <c>ConvertDocxToHtmlComplete</c>; the session-attached renders must agree with it so a
+    /// re-rendered block carries the same class names the stylesheet targets.</summary>
+    private const string EditorCommentCssPrefix = "comment-";
+
+    private static HtmlConversionOptions EditorBlockRenderOptions(EditorRenderOptions o) =>
+        new HtmlConversionOptions
+        {
+            CssClassPrefix = o.CssPrefix,
+            FabricateCssClasses = o.FabricateClasses,
+            RenderFootnotesAndEndnotes = true,
+            RenderTrackedChanges = o.RenderTrackedChanges,
+            CommentRenderMode = o.Comments ? (int)CommentRenderMode.Inline : -1,
+            CommentCssClassPrefix = EditorCommentCssPrefix,
+            // The paginated full render marks PAGE/NUMPAGES results with data-field so the page
+            // boxes can show each page's own number; a block re-render in page view must carry the
+            // same marker or the editor's substitution has nothing to find. A header/footer block
+            // gets it even when the profile says continuous — running stories only ever render
+            // inside page boxes.
+            StampPageNumberFields = o.Paginated,
+            StampPageNumberFieldsInRunningStories = true,
+        };
+
     /// <summary>
     /// Render the live session's current state to a complete anchor-stamped HTML document —
     /// the editor's full re-render (remount) without round-tripping the saved bytes through
@@ -490,6 +559,25 @@ internal static class DocxSessionOps
     public static string ClearPageNumbering(int handle, string anchorId,
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, anchorId, s => s.ClearPageNumbering(anchorId));
+
+    /// <summary>Word's "Different first page" / "Different odd &amp; even pages" checkboxes —
+    /// <paramref name="kind"/> is the wire token ("first" | "even"; "default" is refused when
+    /// disabling). See <see cref="DocxSession.SetHeaderFooterKindEnabled"/>.</summary>
+    public static string SetHeaderFooterKindEnabled(int handle, string anchorId, string kind, bool enabled,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId,
+            s => s.SetHeaderFooterKindEnabled(anchorId, DocxSessionJson.ParseHeaderFooterKind(kind), enabled));
+
+    /// <summary>Page size / orientation / margins / header-footer distance of the section owning
+    /// <paramref name="anchorId"/>. <paramref name="opJson"/> is the <see cref="PageSetupOp"/> wire
+    /// object (see <see cref="DocxSessionJson.ParsePageSetupOp(string)"/>); "" is a no-op.</summary>
+    public static string SetPageSetup(int handle, string anchorId, string opJson,
+        MutationPreconditions? preconditions = null) =>
+        SetPageSetup(handle, anchorId, DocxSessionJson.ParsePageSetupOp(opJson), preconditions);
+
+    public static string SetPageSetup(int handle, string anchorId, PageSetupOp op,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.SetPageSetup(anchorId, op));
 
     // ─── Reference fields (issue #607) ──────────────────────────────────
 

@@ -183,20 +183,25 @@ test.describe('ribbon surface', () => {
     expect(driven.retryVisible).toBe(true);
   });
 
-  test('the Review tab authors and resolves native comments (issue #580)', async ({ page }) => {
+  test('the Review tab authors and resolves native comments through the gutter (issue #580)', async ({ page }) => {
     await openEditorHost(page);
 
-    // The Review tab reveals the comment panel in its empty state.
+    // The Review tab reveals the comment controls in their empty state.
     await page.click('.dxr-tab[data-tab="review"]');
     await expect(page.locator('.dxr-panel[data-panel="review"]')).toHaveAttribute('data-active', '');
-    await expect(page.locator('[data-dxr="threads"]')).toContainText('No comments yet');
+    await expect(page.locator('[data-dxr="commentcount"]')).toContainText('No comments');
 
     // Give the block text (an empty paragraph is rightly refused with empty_comment_span),
-    // leave it uncommitted — addComment must sync the typing before commenting — and author.
+    // leave it uncommitted — addComment must sync the typing before commenting — select a
+    // word, and hit New Comment: a draft bubble opens beside the selection, Word-style.
     await page.click('#editor [data-anchor][contenteditable="true"]');
     await page.keyboard.type('The indemnity clause needs review.');
-    await page.fill('[data-dxr="commenttext"]', 'Please reconsider this clause.');
+    await page.keyboard.press('Home');
+    await page.keyboard.press('Shift+End');
     await page.click('button[data-dxr="comment"]');
+    await expect(page.locator('.docx-comment-bubble[data-draft] textarea')).toBeFocused();
+    await page.keyboard.type('Please reconsider this clause.');
+    await page.click('.docx-comment-bubble[data-draft] [data-comment-action="post"]');
 
     // Session truth: exactly one NATIVE comment thread carrying the typed text.
     const entries = await page.evaluate(() =>
@@ -205,21 +210,24 @@ test.describe('ribbon surface', () => {
     expect(entries[0].text).toContain('Please reconsider this clause.');
     expect(entries[0].resolved).toBeFalsy();
 
-    // The panel shows the thread and its input was cleared for the next comment.
-    await expect(page.locator('.dxr-thread')).toHaveCount(1);
-    await expect(page.locator('.dxr-thread .dxr-ttext')).toContainText('Please reconsider');
-    await expect(page.locator('[data-dxr="commenttext"]')).toHaveValue('');
+    // The gutter shows the thread beside its highlight, and the Review tab counts it.
+    await expect(page.locator('.docx-comment-bubble[data-thread]')).toHaveCount(1);
+    await expect(page.locator('.docx-comment-bubble[data-thread] .docx-comment-text')).toContainText('Please reconsider');
+    await expect(page.locator('#editor span.comment-highlight')).toHaveCount(1);
+    await expect(page.locator('[data-dxr="commentcount"]')).toContainText('1 open');
 
-    // Resolve from the thread row: session truth flips and the row shows it.
-    await page.click('.dxr-thread button');
-    await expect(page.locator('.dxr-thread[data-resolved]')).toHaveCount(1);
+    // Resolve from the ribbon: session truth flips and the bubble shows it.
+    await page.click('#editor span.comment-highlight');
+    await page.click('button[data-dxr="commentresolve"]');
+    await expect(page.locator('.docx-comment-bubble[data-resolved]')).toHaveCount(1);
     const resolved = await page.evaluate(() =>
       (window as any).__demo.getEditor().listComments()[0].resolved);
     expect(resolved).toBe(true);
 
     // Reopen: the toggle is symmetric.
-    await page.click('.dxr-thread button');
-    await expect(page.locator('.dxr-thread[data-resolved]')).toHaveCount(0);
+    await expect(page.locator('button[data-dxr="commentresolve"]')).toHaveText('Reopen');
+    await page.click('button[data-dxr="commentresolve"]');
+    await expect(page.locator('.docx-comment-bubble[data-resolved]')).toHaveCount(0);
 
     // The comment survives a save round-trip as native OOXML (not an overlay).
     const persisted = await page.evaluate(async () => {

@@ -3,8 +3,9 @@
  *
  * `DocxEditor` (editor.ts) is the document engine: it owns the live `DocxSession`,
  * the block wiring and every command. It has deliberately no chrome. This module is
- * the chrome — the tabbed ribbon, the anchor rail, the table picker and the loading
- * overlay — wired onto exactly that command surface and nothing else.
+ * the chrome — the tabbed ribbon, the status bar (with the anchor rail), the table
+ * picker, the find bar and the loading overlay — wired onto exactly that command
+ * surface and nothing else.
  *
  * It exists because the same UI was hand-written three times (the standalone demo,
  * the GitHub Pages landing page, the compact iframe player) and drifted. Now the
@@ -29,10 +30,15 @@ import type {
   DocxEditorExports,
   DocxEditorOptions,
   EditorAlignment,
+  EditorMatch,
   FormatKey,
 } from "./editor.js";
-import type { NumberFormat } from "./types.js";
+import type { BandWhich } from "./editor-headerfooter.js";
+import { TrackedChangeMode } from "./types.js";
+import type { ListFormat, NumberFormat } from "./types.js";
 import {
+  COMMON_FONTS,
+  HIGHLIGHT_COLORS,
   RIBBON_CSS,
   RIBBON_HINT_HTML,
   RIBBON_HTML,
@@ -98,7 +104,7 @@ export interface RibbonOptions extends DocxEditorOptions {
   frame?: "card" | "flush";
   /** Root width, in px, below which "auto" picks compact. Default 720. */
   compactBreakpoint?: number;
-  /** Show the anchor rail (full chrome only). Default true. */
+  /** Show the status bar with the anchor rail (full chrome only). Default true. */
   rail?: boolean;
   /** Show New / Open / Save. Default true. */
   fileActions?: boolean;
@@ -166,7 +172,7 @@ export interface RibbonEditor {
   download(name?: string): void;
   /** Set the status line. */
   setStatus(text: string): void;
-  /** Activate a ribbon tab by name ("home" | "insert" | "layout" | "table"). */
+  /** Activate a ribbon tab by name ("home" | "insert" | "layout" | "references" | "review" | "view" | "table" | "headerfooter"). */
   selectTab(name: string): void;
   /** Force a density, or hand control back to measurement with "auto". */
   setChrome(mode: RibbonChromeMode): void;
@@ -213,11 +219,25 @@ const DEFAULT_FEATURES: RibbonLoaderFeature[] = [
 /** Every `data-dxr` name the template defines — the id-collision probe set. */
 const CONTROL_NAMES = [
   "docname", "new", "file", "save", "undo", "redo", "status", "ribbon",
-  "fontsize", "fontsizes", "fontfamily", "style", "delblock",
-  "table", "hr", "hrThick", "hrDouble", "rulepos", "hrClear", "footnote", "endnote",
-  "paginated", "headerfooter", "pgfmt", "pgstart", "pgclear", "pagenum", "totalpages",
-  "railAnchor", "railBlocks", "railSession", "railOp",
+  "fontsize", "fontsizes", "fontfamily", "fontgrow", "fontshrink", "clearformat", "smallcaps",
+  "fontcolorbtn", "fontcolorbar", "fontcolor", "highlight", "listmenu", "linespacing",
+  "style", "delblock", "findtoggle", "replacetoggle",
+  "table", "picturefile", "link", "unlink", "insertcomment", "gotoheader", "gotofooter", "pagenummenu",
+  "hr", "hrThick", "hrDouble", "rulepos", "hrClear",
+  "margins", "orientation", "pagesize", "pagesetupnote", "spacebefore", "spaceafter",
+  "specialindent", "specialindentval", "pgfmt", "pgstart", "pgclear", "paginated", "headerfooter",
+  "toc", "footnote", "endnote", "pagenum", "totalpages",
+  "comment", "commentdelete", "commentprev", "commentnext", "commentresolve", "showcomments",
+  "commentcount", "trackchanges", "markup", "author", "revcount",
+  "viewpage", "viewweb", "zoom", "zoomfit", "showrail", "showhint",
+  "shadebtn", "shadebar", "shade", "repeatheader",
+  "hfFirst", "hfEven", "hfstory",
+  "findbar", "findtext", "findprev", "findnext", "findcount", "findcase", "replacegroup",
+  "replacetext", "replaceone", "replaceall", "findclose",
+  "railAnchor", "railBlocks", "railSession", "railOp", "pageinfo", "wordcount",
+  "zoomout", "zoomlevel", "zoomin",
   "gridpicker", "gridcells", "gridlabel", "gridalign", "gridborderless",
+  "linkpop", "linkform", "linkurl", "linkcancel",
   "editor",
   "loader", "loaderEyebrow", "loaderTitle", "loaderCopy", "loaderAd", "loaderNumber",
   "loaderAdTitle", "loaderAdCopy", "loaderBar", "loaderLabel", "loaderMeta", "loaderRetry",
@@ -225,6 +245,7 @@ const CONTROL_NAMES = [
 
 const GRID_ROWS = 8;
 const GRID_COLS = 10;
+const ZOOM_STEPS = [0.5, 0.75, 0.9, 1, 1.25, 1.5, 2];
 
 let nextIdPrefixSeed = 0;
 
@@ -260,6 +281,16 @@ function resolveContainer(container: string | HTMLElement): HTMLElement {
   return el;
 }
 
+/** CSS colour → "#rrggbb" (for the colour inputs), or null when it cannot be expressed. */
+function toHex(color: string): string | null {
+  const m = /^rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(color);
+  if (m) {
+    return "#" + [m[1], m[2], m[3]].map((n) => parseInt(n, 10).toString(16).padStart(2, "0")).join("");
+  }
+  if (/^#[0-9a-f]{6}$/i.test(color)) return color.toLowerCase();
+  return null;
+}
+
 /**
  * Mount the ribbon surface into `container`.
  *
@@ -291,6 +322,7 @@ class RibbonSurface implements RibbonEditor {
   private chromeMode: RibbonChromeMode;
   private density: "full" | "compact" = "full";
   private headerFooter: boolean;
+  private author: string;
   private destroyed = false;
 
   private featureTimer: ReturnType<typeof setInterval> | null = null;
@@ -300,15 +332,22 @@ class RibbonSurface implements RibbonEditor {
   private stripObserver: ResizeObserver | null = null;
   private lastAnchorText = "";
   private selectionFrame: number | null = null;
+  private statsTimer: ReturnType<typeof setTimeout> | null = null;
+  private findMatches: EditorMatch[] = [];
+  private findIndex = -1;
   private readonly onSelectionChange: () => void;
   private readonly onDocumentMouseDown: (event: MouseEvent) => void;
+  private readonly onKeydown: (event: KeyboardEvent) => void;
 
   constructor(container: HTMLElement, options: RibbonOptions) {
     this.options = options;
     this.exports = options.exports ?? null;
     this.documentName = options.documentName ?? "untitled.docx";
     this.chromeMode = options.chrome ?? "auto";
-    this.headerFooter = options.headerFooter ?? false;
+    // Headers and footers are document content, so the surface edits them by default; the
+    // engine's own default stays off for consumers that mount `DocxEditor` bare.
+    this.headerFooter = options.headerFooter ?? true;
+    this.author = options.commentAuthor ?? options.revisionAuthor ?? "Reviewer";
     // false suppresses the overlay; true/omitted takes the defaults; an object rewords it.
     this.loaderOptions =
       options.loader === false
@@ -340,6 +379,7 @@ class RibbonSurface implements RibbonEditor {
 
     this.applyStaticOptions();
     this.buildGrid();
+    this.populateStaticMenus();
     this.wire();
     this.wireScrollFades();
     this.applyChrome();
@@ -357,8 +397,10 @@ class RibbonSurface implements RibbonEditor {
       });
     };
     doc.addEventListener("selectionchange", this.onSelectionChange);
-    this.onDocumentMouseDown = (event) => this.maybeClosePicker(event);
+    this.onDocumentMouseDown = (event) => this.maybeClosePopovers(event);
     doc.addEventListener("mousedown", this.onDocumentMouseDown);
+    this.onKeydown = (event) => this.handleShortcut(event);
+    root.addEventListener("keydown", this.onKeydown);
 
     if (this.chromeMode === "auto" && typeof ResizeObserver !== "undefined") {
       this.resizeObserver = new ResizeObserver(() => this.applyChrome());
@@ -395,9 +437,13 @@ class RibbonSurface implements RibbonEditor {
     if (!this.loaderOptions) this.control("loader")?.remove();
 
     this.require("docname").textContent = this.documentName;
-    (this.require<HTMLInputElement>("paginated")).checked = this.options.paginated ?? false;
-    (this.require<HTMLInputElement>("headerfooter")).checked = this.headerFooter;
+    this.require<HTMLInputElement>("paginated").checked = this.options.paginated ?? false;
+    this.require<HTMLInputElement>("headerfooter").checked = this.headerFooter;
+    this.require<HTMLInputElement>("trackchanges").checked =
+      this.options.trackedChanges === TrackedChangeMode.RenderInline;
+    this.require<HTMLInputElement>("author").value = this.author;
     this.surface.dataset.view = this.options.paginated ? "paginated" : "continuous";
+    this.surface.dataset.comments = this.options.comments === false ? "off" : "on";
   }
 
   private buildGrid(): void {
@@ -412,6 +458,92 @@ class RibbonSurface implements RibbonEditor {
       }
     }
     cells.replaceChildren(fragment);
+  }
+
+  /** Menus whose entries do not depend on the document. */
+  private populateStaticMenus(): void {
+    const highlight = this.require<HTMLSelectElement>("highlight");
+    for (const color of HIGHLIGHT_COLORS) {
+      const opt = document.createElement("option");
+      opt.value = color.value;
+      opt.textContent = `■ ${color.label}`;
+      opt.style.color = color.css;
+      highlight.appendChild(opt);
+    }
+    this.populateFonts([]);
+  }
+
+  /** The font menu: the document's own fonts first, then the common list, no duplicates. */
+  private populateFonts(documentFonts: string[]): void {
+    const select = this.require<HTMLSelectElement>("fontfamily");
+    const seen = new Set<string>();
+    select.replaceChildren();
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "Font…";
+    select.appendChild(placeholder);
+    const add = (name: string, group: HTMLElement | HTMLSelectElement) => {
+      const key = name.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      opt.style.fontFamily = `"${name}", sans-serif`;
+      group.appendChild(opt);
+    };
+    if (documentFonts.length > 0) {
+      const group = document.createElement("optgroup");
+      group.label = "In this document";
+      for (const name of documentFonts) add(name, group);
+      select.appendChild(group);
+    }
+    const common = document.createElement("optgroup");
+    common.label = "Common fonts";
+    for (const name of COMMON_FONTS) add(name, common);
+    select.appendChild(common);
+  }
+
+  /** The style gallery: every paragraph style the document defines, quick styles first, plus
+   *  the built-ins Word always offers (the engine creates a missing built-in on first use). */
+  private populateStyles(): void {
+    const select = this.require<HTMLSelectElement>("style");
+    const styles = this.live?.styles() ?? [];
+    const paragraphStyles = styles.filter((s) => s.type === "paragraph" && !s.semiHidden);
+    if (paragraphStyles.length === 0) return; // older bundle: keep the static five
+    const have = new Set(paragraphStyles.map((s) => s.id.toLowerCase()));
+    const builtIns: Array<[string, string, number]> = [
+      ["Normal", "Normal", 0], ["Heading1", "Heading 1", 9], ["Heading2", "Heading 2", 9],
+      ["Heading3", "Heading 3", 9], ["Title", "Title", 10], ["Subtitle", "Subtitle", 11],
+      ["Quote", "Quote", 29], ["ListParagraph", "List Paragraph", 34],
+    ];
+    for (const [id, name, priority] of builtIns) {
+      if (have.has(id.toLowerCase())) continue;
+      paragraphStyles.push({
+        id, name, type: "paragraph", isDefault: false, isCustom: false, hasLatentException: false,
+        uiPriority: priority, quickFormat: true,
+      });
+    }
+    paragraphStyles.sort((a, b) => {
+      const qa = a.quickFormat ? 0 : 1;
+      const qb = b.quickFormat ? 0 : 1;
+      if (qa !== qb) return qa - qb;
+      const pa = a.uiPriority ?? 99;
+      const pb = b.uiPriority ?? 99;
+      if (pa !== pb) return pa - pb;
+      return a.name.localeCompare(b.name);
+    });
+    select.replaceChildren();
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "Style…";
+    select.appendChild(placeholder);
+    for (const style of paragraphStyles) {
+      const opt = document.createElement("option");
+      opt.value = style.id;
+      opt.textContent = style.name;
+      select.appendChild(opt);
+    }
   }
 
   // ── chrome density ──────────────────────────────────────────────────────────
@@ -441,8 +573,8 @@ class RibbonSurface implements RibbonEditor {
     if (next === this.density && this.element.dataset.chrome) return;
     this.density = next;
     this.element.dataset.chrome = next;
-    // The picker's absolute position is meaningless after a density flip.
-    this.closePicker();
+    // A popover's absolute position is meaningless after a density flip.
+    this.closePopovers();
     // A density flip relays out every strip; re-measure without waiting for
     // the observer so the fades never lag a frame behind the new layout.
     this.syncAllStripFades();
@@ -450,12 +582,6 @@ class RibbonSurface implements RibbonEditor {
 
   // ── scroll-edge affordances ─────────────────────────────────────────────────
 
-  /**
-   * The chrome's strips scroll horizontally instead of squashing ("no command
-   * is removed in compact"), so each one reports which edges hide more content
-   * via `data-fade` and the stylesheet dissolves content at exactly those
-   * edges. Without this a strip hard-clips mid-control and reads as broken.
-   */
   private syncStripFade(strip: HTMLElement): void {
     const max = strip.scrollWidth - strip.clientWidth;
     const tokens =
@@ -470,7 +596,7 @@ class RibbonSurface implements RibbonEditor {
 
   private wireScrollFades(): void {
     this.strips = Array.from(
-      this.element.querySelectorAll<HTMLElement>(".dxr-titlebar, .dxr-tabs, .dxr-panel, .dxr-rail"),
+      this.element.querySelectorAll<HTMLElement>(".dxr-titlebar, .dxr-tabs, .dxr-panel, .dxr-rail, .dxr-findbar"),
     );
     if (typeof ResizeObserver !== "undefined") {
       // One observer for all strips. It also fires when a panel becomes the
@@ -526,8 +652,12 @@ class RibbonSurface implements RibbonEditor {
     const paginated = this.require<HTMLInputElement>("paginated").checked;
     this.surface.dataset.view = paginated ? "paginated" : "continuous";
     this.surface.replaceChildren();
+    this.closeFindBar();
 
     const started = performance.now();
+    const tracked = this.require<HTMLInputElement>("trackchanges").checked
+      ? TrackedChangeMode.RenderInline
+      : (this.options.trackedChanges ?? TrackedChangeMode.Accept);
     this.live = DocxEditor.open(this.surface, bytes, this.exports, {
       cssPrefix: this.options.cssPrefix,
       fabricateClasses: this.options.fabricateClasses,
@@ -535,21 +665,34 @@ class RibbonSurface implements RibbonEditor {
       scale: this.options.scale,
       columnWidth: this.options.columnWidth,
       fitToWidth: this.options.fitToWidth,
-      onEdit: this.options.onEdit,
+      onEdit: (info) => {
+        this.options.onEdit?.(info);
+        this.scheduleStats();
+      },
       onMove: this.options.onMove,
+      onStoryChange: (which) => this.onStoryChange(which),
+      onCommentsChange: (info) => this.onCommentsChange(info),
       paginated,
       headerFooter: this.headerFooter,
       blockDrag: this.options.blockDrag ?? true,
-      trackedChanges: this.options.trackedChanges,
-      revisionAuthor: this.options.revisionAuthor,
+      trackedChanges: tracked,
+      revisionAuthor: this.author,
+      comments: this.options.comments,
+      commentAuthor: this.author,
     });
     this.require<HTMLButtonElement>("save").disabled = false;
     this.require("ribbon").setAttribute("aria-disabled", "false");
     this.setState("ready");
     this.setStatus(`Rendered in ${Math.round(performance.now() - started)} ms`);
+    this.populateStyles();
+    this.populateFonts(this.documentFonts());
     this.syncPageNumbering();
+    this.syncLayoutState();
+    this.syncReviewState();
+    this.syncZoom();
     this.refreshRailCounts();
     this.refreshRailAnchor();
+    this.scheduleStats();
     this.options.onOpen?.(this.live);
     return this.live;
   }
@@ -590,12 +733,14 @@ class RibbonSurface implements RibbonEditor {
     const doc = this.element.ownerDocument ?? document;
     doc.removeEventListener("selectionchange", this.onSelectionChange);
     doc.removeEventListener("mousedown", this.onDocumentMouseDown);
+    this.element.removeEventListener("keydown", this.onKeydown);
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
     this.stripObserver?.disconnect();
     this.stripObserver = null;
     if (this.selectionFrame != null) cancelAnimationFrame(this.selectionFrame);
     this.selectionFrame = null;
+    if (this.statsTimer != null) clearTimeout(this.statsTimer);
     this.stopRotation();
     try {
       this.live?.close();
@@ -626,6 +771,7 @@ class RibbonSurface implements RibbonEditor {
       this.options.onCommand?.(label, ms);
       this.refreshRailCounts();
       this.refreshRailAnchor();
+      this.scheduleStats();
     }
   }
 
@@ -667,9 +813,20 @@ class RibbonSurface implements RibbonEditor {
         colRight: () => this.live!.insertTableColumn("right"),
         delRow: () => this.live!.deleteTableRow(),
         delCol: () => this.live!.deleteTableColumn(),
+        mergeRight: () => this.live!.mergeCells(1, 2),
+        mergeDown: () => this.live!.mergeCells(2, 1),
+        unmerge: () => this.live!.unmergeCells(),
+        borders: () => this.live!.setTableBorders({ scope: "all", style: "single", size: 4 }),
+        noborders: () => this.live!.setTableBorders({ scope: "all", style: "none" }),
+        noshade: () => this.live!.setCellShading("", "cell"),
+        delTable: () => this.live!.deleteTable(),
       };
       ops[b.dataset.tt ?? ""]?.();
     });
+    delegate<HTMLElement>("button[data-rev]", (b) => `revision ${b.dataset.rev}`, (b) =>
+      this.runRevisionCommand(b.dataset.rev ?? ""));
+    delegate<HTMLElement>("button[data-hf]", (b) => `header/footer ${b.dataset.hf}`, (b) =>
+      this.runHeaderFooterCommand(b.dataset.hf ?? ""));
 
     const rulepos = () => (this.require<HTMLSelectElement>("rulepos").value === "above" ? "above" : "below");
     const simple: Array<[string, string, () => void]> = [
@@ -684,12 +841,34 @@ class RibbonSurface implements RibbonEditor {
       ["endnote", "endnote", () => this.live!.insertEndnote()],
       ["pagenum", "page number", () => this.live!.insertPageNumber("currentPage")],
       ["totalpages", "total pages", () => this.live!.insertPageNumber("totalPages")],
+      ["fontgrow", "grow font", () => this.live!.adjustFontSize(1)],
+      ["fontshrink", "shrink font", () => this.live!.adjustFontSize(-1)],
+      ["clearformat", "clear formatting", () => this.live!.clearFormatting()],
+      ["toc", "table of contents", () => this.live!.insertTableOfContents()],
+      ["unlink", "remove link", () => this.live!.removeHyperlink()],
+      ["gotoheader", "go to header", () => this.live!.goToHeaderFooter("header")],
+      ["gotofooter", "go to footer", () => this.live!.goToHeaderFooter("footer")],
+      ["viewpage", "page view", () => this.setPaginated(true)],
+      ["viewweb", "continuous view", () => this.setPaginated(false)],
+      ["zoomfit", "fit width", () => this.setZoom(1)],
+      ["zoomin", "zoom in", () => this.stepZoom(1)],
+      ["zoomout", "zoom out", () => this.stepZoom(-1)],
     ];
     for (const [name, label, fn] of simple) {
       const el = this.control(name);
       if (!el) continue;
       this.keepSelection(el);
       el.addEventListener("click", () => this.run(label, fn));
+    }
+
+    const smallcaps = this.control("smallcaps");
+    if (smallcaps) {
+      this.keepSelection(smallcaps);
+      smallcaps.addEventListener("click", () => {
+        const on = smallcaps.getAttribute("aria-pressed") !== "true";
+        this.run("small caps", () => this.live!.setSmallCaps(on));
+        smallcaps.setAttribute("aria-pressed", String(on));
+      });
     }
 
     // Font size: `change` only (it fires on Enter and on blur). Binding keydown as
@@ -706,37 +885,118 @@ class RibbonSurface implements RibbonEditor {
       }
     });
 
-    const fontfamily = this.require<HTMLSelectElement>("fontfamily");
-    fontfamily.addEventListener("change", () => {
-      if (this.live && fontfamily.value) this.run("font family", () => this.live!.setFontFamily(fontfamily.value));
-      fontfamily.value = "";
-    });
+    this.wireSelect("fontfamily", "font family", (v) => this.live!.setFontFamily(v));
+    this.wireSelect("style", "style", (v) => this.live!.setParagraphStyle(v));
+    this.wireSelect("listmenu", "list style", (v) => this.live!.setListFormat(v as ListFormat));
+    this.wireSelect("linespacing", "line spacing", (v) => this.live!.setLineSpacing(parseFloat(v)));
+    this.wireSelect("highlight", "highlight", (v) => this.live!.setHighlight(v === "none" ? "" : v));
+    this.wireSelect("pagenummenu", "page number", (v) =>
+      this.live!.insertPageNumber(v === "pageOf" ? "pageOfTotal" : (v as "currentPage" | "totalPages")));
 
-    const style = this.require<HTMLSelectElement>("style");
-    style.addEventListener("change", () => {
-      if (this.live && style.value) this.run("style", () => this.live!.setParagraphStyle(style.value));
-      style.value = "";
+    // Colour pickers: the native input steals focus, so the engine's last-selection
+    // bookmark is what the command applies to.
+    const fontcolor = this.require<HTMLInputElement>("fontcolor");
+    fontcolor.addEventListener("input", () => {
+      this.require("fontcolorbar").style.setProperty("--dxr-swatch", fontcolor.value);
     });
-
-    // Comment authoring (issue #580): the button comments the live selection (whole block
-    // when collapsed) with the typed text, attributed to the configured revision author.
-    const commentButton = this.control("comment");
-    if (commentButton) {
-      this.keepSelection(commentButton);
-      commentButton.addEventListener("click", () => {
-        if (!this.live) return;
-        const input = this.control<HTMLInputElement>("commenttext");
-        const text = input?.value.trim() || "New comment.";
-        this.run("comment", () =>
-          this.live!.addComment(text, this.options.revisionAuthor ?? "Reviewer"));
-        if (input) input.value = "";
-        this.renderThreads();
-      });
+    fontcolor.addEventListener("change", () => {
+      this.require("fontcolorbar").style.setProperty("--dxr-swatch", fontcolor.value);
+      this.run("font color", () => this.live!.setFontColor(fontcolor.value));
+    });
+    const fontcolorbtn = this.control("fontcolorbtn");
+    if (fontcolorbtn) {
+      this.keepSelection(fontcolorbtn);
+      fontcolorbtn.addEventListener("click", () => this.run("font color", () => this.live!.setFontColor(fontcolor.value)));
     }
+    const shade = this.require<HTMLInputElement>("shade");
+    shade.addEventListener("input", () => this.require("shadebar").style.setProperty("--dxr-swatch", shade.value));
+    shade.addEventListener("change", () => {
+      this.require("shadebar").style.setProperty("--dxr-swatch", shade.value);
+      this.run("cell shading", () => this.live!.setCellShading(shade.value, "cell"));
+    });
+    const shadebtn = this.control("shadebtn");
+    if (shadebtn) {
+      this.keepSelection(shadebtn);
+      shadebtn.addEventListener("click", () => this.run("cell shading", () => this.live!.setCellShading(shade.value, "cell")));
+    }
+    const repeatheader = this.require<HTMLInputElement>("repeatheader");
+    repeatheader.addEventListener("change", () =>
+      this.run("repeat header row", () => this.live!.setRepeatHeaderRow(repeatheader.checked)));
+
+    // Comments: New/Insert open a draft bubble in the gutter (Word's flow); the rest act on the
+    // active thread.
+    for (const name of ["comment", "insertcomment"]) {
+      const button = this.control(name);
+      if (!button) continue;
+      this.keepSelection(button);
+      button.addEventListener("click", () => this.beginComment());
+    }
+    this.control("commentdelete")?.addEventListener("click", () => {
+      const active = this.live?.activeComment;
+      if (!active) return;
+      this.run("delete comment", () => {
+        const replies = this.live!.listComments().filter((c) => c.parentAnchorId === active);
+        for (const r of replies) this.live!.removeComment(r.anchorId);
+        this.live!.removeComment(active);
+      });
+    });
+    this.control("commentresolve")?.addEventListener("click", () => {
+      const active = this.live?.activeComment;
+      if (!active) return;
+      const entry = this.live!.listComments().find((c) => c.anchorId === active);
+      if (!entry) return;
+      this.run(entry.resolved ? "reopen comment" : "resolve comment", () =>
+        this.live!.setCommentResolved(active, !entry.resolved));
+      this.live!.activateComment(active);
+    });
+    this.control("commentprev")?.addEventListener("click", () => this.live?.stepComment(-1));
+    this.control("commentnext")?.addEventListener("click", () => this.live?.stepComment(1));
+    const showcomments = this.require<HTMLInputElement>("showcomments");
+    showcomments.addEventListener("change", () => {
+      this.live?.showComments(showcomments.checked);
+      this.surface.dataset.comments = showcomments.checked && this.options.comments !== false ? "on" : "off";
+    });
+
+    // Tracking.
+    const trackchanges = this.require<HTMLInputElement>("trackchanges");
+    trackchanges.addEventListener("change", () => {
+      if (!this.live) return;
+      this.run(trackchanges.checked ? "track changes on" : "track changes off", () =>
+        this.live!.setTrackedChanges(trackchanges.checked ? TrackedChangeMode.RenderInline : TrackedChangeMode.Accept));
+      this.syncReviewState();
+    });
+    const markup = this.require<HTMLSelectElement>("markup");
+    markup.addEventListener("change", () => {
+      if (!this.live) return;
+      // "No markup" shows the document as if every change were accepted; edits keep recording.
+      this.run(`markup ${markup.value}`, () =>
+        this.live!.setTrackedChanges(markup.value === "none" ? TrackedChangeMode.Accept : TrackedChangeMode.RenderInline));
+      trackchanges.checked = markup.value !== "none";
+    });
+    const author = this.require<HTMLInputElement>("author");
+    author.addEventListener("change", () => {
+      this.author = author.value.trim() || "Reviewer";
+      this.live?.setRevisionAuthor(this.author);
+    });
 
     this.wireFileActions();
     this.wireLayout();
     this.wirePicker();
+    this.wireLinkPopover();
+    this.wireFindBar();
+    this.wireHeaderFooterTab();
+    this.wireZoom();
+    this.wireViewToggles();
+  }
+
+  /** A `<select>` that acts on change and snaps back to its placeholder. */
+  private wireSelect(name: string, label: string, apply: (value: string) => void): void {
+    const select = this.require<HTMLSelectElement>(name);
+    select.addEventListener("change", () => {
+      const value = select.value;
+      if (this.live && value) this.run(label, () => apply(value));
+      select.value = "";
+    });
   }
 
   private wireFileActions(): void {
@@ -753,19 +1013,28 @@ class RibbonSurface implements RibbonEditor {
       if (this.exports) this.openBlank("untitled.docx");
     });
     this.control("save")?.addEventListener("click", () => this.download());
+
+    const picture = this.control<HTMLInputElement>("picturefile");
+    picture?.addEventListener("change", async () => {
+      const chosen = picture.files?.[0];
+      picture.value = "";
+      if (!chosen || !this.live) return;
+      const started = performance.now();
+      const ok = await this.live.insertImageFile(chosen, { altText: chosen.name });
+      const ms = performance.now() - started;
+      const el = this.control("railOp");
+      if (el) el.textContent = `picture ${Math.round(ms)} ms`;
+      this.setStatus(ok ? `Inserted ${chosen.name}` : "Could not insert the picture here");
+      this.refreshRailCounts();
+    });
   }
 
   private wireLayout(): void {
     // Pagination toggles re-render the LIVE session, so edits survive the switch.
     const paginated = this.require<HTMLInputElement>("paginated");
-    paginated.addEventListener("change", () => {
-      this.surface.dataset.view = paginated.checked ? "paginated" : "continuous";
-      if (!this.live) return;
-      this.run(paginated.checked ? "page view" : "continuous view", () =>
-        this.live!.setPaginated(paginated.checked));
-    });
+    paginated.addEventListener("change", () => this.setPaginated(paginated.checked));
 
-    // The band region is chosen at open time, so toggling it re-opens the LIVE
+    // The region is chosen at open time, so toggling it re-opens the LIVE
     // session's bytes rather than the originally loaded file — edits so far survive.
     const headerFooter = this.require<HTMLInputElement>("headerfooter");
     headerFooter.addEventListener("change", () => {
@@ -791,6 +1060,79 @@ class RibbonSurface implements RibbonEditor {
       this.run("clear numbering", () => this.live!.clearPageNumbering());
       this.syncPageNumbering();
     });
+
+    // Page setup (Word's Layout > Page Setup): margins presets, orientation, size.
+    const pageSetup = (op: Parameters<DocxEditor["setPageSetup"]>[0]) => {
+      if (!this.live!.setPageSetup(op)) this.setStatus("This engine build cannot change the page setup");
+      this.syncLayoutState();
+    };
+    this.wireSelect("margins", "margins", (v) => {
+      const [top, bottom, left, right] = v.split(",").map((n) => parseInt(n, 10));
+      pageSetup({ marginTopTwips: top, marginBottomTwips: bottom, marginLeftTwips: left, marginRightTwips: right });
+    });
+    this.wireSelect("orientation", "orientation", (v) => pageSetup({ landscape: v === "landscape" }));
+    this.wireSelect("pagesize", "page size", (v) => {
+      const [w, h] = v.split(",").map((n) => parseInt(n, 10));
+      const landscape = !!this.live!.sectionInfo()?.landscape;
+      pageSetup(landscape
+        ? { pageWidthTwips: h, pageHeightTwips: w, landscape: true }
+        : { pageWidthTwips: w, pageHeightTwips: h });
+    });
+
+    // Paragraph spacing / special indent.
+    const before = this.require<HTMLInputElement>("spacebefore");
+    const after = this.require<HTMLInputElement>("spaceafter");
+    const spacing = (which: "before" | "after", input: HTMLInputElement) => {
+      const pts = parseFloat(input.value);
+      if (!this.live || !(pts >= 0)) return;
+      this.run(`space ${which}`, () =>
+        this.live!.setParagraphSpacing(which === "before" ? { beforePt: pts } : { afterPt: pts }));
+    };
+    before.addEventListener("change", () => spacing("before", before));
+    after.addEventListener("change", () => spacing("after", after));
+    const special = this.require<HTMLSelectElement>("specialindent");
+    const specialVal = this.require<HTMLInputElement>("specialindentval");
+    const applySpecial = () => {
+      if (!this.live || !special.value) return;
+      const inches = parseFloat(specialVal.value);
+      const twips = Math.round((inches >= 0 ? inches : 0.5) * 1440);
+      this.run("special indent", () => {
+        if (special.value === "firstLine") this.live!.setFirstLineIndent(twips);
+        else if (special.value === "hanging") this.live!.setHangingIndent(twips);
+        else this.live!.setFirstLineIndent(0);
+      });
+    };
+    special.addEventListener("change", applySpecial);
+    specialVal.addEventListener("change", applySpecial);
+  }
+
+  private setPaginated(on: boolean): void {
+    const paginated = this.require<HTMLInputElement>("paginated");
+    paginated.checked = on;
+    this.surface.dataset.view = on ? "paginated" : "continuous";
+    if (!this.live) return;
+    this.run(on ? "page view" : "continuous view", () => this.live!.setPaginated(on));
+    this.syncViewButtons();
+  }
+
+  private syncViewButtons(): void {
+    const on = this.require<HTMLInputElement>("paginated").checked;
+    this.control("viewpage")?.classList.toggle("dxr-on", on);
+    this.control("viewweb")?.classList.toggle("dxr-on", !on);
+  }
+
+  private wireViewToggles(): void {
+    const showrail = this.require<HTMLInputElement>("showrail");
+    showrail.addEventListener("change", () => {
+      const rail = this.element.querySelector<HTMLElement>("[data-dxr-rail]");
+      if (rail) rail.hidden = !showrail.checked;
+    });
+    const showhint = this.require<HTMLInputElement>("showhint");
+    showhint.addEventListener("change", () => {
+      const hint = this.element.querySelector<HTMLElement>("[data-dxr-hint]");
+      if (hint) hint.hidden = !showhint.checked;
+    });
+    this.syncViewButtons();
   }
 
   /** The bands own the same setting and read the live session, so both stay in step. */
@@ -801,7 +1143,350 @@ class RibbonSurface implements RibbonEditor {
     this.require<HTMLInputElement>("pgstart").value = numbering.start != null ? String(numbering.start) : "";
   }
 
-  // ── table size picker ───────────────────────────────────────────────────────
+  /** Layout tab: describe the section under the caret. */
+  private syncLayoutState(): void {
+    const note = this.control("pagesetupnote");
+    const info = this.live?.sectionInfo() ?? null;
+    if (!note) return;
+    if (!info) {
+      note.textContent = "";
+      return;
+    }
+    const inches = (twips: number) => (twips / 1440).toFixed(2).replace(/\.?0+$/, "");
+    note.textContent =
+      `${inches(info.pageWidthTwips)}″ × ${inches(info.pageHeightTwips)}″ ${info.landscape ? "landscape" : "portrait"}, ` +
+      `margins ${inches(info.marginTopTwips)}″ / ${inches(info.marginRightTwips)}″ / ${inches(info.marginBottomTwips)}″ / ${inches(info.marginLeftTwips)}″`;
+  }
+
+  // ── review ──────────────────────────────────────────────────────────────────
+
+  private beginComment(): void {
+    if (!this.live) return;
+    if (this.density === "compact") {
+      // No gutter on a phone: post directly on the selection with a prompt.
+      const text = window.prompt("Comment");
+      if (!text?.trim()) return;
+      this.run("comment", () => this.live!.addComment(text.trim(), this.author));
+      return;
+    }
+    if (!this.live.beginComment()) this.setStatus("Click into a paragraph (or select text) to comment on it");
+  }
+
+  private onCommentsChange(info: { threads: number; open: number; active: string | null }): void {
+    const count = this.control("commentcount");
+    if (count) count.textContent = info.threads === 0 ? "No comments" : `${info.open} open · ${info.threads} total`;
+    const resolve = this.control<HTMLButtonElement>("commentresolve");
+    const del = this.control<HTMLButtonElement>("commentdelete");
+    const entry = info.active ? this.live?.listComments().find((c) => c.anchorId === info.active) : null;
+    if (resolve) {
+      resolve.disabled = !entry;
+      resolve.textContent = entry?.resolved ? "Reopen" : "Resolve";
+    }
+    if (del) del.disabled = !entry;
+  }
+
+  private syncReviewState(): void {
+    if (!this.live) return;
+    const tracked = this.live.trackedChanges === TrackedChangeMode.RenderInline;
+    this.require<HTMLInputElement>("trackchanges").checked = tracked;
+    this.require<HTMLSelectElement>("markup").value = tracked ? "all" : "none";
+    const revs = this.live.listRevisions();
+    const count = this.control("revcount");
+    if (count) count.textContent = revs.length === 0 ? "No tracked changes" : `${revs.length} change${revs.length === 1 ? "" : "s"}`;
+    this.require<HTMLInputElement>("showcomments").checked = this.live.commentsVisible || this.options.comments === false;
+  }
+
+  private runRevisionCommand(op: string): void {
+    if (!this.live) return;
+    const marks = this.live.revisionElements();
+    const current = this.currentRevisionMark(marks);
+    switch (op) {
+      case "accept":
+      case "reject": {
+        const mark = current ?? marks[0];
+        const entry = mark ? this.live.revisionAt(mark) : null;
+        if (!entry) { this.setStatus("Put the caret in a tracked change first"); return; }
+        if (op === "accept") this.live.acceptRevision(entry.id);
+        else this.live.rejectRevision(entry.id);
+        break;
+      }
+      case "acceptall": this.live.acceptAllRevisions(); break;
+      case "rejectall": this.live.rejectAllRevisions(); break;
+      case "next":
+      case "prev": {
+        if (marks.length === 0) { this.setStatus("No tracked changes"); return; }
+        const index = current ? marks.indexOf(current) : -1;
+        const target = marks[(index + (op === "next" ? 1 : -1) + marks.length) % marks.length];
+        this.selectRevisionMark(target);
+        return;
+      }
+      default: return;
+    }
+    this.syncReviewState();
+  }
+
+  private currentRevisionMark(marks: HTMLElement[]): HTMLElement | null {
+    const sel = (this.element.ownerDocument ?? document).getSelection();
+    const node = sel?.anchorNode ?? null;
+    if (!node) return null;
+    const el = node.nodeType === Node.ELEMENT_NODE ? (node as HTMLElement) : node.parentElement;
+    const mark = el?.closest<HTMLElement>('ins, del, tr[class*="row-"]') ?? null;
+    return mark && marks.includes(mark) ? mark : null;
+  }
+
+  private selectRevisionMark(mark: HTMLElement): void {
+    const doc = this.element.ownerDocument ?? document;
+    const block = mark.closest<HTMLElement>('[data-anchor][contenteditable="true"]');
+    block?.focus({ preventScroll: true });
+    const range = doc.createRange();
+    range.selectNodeContents(mark);
+    const sel = doc.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+    mark.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  // ── header & footer tab ─────────────────────────────────────────────────────
+
+  private wireHeaderFooterTab(): void {
+    for (const kind of ["first", "even"] as const) {
+      const box = this.require<HTMLInputElement>(kind === "first" ? "hfFirst" : "hfEven");
+      box.addEventListener("change", () => {
+        if (!this.live) return;
+        const ok = this.live.setHeaderFooterKindEnabled(kind, box.checked);
+        if (!ok) {
+          box.checked = !box.checked;
+          this.setStatus("This engine build cannot change that option");
+        }
+        this.run(`${kind === "first" ? "different first page" : "different odd & even"} ${box.checked ? "on" : "off"}`, () => {});
+        this.syncHeaderFooterState();
+      });
+    }
+  }
+
+  private runHeaderFooterCommand(op: string): void {
+    if (!this.live) return;
+    switch (op) {
+      case "pagenum": this.live.insertPageNumber("currentPage"); break;
+      case "totalpages": this.live.insertPageNumber("totalPages"); break;
+      case "pageof": this.live.insertPageNumber("pageOfTotal"); break;
+      case "header": this.live.goToHeaderFooter("header"); break;
+      case "footer": this.live.goToHeaderFooter("footer"); break;
+      case "close": this.live.closeHeaderFooter(); break;
+    }
+    this.syncHeaderFooterState();
+  }
+
+  private onStoryChange(which: BandWhich | null): void {
+    const tab = this.element.querySelector<HTMLElement>('.dxr-tab[data-tab="headerfooter"]');
+    if (!tab) return;
+    tab.hidden = which === null;
+    if (which) {
+      this.selectTab("headerfooter");
+    } else if (tab.getAttribute("aria-selected") === "true") {
+      this.selectTab("home");
+    }
+    this.syncHeaderFooterState();
+  }
+
+  private syncHeaderFooterState(): void {
+    if (!this.live) return;
+    this.require<HTMLInputElement>("hfFirst").checked = this.live.headerFooterKindEnabled("first");
+    this.require<HTMLInputElement>("hfEven").checked = this.live.headerFooterKindEnabled("even");
+    const story = this.control("hfstory");
+    if (story) {
+      const which = this.live.activeStoryKind ?? "header";
+      story.textContent = this.live.headerFooterStoryLabel(which);
+    }
+  }
+
+  // ── zoom ────────────────────────────────────────────────────────────────────
+
+  private wireZoom(): void {
+    for (const name of ["zoom", "zoomlevel"]) {
+      const select = this.control<HTMLSelectElement>(name);
+      select?.addEventListener("change", () => this.setZoom(parseFloat(select.value)));
+    }
+  }
+
+  private setZoom(scale: number): void {
+    if (!this.live || !(scale > 0)) return;
+    this.run(`zoom ${Math.round(scale * 100)}%`, () => this.live!.setZoom(scale));
+    this.syncZoom();
+  }
+
+  private stepZoom(direction: 1 | -1): void {
+    if (!this.live) return;
+    const current = this.live.requestedZoom;
+    const next = direction > 0
+      ? ZOOM_STEPS.find((z) => z > current + 1e-6) ?? ZOOM_STEPS[ZOOM_STEPS.length - 1]
+      : [...ZOOM_STEPS].reverse().find((z) => z < current - 1e-6) ?? ZOOM_STEPS[0];
+    this.setZoom(next);
+  }
+
+  private syncZoom(): void {
+    if (!this.live) return;
+    const requested = this.live.requestedZoom;
+    const value = String(ZOOM_STEPS.find((z) => Math.abs(z - requested) < 1e-6) ?? requested);
+    for (const name of ["zoom", "zoomlevel"]) {
+      const select = this.control<HTMLSelectElement>(name);
+      if (!select) continue;
+      if (!Array.from(select.options).some((o) => o.value === value)) {
+        const opt = document.createElement("option");
+        opt.value = value;
+        opt.textContent = `${Math.round(requested * 100)}%`;
+        select.appendChild(opt);
+      }
+      select.value = value;
+    }
+  }
+
+  // ── find & replace ──────────────────────────────────────────────────────────
+
+  private wireFindBar(): void {
+    const bar = this.require("findbar");
+    const text = this.require<HTMLInputElement>("findtext");
+    const replace = this.require<HTMLInputElement>("replacetext");
+    const matchCase = this.require<HTMLInputElement>("findcase");
+    this.control("findtoggle")?.addEventListener("click", () => this.openFindBar(false));
+    this.control("replacetoggle")?.addEventListener("click", () => this.openFindBar(true));
+    this.control("findclose")?.addEventListener("click", () => this.closeFindBar());
+    text.addEventListener("input", () => this.refreshFind(true));
+    matchCase.addEventListener("change", () => this.refreshFind(true));
+    text.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        this.stepFind(event.shiftKey ? -1 : 1);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        this.closeFindBar();
+      }
+    });
+    replace.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        this.replaceCurrent();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        this.closeFindBar();
+      }
+    });
+    this.control("findprev")?.addEventListener("click", () => this.stepFind(-1));
+    this.control("findnext")?.addEventListener("click", () => this.stepFind(1));
+    this.control("replaceone")?.addEventListener("click", () => this.replaceCurrent());
+    this.control("replaceall")?.addEventListener("click", () => {
+      if (!this.live || !text.value) return;
+      let count = 0;
+      this.run("replace all", () => {
+        count = this.live!.replaceAll(text.value, replace.value, { matchCase: matchCase.checked });
+      });
+      this.setStatus(`Replaced ${count} occurrence${count === 1 ? "" : "s"}`);
+      this.refreshFind(true);
+    });
+    bar.hidden = true;
+  }
+
+  private openFindBar(withReplace: boolean): void {
+    const bar = this.require("findbar");
+    bar.hidden = false;
+    this.require("replacegroup").hidden = !withReplace;
+    this.syncStripFade(bar);
+    const text = this.require<HTMLInputElement>("findtext");
+    text.focus();
+    text.select();
+    this.refreshFind(false);
+  }
+
+  private closeFindBar(): void {
+    const bar = this.control("findbar");
+    if (bar) bar.hidden = true;
+    this.findMatches = [];
+    this.findIndex = -1;
+  }
+
+  private refreshFind(select: boolean): void {
+    const text = this.require<HTMLInputElement>("findtext");
+    const matchCase = this.require<HTMLInputElement>("findcase").checked;
+    this.findMatches = this.live && text.value ? this.live.find(text.value, { matchCase }) : [];
+    this.findIndex = this.findMatches.length > 0 ? 0 : -1;
+    this.updateFindCount();
+    if (select && this.findIndex >= 0) this.live?.selectMatch(this.findMatches[this.findIndex]);
+  }
+
+  private stepFind(direction: 1 | -1): void {
+    if (!this.live) return;
+    if (this.findMatches.length === 0) this.refreshFind(false);
+    if (this.findMatches.length === 0) return;
+    this.findIndex = (this.findIndex + direction + this.findMatches.length) % this.findMatches.length;
+    this.live.selectMatch(this.findMatches[this.findIndex]);
+    this.updateFindCount();
+  }
+
+  private replaceCurrent(): void {
+    if (!this.live) return;
+    if (this.findMatches.length === 0 || this.findIndex < 0) this.refreshFind(true);
+    const match = this.findMatches[this.findIndex];
+    if (!match) return;
+    const replacement = this.require<HTMLInputElement>("replacetext").value;
+    this.run("replace", () => this.live!.replaceMatch(match, replacement));
+    // Offsets after the replacement shifted; re-scan and continue from the same slot.
+    const keep = this.findIndex;
+    this.refreshFind(false);
+    if (this.findMatches.length > 0) {
+      this.findIndex = Math.min(keep, this.findMatches.length - 1);
+      this.live.selectMatch(this.findMatches[this.findIndex]);
+      this.updateFindCount();
+    }
+  }
+
+  private updateFindCount(): void {
+    const el = this.control("findcount");
+    if (!el) return;
+    el.textContent = this.findMatches.length === 0
+      ? (this.require<HTMLInputElement>("findtext").value ? "0 of 0" : "")
+      : `${this.findIndex + 1} of ${this.findMatches.length}`;
+  }
+
+  // ── keyboard shortcuts the engine does not own ──────────────────────────────
+
+  private handleShortcut(event: KeyboardEvent): void {
+    if (!this.live || !(event.ctrlKey || event.metaKey)) return;
+    const key = event.key.toLowerCase();
+    const inDocument = this.surface.contains(event.target as Node);
+    // Ctrl+Alt+M is Word's New Comment; every other chord here is plain Ctrl.
+    if (event.altKey) {
+      if (key === "m" && inDocument) { event.preventDefault(); this.beginComment(); }
+      return;
+    }
+    if (key === "f") { event.preventDefault(); this.openFindBar(false); return; }
+    if (key === "h") { event.preventDefault(); this.openFindBar(true); return; }
+    if (!inDocument) return;
+    const align = (alignment: EditorAlignment) => {
+      event.preventDefault();
+      this.run(`align ${alignment}`, () => this.live!.setAlignment(alignment));
+    };
+    switch (key) {
+      case "k": event.preventDefault(); this.openLinkPopover(); return;
+      case "e": align("center"); return;
+      case "l": align("left"); return;
+      case "r": align("right"); return;
+      case "j": align("justify"); return;
+      case "]": event.preventDefault(); this.run("grow font", () => this.live!.adjustFontSize(1)); return;
+      case "[": event.preventDefault(); this.run("shrink font", () => this.live!.adjustFontSize(-1)); return;
+      case "enter": event.preventDefault(); this.run("page break", () => this.live!.pageBreakBefore(true)); return;
+      default: return;
+    }
+  }
+
+  // ── popovers ────────────────────────────────────────────────────────────────
+
+  private positionPopover(popover: HTMLElement, anchor: HTMLElement): void {
+    if (this.density !== "full") return;
+    const rect = anchor.getBoundingClientRect();
+    const host = this.element.getBoundingClientRect();
+    popover.style.left = `${rect.left - host.left}px`;
+    popover.style.top = `${rect.bottom - host.top + 5}px`;
+  }
 
   private wirePicker(): void {
     const button = this.require("table");
@@ -829,7 +1514,7 @@ class RibbonSurface implements RibbonEditor {
       event.preventDefault();
       const rows = Number(cell.dataset.r) + 1;
       const cols = Number(cell.dataset.c) + 1;
-      this.closePicker();
+      this.closePopovers();
       this.run(`table ${rows}×${cols}`, () =>
         this.live!.insertTable(rows, cols, {
           borderless: this.require<HTMLInputElement>("gridborderless").checked,
@@ -841,32 +1526,67 @@ class RibbonSurface implements RibbonEditor {
     button.addEventListener("click", () => {
       if (!this.live) return;
       if (picker.hasAttribute("data-open")) {
-        this.closePicker();
+        this.closePopovers();
         return;
       }
+      this.closePopovers();
       highlight(0, 0);
       picker.setAttribute("data-open", "");
-      // Compact chrome docks the picker to the viewport bottom (see the stylesheet),
-      // so only the roomy layout needs it positioned under its button.
-      if (this.density === "full") {
-        const rect = button.getBoundingClientRect();
-        const host = this.element.getBoundingClientRect();
-        picker.style.left = `${rect.left - host.left}px`;
-        picker.style.top = `${rect.bottom - host.top + 5}px`;
-      }
+      this.positionPopover(picker, button);
     });
   }
 
-  private closePicker(): void {
-    this.control("gridpicker")?.removeAttribute("data-open");
+  private wireLinkPopover(): void {
+    const button = this.require("link");
+    const pop = this.require("linkpop");
+    const form = this.require<HTMLFormElement>("linkform");
+    const url = this.require<HTMLInputElement>("linkurl");
+    this.keepSelection(button);
+    button.addEventListener("click", () => {
+      if (pop.hasAttribute("data-open")) this.closePopovers();
+      else this.openLinkPopover();
+    });
+    this.control("linkcancel")?.addEventListener("click", () => this.closePopovers());
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const target = url.value.trim();
+      if (!target || !this.live) return;
+      this.closePopovers();
+      let ok = false;
+      this.run("link", () => { ok = this.live!.insertHyperlink(target); });
+      if (!ok) this.setStatus("Select the text to link first");
+    });
+    url.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") { event.preventDefault(); this.closePopovers(); }
+    });
   }
 
-  private maybeClosePicker(event: MouseEvent): void {
-    const picker = this.control("gridpicker");
-    if (!picker?.hasAttribute("data-open")) return;
+  private openLinkPopover(): void {
+    if (!this.live) return;
+    this.closePopovers();
+    const pop = this.require("linkpop");
+    const url = this.require<HTMLInputElement>("linkurl");
+    const existing = this.live.hyperlinkAtCaret();
+    url.value = existing?.target ?? "";
+    pop.setAttribute("data-open", "");
+    this.positionPopover(pop, this.require("link"));
+    url.focus();
+    url.select();
+  }
+
+  private closePopovers(): void {
+    this.control("gridpicker")?.removeAttribute("data-open");
+    this.control("linkpop")?.removeAttribute("data-open");
+  }
+
+  private maybeClosePopovers(event: MouseEvent): void {
     const target = event.target as Node;
-    if (picker.contains(target) || this.control("table")?.contains(target)) return;
-    this.closePicker();
+    for (const [popName, buttonName] of [["gridpicker", "table"], ["linkpop", "link"]] as const) {
+      const pop = this.control(popName);
+      if (!pop?.hasAttribute("data-open")) continue;
+      if (pop.contains(target) || this.control(buttonName)?.contains(target)) continue;
+      pop.removeAttribute("data-open");
+    }
   }
 
   // ── tabs ────────────────────────────────────────────────────────────────────
@@ -879,65 +1599,10 @@ class RibbonSurface implements RibbonEditor {
       if (panel.dataset.panel === name) panel.setAttribute("data-active", "");
       else panel.removeAttribute("data-active");
     }
-    if (name === "layout") this.syncPageNumbering();
-    if (name === "review") this.renderThreads();
-  }
-
-  /** Re-render the Review tab's thread list from session truth ({@link DocxEditor.listComments}):
-   *  one row per comment, replies indented under their thread root, resolve/reopen per root. */
-  private renderThreads(): void {
-    const host = this.control("threads");
-    if (!host || !this.live) return;
-    const doc = this.element.ownerDocument ?? document;
-    host.textContent = "";
-    const comments = this.live.listComments();
-    if (comments.length === 0) {
-      const empty = doc.createElement("span");
-      empty.className = "dxr-note";
-      empty.textContent = "No comments yet.";
-      host.appendChild(empty);
-      return;
-    }
-    for (const entry of comments) {
-      const row = doc.createElement("div");
-      row.className = "dxr-thread";
-      row.setAttribute("data-thread", entry.anchorId);
-      if (entry.resolved) row.setAttribute("data-resolved", "");
-      if (entry.parentAnchorId) row.setAttribute("data-reply", "");
-
-      const author = doc.createElement("span");
-      author.className = "dxr-tauthor";
-      author.textContent = entry.author || "—";
-      row.appendChild(author);
-
-      const text = doc.createElement("span");
-      text.className = "dxr-ttext";
-      text.textContent = entry.text;
-      text.title = entry.text;
-      row.appendChild(text);
-
-      // Resolution is a THREAD state: Word keys it on the root, so replies get no toggle.
-      if (!entry.parentAnchorId) {
-        const toggle = doc.createElement("button");
-        toggle.type = "button";
-        toggle.textContent = entry.resolved ? "Reopen" : "Resolve";
-        toggle.title = entry.resolved
-          ? "Reopen this comment thread"
-          : "Mark this comment thread resolved";
-        toggle.addEventListener("click", () => {
-          if (!this.live) return;
-          this.run(entry.resolved ? "reopen comment" : "resolve comment", () =>
-            this.live!.setCommentResolved(entry.anchorId, !entry.resolved));
-          this.renderThreads();
-        });
-        row.appendChild(toggle);
-      }
-      host.appendChild(row);
-    }
-    // The thread list is the one strip content that grows while its panel is
-    // already visible, which a ResizeObserver on the panel cannot see.
-    const panel = this.element.querySelector<HTMLElement>('.dxr-panel[data-panel="review"]');
-    if (panel) this.syncStripFade(panel);
+    if (name === "layout") { this.syncPageNumbering(); this.syncLayoutState(); }
+    if (name === "review") this.syncReviewState();
+    if (name === "headerfooter") this.syncHeaderFooterState();
+    if (name === "view") this.syncZoom();
   }
 
   // ── selection-driven state ──────────────────────────────────────────────────
@@ -960,11 +1625,34 @@ class RibbonSurface implements RibbonEditor {
       button.classList.toggle("dxr-on", !!state[button.dataset.cmd as FormatKey]);
     }
 
-    // Reflect the caret's font size, unless the field itself is being edited.
-    const fontsize = this.control<HTMLInputElement>("fontsize");
-    if (el && fontsize && (this.element.ownerDocument ?? document).activeElement !== fontsize) {
-      const px = parseFloat(getComputedStyle(el).fontSize);
-      if (px) fontsize.value = String(Math.round(px * 0.75 * 2) / 2);
+    const doc = this.element.ownerDocument ?? document;
+    if (el && typeof getComputedStyle === "function") {
+      const cs = getComputedStyle(el);
+      // Reflect the caret's font size, unless the field itself is being edited.
+      const fontsize = this.control<HTMLInputElement>("fontsize");
+      if (fontsize && doc.activeElement !== fontsize) {
+        const px = parseFloat(cs.fontSize);
+        if (px) fontsize.value = String(Math.round(px * 0.75 * 2) / 2);
+      }
+      const hex = toHex(cs.color);
+      if (hex) {
+        this.control("fontcolorbar")?.style.setProperty("--dxr-swatch", hex);
+        const input = this.control<HTMLInputElement>("fontcolor");
+        if (input && doc.activeElement !== input) input.value = hex;
+      }
+      this.control("smallcaps")?.setAttribute("aria-pressed", String(cs.fontVariant.includes("small-caps")));
+      const align = cs.textAlign === "start" ? "left" : cs.textAlign === "end" ? "right" : cs.textAlign;
+      for (const button of Array.from(this.element.querySelectorAll<HTMLElement>("button[data-align]"))) {
+        button.classList.toggle("dxr-on", button.dataset.align === align);
+      }
+    }
+    const listFormat = this.live.listFormatAtCaret();
+    for (const button of Array.from(this.element.querySelectorAll<HTMLElement>("button[data-list]"))) {
+      const kind = button.dataset.list;
+      button.classList.toggle(
+        "dxr-on",
+        !!listFormat && (kind === "bullet" ? listFormat.startsWith("bullet") : !listFormat.startsWith("bullet")),
+      );
     }
 
     // Reveal the contextual Table tab only while the caret is inside a table.
@@ -973,13 +1661,18 @@ class RibbonSurface implements RibbonEditor {
     if (tableTab) {
       tableTab.hidden = !inTable;
       if (!inTable && tableTab.getAttribute("aria-selected") === "true") this.selectTab("home");
+      if (inTable) {
+        const row = el?.closest("tr");
+        this.require<HTMLInputElement>("repeatheader").checked = !!row?.classList.toString().includes("header");
+      }
     }
     this.refreshRailAnchor();
+    this.scheduleStats();
   }
 
   /** Scope is read from where the block lives, which is exactly what the anchor encodes. */
   private scopeOf(el: HTMLElement): string {
-    const band = el.closest<HTMLElement>(".docx-hf-band");
+    const band = el.closest<HTMLElement>("[data-hf-band]");
     if (band) return band.getAttribute("data-hf-band") === "header" ? "hdr" : "ftr";
     if (el.closest(".footnotes")) return "fn";
     if (el.closest(".endnotes")) return "en";
@@ -1025,6 +1718,40 @@ class RibbonSurface implements RibbonEditor {
     anchorEl.classList.remove("dxr-flash");
     void anchorEl.offsetWidth;
     anchorEl.classList.add("dxr-flash");
+  }
+
+  /** Page position and word count are O(document); debounced off the hot paths. */
+  private scheduleStats(): void {
+    if (this.statsTimer != null) clearTimeout(this.statsTimer);
+    this.statsTimer = setTimeout(() => {
+      this.statsTimer = null;
+      this.refreshStats();
+    }, 150);
+  }
+
+  private refreshStats(): void {
+    if (!this.live || this.destroyed) return;
+    const pageinfo = this.control("pageinfo");
+    if (pageinfo) {
+      const info = this.live.pageInfo();
+      pageinfo.textContent = info ? `Page ${info.page} of ${info.total}` : "Continuous";
+    }
+    const words = this.control("wordcount");
+    if (words) {
+      const n = this.live.wordCount();
+      words.textContent = `${n.toLocaleString()} word${n === 1 ? "" : "s"}`;
+    }
+  }
+
+  /** Font families the document's rendered text actually uses, most common first. */
+  private documentFonts(): string[] {
+    const counts = new Map<string, number>();
+    for (const el of Array.from(this.surface.querySelectorAll<HTMLElement>("[data-anchor] [style*='font-family'], [data-anchor][style*='font-family']"))) {
+      const family = el.style.fontFamily.split(",")[0]?.trim().replace(/^['"]|['"]$/g, "");
+      if (!family || /^(serif|sans-serif|monospace)$/i.test(family)) continue;
+      counts.set(family, (counts.get(family) ?? 0) + 1);
+    }
+    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]).map(([name]) => name).slice(0, 12);
   }
 
   // ── loading overlay ─────────────────────────────────────────────────────────

@@ -12,8 +12,8 @@ Three layers are described here, and they are not the same thing:
 
 | Layer | Path | What it is |
 |-------|------|------------|
-| `DocxEditor` | `npm/src/editor.ts` | The framework-agnostic editor **engine**: the live `DocxSession`, block wiring, every command. Deliberately no chrome. A consumer who wants their own UI builds on this. |
-| `mountRibbon` | `npm/src/ribbon.ts` (+ `ribbon-chrome.ts`) | The **surface**: tabbed ribbon, anchor rail, table picker, loading overlay, responsive layout. Shipped in the npm package; it is what the screenshots below show. |
+| `DocxEditor` | `npm/src/editor.ts` (+ `editor-comments.ts`, `editor-headerfooter.ts`) | The framework-agnostic editor **engine**: the live `DocxSession`, block wiring, every command, the comment gutter and the header/footer region. Deliberately no chrome. A consumer who wants their own UI builds on this. |
+| `mountRibbon` | `npm/src/ribbon.ts` (+ `ribbon-chrome.ts`) | The **surface**: Word's tab set, the status bar, the table picker, the find bar, the loading overlay, responsive layout. Shipped in the npm package; it is what the screenshots below show. |
 | `createRibbonEditor` | `npm/src/embed.ts` | The one-call CDN form of the surface — boots WASM, scopes the document CSS, mounts the ribbon, narrates the wait. |
 
 `mountRibbon` used to be three hand-written copies (`npm/examples/editor.html`, the GitHub Pages
@@ -23,13 +23,19 @@ exports and how much chrome they turn on:
 
 | Host | Obtains exports | Chrome |
 |------|-----------------|--------|
-| `npm/examples/editor.html` | boots `./_framework/dotnet.js` itself | full, bands on |
+| `npm/examples/editor.html` | boots `./_framework/dotnet.js` itself | full |
 | `docs/demo/app.html` | `createRibbonEditor` from jsDelivr | `auto`, full-bleed |
 | `docs/demo/index.html` | `createRibbonEditor` from jsDelivr | `auto`, inside the landing page's frame |
 | `docs/demo/player.html` | `createRibbonEditor` from jsDelivr, on tap | pinned `compact`, no hint |
 
 Every screenshot is the [NVCA Model Certificate of Incorporation](https://nvca.org/model-legal-documents/)
-(346 blocks, 94 footnote citations, 4 sections, 48 rendered pages) opened unmodified.
+(346 blocks, 94 footnote citations, 4 sections, 48 rendered pages) opened unmodified, captured by
+`tools/screenshots/editor/capture.mjs` from the shipped surface.
+
+The yardstick for what belongs here is *the ninety percent of Word people actually use*: the
+Home tab's font and paragraph groups, styles, find and replace, tables, links and pictures,
+page setup, comments, tracked changes, headers and footers. Rulers, columns, text boxes, shapes,
+mail merge and macros are deliberately outside it.
 
 ---
 
@@ -37,19 +43,25 @@ Every screenshot is the [NVCA Model Certificate of Incorporation](https://nvca.o
 
 ![The editor with a document open](../images/editor/editor-overview.png)
 
-Four regions, top to bottom:
+Five regions, top to bottom:
 
-1. **Document strip** — `New` / `Open` / `Save`, then `Undo` / `Redo`. Never behind a tab; these are
-   used constantly and hiding them costs more than the space they take.
-2. **Tab strip** — `Home`, `Insert`, `Layout`, and a contextual `Table` tab that exists only while the
-   caret is inside a table.
-3. **Anchor rail** — live engine state (§6).
-4. **Document** — the rendered DOCX. Blocks are individually `contenteditable`; the page sheet is the
-   body flow, with header/footer bands docked around it (§4).
+1. **Title bar** — `New` / `Open` / `Save`, then `Undo` / `Redo`, and the status line. Never
+   behind a tab; these are used constantly and hiding them costs more than the space they take.
+2. **Tab strip** — `Home`, `Insert`, `Layout`, `References`, `Review`, `View`, plus two
+   contextual tabs that exist only while the caret is inside a table (`Table`) or a header or
+   footer story (`Header & Footer`). Entering a story selects its tab, as Word does; leaving it
+   returns to `Home`.
+3. **Ribbon panel** for the active tab, and — when open — the find & replace strip beneath it.
+4. **Document** — the rendered DOCX, with the **comment gutter** to its right. Blocks are
+   individually `contenteditable`; the page sheet is the body flow with the header and footer
+   drawn as its top and bottom margins (§7).
+5. **Status bar** — the anchor rail (§6), then Word's own cells: page position in page view,
+   word count, and the zoom control.
 
-A block shows a focus outline when it is the active edit target. In the shot above the caret is in a
-body paragraph with a sub-range selected — note that the ribbon's `I` is lit (the paragraph is
-italic) and the size box reads `11`, both derived from the selection rather than from editor state.
+A block shows a focus outline when it is the active edit target. In the shot above the caret is in
+a body paragraph with a sub-range selected — note that the ribbon's **B** is lit, the size box
+reads `10`, and the font-colour swatch matches the run, all derived from the selection rather than
+from editor state.
 
 ---
 
@@ -59,33 +71,34 @@ italic) and the size box reads `11`, both derived from the selection rather than
 
 | Control | `DocxEditor` command | Session op |
 |---------|---------------------|-----------|
-| **B** / *I* / <u>U</u> / ~~S~~ / `</>` / x² / x₂ | `format(key)` | `ApplyFormat` |
-| Size box | `setFontSize(pts)` | `ApplyFormat` (`FontSizePts` → `w:sz`/`w:szCs`) |
-| Font dropdown | `setFontFamily(name)` | `ApplyFormat` (`FontFamily` → `w:rFonts`) |
-| Align left / center / right / justify | `setAlignment(a)` | `SetParagraphFormat` |
+| Font menu | `setFontFamily(name)` | `ApplyFormat` (`FontFamily` → `w:rFonts`) |
+| Size box, A↑ / A↓ | `setFontSize(pts)`, `adjustFontSize(±1)` | `ApplyFormat` (`FontSizePts` → `w:sz`/`w:szCs`) |
+| Clear formatting | `clearFormatting()` | `ApplyFormat` with every run property cleared |
+| **B** / *I* / <u>U</u> / ~~S~~ / x² / x₂ / `</>` | `format(key)` | `ApplyFormat` |
+| Small caps | `setSmallCaps(on)` | `ApplyFormat` (`SmallCaps` → `w:smallCaps`) |
+| Font colour swatch | `setFontColor(hex)` | `ApplyFormat` (`Color` → `w:color`) |
+| Highlight menu | `setHighlight(name)` | `ApplyFormat` (`Highlight` → `w:highlight`, Word's palette) |
+| Bullets / Numbering / List style menu | `toggleList(kind)`, `setListFormat(kind)` | `GetListMembership`, then `ApplyListFormat` — the full gallery: `decimal`, `(1)`, `a.`, `(a)`, `A.`, `i.`, `(i)`, `I.` |
 | Decrease / increase indent | `indent(±720)` | `SetParagraphFormat`, **or `SetListLevel` when the block is a list item** — outdent/indent on a list means "change level", which is what the user means and what Word does |
-| • List / 1. List | `toggleList(kind)` | `GetListMembership` to detect the current kind, then `ApplyListFormat` with `none` to toggle off |
-| Page break | `pageBreakBefore(true)` | `SetParagraphFormat` |
-| Style dropdown | `setParagraphStyle(id)` | `SetParagraphStyle` |
+| Align left / center / right / justify | `setAlignment(a)` | `SetParagraphFormat` |
+| Line spacing menu | `setLineSpacing(multiple)` | `SetParagraphFormat` (`LineSpacing` in 240ths, rule `auto`) |
+| Style gallery | `setParagraphStyle(id)` | `SetParagraphStyle` |
 | Delete block | `deleteBlock()` | `DeleteBlock` — inert inside a table and when it is the only editable block |
+| Find / Replace | `find(query)`, `selectMatch`, `replaceMatch`, `replaceAll` | text scan over the rendered blocks; `ReplaceTextAtSpan` per replacement |
+
+The font menu lists the families the open document actually uses first, then the fonts every
+Word install has. The style gallery is read from the document (`ListStyles`: paragraph styles,
+quick styles first, then by `uiPriority`) with the built-ins Word always offers added when the
+document lacks them — the engine creates a missing built-in on first use.
 
 The inline-format buttons apply to a **selected sub-range**, not the whole block, and every
 paragraph-level command applies across a **multi-block selection**, reconciled as N single-block
-swaps with the cross-block selection restored.
+swaps with the cross-block selection restored. A colour picker is a native control that takes
+focus, so the engine bookmarks the last real selection and applies to that.
 
-Each document block remains an independent `contenteditable` host so edits can be committed through
-its stable OOXML anchor without replacing the surrounding document. Browsers normally fence a
-physical mouse drag at that host boundary, so `DocxEditor` takes over only after the pointer enters
-another editable block in the same OOXML story and exposes the gesture as one normalized DOM
-`Range`. Cross-block updates are coalesced into the next animation frame, after the browser's own
-mousemove selection update but before paint; this keeps Firefox's highlight live instead of
-snapping to the complete range only on mouseup. Intra-block selection remains native, and
-body/header/footer story boundaries remain uncrossable.
-
-Size and font controls cache the last real selection, because a combobox steals focus when clicked.
-Single-block selections are bookmarked as one anchor plus a span; multi-block selections use two
-stable anchors plus content offsets. Without those bookmarks a sub-range selection would be lost
-before the command ran.
+Keyboard: `Ctrl+B/I/U`, `Ctrl+Z`/`Ctrl+Shift+Z`, `Ctrl+E/L/R/J` (alignment), `Ctrl+[`/`Ctrl+]`
+(font size), `Ctrl+K` (link), `Ctrl+F`/`Ctrl+H` (find / replace), `Ctrl+Alt+M` (new comment),
+`Ctrl+Enter` (page break).
 
 ---
 
@@ -95,24 +108,26 @@ before the command ran.
 
 | Control | `DocxEditor` command | Session op |
 |---------|---------------------|-----------|
+| Page break | `pageBreakBefore(true)` | `SetParagraphFormat` |
 | Table | `insertTable(rows, cols, opts)` | `InsertTable` |
-| Single / Thick / Double rule | `insertHorizontalRule(weight, style, position)` | `InsertHorizontalRule` (an empty bottom-bordered paragraph) |
-| Below block / Above block | *(modifies the rule position argument)* | — |
-| Clear | `clearParagraphBorders()` | `SetParagraphFormat` (`clearBorders`) |
-| Footnote / Endnote | `insertFootnote(md?)` / `insertEndnote(md?)` | `InsertFootnote` / `InsertEndnote` |
+| Picture | `insertImageFile(file)` → `insertImage(base64, opts)` | `InsertImage` at the caret offset |
+| Link / Unlink | `insertHyperlink(url)`, `removeHyperlink()` | `AddHyperlink` on the selection span / `RemoveHyperlink` |
+| Comment | `beginComment()` | opens a draft bubble (§4a) |
+| Header / Footer | `goToHeaderFooter(which)` | puts the caret in the story (§7) |
+| Page number menu | `insertPageNumber(field)` | `InsertPageNumberField` — `currentPage`, `totalPages`, or `pageOfTotal` ("Page X of Y") |
+| Single / Thick / Double rule, Clear | `insertHorizontalRule(weight, style, position)`, `clearParagraphBorders()` | `InsertHorizontalRule` / `SetParagraphFormat` (`clearBorders`) |
 
 **Table** opens a size picker rather than a text prompt:
 
 ![Table size picker](../images/editor/table-picker.png)
 
 Hover picks the dimensions; the footer carries cell alignment and a borderless toggle (borderless is
-the default because a layout table is the common case in legal documents).
+the default because a layout table is the common case in legal documents). **Link** opens a small
+popover for the address, prefilled when the caret is already in a link.
 
-**Footnote / Endnote** cite a new note at the caret. Body blocks only — Word does not allow a note
-reference inside a header/footer story or inside another note, so those are rejected client-side
-rather than round-tripping to an `AnchorWrongKind`. The caret offset is captured *before* the block
-is synced (syncing re-renders the block and would drop the live selection), so the citation lands
-mid-word if that is where the caret was.
+A picture is inserted through a full re-render rather than a single-block swap: image parts are
+not part of the block-render shell, so the block path would show the paragraph without its
+picture.
 
 ---
 
@@ -122,39 +137,74 @@ mid-word if that is where the caret was.
 
 | Control | `DocxEditor` command | Session op |
 |---------|---------------------|-----------|
-| Page view | `setPaginated(bool)` | *(render mode; re-renders the live session, edits survive)* |
-| Header & footer bands | *(re-opens with `headerFooter`)* | — |
-| Format / Start at | `setPageNumbering({format, start})` | `SetPageNumbering` → `w:pgNumType` |
-| Clear | `clearPageNumbering()` | `ClearPageNumbering` |
-| Page number / Total pages | `insertPageNumber(field)` | `InsertPageNumberField` |
+| Margins / Orientation / Size | `setPageSetup(op)` | `SetPageSetup` → `w:pgSz` / `w:pgMar` on the governing `w:sectPr` |
+| Before / After | `setParagraphSpacing({beforePt, afterPt})` | `SetParagraphFormat` (`SpacingBefore`/`SpacingAfter`) |
+| Special indent | `setFirstLineIndent(twips)`, `setHangingIndent(twips)` | `SetParagraphFormat` |
+| Format / Start at / Clear | `setPageNumbering({format, start})`, `clearPageNumbering()` | `SetPageNumbering` / `ClearPageNumbering` → `w:pgNumType` |
+| Page view / Headers & footers | `setPaginated(bool)` / re-open with `headerFooter` | render mode; edits survive |
 
-Page numbering is **per section**, resolved from the section that owns the caret's block. The same
-setting is surfaced on both header/footer bands; all three read the live session, so changing it in
-one place updates the others.
-
-The field buttons live here rather than under Insert because the field lands in the **footer story**,
-while every Insert control acts at the caret. Grouping them with the section's numbering keeps that
-readable.
+Page setup and page numbering are **per section**, resolved from the section that owns the
+caret's block; the note under the size menu states the section's current geometry. A margin or
+size change remounts (the sheet's width is whole-document context).
 
 ---
 
-## 4a. Review
+## 4a. Review — comments
+
+![Comment bubbles beside the page](../images/editor/comments.png)
+
+Comments render the way Word renders them. The converter marks a commented range inline
+(`span.comment-highlight[data-comment-id]` around the runs, an editor-hidden `a.comment-marker`
+at the reference), and `CommentGutter` (`npm/src/editor-comments.ts`) joins that to
+`ListComments`: for every thread root it finds the highlight in the live DOM, places a bubble in
+the gutter at the highlight's vertical position — stacking downward when threads would overlap,
+in document order — and draws a leader line from the highlight to the bubble. Highlights and
+bubbles are tinted per author; clicking either activates the thread.
 
 | Control | `DocxEditor` command | Session op |
 |---------|---------------------|-----------|
-| Comment text + 💬 Comment | `addComment(markdown, author)` | `AddComment` (native comment part + threading + range markers) |
-| Thread list | `listComments()` | `ListComments` |
-| Resolve / Reopen (thread roots only) | `setCommentResolved(anchorId, resolved)` | `SetCommentResolved` |
+| New Comment | `beginComment()` → `addComment(text, author, target)` | `AddComment` (range markers + definition) |
+| Reply (in the bubble) | `addCommentReply(root, text, author)` | `AddCommentReply` (`commentsExtended` threading) |
+| Edit (in the bubble) | `updateComment(anchorId, text)` | `UpdateComment` |
+| Resolve / Reopen | `setCommentResolved(anchorId, resolved)` | `SetCommentResolved` (`w15:done`) |
+| Delete | `removeComment(anchorId)` | `RemoveComment` — a root takes its replies with it |
+| Previous / Next | `stepComment(±1)` | — |
+| Show comments | `showComments(bool)` | — (the markup stays in the document) |
 
-Comment authoring over the session's **native** comment family (issue #580 — the annotation
-type legal review runs on). The button comments the live selection span; with a collapsed
-caret it comments the whole block. Uncommitted typing is synced first, the author is the
-ribbon's configured `revisionAuthor` (default `Reviewer`), and an empty block is refused by
-the session with `empty_comment_span` (a comment needs text to range over). The thread list
-is re-read from session truth on every Review-tab visit and after each comment op; replies
-render indented under their root, and resolve/reopen appears only on roots because Word keys
-resolution on the thread (`commentsExtended`), not on individual replies. Resolution is
-thread metadata, so toggling it re-reads the list without re-rendering the document.
+"New Comment" opens a **draft bubble** beside the selection with a focused textarea; the target
+block and span are captured at that moment, because typing into the bubble collapses the document
+selection. Posting goes through `addComment`, which re-renders the host paragraph (the range
+markers live inside it) and the gutter picks the new highlight up on its next layout. The gutter
+re-lays out after every command, on resize and zoom, and on any DOM mutation in the document,
+coalesced to one animation frame.
+
+Nothing here is a second source of state: bubbles are re-derived from `listComments()` plus the
+DOM on every pass, and a bubble whose highlight cannot be found (a comment on content the editor
+does not render) is drawn dashed at the end of the column rather than dropped.
+
+The engine side is a **comment-aware render profile**. The editor renders with comment mode
+*Inline*; per-block re-renders go through `RenderEditorBlockHtml` / `RenderEditorBlocksHtml`,
+whose shell carries the comments parts (and re-opens comment ranges that start in an earlier
+paragraph), so a re-rendered commented paragraph keeps its highlight. `comments: false` on the
+editor restores the markup-free render. In compact chrome the highlights stay and the bubbles
+step aside — there is no room for a markup column on a phone — and "New Comment" falls back to a
+prompt.
+
+---
+
+## 4b. Review — tracked changes
+
+| Control | `DocxEditor` command | Session op |
+|---------|---------------------|-----------|
+| Track changes | `setTrackedChanges(mode)` | `SetTrackedChanges` — edits land as `w:ins`/`w:del` under `RenderInline` |
+| Markup: All / None | `setTrackedChanges(RenderInline \| Accept)` | render profile |
+| Author | `setRevisionAuthor(name)` | `SetRevisionAuthor` — also the comment author |
+| Accept / Reject | `acceptRevision(id)`, `rejectRevision(id)` | `AcceptRevision` / `RejectRevision` on the change at the caret (`revisionAt(mark)` maps the rendered `ins`/`del` to the registry entry) |
+| Accept all / Reject all | `acceptAllRevisions()`, `rejectAllRevisions()` | `AcceptAllRevisions` / `RejectAllRevisions` |
+| Previous / Next change | `revisionElements()` | steps through the rendered marks |
+
+Switching tracking mid-session keeps the undo history and the edits; the document re-renders so
+revisions show (or stop showing) inline.
 
 ---
 
@@ -170,20 +220,24 @@ to Home.
 | Insert above / below | `insertTableRow("above"\|"below")` | `InsertTableRow` |
 | Insert left / right | `insertTableColumn("left"\|"right")` | `InsertTableColumn` |
 | Delete row / column | `deleteTableRow()` / `deleteTableColumn()` | `DeleteTableRow` / `DeleteTableColumn` |
+| Merge right / down, Split | `mergeCells(rowSpan, colSpan)`, `unmergeCells()` | `MergeCells` / `UnmergeCells` |
+| Borders / No borders | `setTableBorders(spec)` | `SetTableBorders` |
+| Shading swatch / No shading | `setCellShading(fill, scope)` | `SetCellShading` |
+| Repeat header row | `setRepeatHeaderRow(bool)` | `SetRepeatHeaderRow` |
+| Delete table | `deleteTable()` | `DeleteBlock` on the table anchor |
 
 This replaced a **floating** table toolbar, whose absolute positioning had to be corrected twice — it
 covered the first row, and then it covered the content below the table. A docked tab cannot overlap
-the cell being edited, so the whole class of bug is gone by construction. Deleting the last row or
-column removes the table. The underlying session ops are grid-aware, not rectangular-only:
-`w:gridSpan`, `w:gridBefore`/`w:gridAfter` and `w:vMerge` runs are all handled — see the CRUD
-behavior table in [`docx_mutation_api.md`](docx_mutation_api.md).
+the cell being edited, so the whole class of bug is gone by construction. The underlying session
+ops are grid-aware, not rectangular-only: `w:gridSpan`, `w:gridBefore`/`w:gridAfter` and `w:vMerge`
+runs are all handled — see the CRUD behavior table in [`docx_mutation_api.md`](docx_mutation_api.md).
 
 ---
 
-## 6. The anchor rail
+## 6. The anchor rail (status bar)
 
 ```
-ANCHOR  p:body:09612b1c13…   BLOCKS 346   SESSION #1   LAST OP  page format 651 ms
+ANCHOR  p:body:09612b1c13…   BLOCKS 346   SESSION #1   LAST OP  page format 651 ms   Page 3 of 48   4,120 words   − 100% +
 ```
 
 | Cell | Meaning |
@@ -192,6 +246,8 @@ ANCHOR  p:body:09612b1c13…   BLOCKS 346   SESSION #1   LAST OP  page format 65
 | `blocks` | Addressable blocks currently rendered |
 | `session` | The live `DocxSession` handle in WASM |
 | `last op` | The last command and how long it actually took |
+| page / words | Word's own cells — the page holding the caret (page view) and the body word count |
+| zoom | `setZoom(scale)`; fit-to-width still caps it on a narrow host |
 
 The rail is not decoration. Anchor addressing *is* the architecture — every edit is routed by anchor,
 not by DOM position — so the demo states the anchor rather than hiding it in devtools. It is also the
@@ -204,26 +260,51 @@ caught and driven down to a few hundred milliseconds.
 
 ---
 
-## 7. Header/footer bands
+## 7. Headers and footers
 
-![Header band showing the first-page story](../images/editor/header-band.png)
+![The header being edited in the continuous view](../images/editor/header-band.png)
 
-Opt-in (`headerFooter: true`). Header/footer stories live in their own OOXML parts outside the body,
-so they dock as their own regions rather than joining the body flow.
+Header/footer stories live in their own OOXML parts outside the body, so they cannot be another
+block in the body flow. `HeaderFooterRegion` (`npm/src/editor-headerfooter.ts`) presents them two
+ways, both composed **per story paragraph** through the editor's own block renderer, which resolves
+`hdr`/`ftr` anchors natively:
 
-Each band carries a `Default` / `First page` / `Even pages` kind selector, a page-number control, and
-the section's page-number format/start. Band paragraphs are wired by the same code path as body
-blocks, so **the entire ribbon works inside a band** with no band-specific command code.
+- **Continuous view** — two bands, drawn as the top and bottom margins of the sheet: a dashed rule
+  and a small `Header` / `Footer` tag in the margin, the look Word has while a header is being
+  edited. When more than one story kind exists the tag carries a switcher (`All pages` / `First
+  page` / `Even pages`). A story inherited from an earlier section is labelled *Same as previous
+  section*, since editing it edits the shared part.
+- **Page view** — no bands. The paginator clones each story onto every page as inert
+  presentation; **clicking a page's header or footer area swaps that page's clone for the live,
+  editable story** (Word's edit-in-the-margin). A commit re-renders the paragraph and re-clones
+  the story onto every other page showing the same story, substituting `PAGE` / `NUMPAGES` per
+  page exactly as the paginator does, so all pages update without a remount. A story that grew
+  past the band the paginator reserved re-paginates when the caret leaves it; one that did not
+  leaves the page stack untouched.
 
-The shot above shows the document's real first-page header after switching the kind to `First page`,
-along with the inline warning the band raises: `w:titlePg` makes page 1 use its own first-page header
-*and footer*, so an empty first-page footer silently leaves page 1 with no footer at all. A kind whose
-story is inherited from an earlier section is shown, marked inherited, rather than offering to create
-a redundant part.
+![Page view with the footer being edited in place](../images/editor/paginated.png)
 
-Bands compose per story paragraph via the session-attached `RenderBlockHtml`, not from the body
-render: the full render stamps anchors only in the main document part, and paginated mode clones one
-header node onto every page — so a page-margin overlay could never be uniquely addressable.
+Once rendered, a story paragraph is an ordinary editable block, wired by the same `wireBlock` as
+the body — so the **entire ribbon works inside a story** with no story-specific command code — and
+the caret entering one reveals the contextual tab:
+
+| Control | `DocxEditor` command | Session op |
+|---------|---------------------|-----------|
+| Different first page | `setHeaderFooterKindEnabled("first", on)` | `SetHeaderFooterKindEnabled` → `w:titlePg` |
+| Different odd & even pages | `setHeaderFooterKindEnabled("even", on)` | `SetHeaderFooterKindEnabled` → `w:evenAndOddHeaders` |
+| Page number / Total pages / Page X of Y | `insertPageNumber(field)` | `InsertPageNumberField` (plain fields, so they follow the section's format) |
+| Go to Header / Go to Footer | `goToHeaderFooter(which)` | — (page view creates the story and re-paginates when the document has none) |
+| Close Header and Footer | `closeHeaderFooter()` | — |
+
+Enabling either option seeds **both** the header and the footer story of that kind when they are
+absent, as Word does: `w:titlePg` makes page 1 use its own header *and* footer, so seeding only
+one side would silently leave page 1 with no footer. Disabling clears the flag and leaves the
+parts in place, also as Word does. `w:evenAndOddHeaders` is document-global.
+
+Stories keep exactly one live DOM node per paragraph at any time: the band's, or the one page
+host that was clicked. The editor resolves a story block's anchor from its stamped
+`data-hf-anchor` rather than the unid map, because empty story paragraphs in different parts
+share a content-addressed unid.
 
 ---
 
@@ -236,16 +317,13 @@ are document content:
 
 The citation marker and the `↩` backref are converter-generated chrome: they are excluded from the
 content-offset space and are not editable. Without that, offsets drift, or the rendered display
-number gets committed as literal text and destroys the citation run.
+number gets committed as literal text and destroys the citation run. The comment reference marker
+is treated the same way.
 
 `Page view` flows blocks into real page boxes, with notes at the foot of the page that cites them and
-per-page number substitution:
-
-![Paginated view](../images/editor/paginated.png)
-
-Page numbers here are *computed per page*, not the field's cached result — a header is authored once
-and cloned onto every page, so the cached value would read the same number throughout. The footer
-above shows `Last Updated October 2025 i` on page 1 of a section formatted `lowerRoman`.
+per-page number substitution. Page numbers are *computed per page*, not the field's cached result — a
+header is authored once and cloned onto every page, so the cached value would read the same number
+throughout.
 
 ---
 
@@ -267,19 +345,15 @@ page to fit, never by reflowing the column:
 | Fit | zoom on `.docx-body-flow` | zoom on `#pagination-container` |
 | Recomputed | `ResizeObserver` on the editor container | same |
 
-`DocxEditor.zoom` reports the applied scale, and the viewport publishes the page's on-screen
-width as `--docx-sheet-width` so chrome docked *outside* the zoomed sheet — the header/footer
-bands — lines up with it at any zoom. `fitToWidth: false` opts out (an oversized page then
-overflows and the surface scrolls); `columnWidth: "fluid"` restores the pre-geometry behavior of
-sizing the column from the host.
+`DocxEditor.zoom` reports the applied scale, `setZoom` pins one (the status bar's control), and
+the viewport publishes the page's on-screen width as `--docx-sheet-width` so chrome docked
+*outside* the zoomed sheet — the header/footer bands — lines up with it at any zoom.
+`fitToWidth: false` opts out (an oversized page then overflows and the surface scrolls);
+`columnWidth: "fluid"` restores the pre-geometry behavior of sizing the column from the host.
 
-Why it matters beyond aesthetics: with a device-sized column, line breaking differed on every
-screen and matched neither Word nor the editor's own page view, and content the document sizes in
-absolute units — a full-width table above all — could not fit at all. A table box never shrinks
-below its content's minimum, so it overflowed the sheet and was clipped by the window; enlarging a
-run's font size made that minimum grow, so the damage peaked exactly while the user was editing.
-The converter's side of the same fix (Word's table layout and word-breaking rules, which CSS's
-defaults invert) is in `docs/ooxml_corner_cases.md`.
+The comment gutter sits to the right of the sheet; the surface reserves its width
+(`--dxr-gutter`, 264 px) so the page shifts left rather than the bubbles covering it — Word's
+markup area.
 
 ---
 
@@ -294,12 +368,13 @@ ratios, not contracts:
 |-----------|------|--------------------------------|-----|
 | Open + first render | ~3 s | ~3 s | Full document conversion (one-time; M3 worker offload is the open item) |
 | Text edit (commit on blur) | ~30 ms | ~100 ms | Session op + single-block re-render through the persistent shell |
-| Inline format (bold, size) | ~35–50 ms | ~90–110 ms | Same, plus selection restore |
-| Paragraph format (align) | ~40 ms | ~85 ms | Same |
+| Inline format (bold, size, colour) | ~35–50 ms | ~90–110 ms | Same, plus selection restore |
+| Paragraph format (align, spacing) | ~40 ms | ~85 ms | Same |
 | Enter (split) | ~40 ms | ~135 ms | Both halves render in ONE batched `RenderBlocksHtml` call |
 | Backspace (merge) | ~25 ms | ~80 ms | Session op + one block render |
-| Insert table / row | ~85–130 ms | ~1.2–1.5 s (remount on real docs) | Incremental reconcile |
+| Insert table / row, merge cells | ~85–130 ms | ~1.2–1.5 s (remount on real docs) | Incremental reconcile |
 | Delete block | ~25 ms | ~1.2 s (remount on real docs) | Incremental reconcile |
+| Add comment | ~80 ms | — | Host paragraph re-render + one gutter layout |
 | Undo / redo | ~55–125 ms | ~1.1–1.2 s (remount on real docs) | Snapshot restore + incremental reconcile |
 | `save()` | ~60–80 ms | ~60 ms | Lossless serialize |
 
@@ -397,7 +472,7 @@ which no part of this pass touches — see the M3 worker offload item.
 Structural operations reconcile: `DocxEditor.reconcile()` diffs the DOM's top-level unit
 sequence against the session's render plan (`ListBlocks` — LCS over `unid|contentHash` tokens),
 keeps unchanged units' DOM nodes, renders changed/created units in one batched WASM call
-(`RenderBlocksHtml`, with real sibling context and true list-marker numbers), and renumbers
+(`RenderEditorBlocksHtml`, with real sibling context and true list-marker numbers), and renumbers
 footnote/endnote marker chrome positionally from `ListNotes`. Substituted units pair by unid
 first, positionally as fallback. A full remount survives as the universal **fallback** —
 paginated mode, pure list-item insert/remove (sibling numbers shift without sibling XML
@@ -407,10 +482,10 @@ equal to a remounted DOM by `npm/tests/editor-reconcile.spec.ts`. When an op rea
 rail, `editor['lastReconcileFallback']` says why it fell back.
 
 Single-block re-renders go through a **persistent render shell**: the session keeps an open
-throwaway document holding the formatting parts, and each render replaces only its body
-(`HtmlConversionOps.RenderTargetsFromShell`), so the package open, styles/numbering parse, and
-the converter's style-resolution caches are paid once per formatting-signature change instead
-of per keystroke.
+throwaway document holding the formatting parts (and, since the comment gutter, the comments
+parts), and each render replaces only its body (`HtmlConversionOps.RenderTargetsFromShell`), so
+the package open, styles/numbering parse, and the converter's style-resolution caches are paid
+once per formatting-signature change instead of per keystroke.
 
 ---
 
@@ -432,8 +507,15 @@ With no explicit `idPrefix` it uses bare ids when they are free on the page and 
 `dxr<N>-` the moment any of them is taken — so the historical spec selectors keep working and a
 second ribbon on the same page cannot collide with the first. Stable ids the specs bind to:
 `#editor`, `#fontsize`, `#new`, `#save`, `#undo`, `#redo`, `#table`, `#gridpicker`, `#gridcells`,
-`#gridalign`, `#paginated`, `#loader`. Behavioural attributes are the delegation contract:
-`data-cmd`, `data-align`, `data-indent`, `data-list`, `data-tt`.
+`#gridalign`, `#paginated`, `#loader`, `#comment`, `#commentresolve`, `#findtext`. Behavioural
+attributes are the delegation contract: `data-cmd`, `data-align`, `data-indent`, `data-list`,
+`data-tt`, `data-rev`, `data-hf`.
+
+The comment gutter is addressable as `.docx-comment-gutter`, bubbles as
+`.docx-comment-bubble[data-thread]` (with `data-comment-id`, `data-active`, `data-resolved`,
+`data-draft`), and their actions as `[data-comment-action]`. Story hosts carry `data-hf-band`;
+page-view header/footer areas carry `data-hf-page` before a click and `data-hf-active` while
+edited.
 
 The root reports its own state: `.dxr[data-state]` is `idle` | `loading` | `ready` | `error`, and
 `.dxr[data-chrome]` is `full` | `compact`.
@@ -455,12 +537,13 @@ embed inside a wide desktop page is narrow, and a viewport media query gets that
 | | `full` | `compact` |
 |---|---|---|
 | Ribbon panel | multi-row groups with labels | one horizontally-scrolling strip, labels dropped |
-| Anchor rail | shown | hidden |
+| Status bar / anchor rail | shown | hidden |
 | Editing hint | shown | hidden |
 | Title bar | brand + doc name + status | brand + doc name, status dropped |
+| Comment gutter | beside the sheet | hidden (highlights stay; New Comment prompts) |
 | Table picker | popover under its button | docked to the bottom edge, within thumb reach |
 | Sheet padding | 56 px vertical | 22 px vertical (gutters come from `w:sectPr`, not from chrome) |
-| Touch targets | 30 px | 40 px on coarse pointers |
+| Touch targets | 28 px | 40 px on coarse pointers |
 
 **Compact trims the chrome, never the page.** The document's text column is the width its
 `w:sectPr` defines at every density; a window too narrow for it is handled by the viewport's
@@ -470,18 +553,19 @@ page rather than a narrower one whose lines break where Word's never would.
 **No command is removed in compact** — the strip scrolls instead. That is the one rule the previous
 hand-rolled mini toolbar broke, and the reason the compact player kept falling behind the editor.
 
-A strip that scrolls must also *say so*: every scrolling strip (title bar, tab strip, panels, rail)
-stamps `data-fade` with the edges that hide more content, and the stylesheet dissolves content at
-exactly those edges — the horizontal twin of the document scroller's gradient veils. Without it the
-clipped edge reads as a squashed layout, which is precisely how it was reported from phones. The
-fade lifts the moment a strip fits, so nothing is faded unless there is more behind it.
+A strip that scrolls must also *say so*: every scrolling strip (title bar, tab strip, panels, rail,
+find bar) stamps `data-fade` with the edges that hide more content, and the stylesheet dissolves
+content at exactly those edges — the horizontal twin of the document scroller's gradient veils.
+Without it the clipped edge reads as a squashed layout, which is precisely how it was reported
+from phones. The fade lifts the moment a strip fits, so nothing is faded unless there is more
+behind it.
 
 `chrome: "compact"` or `"full"` pins the density (what `player.html` does, since a host site may
 size its iframe wide enough to trip the roomy layout); `"auto"` is the default.
 
 Options the host controls: `chrome`, `compactBreakpoint`, `rail`, `fileActions`, `hint`, `loader`,
 `documentName`, `idPrefix`, `onSave`, `onOpen`, `onStatus`, `onCommand`, plus every
-`DocxEditorOptions` field.
+`DocxEditorOptions` field (`comments`, `commentAuthor`, `headerFooter`, `trackedChanges`, …).
 
 ---
 

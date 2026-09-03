@@ -4,7 +4,89 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **The editor surface now covers the Word most people use.** `mountRibbon` /
+  `createRibbonEditor` gained Word's tab set — Home · Insert · Layout · References · Review ·
+  View, plus the contextual Table and Header & Footer tabs — and the controls behind them:
+  font colour, text highlight, small caps, grow/shrink font, clear formatting; the full
+  numbering gallery, line spacing, paragraph spacing before/after, first-line and hanging
+  indents; a styles gallery read from the document's own style definitions; find and replace
+  (with replace-all); hyperlinks and pictures; a table of contents; page margins, orientation
+  and paper size; track-changes on/off with accept/reject (one or all) and change navigation;
+  table cell merge/split, borders, shading, repeat-header-row and delete-table; zoom; and a
+  Word-style status bar (page position, word count, zoom) that also carries the anchor rail.
+  Every control is a `DocxEditor` command first — `setFontColor`, `setHighlight`,
+  `setLineSpacing`, `setListFormat`, `insertHyperlink`, `insertImage`, `insertTableOfContents`,
+  `mergeCells`, `setTableBorders`, `setCellShading`, `setTrackedChanges`, `acceptRevision`,
+  `find` / `replaceMatch` / `replaceAll`, `setZoom`, `setPageSetup`, and the rest — so a host
+  with its own chrome gets the same surface.
+- **Comments render the way Word renders them.** The editor now shows each commented range as
+  an inline highlight (tinted per author) and each thread as a bubble in a markup gutter beside
+  the page, positioned at its anchor with a leader line, stacking when threads crowd. Bubbles
+  carry reply, edit, resolve/reopen and delete; "New Comment" opens a draft bubble on the
+  selection. Both views. `DocxEditor` gained `addCommentReply`, `updateComment`, `removeComment`,
+  `beginComment`, `activateComment`, `stepComment` and `showComments`; `comments: false` restores
+  the markup-free render. The engine side is a comment-aware editor render profile
+  (`RenderEditorHtml` / `RenderEditorBlockHtml` / `RenderEditorBlocksHtml` on the WASM bridge)
+  whose per-block renders carry the comments parts, so a re-rendered commented paragraph keeps
+  its highlight, and `CommentListEntry` now reports the comment's numeric `id`.
+- **Headers and footers are edited in place.** In page view every page's header and footer area
+  is click-to-edit: the click swaps that page's clone for the live story, a commit re-clones it
+  onto every page that shows the same story (page-number fields substituted per page), and a
+  story that grew re-paginates when the caret leaves it. The continuous view's bands now draw as
+  the sheet's own top and bottom margins with a story tag, not as separate cards. Word's two
+  options — *Different first page* and *Different odd & even pages* — are checkboxes on the
+  contextual tab, backed by a new `DocxSession.SetHeaderFooterKindEnabled(anchor, kind, enabled)`
+  op (enabling seeds both the header and the footer story of that kind, as Word does; disabling
+  clears `w:titlePg` / `w:evenAndOddHeaders` and leaves the parts). `SectionInfo` reports
+  `titlePage`, `evenAndOddHeaders`, `headerDistanceTwips` and `footerDistanceTwips`.
+  `InsertPageNumberField` accepts `"pageOfTotal"` for Word's "Page X of Y".
+- `DocxSession.SetPageSetup(anchor, PageSetupOp)` — Word's Page Setup for the section holding
+  an anchor: page size, orientation, the four margins and the header/footer distances, written
+  to the governing `w:sectPr`. Rippled to the WASM bridge, npm, the stdio host and the Python
+  client.
+- `FormatOp` gained `highlight` (Word's highlighter palette, `""` clears), `caps` and
+  `smallCaps`.
+- `tools/screenshots/editor/` regenerates the editor screenshots under `docs/images/editor/`
+  from the shipped surface.
+
+### Changed
+
+- The ribbon's header/footer band no longer carries its own kind selector, page-number menu and
+  format/start controls; those live on the contextual Header & Footer tab and the Layout tab.
+  The `headerFooter` option now defaults to **on** for the ribbon (the bare `DocxEditor` default
+  is unchanged). Footnote/endnote insertion moved from Insert to References, as in Word.
+
 ### Fixed
+
+- **Disposing a session no longer rewrites its archive.** A package opened for editing writes
+  its whole zip back into the backing stream when it closes, re-deflating every part touched
+  since it was opened. `DocxSession.Dispose`, the render shell, and a snapshot restore all
+  discard that stream immediately, so the rewrite had no reader. They now drop the package
+  for the garbage collector and close only the stream. In the browser runtime the editor's
+  `close()` hung inside that rewrite in one reproducible sequence (save, convert the saved
+  bytes, format three paragraphs, close); the .NET runtime never did, and the hang's cause
+  in the runtime's compression path is not isolated. Skipping the rewrite takes the close
+  path out of it.
+- A page-view header or footer edit no longer requires a full remount to show on the other
+  pages, and a header edited in the band no longer disappears from page view.
+- Leaving a page footer no longer re-paginates the document spuriously.
+- `WmlToHtmlConverter` now serializes an empty non-void element as `<span></span>` rather than
+  XHTML's `<span />`. Browsers parse the converter's output as HTML, and the HTML parser treats
+  `<span />` as an *open* tag, so everything after it nested inside: a complex field's
+  begin/separate/end runs are exactly such empty spans, which is why a footer authored as
+  "Page {PAGE} of {NUMPAGES}" showed only "Page 1" in the paginated view (the paginator's
+  per-page substitution then overwrote the swallowed " of " and second field). Void elements
+  (`br`, `img`, `meta`, …) keep their self-closing form.
+- `DocxSession.ReplaceTextAtSpan` accepts a zero-length span at a run boundary and inserts the
+  text as a **new run**, stepping outside any complex field whose chrome surrounds the boundary,
+  instead of refusing with `offset_out_of_range`. The browser editor relied on rewriting a
+  neighbouring character to express a pure insertion, which put text typed after a page-number
+  field inside the field's result run — where Word's next field update discards it. An offset
+  strictly inside a run's text is still refused. Tracked mode wraps the new run in `w:ins`.
+- The editor keeps a typed trailing space ("Page " before inserting a page number) instead of
+  trimming it on commit, while the placeholder an empty paragraph renders as is still dropped.
 
 - `WmlToHtmlConverter` now carries a font's document-declared alternate into the CSS font stack.
   ECMA-376's `w:altName` in `word/fontTable.xml` is exactly "use this family when the primary one
