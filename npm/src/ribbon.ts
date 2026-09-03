@@ -1454,9 +1454,6 @@ class RibbonSurface implements RibbonEditor {
     const key = event.key.toLowerCase();
     const target = event.target instanceof Element ? event.target : null;
     const inDocument = this.surface.contains(event.target as Node);
-    // A comment bubble's boxes own their keys: Ctrl+Enter posts a reply there and must not also
-    // drop a page break on the paragraph, nor Ctrl+E/L/R/J re-align it mid-reply.
-    if (inDocument && target?.closest(".docx-comment-gutter, textarea, input")) return;
     // Ctrl+Alt+M is Word's New Comment; every other chord here is plain Ctrl.
     if (event.altKey) {
       if (key === "m" && inDocument) { event.preventDefault(); this.beginComment(); }
@@ -1465,6 +1462,11 @@ class RibbonSurface implements RibbonEditor {
     if (key === "f") { event.preventDefault(); this.openFindBar(false); return; }
     if (key === "h") { event.preventDefault(); this.openFindBar(true); return; }
     if (!inDocument) return;
+    // Below here every chord edits the focused BLOCK, so a text box inside the surface — the
+    // comment gutter's reply and edit boxes — owns its keys: Ctrl+Enter posts a reply there and
+    // must not also drop a page break on the commented paragraph, nor Ctrl+E/L/R/J re-align it
+    // mid-reply. Find and replace stay reachable from a comment box, as they are in Word.
+    if (target?.closest(".docx-comment-gutter, textarea, input")) return;
     const align = (alignment: EditorAlignment) => {
       event.preventDefault();
       this.run(`align ${alignment}`, () => this.live!.setAlignment(alignment));
