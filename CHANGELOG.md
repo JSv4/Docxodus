@@ -82,7 +82,15 @@ All notable changes to this project will be documented in this file.
   when tracked changes are on.
 - **Compact chrome grows its touch targets by layout, not pointer.** The phone-width ribbon now
   adopts the 40px control floor whether or not the browser reports a coarse pointer, so an
-  emulated narrow viewport gets real tap targets.
+  emulated narrow viewport gets real tap targets. The floor buys tap *size*, so the rows no
+  longer spend it again on padding: a phone stacks three chrome rows above the page, every
+  pixel of row padding is paid three times before the document starts, and the tab strip —
+  navigation, whose labels already clear the floor horizontally — keeps a slimmer 34px height
+  the way Word's own phone ribbon does. Compact chrome is 118px rather than 140px, which is
+  what lets the arcade demo's phone card go back to hugging the game screen instead of
+  stretching to 80dvh of blank paper. Real phones always took the 40px floor through the
+  coarse-pointer query, so they had carried the taller chrome all along; only emulated
+  viewports were exempt, which is why no test had caught it.
 - **Disposing a session no longer rewrites its archive.** A package opened for editing writes
   its whole zip back into the backing stream when it closes, re-deflating every part touched
   since it was opened. `DocxSession.Dispose`, the render shell, and a snapshot restore all

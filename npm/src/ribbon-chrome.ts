@@ -603,9 +603,13 @@ export const RIBBON_CSS = `
    does not), so the compact strip adopts the same 40px control floor the coarse-pointer media
    query sets, keeping every icon button at a real tap size. */
 .dxr[data-chrome="compact"] { --dxr-tap: 40px; }
+/* The floor buys tap SIZE; the rows must not spend it again on padding. A phone stacks three
+   chrome rows — title, tabs, commands — above the page, so every pixel of row padding is paid
+   three times before the document starts, and the arcade demo's card (which sizes itself to the
+   game screen plus its controls) runs out of viewport when it is. */
 .dxr[data-chrome="compact"] .dxr-titlebar {
   gap: 6px;
-  padding: 5px 8px 0;
+  padding: 0 8px;
 }
 .dxr[data-chrome="compact"] .dxr-brandname { display: none; }
 .dxr[data-chrome="compact"] .dxr-brand { flex: 0 1 auto; }
@@ -616,12 +620,16 @@ export const RIBBON_CSS = `
 .dxr[data-chrome="compact"] .dxr-quick button,
 .dxr[data-chrome="compact"] .dxr-quick label.dxr-btn { padding: 4px 8px; }
 .dxr[data-chrome="compact"] .dxr-status { display: none; }
-.dxr[data-chrome="compact"] .dxr-tabs { padding: 5px 8px 0; }
-.dxr[data-chrome="compact"] .dxr-tab { padding: 6px 11px 7px; font-size: 12px; }
+.dxr[data-chrome="compact"] .dxr-tabs { padding: 0 8px; }
+/* A tab is a WIDE target — its label plus 11px of side padding already clears the tap floor
+   horizontally — and it is navigation rather than a command, so it does not need the command
+   row's full height. Word's own phone ribbon keeps its tab strip slim for the same reason: the
+   page starts higher. The commands below keep the full 40px floor. */
+.dxr[data-chrome="compact"] .dxr-tab { min-height: 34px; padding: 6px 11px 7px; font-size: 12px; }
 .dxr[data-chrome="compact"] .dxr-panel {
   align-items: center;
   gap: 4px;
-  padding: 5px 8px;
+  padding: 2px 8px;
   scroll-snap-type: x proximity;
 }
 .dxr[data-chrome="compact"] .dxr-group {
