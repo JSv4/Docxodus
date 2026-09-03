@@ -38,8 +38,10 @@ All notable changes to this project will be documented in this file.
   the sheet's own top and bottom margins with a story tag, not as separate cards. Word's two
   options — *Different first page* and *Different odd & even pages* — are checkboxes on the
   contextual tab, backed by a new `DocxSession.SetHeaderFooterKindEnabled(anchor, kind, enabled)`
-  op (enabling seeds both the header and the footer story of that kind, as Word does; disabling
-  clears `w:titlePg` / `w:evenAndOddHeaders` and leaves the parts). `SectionInfo` reports
+  op. Enabling sets `w:titlePg` / `w:evenAndOddHeaders` — turning on an element Word left
+  present-but-off (`w:val="0"`) rather than treating presence as "on" — and the editor then
+  seeds both the header and the footer story of that kind, as Word does; disabling clears the
+  flag and leaves the parts. `SectionInfo` reports
   `titlePage`, `evenAndOddHeaders`, `headerDistanceTwips` and `footerDistanceTwips`.
   `InsertPageNumberField` accepts `"pageOfTotal"` for Word's "Page X of Y".
 - `DocxSession.SetPageSetup(anchor, PageSetupOp)` — Word's Page Setup for the section holding
@@ -48,11 +50,18 @@ All notable changes to this project will be documented in this file.
   client.
 - `FormatOp` gained `highlight` (Word's highlighter palette, `""` clears), `caps` and
   `smallCaps`.
+- `WmlToHtmlConverterSettings.StampPageNumberFields` wraps every PAGE / NUMPAGES result in the
+  `data-field` marker outside paginated mode too, for a client that paginates a block render
+  itself (the browser editor editing a running story in place). Library-only; no transport
+  exposes it. `EditErrorCode.InvalidPageSetup` is the rejection code for a `SetPageSetup` whose
+  margins leave no page.
 - `tools/screenshots/editor/` regenerates the editor screenshots under `docs/images/editor/`
   from the shipped surface.
 
 ### Changed
 
+- `CommentListEntry.Id` is a `required` init property. Code that constructs the record
+  positionally must now set `Id`; callers that only read `ListComments()` are unaffected.
 - The ribbon's header/footer band no longer carries its own kind selector, page-number menu and
   format/start controls; those live on the contextual Header & Footer tab and the Layout tab.
   The `headerFooter` option now defaults to **on** for the ribbon (the bare `DocxEditor` default
@@ -94,6 +103,28 @@ All notable changes to this project will be documented in this file.
   strictly inside a run's text is still refused. Tracked mode wraps the new run in `w:ins`.
 - The editor keeps a typed trailing space ("Page " before inserting a page number) instead of
   trimming it on commit, while the placeholder an empty paragraph renders as is still dropped.
+- A zero-length insert at the edge of an inline container lands beside it, not inside it. Text
+  typed at the end of another author's `w:ins` (or a `w:moveTo`, hyperlink or smart tag) with
+  tracking off became part of that author's change; at the start of a leading insertion it did
+  the same. The boundary now steps out of every container whose first or last content it sits
+  on, before stepping out of a field — so a field whose result wraps its runs in a hyperlink
+  (every TOC entry) is still stepped out of. A boundary strictly inside a container stays
+  inside. Offset 0 of a paragraph whose only content is a field with an empty cached result
+  inserts before the field rather than after it, and the editor no longer flattens such a
+  paragraph to literal text on its first edit.
+- `EnsureHeaderFooterVisible` / `SetHeaderFooterKindEnabled(…, true)` turn on a flag Word left
+  present-but-off. Word writes `<w:titlePg w:val="0"/>` when "Different first page" is cleared
+  (and `<w:evenAndOddHeaders w:val="0"/>` likewise), `SectionInfo` reads the value, but the
+  enable path tested presence — so the checkbox reported off, the op reported success, and
+  nothing changed. Both now read the value and strip `w:val` from an existing element. "Page X
+  of Y" also inherits its run formatting from a live run, never from a tracked deletion.
+- Keys typed in a comment bubble no longer drive the ribbon's chords: Ctrl+Enter posted the
+  reply *and* dropped a page break on the commented paragraph, Ctrl+E/L/R/J re-aligned it
+  mid-reply. The first comment in a document is positioned against a shown gutter (an empty
+  gutter is `display:none`, and a draft measured against its zero rect landed at the viewport
+  top); re-showing comments re-lays them out; deleting a thread root takes replies-to-replies
+  with it; and a remount while the caret is in a header or footer publishes "back in the body",
+  so the contextual tab no longer sticks.
 - Tabs in headers, footers and notes now advance to the stop they declare (#688). Tab geometry is
   resolved by a pass that walked the main document part alone, so a tab anywhere else collapsed to
   a zero-width advance. On the standard legal running foot — `Last Updated October 2025 [tab] PAGE`

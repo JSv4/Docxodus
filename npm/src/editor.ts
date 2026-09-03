@@ -23,6 +23,7 @@ import type { ColumnWidth } from "./viewport.js";
 import { HeaderFooterRegion } from "./editor-headerfooter.js";
 import type { BandWhich } from "./editor-headerfooter.js";
 import { CommentGutter, COMMENT_GUTTER_CSS } from "./editor-comments.js";
+import type { CommentTarget } from "./editor-comments.js";
 import {
   draggable,
   dropTargetForElements,
@@ -43,6 +44,7 @@ import type {
   ImageInsertOptions,
   ListFormat,
   NumberFormat,
+  PageSetupOp,
   RevisionListEntry,
   SectionInfo,
   StyleInfo,
@@ -300,18 +302,11 @@ export interface DocxEditorOptions {
   onCommentsChange?: (info: { threads: number; open: number; active: string | null }) => void;
 }
 
-/** Word's Page Setup, as {@link DocxEditor.setPageSetup} takes it. All twips; omit = unchanged. */
-export interface EditorPageSetup {
-  pageWidthTwips?: number;
-  pageHeightTwips?: number;
-  landscape?: boolean;
-  marginTopTwips?: number;
-  marginBottomTwips?: number;
-  marginLeftTwips?: number;
-  marginRightTwips?: number;
-  headerDistanceTwips?: number;
-  footerDistanceTwips?: number;
-}
+/**
+ * Word's Page Setup, as {@link DocxEditor.setPageSetup} takes it — the session's own
+ * {@link PageSetupOp} (all twips; omit = unchanged), so the two cannot drift.
+ */
+export type EditorPageSetup = PageSetupOp;
 
 /** One hit from {@link DocxEditor.find}: a content-offset span inside an editable block. */
 export interface EditorMatch {
@@ -2659,7 +2654,11 @@ export class DocxEditor {
     const next = blockContentText(el).replace(/\u00a0$/, " ");
     if (old === next) return null;
 
-    if (old.trim().length === 0) {
+    // A whitespace-only baseline means the paragraph was (or rendered as) empty, so the typed
+    // text replaces it wholesale — unless it holds a field whose cached result is empty (a PAGE
+    // field in a tool-generated footer): that is content, and the span path below keeps it
+    // while inserting the typed text beside it.
+    if (old.trim().length === 0 && !el.querySelector("[data-field]")) {
       return this.parseEdit(
         this.exports.DocxSessionBridge.ReplaceText(this.handle, fullId, serializeInlineMarkdown(el)),
       );
@@ -3389,9 +3388,19 @@ export class DocxEditor {
   addComment(
     markdown = "New comment.",
     author = this.options.commentAuthor,
-    target?: { block: HTMLElement; span: { start: number; length: number } | null },
+    target?: CommentTarget,
   ): CommentListEntry | null {
-    const block = target?.block.isConnected ? target.block : this.activeBlock;
+    let block = target?.block.isConnected ? target.block : this.activeBlock;
+    let span = target ? target.span : null;
+    if (target && !target.block.isConnected) {
+      // The draft's block was swapped since it was captured — the click that posts a draft
+      // blurs and commits the paragraph. Find the same paragraph by anchor rather than taking
+      // whatever block is active now, and keep the span only while the text it was measured
+      // on is unchanged; otherwise comment the whole paragraph rather than the wrong characters.
+      const live = target.anchor === undefined ? null : this.blockByAnchor(target.anchor);
+      if (live) block = live;
+      if (!live || target.text === undefined || blockContentText(live) !== target.text) span = null;
+    }
     if (this.closed || !block) return null;
     const bridge = this.exports.DocxSessionBridge;
     if (!bridge.AddComment) return null; // bridge predates comment authoring
@@ -3400,7 +3409,7 @@ export class DocxEditor {
     const idx = this.blockIndex(block);
     // Span first: syncBlock re-renders the block and would drop the live selection. A target
     // captured earlier (the gutter's draft bubble) wins over whatever the selection is now.
-    const span = target ? target.span : selectionSpanIn(block);
+    if (!target) span = selectionSpanIn(block);
     fullId = this.syncBlock(block, fullId);
     const res = this.parseEdit(
       bridge.AddComment(
@@ -3451,13 +3460,21 @@ export class DocxEditor {
   }
 
   /** What "New comment" would comment on right now: the active block and the selection in it. */
-  commentTarget(): { block: HTMLElement; span: { start: number; length: number } | null } | null {
+  commentTarget(): CommentTarget | null {
     const block = this.activeBlock;
     if (this.closed || !block || !block.isConnected) return null;
     let span = selectionSpanIn(block);
     const unid = block.getAttribute("data-anchor");
     if (!span && this.lastSelection && this.lastSelection.unid === unid) span = this.lastSelection.span;
-    return { block, span };
+    return { block, span, anchor: this.anchorIdOf(block), text: blockContentText(block) };
+  }
+
+  /** The live block for a full anchor id, or null when no mounted block resolves to it. */
+  private blockByAnchor(anchor: string): HTMLElement | null {
+    for (const el of Array.from(this.container.querySelectorAll<HTMLElement>("[data-anchor]"))) {
+      if (this.anchorIdOf(el) === anchor) return el;
+    }
+    return null;
   }
 
   /** Open a draft comment bubble beside the selection (Word's "New Comment"). */

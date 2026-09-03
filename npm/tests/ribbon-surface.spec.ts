@@ -183,6 +183,53 @@ test.describe('ribbon surface', () => {
     expect(driven.retryVisible).toBe(true);
   });
 
+  test('a draft bubble sits beside its selection, and its Ctrl+Enter posts without touching the paragraph', async ({ page }) => {
+    await openEditorHost(page);
+    await page.click('.dxr-tab[data-tab="review"]');
+    await page.click('#editor [data-anchor][contenteditable="true"]');
+    await page.keyboard.type('The indemnity clause needs review.');
+    await page.keyboard.press('Home');
+    await page.keyboard.press('Shift+End');
+    await page.click('button[data-dxr="comment"]');
+    const draftBox = page.locator('.docx-comment-bubble[data-draft] textarea');
+    await expect(draftBox).toBeFocused();
+
+    // The first comment in a document drafts against a gutter that was display:none a moment
+    // ago. Measured against that zero rect, the bubble landed a ribbon's height below its
+    // selection; it must open level with the selected paragraph.
+    const offset = await page.evaluate(() => {
+      const bubble = document.querySelector('.docx-comment-bubble[data-draft]')!.getBoundingClientRect();
+      const block = document.querySelector('#editor [data-anchor][contenteditable="true"]')!.getBoundingClientRect();
+      return Math.abs(bubble.top - block.top);
+    });
+    expect(offset).toBeLessThan(40);
+
+    // Ctrl+Enter in the bubble posts the draft. The same chord on a document block is the
+    // ribbon's "page break before"; a keystroke inside the bubble must not reach it.
+    await page.keyboard.type('Please reconsider this clause.');
+    await page.keyboard.press('Control+Enter');
+    await expect(page.locator('.docx-comment-bubble[data-thread]')).toHaveCount(1);
+    await expect(page.locator('.docx-comment-bubble[data-draft]')).toHaveCount(0);
+    const { comments, pageBreak } = await page.evaluate(() => {
+      const editor = (window as any).__demo.getEditor();
+      const exports = editor.exports;
+      const handle = exports.DocxSessionBridge.OpenSession(editor.save(), '');
+      try {
+        const body = Object.keys(JSON.parse(exports.DocxSessionBridge.Project(handle)).anchorIndex)
+          .find((k: string) => k.startsWith('p:body:'))!;
+        return {
+          comments: JSON.parse(exports.DocxSessionBridge.ListComments(handle)).map((c: any) => c.text),
+          pageBreak: /pageBreakBefore/.test(exports.DocxSessionBridge.RawGetXml(handle, body)),
+        };
+      } finally {
+        exports.DocxSessionBridge.CloseSession(handle);
+      }
+    });
+    expect(comments).toHaveLength(1);
+    expect(comments[0]).toContain('Please reconsider this clause.');
+    expect(pageBreak).toBe(false);
+  });
+
   test('the Review tab authors and resolves native comments through the gutter (issue #580)', async ({ page }) => {
     await openEditorHost(page);
 

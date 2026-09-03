@@ -441,8 +441,13 @@ export class HeaderFooterRegion {
     for (const [area, listener] of this.pageListeners) area.removeEventListener("mousedown", listener);
     this.pageListeners.clear();
     this.pageHosts.clear();
+    const hadActive = this.activeHost !== null;
     this.activeHost = null;
     this.pageRoot = null;
+    // The pages are being thrown away, so there is no host to deactivate — but the caret WAS
+    // in a story, and the ribbon's contextual tab and story label follow this callback. Without
+    // it, the next body focus compared null to null and never published "back in the body".
+    if (hadActive) this.callbacks.onActiveChange?.(null, null);
   }
 
   /** True when the region is presenting stories inside page boxes rather than as bands. */

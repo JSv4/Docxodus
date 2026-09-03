@@ -33,6 +33,7 @@ import type {
   EditorMatch,
   FormatKey,
 } from "./editor.js";
+import { threadMembers } from "./editor-comments.js";
 import type { BandWhich } from "./editor-headerfooter.js";
 import { TrackedChangeMode } from "./types.js";
 import type { ListFormat, NumberFormat } from "./types.js";
@@ -935,8 +936,7 @@ class RibbonSurface implements RibbonEditor {
       const active = this.live?.activeComment;
       if (!active) return;
       this.run("delete comment", () => {
-        const replies = this.live!.listComments().filter((c) => c.parentAnchorId === active);
-        for (const r of replies) this.live!.removeComment(r.anchorId);
+        for (const id of threadMembers(this.live!.listComments(), active)) this.live!.removeComment(id);
         this.live!.removeComment(active);
       });
     });
@@ -1452,7 +1452,11 @@ class RibbonSurface implements RibbonEditor {
   private handleShortcut(event: KeyboardEvent): void {
     if (!this.live || !(event.ctrlKey || event.metaKey)) return;
     const key = event.key.toLowerCase();
+    const target = event.target instanceof Element ? event.target : null;
     const inDocument = this.surface.contains(event.target as Node);
+    // A comment bubble's boxes own their keys: Ctrl+Enter posts a reply there and must not also
+    // drop a page break on the paragraph, nor Ctrl+E/L/R/J re-align it mid-reply.
+    if (inDocument && target?.closest(".docx-comment-gutter, textarea, input")) return;
     // Ctrl+Alt+M is Word's New Comment; every other chord here is plain Ctrl.
     if (event.altKey) {
       if (key === "m" && inDocument) { event.preventDefault(); this.beginComment(); }

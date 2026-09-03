@@ -1235,12 +1235,16 @@ public sealed record SectionInfo
     required public int MarginLeftTwips { get; init; }
     required public int MarginRightTwips { get; init; }
 
-    /// <summary>Header distance from the page's top edge (<c>w:pgMar/@w:header</c>); Word's
-    /// default 720 (0.5") when the attribute is absent.</summary>
+    /// <summary>Word's header/footer distance (0.5") when <c>w:pgMar</c> omits the attribute —
+    /// the one declaration every reader and writer of the two distances falls back to.</summary>
+    public const int DefaultHeaderFooterDistanceTwips = 720;
+
+    /// <summary>Header distance from the page's top edge (<c>w:pgMar/@w:header</c>);
+    /// <see cref="DefaultHeaderFooterDistanceTwips"/> when the attribute is absent.</summary>
     required public int HeaderDistanceTwips { get; init; }
 
-    /// <summary>Footer distance from the page's bottom edge (<c>w:pgMar/@w:footer</c>); Word's
-    /// default 720 (0.5") when the attribute is absent.</summary>
+    /// <summary>Footer distance from the page's bottom edge (<c>w:pgMar/@w:footer</c>);
+    /// <see cref="DefaultHeaderFooterDistanceTwips"/> when the attribute is absent.</summary>
     required public int FooterDistanceTwips { get; init; }
 
     /// <summary>
@@ -5440,12 +5444,18 @@ public sealed partial class DocxSession : IDisposable
             if (!rPr.HasElements) rPr = null;
         }
 
-        // Step out of a complex field: `after` inside a field means "after the field's end run";
-        // `before` inside one means "before its begin run".
+        // Step out of an inline container whose EDGE the boundary sits on: `after` the last run
+        // of another author's w:ins (or a w:moveTo, hyperlink or smart tag) means after the
+        // container, not inside it — text typed at the end of B's tracked insertion with tracking
+        // off must not become part of B's change, and Word does not grow a link from text typed
+        // at its end. A boundary strictly inside the container stays inside it. Then step out of
+        // a complex field: `after` inside a field means "after the field's end run"; `before`
+        // inside one means "before its begin run". Containers first, so a field whose result
+        // wraps its runs in a hyperlink (every TOC entry does) is still stepped out of.
         var afterBeforeFieldStep = after;
         var beforeBeforeFieldStep = before;
-        if (after is not null) after = FieldEndRunOrSelf(after);
-        if (before is not null) before = FieldBeginRunOrSelf(before);
+        if (after is not null) after = FieldEndRunOrSelf(StepOutOfContainersAtEnd(after, element));
+        if (before is not null) before = FieldBeginRunOrSelf(StepOutOfContainersAtStart(before, element));
 
         // Coalesce into the adjacent run rather than fragmenting the paragraph. Appending "foo"
         // after a run should extend that run's text, not drop a sibling run beside it: a separate
@@ -5514,6 +5524,13 @@ public sealed partial class DocxSession : IDisposable
             UnidHelper.AssignToSelfAndDescendants(node);
             if (after is not null) after.AddAfterSelf(node);
             else if (before is not null) before.AddBeforeSelf(node);
+            else if (element.Elements().FirstOrDefault(e => e.Name != W.pPr) is { } firstContent)
+            {
+                // No run has any text (a paragraph holding only a field with an empty cached
+                // result), so offset 0 matched nothing — but it is still the START of the
+                // paragraph, and "Page " typed before a PAGE field belongs before it.
+                firstContent.AddBeforeSelf(node);
+            }
             else element.Add(node);
 
             InvalidateProjectionCache();
@@ -5565,6 +5582,43 @@ public sealed partial class DocxSession : IDisposable
             else if (kind == "end" && --depth == 0) return sibling;
         }
         return run;
+    }
+
+    /// <summary>
+    /// Inline containers a boundary insert steps out of when the boundary is at their edge. Not
+    /// <c>w:sdt</c>: the caret at either end of a content control is inside it, as Word's is.
+    /// </summary>
+    private static readonly HashSet<XName> BoundaryContainers = new() { W.ins, W.moveTo, W.hyperlink, W.smartTag };
+
+    /// <summary>Range markers and proofing marks — siblings that do not make a run anything but
+    /// the container's first or last content.</summary>
+    private static bool IsInlineMarker(XElement e) =>
+        e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd
+        || e.Name == W.commentRangeStart || e.Name == W.commentRangeEnd
+        || e.Name == W.permStart || e.Name == W.permEnd
+        || e.Name == W.proofErr;
+
+    /// <summary>Climb from <paramref name="node"/> through every <see cref="BoundaryContainers"/>
+    /// ancestor (short of <paramref name="paragraph"/>) in which it is the last content, so an
+    /// insert "after" it lands after the container.</summary>
+    private static XElement StepOutOfContainersAtEnd(XElement node, XElement paragraph)
+    {
+        while (node.Parent is { } parent && !ReferenceEquals(parent, paragraph)
+            && BoundaryContainers.Contains(parent.Name)
+            && !node.ElementsAfterSelf().Any(e => !IsInlineMarker(e)))
+            node = parent;
+        return node;
+    }
+
+    /// <summary>The mirror of <see cref="StepOutOfContainersAtEnd"/> for an insert "before"
+    /// the container's first content.</summary>
+    private static XElement StepOutOfContainersAtStart(XElement node, XElement paragraph)
+    {
+        while (node.Parent is { } parent && !ReferenceEquals(parent, paragraph)
+            && BoundaryContainers.Contains(parent.Name)
+            && !node.ElementsBeforeSelf().Any(e => !IsInlineMarker(e)))
+            node = parent;
+        return node;
     }
 
     /// <summary>The mirror of <see cref="FieldEndRunOrSelf"/>: the field's <c>begin</c> run when
@@ -9264,10 +9318,15 @@ public sealed partial class DocxSession : IDisposable
 
         // Already set? Return BEFORE snapshotting. A UI that calls this on every kind selection
         // (the editor's band does) would otherwise push a no-op snapshot per click into the
-        // bounded undo ring and evict the user's real history.
+        // bounded undo ring and evict the user's real history. The test is the flag's VALUE, not
+        // its presence: Word writes <w:titlePg w:val="0"/> when the box is cleared, and
+        // SectionInfo reads it the same way — an enable that saw "present" as "on" left the
+        // checkbox unable to stick.
+        var settingsRootForCheck = main.DocumentSettingsPart?.GetXDocument().Root;
         bool alreadySet = kind == HeaderFooterKind.First
-            ? sectPr.Element(W.titlePg) is not null
-            : main.DocumentSettingsPart?.GetXDocument().Root?.Element(W.evenAndOddHeaders) is not null;
+            ? WordprocessingMLUtil.GetBoolProp(sectPr, W.titlePg)
+            : settingsRootForCheck is not null
+                && WordprocessingMLUtil.GetBoolProp(settingsRootForCheck, W.evenAndOddHeaders);
         if (alreadySet)
             return new EditResult { Success = true, Modified = new[] { target.Anchor } };
 
@@ -9475,7 +9534,7 @@ public sealed partial class DocxSession : IDisposable
             Internal.OwnedPartRelationships.SweepOrphanedImages(part);
 
             // Visibility flags so Word actually shows the First/Even stories.
-            if (kind == HeaderFooterKind.First && sectPr.Element(W.titlePg) is null)
+            if (kind == HeaderFooterKind.First && !WordprocessingMLUtil.GetBoolProp(sectPr, W.titlePg))
                 InsertSectPrTitlePg(sectPr);
             else if (kind == HeaderFooterKind.Even)
                 WordprocessingMLUtil.EnsureEvenAndOddHeaders(main);
@@ -9624,7 +9683,7 @@ public sealed partial class DocxSession : IDisposable
     /// </summary>
     private static XElement[] BuildPageOfTotalRuns(XElement paragraph, NumberFormat? format)
     {
-        var inherited = paragraph.Descendants(W.r).LastOrDefault(r => r.Element(W.rPr) is not null)?.Element(W.rPr);
+        var inherited = InlineRuns(paragraph).LastOrDefault(r => r.Element(W.rPr) is not null)?.Element(W.rPr);
         XElement? InheritedRPr()
         {
             if (inherited is null) return null;
@@ -9822,8 +9881,10 @@ public sealed partial class DocxSession : IDisposable
         int bottom = op.MarginBottomTwips ?? Read(pgMar, W.bottom, 1440);
         int left = op.MarginLeftTwips ?? Read(pgMar, W.left, 1440);
         int right = op.MarginRightTwips ?? Read(pgMar, W.right, 1440);
-        int header = op.HeaderDistanceTwips ?? Read(pgMar, W.header, 720);
-        int footer = op.FooterDistanceTwips ?? Read(pgMar, W.footer, 720);
+        int header = op.HeaderDistanceTwips
+            ?? Read(pgMar, W.header, SectionInfo.DefaultHeaderFooterDistanceTwips);
+        int footer = op.FooterDistanceTwips
+            ?? Read(pgMar, W.footer, SectionInfo.DefaultHeaderFooterDistanceTwips);
 
         if (left + right >= width)
             throw new PageSetupException(
@@ -9938,8 +9999,19 @@ public sealed partial class DocxSession : IDisposable
         }
     }
 
-    private static void InsertSectPrTitlePg(XElement sectPr) =>
+    /// <summary>Turn the section's "Different first page" flag on. An existing
+    /// <c>w:titlePg</c> loses its <c>w:val</c> (Word writes <c>w:val="0"</c> when the box is
+    /// cleared, so presence is not "on"); otherwise one is inserted at its schema slot.</summary>
+    private static void InsertSectPrTitlePg(XElement sectPr)
+    {
+        var existing = sectPr.Element(W.titlePg);
+        if (existing is not null)
+        {
+            existing.Attributes(W.val).Remove();
+            return;
+        }
         WordprocessingMLUtil.InsertSectPrChildInOrder(sectPr, new XElement(W.titlePg));
+    }
 
     // ─── Reference fields: TOC / TOF / TOA (issue #607) ───────────────────────
     //

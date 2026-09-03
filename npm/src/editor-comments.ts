@@ -30,14 +30,14 @@ export interface CommentGutterHost {
   addComment(
     markdown: string,
     author: string,
-    target?: { block: HTMLElement; span: { start: number; length: number } | null },
+    target?: CommentTarget,
   ): CommentListEntry | null;
   addCommentReply(parentAnchorId: string, markdown: string, author: string): boolean;
   updateComment(anchorId: string, markdown: string): boolean;
   removeComment(anchorId: string): boolean;
   setCommentResolved(anchorId: string, resolved: boolean): boolean;
   /** The block that would receive a new comment, and the selection span inside it. */
-  commentTarget(): { block: HTMLElement; span: { start: number; length: number } | null } | null;
+  commentTarget(): CommentTarget | null;
 }
 
 export interface CommentGutterOptions {
@@ -94,6 +94,45 @@ function authorHue(author: string): number {
   return h % 360;
 }
 
+/**
+ * What a comment is about to be attached to: a block and the selection span in it (null = the
+ * whole paragraph). `anchor` and `text` record which paragraph, with what content, the target
+ * was captured on, so a post that comes after the block was re-rendered or edited can find the
+ * live node and tell whether the span still means the same characters.
+ */
+export interface CommentTarget {
+  block: HTMLElement;
+  span: { start: number; length: number } | null;
+  anchor?: string;
+  text?: string;
+}
+
+/**
+ * Every comment hanging off `rootAnchorId`, transitively — replies to replies included — deepest
+ * first, so removing them in order never leaves an orphan behind. The root itself is not listed.
+ */
+export function threadMembers(comments: readonly CommentListEntry[], rootAnchorId: string): string[] {
+  const children = new Map<string, string[]>();
+  for (const c of comments) {
+    if (!c.parentAnchorId) continue;
+    const list = children.get(c.parentAnchorId) ?? [];
+    list.push(c.anchorId);
+    children.set(c.parentAnchorId, list);
+  }
+  const out: string[] = [];
+  const seen = new Set<string>([rootAnchorId]);
+  const walk = (id: string) => {
+    for (const child of children.get(id) ?? []) {
+      if (seen.has(child)) continue;
+      seen.add(child);
+      walk(child);
+      out.push(child);
+    }
+  };
+  walk(rootAnchorId);
+  return out;
+}
+
 export class CommentGutter {
   readonly element: HTMLElement;
 
@@ -106,7 +145,7 @@ export class CommentGutter {
   private resize: ResizeObserver | null = null;
   private activeId: string | null = null;
   private draft: HTMLElement | null = null;
-  private draftTarget: { block: HTMLElement; span: { start: number; length: number } | null } | null = null;
+  private draftTarget: CommentTarget | null = null;
   private draftAnchorTop = 0;
   private editing: string | null = null;
   private replying: string | null = null;
@@ -209,6 +248,10 @@ export class CommentGutter {
       existing.set(el.dataset.thread!, el);
     }
 
+    // Measure with the gutter shown: an empty gutter is display:none, whose rect is all zeros,
+    // and every bubble top below is relative to it. The toggle at the end hides it again when
+    // nothing is left to show.
+    this.element.toggleAttribute("data-empty", roots.length === 0 && !this.draft);
     const containerRect = this.host.container.getBoundingClientRect();
     const gutterRect = this.element.getBoundingClientRect();
     const views: ThreadView[] = [];
@@ -318,10 +361,14 @@ export class CommentGutter {
 
   /** Show or hide the markup area (Word's "Show Comments"). */
   setVisible(visible: boolean): void {
+    const wasVisible = this.visible;
     this.visible = visible;
     this.element.hidden = !visible;
     this.leaders.style.display = visible ? "" : "none";
     this.host.container.toggleAttribute("data-comments-hidden", !visible);
+    // Layouts that ran while hidden measured a zero-height gutter and zero-height bubbles;
+    // place everything again now that it can be measured.
+    if (visible && !wasVisible) this.schedule();
   }
 
   get isVisible(): boolean {
@@ -402,6 +449,9 @@ export class CommentGutter {
     this.cancelDraft();
     this.draftTarget = target;
     const doc = this.host.container.ownerDocument;
+    // The first comment in a document drafts against a gutter that is still display:none
+    // (no threads); its rect is zeros until shown, and the draft's top is relative to it.
+    this.element.removeAttribute("data-empty");
     const gutterRect = this.element.getBoundingClientRect();
     const sel = doc.defaultView?.getSelection();
     let rect: DOMRect | null = null;
@@ -650,9 +700,9 @@ export class CommentGutter {
     del.innerHTML = "&#128465;";
     del.addEventListener("click", () => {
       if (isRoot) {
-        // A deleted root would orphan its replies into top-level comments; take the thread down.
-        const comments = this.host.listComments();
-        for (const r of comments) if (r.parentAnchorId === entry.anchorId) this.host.removeComment(r.anchorId);
+        // A deleted root would orphan its replies into top-level comments; take the thread
+        // down, replies to replies included.
+        for (const id of threadMembers(this.host.listComments(), entry.anchorId)) this.host.removeComment(id);
       }
       this.host.removeComment(entry.anchorId);
       if (this.activeId === entry.anchorId) this.activeId = null;

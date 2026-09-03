@@ -691,4 +691,184 @@ public class DocxSessionEditorParityTests
         Assert.Equal("preserve", (string?)text?.Attribute(XNamespace.Xml + "space"));
         Assert.Equal("Hello world", session.Project().AnchorIndex[para].TextPreview);
     }
+    // ─── Flags Word leaves present-but-off ──────────────────────────────
+
+    /// <summary>The fixture with <c>&lt;w:titlePg w:val="0"/&gt;</c> in its sectPr and
+    /// <c>&lt;w:evenAndOddHeaders w:val="0"/&gt;</c> in a settings part — the shape Word writes
+    /// when a user clears either checkbox, rather than removing the element.</summary>
+    private static byte[] WithBothFlagsPresentButOff(byte[] docx)
+    {
+        using var ms = new MemoryStream();
+        ms.Write(docx, 0, docx.Length);
+        ms.Position = 0;
+        using (var doc = WordprocessingDocument.Open(ms, true))
+        {
+            var main = doc.MainDocumentPart!;
+            var xd = main.GetXDocument();
+            xd.Root!.Element(W + "body")!.Element(W + "sectPr")!
+                .Add(new XElement(W + "titlePg", new XAttribute(W + "val", "0")));
+            main.PutXDocument();
+            var settings = main.DocumentSettingsPart ?? main.AddNewPart<DocumentSettingsPart>();
+            settings.Settings = new DocumentFormat.OpenXml.Wordprocessing.Settings(
+                new DocumentFormat.OpenXml.Wordprocessing.EvenAndOddHeaders { Val = false });
+            settings.Settings.Save();
+        }
+        return ms.ToArray();
+    }
+
+    [Fact]
+    public void DEP025_Enable_WhenFlagIsPresentButOff_TurnsItOn()
+    {
+        using var session = new DocxSession(WithBothFlagsPresentButOff(BuildTwoParagraphsWithSection()));
+        var anchor = FirstBodyParagraph(session);
+        var info = session.GetSectionInfo(anchor)!;
+        Assert.False(info.TitlePage);
+        Assert.False(info.EvenAndOddHeaders);
+
+        int undoBefore = session.UndoCount;
+        var first = session.SetHeaderFooterKindEnabled(anchor, HeaderFooterKind.First, true);
+        Assert.True(first.Success, first.Error?.Message);
+        var even = session.SetHeaderFooterKindEnabled(anchor, HeaderFooterKind.Even, true);
+        Assert.True(even.Success, even.Error?.Message);
+        // Both were real changes, so both are undo steps — "present" was not "on".
+        Assert.Equal(undoBefore + 2, session.UndoCount);
+
+        info = session.GetSectionInfo(anchor)!;
+        Assert.True(info.TitlePage);
+        Assert.True(info.EvenAndOddHeaders);
+
+        var bytes = session.Save();
+        var titlePg = Assert.Single(GoverningSectPr(bytes).Elements(W + "titlePg"));
+        Assert.True(WordprocessingMLUtil.GetBoolProp(titlePg.Parent!, W + "titlePg"));
+        var settingsRoot = SettingsXml(bytes)!;
+        Assert.Single(settingsRoot.Elements(W + "evenAndOddHeaders"));
+        Assert.True(WordprocessingMLUtil.GetBoolProp(settingsRoot, W + "evenAndOddHeaders"));
+
+        // Enabling again is the no-op it should be, and undo restores the OFF value.
+        Assert.True(session.SetHeaderFooterKindEnabled(anchor, HeaderFooterKind.First, true).Success);
+        Assert.Equal(undoBefore + 2, session.UndoCount);
+        Assert.True(session.Undo());
+        Assert.True(session.Undo());
+        info = session.GetSectionInfo(anchor)!;
+        Assert.False(info.TitlePage);
+        Assert.False(info.EvenAndOddHeaders);
+    }
+
+    [Fact]
+    public void DEP026_SetHeaderText_First_WhenTitlePgIsPresentButOff_TurnsItOn()
+    {
+        using var session = new DocxSession(WithBothFlagsPresentButOff(BuildTwoParagraphsWithSection()));
+        var anchor = FirstBodyParagraph(session);
+        var r = session.SetHeaderText(anchor, HeaderFooterKind.First, "Cover");
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.True(session.GetSectionInfo(anchor)!.TitlePage);
+        Assert.Single(GoverningSectPr(session.Save()).Elements(W + "titlePg"));
+    }
+
+    // ─── Zero-length insert against an inline container ─────────────────
+
+    /// <summary>Replace the first body paragraph with hand-written inline XML and return its
+    /// (possibly re-minted) anchor.</summary>
+    private static string ReplaceFirstParagraph(DocxSession session, string inlineXml)
+    {
+        var anchor = FirstBodyParagraph(session);
+        var rep = session.Raw.ReplaceXml(anchor, $"<w:p xmlns:w=\"{W}\">{inlineXml}</w:p>");
+        Assert.True(rep.Success, rep.Error?.Message);
+        return FirstBodyParagraph(session);
+    }
+
+    private static string[] ChildNames(DocxSession session, string anchor) =>
+        XElement.Parse(session.Raw.GetXml(anchor)).Elements()
+            .Where(e => e.Name != W + "pPr").Select(e => e.Name.LocalName).ToArray();
+
+    [Fact]
+    public void DEP044_ZeroLengthInsert_AtEdgeOfInsertionOrHyperlink_LandsOutsideTheContainer()
+    {
+        using var session = new DocxSession(BuildTwoParagraphsWithSection());
+        var para = ReplaceFirstParagraph(session,
+            "<w:r><w:t>A</w:t></w:r>"
+            + "<w:ins w:id=\"7\" w:author=\"B\" w:date=\"2024-01-01T00:00:00Z\"><w:r><w:t>B</w:t></w:r></w:ins>"
+            + "<w:hyperlink w:anchor=\"top\"><w:r><w:t>L</w:t></w:r></w:hyperlink>");
+        Assert.Equal("ABL", session.Project().AnchorIndex[para].TextPreview);
+
+        // End of B's tracked insertion (offset 2): the new run is a SIBLING of the w:ins, not a
+        // child — typing there with tracking off must not become part of B's change.
+        var afterIns = session.ReplaceTextAtSpan(para, 2, 0, "x");
+        Assert.True(afterIns.Success, afterIns.Error?.Message);
+        Assert.Equal(new[] { "r", "ins", "r", "hyperlink" }, ChildNames(session, para));
+
+        // End of the hyperlink (offset 4): after the link, not inside it — Word does not grow a
+        // link from text typed at its end.
+        var afterLink = session.ReplaceTextAtSpan(para, 4, 0, "y");
+        Assert.True(afterLink.Success, afterLink.Error?.Message);
+        Assert.Equal(new[] { "r", "ins", "r", "hyperlink", "r" }, ChildNames(session, para));
+        Assert.Equal("ABxLy", session.Project().AnchorIndex[para].TextPreview);
+
+        // Tracked mode at the same insertion edge: a sibling w:ins after B's, never nested in it.
+        session.SetTrackedChanges(TrackedChangeMode.RenderInline);
+        var tracked = session.ReplaceTextAtSpan(para, 2, 0, "z");
+        Assert.True(tracked.Success, tracked.Error?.Message);
+        Assert.Equal(new[] { "r", "ins", "ins", "r", "hyperlink", "r" }, ChildNames(session, para));
+        var envelopes = XElement.Parse(session.Raw.GetXml(para)).Elements(W + "ins").ToList();
+        Assert.Equal("B", (string?)envelopes[0].Attribute(W + "author"));
+        Assert.Empty(envelopes[0].Elements(W + "ins"));
+        Assert.Equal("z", envelopes[1].Element(W + "r")?.Element(W + "t")?.Value);
+        Assert.Equal("ABzxLy", session.Project().AnchorIndex[para].TextPreview);
+    }
+
+    [Fact]
+    public void DEP045_ZeroLengthInsert_AtStartOfLeadingInsertion_LandsBeforeTheEnvelope()
+    {
+        using var session = new DocxSession(BuildTwoParagraphsWithSection());
+        var para = ReplaceFirstParagraph(session,
+            "<w:ins w:id=\"7\" w:author=\"B\" w:date=\"2024-01-01T00:00:00Z\"><w:r><w:t>B</w:t></w:r></w:ins>"
+            + "<w:r><w:t>C</w:t></w:r>");
+
+        // Offset 0 resolves to "before B's run", which is the first run of the envelope: the new
+        // run goes before the w:ins, not inside it.
+        var r = session.ReplaceTextAtSpan(para, 0, 0, "x");
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Equal(new[] { "r", "ins", "r" }, ChildNames(session, para));
+        Assert.Equal("xBC", session.Project().AnchorIndex[para].TextPreview);
+
+        // But a boundary strictly inside the envelope stays inside it: with two runs in the
+        // insertion, the seam between them is B's content, and text typed there belongs to it.
+        para = ReplaceFirstParagraph(session,
+            "<w:ins w:id=\"8\" w:author=\"B\" w:date=\"2024-01-01T00:00:00Z\">"
+            + "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>"
+            + "<w:r><w:instrText xml:space=\"preserve\"> PAGE </w:instrText></w:r>"
+            + "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>"
+            + "<w:r><w:t>1</w:t></w:r>"
+            + "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>"
+            + "<w:r><w:t>D</w:t></w:r></w:ins>");
+        var inside = session.ReplaceTextAtSpan(para, 1, 0, "y");
+        Assert.True(inside.Success, inside.Error?.Message);
+        Assert.Equal(new[] { "ins" }, ChildNames(session, para));
+        // ...and it still stepped out of the field to reach that seam.
+        var runs = XElement.Parse(session.Raw.GetXml(para)).Element(W + "ins")!.Elements(W + "r").ToList();
+        Assert.Equal("end", (string?)runs[^3].Element(W + "fldChar")?.Attribute(W + "fldCharType"));
+        Assert.Equal("y", runs[^2].Element(W + "t")?.Value);
+        Assert.Equal("D", runs[^1].Element(W + "t")?.Value);
+    }
+    [Fact]
+    public void DEP046_ZeroLengthInsert_AtOffsetZero_OfFieldOnlyParagraph_LandsBeforeTheField()
+    {
+        using var session = new DocxSession(BuildTwoParagraphsWithSection());
+        // A PAGE field with an EMPTY cached result — the shape a tool-generated footer has before
+        // Word ever updates it. The paragraph's text is "", so offset 0 matches no run.
+        var para = ReplaceFirstParagraph(session,
+            "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>"
+            + "<w:r><w:instrText xml:space=\"preserve\"> PAGE </w:instrText></w:r>"
+            + "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>"
+            + "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>");
+        Assert.Equal("", session.Project().AnchorIndex[para].TextPreview ?? "");
+
+        var r = session.ReplaceTextAtSpan(para, 0, 0, "Page ");
+        Assert.True(r.Success, r.Error?.Message);
+        var runs = XElement.Parse(session.Raw.GetXml(para)).Elements(W + "r").ToList();
+        Assert.Equal(5, runs.Count);
+        Assert.Equal("Page ", runs[0].Element(W + "t")?.Value);
+        Assert.Equal("begin", (string?)runs[1].Element(W + "fldChar")?.Attribute(W + "fldCharType"));
+        Assert.Equal("end", (string?)runs[^1].Element(W + "fldChar")?.Attribute(W + "fldCharType"));
+    }
 }

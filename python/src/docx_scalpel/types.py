@@ -1701,6 +1701,11 @@ class HeaderFooterRef:
         )
 
 
+#: Word's header/footer distance when ``w:pgMar`` omits the attribute (0.5"). Also the value
+#: an older host that predates the two fields is read as.
+DEFAULT_HEADER_FOOTER_DISTANCE_TWIPS = 720
+
+
 @dataclass(frozen=True, slots=True)
 class SectionInfo:
     """Page-layout snapshot for the w:sectPr that governs an anchor."""
@@ -1719,9 +1724,9 @@ class SectionInfo:
     footer_part_uris: tuple[str, ...]
     #: Header distance from the page's top edge (``w:pgMar/@w:header``); Word's default 720
     #: when the attribute is absent.
-    header_distance_twips: int = 720
+    header_distance_twips: int = DEFAULT_HEADER_FOOTER_DISTANCE_TWIPS
     #: Footer distance from the page's bottom edge (``w:pgMar/@w:footer``); Word's default 720.
-    footer_distance_twips: int = 720
+    footer_distance_twips: int = DEFAULT_HEADER_FOOTER_DISTANCE_TWIPS
     #: Word's "Different first page" flag — ``True`` when the governing ``w:sectPr`` carries an
     #: on-valued ``w:titlePg``. Toggle with :meth:`DocxSession.set_header_footer_kind_enabled`.
     title_page: bool = False
@@ -1757,8 +1762,8 @@ class SectionInfo:
             header_part_uris=tuple(d["headerPartUris"]),
             footer_part_uris=tuple(d["footerPartUris"]),
             # .get with Word's defaults: an older host that predates these still decodes.
-            header_distance_twips=int(d.get("headerDistanceTwips", 720)),
-            footer_distance_twips=int(d.get("footerDistanceTwips", 720)),
+            header_distance_twips=int(d.get("headerDistanceTwips", DEFAULT_HEADER_FOOTER_DISTANCE_TWIPS)),
+            footer_distance_twips=int(d.get("footerDistanceTwips", DEFAULT_HEADER_FOOTER_DISTANCE_TWIPS)),
             title_page=bool(d.get("titlePage", False)),
             even_and_odd_headers=bool(d.get("evenAndOddHeaders", False)),
             # .get: an older host that predates the refs still decodes.

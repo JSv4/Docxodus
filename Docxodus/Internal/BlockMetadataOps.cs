@@ -78,8 +78,10 @@ internal static class BlockMetadataOps
         int bottom = ParseInt((string?)pgMar?.Attribute(W.bottom)) ?? 1440;
         int left = ParseInt((string?)pgMar?.Attribute(W.left)) ?? 1440;
         int right = ParseInt((string?)pgMar?.Attribute(W.right)) ?? 1440;
-        int headerDistance = ParseInt((string?)pgMar?.Attribute(W.header)) ?? 720;
-        int footerDistance = ParseInt((string?)pgMar?.Attribute(W.footer)) ?? 720;
+        int headerDistance = ParseInt((string?)pgMar?.Attribute(W.header))
+            ?? SectionInfo.DefaultHeaderFooterDistanceTwips;
+        int footerDistance = ParseInt((string?)pgMar?.Attribute(W.footer))
+            ?? SectionInfo.DefaultHeaderFooterDistanceTwips;
 
         // Both flags are CT_OnOff: present-and-bare or w:val="1"/"true"/"on" means on; an explicit
         // off value reads as off even though the element is there (Word writes w:titlePg w:val="0"

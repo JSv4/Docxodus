@@ -129,7 +129,8 @@ internal static class Dispatcher
         "clear_page_numbering" => DocxSessionOps.ClearPageNumbering(
             Handle(args), Str(args, "anchorId")),
         "set_header_footer_kind_enabled" => DocxSessionOps.SetHeaderFooterKindEnabled(
-            Handle(args), Str(args, "anchorId"), Str(args, "kind"), OptBool(args, "enabled") ?? true),
+            Handle(args), Str(args, "anchorId"), Str(args, "kind"),
+            OptBool(args, "enabled") ?? throw new FormatException("args missing boolean \"enabled\"")),
         "set_page_setup" => DocxSessionOps.SetPageSetup(
             Handle(args), Str(args, "anchorId"), ParsePageSetupOp(args, "op")),
 
