@@ -10,14 +10,29 @@ and exercises a broader but less guarded operation mix.
 editing* — inspect, isolated preview, atomic apply under a transaction id, a retry proving
 byte-exact replay, an intentional stale request, an intentional atomic failure, an audit
 that nothing moved, a page citation, then save. `epic-435-validation.json` reopens the
-saved package and checks what persisted. Neither file is edited by hand: the first is
-emitted by `build_epic_435_workflow.py`, because the preview, the apply and the retry must
-send a byte-identical step array or the retry is a `transaction_conflict` rather than a
-replay.
+saved package and checks what persisted.
+
+Neither file is edited by hand. Both are emitted by `build_epic_435_fixtures.py`, for two
+reasons: the preview, the apply and the retry must send a byte-identical step array or the
+retry is a `transaction_conflict` rather than a replay; and the two files assert the *same*
+revision list, which drifted out of both when each was maintained separately (#687). That
+list now has one declaration, `REVISION_MEMBERS`.
+
+`scripts/mcp-smoke.sh` runs the whole gate — regenerate, check the committed fixtures are
+what the generator emits, run both workflows, and re-check the refusal and replay counts
+the runner reports but does not enforce. CI runs it on every pull request; run it locally
+the same way:
+
+```bash
+dotnet build tools/mcp-server/mcpserver.csproj -c Release
+./scripts/mcp-smoke.sh
+```
+
+To drive the two runs by hand instead:
 
 ```bash
 dotnet build tools/mcp-server/mcpserver.csproj
-python3 tools/mcp-server/smoke/build_epic_435_workflow.py
+python3 tools/mcp-server/smoke/build_epic_435_fixtures.py
 
 # Copy the source document into a scratch storage root — the run SAVES, and pointing
 # the root at TestFiles/ would overwrite a committed fixture.
@@ -35,8 +50,20 @@ python3 tools/mcp-server/smoke/mcp_probe.py \
   --quiet-server -- tools/mcp-server/bin/Debug/net10.0/docxodus-mcp
 ```
 
-Expected: 64 calls / 212 assertions and 13 calls / 27 assertions, both with zero failures,
+Expected: 64 calls / 211 assertions and 15 calls / 24 assertions, both with zero failures,
 five expected failures in the first, and `replayMismatches: 0`.
+
+### The six revisions
+
+The five tracked steps settle into six revisions, and the count surprises people, so it is
+worth stating: `insert_footnote` accounts for two of them. The note body lands in
+`word/footnotes.xml`, and the reference run lands in the body — a real tracked insertion
+whose `text` is empty, because a `w:footnoteReference` carries no text to report. Rejecting
+that revision is what takes the reference back out, so suppressing it from the list would
+hide a change an agent is entitled to see.
+
+The order the engine enumerates them in is not part of the contract, so the fixtures match
+them as members (see `expectMembers` below) keyed on type, text, part and scope.
 
 Five calls are *supposed* to fail, and the runner treats a success there as the defect
 (`unexpectedSuccesses`): a bookmark and a table insert refused under tracked recording, a
@@ -53,6 +80,7 @@ Beyond `name`/`arguments`/`capture`/`expect`, honored by `mcp_probe.py`:
 | `expectFailure` | This call must fail. Its failure stops counting against the run, and a *success* becomes an `unexpectedSuccess`. |
 | `expectSameAs` | Compare this call's raw response text to that of the named earlier call. Byte-exact, before JSON parsing normalizes key order — which is what transaction replay actually promises. |
 | `expectNonEmpty` | List of result paths that must resolve to a non-empty string, array, or object. Used for generated payloads such as preview HTML and package hashes where pinning fixture-specific bytes would be brittle. |
+| `expectMembers` | Map of list path → expected member objects. Each member must match exactly one not-yet-claimed entry on that list, in any order, comparing only the keys the member names. Use it where a collection's contents are the contract but its enumeration order is not. |
 
 `expect` values substitute `$variables` too, so one call can be asserted against another's
 captured value (the apply's `resultVersion` against the preview's prediction).

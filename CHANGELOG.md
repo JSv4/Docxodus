@@ -6,6 +6,19 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- The epic #435 MCP acceptance smoke and its reopen validation now assert the revision list
+  the engine actually produces, and CI runs both on every pull request (#687). Their committed
+  assertions expected four revisions where the workflow produces six, so the documented runs
+  had been failing on main. Both extra entries are correct: a single `insert_footnote` step
+  yields the note body in `word/footnotes.xml` *and* the reference run in the body — a genuine
+  tracked insertion whose text is empty, because `w:footnoteReference` carries none, and whose
+  rejection is what removes the reference. The revision contract now has one declaration shared
+  by both fixtures instead of two hand-maintained copies that drifted apart, and it is keyed on
+  revision type, text, part and scope rather than on list position, which was never part of the
+  contract. `scripts/mcp-smoke.sh` is the gate: it regenerates the fixtures, fails if the
+  committed JSON differs, runs both workflows, and re-checks the five refusals and the
+  byte-exact transaction replay that the runner reports but does not enforce.
+
 - `WmlToHtmlConverter` now carries a font's document-declared alternate into the CSS font stack.
   ECMA-376's `w:altName` in `word/fontTable.xml` is exactly "use this family when the primary one
   is unavailable", and real documents lean on it for names no vendor ships:
