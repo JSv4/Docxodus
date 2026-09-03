@@ -996,27 +996,33 @@ internal static class IrMarkupRenderer
                 sink.Add(BuildInsertedTailPilcrow(nextPPr, state));
                 return;
             }
+            else if (nP && bi >= 0 && !insGroups[ni].Wordful && IsWholeTableGroup(delGroups[bi]))
+            {
+                // The same virtual pair with an EMPTY final next paragraph: there are no runs to
+                // fuse, so the next side's final pilcrow simply lands AFTER the deleted table (Word
+                // keeps it live there; our contract keeps its ¶INS mark — reject removes it,
+                // accept keeps it — rendering the same trailing empty line). Every other insert
+                // stays ahead of the deletions, exactly as in the fused shape above.
+                for (int k = 0; k < ni; k++)
+                    sink.AddRange(insGroups[k].Elements);
+                foreach (var g in delGroups)
+                    sink.AddRange(g.Elements);
+                sink.AddRange(insGroups[ni].Elements);
+                return;
+            }
         }
-        // The structural pair does not by itself open a chain: further pairs OPEN only on an
-        // empty↔empty candidate and CONTINUE while at least one side is empty.
-        bool chain = false;
-        while (bi >= 0 && ni >= 0)
+        // Further pilcrows pair backwards from the structural pair only through EMPTY↔EMPTY
+        // paragraphs on both sides at every step, the structural pair included (decoded from Word's
+        // compare output): a wordful member on either side ends the chain there, so its pilcrow
+        // stays with its own side — the next side's last wordful paragraph stays ¶INS (or fuses
+        // at the head when it IS the structural member) and a base blank beyond it stays ¶DEL.
+        bool chain = pairs.Count == 1 && !delGroups[pairs[0].B].Wordful && !insGroups[pairs[0].N].Wordful;
+        while (chain && bi >= 0 && ni >= 0)
         {
             if (!delGroups[bi].IsPlainParagraph || !insGroups[ni].IsPlainParagraph)
                 break;
-            bool baseEmpty = !delGroups[bi].Wordful;
-            bool nextEmpty = !insGroups[ni].Wordful;
-            if (!chain)
-            {
-                if (baseEmpty && nextEmpty)
-                    chain = true;
-                else
-                    break;
-            }
-            else if (!(baseEmpty || nextEmpty))
-            {
+            if (delGroups[bi].Wordful || insGroups[ni].Wordful)
                 break;
-            }
             pairs.Add((bi, ni));
             bi--;
             ni--;

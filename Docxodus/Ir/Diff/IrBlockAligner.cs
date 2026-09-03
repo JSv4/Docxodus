@@ -130,13 +130,22 @@ internal static class IrBlockAligner
             }
         }
 
+        // A blank spacer never anchors on its own evidence (see ReleaseUnsupportedBlankPairs): a
+        // unique blank that the spine pinned between unrelated content is released back to the free
+        // pool NOW, so the gap fill sees the single replace region Word processes rather than two
+        // halves split at a pilcrow. It may re-pair in the gap fill and is re-judged after it.
+        ReleaseUnsupportedBlankPairs(leftBlocks, rightBlocks, similarity, leftKind, rightKind, leftMatch, rightMatch,
+            toFreePool: true);
+
         // --- Gap fill: between consecutive spine pairs (and the head/tail gaps), pair the remaining
         // (non-Moved, non-anchored) left and right blocks. Blocks already consumed as Moved or anchored
         // do NOT participate — they are skipped when walking the gaps.
         //
         // Build the ordered list of spine pairs (left index, right index), both ascending in lockstep.
+        // A spine candidate the blank release above returned to the free pool is no longer a pair.
         var spinePairs = onSpine
             .Select(c => (Left: candidates[c].LeftIndex, Right: candidates[c].RightIndex))
+            .Where(p => leftMatch[p.Left] == p.Right)
             .OrderBy(p => p.Left)
             .ToList();
 
@@ -158,6 +167,12 @@ internal static class IrBlockAligner
             similarity, settings, splitGroups, mergeGroups,
             leftBodyFullRewriteGroups, rightBodyFullRewriteGroups, markBodyFullRewriteGaps,
             ref nextBodyFullRewriteGroupId);
+
+        // Final judgement of every blank pairing the gap fill (re)formed: a blank retains only inside a
+        // run of matched content; an unsupported one lowers to Deleted+Inserted so the surrounding
+        // insert/delete groups arrange as ONE replace region.
+        ReleaseUnsupportedBlankPairs(leftBlocks, rightBlocks, similarity, leftKind, rightKind, leftMatch, rightMatch,
+            toFreePool: false);
 
         // A renderer emits paired in-place blocks in RIGHT order.  Therefore every such pairing must be
         // monotone: crossed Modified pairs accept to the right sequence, but reject leaves their LEFT content
@@ -1995,6 +2010,99 @@ internal static class IrBlockAligner
                 NoteAccepted(candLeft, rj);
                 break;
             }
+        }
+    }
+
+    /// <summary>
+    /// Word never retains a blank-spacer paragraph on its own evidence (decoded from Word's compare
+    /// output). A blank has no words, so the only thing that can make its pilcrow "the same
+    /// paragraph" on both sides is the matched content it sits inside: a blank between two retained or
+    /// edited paragraphs is retained with them, while a blank that merely happens to exist in both of
+    /// two otherwise unrelated regions is NOT an anchor — Word emits the whole region as one replace
+    /// (next content inserted, base content deleted) and the two blanks go with their own sides.
+    /// Anchoring such a blank fragments that single region into two halves, scatters the deletions
+    /// between them and, at the spine stage, even scopes the gap fill to the wrong halves.
+    /// </summary>
+    /// <remarks>
+    /// <para>A blank in-place pair (<paramref name="leftMatch"/>-linked, not a move) is SUPPORTED when
+    /// a diagonal neighbour — the block before it on both sides, or the block after it on both sides —
+    /// is itself paired in place, and (when that neighbour is another blank pair) is supported in turn:
+    /// a run of blanks borrows its support from the content at either end of the run. The document-final
+    /// pair is supported structurally: Word always pairs the two final pilcrows. Every other blank pair
+    /// is released — at the spine stage (<paramref name="toFreePool"/>) back to the free pool, since the
+    /// gap fill may legitimately re-pair it beside a Modified neighbour the spine could not yet see;
+    /// after the gap fill to Deleted + Inserted.</para>
+    /// <para>Runs in O(n) per call plus a fixpoint over the blank pairs only (each iteration marks at
+    /// least one more pair supported or stops), so it never disturbs the aligner's scale guard. Blank-free
+    /// alignments are untouched.</para>
+    /// </remarks>
+    private static void ReleaseUnsupportedBlankPairs(
+        IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks, IrBlockSimilarity similarity,
+        IrAlignmentKind?[] leftKind, IrAlignmentKind?[] rightKind, int[] leftMatch, int[] rightMatch,
+        bool toFreePool)
+    {
+        int nLeft = leftBlocks.Count;
+        int nRight = rightBlocks.Count;
+
+        bool InPlaceLeft(int i) => leftMatch[i] != -1 &&
+            leftKind[i] is not (IrAlignmentKind.Moved or IrAlignmentKind.MovedModified);
+        bool InPlaceRight(int j) => rightMatch[j] != -1 &&
+            rightKind[j] is not (IrAlignmentKind.Moved or IrAlignmentKind.MovedModified);
+
+        // Collect the blank in-place pairs (content-equal ⇒ both blank, so testing the left suffices).
+        var blankPairs = new List<int>();
+        var isBlankPair = new bool[nLeft];
+        for (int i = 0; i < nLeft; i++)
+        {
+            if (!InPlaceLeft(i) || rightMatch[leftMatch[i]] != i)
+                continue;
+            if (!similarity.IsBlankSpacer(leftBlocks[i]))
+                continue;
+            blankPairs.Add(i);
+            isBlankPair[i] = true;
+        }
+        if (blankPairs.Count == 0)
+            return;
+
+        var supported = new bool[nLeft];
+        bool SupportsFrom(int li, int rj)
+        {
+            if (li < 0 || rj < 0 || li >= nLeft || rj >= nRight)
+                return false;
+            if (!InPlaceLeft(li) || !InPlaceRight(rj))
+                return false;
+            return !isBlankPair[li] || supported[li];
+        }
+
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+            foreach (int li in blankPairs)
+            {
+                if (supported[li])
+                    continue;
+                int rj = leftMatch[li];
+                if ((li == nLeft - 1 && rj == nRight - 1) ||
+                    SupportsFrom(li - 1, rj - 1) || SupportsFrom(li + 1, rj + 1))
+                {
+                    supported[li] = true;
+                    changed = true;
+                }
+            }
+        }
+
+        foreach (int li in blankPairs)
+        {
+            if (supported[li])
+                continue;
+            int rj = leftMatch[li];
+            leftMatch[li] = -1;
+            rightMatch[rj] = -1;
+            // Spine stage: back to the free pool (null = still free for the gap fill). After the gap
+            // fill: the terminal leftover kinds, exactly as FillOneGap stamps its own unpaired blocks.
+            leftKind[li] = toFreePool ? null : IrAlignmentKind.Deleted;
+            rightKind[rj] = toFreePool ? null : IrAlignmentKind.Inserted;
         }
     }
 

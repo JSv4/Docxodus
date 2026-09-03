@@ -6,6 +6,32 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `DocxDiff` no longer lets an empty paragraph act as an alignment anchor on its own. An empty
+  paragraph has no words, so the only thing that can make its paragraph mark "the same paragraph"
+  on both sides is the matched content it sits inside — a blank between two retained or edited
+  paragraphs is retained with them, but a blank that merely happens to exist in both of two
+  otherwise unrelated regions is not evidence of anything. The block aligner nevertheless pinned
+  such blanks (a unique one on the exact-match spine, further ones in the in-order gap pass),
+  which split what Word treats as one replace region into halves with the deletions scattered
+  between them: a base that ends with an empty paragraph compared against a next that begins with
+  one produced *all deletions, a live empty line, all insertions* instead of Word's *insertions,
+  then deletions, then the shared final paragraph mark*. A blank pairing is now released unless a
+  neighbouring block pair on both sides is paired in place (a run of blanks borrows its support
+  from the content at either end), with the document-final pair supported structurally because
+  Word always pairs the two final paragraph marks. The rule runs once after the spine (so the gap
+  fill sees the whole region) and once after the gap fill (so a blank beside a paragraph the gap
+  fill paired as edited keeps its retained mark). Accept ≡ right and reject ≡ left hold unchanged.
+- `DocxDiff`'s trailing-region paragraph-mark chain now pairs marks backwards from the final pair
+  only through paragraphs that are empty on *both* sides, the final pair included. The chain used
+  to open on any empty↔empty candidate and keep going while either side was empty, which paired a
+  base blank with the next document's last wordful paragraph (or a trailing blank on each side
+  behind a wordful final paragraph) and turned that paragraph's mark into a shared, unmarked one.
+  Word's compare output leaves such a paragraph tracked-inserted ahead of the deletions and the
+  base blank tracked-deleted; the tail now matches it. In the same region grammar, a base story
+  that ends with a table compared against a next story that ends with an *empty* paragraph now
+  places that final paragraph mark after the deleted table, exactly as the already-handled wordful
+  case does; before, the mark was emitted with the other insertions and the document ended with the
+  deleted table.
 - `WmlToHtmlConverter` now carries a font's document-declared alternate into the CSS font stack.
   ECMA-376's `w:altName` in `word/fontTable.xml` is exactly "use this family when the primary one
   is unavailable", and real documents lean on it for names no vendor ships:
