@@ -130,6 +130,14 @@ original pooled figures rather than being refreshed to the newer ones, because c
 faster reading would just be chasing weather, and the panel recomputes the ratio live
 anyway.
 
+That test needs a threshold, or it will fire on noise. Two consecutive `full + HTML` runs on
+one build within one hour read **77× and 84×** — so the ratio itself carries roughly ±10%,
+and a movement inside that band means nothing. #653 is the calibration for the other end: it
+halved the ratio, and there was no ambiguity about reading it as real. The rule is worth
+stating with the number attached — **a ratio movement under about 10% is noise; one that
+approaches a halving or doubling is the engine.** In between, measure again before believing
+it.
+
 The rigorous headless counterpart — the same question asked of a 147 KB certificate of
 incorporation, with stage attribution and allocation figures — lives in
 `benchmarks/docxdiff-stress/FINDINGS.md`. That harness is the authority on engine
