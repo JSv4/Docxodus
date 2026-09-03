@@ -6625,6 +6625,7 @@ internal static class IrMarkupRenderer
         DocDefaultsStyleProjection? docDefaultsStyleProjection)
     {
         var rightImportedStyles = new HashSet<StyleIdentity>();
+        var importedParagraphStyles = new List<(XElement Style, string Id)>();
         if (wDoc.MainDocumentPart?.StyleDefinitionsPart is not { } leftStyles ||
             wDocRight.MainDocumentPart?.StyleDefinitionsPart is not { } rightStyles)
             return rightImportedStyles;
@@ -6667,14 +6668,11 @@ internal static class IrMarkupRenderer
                     // input property revision is also retained: stripping its default flag would
                     // change the source revision's reachability before it can be preserved.
                     cloned.Attribute(W._default)?.Remove();
-                    // An imported right-only style lives under the LEFT docDefaults from now on, so it
-                    // needs the same docDefaults delta an updated shared style gets (decoded from Word's
-                    // compare output: an imported heading whose document said line=259 in its defaults
-                    // is written with line=259 explicit, and a left after=200 the right never declared
-                    // is neutralized). Without it every paragraph in the imported style renders with
-                    // the left's spacing — a page's worth of drift over a long inserted document.
+                    // An imported right-only paragraph style lives under the LEFT docDefaults from now
+                    // on; it is expressed there in a second pass once every style's payload is final
+                    // (see ExpressImportedStyleUnderLeftDefaults).
                     if (string.Equals(type, "paragraph", StringComparison.Ordinal) && styleId is not null)
-                        ExpressImportedStyleUnderLeftDefaults(cloned, rightRoot, leftOriginalRoot, type, styleId);
+                        importedParagraphStyles.Add((cloned, styleId));
                 }
                 root.Add(cloned);
                 if (type is not null && styleId is not null)
@@ -6743,6 +6741,16 @@ internal static class IrMarkupRenderer
                 anchor.AddBeforeSelf(newRPr);
             }
         }
+        // Decoded from Word's compare output: the docDefaults delta is stated ONCE along a style
+        // chain. When the default paragraph style was updated above, its payload carries the delta
+        // and an imported style based on it inherits it — Word writes nothing more on the import.
+        // Only when no ancestor in the OUTPUT chain states an attribute does the imported style state
+        // it itself (an imported heading under an untouched Normal is written with line=259 explicit
+        // and the left's after=200 neutralized). Parents first, so a chain of imports resolves in order.
+        foreach (var (style, id) in importedParagraphStyles
+                     .OrderBy(entry => StyleChainDepth(root, entry.Id)))
+            ExpressImportedStyleUnderLeftDefaults(style, rightRoot, leftOriginalRoot, root, "paragraph", id);
+
         leftStyles.PutXDocument();
         return rightImportedStyles;
     }
@@ -6812,7 +6820,7 @@ internal static class IrMarkupRenderer
     /// right formatting the same way the updated-style branch does.
     /// </summary>
     private static void ExpressImportedStyleUnderLeftDefaults(
-        XElement cloned, XElement rightRoot, XElement leftOriginalRoot, string type, string styleId)
+        XElement cloned, XElement rightRoot, XElement leftOriginalRoot, XElement outputRoot, string type, string styleId)
     {
         var (rightEffPPr, rightRPr) = ResolveEffectiveStyleFormatting(rightRoot, type, styleId);
         var pPr = cloned.Element(W.pPr);
@@ -6827,8 +6835,49 @@ internal static class IrMarkupRenderer
         }
         var leftDd = LeftDocDefaultsProps(leftOriginalRoot, paragraphAxis: true);
         var rightDd = LeftDocDefaultsProps(rightRoot, paragraphAxis: true);
-        AddDocDefaultsNeutralizers(pPr, leftDd, rightEffPPr, paragraphAxis: true, rightDd);
-        MaterializeRightDocDefaults(pPr, leftDd, rightDd);
+
+        // Work on a probe that already carries everything the OUTPUT ancestor chain states, so the
+        // delta is computed against what the imported style really inherits; then copy over only the
+        // additions the probe gained beyond the style's own payload.
+        var probe = new XElement(pPr);
+        foreach (var ancestorPPr in OutputAncestorPPrs(outputRoot, cloned))
+        {
+            foreach (var el in ancestorPPr.Elements())
+            {
+                if (el.Name == W.pPrChange || el.Name == W.rPr)
+                    continue;
+                var mine = probe.Element(el.Name);
+                if (mine is null)
+                    probe.Add(new XElement(el));
+                else if (el.Name == W.spacing)
+                    foreach (var at in el.Attributes())
+                        if (mine.Attribute(at.Name) is null)
+                            mine.SetAttributeValue(at.Name, at.Value);
+            }
+        }
+        var before = new XElement(probe);
+        AddDocDefaultsNeutralizers(probe, leftDd, rightEffPPr, paragraphAxis: true, rightDd);
+        MaterializeRightDocDefaults(probe, leftDd, rightDd);
+        foreach (var el in probe.Elements())
+        {
+            var prior = before.Element(el.Name);
+            if (prior is null)
+            {
+                if (pPr.Element(el.Name) is null)
+                    pPr.Add(new XElement(el));
+                continue;
+            }
+            if (el.Name != W.spacing)
+                continue;
+            var own = pPr.Element(W.spacing);
+            foreach (var at in el.Attributes())
+            {
+                if (prior.Attribute(at.Name) is not null)
+                    continue;
+                own ??= AddSpacingElement(pPr);
+                own.SetAttributeValue(at.Name, at.Value);
+            }
+        }
         NormalizeTwipsMeasures(pPr);
         NormalizeStylePropertyOrder(pPr, StylePPrChildOrder);
         if (!pPr.HasElements)
@@ -6840,6 +6889,47 @@ internal static class IrMarkupRenderer
         cloned.Elements(W.rPr).Remove();
         if (rightRPr.HasElements)
             ReplaceStyleProperties(cloned, null, new XElement(W.rPr, rightRPr.Elements()));
+    }
+
+    private static XElement AddSpacingElement(XElement pPr)
+    {
+        var spacing = new XElement(W.spacing);
+        pPr.Add(spacing);
+        return spacing;
+    }
+
+    /// <summary>The <c>w:pPr</c> payloads of a style's <c>basedOn</c> ancestors in the output styles
+    /// part, nearest first; a cycle or a missing ancestor ends the walk.</summary>
+    private static IEnumerable<XElement> OutputAncestorPPrs(XElement outputRoot, XElement style)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var current = style;
+        while ((string?)current.Element(W.basedOn)?.Attribute(W.val) is { } parentId && seen.Add(parentId))
+        {
+            var parent = outputRoot.Elements(W.style).FirstOrDefault(st =>
+                (string?)st.Attribute(W.type) == "paragraph" && (string?)st.Attribute(W.styleId) == parentId);
+            if (parent is null)
+                yield break;
+            if (parent.Element(W.pPr) is { } pPr)
+                yield return pPr;
+            current = parent;
+        }
+    }
+
+    /// <summary>Depth of a paragraph style's <c>basedOn</c> chain in the output styles part (0 for a root).</summary>
+    private static int StyleChainDepth(XElement outputRoot, string styleId)
+    {
+        int depth = 0;
+        var seen = new HashSet<string>(StringComparer.Ordinal) { styleId };
+        var current = outputRoot.Elements(W.style).FirstOrDefault(st =>
+            (string?)st.Attribute(W.type) == "paragraph" && (string?)st.Attribute(W.styleId) == styleId);
+        while (current is not null && (string?)current.Element(W.basedOn)?.Attribute(W.val) is { } parentId && seen.Add(parentId))
+        {
+            depth++;
+            current = outputRoot.Elements(W.style).FirstOrDefault(st =>
+                (string?)st.Attribute(W.type) == "paragraph" && (string?)st.Attribute(W.styleId) == parentId);
+        }
+        return depth;
     }
 
     /// <summary>

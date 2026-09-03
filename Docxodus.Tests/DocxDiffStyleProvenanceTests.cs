@@ -1046,14 +1046,81 @@ public class DocxDiffStyleProvenanceTests
 
         var result = DocxDiff.Compare(left, right);
 
-        var imported = StyleOf(StylesOf(result), "SideHeading");
-        var spacing = imported.Element(W + "pPr")?.Element(W + "spacing");
-        Assert.NotNull(spacing);
-        Assert.Equal("240", (string?)spacing!.Attribute(W + "before"));
-        Assert.Equal("0", (string?)spacing.Attribute(W + "after"));
-        Assert.Equal("300", (string?)spacing.Attribute(W + "line"));
+        // The delta is stated once along the chain (on Normal when the equal-definitions projection
+        // carries it there, else on the import itself); what matters is what the imported style
+        // resolves to under the retained left docDefaults.
+        var styles = StylesOf(result);
+        var imported = StyleOf(styles, "SideHeading");
+        Assert.Equal("240", EffectiveSpacingAttribute(styles, "SideHeading", "before"));
+        Assert.Equal("0", EffectiveSpacingAttribute(styles, "SideHeading", "after"));
+        Assert.Equal("300", EffectiveSpacingAttribute(styles, "SideHeading", "line"));
         Assert.NotNull(imported.Element(W + "pPr")?.Element(W + "keepNext"));
         Assert.NotNull(imported.Element(W + "rPr")?.Element(W + "b"));
+    }
+
+    /// <summary>A spacing attribute resolved along the style's basedOn chain (current payloads only).</summary>
+    private static string? EffectiveSpacingAttribute(XDocument styles, string styleId, string attribute)
+    {
+        var seen = new HashSet<string>();
+        string? id = styleId;
+        while (id is not null && seen.Add(id))
+        {
+            var style = styles.Root!.Elements(W + "style").FirstOrDefault(st => (string?)st.Attribute(W + "styleId") == id);
+            if (style is null)
+                break;
+            var value = (string?)style.Element(W + "pPr")?.Element(W + "spacing")?.Attribute(W + attribute);
+            if (value is not null)
+                return value;
+            id = (string?)style.Element(W + "basedOn")?.Attribute(W + "val");
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The delta is stated ONCE along the chain: when Normal itself differs between the sides and is
+    /// updated (its payload then carries the docDefaults delta), an imported style based on Normal
+    /// inherits it and Word writes nothing more on the import — no spacing appears on it.
+    /// </summary>
+    [Fact]
+    public void ImportedStyle_UnderUpdatedNormal_InheritsDeltaAndStaysRaw()
+    {
+        WmlDocument Doc(bool leftSide, string text)
+        {
+            using var stream = new MemoryStream();
+            using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+            {
+                var main = doc.AddMainDocumentPart();
+                var p = new Paragraph(new Run(new Text(text)));
+                if (!leftSide)
+                    p.PrependChild(new ParagraphProperties(new ParagraphStyleId { Val = "SideNote" }));
+                main.Document = new Document(new Body(p));
+                var styles = main.AddNewPart<StyleDefinitionsPart>();
+                string defaults = leftSide
+                    ? "<w:docDefaults><w:pPrDefault><w:pPr><w:spacing w:after=\"160\" w:line=\"278\" w:lineRule=\"auto\"/></w:pPr></w:pPrDefault></w:docDefaults>"
+                    : "<w:docDefaults><w:pPrDefault><w:pPr><w:spacing w:line=\"300\" w:lineRule=\"auto\"/></w:pPr></w:pPrDefault></w:docDefaults>";
+                // Normal DIFFERS between the sides (widowControl only on the right) so it is updated.
+                string normal = leftSide
+                    ? "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\"><w:name w:val=\"Normal\"/></w:style>"
+                    : "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\"><w:name w:val=\"Normal\"/><w:pPr><w:widowControl w:val=\"0\"/></w:pPr></w:style>";
+                string side = leftSide ? string.Empty
+                    : "<w:style w:type=\"paragraph\" w:styleId=\"SideNote\"><w:name w:val=\"Side Note\"/><w:basedOn w:val=\"Normal\"/><w:pPr><w:keepNext/></w:pPr></w:style>";
+                using (var writer = new StreamWriter(styles.GetStream(FileMode.Create, FileAccess.Write)))
+                    writer.Write($"<w:styles xmlns:w=\"{W.NamespaceName}\">{defaults}{normal}{side}</w:styles>");
+                main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+                doc.Save();
+            }
+            return new WmlDocument("import2.docx", stream.ToArray());
+        }
+
+        var result = DocxDiff.Compare(Doc(true, "Alpha bravo charlie."), Doc(false, "Delta echo foxtrot."));
+        var styles = StylesOf(result);
+        var normalSpacing = StyleOf(styles, "Normal").Element(W + "pPr")?.Element(W + "spacing");
+        Assert.NotNull(normalSpacing);
+        Assert.Equal("300", (string?)normalSpacing!.Attribute(W + "line"));
+        Assert.Equal("0", (string?)normalSpacing.Attribute(W + "after"));
+        var imported = StyleOf(styles, "SideNote");
+        Assert.Null(imported.Element(W + "pPr")?.Element(W + "spacing"));
+        Assert.NotNull(imported.Element(W + "pPr")?.Element(W + "keepNext"));
     }
 
     /// <summary>

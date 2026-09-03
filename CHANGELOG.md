@@ -67,9 +67,11 @@ All notable changes to this project will be documented in this file.
   whose own defaults said `line=259` and `after=160` rendered a page longer than Word's output
   under the left's `line=276 after=200`. An imported paragraph style now receives the same
   docDefaults delta an updated shared style gets — right defaults the left values differently
-  materialized, left defaults the right never declared reset to their built-ins — and its
-  spacing and indent measures are written in twips, as Word writes them (a `line="12.95pt"`
-  under the `auto` rule is ambiguous to a renderer; `259` is not).
+  materialized, left defaults the right never declared reset to their built-ins — stated once
+  along the style chain: an import based on a Normal that was itself updated inherits the delta
+  and is left raw, exactly as Word writes it. Its spacing and indent measures are written in
+  twips, as Word writes them (a `line="12.95pt"` under the `auto` rule is ambiguous to a
+  renderer; `259` is not).
 - `DocxDiff` keeps a paired paragraph's right-side `w:pStyle` when the style is one that inserted
   content already imports. Word expresses a paired paragraph's format change within the style
   universe the output resolves: a right-only style is brought in only by wholly inserted
