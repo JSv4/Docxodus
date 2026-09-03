@@ -895,7 +895,7 @@ public class DocxDiffStyleProvenanceTests
 
     /// <summary>A doc whose docDefaults optionally declare paragraph spacing / kern / ligatures, with a
     /// Normal style whose own pPr payload is <paramref name="normalPPrXml"/> (may be empty).</summary>
-    private static WmlDocument DocWithDefaultsAndNormalPPr(bool declareDefaults, string normalPPrXml, string text)
+    private static WmlDocument DocWithDefaultsAndNormalPPr(bool declareDefaults, string normalPPrXml, string text, string rightPPrDefaultXml = "<w:pPrDefault/>")
     {
         using var stream = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
@@ -913,7 +913,7 @@ public class DocxDiffStyleProvenanceTests
                   "</w:pPr></w:pPrDefault></w:docDefaults>"
                 : "<w:docDefaults><w:rPrDefault><w:rPr>" +
                   "<w:rFonts w:ascii=\"Inter\" w:hAnsi=\"Inter\"/><w:sz w:val=\"22\"/>" +
-                  "</w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults>";
+                  $"</w:rPr></w:rPrDefault>{rightPPrDefaultXml}</w:docDefaults>";
             using (var writer = new StreamWriter(styles.GetStream(FileMode.Create, FileAccess.Write)))
             {
                 writer.Write(
@@ -959,6 +959,28 @@ public class DocxDiffStyleProvenanceTests
         Assert.Equal("0", (string?)rPr!.Element(W + "kern")?.Attribute(W + "val"));
         XNamespace w14 = "http://schemas.microsoft.com/office/word/2010/wordml";
         Assert.Equal("none", (string?)rPr.Element(w14 + "ligatures")?.Attribute(w14 + "val"));
+    }
+
+    /// <summary>
+    /// Spacing attributes inherit one by one. When the right's docDefaults declare only line/lineRule
+    /// (a common web-authored shape) against a left declaring after=160 line=278, the right's line
+    /// must be materialized AND the left's after neutralized on the same current payload — Word writes
+    /// spacing after=0 line=276 on the updated Normal. An element-level check let after=160 leak
+    /// through and spaced every accepted paragraph apart.
+    /// </summary>
+    [Fact]
+    public void LeftDocDefaultsSpacing_PartiallyDeclaredByRight_IsNeutralizedAttributeWise()
+    {
+        var left = DocWithDefaultsAndNormalPPr(true, "<w:widowControl w:val=\"0\"/>", "Shared body line.");
+        var right = DocWithDefaultsAndNormalPPr(false, string.Empty, "Shared body line revised.",
+            "<w:pPrDefault><w:pPr><w:spacing w:line=\"276\" w:lineRule=\"auto\"/></w:pPr></w:pPrDefault>");
+
+        var result = DocxDiff.Compare(left, right);
+
+        var spacing = StyleOf(StylesOf(result), "Normal").Element(W + "pPr")?.Element(W + "spacing");
+        Assert.NotNull(spacing);
+        Assert.Equal("0", (string?)spacing!.Attribute(W + "after"));
+        Assert.Equal("276", (string?)spacing.Attribute(W + "line"));
     }
 
     /// <summary>

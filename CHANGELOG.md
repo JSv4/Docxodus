@@ -51,6 +51,14 @@ All notable changes to this project will be documented in this file.
   handled. Word's compare output keeps such a cell in the merged row with its content deleted, so
   two unrelated tables paired positionally, or a row that lost a column, no longer double the
   table on the page.
+- `DocxDiff` neutralizes the left document's default paragraph spacing attribute by attribute. The
+  output keeps the left styles part, so an updated style's current payload has to cancel any
+  default the right document does not share; the check was per element, so a right whose
+  defaults declared only `line` (a common web-authored shape) against a left declaring
+  `after=160 line=278` produced a Normal style saying just `line=276` and every accepted
+  paragraph inherited the left's 160 twips of space below. Word writes `after=0 line=276` there,
+  and so does the renderer now: the right's declared attributes are materialized and the
+  left-only attributes reset to their built-ins on the same spacing element.
 - `DocxDiff` keeps a paired paragraph's right-side `w:pStyle` when the style is one that inserted
   content already imports. Word expresses a paired paragraph's format change within the style
   universe the output resolves: a right-only style is brought in only by wholly inserted

@@ -6781,12 +6781,37 @@ internal static class IrMarkupRenderer
             return;
         foreach (var declared in leftDocDefaultsProps.Elements())
         {
-            if (rightEffectiveProps.Element(declared.Name) is not null ||
-                current.Element(declared.Name) is not null)
+            var rightEffective = rightEffectiveProps.Element(declared.Name);
+            var currentDeclared = current.Element(declared.Name);
+            if (paragraphAxis && declared.Name == W.spacing && (rightEffective is not null || currentDeclared is not null))
+            {
+                // Spacing attributes inherit one by one, so a right side that declares SOME of them
+                // (typically line/lineRule) still lets the left docDefaults' other attributes
+                // (typically after/before) through. Word neutralizes exactly those (decoded from its
+                // compare output: a right whose defaults say only line=276 against a left saying
+                // after=160 line=278 yields an updated Normal of after=0 line=276).
+                var neutral = BuiltinDefaultFor(declared, paragraphAxis);
+                if (neutral is null)
+                    continue;
+                var missing = neutral.Attributes()
+                    .Where(a => rightEffective?.Attribute(a.Name) is null && currentDeclared?.Attribute(a.Name) is null)
+                    .ToList();
+                if (missing.Count == 0)
+                    continue;
+                if (currentDeclared is null)
+                {
+                    currentDeclared = new XElement(W.spacing);
+                    current.Add(currentDeclared);
+                }
+                foreach (var a in missing)
+                    currentDeclared.SetAttributeValue(a.Name, a.Value);
                 continue;
-            var neutral = BuiltinDefaultFor(declared, paragraphAxis);
-            if (neutral is not null)
-                current.Add(neutral);
+            }
+            if (rightEffective is not null || currentDeclared is not null)
+                continue;
+            var whole = BuiltinDefaultFor(declared, paragraphAxis);
+            if (whole is not null)
+                current.Add(whole);
         }
     }
 
@@ -6836,9 +6861,20 @@ internal static class IrMarkupRenderer
             return;
         foreach (var declared in rightDocDefaultsProps.Elements())
         {
-            if (current.Element(declared.Name) is not null)
-                continue;
             var leftDeclared = leftDocDefaultsProps?.Element(declared.Name);
+            if (current.Element(declared.Name) is { } currentDeclared)
+            {
+                // Spacing attributes inherit one by one: a current spacing that carries only the
+                // neutralizers (after=0) still needs the right's line/lineRule stated when the left
+                // values them differently.
+                if (declared.Name != W.spacing)
+                    continue;
+                foreach (var a in declared.Attributes())
+                    if (currentDeclared.Attribute(a.Name) is null &&
+                        (string?)leftDeclared?.Attribute(a.Name) != a.Value)
+                        currentDeclared.SetAttributeValue(a.Name, a.Value);
+                continue;
+            }
             if (leftDeclared is not null && XNode.DeepEquals(leftDeclared, declared))
                 continue;
             current.Add(StripUnids(new XElement(declared)));
