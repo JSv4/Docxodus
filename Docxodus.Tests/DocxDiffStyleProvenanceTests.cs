@@ -1007,6 +1007,56 @@ public class DocxDiffStyleProvenanceTests
     }
 
     /// <summary>
+    /// A right-only paragraph style imported into the output lives under the LEFT docDefaults from
+    /// then on, so it gets the same docDefaults delta an updated shared style gets: the right's
+    /// line=300 (which the left values differently) materialized, the left's after=160 (which the
+    /// right never declared) neutralized to 0. Word writes the imported heading exactly so; copying
+    /// it raw left every paragraph in the style at the left's spacing.
+    /// </summary>
+    [Fact]
+    public void ImportedRightOnlyParagraphStyle_CarriesDocDefaultsDelta()
+    {
+        WmlDocument Doc(bool leftDefaults, bool withHeading, string text)
+        {
+            using var stream = new MemoryStream();
+            using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+            {
+                var main = doc.AddMainDocumentPart();
+                var p = new Paragraph(new Run(new Text(text)));
+                if (withHeading)
+                    p.PrependChild(new ParagraphProperties(new ParagraphStyleId { Val = "SideHeading" }));
+                main.Document = new Document(new Body(p));
+                var styles = main.AddNewPart<StyleDefinitionsPart>();
+                string defaults = leftDefaults
+                    ? "<w:docDefaults><w:pPrDefault><w:pPr><w:spacing w:after=\"160\" w:line=\"278\" w:lineRule=\"auto\"/></w:pPr></w:pPrDefault></w:docDefaults>"
+                    : "<w:docDefaults><w:pPrDefault><w:pPr><w:spacing w:line=\"300\" w:lineRule=\"auto\"/></w:pPr></w:pPrDefault></w:docDefaults>";
+                string heading = withHeading
+                    ? "<w:style w:type=\"paragraph\" w:styleId=\"SideHeading\"><w:name w:val=\"Side Heading\"/><w:basedOn w:val=\"Normal\"/><w:pPr><w:keepNext/><w:spacing w:before=\"240\"/></w:pPr><w:rPr><w:b/></w:rPr></w:style>"
+                    : string.Empty;
+                using (var writer = new StreamWriter(styles.GetStream(FileMode.Create, FileAccess.Write)))
+                    writer.Write($"<w:styles xmlns:w=\"{W.NamespaceName}\">{defaults}<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\"><w:name w:val=\"Normal\"/></w:style>{heading}</w:styles>");
+                main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+                doc.Save();
+            }
+            return new WmlDocument("import.docx", stream.ToArray());
+        }
+
+        var left = Doc(leftDefaults: true, withHeading: false, "Alpha bravo charlie.");
+        var right = Doc(leftDefaults: false, withHeading: true, "Delta echo foxtrot.");
+
+        var result = DocxDiff.Compare(left, right);
+
+        var imported = StyleOf(StylesOf(result), "SideHeading");
+        var spacing = imported.Element(W + "pPr")?.Element(W + "spacing");
+        Assert.NotNull(spacing);
+        Assert.Equal("240", (string?)spacing!.Attribute(W + "before"));
+        Assert.Equal("0", (string?)spacing.Attribute(W + "after"));
+        Assert.Equal("300", (string?)spacing.Attribute(W + "line"));
+        Assert.NotNull(imported.Element(W + "pPr")?.Element(W + "keepNext"));
+        Assert.NotNull(imported.Element(W + "rPr")?.Element(W + "b"));
+    }
+
+    /// <summary>
     /// A left package with NO styles part at all takes the right's style definitions wholesale —
     /// Word's compare output for this shape carries every right style definition (a used
     /// ListParagraph's contextualSpacing is what keeps inserted bullet lists tight) while the

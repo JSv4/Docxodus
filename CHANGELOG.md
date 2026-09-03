@@ -61,6 +61,15 @@ All notable changes to this project will be documented in this file.
   paragraph inherited the left's 160 twips of space below. Word writes `after=0 line=276` there,
   and so does the renderer now: the right's declared attributes are materialized and the
   left-only attributes reset to their built-ins on the same spacing element.
+- `DocxDiff` expresses an imported right-only paragraph style under the left document's defaults.
+  The output keeps the left `docDefaults`, and a style copied in from the right document was
+  copied raw, so every paragraph in it took the left's default spacing: a long inserted document
+  whose own defaults said `line=259` and `after=160` rendered a page longer than Word's output
+  under the left's `line=276 after=200`. An imported paragraph style now receives the same
+  docDefaults delta an updated shared style gets — right defaults the left values differently
+  materialized, left defaults the right never declared reset to their built-ins — and its
+  spacing and indent measures are written in twips, as Word writes them (a `line="12.95pt"`
+  under the `auto` rule is ambiguous to a renderer; `259` is not).
 - `DocxDiff` keeps a paired paragraph's right-side `w:pStyle` when the style is one that inserted
   content already imports. Word expresses a paired paragraph's format change within the style
   universe the output resolves: a right-only style is brought in only by wholly inserted

@@ -6667,6 +6667,14 @@ internal static class IrMarkupRenderer
                     // input property revision is also retained: stripping its default flag would
                     // change the source revision's reachability before it can be preserved.
                     cloned.Attribute(W._default)?.Remove();
+                    // An imported right-only style lives under the LEFT docDefaults from now on, so it
+                    // needs the same docDefaults delta an updated shared style gets (decoded from Word's
+                    // compare output: an imported heading whose document said line=259 in its defaults
+                    // is written with line=259 explicit, and a left after=200 the right never declared
+                    // is neutralized). Without it every paragraph in the imported style renders with
+                    // the left's spacing — a page's worth of drift over a long inserted document.
+                    if (string.Equals(type, "paragraph", StringComparison.Ordinal) && styleId is not null)
+                        ExpressImportedStyleUnderLeftDefaults(cloned, rightRoot, leftOriginalRoot, type, styleId);
                 }
                 root.Add(cloned);
                 if (type is not null && styleId is not null)
@@ -6795,6 +6803,75 @@ internal static class IrMarkupRenderer
     /// (oracle-decoded: spacing → 0/240/auto attribute-wise, kern → 0, ligatures → none). Properties
     /// without a confident built-in stay untouched — the leak is the pre-existing status quo there.
     /// </summary>
+    /// <summary>
+    /// State an imported right-only paragraph style's docDefaults delta on its own payload: the output
+    /// keeps the LEFT docDefaults, so a right default the left values differently (or lacks) must be
+    /// materialized, and a left default the right never declared must be neutralized — exactly the
+    /// treatment an updated shared style receives. The paragraph side works on the RAW right payload
+    /// (docDefaults spacing is never folded into a style wholesale); the run side takes the resolved
+    /// right formatting the same way the updated-style branch does.
+    /// </summary>
+    private static void ExpressImportedStyleUnderLeftDefaults(
+        XElement cloned, XElement rightRoot, XElement leftOriginalRoot, string type, string styleId)
+    {
+        var (rightEffPPr, rightRPr) = ResolveEffectiveStyleFormatting(rightRoot, type, styleId);
+        var pPr = cloned.Element(W.pPr);
+        if (pPr is null)
+        {
+            pPr = new XElement(W.pPr);
+            var rPrAnchor = cloned.Element(W.rPr);
+            if (rPrAnchor is not null)
+                rPrAnchor.AddBeforeSelf(pPr);
+            else
+                cloned.Add(pPr);
+        }
+        var leftDd = LeftDocDefaultsProps(leftOriginalRoot, paragraphAxis: true);
+        var rightDd = LeftDocDefaultsProps(rightRoot, paragraphAxis: true);
+        AddDocDefaultsNeutralizers(pPr, leftDd, rightEffPPr, paragraphAxis: true, rightDd);
+        MaterializeRightDocDefaults(pPr, leftDd, rightDd);
+        NormalizeTwipsMeasures(pPr);
+        NormalizeStylePropertyOrder(pPr, StylePPrChildOrder);
+        if (!pPr.HasElements)
+            pPr.Remove();
+
+        AddDocDefaultsNeutralizers(rightRPr,
+            LeftDocDefaultsProps(leftOriginalRoot, paragraphAxis: false), rightRPr, paragraphAxis: false);
+        NormalizeStylePropertyOrder(rightRPr, StyleRPrChildOrder);
+        cloned.Elements(W.rPr).Remove();
+        if (rightRPr.HasElements)
+            ReplaceStyleProperties(cloned, null, new XElement(W.rPr, rightRPr.Elements()));
+    }
+
+    /// <summary>
+    /// Rewrite universal measures ("12pt", "0.5in", "1.27cm") on a payload's <c>w:spacing</c> and
+    /// <c>w:ind</c> attributes as plain twips, the form Word writes. A <c>w:line</c> under the
+    /// <c>auto</c> rule is a 240ths-of-a-line count, so a unit suffix there is ambiguous to a renderer;
+    /// the numeric twip value carries the author's intent (12.95pt = 259 = 1.08 lines) unambiguously.
+    /// Values already in twips (or a percentage) are left untouched.
+    /// </summary>
+    private static void NormalizeTwipsMeasures(XElement props)
+    {
+        foreach (var el in props.Elements().Where(e => e.Name == W.spacing || e.Name == W.ind))
+        {
+            foreach (var at in el.Attributes().ToList())
+            {
+                var m = System.Text.RegularExpressions.Regex.Match(at.Value, @"^(-?\d+(?:\.\d+)?)(pt|in|cm|mm|pc|pi)$");
+                if (!m.Success)
+                    continue;
+                double v = double.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+                double twips = m.Groups[2].Value switch
+                {
+                    "pt" => v * 20,
+                    "in" => v * 1440,
+                    "cm" => v * 567,
+                    "mm" => v * 56.7,
+                    _ => v * 240, // pc / pi (picas)
+                };
+                at.Value = ((long)Math.Round(twips)).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            }
+        }
+    }
+
     private static void AddDocDefaultsNeutralizers(
         XElement current, XElement? leftDocDefaultsProps, XElement rightEffectiveProps, bool paragraphAxis,
         XElement? rightDocDefaultsProps = null)
