@@ -6701,7 +6701,8 @@ internal static class IrMarkupRenderer
             if (string.Equals(type, "paragraph", StringComparison.Ordinal))
             {
                 AddDocDefaultsNeutralizers(rightRawPPr,
-                    LeftDocDefaultsProps(leftOriginalRoot, paragraphAxis: true), rightEffPPr, paragraphAxis: true);
+                    LeftDocDefaultsProps(leftOriginalRoot, paragraphAxis: true), rightEffPPr, paragraphAxis: true,
+                    LeftDocDefaultsProps(rightRoot, paragraphAxis: true));
                 MaterializeRightDocDefaults(rightRawPPr,
                     LeftDocDefaultsProps(leftOriginalRoot, paragraphAxis: true),
                     LeftDocDefaultsProps(rightRoot, paragraphAxis: true));
@@ -6768,7 +6769,8 @@ internal static class IrMarkupRenderer
         {
             currentPPr = new XElement(rightPPr);
             AddDocDefaultsNeutralizers(currentPPr,
-                LeftDocDefaultsProps(leftStylesRoot, paragraphAxis: true), rightPPr, paragraphAxis: true);
+                LeftDocDefaultsProps(leftStylesRoot, paragraphAxis: true), rightPPr, paragraphAxis: true,
+                LeftDocDefaultsProps(rightStylesRoot, paragraphAxis: true));
             NormalizeStylePropertyOrder(currentPPr, StylePPrChildOrder);
             currentPPr.Add(new XElement(W.pPrChange, state.RevisionAttributes(), new XElement(leftPPr)));
         }
@@ -6794,7 +6796,8 @@ internal static class IrMarkupRenderer
     /// without a confident built-in stay untouched — the leak is the pre-existing status quo there.
     /// </summary>
     private static void AddDocDefaultsNeutralizers(
-        XElement current, XElement? leftDocDefaultsProps, XElement rightEffectiveProps, bool paragraphAxis)
+        XElement current, XElement? leftDocDefaultsProps, XElement rightEffectiveProps, bool paragraphAxis,
+        XElement? rightDocDefaultsProps = null)
     {
         if (leftDocDefaultsProps is null)
             return;
@@ -6802,18 +6805,23 @@ internal static class IrMarkupRenderer
         {
             var rightEffective = rightEffectiveProps.Element(declared.Name);
             var currentDeclared = current.Element(declared.Name);
-            if (paragraphAxis && declared.Name == W.spacing && (rightEffective is not null || currentDeclared is not null))
+            var rightDefault = rightDocDefaultsProps?.Element(declared.Name);
+            if (paragraphAxis && declared.Name == W.spacing &&
+                (rightEffective is not null || currentDeclared is not null || rightDefault is not null))
             {
                 // Spacing attributes inherit one by one, so a right side that declares SOME of them
                 // (typically line/lineRule) still lets the left docDefaults' other attributes
                 // (typically after/before) through. Word neutralizes exactly those (decoded from its
                 // compare output: a right whose defaults say only line=276 against a left saying
-                // after=160 line=278 yields an updated Normal of after=0 line=276).
+                // after=160 line=278 yields an updated Normal of after=0 line=276). An attribute the
+                // RIGHT's own docDefaults declare is not left-only: it is materialized with the right's
+                // value by MaterializeRightDocDefaults, never reset to a built-in here.
                 var neutral = BuiltinDefaultFor(declared, paragraphAxis);
                 if (neutral is null)
                     continue;
                 var missing = neutral.Attributes()
-                    .Where(a => rightEffective?.Attribute(a.Name) is null && currentDeclared?.Attribute(a.Name) is null)
+                    .Where(a => rightEffective?.Attribute(a.Name) is null && currentDeclared?.Attribute(a.Name) is null &&
+                                rightDefault?.Attribute(a.Name) is null)
                     .ToList();
                 if (missing.Count == 0)
                     continue;

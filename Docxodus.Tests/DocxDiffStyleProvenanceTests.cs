@@ -984,6 +984,29 @@ public class DocxDiffStyleProvenanceTests
     }
 
     /// <summary>
+    /// The complement of the attribute-wise neutralizer: an attribute the RIGHT's own docDefaults
+    /// declare (line=300 against the left's line=278) is not left-only. It must be materialized with
+    /// the right's value on a style whose own payload carries before/after, never reset to the
+    /// built-in 240 — Word's updated heading reads before/after from the style and line from the
+    /// right's defaults.
+    /// </summary>
+    [Fact]
+    public void RightDocDefaultsSpacingAttribute_IsMaterializedNotNeutralized_OnStyleWithOwnSpacing()
+    {
+        var left = DocWithDefaultsAndNormalPPr(true, "<w:spacing w:before=\"360\" w:after=\"80\"/>", "Shared body line.");
+        var right = DocWithDefaultsAndNormalPPr(false, "<w:spacing w:before=\"360\" w:after=\"80\"/><w:keepNext/>", "Shared body line revised.",
+            "<w:pPrDefault><w:pPr><w:spacing w:after=\"160\" w:line=\"300\" w:lineRule=\"auto\"/></w:pPr></w:pPrDefault>");
+
+        var result = DocxDiff.Compare(left, right);
+
+        var spacing = StyleOf(StylesOf(result), "Normal").Element(W + "pPr")?.Element(W + "spacing");
+        Assert.NotNull(spacing);
+        Assert.Equal("360", (string?)spacing!.Attribute(W + "before"));
+        Assert.Equal("80", (string?)spacing.Attribute(W + "after"));
+        Assert.Equal("300", (string?)spacing.Attribute(W + "line"));
+    }
+
+    /// <summary>
     /// A left package with NO styles part at all takes the right's style definitions wholesale —
     /// Word's compare output for this shape carries every right style definition (a used
     /// ListParagraph's contextualSpacing is what keeps inserted bullet lists tight) while the
