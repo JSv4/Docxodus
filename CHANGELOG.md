@@ -6,6 +6,20 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Tabs in headers, footers and notes now advance to the stop they declare (#688). Tab geometry is
+  resolved by a pass that walked the main document part alone, so a tab anywhere else collapsed to
+  a zero-width advance. On the standard legal running foot — `Last Updated October 2025 [tab] PAGE`
+  over a centered stop at the column's midpoint — that did not merely mis-place the page number, it
+  painted the number on top of the date. The pass now runs over every content part, which is what
+  the method's own note had said it would need once anything but the body was rendered.
+- Empty elements no longer serialize as self-closing tags. The converter builds an XML tree and
+  every consumer serializes it with `XElement.ToString`, which writes `<span />` for an element with
+  no content — correct XML, and a trap in HTML, where the trailing slash is ignored and the span
+  stays open until some later closing tag is spent on it. The browser then builds a different tree
+  from the one we emitted: a footnote beginning with a reference mark and a tab had its whole text
+  reparented inside the tab's fixed-width box and rendered a couple of characters per line. Empty
+  non-void elements are now closed at the tree's edge, so every serialization site is covered.
+
 - The epic #435 MCP acceptance smoke and its reopen validation now assert the revision list
   the engine actually produces, and CI runs both on every pull request (#687). Their committed
   assertions expected four revisions where the workflow produces six, so the documented runs

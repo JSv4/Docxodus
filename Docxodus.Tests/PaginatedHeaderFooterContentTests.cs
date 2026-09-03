@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Xml.Linq;
@@ -40,8 +41,10 @@ namespace Docxodus.Tests;
 public class PaginatedHeaderFooterContentTests
 {
     /// <summary>A document whose footer paragraph is <c>text runs → tab → PAGE field</c>, the shape
-    /// Word writes for a "label on the left, page number on the right" running foot.</summary>
-    private static byte[] BuildDocWithTabbedFooter()
+    /// Word writes for a "label on the left, page number on the right" running foot. When
+    /// <paramref name="tabStop"/> is given the paragraph declares that single stop, the way the
+    /// NVCA charter's footer declares a centered one at 4680 twips.</summary>
+    private static byte[] BuildDocWithTabbedFooter(TabStop? tabStop = null)
     {
         using var ms = new MemoryStream();
         using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
@@ -55,6 +58,8 @@ public class PaginatedHeaderFooterContentTests
 
             var footer = main.AddNewPart<FooterPart>();
             var p = new Paragraph();
+            if (tabStop is not null)
+                p.Append(new ParagraphProperties(new Tabs(tabStop)));
             // Split across runs exactly as Word does, to prove every one of them survives.
             p.Append(new Run(new Text("Last Updated ") { Space = SpaceProcessingModeValues.Preserve }));
             p.Append(new Run(new Text("October")));
@@ -238,5 +243,54 @@ public class PaginatedHeaderFooterContentTests
         var html = PaginatedHtml(ms.ToArray());
 
         Assert.Contains("dangling header link", html);
+    }
+
+    /// <summary>
+    /// The wrapper span's declared width, in inches, for the aligned segment that ends at a tab.
+    /// <c>TransformElementsPrecedingTab</c> emits the segment as one <c>inline-flex</c> box whose
+    /// width is the whole advance to the tab stop, so this number IS the resolved tab geometry.
+    /// </summary>
+    private static decimal TabSegmentWidthInches(string html)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(
+            html, @"display:\s*inline-flex[^""]*?width:\s*([0-9.]+)in");
+        Assert.True(match.Success, "paginated HTML has no inline-flex tab segment:\n" + html);
+        return decimal.Parse(match.Groups[1].Value, NumberFormatInfo.InvariantInfo);
+    }
+
+    /// <summary>
+    /// A footer tab must advance to its declared stop. Tab geometry is annotated by
+    /// <c>CalculateSpanWidthForTabs</c>, which walked the main document part alone, so every tab in
+    /// a running story resolved to a zero-width advance — and the page number after it was painted
+    /// on top of the label before it rather than at the stop (issue #688).
+    /// </summary>
+    /// <remarks>
+    /// A LEFT stop makes the arithmetic exact and font-independent: the advance is
+    /// <c>pos − pen</c>, and the segment's total width is <c>pen + (pos − pen)</c>, so the wrapper
+    /// must declare exactly the stop's own position however wide the label measures.
+    /// </remarks>
+    [Fact]
+    public void PHF015_AFooterTabAdvancesToItsDeclaredStop()
+    {
+        var html = PaginatedHtml(BuildDocWithTabbedFooter(
+            new TabStop { Val = TabStopValues.Left, Position = 4680 }));
+
+        Assert.Equal(3.25m, TabSegmentWidthInches(html));
+    }
+
+    /// <summary>
+    /// The NVCA charter's own footer shape: a single CENTERED stop at 4680 twips, the midpoint of a
+    /// 468pt text column, so the page number sits centered under the body. Centering spends half
+    /// the following text's width, so the advance lands just short of the stop — but nowhere near
+    /// zero, which is what the unannotated story used to produce.
+    /// </summary>
+    [Fact]
+    public void PHF016_ACenteredFooterTabStopCentersOnItsPosition()
+    {
+        var html = PaginatedHtml(BuildDocWithTabbedFooter(
+            new TabStop { Val = TabStopValues.Center, Position = 4680 }));
+
+        var width = TabSegmentWidthInches(html);
+        Assert.InRange(width, 3.0m, 3.25m);
     }
 }
