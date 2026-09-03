@@ -53,6 +53,15 @@ jobs:
           dotnet build tools/manifest-fuzz/replay/replay.csproj -c Release
           dotnet build tools/screenshots/redline/redline-screenshot.csproj -c Release
 
+      # The epic #435 acceptance smoke is the only end-to-end exercise of the MCP
+      # surface — lifecycle, atomic apply, transaction replay, the refusals, save and
+      # reopen. It was documented as a by-hand run, so its committed assertions went
+      # stale on main and nobody noticed for a release (#687). Roughly a minute.
+      - name: Run MCP acceptance smoke
+        run: |
+          dotnet build tools/mcp-server/mcpserver.csproj -c Release
+          ./scripts/mcp-smoke.sh
+
       - name: Run tests
         env:
           DOCXODUS_EVAL_ARTIFACTS: ${{ github.workspace }}/eval-artifacts
