@@ -630,10 +630,10 @@ internal static class IrBlockAligner
         {
             DetectOneToManyInGap(leftBlocks, rightBlocks, leftFrom, leftTo, rightFrom, rightTo,
                 leftKind, rightKind, leftMatch, rightMatch, leftoverLeft, leftoverRight,
-                IrAlignmentKind.Split, splitGroups, settings);
+                IrAlignmentKind.Split, splitGroups, settings, similarity);
             DetectOneToManyInGap(rightBlocks, leftBlocks, rightFrom, rightTo, leftFrom, leftTo,
                 rightKind, leftKind, rightMatch, leftMatch, leftoverRight, leftoverLeft,
-                IrAlignmentKind.Merge, mergeGroups, settings);
+                IrAlignmentKind.Merge, mergeGroups, settings, similarity);
         }
 
         // Word-matcher junction pairing (calibrated against Word's compare output). Word's
@@ -1612,7 +1612,7 @@ internal static class IrBlockAligner
         List<int> leftoverSingular, List<int> leftoverPlural,
         IrAlignmentKind kind,
         List<(int SingularIndex, List<int> PluralIndexes)> groups,
-        IrDiffSettings settings)
+        IrDiffSettings settings, IrBlockSimilarity similarity)
     {
         // O(1)-prefilter content-token counts, computed lazily once per gap (-1 = not yet counted).
         // The thresholds imply HARD length bounds a window must satisfy before any LCS scoring is
@@ -1647,7 +1647,7 @@ internal static class IrBlockAligner
             }
 
             var run = FindQualifyingRun(singularPara, partner, pluralBlocks, pluralFrom, pluralTo,
-                pluralMatch, settings, PluralContent);
+                pluralMatch, settings, PluralContent, similarity);
             if (run is null)
                 continue;
 
@@ -1698,10 +1698,45 @@ internal static class IrBlockAligner
     private static List<int>? FindQualifyingRun(
         IrParagraph singular, int partner,
         IrNodeList<IrBlock> pluralBlocks, int pluralFrom, int pluralTo,
-        int[] pluralMatch, IrDiffSettings settings, Func<int, int> pluralContent)
+        int[] pluralMatch, IrDiffSettings settings, Func<int, int> pluralContent,
+        IrBlockSimilarity similarity)
     {
         bool Eligible(int pj) =>
             pluralBlocks[pj] is IrParagraph && (pluralMatch[pj] == -1 || pj == partner);
+
+        // Shared-word prefilter (exact necessary condition, pure performance): TrimAndGate's Gate 1
+        // needs ≥2 members each carrying ≥ MinMatchedWordsPerSplitFragment LCS-matched Word tokens,
+        // and a member's matched tokens can never exceed its Word-key multiset overlap with the
+        // singular. So a singular with fewer than 2·Min words can never split/merge, and a window
+        // with fewer than two members overlapping it by ≥ Min words cannot qualify — neither pays
+        // for an LCS. Without this, one long whole-rewrite region (a 50×1100 gap of a template
+        // against a 120-page document) ran the LCS scorer on hundreds of thousands of windows.
+        var singularKeys = similarity.WordKeys(singular);
+        int singularWords = 0;
+        foreach (var kv in singularKeys)
+            singularWords += kv.Value;
+        if (singularWords < 2 * MinMatchedWordsPerSplitFragment)
+            return null;
+        var sharedWords = new int[pluralTo - pluralFrom];
+        Array.Fill(sharedWords, -1);
+        bool PhraseCandidate(int pj)
+        {
+            int idx = pj - pluralFrom;
+            if (sharedWords[idx] < 0)
+            {
+                int shared = 0;
+                if (pluralBlocks[pj] is IrParagraph pp)
+                {
+                    var keys = similarity.WordKeys(pp);
+                    var (small, large) = keys.Count <= singularKeys.Count ? (keys, singularKeys) : (singularKeys, keys);
+                    foreach (var kv in small)
+                        if (large.TryGetValue(kv.Key, out int other))
+                            shared += Math.Min(kv.Value, other);
+                }
+                sharedWords[idx] = shared;
+            }
+            return sharedWords[idx] >= MinMatchedWordsPerSplitFragment;
+        }
 
         // O(1) length prefilter bounds (see DetectOneToManyInGap): a window whose content-token total
         // falls outside [coverage·singular, singular/(1−slack)] cannot clear the thresholds, so the
@@ -1739,15 +1774,20 @@ internal static class IrBlockAligner
             if (!Eligible(a))
                 continue;
             int windowContent = pluralContent(a);
+            int phraseCandidates = PhraseCandidate(a) ? 1 : 0;
             for (int b = a + 1; b < pluralTo && b - a + 1 <= settings.SplitMaxRunLength; b++)
             {
                 if (!Eligible(b))
                     break; // adjacency requirement: the window must be a contiguous eligible run
                 windowContent += pluralContent(b);
+                if (PhraseCandidate(b))
+                    phraseCandidates++;
                 if (windowContent > maxWindowContent)
                     break; // adding members only grows content — no longer window from this start qualifies
                 if (windowContent < minWindowContent)
                     continue; // too little content to cover the singular side yet — extend the window
+                if (phraseCandidates < 2)
+                    continue; // Gate 1 cannot pass: fewer than two members share ≥ Min words with the singular
                 var trimmed = TrimAndGate(singular, partner, a, b, pluralBlocks, pluralMatch, settings,
                     out bool viaCoveragePath, out double coverage);
                 if (trimmed is null)
