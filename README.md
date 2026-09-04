@@ -158,13 +158,19 @@ The document you see is the document you get: edits go through the session, and 
 block re-renders** — so a structural op costs ~90–360 ms on a 346-block, 94-footnote filing
 template, not the ~6 s a full remount used to take. `save()` returns lossless bytes.
 
+The ribbon covers the Word most people use — fonts, colour and highlight, paragraph spacing and
+the numbering gallery, styles read from the document, find and replace, links, pictures, tables
+with merge and shading, page setup, tracked changes with accept/reject — and comments render the
+way Word renders them: the range highlighted inline, the thread as a bubble in the margin.
+Headers and footers are edited in place on the page.
+
 <p align="center">
-  <img src="docs/images/editor/ribbon-insert.png" alt="Insert tab" width="49%">
-  <img src="docs/images/editor/ribbon-table-contextual.png" alt="Contextual table tab" width="49%">
+  <img src="docs/images/editor/comments.png" alt="Comment bubbles beside the page" width="49%">
+  <img src="docs/images/editor/paginated.png" alt="Page view with a footer being edited in place" width="49%">
 </p>
 
-More of the surface — ribbon anatomy, header/footer bands, paginated mode, per-operation costs — is
-in [`docs/architecture/editor_ui_surface.md`](docs/architecture/editor_ui_surface.md).
+More of the surface — ribbon anatomy, the comment gutter, in-page headers and footers, per-operation
+costs — is in [`docs/architecture/editor_ui_surface.md`](docs/architecture/editor_ui_surface.md).
 
 ---
 

@@ -197,7 +197,7 @@ checkpoint and, with the default initial capture, compares it with the exact ope
 | **Native images** | `get_image_capabilities`, `list_images`, `insert_image`, `replace_image`, `set_image_dimensions`, `set_image_metadata`, `set_image_floating_layout`, `remove_image` |
 | **A: text mutations** | `replace_text`, `replace_text_range`, `replace_text_at_span`, `replace_inner`, `replace_match`, `delete_block`, `move_block`, `delete_range`, `delete_section` |
 | **B: structural** | `insert_paragraph`, `split_paragraph`, `merge_paragraphs` |
-| **B: headers/footers/page numbers** | `set_header_text`, `set_footer_text`, `ensure_header_footer_visible`, `insert_page_number_field`, `set_page_numbering`, `clear_page_numbering` |
+| **B: headers/footers/page numbers** | `set_header_text`, `set_footer_text`, `ensure_header_footer_visible`, `set_header_footer_kind_enabled`, `insert_page_number_field`, `set_page_numbering`, `clear_page_numbering`, `set_page_setup` |
 | **B: footnotes/endnotes** | `insert_footnote`, `insert_endnote` |
 | **B: native comments** | `add_comment`, `add_comment_to_revision`, `add_comment_reply`, `update_comment`, `set_comment_resolved`, `remove_comment`, `list_comments` |
 | **C: formatting** | `apply_format`, `apply_format_by_substring`, `set_paragraph_style`, `set_paragraph_format`, `set_list_level`, `remove_list_membership`, `apply_list_format`, `apply_list_format_range`, `set_list_start_override`, `clear_list_start_override` |

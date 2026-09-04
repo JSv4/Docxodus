@@ -307,7 +307,7 @@ code/strike, links, hard breaks).
 ### `docxodus_format` — formatting
 
 `apply_format`/`apply_format_by_substring` (`FormatOp`: bold/italic/underline/strike/code/color/
-vertAlign/fontSizePts/fontFamily), `set_paragraph_style`, `set_paragraph_format`
+vertAlign/fontSizePts/fontFamily/highlight/caps/smallCaps), `set_paragraph_style`, `set_paragraph_format`
 (`ParagraphFormatOp`: alignment/indentDelta/firstLineIndent/hangingIndent/spacingBefore/
 spacingAfter/lineSpacing/lineSpacingRule/pageBreakBefore/topBorder/bottomBorder/clearBorders —
 indent/spacing values are twips (1440 = 1in, 20 = 1pt); `firstLineIndent`/`hangingIndent` are
@@ -365,8 +365,9 @@ one comment by `commentAnchorId`; `resolved` defaults true and false reopens it 
 parentage. Flat comments are upgraded with find-or-created `commentsExtended.xml` and
 `commentsIds.xml` parts when first replied to or resolved.
 
-`list` returns part-order entries with additive `parentAnchorId` and `resolved` fields when a
-Word extension entry exists; an absent field means legacy/flat metadata rather than reopened.
+`list` returns part-order entries, each carrying the comment's numeric `id` (the `w:id` that
+rendered HTML exposes as `data-comment-id`), with additive `parentAnchorId` and `resolved` fields
+when a Word extension entry exists; an absent field means legacy/flat metadata rather than reopened.
 `update`/`remove` use the same definition anchor. Removing a comment also prunes the extension
 entries it owned and clears child links that would otherwise dangle. Documented at
 `docs/architecture/docx_mutation_api.md` (Comments section).

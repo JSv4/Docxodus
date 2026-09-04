@@ -40,6 +40,7 @@ import type {
   NumberFormat,
   PageNumberField,
   PageNumberingOp,
+  PageSetupOp,
   TableOfAuthoritiesOptions,
   TableOfContentsOptions,
   TableOfFiguresOptions,
@@ -819,9 +820,12 @@ export class DocxSession {
   /**
    * Append a page-number field to the paragraph `anchorId` — typically a header/footer paragraph
    * returned by {@link setFooterText}/{@link setHeaderText}. `"currentPage"` emits a PAGE field,
-   * `"totalPages"` a NUMPAGES field (native complex field with a cached result). Center it by
-   * setting the paragraph alignment ({@link setParagraphFormat}). Returns the paragraph anchor in
-   * `modified`.
+   * `"totalPages"` a NUMPAGES field (native complex field with a cached result), and
+   * `"pageOfTotal"` Word's "Page X of Y" gallery entry — the text `Page `, a PAGE field, the text
+   * ` of ` and a NUMPAGES field, every run inheriting the paragraph's last run formatting (the
+   * pieces cannot be composed from the single-field form: text after a field cannot be appended
+   * without rewriting the field's result). Center it by setting the paragraph alignment
+   * ({@link setParagraphFormat}). Returns the paragraph anchor in `modified`.
    *
    * `format` writes the field's own `\*` general-formatting switch (`PAGE \* roman` → `i, ii, iii`).
    * Omitting it — the default — emits a plain field, which is what Word inserts and what follows the
@@ -933,6 +937,50 @@ export class DocxSession {
    */
   ensureHeaderFooterVisible(anchorId: string, kind: HeaderFooterKind): EditResult {
     return JSON.parse(this.wasm.EnsureHeaderFooterVisible(this.handle, anchorId, kind)) as EditResult;
+  }
+
+  /**
+   * Word's "Different first page" / "Different odd & even pages" checkboxes as one verb: switch
+   * the `kind` story of the section that owns `anchorId` (any body block in it) on or off.
+   * `enabled: true` is exactly {@link ensureHeaderFooterVisible}; `enabled: false` removes the
+   * flag that selects the story — `w:titlePg` from the governing `w:sectPr` for `"first"`, the
+   * document-global `w:evenAndOddHeaders` for `"even"` — and leaves the story parts in place,
+   * which is what Word does when the checkbox is cleared (re-enabling brings the content straight
+   * back). Disabling `"default"` fails with `invalid_page_setup`: that story has no flag.
+   *
+   * A flag already in the requested state is a successful no-op that records NO undo step, so a
+   * checkbox handler can call this unconditionally. Read the current state from
+   * {@link SectionInfo.titlePage} / {@link SectionInfo.evenAndOddHeaders}.
+   */
+  setHeaderFooterKindEnabled(anchorId: string, kind: HeaderFooterKind, enabled: boolean): EditResult {
+    if (!this.wasm.SetHeaderFooterKindEnabled) {
+      throw new Error("SetHeaderFooterKindEnabled is not available in this WASM build");
+    }
+    return JSON.parse(
+      this.wasm.SetHeaderFooterKindEnabled(this.handle, anchorId, kind, enabled)
+    ) as EditResult;
+  }
+
+  /**
+   * Set the page geometry (`w:pgSz` / `w:pgMar`) of the section that owns `anchorId` — Word's
+   * *Page Setup* dialog: page size, orientation, margins and header/footer distance. Omitted
+   * fields on `op` are left unchanged; the elements are created in schema order when absent, as
+   * is a trailing `w:sectPr` for a body that has none. Read the result back with
+   * {@link getSectionInfo}.
+   *
+   * `landscape: true` without an explicit size swaps a portrait-shaped page's width and height
+   * (and `false` swaps back), matching Word's orientation toggle. Invalid geometry — a
+   * non-positive size, a negative margin, or opposing margins that leave no room — fails with
+   * `invalid_page_setup` and touches nothing. Values the section already has are a successful
+   * no-op that consumes no undo history.
+   */
+  setPageSetup(anchorId: string, op: PageSetupOp): EditResult {
+    if (!this.wasm.SetPageSetup) {
+      throw new Error("SetPageSetup is not available in this WASM build");
+    }
+    return JSON.parse(
+      this.wasm.SetPageSetup(this.handle, anchorId, JSON.stringify(op))
+    ) as EditResult;
   }
 
   // ─── Footnotes / endnotes ────────────────────────────────────────────
