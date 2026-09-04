@@ -554,7 +554,7 @@ embed inside a wide desktop page is narrow, and a viewport media query gets that
 | Comment gutter | beside the sheet | hidden (highlights stay; New Comment prompts) |
 | Table picker | popover under its button | docked to the bottom edge, within thumb reach |
 | Sheet padding | 56 px vertical | 22 px vertical (gutters come from `w:sectPr`, not from chrome) |
-| Touch targets | 28 px | 40 px on coarse pointers |
+| Touch targets | 28 px | 40 px on every command control, by LAYOUT rather than pointer (an emulated narrow viewport reports a fine pointer and is still driven by a thumb). The rows add no padding of their own on top of it, and the tab strip — navigation, whose labels already clear the floor horizontally — takes 34 px, so three chrome rows cost 118 px rather than 140 px above the page. |
 
 **Compact trims the chrome, never the page.** The document's text column is the width its
 `w:sectPr` defines at every density; a window too narrow for it is handled by the viewport's
