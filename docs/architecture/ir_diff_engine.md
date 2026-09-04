@@ -94,6 +94,7 @@ Internal stages (all `internal`, under `Docxodus/Ir/Diff/`):
 - **`IrTokenDiffer`** — Myers O(ND) token diff inside a paired block (Equal/Insert/Delete/FormatChanged).
 - **`IrTableDiffer`** — nested table row/cell diffs (a cell-text edit surfaces as a token diff inside that cell, not a whole-table blob).
 - **`IrEditScriptBuilder`** — assembles the `IrEditScript` from the alignment + token/table diffs, including footnote/endnote scope ops.
+- **`IrCrossParagraphSegmenter`** — the second arrangement mode: a region the aligner could not pair block-wise is factored back into output paragraphs from one flat word+pilcrow stream, so retained words cross paragraph boundaries the way Word's do. Selected per region by `IrEditScriptBuilder.TryBuildCrossParagraphRunOp` / `TryBuildStoryFinalMixedRegionOp`; the class remarks are the algorithm, and `token_stream_arrangement.md` is the architecture decision behind it — including the one part still open, the criterion that decides which regions it owns (issue #694).
 - **`IrMarkupRenderer` / `IrRevisionRenderer` / `IrEditScriptJson`** — the three renderers above.
 
 ### One read per document per comparison
