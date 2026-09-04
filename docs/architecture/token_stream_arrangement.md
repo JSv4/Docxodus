@@ -196,9 +196,9 @@ battery.
 
 ## Child issues
 
-- **Decode reference compare output for large zero-pair regions** (`type:design`, `area:diff`,
-  `surface:core`). The prerequisite for point 2. Produces the evidence, not a rule.
-- **Replace the two tuned literals with the decoded criterion** (`type:feat`, `area:diff`,
-  `surface:core`). Blocked on the decode. Must land with the cost bound from point 6.
+- **#699 — Decode reference compare output for large zero-pair regions.** The prerequisite for
+  point 2. Produces the evidence, not a rule.
+- **#700 — Replace the token-stream mode's tuned gate with the decoded selection criterion.**
+  Blocked on #699. Must land with the cost bound from point 6.
 
 #694 closes on this note. It does not close on the children.
