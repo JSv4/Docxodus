@@ -592,6 +592,52 @@ A malformed parent graph (cycle, self-reference, missing parent) degrades safely
 first pass cannot reach through a parent renders flat in a second pass, and a shared
 rendered-set guarantees each comment renders exactly once.
 
+## The browser editor's use of Inline mode
+
+The block editor (`npm/src/editor.ts`) renders comments through Inline mode, and it does so on
+two paths that must agree: the full-document paint and the per-block re-render after an edit.
+Both go through the session-attached `DocxSessionOps.RenderEditorHtml` /
+`RenderEditorBlocksHtml` / `RenderEditorBlockHtml` façades, whose single JSON options object
+carries a `comments` flag; `comments: true` maps to `CommentRenderMode.Inline` with the
+`comment-` class prefix, so a re-rendered block carries exactly the `comment-highlight` spans,
+`data-comment-id` values and `comment-marker` anchors the first paint produced. The older
+`RenderHtml` / `RenderBlockHtml` / `RenderBlocksHtml` façades never render comments and are
+unchanged — the block-fidelity tests pin their output — and the editor profile with
+`comments: false` is byte-identical to them.
+
+Two things make the per-block path work that the full render gets for free:
+
+- **The render shell copies the comments family.** `HtmlConversionOps.AddFormattingParts`
+  clones `WordprocessingCommentsPart`, `WordprocessingCommentsExPart`,
+  `WordprocessingCommentsIdsPart` and `WordprocessingPeoplePart` into the reusable per-session
+  shell alongside styles/numbering/theme/fonts/settings, so `LoadComments` in the throwaway
+  document finds the definitions (author, body text for the tooltip, `w15:done` for
+  `comment-resolved`, `w15:paraIdParent` for replies). The shell's rebuild signature mixes in
+  `DocxSession.CommentsVersion`, a counter every comment mutation and every snapshot restore
+  bumps, so a shell built before the first comment is rebuilt on the next render rather than
+  serving stale definitions forever — and an ordinary text edit still reuses it.
+- **Cross-block ranges are reconstructed.** A comment whose `w:commentRangeStart` sits in an
+  earlier paragraph than the block being re-rendered would never open the tracker in an isolated
+  shell body. `RenderTargetsFromShell` therefore walks the owning part once (only when comments
+  are being rendered and the document defines any), computes the ids open at the start of each
+  render run, and brackets the run with synthetic body-level `w:commentRangeStart` /
+  `w:commentRangeEnd` markers, so the covered runs highlight exactly as in the full render and
+  nothing leaks into the next run.
+
+One more thing the editor's block profile turns on that has nothing to do with comments: the
+paginated full render wraps every PAGE / NUMPAGES result in `<span data-field="PAGE">` (plus
+`data-field-format`) so the page boxes can substitute each page's real number, and a block
+render never paginates, so it never emitted the marker. `WmlToHtmlConverterSettings.StampPageNumberFields`
+now forces it; the editor block profile sets it from its `paginated` flag and, through
+`HtmlConversionOptions.StampPageNumberFieldsInRunningStories`, for any batch that contains a
+header/footer block regardless (running stories only ever render inside page boxes). The
+comment-less `RenderBlockHtml` never sets either, so its output is unchanged.
+
+`ConvertRun` already degrades to an unadorned highlight when a range id has no definition
+(`tracker.Comments.TryGetValue`), so a marker whose comment was deleted mid-session never
+throws. `ListComments()` surfaces each comment's numeric `w:id` as `CommentListEntry.Id` for
+precisely this pairing: it is the value the highlight's `data-comment-id` carries.
+
 ## Limitations
 
 1. **Comment highlighting colors**: Word allows different highlight colors per comment; currently all use the same CSS

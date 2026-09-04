@@ -15,7 +15,8 @@
        Everything below is page framing: fill the viewport so the surface manages its
        own scrolling (the ribbon stays put on a phone instead of scrolling away). */
     html, body { height: 100%; }
-    body { margin: 0; }
+    /* !important: the converter injects its own "body { margin: 20px }" into this page. */
+    body { margin: 0 !important; }
     #app { height: 100%; }
   </style>
 </head>

@@ -1702,7 +1702,13 @@ listSeparator
                 root = new XElement(W.settings, new XAttribute(XNamespace.Xmlns + "w", W.w));
                 xDoc.Add(root);
             }
-            if (root.Element(W.evenAndOddHeaders) == null)
+            var existing = root.Element(W.evenAndOddHeaders);
+            if (existing != null)
+            {
+                // Word writes w:val="0" when the box is cleared; presence is not "on".
+                existing.Attributes(W.val).Remove();
+            }
+            else
             {
                 var rank = Order_settings[W.evenAndOddHeaders];
                 var firstLater = root.Elements().FirstOrDefault(e =>

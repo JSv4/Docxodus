@@ -500,7 +500,7 @@ internal static class Dispatcher
             session.Handle, Str(args, "anchorId"), Int(args, "characterOffset"), Str(args, "markdown")),
         "insert_page_number_field" => DocxSessionOps.InsertPageNumberField(
             session.Handle, Str(args, "anchorId"),
-            OptStr(args, "field") == "total_pages" ? PageNumberField.TotalPages : PageNumberField.CurrentPage,
+            DocxSessionJson.ParsePageNumberField(OptStr(args, "field")),
             DocxSessionJson.ParseNumberFormatOrNull(OptStr(args, "numberFormat"))),
         // Reference fields (issue #607). The switches are typed options here too: an agent asks
         // for "levels 1-3, hyperlinked", never for \o "1-3" \h.
@@ -1626,7 +1626,7 @@ internal static class Dispatcher
                 break;
             case ("docxodus_create", "insert_page_number_field"):
                 RequireStrings(args, "anchorId");
-                ValidateOptionalEnum(args, "field", "current_page", "total_pages");
+                ValidateOptionalEnum(args, "field", "current_page", "total_pages", "page_of_total");
                 ValidateOptionalEnum(args, "numberFormat", "decimal", "upperLetter",
                     "lowerLetter", "upperRoman", "lowerRoman");
                 break;

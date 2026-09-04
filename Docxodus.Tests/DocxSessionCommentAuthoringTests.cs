@@ -680,8 +680,9 @@ public class DocxSessionCommentAuthoringTests
     public void DS400_AddCommentReply_AuthorsNativeThread_AndSharesParentRange()
     {
         // The five-value constructor/deconstructor are an existing CLR contract. Thread fields
-        // are init properties so extending the entry remains binary-compatible.
-        var legacyEntry = new CommentListEntry("cmt:cmt:1", "A", null, null, "body");
+        // are init properties so extending the entry keeps the positional shape; the numeric
+        // Id is a required init property because every real entry has one.
+        var legacyEntry = new CommentListEntry("cmt:cmt:1", "A", null, null, "body") { Id = 1 };
         var (legacyAnchor, legacyAuthor, legacyInitials, legacyDate, legacyText) = legacyEntry;
         Assert.Equal("cmt:cmt:1", legacyAnchor);
         Assert.Equal("A", legacyAuthor);

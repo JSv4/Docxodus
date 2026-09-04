@@ -282,6 +282,8 @@ class PageNumberField(str, Enum):
 
     CURRENT_PAGE = "currentPage"
     TOTAL_PAGES = "totalPages"
+    #: Word's "Page X of Y" gallery entry: the text ``Page ``, a PAGE field, `` of ``, NUMPAGES.
+    PAGE_OF_TOTAL = "pageOfTotal"
 
 
 class ParagraphAlignment(str, Enum):
@@ -354,6 +356,7 @@ class EditErrorCode(str, Enum):
     INVALID_LIST_LEVEL = "invalid_list_level"
     INVALID_LIST_START_VALUE = "invalid_list_start_value"
     INVALID_PAGE_NUMBERING = "invalid_page_numbering"
+    INVALID_PAGE_SETUP = "invalid_page_setup"
     INVALID_REFERENCE_FIELD = "invalid_reference_field"
     INVALID_PARAGRAPH_FORMAT = "invalid_paragraph_format"
     INVALID_TABLE_STYLING = "invalid_table_styling"

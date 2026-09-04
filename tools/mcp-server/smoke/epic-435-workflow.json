@@ -950,14 +950,57 @@
       "action": "list"
     },
     "expect": {
-      "revisions.length": 4,
-      "revisions.1.type": "delete",
-      "revisions.1.text": "[_______________]",
-      "revisions.2.type": "insert",
-      "revisions.2.text": "Northstar Robotics, Inc.",
-      "revisions.2.author": "Smoke Counsel",
-      "revisions.3.type": "format",
-      "revisions.3.text": "Northstar Robotics, Inc."
+      "revisions.length": 6
+    },
+    "expectMembers": {
+      "revisions": [
+        {
+          "type": "insert",
+          "text": "",
+          "author": "Smoke Counsel",
+          "partUri": "/word/document.xml",
+          "scope": "body",
+          "anchorId": "$certify_anchor"
+        },
+        {
+          "type": "insert",
+          "text": "The undersigned further certifies that this Restated Certificate has been duly adopted in accordance with Sections 242 and 245 of the DGCL.\u00b6",
+          "author": "Smoke Counsel",
+          "partUri": "/word/document.xml",
+          "scope": "body"
+        },
+        {
+          "type": "delete",
+          "text": "[_______________]",
+          "author": "Smoke Counsel",
+          "partUri": "/word/document.xml",
+          "scope": "body",
+          "anchorId": "$name_anchor"
+        },
+        {
+          "type": "insert",
+          "text": "Northstar Robotics, Inc.",
+          "author": "Smoke Counsel",
+          "partUri": "/word/document.xml",
+          "scope": "body",
+          "anchorId": "$name_anchor"
+        },
+        {
+          "type": "format",
+          "text": "Northstar Robotics, Inc.",
+          "author": "Smoke Counsel",
+          "partUri": "/word/document.xml",
+          "scope": "body",
+          "anchorId": "$name_anchor"
+        },
+        {
+          "type": "insert",
+          "text": " Adopted by written consent of the stockholders.\u00b6",
+          "author": "Smoke Counsel",
+          "partUri": "/word/footnotes.xml",
+          "scope": "fn"
+        }
+      ]
     }
   },
   {

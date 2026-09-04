@@ -184,6 +184,15 @@ namespace Docxodus
         public bool IncludeCommentMetadata;
 
         /// <summary>
+        /// If true, wrap every PAGE / NUMPAGES field result in a <c>&lt;span data-field="PAGE"&gt;</c>
+        /// (plus <c>data-field-format</c> for a <c>\*</c> switch) exactly as paginated rendering does,
+        /// regardless of <see cref="RenderPagination"/>. Lets a client that paginates a block render
+        /// itself — the browser editor editing a running story inside the page boxes — substitute
+        /// each page's real number. Default false: only paginated mode stamps the marker.
+        /// </summary>
+        public bool StampPageNumberFields;
+
+        /// <summary>
         /// If not None, render document with page containers in PDF.js style.
         /// Default: None (continuous scrolling layout).
         /// </summary>
@@ -334,6 +343,7 @@ namespace Docxodus
             CommentRenderMode = CommentRenderMode.EndnoteStyle;
             CommentCssClassPrefix = "comment-";
             IncludeCommentMetadata = true;
+            StampPageNumberFields = false;
             RenderPagination = PaginationMode.None;
             PaginationScale = 1.0;
             PaginationCssClassPrefix = "page-";
@@ -373,6 +383,7 @@ namespace Docxodus
             CommentRenderMode = htmlConverterSettings.CommentRenderMode;
             CommentCssClassPrefix = htmlConverterSettings.CommentCssClassPrefix;
             IncludeCommentMetadata = htmlConverterSettings.IncludeCommentMetadata;
+            StampPageNumberFields = htmlConverterSettings.StampPageNumberFields;
             RenderPagination = htmlConverterSettings.RenderPagination;
             PaginationScale = htmlConverterSettings.PaginationScale;
             PaginationCssClassPrefix = htmlConverterSettings.PaginationCssClassPrefix;
@@ -467,6 +478,15 @@ namespace Docxodus
         /// If true, include comment metadata (author, date) as data attributes
         /// </summary>
         public bool IncludeCommentMetadata;
+
+        /// <summary>
+        /// If true, wrap every PAGE / NUMPAGES field result in a <c>&lt;span data-field="PAGE"&gt;</c>
+        /// (plus <c>data-field-format</c> for a <c>\*</c> switch) exactly as paginated rendering does,
+        /// regardless of <see cref="RenderPagination"/>. Lets a client that paginates a block render
+        /// itself — the browser editor editing a running story inside the page boxes — substitute
+        /// each page's real number. Default false: only paginated mode stamps the marker.
+        /// </summary>
+        public bool StampPageNumberFields;
 
         /// <summary>
         /// If not None, render document with page containers in PDF.js style.
@@ -571,6 +591,7 @@ namespace Docxodus
             CommentRenderMode = CommentRenderMode.EndnoteStyle;
             CommentCssClassPrefix = "comment-";
             IncludeCommentMetadata = true;
+            StampPageNumberFields = false;
             RenderPagination = PaginationMode.None;
             PaginationScale = 1.0;
             PaginationCssClassPrefix = "page-";
@@ -1074,6 +1095,8 @@ namespace Docxodus
             // (newlines/indentation) doesn't create visible spaces between adjacent elements.
             NormalizeInlineWhitespace(xhtml);
 
+            CloseEmptyNonVoidElements(xhtml);
+
             // Note: the xhtml returned by ConvertToHtmlTransform contains objects of type
             // XEntity.  PtOpenXmlUtil.cs define the XEntity class.  See
             // http://blogs.msdn.com/ericwhite/archive/2010/01/21/writing-entity-references-using-linq-to-xml.aspx
@@ -1083,6 +1106,53 @@ namespace Docxodus
             // must do it correctly, or entities will not be serialized properly.
 
             return xhtml;
+        }
+
+        /// <summary>
+        /// The HTML elements that are allowed to stand alone. Everything else needs a closing tag.
+        /// </summary>
+        private static readonly HashSet<string> HtmlVoidElements = new(StringComparer.Ordinal)
+        {
+            "area", "base", "br", "col", "embed", "hr", "img", "input",
+            "link", "meta", "param", "source", "track", "wbr",
+        };
+
+        /// <summary>
+        /// Give every empty non-void element a text node, so serialization writes
+        /// <c>&lt;span&gt;&lt;/span&gt;</c> rather than <c>&lt;span /&gt;</c>.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// The converter builds an XML tree and every consumer serializes it with
+        /// <c>XElement.ToString</c>, which self-closes an element with no content. That is correct
+        /// XML and a trap in HTML: outside foreign content an HTML parser ignores the trailing
+        /// slash, so <c>&lt;span /&gt;</c> opens a span that never closes there, and every following
+        /// sibling becomes its child until some later closing tag is spent on it. The tree the
+        /// browser builds is then a different shape from the one we emitted.
+        /// </para>
+        /// <para>
+        /// It surfaced as a layout bug with no obvious cause (issue #688): a footnote whose text
+        /// begins with a reference mark and a tab emits an empty wrapper span for the mark, and in
+        /// the browser the note's whole text was reparented inside the tab's fixed-width box and
+        /// rendered a couple of characters per line. Fixing it at the tree's edge rather than at
+        /// each site that happens to produce an empty element is what keeps the emitted shape and
+        /// the parsed shape the same; <c>ConvertContentThatCanContainFields</c> had already had to
+        /// special-case an empty <c>&lt;a&gt;</c> for exactly this.
+        /// </para>
+        /// <para>
+        /// The same defect broke complex fields in the paginated editor: a field's begin, separate
+        /// and end runs each emit an empty span, so a footer authored as "Page {PAGE} of {NUMPAGES}"
+        /// parsed with " of " and the second field swallowed inside the first one's chrome, and the
+        /// paginator's per-page substitution then overwrote them — the footer read "Page 1".
+        /// </para>
+        /// </remarks>
+        private static void CloseEmptyNonVoidElements(XElement root)
+        {
+            foreach (var element in root.DescendantsAndSelf())
+            {
+                if (element.IsEmpty && !HtmlVoidElements.Contains(element.Name.LocalName))
+                    element.Add(new XText(string.Empty));
+            }
         }
 
         /// <summary>
@@ -6456,14 +6526,14 @@ namespace Docxodus
             var firstTabRun = paragraphContent
                 .Where(element => element.Name == W.r)
                 .FirstOrDefault(run => run.Elements(W.tab).Any());
-            // EVERY paragraph child before the tab, not just width-annotated runs. PtOpenXml:TabWidth is
-            // applied by CalculateSpanWidthForTabs, which walks the MAIN document part only, so
-            // filtering on it here dropped header/footer content outright: such a run is absent from
-            // this list AND from elementsSucceedingTab (which starts after the tab), so it rendered
-            // nowhere. A footer of the shape `Last Updated October 2025 [tab] PAGE` came out as just
-            // the page number. The two questions are separate — TransformElementsPrecedingTab still
-            // sums widths over the annotated children only, and an unannotated run simply
-            // contributes zero width while keeping its text.
+            // EVERY paragraph child before the tab, not just width-annotated runs. Filtering on
+            // PtOpenXml:TabWidth dropped content outright — such a run is absent from this list AND
+            // from elementsSucceedingTab (which starts after the tab), so it rendered nowhere. Back
+            // when CalculateSpanWidthForTabs walked the main part alone, that lost a whole running
+            // footer: `Last Updated October 2025 [tab] PAGE` came out as just the page number. The
+            // annotation now reaches every story, but the two questions stay separate —
+            // TransformElementsPrecedingTab still sums widths over the annotated children only, and
+            // an unannotated run contributes zero width while keeping its text.
             var elementsPrecedingTab = firstTabRun != null
                 ? paragraphContent.TakeWhile(e => e != firstTabRun).ToList()
                 : Enumerable.Empty<XElement>().ToList();
@@ -8143,11 +8213,16 @@ namespace Docxodus
                 toBorder.SetAttributeValue(W.themeTint, fromBorder.Attribute(W.themeTint)!.Value);
         }
 
+        /// <summary>
+        /// Resolve every tab in every story to the advance its stop demands, and annotate the runs
+        /// with it. Runs over all content parts, not just the body: a header or footer paragraph of
+        /// the shape <c>Last Updated October 2025 [tab] PAGE</c> is the standard legal running
+        /// footer, and an unannotated tab collapses to zero width — which does not merely
+        /// mis-position the page number, it paints it on top of the date (issue #688). Paginated
+        /// mode renders those stories, so their tabs have to resolve like the body's.
+        /// </summary>
         private static void CalculateSpanWidthForTabs(WordprocessingDocument wordDoc)
         {
-            // Note: when implementing a paging version of the HTML transform, this needs to be done
-            // for all content parts, not just the main document part.
-
             // w:defaultTabStop in settings. Settings is optional in OOXML — Word opens
             // packages without word/settings.xml fine. Missing DocumentSettingsPart used
             // to throw ArgumentNullException("part") via GetXDocument and abort conversion
@@ -8163,13 +8238,15 @@ namespace Docxodus
                     defaultTabStop = WordprocessingMLUtil.StringToTwips(defaultTabStopValue);
             }
 
-            var pxd = wordDoc.MainDocumentPart!.GetXDocument();
-            var root = pxd.Root;
-            if (root == null) return;
+            foreach (var part in wordDoc.ContentParts())
+            {
+                var root = part.GetXDocument().Root;
+                if (root == null) continue;
 
-            var newRoot = (XElement)CalculateSpanWidthTransform(root, defaultTabStop);
-            root.ReplaceWith(newRoot);
-            wordDoc.MainDocumentPart!.PutXDocument();
+                var newRoot = (XElement)CalculateSpanWidthTransform(root, defaultTabStop);
+                root.ReplaceWith(newRoot);
+                part.PutXDocument();
+            }
         }
 
         // TODO: Refactor. This method is way too long.
@@ -9603,9 +9680,10 @@ namespace Docxodus
 
                     // Mark PAGE/NUMPAGES results so the paginator can substitute each page's real
                     // number: a header/footer is cloned onto every page, so the field's single
-                    // cached result would otherwise read the same on all of them. Paginated mode
-                    // only — it is the only consumer, and every other mode's HTML stays untouched.
-                    if (settings.RenderPagination == PaginationMode.Paginated
+                    // cached result would otherwise read the same on all of them. Paginated mode,
+                    // or a caller that paginates a block render itself (StampPageNumberFields) —
+                    // every other mode's HTML stays untouched.
+                    if ((settings.RenderPagination == PaginationMode.Paginated || settings.StampPageNumberFields)
                         && Internal.PageNumberFieldInstr.TryParse(instrText) is { } pageField)
                     {
                         return new XElement(Xhtml.span,

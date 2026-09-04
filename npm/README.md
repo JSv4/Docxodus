@@ -72,7 +72,9 @@ Two layers, so you can take as much UI as you want:
 import { DocxEditor } from 'docxodus';
 const editor = DocxEditor.open(container, docxBytes, exports);
 
-// Or the whole surface: tabbed ribbon, anchor rail, table picker, loading overlay.
+// Or the whole surface: Word's tabbed ribbon (fonts, colour, styles, find & replace, links,
+// pictures, tables, page setup, tracked changes), Word-style comment bubbles beside the page,
+// in-place header/footer editing, a status bar with zoom, and the loading overlay.
 import { mountRibbon } from 'docxodus';
 const ribbon = mountRibbon(container, { exports });
 ribbon.open(docxBytes, 'contract.docx');
