@@ -1338,9 +1338,16 @@ internal static class IrEditScriptBuilder
             // zero-pair regions are admitted too — the segmenter ships them only on a count-equal
             // boundary construct. LARGE regions never stream: a whole-document rewrite is one giant
             // zero-pair gap whose scattered incidental shared words would otherwise ship a stream,
-            // while the reference compare output arranges such regions with the replace-gap grammar
-            // (the decoded stream constructs all live in small regions — the grammar corpus was
-            // validated on exactly the large ones).
+            // while the reference compare output arranges such regions with the replace-gap grammar.
+            //
+            // The bound is an OUTER one, not the selection rule, and the corpus says so (issue #699,
+            // 803 reference triples; see token_stream_arrangement.md § 2). The reference output's
+            // retention of a zero-pair region's shared words decays smoothly with region size —
+            // 55% at 1-2 members, 41% at 5-8, 28% at 17-32, 10% at 33+ — so there is no cliff here
+            // to place a cap on. Raising this literal to 32 changes 8 of 428 regions for 3 wins and
+            // 3 losses: a wash, so it stays where it is rather than churning the corpus baseline for
+            // no measured gain. What actually selects a region is the segmenter's structural
+            // count-equal boundary construct.
             if (leftParas.Count + rightParas.Count < 3)
                 return null;
             if (leftParas.Count > 8 || rightParas.Count > 8)
