@@ -528,6 +528,10 @@ internal static class IrCrossParagraphSegmenter
             // count-equal boundary construct (a lone "and"/"document" match whose pilcrow counts
             // balance pairs the pilcrows and streams the region). Punctuation and separator
             // extensions never count as units. An INTERIOR region ships only on a construct.
+            // The ≥2 floor was A/B-tested against the reference corpus (issue #699): relaxing it to
+            // ≥1 ships 16 more regions for ZERO wins and one loss, and 15 of those 16 matched only
+            // on function words or separators — exactly the positional scaffolding the construct
+            // gate below refuses. It is the empirically right floor, not a tuning knob.
             // Either way the stream must CHANGE structure — ≥1 interior boundary left unpaired.
             bool anyInteriorUnpaired = false;
             for (int b = 0; b < kl - 1 && !anyInteriorUnpaired; b++)

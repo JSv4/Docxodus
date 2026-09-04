@@ -43,46 +43,55 @@ terms, everything the block path already gets right — and the evidence base fo
 every existing guarantee intact at the price of needing a selection rule; that price is point 2, and
 it is worth paying.
 
-### 2. Selection — **open**, and this is the whole of what #694 leaves undecided
+### 2. Selection — settled by decode (#699), and the answer is that the gate is already right
 
-Two literals in the current gate are the tuned thresholds the issue rules out, and they are the only
-part of this design that is not settled:
+This point was open when the note was first written; #699 decoded it against the reference compare
+corpus (803 base/next/reference triples), and the finding reversed the expected conclusion.
 
-| Where | Literal | What it does |
+**Retention decays with region size; there is no cliff.** For every region *our* engine replaces
+whole — a maximal run of purely one-sided paragraphs with content on both sides — the measurement
+asks whether the reference output retained any of that region's shared content words in place,
+inside the region's own span:
+
+| our region size | regions sharing a content word | reference retained in place |
 |---|---|---|
-| `IrEditScriptBuilder.TryBuildStoryFinalMixedRegionOp` | `leftParas.Count > 8 \|\| rightParas.Count > 8` | large zero-pair regions never stream |
-| `IrCrossParagraphSegmenter.SegmentRegion` | `crossUnitMatches >= 2 \|\| constructPairs > 0` | how much shared text a zero-pair region needs to stream at all |
+| 1–2 | 12 | 55% |
+| 3–4 | 18 | 50% |
+| 5–8 | 29 | 41% |
+| 9–16 | 26 | 32% |
+| 17–32 | 36 | 28% |
+| 33+ | 20 | **10%** |
 
-The size cap is honest about why it exists, in the code comment that carries it: *the decoded stream
-constructs all live in small regions, and the replace-gap grammar corpus was validated on exactly
-the large ones.* That is a statement about where the evidence is, not about where the boundary
-belongs.
+Word retains less and less as the region grows, and by 33+ members it has essentially stopped. That
+is a gradient, not a boundary — which is the first reason no threshold is the criterion.
 
-**The decision is that the criterion cannot be chosen yet, and that it must be decoded rather than
-designed.** Every candidate that can be written from here fails one of the issue's own constraints:
+**Coverage is not the discriminator, and it points the wrong way.** In the reference output's *own*
+zero-pair regions (398 of them, where Word paired nothing), content-word coverage between the
+deleted and inserted sides *rises* with size — median 0.00 and p90 0.10 at 1–2 members, median 0.15
+and p90 0.83 at 33+, with individual regions at coverage 1.0 (a 34×10 region sharing 55 content
+words, replaced whole). Word leaves large, heavily overlapping regions entirely unpaired. Any
+coverage-based rule would stream exactly those, and be wrong.
 
-- A **coverage fraction** (matched content characters over the smaller side) is exactly the tuned
-  threshold point 2 forbids, and the segmenter has already been burned twice by density and
-  matched-char floors — see the pass-1 remark: *"the retain-in-place and yield-to-cross classes
-  overlap on coverage, so no threshold separates them."*
-- **"Stream every zero-pair region"** — correspondence is absent by construction, so let the stream
-  own it — is the cleanest rule available and may well be right, but it directly contradicts the
-  only evidence in hand, which says large zero-pair regions arrange with the replace-gap grammar.
-- **"Emit what a whole-story LCS gives and accept the interleave"** assumes Word is token-first all
-  the way down at every scale. That is the issue's premise, and it is unverified precisely where it
-  matters: the decode that produced this engine's rules covered small regions.
+**Both literals were then A/B-tested against the corpus, and both are already correct:**
 
-The prerequisite is a **decode of reference compare output for large zero-pair regions**: pairs with
-little shared text and many paragraphs on each side — a template against a filled-in copy, a memo
-against the contract that replaced it, two drafts rewritten rather than edited. Scored on one
-question: does the reference output retain surviving fragments in place across paragraph boundaries,
-or does it replace the region whole? That answer picks the rule, and it may well be structural
-rather than numeric (the count-equal boundary construct below is what a *structural* rule looks
-like: no threshold, just "the same number of matched tokens precedes each pilcrow").
+| Literal | Change tested | Result |
+|---|---|---|
+| `leftParas.Count > 8 \|\| rightParas.Count > 8` | raise to 32 | 8 of 428 regions change arrangement: **3 wins, 3 losses**, 2 with no shared words |
+| `crossUnitMatches >= 2 \|\| constructPairs > 0` | relax to `>= 1` | 16 regions start streaming: **0 wins, 1 loss**; 15 of the 16 matched only on words the content filter excludes — precisely the "a lone function word is positional scaffolding" case the gate's own comment describes |
 
-Whatever the rule turns out to be, it must be a function of the region's own content — no
-document-level state, no per-document switch — so that a region's arrangement does not depend on
-what else is in the document.
+So the size cap is **barely load-bearing** — moving it four-fold is a coin flip on 803 documents, which
+means there is no evidence to move it and moving it would churn the corpus baseline for nothing. And
+the `>= 2` unit-match floor is **empirically right**: relaxing it buys nothing and costs something.
+
+**The decision.** The criterion is structural, and it already is: the count-equal boundary construct
+(a pilcrow pairs when the same number of matched tokens precedes it on each side — no threshold, just
+a stream property) is what selects a region, and `>= 2` plus the size cap are outer bounds around it,
+not the rule. Point 2 is therefore settled by keeping the gate as it stands, with the two literals
+now carrying the measurement that justifies them rather than an admission that the evidence was
+missing. What remains genuinely undecided is nothing in this design; what remains *unknown* is
+whether a different structural construct would recover the 28–41% of mid-size regions where the
+reference retains and we do not — and that is a question about finding a new construct, not about
+tuning a gate.
 
 ### 3. Reversibility — settled, and independent of the selection rule
 
@@ -196,9 +205,10 @@ battery.
 
 ## Child issues
 
-- **#699 — Decode reference compare output for large zero-pair regions.** The prerequisite for
-  point 2. Produces the evidence, not a rule.
-- **#700 — Replace the token-stream mode's tuned gate with the decoded selection criterion.**
-  Blocked on #699. Must land with the cost bound from point 6.
+- **#699 — Decode reference compare output for large zero-pair regions.** Done; its result is
+  point 2 above.
+- **#700 — Replace the token-stream mode's tuned gate with the decoded selection criterion.** Closed
+  by the same decode: there is nothing to replace. Both literals were A/B-tested and neither is a
+  mis-placed threshold.
 
-#694 closes on this note. It does not close on the children.
+#694 closed on this note; #699 and #700 closed on the decode that filled in its one open point.
