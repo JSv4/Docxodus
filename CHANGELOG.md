@@ -69,6 +69,81 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `DocxDiff` no longer lets an empty paragraph act as an alignment anchor on its own. An empty
+  paragraph has no words, so the only thing that can make its paragraph mark "the same paragraph"
+  on both sides is the matched content it sits inside — a blank between two retained or edited
+  paragraphs is retained with them, but a blank that merely happens to exist in both of two
+  otherwise unrelated regions is not evidence of anything. The block aligner nevertheless pinned
+  such blanks (a unique one on the exact-match spine, further ones in the in-order gap pass),
+  which split what Word treats as one replace region into halves with the deletions scattered
+  between them: a base that ends with an empty paragraph compared against a next that begins with
+  one produced *all deletions, a live empty line, all insertions* instead of Word's *insertions,
+  then deletions, then the shared final paragraph mark*. A blank pairing is now released unless a
+  neighbouring block pair on both sides is paired in place (a run of blanks borrows its support
+  from the content at either end), with the document-final pair supported structurally because
+  Word always pairs the two final paragraph marks. The rule runs once after the spine (so the gap
+  fill sees the whole region) and once after the gap fill (so a blank beside a paragraph the gap
+  fill paired as edited keeps its retained mark). A blank that follows an edited paragraph now
+  pairs with the blank across from it even when the next document restyled it (retained mark plus
+  `w:pPrChange`, as Word writes it), where the gap passes used to leave a deleted blank followed
+  by an inserted one. Trailing blanks of a region take their support from the pair *after* them
+  only when the run of blanks reaches straight back to the pair before it on both sides (so
+  identical blank runs still match); any other trailing blank is left to the paragraph-mark
+  chain below. Accept ≡ right and reject ≡ left hold unchanged.
+- `DocxDiff`'s trailing-region paragraph-mark chain no longer opens behind a final paragraph
+  pair with a wordful member. The chain pairs further marks backwards from the story-final pair
+  when it meets an empty paragraph on both sides, but when the final pair itself joins a base
+  blank to a wordful next paragraph (or the reverse) the words sit between that mark and the
+  previous one, and Word pairs nothing further: a trailing blank on each side stays
+  tracked-inserted ahead of the deletions and tracked-deleted after them, instead of turning
+  into a shared, unmarked mark. Inside the document (a region that ends at a shared paragraph
+  or table rather than at the story end) the chain now follows the rule Word's output obeys in
+  331 of the 334 such regions in the reference corpus: it opens on a trailing blank on both
+  sides and walks backwards while the *base* member is empty (a wordful next member is fine,
+  its runs fuse into the first deleted paragraph), a wordful base member facing an empty next
+  member cancels the whole chain, a wordful-against-wordful stop keeps it only when the
+  paragraphs left before it balance, and a fused next member needs a deleted paragraph to host
+  its runs. The old chain paired a base blank with the next document's last wordful paragraph
+  in shapes where Word keeps every mark. In the same region grammar, a base story
+  that ends with a table compared against a next story that ends with an *empty* paragraph now
+  places that final paragraph mark after the deleted table, exactly as the already-handled wordful
+  case does; before, the mark was emitted with the other insertions and the document ended with the
+  deleted table.
+- `DocxDiff` renders a paired table row whose base side has more cells than the next side as one
+  modified row instead of lowering the entire table to a deleted table followed by an inserted one.
+  The surplus base cell now stays in its place with `w:tcPr/w:cellDel` and struck content, which
+  accept removes and reject restores, mirroring the right-only `w:cellIns` case the renderer already
+  handled. Word's compare output keeps such a cell in the merged row with its content deleted, so
+  two unrelated tables paired positionally, or a row that lost a column, no longer double the
+  table on the page.
+- `DocxDiff` neutralizes the left document's default paragraph spacing attribute by attribute. The
+  output keeps the left styles part, so an updated style's current payload has to cancel any
+  default the right document does not share; the check was per element, so a right whose
+  defaults declared only `line` (a common web-authored shape) against a left declaring
+  `after=160 line=278` produced a Normal style saying just `line=276` and every accepted
+  paragraph inherited the left's 160 twips of space below. Word writes `after=0 line=276` there,
+  and so does the renderer now: the right's declared attributes are materialized and the
+  left-only attributes reset to their built-ins on the same spacing element.
+- `DocxDiff` expresses an imported right-only paragraph style under the left document's defaults.
+  The output keeps the left `docDefaults`, and a style copied in from the right document was
+  copied raw, so every paragraph in it took the left's default spacing: a long inserted document
+  whose own defaults said `line=259` and `after=160` rendered a page longer than Word's output
+  under the left's `line=276 after=200`. An imported paragraph style now receives the same
+  docDefaults delta an updated shared style gets — right defaults the left values differently
+  materialized, left defaults the right never declared reset to their built-ins — stated once
+  along the style chain: an import based on a Normal that was itself updated inherits the delta
+  and is left raw, exactly as Word writes it. Its spacing and indent measures are written in
+  twips, as Word writes them (a `line="12.95pt"` under the `auto` rule is ambiguous to a
+  renderer; `259` is not).
+- `DocxDiff` keeps a paired paragraph's right-side `w:pStyle` when the style is one that inserted
+  content already imports. Word expresses a paired paragraph's format change within the style
+  universe the output resolves: a right-only style is brought in only by wholly inserted
+  paragraphs, but once one of them has imported it, a retained or edited paragraph naming the same
+  style keeps the reference (there is nothing to lower to direct properties). The renderer used to
+  test only the left document's style definitions, so a whole-document rewrite whose final
+  paragraph pair adopted the right's heading or list style — or an edited title paragraph in a
+  document whose inserted body uses the same title style — rendered with the default paragraph
+  style while the definition it needed sat, imported, in the output styles part.
 - **The editor's first paint no longer restyles the host page.** The embed wrapper scopes the
   converter's stylesheet (its `body`/`span` rules) for every whole-document render, but the
   editor's comment-aware first paint reaches for a new render method, `RenderEditorHtml`, that

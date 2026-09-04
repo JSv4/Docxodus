@@ -105,58 +105,84 @@ public class DocxDiffSeamDisciplineTests
         }
     }
 
-    [Fact]
-    public void PairedParagraph_RightOnlyStyleRef_IsDroppedFromCurrentPPr()
+    /// <summary>Three-paragraph document; <paramref name="styledIndexes"/> selects which paragraphs
+    /// name the paragraph style <c>GrandTitle</c>, which the styles part defines only when any do.</summary>
+    private static WmlDocument GrandTitleDoc(int[] styledIndexes, params string[] texts)
     {
-        // The left style universe has no "GrandTitle"; the right styles every paragraph with it.
-        // Word expresses a PAIRED paragraph's format change within the LEFT style universe: the
-        // unresolvable pStyle is dropped from the current pPr (direct props only) — the oracle's
-        // output for exactly this corpus shape carries no pStyle and no imported style definition.
-        static WmlDocument StyledDoc(bool styled, params string[] texts)
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
         {
-            using var stream = new MemoryStream();
-            using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Document(new Body(texts.Select((t, i) =>
             {
-                var main = doc.AddMainDocumentPart();
-                main.Document = new Document(new Body(texts.Select(t =>
-                {
-                    var p = new Paragraph(new Run(new Text(t)));
-                    if (styled)
-                        p.PrependChild(new ParagraphProperties(new ParagraphStyleId { Val = "GrandTitle" }));
-                    return (OpenXmlElement)p;
-                })));
-                var styles = new Styles(new DocDefaults());
-                if (styled)
-                    styles.Append(new Style(new StyleName { Val = "Grand Title" })
-                    { Type = StyleValues.Paragraph, StyleId = "GrandTitle" });
-                main.AddNewPart<StyleDefinitionsPart>().Styles = styles;
-                main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
-                doc.Save();
-            }
-            return new WmlDocument("t.docx", stream.ToArray());
+                var p = new Paragraph(new Run(new Text(t)));
+                if (styledIndexes.Contains(i))
+                    p.PrependChild(new ParagraphProperties(new ParagraphStyleId { Val = "GrandTitle" }));
+                return (OpenXmlElement)p;
+            })));
+            var styles = new Styles(new DocDefaults());
+            if (styledIndexes.Length > 0)
+                styles.Append(new Style(new StyleName { Val = "Grand Title" })
+                { Type = StyleValues.Paragraph, StyleId = "GrandTitle" });
+            main.AddNewPart<StyleDefinitionsPart>().Styles = styles;
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+            doc.Save();
         }
+        return new WmlDocument("t.docx", stream.ToArray());
+    }
 
-        var left = StyledDoc(styled: false,
-            "Alpha ancient prose.", "This document demonstrates the old body.", "Omega bygone prose.");
-        var right = StyledDoc(styled: true,
-            "Zulu contemporary words.", "This document demonstrates superscript body.", "Kappa modern words.");
-
-        var redline = DocxDiff.Compare(left, right);
-
-        // A SHARED-pilcrow (unmarked) paragraph expresses its format within the LEFT style
-        // universe: the unresolvable pStyle is dropped from its current pPr. An INSERTED (¶INS)
-        // paragraph keeps its own side's pPr verbatim — its style rides the right-only style
-        // import — so the assertion is scoped to unmarked paragraphs.
+    /// <summary>Current (non-archived) <c>GrandTitle</c> references on paragraphs whose mark is NOT ¶INS.</summary>
+    private static List<ParagraphStyleId> PairedGrandTitleRefs(WmlDocument redline)
+    {
         using var s = new MemoryStream(redline.DocumentByteArray);
         using var d = WordprocessingDocument.Open(s, false);
-        var refs = d.MainDocumentPart!.Document.Body!
+        return d.MainDocumentPart!.Document.Body!
             .Descendants<ParagraphStyleId>()
             .Where(id => id.Val?.Value == "GrandTitle" &&
                          id.Ancestors<ParagraphPropertiesChange>().FirstOrDefault() is null)
             .Where(id => id.Ancestors<Paragraph>().First().ParagraphProperties
                              ?.ParagraphMarkRunProperties?.GetFirstChild<Inserted>() is null)
             .ToList();
-        Assert.Empty(refs);
+    }
+
+    [Fact]
+    public void PairedParagraph_RightOnlyStyleRef_IsDroppedFromCurrentPPr()
+    {
+        // The left style universe has no "GrandTitle"; on the right ONLY the paired middle paragraph
+        // names it. Word expresses a PAIRED paragraph's format change within the style universe the
+        // output resolves — and only wholly inserted paragraphs import a right-only style. Nothing
+        // inserted names GrandTitle here, so the paired paragraph's unresolvable pStyle is dropped
+        // from its current pPr (direct props only), as the reference output does for this shape.
+        var left = GrandTitleDoc(Array.Empty<int>(),
+            "Alpha ancient prose.", "This document demonstrates the old body.", "Omega bygone prose.");
+        var right = GrandTitleDoc(new[] { 1 },
+            "Zulu contemporary words.", "This document demonstrates superscript body.", "Kappa modern words.");
+
+        var redline = DocxDiff.Compare(left, right);
+
+        Assert.Empty(PairedGrandTitleRefs(redline));
+    }
+
+    [Fact]
+    public void PairedParagraph_RightOnlyStyleRef_IsKeptWhenInsertedContentImportsIt()
+    {
+        // Same shape, but the right styles EVERY paragraph with GrandTitle: the wholly inserted first
+        // paragraph imports the definition into the output, and once it resolves there every
+        // shared-pilcrow paragraph keeps its pStyle too — the paired middle paragraph and the
+        // story-final structural pair (whose shared pilcrow carries the next side's pPr). The
+        // reference output carries the style on retained paragraphs whenever an inserted paragraph
+        // brought its definition in.
+        var left = GrandTitleDoc(Array.Empty<int>(),
+            "Alpha ancient prose.", "This document demonstrates the old body.", "Omega bygone prose.");
+        var right = GrandTitleDoc(new[] { 0, 1, 2 },
+            "Zulu contemporary words.", "This document demonstrates superscript body.", "Kappa modern words.");
+
+        var redline = DocxDiff.Compare(left, right);
+
+        var refs = PairedGrandTitleRefs(redline);
+        Assert.Equal(2, refs.Count);
+        Assert.All(refs, id => Assert.NotNull(
+            id.Ancestors<Paragraph>().First().ParagraphProperties?.GetFirstChild<ParagraphPropertiesChange>()));
     }
 
     [Fact]

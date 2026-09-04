@@ -130,13 +130,22 @@ internal static class IrBlockAligner
             }
         }
 
+        // A blank spacer never anchors on its own evidence (see ReleaseUnsupportedBlankPairs): a
+        // unique blank that the spine pinned between unrelated content is released back to the free
+        // pool NOW, so the gap fill sees the single replace region Word processes rather than two
+        // halves split at a pilcrow. It may re-pair in the gap fill and is re-judged after it.
+        ReleaseUnsupportedBlankPairs(leftBlocks, rightBlocks, similarity, leftKind, rightKind, leftMatch, rightMatch,
+            toFreePool: true);
+
         // --- Gap fill: between consecutive spine pairs (and the head/tail gaps), pair the remaining
         // (non-Moved, non-anchored) left and right blocks. Blocks already consumed as Moved or anchored
         // do NOT participate — they are skipped when walking the gaps.
         //
         // Build the ordered list of spine pairs (left index, right index), both ascending in lockstep.
+        // A spine candidate the blank release above returned to the free pool is no longer a pair.
         var spinePairs = onSpine
             .Select(c => (Left: candidates[c].LeftIndex, Right: candidates[c].RightIndex))
+            .Where(p => leftMatch[p.Left] == p.Right)
             .OrderBy(p => p.Left)
             .ToList();
 
@@ -175,6 +184,20 @@ internal static class IrBlockAligner
         // order by construction (the source op is emitted at the left position).
         EnforceInPlaceOrderMonotonicity(leftBlocks, rightBlocks, leftKind, rightKind, leftMatch, rightMatch,
             splitGroups, mergeGroups);
+
+        // The two halves of the blank-support rule, now that every content pairing is known AND
+        // monotone (a blank's support must come from pairs that survive the crossing normalization
+        // above — a same-identity blank pair that crossed a table pair is no support at all). First
+        // the constructive half: a free blank whose preceding diagonal neighbour pair is in place pairs
+        // with the free blank across from it, format-equal or not (Word retains a format-differing
+        // blank beside matched content with a pPrChange — the gap passes deliberately leave such
+        // blanks alone so they cannot claim slots ahead of content). Then the judgement: a blank
+        // retains only inside a run of matched content; an unsupported one lowers to Deleted+Inserted
+        // so the surrounding insert/delete groups arrange as ONE replace region. Both only add or
+        // remove diagonal pairs beside in-place pairs, so monotonicity is preserved.
+        PairSupportedBlanks(leftBlocks, rightBlocks, similarity, settings, leftKind, rightKind, leftMatch, rightMatch);
+        ReleaseUnsupportedBlankPairs(leftBlocks, rightBlocks, similarity, leftKind, rightKind, leftMatch, rightMatch,
+            toFreePool: false);
 
         // --- Cross-gap fuzzy moves: over the GLOBAL leftover Deleted × Inserted sets (after all gap
         // fill), re-pair similar blocks as Moved / MovedModified. Runs AFTER gap fill so it sees the
@@ -607,10 +630,10 @@ internal static class IrBlockAligner
         {
             DetectOneToManyInGap(leftBlocks, rightBlocks, leftFrom, leftTo, rightFrom, rightTo,
                 leftKind, rightKind, leftMatch, rightMatch, leftoverLeft, leftoverRight,
-                IrAlignmentKind.Split, splitGroups, settings);
+                IrAlignmentKind.Split, splitGroups, settings, similarity);
             DetectOneToManyInGap(rightBlocks, leftBlocks, rightFrom, rightTo, leftFrom, leftTo,
                 rightKind, leftKind, rightMatch, leftMatch, leftoverRight, leftoverLeft,
-                IrAlignmentKind.Merge, mergeGroups, settings);
+                IrAlignmentKind.Merge, mergeGroups, settings, similarity);
         }
 
         // Word-matcher junction pairing (calibrated against Word's compare output). Word's
@@ -1589,7 +1612,7 @@ internal static class IrBlockAligner
         List<int> leftoverSingular, List<int> leftoverPlural,
         IrAlignmentKind kind,
         List<(int SingularIndex, List<int> PluralIndexes)> groups,
-        IrDiffSettings settings)
+        IrDiffSettings settings, IrBlockSimilarity similarity)
     {
         // O(1)-prefilter content-token counts, computed lazily once per gap (-1 = not yet counted).
         // The thresholds imply HARD length bounds a window must satisfy before any LCS scoring is
@@ -1624,7 +1647,7 @@ internal static class IrBlockAligner
             }
 
             var run = FindQualifyingRun(singularPara, partner, pluralBlocks, pluralFrom, pluralTo,
-                pluralMatch, settings, PluralContent);
+                pluralMatch, settings, PluralContent, similarity);
             if (run is null)
                 continue;
 
@@ -1675,10 +1698,45 @@ internal static class IrBlockAligner
     private static List<int>? FindQualifyingRun(
         IrParagraph singular, int partner,
         IrNodeList<IrBlock> pluralBlocks, int pluralFrom, int pluralTo,
-        int[] pluralMatch, IrDiffSettings settings, Func<int, int> pluralContent)
+        int[] pluralMatch, IrDiffSettings settings, Func<int, int> pluralContent,
+        IrBlockSimilarity similarity)
     {
         bool Eligible(int pj) =>
             pluralBlocks[pj] is IrParagraph && (pluralMatch[pj] == -1 || pj == partner);
+
+        // Shared-word prefilter (exact necessary condition, pure performance): TrimAndGate's Gate 1
+        // needs ≥2 members each carrying ≥ MinMatchedWordsPerSplitFragment LCS-matched Word tokens,
+        // and a member's matched tokens can never exceed its Word-key multiset overlap with the
+        // singular. So a singular with fewer than 2·Min words can never split/merge, and a window
+        // with fewer than two members overlapping it by ≥ Min words cannot qualify — neither pays
+        // for an LCS. Without this, one long whole-rewrite region (a 50×1100 gap of a template
+        // against a 120-page document) ran the LCS scorer on hundreds of thousands of windows.
+        var singularKeys = similarity.WordKeys(singular);
+        int singularWords = 0;
+        foreach (var kv in singularKeys)
+            singularWords += kv.Value;
+        if (singularWords < 2 * MinMatchedWordsPerSplitFragment)
+            return null;
+        var sharedWords = new int[pluralTo - pluralFrom];
+        Array.Fill(sharedWords, -1);
+        bool PhraseCandidate(int pj)
+        {
+            int idx = pj - pluralFrom;
+            if (sharedWords[idx] < 0)
+            {
+                int shared = 0;
+                if (pluralBlocks[pj] is IrParagraph pp)
+                {
+                    var keys = similarity.WordKeys(pp);
+                    var (small, large) = keys.Count <= singularKeys.Count ? (keys, singularKeys) : (singularKeys, keys);
+                    foreach (var kv in small)
+                        if (large.TryGetValue(kv.Key, out int other))
+                            shared += Math.Min(kv.Value, other);
+                }
+                sharedWords[idx] = shared;
+            }
+            return sharedWords[idx] >= MinMatchedWordsPerSplitFragment;
+        }
 
         // O(1) length prefilter bounds (see DetectOneToManyInGap): a window whose content-token total
         // falls outside [coverage·singular, singular/(1−slack)] cannot clear the thresholds, so the
@@ -1716,15 +1774,20 @@ internal static class IrBlockAligner
             if (!Eligible(a))
                 continue;
             int windowContent = pluralContent(a);
+            int phraseCandidates = PhraseCandidate(a) ? 1 : 0;
             for (int b = a + 1; b < pluralTo && b - a + 1 <= settings.SplitMaxRunLength; b++)
             {
                 if (!Eligible(b))
                     break; // adjacency requirement: the window must be a contiguous eligible run
                 windowContent += pluralContent(b);
+                if (PhraseCandidate(b))
+                    phraseCandidates++;
                 if (windowContent > maxWindowContent)
                     break; // adding members only grows content — no longer window from this start qualifies
                 if (windowContent < minWindowContent)
                     continue; // too little content to cover the singular side yet — extend the window
+                if (phraseCandidates < 2)
+                    continue; // Gate 1 cannot pass: fewer than two members share ≥ Min words with the singular
                 var trimmed = TrimAndGate(singular, partner, a, b, pluralBlocks, pluralMatch, settings,
                     out bool viaCoveragePath, out double coverage);
                 if (trimmed is null)
@@ -1995,6 +2058,174 @@ internal static class IrBlockAligner
                 NoteAccepted(candLeft, rj);
                 break;
             }
+        }
+    }
+
+    /// <summary>
+    /// Constructive half of the blank-support rule (see <see cref="ReleaseUnsupportedBlankPairs"/>):
+    /// a still-free blank spacer whose PRECEDING neighbour — the block before it on both sides — is an
+    /// in-place pair pairs with the still-free blank across from it, as Unchanged when format-equal
+    /// and FormatOnly (a retained mark with a pPrChange) otherwise. Blanks at the END of a region are
+    /// left to the renderer's backward pilcrow chain, which owns that shape (see the inline note).
+    /// Decoded from Word's compare output: the blank between two paired list items keeps its mark even
+    /// when the next side re-styled it, where the gap passes — which must not let blanks claim slots
+    /// ahead of content — had left it as a deleted blank plus an inserted one. Runs to a fixpoint so a
+    /// run of blanks pairs outward from the content at either end; monotone by construction (each new
+    /// pair sits diagonally beside an in-place pair with both partners free).
+    /// </summary>
+    private static void PairSupportedBlanks(
+        IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks, IrBlockSimilarity similarity,
+        IrDiffSettings settings, IrAlignmentKind?[] leftKind, IrAlignmentKind?[] rightKind,
+        int[] leftMatch, int[] rightMatch)
+    {
+        int nLeft = leftBlocks.Count;
+        int nRight = rightBlocks.Count;
+
+        bool InPlace(int li, int rj) => li >= 0 && rj >= 0 && li < nLeft && rj < nRight &&
+            leftMatch[li] == rj && rightMatch[rj] == li &&
+            leftKind[li] is not (IrAlignmentKind.Moved or IrAlignmentKind.MovedModified);
+        bool FreeBlank(int li, int rj) => li >= 0 && rj >= 0 && li < nLeft && rj < nRight &&
+            leftMatch[li] == -1 && rightMatch[rj] == -1 &&
+            similarity.IsBlankSpacer(leftBlocks[li]) && similarity.IsBlankSpacer(rightBlocks[rj]);
+
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+            for (int li = 0; li < nLeft; li++)
+            {
+                if (leftMatch[li] != -1 || !similarity.IsBlankSpacer(leftBlocks[li]))
+                    continue;
+                // Support from the PRECEDING pair only. A free blank at the END of a replace region
+                // (the block after it on both sides is a pair) belongs to the renderer's backward
+                // pilcrow chain, which opens on exactly that empty↔empty candidate and may continue
+                // through a wordful member with fusion; pairing it here would split the region and
+                // leave the chain without its opener.
+                if (li == 0 || leftMatch[li - 1] == -1 || !InPlace(li - 1, leftMatch[li - 1]) ||
+                    !FreeBlank(li, leftMatch[li - 1] + 1))
+                    continue;
+                int rj = leftMatch[li - 1] + 1;
+                var kind = FormatEqual(leftBlocks[li], rightBlocks[rj], settings)
+                    ? IrAlignmentKind.Unchanged : IrAlignmentKind.FormatOnly;
+                leftKind[li] = kind;
+                rightKind[rj] = kind;
+                leftMatch[li] = rj;
+                rightMatch[rj] = li;
+                changed = true;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Word never retains a blank-spacer paragraph on its own evidence (decoded from Word's compare
+    /// output). A blank has no words, so the only thing that can make its pilcrow "the same
+    /// paragraph" on both sides is the matched content it sits inside: a blank between two retained or
+    /// edited paragraphs is retained with them, while a blank that merely happens to exist in both of
+    /// two otherwise unrelated regions is NOT an anchor — Word emits the whole region as one replace
+    /// (next content inserted, base content deleted) and the two blanks go with their own sides.
+    /// Anchoring such a blank fragments that single region into two halves, scatters the deletions
+    /// between them and, at the spine stage, even scopes the gap fill to the wrong halves.
+    /// </summary>
+    /// <remarks>
+    /// <para>A blank in-place pair (<paramref name="leftMatch"/>-linked, not a move) is SUPPORTED when
+    /// a diagonal neighbour — the block before it on both sides, or (when the blank run touches the
+    /// preceding pair on both sides, see the inline note) the block after it on both sides — is
+    /// itself paired in place, and (when that neighbour is another blank pair) is supported in turn:
+    /// a run of blanks borrows its support from the content at either end. The document-final
+    /// pair is supported structurally: Word always pairs the two final pilcrows. Every other blank pair
+    /// is released — at the spine stage (<paramref name="toFreePool"/>) back to the free pool, since the
+    /// gap fill may legitimately re-pair it beside a Modified neighbour the spine could not yet see;
+    /// after the gap fill to Deleted + Inserted.</para>
+    /// <para>Runs in O(n) per call plus a fixpoint over the blank pairs only (each iteration marks at
+    /// least one more pair supported or stops), so it never disturbs the aligner's scale guard. Blank-free
+    /// alignments are untouched.</para>
+    /// </remarks>
+    private static void ReleaseUnsupportedBlankPairs(
+        IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks, IrBlockSimilarity similarity,
+        IrAlignmentKind?[] leftKind, IrAlignmentKind?[] rightKind, int[] leftMatch, int[] rightMatch,
+        bool toFreePool)
+    {
+        int nLeft = leftBlocks.Count;
+        int nRight = rightBlocks.Count;
+
+        bool InPlaceLeft(int i) => leftMatch[i] != -1 &&
+            leftKind[i] is not (IrAlignmentKind.Moved or IrAlignmentKind.MovedModified);
+        bool InPlaceRight(int j) => rightMatch[j] != -1 &&
+            rightKind[j] is not (IrAlignmentKind.Moved or IrAlignmentKind.MovedModified);
+
+        // Collect the blank in-place pairs (content-equal ⇒ both blank, so testing the left suffices).
+        var blankPairs = new List<int>();
+        var isBlankPair = new bool[nLeft];
+        for (int i = 0; i < nLeft; i++)
+        {
+            if (!InPlaceLeft(i) || rightMatch[leftMatch[i]] != i)
+                continue;
+            if (!similarity.IsBlankSpacer(leftBlocks[i]))
+                continue;
+            blankPairs.Add(i);
+            isBlankPair[i] = true;
+        }
+        if (blankPairs.Count == 0)
+            return;
+
+        var supported = new bool[nLeft];
+        bool SupportsFrom(int li, int rj)
+        {
+            if (li < 0 || rj < 0 || li >= nLeft || rj >= nRight)
+                return false;
+            if (!InPlaceLeft(li) || !InPlaceRight(rj))
+                return false;
+            return !isBlankPair[li] || supported[li];
+        }
+
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+            foreach (int li in blankPairs)
+            {
+                if (supported[li])
+                    continue;
+                int rj = leftMatch[li];
+                // Support from the PRECEDING pair, the structural final pair, or — for a run of blank
+                // pairs that reaches back to the preceding in-place block on BOTH sides with nothing
+                // free between — from the pair after it (identical blank runs always match). A
+                // trailing blank run with free content before it on either side is the renderer's
+                // backward pilcrow chain's to form or refuse: Word's rule there depends on what that
+                // content is (see EmitGapArranged), which the aligner does not model.
+                if ((li == nLeft - 1 && rj == nRight - 1) || SupportsFrom(li - 1, rj - 1) ||
+                    (SupportsFrom(li + 1, rj + 1) && BlankRunTouchesPrecedingPair(li, rj)))
+                {
+                    supported[li] = true;
+                    changed = true;
+                }
+            }
+        }
+
+        // Walk back over the run's own blank pairs; the run touches the preceding pair when the block
+        // before it is in place (or the document start) on both sides — nothing free in between.
+        bool BlankRunTouchesPrecedingPair(int li, int rj)
+        {
+            int l = li, r = rj;
+            while (l > 0 && r > 0 && isBlankPair[l - 1] && leftMatch[l - 1] == r - 1)
+            {
+                l--;
+                r--;
+            }
+            return (l == 0 || InPlaceLeft(l - 1)) && (r == 0 || InPlaceRight(r - 1));
+        }
+
+        foreach (int li in blankPairs)
+        {
+            if (supported[li])
+                continue;
+            int rj = leftMatch[li];
+            leftMatch[li] = -1;
+            rightMatch[rj] = -1;
+            // Spine stage: back to the free pool (null = still free for the gap fill). After the gap
+            // fill: the terminal leftover kinds, exactly as FillOneGap stamps its own unpaired blocks.
+            leftKind[li] = toFreePool ? null : IrAlignmentKind.Deleted;
+            rightKind[rj] = toFreePool ? null : IrAlignmentKind.Inserted;
         }
     }
 
