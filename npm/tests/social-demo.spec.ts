@@ -21,7 +21,7 @@ import { test, expect, type Page } from '@playwright/test';
  */
 
 const OVERRIDES = 'engine=./embed.bundle.js&doc=./docxodus-demo-guide.docx';
-const RELEASE_ENGINE = 'docxodus@11.0.0/dist/embed.bundle.js';
+const RELEASE_ENGINE = 'docxodus@12.0.0/dist/embed.bundle.js';
 
 async function formattingState(page: Page, anchor: string, text: string) {
   return page.evaluate(({ anchor, text }) => {
