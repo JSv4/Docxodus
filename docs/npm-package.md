@@ -1006,7 +1006,7 @@ editor, the `embed` bundle is the one-tag path — it packages the whole stack
 <div id="editor"></div>
 <script type="module">
   import { createViewer, createEditor }
-    from 'https://cdn.jsdelivr.net/npm/docxodus@11.0.0/dist/embed.bundle.js';
+    from 'https://cdn.jsdelivr.net/npm/docxodus@12.0.0/dist/embed.bundle.js';
 
   // Choose either factory, or render both into separate containers as shown.
   // Source: URL string, Uint8Array, ArrayBuffer, Blob, or File.

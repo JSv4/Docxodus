@@ -3,15 +3,17 @@ using System.Runtime.Versioning;
 using System.Text.Json;
 using Docxodus;
 using Docxodus.Internal;
-using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
-using DocumentFormat.OpenXml.Wordprocessing;
 
 namespace DocxodusWasm;
 
 /// <summary>
 /// JSExport methods for DOCX document comparison (redlining).
 /// These methods are callable from JavaScript.
+///
+/// <para><b>Invariant.</b> Every export here that runs a comparison calls
+/// <see cref="ComparisonEngine.EnsureWarm"/> first; a new one must too. See that class for why
+/// the browser cannot be left to discover the engine's cold path on a real document.</para>
 /// </summary>
 [SupportedOSPlatform("browser")]
 public partial class DocumentComparer
@@ -19,86 +21,21 @@ public partial class DocumentComparer
     /// <summary>
     /// Force the comparison code path fully hot.
     ///
-    /// Creating the WASM runtime does not exercise the comparison engine, so
-    /// the first real <see cref="CompareDocuments"/> pays a one-time warmup
-    /// cost — comparison-assembly initialization plus JIT of the diff/XML
-    /// stack — on top of the actual diff work (~2x the steady-state latency).
+    /// Creating the WASM runtime does not exercise the comparison engine, so the first real
+    /// comparison executes the engine's whole cold path on top of the actual diff work. Every
+    /// comparison entry point now pays that itself (see <see cref="ComparisonEngine"/>, which
+    /// explains why the browser cannot be left to discover it); this export exists so a caller
+    /// can pay it up front instead — the npm worker's <c>prepare()</c> — and keep the first
+    /// interactive comparison at steady-state latency.
     ///
-    /// <para>This method runs a complete comparison against two tiny seed
-    /// documents constructed in-memory, exercising the exact code path
-    /// <see cref="CompareDocuments"/> uses (<see cref="DocxCompare.Compare"/> through
-    /// the DocxDiff engine).
-    /// That resolves and JIT-compiles everything the engine touches, so a
-    /// subsequent real comparison runs at steady-state speed and triggers no
-    /// further <c>.wasm</c> fetches.</para>
-    ///
-    /// <para>Idempotent and self-contained: no caller IO, no seed fixtures to
-    /// ship. Safe to call repeatedly — the warmup work is only paid once.
-    /// Returns <c>"ok"</c> on success or a JSON error object; warmup is
-    /// best-effort, so even the error path has already warmed the engine.</para>
+    /// <para>Idempotent and self-contained: no caller IO, no seed fixtures to ship. Safe to call
+    /// repeatedly — the warm-up work is only paid once. Returns <c>"ok"</c> on success or a JSON
+    /// error object; warm-up is best-effort, so even the error path has already warmed the
+    /// engine.</para>
     /// </summary>
     /// <returns><c>"ok"</c> on success, or a JSON error object.</returns>
     [JSExport]
-    public static string Warmup()
-    {
-        try
-        {
-            // Two minimal in-memory documents that differ by a single word, so
-            // DocxDiff produces a real insertion/deletion and walks its full
-            // alignment + markup path rather than an empty fast-exit.
-            var original = new WmlDocument("warmup-original.docx", BuildSeedDocx("warmup original"));
-            var modified = new WmlDocument("warmup-modified.docx", BuildSeedDocx("warmup modified"));
-
-            var settings = new DocxDiffSettings
-            {
-                AuthorForRevisions = "Docxodus",
-                DateTimeForRevisions = DateTime.UtcNow.ToString("o"),
-            };
-
-            var result = DocxCompare.Compare(original, modified, settings);
-
-            // Touch the revision-extraction path too, since callers that warm
-            // the compare path almost always read revisions next.
-            using (var warmSession = new DocxSession(result.DocumentByteArray))
-                _ = warmSession.ListRevisions();
-
-            return "ok";
-        }
-        catch (Exception ex)
-        {
-            // The act of calling DocxCompare.Compare above has already forced
-            // the assemblies to load even if the comparison itself threw, so
-            // warmup has still served its purpose. Report the failure so a
-            // caller can surface it, but do not throw.
-            return DocumentConverter.SerializeError(ex.Message, ex.GetType().Name);
-        }
-    }
-
-    /// <summary>
-    /// Build a minimal but valid DOCX package (one paragraph) in memory.
-    /// Includes the parts comparison expects (styles, settings).
-    /// </summary>
-    private static byte[] BuildSeedDocx(string text)
-    {
-        using var ms = new MemoryStream();
-        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
-        {
-            var mainPart = doc.AddMainDocumentPart();
-            mainPart.Document = new Document(new Body(
-                new Paragraph(
-                    new Run(
-                        new Text(text) { Space = SpaceProcessingModeValues.Preserve }))));
-
-            var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
-            stylesPart.Styles = new Styles();
-
-            var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
-            settingsPart.Settings = new Settings();
-
-            mainPart.Document.Save();
-        }
-        return ms.ToArray();
-    }
+    public static string Warmup() => ComparisonEngine.EnsureWarm();
 
     /// <summary>
     /// Compare two DOCX documents and return the result as a redlined DOCX (byte array).
@@ -125,6 +62,8 @@ public partial class DocumentComparer
         // byte-for-byte copy of the package they supplied.
         if (originalBytes.AsSpan().SequenceEqual(modifiedBytes))
             return (byte[])originalBytes.Clone();
+
+        ComparisonEngine.EnsureWarm();
 
         try
         {
@@ -186,6 +125,8 @@ public partial class DocumentComparer
         {
             return DocumentConverter.SerializeError("Missing document data");
         }
+
+        ComparisonEngine.EnsureWarm();
 
         try
         {
@@ -295,6 +236,8 @@ public partial class DocumentComparer
             return DocumentConverter.SerializeError("Missing document data");
         }
 
+        ComparisonEngine.EnsureWarm();
+
         try
         {
             var original = new WmlDocument("original.docx", originalBytes);
@@ -368,6 +311,8 @@ public partial class DocumentComparer
 
         if (originalBytes.AsSpan().SequenceEqual(modifiedBytes))
             return (byte[])originalBytes.Clone();
+
+        ComparisonEngine.EnsureWarm();
 
         try
         {

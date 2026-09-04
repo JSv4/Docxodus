@@ -4,71 +4,25 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Added
-
-- **The editor surface now covers the Word most people use.** `mountRibbon` /
-  `createRibbonEditor` gained Word's tab set — Home · Insert · Layout · References · Review ·
-  View, plus the contextual Table and Header & Footer tabs — and the controls behind them:
-  font colour, text highlight, small caps, grow/shrink font, clear formatting; the full
-  numbering gallery, line spacing, paragraph spacing before/after, first-line and hanging
-  indents; a styles gallery read from the document's own style definitions; find and replace
-  (with replace-all); hyperlinks and pictures; a table of contents; page margins, orientation
-  and paper size; track-changes on/off with accept/reject (one or all) and change navigation;
-  table cell merge/split, borders, shading, repeat-header-row and delete-table; zoom; and a
-  Word-style status bar (page position, word count, zoom) that also carries the anchor rail.
-  Every control is a `DocxEditor` command first — `setFontColor`, `setHighlight`,
-  `setLineSpacing`, `setListFormat`, `insertHyperlink`, `insertImage`, `insertTableOfContents`,
-  `mergeCells`, `setTableBorders`, `setCellShading`, `setTrackedChanges`, `acceptRevision`,
-  `find` / `replaceMatch` / `replaceAll`, `setZoom`, `setPageSetup`, and the rest — so a host
-  with its own chrome gets the same surface.
-- **Comments render the way Word renders them.** The editor now shows each commented range as
-  an inline highlight (tinted per author) and each thread as a bubble in a markup gutter beside
-  the page, positioned at its anchor with a leader line, stacking when threads crowd. Bubbles
-  carry reply, edit, resolve/reopen and delete; "New Comment" opens a draft bubble on the
-  selection. Both views. `DocxEditor` gained `addCommentReply`, `updateComment`, `removeComment`,
-  `beginComment`, `activateComment`, `stepComment` and `showComments`; `comments: false` restores
-  the markup-free render. The engine side is a comment-aware editor render profile
-  (`RenderEditorHtml` / `RenderEditorBlockHtml` / `RenderEditorBlocksHtml` on the WASM bridge)
-  whose per-block renders carry the comments parts, so a re-rendered commented paragraph keeps
-  its highlight, and `CommentListEntry` now reports the comment's numeric `id`.
-- **Headers and footers are edited in place.** In page view every page's header and footer area
-  is click-to-edit: the click swaps that page's clone for the live story, a commit re-clones it
-  onto every page that shows the same story (page-number fields substituted per page), and a
-  story that grew re-paginates when the caret leaves it. The continuous view's bands now draw as
-  the sheet's own top and bottom margins with a story tag, not as separate cards. Word's two
-  options — *Different first page* and *Different odd & even pages* — are checkboxes on the
-  contextual tab, backed by a new `DocxSession.SetHeaderFooterKindEnabled(anchor, kind, enabled)`
-  op. Enabling sets `w:titlePg` / `w:evenAndOddHeaders` — turning on an element Word left
-  present-but-off (`w:val="0"`) rather than treating presence as "on" — and the editor then
-  seeds both the header and the footer story of that kind, as Word does; disabling clears the
-  flag and leaves the parts. `SectionInfo` reports
-  `titlePage`, `evenAndOddHeaders`, `headerDistanceTwips` and `footerDistanceTwips`.
-  `InsertPageNumberField` accepts `"pageOfTotal"` for Word's "Page X of Y".
-- `DocxSession.SetPageSetup(anchor, PageSetupOp)` — Word's Page Setup for the section holding
-  an anchor: page size, orientation, the four margins and the header/footer distances, written
-  to the governing `w:sectPr`. Rippled to the WASM bridge, npm, the stdio host and the Python
-  client.
-- `FormatOp` gained `highlight` (Word's highlighter palette, `""` clears), `caps` and
-  `smallCaps`.
-- `WmlToHtmlConverterSettings.StampPageNumberFields` wraps every PAGE / NUMPAGES result in the
-  `data-field` marker outside paginated mode too, for a client that paginates a block render
-  itself (the browser editor editing a running story in place). Library-only; no transport
-  exposes it. `EditErrorCode.InvalidPageSetup` is the rejection code for a `SetPageSetup` whose
-  margins leave no page.
-- `tools/screenshots/editor/` regenerates the editor screenshots under `docs/images/editor/`
-  from the shipped surface.
-
-### Changed
-
-- `CommentListEntry.Id` is a `required` init property. Code that constructs the record
-  positionally must now set `Id`; callers that only read `ListComments()` are unaffected.
-- The ribbon's header/footer band no longer carries its own kind selector, page-number menu and
-  format/start controls; those live on the contextual Header & Footer tab and the Layout tab.
-  The `headerFooter` option now defaults to **on** for the ribbon (the bare `DocxEditor` default
-  is unchanged). Footnote/endnote insertion moved from Insert to References, as in Word.
-
 ### Fixed
 
+- The browser build no longer hangs on a comparison that follows a session read. The first
+  comparison a WASM module instance runs executes the whole cold path of the engine — assembly
+  resolution, type loads, static constructors, and the first-time entry into every method the
+  diff and render stages touch — and much of that runs on the Mono interpreter rather than in
+  AOT-compiled code. Mono's collector pins conservatively from the interpreter stack, so every
+  nursery collection taken while that cold path is live pays a scan proportional to it, and a
+  comparison allocates a package's worth of XML. On a heap an earlier operation had already
+  filled — opening a `DocxSession` to read revisions, say — the two coincided and the comparison
+  stopped making meaningful progress: over ten minutes for an 11 KB pair that takes 25 ms
+  natively and about half a second warm in the browser. Every comparison entry point in the WASM
+  bridge now warms the engine first, against two one-paragraph in-memory documents that walk the
+  same cold path while allocating almost nothing. `DocumentComparer.Warmup` (the npm worker's
+  `prepare()`) still exists to move that cost off the critical path, but is no longer the
+  difference between working and hanging; it is now latched, so it truly costs nothing after the
+  first call. The first comparison of a module instance is about 250 ms slower; every later one
+  is unchanged. Tuning the collector is not an alternative — the collapse is not monotone in
+  nursery size, so no setting fixes it, while warming first survives every size measured.
 - `DocxDiff` no longer lets an empty paragraph act as an alignment anchor on its own. An empty
   paragraph has no words, so the only thing that can make its paragraph mark "the same paragraph"
   on both sides is the matched content it sits inside — a blank between two retained or edited
@@ -144,6 +98,128 @@ All notable changes to this project will be documented in this file.
   paragraph pair adopted the right's heading or list style — or an edited title paragraph in a
   document whose inserted body uses the same title style — rendered with the default paragraph
   style while the definition it needed sat, imported, in the output styles part.
+
+### Added
+
+- **REDLINE THEATER (`docs/demo/redline.html`) — the agent protocol as the demo.** Three
+  counsel negotiate a Master Services Agreement, and every edit that lands is dispatched
+  from a real JSON-RPC 2.0 `tools/call` frame in the shape `docxodus-mcp` accepts over
+  stdio, streamed on a wire console beside the document. Nothing renders a diff: the
+  session records in `render_inline` mode, so each call writes native `w:ins`/`w:del`
+  into the live package and the editor repaints only the block that changed — what you
+  watch is the file that downloads, attributed per counsel because the three reviewers
+  are three values of the session's revision author. The finale proves the result rather
+  than asserting it: `proveRedlineReversibility` plus a `docxDiffGetRevisions` pass
+  confirm accept-all reaches the negotiated final and reject-all restores the baseline
+  with zero content differences, with reject-path package divergences classified against
+  a closed set of parts that review comments legitimately explain. One scripted call is
+  *expected to be refused* — list membership has no reversible tracked-change encoding,
+  so the engine declines it rather than writing a mark reject-all could not undo. That
+  closed-set classification is also what found the note-insertion defect fixed in #625:
+  a footnote's definition survived reject-all, and because `/word/footnotes.xml` is not
+  a part a comment can explain, the demo reported the redline unreversible instead of
+  absorbing it into a pattern match. Act II footnotes the negotiated cap again now, so
+  the proof exercises that path on every run.
+  The page carries a second mode, **diff stress**, because "redline" means two things
+  here and only one was on screen: where the negotiation RECORDS its markup, the stress
+  meter RECOMPUTES the redline from scratch after every edit and times it, appending a
+  clause per frame so the input grows under the engine. Three selectable pipeline depths
+  measure ~52 ms (`docxDiffGetRevisions`), ~74 ms (`docxDiffCompareProducts` → package +
+  revisions) and ~141 ms (plus `convertDocxToHtml`) — that is 33× to 78× the cost of the
+  ~2 ms mutation path measured through the same endpoint, so a redline-per-edit loop runs
+  between roughly 7 and 19 frames per second: not an animation rate, but no longer far
+  from one. The panel
+  reports the ratio it just measured, not a number written into the page, which is how it
+  picked up three successive engine improvements — the read-amplification fix from the
+  DocxDiff stress work, the normalizer gating, and the read-identity change — without a
+  line of its own changing. `benchmarks/docxdiff-stress/FINDINGS.md` remains the authority on engine
+  performance; this mode is the watchable version of the same question.
+  A browser MCP endpoint (`docs/demo/mcp-wire.js`) reimplements the server's front half
+  (envelope parsing, (tool, action) routing, the `content[].text` + `isError` result
+  shape, business failures as tool results rather than protocol errors) over `DocxSession`
+  via WASM; `docs/demo/tools/redline-theater.test.mjs` parses the real
+  `tools/mcp-server/ToolCatalog.cs` so that correspondence is checked rather than
+  claimed, and `npm/tests/demo-redline.spec.ts` guards the run, the attribution, the
+  proof and a latency budget. Demo content only — not shipped in the npm package.
+
+
+## [12.0.0] - 2026-09-04
+
+### Added
+
+- **The editor surface now covers the Word most people use.** `mountRibbon` /
+  `createRibbonEditor` gained Word's tab set — Home · Insert · Layout · References · Review ·
+  View, plus the contextual Table and Header & Footer tabs — and the controls behind them:
+  font colour, text highlight, small caps, grow/shrink font, clear formatting; the full
+  numbering gallery, line spacing, paragraph spacing before/after, first-line and hanging
+  indents; a styles gallery read from the document's own style definitions; find and replace
+  (with replace-all); hyperlinks and pictures; a table of contents; page margins, orientation
+  and paper size; track-changes on/off with accept/reject (one or all) and change navigation;
+  table cell merge/split, borders, shading, repeat-header-row and delete-table; zoom; and a
+  Word-style status bar (page position, word count, zoom) that also carries the anchor rail.
+  Every control is a `DocxEditor` command first — `setFontColor`, `setHighlight`,
+  `setLineSpacing`, `setListFormat`, `insertHyperlink`, `insertImage`, `insertTableOfContents`,
+  `mergeCells`, `setTableBorders`, `setCellShading`, `setTrackedChanges`, `acceptRevision`,
+  `find` / `replaceMatch` / `replaceAll`, `setZoom`, `setPageSetup`, and the rest — so a host
+  with its own chrome gets the same surface.
+- **Comments render the way Word renders them.** The editor now shows each commented range as
+  an inline highlight (tinted per author) and each thread as a bubble in a markup gutter beside
+  the page, positioned at its anchor with a leader line, stacking when threads crowd. Bubbles
+  carry reply, edit, resolve/reopen and delete; "New Comment" opens a draft bubble on the
+  selection. Both views. `DocxEditor` gained `addCommentReply`, `updateComment`, `removeComment`,
+  `beginComment`, `activateComment`, `stepComment` and `showComments`; `comments: false` restores
+  the markup-free render. The engine side is a comment-aware editor render profile
+  (`RenderEditorHtml` / `RenderEditorBlockHtml` / `RenderEditorBlocksHtml` on the WASM bridge)
+  whose per-block renders carry the comments parts, so a re-rendered commented paragraph keeps
+  its highlight, and `CommentListEntry` now reports the comment's numeric `id`.
+- **Headers and footers are edited in place.** In page view every page's header and footer area
+  is click-to-edit: the click swaps that page's clone for the live story, a commit re-clones it
+  onto every page that shows the same story (page-number fields substituted per page), and a
+  story that grew re-paginates when the caret leaves it. The continuous view's bands now draw as
+  the sheet's own top and bottom margins with a story tag, not as separate cards. Word's two
+  options — *Different first page* and *Different odd & even pages* — are checkboxes on the
+  contextual tab, backed by a new `DocxSession.SetHeaderFooterKindEnabled(anchor, kind, enabled)`
+  op. Enabling sets `w:titlePg` / `w:evenAndOddHeaders` — turning on an element Word left
+  present-but-off (`w:val="0"`) rather than treating presence as "on" — and the editor then
+  seeds both the header and the footer story of that kind, as Word does; disabling clears the
+  flag and leaves the parts. `SectionInfo` reports
+  `titlePage`, `evenAndOddHeaders`, `headerDistanceTwips` and `footerDistanceTwips`.
+  `InsertPageNumberField` accepts `"pageOfTotal"` for Word's "Page X of Y".
+- `DocxSession.SetPageSetup(anchor, PageSetupOp)` — Word's Page Setup for the section holding
+  an anchor: page size, orientation, the four margins and the header/footer distances, written
+  to the governing `w:sectPr`. Rippled to the WASM bridge, npm, the stdio host and the Python
+  client.
+- `FormatOp` gained `highlight` (Word's highlighter palette, `""` clears), `caps` and
+  `smallCaps`.
+- `WmlToHtmlConverterSettings.StampPageNumberFields` wraps every PAGE / NUMPAGES result in the
+  `data-field` marker outside paginated mode too, for a client that paginates a block render
+  itself (the browser editor editing a running story in place). Library-only; no transport
+  exposes it. `EditErrorCode.InvalidPageSetup` is the rejection code for a `SetPageSetup` whose
+  margins leave no page.
+- `tools/screenshots/editor/` regenerates the editor screenshots under `docs/images/editor/`
+  from the shipped surface.
+
+### Changed
+
+- `CommentListEntry.Id` is a `required` init property. Code that constructs the record
+  positionally must now set `Id`; callers that only read `ListComments()` are unaffected.
+- The ribbon's header/footer band no longer carries its own kind selector, page-number menu and
+  format/start controls; those live on the contextual Header & Footer tab and the Layout tab.
+  The `headerFooter` option now defaults to **on** for the ribbon (the bare `DocxEditor` default
+  is unchanged). Footnote/endnote insertion moved from Insert to References, as in Word.
+
+- Documented, as a deliberate position rather than an accident, that Docxodus preserves
+  schema-invalid tracked-revision markup nested inside an Office Math run (`w:ins`/`w:del` as a
+  direct child of `m:r`) instead of silently rewriting it. `WmlComparer` repaired that shape as a
+  side effect of rebuilding the whole package — the same reserialization that made it drop content
+  elsewhere — and nothing replaced the repair when the engine was removed in v11.0.0. No consumer
+  we can test fails on the shape: LibreOffice renders it, and the only symptom is one validator
+  finding the input already carried. See "Office Math: revision wrappers nested inside `m:r`" in
+  `docs/ooxml_corner_cases.md` for the reasoning and for where a repair would belong if one is ever
+  warranted.
+
+### Fixed
+
 - **The editor's first paint no longer restyles the host page.** The embed wrapper scopes the
   converter's stylesheet (its `body`/`span` rules) for every whole-document render, but the
   editor's comment-aware first paint reaches for a new render method, `RenderEditorHtml`, that
@@ -260,61 +336,6 @@ All notable changes to this project will be documented in this file.
   already had, so an untouched part comes back byte-identical and a package diff shows the edit
   instead of burying it. This holds for every transport, because they all save through the same
   serializer.
-
-### Changed
-
-- Documented, as a deliberate position rather than an accident, that Docxodus preserves
-  schema-invalid tracked-revision markup nested inside an Office Math run (`w:ins`/`w:del` as a
-  direct child of `m:r`) instead of silently rewriting it. `WmlComparer` repaired that shape as a
-  side effect of rebuilding the whole package — the same reserialization that made it drop content
-  elsewhere — and nothing replaced the repair when the engine was removed in v11.0.0. No consumer
-  we can test fails on the shape: LibreOffice renders it, and the only symptom is one validator
-  finding the input already carried. See "Office Math: revision wrappers nested inside `m:r`" in
-  `docs/ooxml_corner_cases.md` for the reasoning and for where a repair would belong if one is ever
-  warranted.
-
-### Added
-
-- **REDLINE THEATER (`docs/demo/redline.html`) — the agent protocol as the demo.** Three
-  counsel negotiate a Master Services Agreement, and every edit that lands is dispatched
-  from a real JSON-RPC 2.0 `tools/call` frame in the shape `docxodus-mcp` accepts over
-  stdio, streamed on a wire console beside the document. Nothing renders a diff: the
-  session records in `render_inline` mode, so each call writes native `w:ins`/`w:del`
-  into the live package and the editor repaints only the block that changed — what you
-  watch is the file that downloads, attributed per counsel because the three reviewers
-  are three values of the session's revision author. The finale proves the result rather
-  than asserting it: `proveRedlineReversibility` plus a `docxDiffGetRevisions` pass
-  confirm accept-all reaches the negotiated final and reject-all restores the baseline
-  with zero content differences, with reject-path package divergences classified against
-  a closed set of parts that review comments legitimately explain. One scripted call is
-  *expected to be refused* — list membership has no reversible tracked-change encoding,
-  so the engine declines it rather than writing a mark reject-all could not undo. That
-  closed-set classification is also what found the note-insertion defect fixed in #625:
-  a footnote's definition survived reject-all, and because `/word/footnotes.xml` is not
-  a part a comment can explain, the demo reported the redline unreversible instead of
-  absorbing it into a pattern match. Act II footnotes the negotiated cap again now, so
-  the proof exercises that path on every run.
-  The page carries a second mode, **diff stress**, because "redline" means two things
-  here and only one was on screen: where the negotiation RECORDS its markup, the stress
-  meter RECOMPUTES the redline from scratch after every edit and times it, appending a
-  clause per frame so the input grows under the engine. Three selectable pipeline depths
-  measure ~52 ms (`docxDiffGetRevisions`), ~74 ms (`docxDiffCompareProducts` → package +
-  revisions) and ~141 ms (plus `convertDocxToHtml`) — that is 33× to 78× the cost of the
-  ~2 ms mutation path measured through the same endpoint, so a redline-per-edit loop runs
-  between roughly 7 and 19 frames per second: not an animation rate, but no longer far
-  from one. The panel
-  reports the ratio it just measured, not a number written into the page, which is how it
-  picked up three successive engine improvements — the read-amplification fix from the
-  DocxDiff stress work, the normalizer gating, and the read-identity change — without a
-  line of its own changing. `benchmarks/docxdiff-stress/FINDINGS.md` remains the authority on engine
-  performance; this mode is the watchable version of the same question.
-  A browser MCP endpoint (`docs/demo/mcp-wire.js`) reimplements the server's front half
-  (envelope parsing, (tool, action) routing, the `content[].text` + `isError` result
-  shape, business failures as tool results rather than protocol errors) over `DocxSession`
-  via WASM; `docs/demo/tools/redline-theater.test.mjs` parses the real
-  `tools/mcp-server/ToolCatalog.cs` so that correspondence is checked rather than
-  claimed, and `npm/tests/demo-redline.spec.ts` guards the run, the attribution, the
-  proof and a latency budget. Demo content only — not shipped in the npm package.
 
 ### Fixed
 

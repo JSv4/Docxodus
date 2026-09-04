@@ -42,7 +42,7 @@ const PINNED_FILES = [
   'npm/src/index.ts',
 ];
 
-// `docxodus@11.0.0`, `docxodus@11.0.0/dist/embed.bundle.js`, the bare npm URL —
+// `docxodus@12.0.0`, `docxodus@12.0.0/dist/embed.bundle.js`, the bare npm URL —
 // all of them, but never `docxodus@latest`, which the docs use deliberately in
 // one "unpinned" example.
 const PIN = /docxodus@(\d+\.\d+\.\d+)/g;
