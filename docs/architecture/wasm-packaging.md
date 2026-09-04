@@ -169,6 +169,54 @@ The AOT-compiled `dotnet.native.wasm` is a different binary from the interpreter
 the trim canaries in `trim-validation.spec.ts` and the whole Playwright suite are what prove
 the tier did not change behaviour; both ran green on the AOT bundle before it shipped.
 
+### The cold path can collapse, so every comparison warms first (issues #695, #696)
+
+A stale profile costs speed, never correctness — but the *cold path* costs more than speed.
+The first comparison a module instance runs executes the engine's whole cold path (assembly
+resolution, type loads, static constructors, first-time entry into every method the diff and
+render stages touch), and a large part of that is outside any profile and therefore runs
+interpreted. **Mono's collector pins conservatively from the interpreter stack**, so a nursery
+collection taken while that cold path is live pays a root scan proportional to it. A comparison
+also allocates a package's worth of XML, so it takes many collections. On a heap that an
+earlier operation has already filled the two coincide and the comparison stops making
+meaningful progress — not "slow", but no longer finishing.
+
+Measured on `WC/WC007-Unmodified.docx` against `WC/WC007-Moved-into-Table.docx` (11 KB each)
+after one `DocxSession` revision read in the same page:
+
+| | first comparison |
+|---|---|
+| warm native (.NET 10 x64) | 25 ms |
+| browser, warm | ~0.5 s |
+| browser, cold, on a clean heap | ~0.6 s |
+| **browser, cold, after a session read** | **> 10 min (never observed to finish)** |
+
+Sampling the hung page with `Debugger.pause` put **14 of 14 stacks** in
+`collect_nursery → pin_from_roots → sgen_client_scan_thread_data → interp_mark_stack`.
+
+Three things this is *not*, each ruled out by measurement rather than argument:
+
+- **Not a diff-engine regression.** The redline this pair produces is byte-identical before and
+  after the change that first exposed it (#693) — only the revision timestamp differs — and warm
+  native is 24–26 ms at both commits.
+- **Not a stale profile.** Re-recording `docxodus.aotprofile` and rebuilding does not fix it.
+  (The jiterpreter is barely involved either: the shipped tier reports 0 traces and 264 B jitted
+  across the sequence, because the profile already covers the warm path.)
+- **Not a GC tuning problem.** The collapse is **not monotone in nursery size**: with
+  `MONO_GC_PARAMS=nursery-size=`, 4m, 6m and 12m all collapse while 8m and 16m do not. A value
+  that survives today is a lottery ticket, not a fix — which is why none is set.
+
+What does hold is warming the engine on input too small to take a collection.
+`DocxodusWasm/ComparisonEngine.EnsureWarm()` compares two one-paragraph in-memory documents:
+same cold path, almost no allocation. Every comparison export in `DocxDiffBridge` and
+`DocumentComparer` calls it before touching the caller's documents, and it is latched, so it
+runs once per module instance. It fixes the sequence under every nursery size measured above,
+including the three that collapse. The cost is about 250 ms on the first comparison and nothing
+after it; `DocumentComparer.Warmup` (the npm worker's `prepare()`) still exists to move that
+250 ms off the critical path, but is no longer the difference between working and hanging.
+`npm/tests/wasm-steady-state.spec.ts` pins the sequence — session read first, comparison second,
+both in a page that has run neither before, because comparing first makes it pass trivially.
+
 ## Compression and serving
 
 `build-wasm.sh` writes a brotli-11 `.br` sibling next to every `_framework` asset. The

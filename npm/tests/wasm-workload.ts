@@ -18,6 +18,9 @@ import { fileURLToPath } from 'url';
 
 const TEST_FILES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../TestFiles');
 
+/** The same TestFiles root, for specs that read a fixture this module does not name. */
+export const WORKLOAD_TEST_FILES_DIR = TEST_FILES_DIR;
+
 /** Fixtures, relative to TestFiles/. */
 export const WORKLOAD_FIXTURES = {
   /** Two 11 KB revisions of one document — the "typical" compare. */

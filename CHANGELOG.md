@@ -6,6 +6,23 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- The browser build no longer hangs on a comparison that follows a session read. The first
+  comparison a WASM module instance runs executes the whole cold path of the engine — assembly
+  resolution, type loads, static constructors, and the first-time entry into every method the
+  diff and render stages touch — and much of that runs on the Mono interpreter rather than in
+  AOT-compiled code. Mono's collector pins conservatively from the interpreter stack, so every
+  nursery collection taken while that cold path is live pays a scan proportional to it, and a
+  comparison allocates a package's worth of XML. On a heap an earlier operation had already
+  filled — opening a `DocxSession` to read revisions, say — the two coincided and the comparison
+  stopped making meaningful progress: over ten minutes for an 11 KB pair that takes 25 ms
+  natively and about half a second warm in the browser. Every comparison entry point in the WASM
+  bridge now warms the engine first, against two one-paragraph in-memory documents that walk the
+  same cold path while allocating almost nothing. `DocumentComparer.Warmup` (the npm worker's
+  `prepare()`) still exists to move that cost off the critical path, but is no longer the
+  difference between working and hanging; it is now latched, so it truly costs nothing after the
+  first call. The first comparison of a module instance is about 250 ms slower; every later one
+  is unchanged. Tuning the collector is not an alternative — the collapse is not monotone in
+  nursery size, so no setting fixes it, while warming first survives every size measured.
 - `DocxDiff` no longer lets an empty paragraph act as an alignment anchor on its own. An empty
   paragraph has no words, so the only thing that can make its paragraph mark "the same paragraph"
   on both sides is the matched content it sits inside — a blank between two retained or edited
