@@ -19,6 +19,10 @@ namespace DocxodusWasm;
 /// comparisons. This bridge exposes its additional anchor-addressed revisions and
 /// diff-as-data edit script. Settings arrive as a JSON object (the transport mirror
 /// of <c>DocxDiffSettings</c>); an empty/whitespace string uses the defaults.</para>
+///
+/// <para><b>Invariant.</b> Every export here that runs a comparison calls
+/// <see cref="ComparisonEngine.EnsureWarm"/> first; a new one must too. See that class for why
+/// the browser cannot be left to discover the engine's cold path on a real document.</para>
 /// </summary>
 [SupportedOSPlatform("browser")]
 public static partial class DocxDiffBridge
@@ -34,6 +38,7 @@ public static partial class DocxDiffBridge
     [JSExport]
     public static byte[] Compare(byte[] leftBytes, byte[] rightBytes, string settingsJson)
     {
+        ComparisonEngine.EnsureWarm();
         try
         {
             return DocxDiffOps.Compare(leftBytes, rightBytes, settingsJson);
@@ -52,6 +57,7 @@ public static partial class DocxDiffBridge
     [JSExport]
     public static string GetRevisionsJson(byte[] leftBytes, byte[] rightBytes, string settingsJson)
     {
+        ComparisonEngine.EnsureWarm();
         try
         {
             return DocxDiffOps.GetRevisionsJson(leftBytes, rightBytes, settingsJson);
@@ -69,6 +75,7 @@ public static partial class DocxDiffBridge
     [JSExport]
     public static string GetEditScriptJson(byte[] leftBytes, byte[] rightBytes, string settingsJson)
     {
+        ComparisonEngine.EnsureWarm();
         try
         {
             return DocxDiffOps.GetEditScriptJson(leftBytes, rightBytes, settingsJson);
@@ -87,6 +94,7 @@ public static partial class DocxDiffBridge
     public static string GetSemanticChangesJson(
         byte[] leftBytes, byte[] rightBytes, string settingsJson)
     {
+        ComparisonEngine.EnsureWarm();
         try
         {
             return DocxDiffOps.GetSemanticChangesJson(leftBytes, rightBytes, settingsJson);
@@ -108,6 +116,7 @@ public static partial class DocxDiffBridge
     public static string CompareProductsJson(
         byte[] leftBytes, byte[] rightBytes, string settingsJson, string productsJson)
     {
+        ComparisonEngine.EnsureWarm();
         try
         {
             return DocxDiffOps.CompareProductsJson(leftBytes, rightBytes, settingsJson, productsJson);
@@ -129,6 +138,7 @@ public static partial class DocxDiffBridge
     public static string CompareBatchJson(
         byte[] baselineBytes, string candidatesJson, string settingsJson, string productsJson)
     {
+        ComparisonEngine.EnsureWarm();
         try
         {
             return DocxDiffOps.CompareBatchJson(baselineBytes, candidatesJson, settingsJson, productsJson);
@@ -190,6 +200,7 @@ public static partial class DocxDiffBridge
     [JSExport]
     public static byte[] Consolidate(byte[] baseBytes, string reviewersJson, string settingsJson)
     {
+        ComparisonEngine.EnsureWarm();
         try
         {
             return DocxDiffOps.Consolidate(baseBytes, reviewersJson, settingsJson);
@@ -209,6 +220,7 @@ public static partial class DocxDiffBridge
     [JSExport]
     public static string GetConsolidatedRevisionsJson(byte[] baseBytes, string reviewersJson, string settingsJson)
     {
+        ComparisonEngine.EnsureWarm();
         try
         {
             return DocxDiffOps.GetConsolidatedRevisionsJson(baseBytes, reviewersJson, settingsJson);
@@ -227,6 +239,7 @@ public static partial class DocxDiffBridge
     [JSExport]
     public static string GetConsolidatedEditScriptJson(byte[] baseBytes, string reviewersJson, string settingsJson)
     {
+        ComparisonEngine.EnsureWarm();
         try
         {
             return DocxDiffOps.GetConsolidatedEditScriptJson(baseBytes, reviewersJson, settingsJson);
@@ -245,6 +258,7 @@ public static partial class DocxDiffBridge
     [JSExport]
     public static string GetConflictsJson(byte[] baseBytes, string reviewersJson, string settingsJson)
     {
+        ComparisonEngine.EnsureWarm();
         try
         {
             return DocxDiffOps.GetConflictsJson(baseBytes, reviewersJson, settingsJson);
