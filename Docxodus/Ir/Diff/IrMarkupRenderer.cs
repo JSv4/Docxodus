@@ -244,6 +244,7 @@ internal static class IrMarkupRenderer
 
         var state = new RenderState(irLeft, irRight, settings);
         state.LeftStyleIds = ReadStyleIds(left);
+        state.InsertedParagraphStyleIds = CollectInsertedParagraphStyleIds(script, state);
 
         // Word-parity input-revision preservation (PreserveInputRevisions): map each accepted working-copy
         // body block back to its ORIGINAL source element. A revision-free LEFT keeps the established path:
@@ -996,30 +997,115 @@ internal static class IrMarkupRenderer
                 sink.Add(BuildInsertedTailPilcrow(nextPPr, state));
                 return;
             }
+            else if (nP && bi >= 0 && !insGroups[ni].Wordful && IsWholeTableGroup(delGroups[bi]))
+            {
+                // The same virtual pair with an EMPTY final next paragraph: there are no runs to
+                // fuse, so the next side's final pilcrow simply lands AFTER the deleted table (Word
+                // keeps it live there; our contract keeps its ¶INS mark — reject removes it,
+                // accept keeps it — rendering the same trailing empty line). Every other insert
+                // stays ahead of the deletions, exactly as in the fused shape above.
+                for (int k = 0; k < ni; k++)
+                    sink.AddRange(insGroups[k].Elements);
+                foreach (var g in delGroups)
+                    sink.AddRange(g.Elements);
+                sink.AddRange(insGroups[ni].Elements);
+                return;
+            }
         }
-        // The structural pair does not by itself open a chain: further pairs OPEN only on an
-        // empty↔empty candidate and CONTINUE while at least one side is empty.
-        bool chain = false;
-        while (bi >= 0 && ni >= 0)
+        if (storyEnd)
         {
-            if (!delGroups[bi].IsPlainParagraph || !insGroups[ni].IsPlainParagraph)
-                break;
-            bool baseEmpty = !delGroups[bi].Wordful;
-            bool nextEmpty = !insGroups[ni].Wordful;
-            if (!chain)
+            // STORY END. The structural pair does not by itself open a chain: further pairs OPEN only
+            // on an empty↔empty candidate and CONTINUE while at least one side is empty. A structural
+            // pair with a WORDFUL member on either side blocks the chain outright (decoded from Word's
+            // compare output): behind a wordful final paragraph the words sit between that pilcrow
+            // and the previous one, so no earlier pilcrow can pair.
+            bool chain = false;
+            bool blocked = pairs.Count == 1 &&
+                (delGroups[pairs[0].B].Wordful || insGroups[pairs[0].N].Wordful);
+            while (!blocked && bi >= 0 && ni >= 0)
             {
-                if (baseEmpty && nextEmpty)
-                    chain = true;
-                else
+                if (!delGroups[bi].IsPlainParagraph || !insGroups[ni].IsPlainParagraph)
                     break;
+                bool baseEmpty = !delGroups[bi].Wordful;
+                bool nextEmpty = !insGroups[ni].Wordful;
+                if (!chain)
+                {
+                    if (baseEmpty && nextEmpty)
+                        chain = true;
+                    else
+                        break;
+                }
+                else if (!(baseEmpty || nextEmpty))
+                {
+                    break;
+                }
+                pairs.Add((bi, ni));
+                bi--;
+                ni--;
             }
-            else if (!(baseEmpty || nextEmpty))
+        }
+        else
+        {
+            // INTERIOR region (it ends at a shared block, not the story end). Decoded from Word's
+            // compare output across every such region of the reference corpus that ends with a blank
+            // on both sides (331 of 334 follow it): the chain OPENS on that empty↔empty pair and walks
+            // backwards while the BASE member is empty — a wordful NEXT member is fine, its runs fuse
+            // into the first deleted paragraph — but a wordful base member facing an empty next member
+            // CANCELS the whole chain (Word keeps every mark: the base paragraph stays ¶DEL whole and
+            // the next blanks ¶INS). At a wordful↔wordful stop the chain survives only when the
+            // paragraphs left over before it balance; a fused next member needs a deleted paragraph
+            // to host its runs, or the chain is cancelled too. A table or break carrier on either side
+            // simply stops the walk.
+            if (bi >= 0 && ni >= 0 && delGroups[bi].IsPlainParagraph && insGroups[ni].IsPlainParagraph &&
+                !delGroups[bi].Wordful && !insGroups[ni].Wordful)
             {
-                break;
+                var chainPairs = new List<(int B, int N)>();
+                bool keep = true, fusion = false, stoppedAtWordful = false;
+                int cb = bi, cn = ni;
+                chainPairs.Add((cb, cn));
+                cb--;
+                cn--;
+                while (cb >= 0 && cn >= 0)
+                {
+                    if (!delGroups[cb].IsPlainParagraph || !insGroups[cn].IsPlainParagraph)
+                        break;
+                    if (!delGroups[cb].Wordful)
+                    {
+                        if (insGroups[cn].Wordful)
+                            fusion = true;
+                        chainPairs.Add((cb, cn));
+                        cb--;
+                        cn--;
+                        continue;
+                    }
+                    if (!insGroups[cn].Wordful)
+                    {
+                        keep = false;
+                        break;
+                    }
+                    stoppedAtWordful = true;
+                    break;
+                }
+                if (keep && fusion)
+                    keep = cb >= 0 && delGroups[0].IsPlainParagraph && delGroups[0].Wordful;
+                if (keep && stoppedAtWordful)
+                {
+                    int remainingBase = 0, remainingNext = 0;
+                    for (int k = 0; k <= cb; k++)
+                        if (!IsWholeTableGroup(delGroups[k]))
+                            remainingBase++;
+                    for (int k = 0; k <= cn; k++)
+                        if (!IsWholeTableGroup(insGroups[k]))
+                            remainingNext++;
+                    keep = remainingBase == remainingNext;
+                }
+                if (keep)
+                {
+                    pairs.AddRange(chainPairs);
+                    bi = cb;
+                    ni = cn;
+                }
             }
-            pairs.Add((bi, ni));
-            bi--;
-            ni--;
         }
         pairs.Reverse(); // head-most first
 
@@ -1816,13 +1902,16 @@ internal static class IrMarkupRenderer
         var rightCells = rightRowSrc.Elements(W.tc).ToList();
         var leftCells = leftRowSrc?.Elements(W.tc).ToList();
         // A monotone cell-op sequence is renderable whenever every output (right) cell is represented once
-        // and no left-only deletion is present.  This includes an ordinary-grid insertion at the head or in
-        // the middle: build from the accepted right grid, mark only the right-only cell w:cellIns, and let
-        // tblGridChange restore the old grid on reject.  Left-only cells remain a conservative whole-table
-        // fallback until the delete/merge topology path is made grid-aware.
+        // and every left cell is represented once. This includes an ordinary-grid insertion at the head or
+        // in the middle — build from the accepted right grid, mark only the right-only cell w:cellIns, and
+        // let tblGridChange restore the old grid on reject — and a left-only cell (a column the next row
+        // no longer has, or a narrower row paired positionally with a wider one): that cell is emitted in
+        // its place as the base cell with w:tcPr/w:cellDel and its content struck, so accept removes it
+        // and reject restores it. Word's compare output keeps such a surplus base cell in the merged row
+        // with its content deleted rather than lowering the whole table to a delete + insert pair.
         if (rowOp.CellOps.Count(c => c.RightCellAnchor != null) != rightCells.Count ||
-            rowOp.CellOps.Any(c => c.RightCellAnchor == null) ||
-            (leftCells != null && rowOp.CellOps.Count(c => c.LeftCellAnchor != null) != leftCells.Count))
+            (leftCells != null && rowOp.CellOps.Count(c => c.LeftCellAnchor != null) != leftCells.Count) ||
+            (leftCells == null && rowOp.CellOps.Any(c => c.RightCellAnchor == null)))
             return false;
 
         var newRow = new XElement(W.tr);
@@ -1833,6 +1922,17 @@ internal static class IrMarkupRenderer
         int leftIndex = 0;
         foreach (var cellOp in rowOp.CellOps)
         {
+            if (cellOp.RightCellAnchor == null)
+            {
+                // Left-only cell: the base cell survives in place, whole-marked deleted (cellDel + struck
+                // content). leftCells is non-null here — the guard above rejects this op without a left row.
+                if (leftIndex >= leftCells!.Count)
+                    return false;
+                var deletedCell = StripUnids(new XElement(leftCells[leftIndex++]));
+                MarkWholeCell(deletedCell, RevKind.Del, state);
+                newRow.Add(deletedCell);
+                continue;
+            }
             if (rightIndex >= rightCells.Count)
                 return false;
             var cellSrc = rightCells[rightIndex++];
@@ -5629,9 +5729,10 @@ internal static class IrMarkupRenderer
     /// (the original is never mutated); pass-through when the style resolves or no registry exists.</summary>
     private static XElement? DropUnresolvableForCompare(XElement? pPr, RenderState state)
     {
-        if (pPr is null || state.LeftStyleIds is not { } known)
+        if (pPr is null || state.LeftStyleIds is null)
             return pPr;
-        if (pPr.Element(W.pStyle) is not { } pStyle || (string?)pStyle.Attribute(W.val) is not { } id || known.Contains(id))
+        if (pPr.Element(W.pStyle) is not { } pStyle || (string?)pStyle.Attribute(W.val) is not { } id ||
+            state.PairedParagraphStyleResolves(id))
             return pPr;
         var clone = new XElement(pPr);
         clone.Elements(W.pStyle).Remove();
@@ -6524,6 +6625,7 @@ internal static class IrMarkupRenderer
         DocDefaultsStyleProjection? docDefaultsStyleProjection)
     {
         var rightImportedStyles = new HashSet<StyleIdentity>();
+        var importedParagraphStyles = new List<(XElement Style, string Id)>();
         if (wDoc.MainDocumentPart?.StyleDefinitionsPart is not { } leftStyles ||
             wDocRight.MainDocumentPart?.StyleDefinitionsPart is not { } rightStyles)
             return rightImportedStyles;
@@ -6566,6 +6668,11 @@ internal static class IrMarkupRenderer
                     // input property revision is also retained: stripping its default flag would
                     // change the source revision's reachability before it can be preserved.
                     cloned.Attribute(W._default)?.Remove();
+                    // An imported right-only paragraph style lives under the LEFT docDefaults from now
+                    // on; it is expressed there in a second pass once every style's payload is final
+                    // (see ExpressImportedStyleUnderLeftDefaults).
+                    if (string.Equals(type, "paragraph", StringComparison.Ordinal) && styleId is not null)
+                        importedParagraphStyles.Add((cloned, styleId));
                 }
                 root.Add(cloned);
                 if (type is not null && styleId is not null)
@@ -6600,7 +6707,8 @@ internal static class IrMarkupRenderer
             if (string.Equals(type, "paragraph", StringComparison.Ordinal))
             {
                 AddDocDefaultsNeutralizers(rightRawPPr,
-                    LeftDocDefaultsProps(leftOriginalRoot, paragraphAxis: true), rightEffPPr, paragraphAxis: true);
+                    LeftDocDefaultsProps(leftOriginalRoot, paragraphAxis: true), rightEffPPr, paragraphAxis: true,
+                    LeftDocDefaultsProps(rightRoot, paragraphAxis: true));
                 MaterializeRightDocDefaults(rightRawPPr,
                     LeftDocDefaultsProps(leftOriginalRoot, paragraphAxis: true),
                     LeftDocDefaultsProps(rightRoot, paragraphAxis: true));
@@ -6633,6 +6741,16 @@ internal static class IrMarkupRenderer
                 anchor.AddBeforeSelf(newRPr);
             }
         }
+        // Decoded from Word's compare output: the docDefaults delta is stated ONCE along a style
+        // chain. When the default paragraph style was updated above, its payload carries the delta
+        // and an imported style based on it inherits it — Word writes nothing more on the import.
+        // Only when no ancestor in the OUTPUT chain states an attribute does the imported style state
+        // it itself (an imported heading under an untouched Normal is written with line=259 explicit
+        // and the left's after=200 neutralized). Parents first, so a chain of imports resolves in order.
+        foreach (var (style, id) in importedParagraphStyles
+                     .OrderBy(entry => StyleChainDepth(root, entry.Id)))
+            ExpressImportedStyleUnderLeftDefaults(style, rightRoot, leftOriginalRoot, root, "paragraph", id);
+
         leftStyles.PutXDocument();
         return rightImportedStyles;
     }
@@ -6667,7 +6785,8 @@ internal static class IrMarkupRenderer
         {
             currentPPr = new XElement(rightPPr);
             AddDocDefaultsNeutralizers(currentPPr,
-                LeftDocDefaultsProps(leftStylesRoot, paragraphAxis: true), rightPPr, paragraphAxis: true);
+                LeftDocDefaultsProps(leftStylesRoot, paragraphAxis: true), rightPPr, paragraphAxis: true,
+                LeftDocDefaultsProps(rightStylesRoot, paragraphAxis: true));
             NormalizeStylePropertyOrder(currentPPr, StylePPrChildOrder);
             currentPPr.Add(new XElement(W.pPrChange, state.RevisionAttributes(), new XElement(leftPPr)));
         }
@@ -6692,19 +6811,201 @@ internal static class IrMarkupRenderer
     /// (oracle-decoded: spacing → 0/240/auto attribute-wise, kern → 0, ligatures → none). Properties
     /// without a confident built-in stay untouched — the leak is the pre-existing status quo there.
     /// </summary>
+    /// <summary>
+    /// State an imported right-only paragraph style's docDefaults delta on its own payload: the output
+    /// keeps the LEFT docDefaults, so a right default the left values differently (or lacks) must be
+    /// materialized, and a left default the right never declared must be neutralized — exactly the
+    /// treatment an updated shared style receives. The paragraph side works on the RAW right payload
+    /// (docDefaults spacing is never folded into a style wholesale); the run side takes the resolved
+    /// right formatting the same way the updated-style branch does.
+    /// </summary>
+    private static void ExpressImportedStyleUnderLeftDefaults(
+        XElement cloned, XElement rightRoot, XElement leftOriginalRoot, XElement outputRoot, string type, string styleId)
+    {
+        var (rightEffPPr, rightRPr) = ResolveEffectiveStyleFormatting(rightRoot, type, styleId);
+        var pPr = cloned.Element(W.pPr);
+        if (pPr is null)
+        {
+            pPr = new XElement(W.pPr);
+            var rPrAnchor = cloned.Element(W.rPr);
+            if (rPrAnchor is not null)
+                rPrAnchor.AddBeforeSelf(pPr);
+            else
+                cloned.Add(pPr);
+        }
+        var leftDd = LeftDocDefaultsProps(leftOriginalRoot, paragraphAxis: true);
+        var rightDd = LeftDocDefaultsProps(rightRoot, paragraphAxis: true);
+
+        // Work on a probe that already carries everything the OUTPUT ancestor chain states, so the
+        // delta is computed against what the imported style really inherits; then copy over only the
+        // additions the probe gained beyond the style's own payload.
+        var probe = new XElement(pPr);
+        foreach (var ancestorPPr in OutputAncestorPPrs(outputRoot, cloned))
+        {
+            foreach (var el in ancestorPPr.Elements())
+            {
+                if (el.Name == W.pPrChange || el.Name == W.rPr)
+                    continue;
+                var mine = probe.Element(el.Name);
+                if (mine is null)
+                    probe.Add(new XElement(el));
+                else if (el.Name == W.spacing)
+                    foreach (var at in el.Attributes())
+                        if (mine.Attribute(at.Name) is null)
+                            mine.SetAttributeValue(at.Name, at.Value);
+            }
+        }
+        var before = new XElement(probe);
+        AddDocDefaultsNeutralizers(probe, leftDd, rightEffPPr, paragraphAxis: true, rightDd);
+        MaterializeRightDocDefaults(probe, leftDd, rightDd);
+        foreach (var el in probe.Elements())
+        {
+            var prior = before.Element(el.Name);
+            if (prior is null)
+            {
+                if (pPr.Element(el.Name) is null)
+                    pPr.Add(new XElement(el));
+                continue;
+            }
+            if (el.Name != W.spacing)
+                continue;
+            var own = pPr.Element(W.spacing);
+            foreach (var at in el.Attributes())
+            {
+                if (prior.Attribute(at.Name) is not null)
+                    continue;
+                own ??= AddSpacingElement(pPr);
+                own.SetAttributeValue(at.Name, at.Value);
+            }
+        }
+        NormalizeTwipsMeasures(pPr);
+        NormalizeStylePropertyOrder(pPr, StylePPrChildOrder);
+        if (!pPr.HasElements)
+            pPr.Remove();
+
+        AddDocDefaultsNeutralizers(rightRPr,
+            LeftDocDefaultsProps(leftOriginalRoot, paragraphAxis: false), rightRPr, paragraphAxis: false);
+        NormalizeStylePropertyOrder(rightRPr, StyleRPrChildOrder);
+        cloned.Elements(W.rPr).Remove();
+        if (rightRPr.HasElements)
+            ReplaceStyleProperties(cloned, null, new XElement(W.rPr, rightRPr.Elements()));
+    }
+
+    private static XElement AddSpacingElement(XElement pPr)
+    {
+        var spacing = new XElement(W.spacing);
+        pPr.Add(spacing);
+        return spacing;
+    }
+
+    /// <summary>The <c>w:pPr</c> payloads of a style's <c>basedOn</c> ancestors in the output styles
+    /// part, nearest first; a cycle or a missing ancestor ends the walk.</summary>
+    private static IEnumerable<XElement> OutputAncestorPPrs(XElement outputRoot, XElement style)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var current = style;
+        while ((string?)current.Element(W.basedOn)?.Attribute(W.val) is { } parentId && seen.Add(parentId))
+        {
+            var parent = outputRoot.Elements(W.style).FirstOrDefault(st =>
+                (string?)st.Attribute(W.type) == "paragraph" && (string?)st.Attribute(W.styleId) == parentId);
+            if (parent is null)
+                yield break;
+            if (parent.Element(W.pPr) is { } pPr)
+                yield return pPr;
+            current = parent;
+        }
+    }
+
+    /// <summary>Depth of a paragraph style's <c>basedOn</c> chain in the output styles part (0 for a root).</summary>
+    private static int StyleChainDepth(XElement outputRoot, string styleId)
+    {
+        int depth = 0;
+        var seen = new HashSet<string>(StringComparer.Ordinal) { styleId };
+        var current = outputRoot.Elements(W.style).FirstOrDefault(st =>
+            (string?)st.Attribute(W.type) == "paragraph" && (string?)st.Attribute(W.styleId) == styleId);
+        while (current is not null && (string?)current.Element(W.basedOn)?.Attribute(W.val) is { } parentId && seen.Add(parentId))
+        {
+            depth++;
+            current = outputRoot.Elements(W.style).FirstOrDefault(st =>
+                (string?)st.Attribute(W.type) == "paragraph" && (string?)st.Attribute(W.styleId) == parentId);
+        }
+        return depth;
+    }
+
+    /// <summary>
+    /// Rewrite universal measures ("12pt", "0.5in", "1.27cm") on a payload's <c>w:spacing</c> and
+    /// <c>w:ind</c> attributes as plain twips, the form Word writes. A <c>w:line</c> under the
+    /// <c>auto</c> rule is a 240ths-of-a-line count, so a unit suffix there is ambiguous to a renderer;
+    /// the numeric twip value carries the author's intent (12.95pt = 259 = 1.08 lines) unambiguously.
+    /// Values already in twips (or a percentage) are left untouched.
+    /// </summary>
+    private static void NormalizeTwipsMeasures(XElement props)
+    {
+        foreach (var el in props.Elements().Where(e => e.Name == W.spacing || e.Name == W.ind))
+        {
+            foreach (var at in el.Attributes().ToList())
+            {
+                var m = System.Text.RegularExpressions.Regex.Match(at.Value, @"^(-?\d+(?:\.\d+)?)(pt|in|cm|mm|pc|pi)$");
+                if (!m.Success)
+                    continue;
+                double v = double.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+                double twips = m.Groups[2].Value switch
+                {
+                    "pt" => v * 20,
+                    "in" => v * 1440,
+                    "cm" => v * 567,
+                    "mm" => v * 56.7,
+                    _ => v * 240, // pc / pi (picas)
+                };
+                at.Value = ((long)Math.Round(twips)).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            }
+        }
+    }
+
     private static void AddDocDefaultsNeutralizers(
-        XElement current, XElement? leftDocDefaultsProps, XElement rightEffectiveProps, bool paragraphAxis)
+        XElement current, XElement? leftDocDefaultsProps, XElement rightEffectiveProps, bool paragraphAxis,
+        XElement? rightDocDefaultsProps = null)
     {
         if (leftDocDefaultsProps is null)
             return;
         foreach (var declared in leftDocDefaultsProps.Elements())
         {
-            if (rightEffectiveProps.Element(declared.Name) is not null ||
-                current.Element(declared.Name) is not null)
+            var rightEffective = rightEffectiveProps.Element(declared.Name);
+            var currentDeclared = current.Element(declared.Name);
+            var rightDefault = rightDocDefaultsProps?.Element(declared.Name);
+            if (paragraphAxis && declared.Name == W.spacing &&
+                (rightEffective is not null || currentDeclared is not null || rightDefault is not null))
+            {
+                // Spacing attributes inherit one by one, so a right side that declares SOME of them
+                // (typically line/lineRule) still lets the left docDefaults' other attributes
+                // (typically after/before) through. Word neutralizes exactly those (decoded from its
+                // compare output: a right whose defaults say only line=276 against a left saying
+                // after=160 line=278 yields an updated Normal of after=0 line=276). An attribute the
+                // RIGHT's own docDefaults declare is not left-only: it is materialized with the right's
+                // value by MaterializeRightDocDefaults, never reset to a built-in here.
+                var neutral = BuiltinDefaultFor(declared, paragraphAxis);
+                if (neutral is null)
+                    continue;
+                var missing = neutral.Attributes()
+                    .Where(a => rightEffective?.Attribute(a.Name) is null && currentDeclared?.Attribute(a.Name) is null &&
+                                rightDefault?.Attribute(a.Name) is null)
+                    .ToList();
+                if (missing.Count == 0)
+                    continue;
+                if (currentDeclared is null)
+                {
+                    currentDeclared = new XElement(W.spacing);
+                    current.Add(currentDeclared);
+                }
+                foreach (var a in missing)
+                    currentDeclared.SetAttributeValue(a.Name, a.Value);
                 continue;
-            var neutral = BuiltinDefaultFor(declared, paragraphAxis);
-            if (neutral is not null)
-                current.Add(neutral);
+            }
+            if (rightEffective is not null || currentDeclared is not null)
+                continue;
+            var whole = BuiltinDefaultFor(declared, paragraphAxis);
+            if (whole is not null)
+                current.Add(whole);
         }
     }
 
@@ -6754,9 +7055,20 @@ internal static class IrMarkupRenderer
             return;
         foreach (var declared in rightDocDefaultsProps.Elements())
         {
-            if (current.Element(declared.Name) is not null)
-                continue;
             var leftDeclared = leftDocDefaultsProps?.Element(declared.Name);
+            if (current.Element(declared.Name) is { } currentDeclared)
+            {
+                // Spacing attributes inherit one by one: a current spacing that carries only the
+                // neutralizers (after=0) still needs the right's line/lineRule stated when the left
+                // values them differently.
+                if (declared.Name != W.spacing)
+                    continue;
+                foreach (var a in declared.Attributes())
+                    if (currentDeclared.Attribute(a.Name) is null &&
+                        (string?)leftDeclared?.Attribute(a.Name) != a.Value)
+                        currentDeclared.SetAttributeValue(a.Name, a.Value);
+                continue;
+            }
             if (leftDeclared is not null && XNode.DeepEquals(leftDeclared, declared))
                 continue;
             current.Add(StripUnids(new XElement(declared)));
@@ -7093,11 +7405,52 @@ internal static class IrMarkupRenderer
     /// for a paired paragraph; only wholly-inserted paragraphs import their styles).</summary>
     private static void DropUnresolvableStyleRef(XElement pPr, RenderState state)
     {
-        if (state.LeftStyleIds is not { } known)
+        if (state.LeftStyleIds is null)
             return;
         var pStyle = pPr.Element(W.pStyle);
-        if (pStyle is not null && (string?)pStyle.Attribute(W.val) is { } id && !known.Contains(id))
+        if (pStyle is not null && (string?)pStyle.Attribute(W.val) is { } id && !state.PairedParagraphStyleResolves(id))
             pStyle.Remove();
+    }
+
+    /// <summary>The paragraph style ids the body's wholly inserted blocks name (see
+    /// <see cref="RenderState.InsertedParagraphStyleIds"/>), read from their right-side source
+    /// elements; null when there are none or provenance is unavailable.</summary>
+    private static HashSet<string>? CollectInsertedParagraphStyleIds(IrEditScript script, RenderState state)
+    {
+        HashSet<string>? ids = null;
+        void AddFrom(XElement? source)
+        {
+            if (source is null)
+                return;
+            foreach (var paragraph in source.DescendantsAndSelf(W.p))
+            {
+                if ((string?)paragraph.Element(W.pPr)?.Element(W.pStyle)?.Attribute(W.val) is { Length: > 0 } styleId)
+                    (ids ??= new HashSet<string>(StringComparer.Ordinal)).Add(styleId);
+            }
+        }
+        // Inserted content nests: a wholly inserted block, an inserted ROW of a paired table, or an
+        // inserted block inside a paired CELL all bring their paragraphs' styles into the output.
+        void Walk(IEnumerable<IrEditOp> ops)
+        {
+            foreach (var op in ops)
+            {
+                if (op.Kind == IrEditOpKind.InsertBlock)
+                    AddFrom(SourceElement(op.RightAnchor, state.RightSource));
+                if (op.TableDiff is not { } tableDiff)
+                    continue;
+                foreach (var row in tableDiff.RowOps)
+                {
+                    if (row.Kind == IrRowOpKind.InsertRow)
+                        AddFrom(SourceElement(row.RightRowAnchor, state.RightSource));
+                    else if (row.CellOps is { } cellOps)
+                        foreach (var cell in cellOps)
+                            if (cell.BlockOps is { } blockOps)
+                                Walk(blockOps);
+                }
+            }
+        }
+        Walk(script.Operations);
+        return ids;
     }
 
     /// <summary>
@@ -8280,10 +8633,24 @@ internal static class IrMarkupRenderer
         public string? AuthorOverride { get; set; }
 
         /// <summary>Style ids defined in the LEFT document's styles part. A PAIRED paragraph's
-        /// right-side <c>w:pStyle</c> referencing a style outside this set is dropped when stamped
-        /// as current (<see cref="DropUnresolvableStyleRef"/>) — Word expresses a paired
-        /// paragraph's format change within the left style universe. Null disables the check.</summary>
+        /// right-side <c>w:pStyle</c> referencing a style outside this set — and outside
+        /// <see cref="InsertedParagraphStyleIds"/> — is dropped when stamped as current
+        /// (<see cref="DropUnresolvableStyleRef"/>) — Word expresses a paired paragraph's format
+        /// change within the style universe the output resolves. Null disables the check.</summary>
         public HashSet<string>? LeftStyleIds { get; set; }
+
+        /// <summary>Paragraph style ids named by the body's wholly INSERTED blocks (their paragraphs
+        /// and the paragraphs of inserted tables). Decoded from Word's compare output: only inserted
+        /// paragraphs bring a right-only style definition into the result, but once one has, a PAIRED
+        /// paragraph naming that same style keeps its <c>w:pStyle</c> too — the reference resolves in
+        /// the output, so Word has no reason to lower it to direct properties. Null = no inserted styles.</summary>
+        public HashSet<string>? InsertedParagraphStyleIds { get; set; }
+
+        /// <summary>Whether a paired paragraph's right-side <c>w:pStyle</c> resolves in the output's
+        /// style universe: the LEFT definitions plus the right-only styles inserted content imports.</summary>
+        public bool PairedParagraphStyleResolves(string styleId) =>
+            (LeftStyleIds?.Contains(styleId) ?? true) ||
+            (InsertedParagraphStyleIds?.Contains(styleId) ?? false);
 
         /// <summary>Accepted-working-element → ORIGINAL right body element(s) map for
         /// <c>PreserveInputRevisions</c> (see <see cref="IrMarkupRenderer.BuildPreservedOriginalIndex"/>).

@@ -4,8 +4,210 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **The editor surface now covers the Word most people use.** `mountRibbon` /
+  `createRibbonEditor` gained Word's tab set — Home · Insert · Layout · References · Review ·
+  View, plus the contextual Table and Header & Footer tabs — and the controls behind them:
+  font colour, text highlight, small caps, grow/shrink font, clear formatting; the full
+  numbering gallery, line spacing, paragraph spacing before/after, first-line and hanging
+  indents; a styles gallery read from the document's own style definitions; find and replace
+  (with replace-all); hyperlinks and pictures; a table of contents; page margins, orientation
+  and paper size; track-changes on/off with accept/reject (one or all) and change navigation;
+  table cell merge/split, borders, shading, repeat-header-row and delete-table; zoom; and a
+  Word-style status bar (page position, word count, zoom) that also carries the anchor rail.
+  Every control is a `DocxEditor` command first — `setFontColor`, `setHighlight`,
+  `setLineSpacing`, `setListFormat`, `insertHyperlink`, `insertImage`, `insertTableOfContents`,
+  `mergeCells`, `setTableBorders`, `setCellShading`, `setTrackedChanges`, `acceptRevision`,
+  `find` / `replaceMatch` / `replaceAll`, `setZoom`, `setPageSetup`, and the rest — so a host
+  with its own chrome gets the same surface.
+- **Comments render the way Word renders them.** The editor now shows each commented range as
+  an inline highlight (tinted per author) and each thread as a bubble in a markup gutter beside
+  the page, positioned at its anchor with a leader line, stacking when threads crowd. Bubbles
+  carry reply, edit, resolve/reopen and delete; "New Comment" opens a draft bubble on the
+  selection. Both views. `DocxEditor` gained `addCommentReply`, `updateComment`, `removeComment`,
+  `beginComment`, `activateComment`, `stepComment` and `showComments`; `comments: false` restores
+  the markup-free render. The engine side is a comment-aware editor render profile
+  (`RenderEditorHtml` / `RenderEditorBlockHtml` / `RenderEditorBlocksHtml` on the WASM bridge)
+  whose per-block renders carry the comments parts, so a re-rendered commented paragraph keeps
+  its highlight, and `CommentListEntry` now reports the comment's numeric `id`.
+- **Headers and footers are edited in place.** In page view every page's header and footer area
+  is click-to-edit: the click swaps that page's clone for the live story, a commit re-clones it
+  onto every page that shows the same story (page-number fields substituted per page), and a
+  story that grew re-paginates when the caret leaves it. The continuous view's bands now draw as
+  the sheet's own top and bottom margins with a story tag, not as separate cards. Word's two
+  options — *Different first page* and *Different odd & even pages* — are checkboxes on the
+  contextual tab, backed by a new `DocxSession.SetHeaderFooterKindEnabled(anchor, kind, enabled)`
+  op. Enabling sets `w:titlePg` / `w:evenAndOddHeaders` — turning on an element Word left
+  present-but-off (`w:val="0"`) rather than treating presence as "on" — and the editor then
+  seeds both the header and the footer story of that kind, as Word does; disabling clears the
+  flag and leaves the parts. `SectionInfo` reports
+  `titlePage`, `evenAndOddHeaders`, `headerDistanceTwips` and `footerDistanceTwips`.
+  `InsertPageNumberField` accepts `"pageOfTotal"` for Word's "Page X of Y".
+- `DocxSession.SetPageSetup(anchor, PageSetupOp)` — Word's Page Setup for the section holding
+  an anchor: page size, orientation, the four margins and the header/footer distances, written
+  to the governing `w:sectPr`. Rippled to the WASM bridge, npm, the stdio host and the Python
+  client.
+- `FormatOp` gained `highlight` (Word's highlighter palette, `""` clears), `caps` and
+  `smallCaps`.
+- `WmlToHtmlConverterSettings.StampPageNumberFields` wraps every PAGE / NUMPAGES result in the
+  `data-field` marker outside paginated mode too, for a client that paginates a block render
+  itself (the browser editor editing a running story in place). Library-only; no transport
+  exposes it. `EditErrorCode.InvalidPageSetup` is the rejection code for a `SetPageSetup` whose
+  margins leave no page.
+- `tools/screenshots/editor/` regenerates the editor screenshots under `docs/images/editor/`
+  from the shipped surface.
+
+### Changed
+
+- `CommentListEntry.Id` is a `required` init property. Code that constructs the record
+  positionally must now set `Id`; callers that only read `ListComments()` are unaffected.
+- The ribbon's header/footer band no longer carries its own kind selector, page-number menu and
+  format/start controls; those live on the contextual Header & Footer tab and the Layout tab.
+  The `headerFooter` option now defaults to **on** for the ribbon (the bare `DocxEditor` default
+  is unchanged). Footnote/endnote insertion moved from Insert to References, as in Word.
+
 ### Fixed
 
+- `DocxDiff` no longer lets an empty paragraph act as an alignment anchor on its own. An empty
+  paragraph has no words, so the only thing that can make its paragraph mark "the same paragraph"
+  on both sides is the matched content it sits inside — a blank between two retained or edited
+  paragraphs is retained with them, but a blank that merely happens to exist in both of two
+  otherwise unrelated regions is not evidence of anything. The block aligner nevertheless pinned
+  such blanks (a unique one on the exact-match spine, further ones in the in-order gap pass),
+  which split what Word treats as one replace region into halves with the deletions scattered
+  between them: a base that ends with an empty paragraph compared against a next that begins with
+  one produced *all deletions, a live empty line, all insertions* instead of Word's *insertions,
+  then deletions, then the shared final paragraph mark*. A blank pairing is now released unless a
+  neighbouring block pair on both sides is paired in place (a run of blanks borrows its support
+  from the content at either end), with the document-final pair supported structurally because
+  Word always pairs the two final paragraph marks. The rule runs once after the spine (so the gap
+  fill sees the whole region) and once after the gap fill (so a blank beside a paragraph the gap
+  fill paired as edited keeps its retained mark). A blank that follows an edited paragraph now
+  pairs with the blank across from it even when the next document restyled it (retained mark plus
+  `w:pPrChange`, as Word writes it), where the gap passes used to leave a deleted blank followed
+  by an inserted one. Trailing blanks of a region take their support from the pair *after* them
+  only when the run of blanks reaches straight back to the pair before it on both sides (so
+  identical blank runs still match); any other trailing blank is left to the paragraph-mark
+  chain below. Accept ≡ right and reject ≡ left hold unchanged.
+- `DocxDiff`'s trailing-region paragraph-mark chain no longer opens behind a final paragraph
+  pair with a wordful member. The chain pairs further marks backwards from the story-final pair
+  when it meets an empty paragraph on both sides, but when the final pair itself joins a base
+  blank to a wordful next paragraph (or the reverse) the words sit between that mark and the
+  previous one, and Word pairs nothing further: a trailing blank on each side stays
+  tracked-inserted ahead of the deletions and tracked-deleted after them, instead of turning
+  into a shared, unmarked mark. Inside the document (a region that ends at a shared paragraph
+  or table rather than at the story end) the chain now follows the rule Word's output obeys in
+  331 of the 334 such regions in the reference corpus: it opens on a trailing blank on both
+  sides and walks backwards while the *base* member is empty (a wordful next member is fine,
+  its runs fuse into the first deleted paragraph), a wordful base member facing an empty next
+  member cancels the whole chain, a wordful-against-wordful stop keeps it only when the
+  paragraphs left before it balance, and a fused next member needs a deleted paragraph to host
+  its runs. The old chain paired a base blank with the next document's last wordful paragraph
+  in shapes where Word keeps every mark. In the same region grammar, a base story
+  that ends with a table compared against a next story that ends with an *empty* paragraph now
+  places that final paragraph mark after the deleted table, exactly as the already-handled wordful
+  case does; before, the mark was emitted with the other insertions and the document ended with the
+  deleted table.
+- `DocxDiff` renders a paired table row whose base side has more cells than the next side as one
+  modified row instead of lowering the entire table to a deleted table followed by an inserted one.
+  The surplus base cell now stays in its place with `w:tcPr/w:cellDel` and struck content, which
+  accept removes and reject restores, mirroring the right-only `w:cellIns` case the renderer already
+  handled. Word's compare output keeps such a cell in the merged row with its content deleted, so
+  two unrelated tables paired positionally, or a row that lost a column, no longer double the
+  table on the page.
+- `DocxDiff` neutralizes the left document's default paragraph spacing attribute by attribute. The
+  output keeps the left styles part, so an updated style's current payload has to cancel any
+  default the right document does not share; the check was per element, so a right whose
+  defaults declared only `line` (a common web-authored shape) against a left declaring
+  `after=160 line=278` produced a Normal style saying just `line=276` and every accepted
+  paragraph inherited the left's 160 twips of space below. Word writes `after=0 line=276` there,
+  and so does the renderer now: the right's declared attributes are materialized and the
+  left-only attributes reset to their built-ins on the same spacing element.
+- `DocxDiff` expresses an imported right-only paragraph style under the left document's defaults.
+  The output keeps the left `docDefaults`, and a style copied in from the right document was
+  copied raw, so every paragraph in it took the left's default spacing: a long inserted document
+  whose own defaults said `line=259` and `after=160` rendered a page longer than Word's output
+  under the left's `line=276 after=200`. An imported paragraph style now receives the same
+  docDefaults delta an updated shared style gets — right defaults the left values differently
+  materialized, left defaults the right never declared reset to their built-ins — stated once
+  along the style chain: an import based on a Normal that was itself updated inherits the delta
+  and is left raw, exactly as Word writes it. Its spacing and indent measures are written in
+  twips, as Word writes them (a `line="12.95pt"` under the `auto` rule is ambiguous to a
+  renderer; `259` is not).
+- `DocxDiff` keeps a paired paragraph's right-side `w:pStyle` when the style is one that inserted
+  content already imports. Word expresses a paired paragraph's format change within the style
+  universe the output resolves: a right-only style is brought in only by wholly inserted
+  paragraphs, but once one of them has imported it, a retained or edited paragraph naming the same
+  style keeps the reference (there is nothing to lower to direct properties). The renderer used to
+  test only the left document's style definitions, so a whole-document rewrite whose final
+  paragraph pair adopted the right's heading or list style — or an edited title paragraph in a
+  document whose inserted body uses the same title style — rendered with the default paragraph
+  style while the definition it needed sat, imported, in the output styles part.
+- **The editor's first paint no longer restyles the host page.** The embed wrapper scopes the
+  converter's stylesheet (its `body`/`span` rules) for every whole-document render, but the
+  editor's comment-aware first paint reaches for a new render method, `RenderEditorHtml`, that
+  the wrapper did not cover — so `body { margin: 20px }` leaked onto the host `<body>`. The
+  wrapper now scopes `RenderEditorHtml` alongside `RenderHtml` and `RenderHtmlForReview`.
+- **Typing at a run boundary keeps an ordinary space.** A pure insertion against an ordinary
+  text run now extends that run instead of dropping a separate run beside it. A separate run
+  whose text begins or ends with a space forces the converter to render that space as `&#160;`
+  (a run boundary is where HTML collapses whitespace), so a plainly typed leading space came
+  back non-breaking; the insertion still opens its own run when it must step outside a field or
+  when tracked changes are on.
+- **Compact chrome grows its touch targets by layout, not pointer.** The phone-width ribbon now
+  adopts the 40px control floor whether or not the browser reports a coarse pointer, so an
+  emulated narrow viewport gets real tap targets. The floor buys tap *size*, so the rows no
+  longer spend it again on padding: a phone stacks three chrome rows above the page, every
+  pixel of row padding is paid three times before the document starts, and the tab strip —
+  navigation, whose labels already clear the floor horizontally — keeps a slimmer 34px height
+  the way Word's own phone ribbon does. Compact chrome is 118px rather than 140px, which is
+  what lets the arcade demo's phone card go back to hugging the game screen instead of
+  stretching to 80dvh of blank paper. Real phones always took the 40px floor through the
+  coarse-pointer query, so they had carried the taller chrome all along; only emulated
+  viewports were exempt, which is why no test had caught it.
+- **Disposing a session no longer rewrites its archive.** A package opened for editing writes
+  its whole zip back into the backing stream when it closes, re-deflating every part touched
+  since it was opened. `DocxSession.Dispose`, the render shell, and a snapshot restore all
+  discard that stream immediately, so the rewrite had no reader. They now drop the package
+  for the garbage collector and close only the stream. In the browser runtime the editor's
+  `close()` hung inside that rewrite in one reproducible sequence (save, convert the saved
+  bytes, format three paragraphs, close); the .NET runtime never did, and the hang's cause
+  in the runtime's compression path is not isolated. Skipping the rewrite takes the close
+  path out of it.
+- A page-view header or footer edit no longer requires a full remount to show on the other
+  pages, and a header edited in the band no longer disappears from page view.
+- Leaving a page footer no longer re-paginates the document spuriously.
+- `DocxSession.ReplaceTextAtSpan` accepts a zero-length span at a run boundary and inserts the
+  text as a **new run**, stepping outside any complex field whose chrome surrounds the boundary,
+  instead of refusing with `offset_out_of_range`. The browser editor relied on rewriting a
+  neighbouring character to express a pure insertion, which put text typed after a page-number
+  field inside the field's result run — where Word's next field update discards it. An offset
+  strictly inside a run's text is still refused. Tracked mode wraps the new run in `w:ins`.
+- The editor keeps a typed trailing space ("Page " before inserting a page number) instead of
+  trimming it on commit, while the placeholder an empty paragraph renders as is still dropped.
+- A zero-length insert at the edge of an inline container lands beside it, not inside it. Text
+  typed at the end of another author's `w:ins` (or a `w:moveTo`, hyperlink or smart tag) with
+  tracking off became part of that author's change; at the start of a leading insertion it did
+  the same. The boundary now steps out of every container whose first or last content it sits
+  on, before stepping out of a field — so a field whose result wraps its runs in a hyperlink
+  (every TOC entry) is still stepped out of. A boundary strictly inside a container stays
+  inside. Offset 0 of a paragraph whose only content is a field with an empty cached result
+  inserts before the field rather than after it, and the editor no longer flattens such a
+  paragraph to literal text on its first edit.
+- `EnsureHeaderFooterVisible` / `SetHeaderFooterKindEnabled(…, true)` turn on a flag Word left
+  present-but-off. Word writes `<w:titlePg w:val="0"/>` when "Different first page" is cleared
+  (and `<w:evenAndOddHeaders w:val="0"/>` likewise), `SectionInfo` reads the value, but the
+  enable path tested presence — so the checkbox reported off, the op reported success, and
+  nothing changed. Both now read the value and strip `w:val` from an existing element. "Page X
+  of Y" also inherits its run formatting from a live run, never from a tracked deletion.
+- Keys typed in a comment bubble no longer drive the ribbon's chords: Ctrl+Enter posted the
+  reply *and* dropped a page break on the commented paragraph, Ctrl+E/L/R/J re-aligned it
+  mid-reply. The first comment in a document is positioned against a shown gutter (an empty
+  gutter is `display:none`, and a draft measured against its zero rect landed at the viewport
+  top); re-showing comments re-lays them out; deleting a thread root takes replies-to-replies
+  with it; and a remount while the caret is in a header or footer publishes "back in the body",
+  so the contextual tab no longer sticks.
 - Tabs in headers, footers and notes now advance to the stop they declare (#688). Tab geometry is
   resolved by a pass that walked the main document part alone, so a tab anywhere else collapsed to
   a zero-width advance. On the standard legal running foot — `Last Updated October 2025 [tab] PAGE`
@@ -19,8 +221,12 @@ All notable changes to this project will be documented in this file.
   from the one we emitted: a footnote beginning with a reference mark and a tab had its whole text
   reparented inside the tab's fixed-width box and rendered a couple of characters per line. Empty
   non-void elements are now closed at the tree's edge, so every serialization site is covered. The
-  committed `HC026` tab snapshot had encoded the defect — a paragraph reading
-  `Tab [tab] with first line indent set.` rendered one word per line — and is re-baselined here.
+  same bug is why a footer authored as "Page {PAGE} of {NUMPAGES}" showed only "Page 1" in the
+  paginated editor: a complex field's begin/separate/end runs are exactly such empty spans, so
+  " of " and the second field were swallowed by the first field's chrome and the per-page
+  substitution overwrote them. The committed `HC026` tab snapshot had encoded the defect — a
+  paragraph reading `Tab [tab] with first line indent set.` rendered one word per line — and is
+  re-baselined here.
 
 - The epic #435 MCP acceptance smoke and its reopen validation now assert the revision list
   the engine actually produces, and CI runs both on every pull request (#687). Their committed

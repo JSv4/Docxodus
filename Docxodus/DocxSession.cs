@@ -142,6 +142,78 @@ public sealed record FormatOp
     /// inherits the style/default. Needed to match serif filings (e.g. an S-1 in Times New Roman).
     /// </summary>
     public string? FontFamily { get; init; }
+
+    /// <summary>
+    /// Text highlight colour (<c>w:highlight</c>) — one of Word's fixed <c>ST_HighlightColor</c>
+    /// names: <c>yellow</c>, <c>green</c>, <c>cyan</c>, <c>magenta</c>, <c>blue</c>, <c>red</c>,
+    /// <c>darkBlue</c>, <c>darkCyan</c>, <c>darkGreen</c>, <c>darkMagenta</c>, <c>darkRed</c>,
+    /// <c>darkYellow</c>, <c>darkGray</c>, <c>lightGray</c>, <c>black</c>, <c>white</c>. null =
+    /// leave unchanged; <c>""</c> or <c>"none"</c> clears. Any other value fails the op
+    /// (<see cref="EditErrorCode.InternalError"/> carrying the message, the same way an invalid
+    /// <see cref="VertAlign"/> does) — Word has no free-form highlight, only these swatches.
+    /// </summary>
+    public string? Highlight { get; init; }
+
+    /// <summary>
+    /// All-capitals display (<c>w:caps</c>). true sets it, false removes it, null leaves it. Word
+    /// treats caps and small caps as one either/or slot, so setting this true also removes
+    /// <c>w:smallCaps</c>.
+    /// </summary>
+    public bool? Caps { get; init; }
+
+    /// <summary>
+    /// Small-capitals display (<c>w:smallCaps</c>). true sets it, false removes it, null leaves
+    /// it. Setting this true also removes <c>w:caps</c> (Word's either/or rule).
+    /// </summary>
+    public bool? SmallCaps { get; init; }
+}
+
+/// <summary>
+/// Page geometry for <see cref="DocxSession.SetPageSetup"/> — the <c>w:pgSz</c> and
+/// <c>w:pgMar</c> of the governing <c>w:sectPr</c>, which is what Word's <i>Page Setup</i> dialog
+/// writes. Every field is tri-state: <c>null</c> leaves that attribute exactly as it is. All values
+/// are twips (1440 = 1 inch).
+/// </summary>
+/// <remarks>
+/// <see cref="Landscape"/> without an explicit size swaps the current width and height when they
+/// are portrait-shaped (and back on <c>false</c>); with an explicit size it only writes
+/// <c>w:orient</c>. Validation (<see cref="EditErrorCode.InvalidPageSetup"/>): page width and height
+/// must be positive, margins and header/footer distances non-negative, and the opposing margins
+/// must leave room for content (<c>left + right &lt; width</c>, <c>top + bottom &lt; height</c>),
+/// measured against the section's effective values after the op.
+/// </remarks>
+public sealed record PageSetupOp
+{
+    /// <summary>Page width (<c>w:pgSz/@w:w</c>).</summary>
+    public int? PageWidthTwips { get; init; }
+
+    /// <summary>Page height (<c>w:pgSz/@w:h</c>).</summary>
+    public int? PageHeightTwips { get; init; }
+
+    /// <summary>
+    /// Orientation (<c>w:pgSz/@w:orient</c>). <c>true</c> writes <c>landscape</c> and, when no
+    /// explicit size is given and the page is currently taller than wide, swaps width and height;
+    /// <c>false</c> removes the attribute and swaps back when the page is wider than tall.
+    /// </summary>
+    public bool? Landscape { get; init; }
+
+    /// <summary>Top margin (<c>w:pgMar/@w:top</c>).</summary>
+    public int? MarginTopTwips { get; init; }
+
+    /// <summary>Bottom margin (<c>w:pgMar/@w:bottom</c>).</summary>
+    public int? MarginBottomTwips { get; init; }
+
+    /// <summary>Left margin (<c>w:pgMar/@w:left</c>).</summary>
+    public int? MarginLeftTwips { get; init; }
+
+    /// <summary>Right margin (<c>w:pgMar/@w:right</c>).</summary>
+    public int? MarginRightTwips { get; init; }
+
+    /// <summary>Header distance from the page's top edge (<c>w:pgMar/@w:header</c>).</summary>
+    public int? HeaderDistanceTwips { get; init; }
+
+    /// <summary>Footer distance from the page's bottom edge (<c>w:pgMar/@w:footer</c>).</summary>
+    public int? FooterDistanceTwips { get; init; }
 }
 
 /// <summary>
@@ -195,9 +267,12 @@ public enum HeaderFooterKind { Default, First, Even }
 /// <summary>
 /// Which page-number field <see cref="DocxSession.InsertPageNumberField"/> emits:
 /// <see cref="CurrentPage"/> → a <c>PAGE</c> field (the current page number),
-/// <see cref="TotalPages"/> → a <c>NUMPAGES</c> field (the total page count).
+/// <see cref="TotalPages"/> → a <c>NUMPAGES</c> field (the total page count),
+/// <see cref="PageOfTotal"/> → Word's "Page X of Y" gallery entry: the text <c>Page </c>, a
+/// <c>PAGE</c> field, the text <c> of </c> and a <c>NUMPAGES</c> field, every run inheriting the
+/// paragraph's last run properties.
 /// </summary>
-public enum PageNumberField { CurrentPage, TotalPages }
+public enum PageNumberField { CurrentPage, TotalPages, PageOfTotal }
 
 /// <summary>
 /// Section-level page-numbering setup for <see cref="DocxSession.SetPageNumbering"/> — the
@@ -1160,6 +1235,33 @@ public sealed record SectionInfo
     required public int MarginLeftTwips { get; init; }
     required public int MarginRightTwips { get; init; }
 
+    /// <summary>Word's header/footer distance (0.5") when <c>w:pgMar</c> omits the attribute —
+    /// the one declaration every reader and writer of the two distances falls back to.</summary>
+    public const int DefaultHeaderFooterDistanceTwips = 720;
+
+    /// <summary>Header distance from the page's top edge (<c>w:pgMar/@w:header</c>);
+    /// <see cref="DefaultHeaderFooterDistanceTwips"/> when the attribute is absent.</summary>
+    required public int HeaderDistanceTwips { get; init; }
+
+    /// <summary>Footer distance from the page's bottom edge (<c>w:pgMar/@w:footer</c>);
+    /// <see cref="DefaultHeaderFooterDistanceTwips"/> when the attribute is absent.</summary>
+    required public int FooterDistanceTwips { get; init; }
+
+    /// <summary>
+    /// Word's "Different first page" flag — <c>true</c> when the governing <c>w:sectPr</c> carries
+    /// an on-valued <c>w:titlePg</c>, i.e. the section's first-page header/footer stories actually
+    /// render. Toggle with <see cref="DocxSession.SetHeaderFooterKindEnabled"/>.
+    /// </summary>
+    required public bool TitlePage { get; init; }
+
+    /// <summary>
+    /// Word's "Different odd &amp; even pages" flag — <c>true</c> when the settings part carries an
+    /// on-valued <c>w:evenAndOddHeaders</c>. Document-global (it is a settings-part element), so
+    /// every section reports the same value. Toggle with
+    /// <see cref="DocxSession.SetHeaderFooterKindEnabled"/>.
+    /// </summary>
+    required public bool EvenAndOddHeaders { get; init; }
+
     /// <summary>Number of text columns. Defaults to 1 if no <c>w:cols</c> is set.</summary>
     required public int Columns { get; init; }
 
@@ -1364,12 +1466,17 @@ public sealed record NoteListEntry(string Id, string DefAnchorId, int Ordinal);
 /// <c>w:annotationRef</c> mark excluded). <see cref="ParentAnchorId"/> resolves
 /// <c>w15:paraIdParent</c> back to the parent definition anchor; <see cref="Resolved"/>
 /// reflects <c>w15:done</c>. Both are null when this comment has no
-/// <c>commentsExtended</c> entry. The numeric <c>w:id</c> is deliberately not surfaced —
-/// comments are addressed by anchor everywhere in this API.
+/// <c>commentsExtended</c> entry. <see cref="Id"/> is the numeric <c>w:id</c> — the value the
+/// HTML renderer stamps as <c>data-comment-id</c> on highlight spans and markers, which is how a
+/// rendered range is matched back to this entry. Mutations still address comments by anchor.
 /// </summary>
 public sealed record CommentListEntry(
     string DefAnchorId, string Author, string? Initials, string? Date, string Text)
 {
+    /// <summary>The comment's numeric <c>w:comment/@w:id</c> (the same id the range markers and
+    /// the rendered <c>data-comment-id</c> attribute carry).</summary>
+    required public int Id { get; init; }
+
     /// <summary>The parent definition's stable <c>cmt</c> anchor for a reply; null for a
     /// top-level or legacy comment.</summary>
     public string? ParentAnchorId { get; init; }
@@ -1713,6 +1820,13 @@ public enum EditErrorCode
     /// <see cref="NumberFormat.Bullet"/> as a page-number format (neither <c>w:pgNumType/@w:fmt</c>
     /// nor the field <c>\*</c> switch has a bullet notion).</summary>
     InvalidPageNumbering,
+
+    /// <summary>A page-setup value the section cannot express: a non-positive page width/height,
+    /// a negative margin or header/footer distance, opposing margins that leave no room for
+    /// content (<c>left + right &gt;= width</c>, <c>top + bottom &gt;= height</c>), or
+    /// <see cref="DocxSession.SetHeaderFooterKindEnabled"/> asked to switch off
+    /// <see cref="HeaderFooterKind.Default"/>, which has no on/off flag.</summary>
+    InvalidPageSetup,
 
     /// <summary>A reference-field option is out of range or malformed (issue #607).</summary>
     InvalidReferenceField,
@@ -2688,6 +2802,8 @@ public sealed partial class DocxSession : IDisposable
                 (string?)c.Attribute(W.date),
                 Internal.CommentOps.FlattenBodyText(c))
             {
+                Id = int.TryParse((string?)c.Attribute(W.id), System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out var numericId) ? numericId : -1,
                 ParentAnchorId = parentAnchorId,
                 Resolved = resolved,
             });
@@ -5220,6 +5336,9 @@ public sealed partial class DocxSession : IDisposable
             return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
                 $"span {spanStart}+{spanLength} out of [0, {map.FlatText.Length}]", anchorId);
 
+        if (spanLength == 0)
+            return InsertTextAtBoundary(target, element, map, spanStart, replace);
+
         var pieces = Internal.RunTextMap.ResolveRange(map, spanStart, spanLength);
         if (pieces.Count == 0)
             return EditResult.Fail(EditErrorCode.OffsetOutOfRange, "span resolved to no runs", anchorId);
@@ -5278,6 +5397,252 @@ public sealed partial class DocxSession : IDisposable
             RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
         }
+    }
+
+    /// <summary>
+    /// The zero-length form of <see cref="ReplaceTextAtSpan"/>: insert <paramref name="replace"/>
+    /// at a RUN BOUNDARY as a new run, rather than rewriting a neighbouring run's text. The
+    /// difference matters next to a complex field: a browser editor that types after
+    /// <c>Page {PAGE} of {NUMPAGES}</c> must not put its keystrokes inside the NUMPAGES result run,
+    /// where Word's next field update would discard them. The new run copies the formatting of
+    /// the run it follows (or precedes, at offset 0), minus any revision marker, and lands
+    /// OUTSIDE any field whose chrome surrounds the boundary — after the field's <c>end</c> run,
+    /// or before its <c>begin</c>. An offset strictly inside a run's text is not a boundary and is
+    /// refused with <see cref="EditErrorCode.OffsetOutOfRange"/>, as the old zero-length span was;
+    /// callers keep using a one-character span there.
+    /// </summary>
+    private EditResult InsertTextAtBoundary(
+        AnchorTarget target, XElement element, Internal.RunTextMap.Map map, int offset, string replace)
+    {
+        var anchorId = target.Anchor.Id;
+        if (replace.Length == 0)
+            return new EditResult { Success = true, Modified = new[] { target.Anchor } };
+
+        // The run whose text ends exactly at `offset` (insert after it), else the run whose text
+        // starts there (insert before it). Empty paragraphs and offset 0 with no run resolve to the
+        // paragraph itself.
+        XElement? after = null;
+        XElement? before = null;
+        foreach (var seg in map.Segments)
+        {
+            if (seg.Length == 0) continue;
+            if (seg.EndOffsetInBlock == offset) { after = seg.Run; break; }
+            if (seg.StartOffsetInBlock == offset) { before = seg.Run; break; }
+            if (seg.StartOffsetInBlock < offset && offset < seg.EndOffsetInBlock)
+                return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
+                    "a zero-length span must sit on a run boundary", anchorId);
+        }
+        if (after is null && before is null && offset != 0 && map.FlatText.Length != 0)
+            return EditResult.Fail(EditErrorCode.OffsetOutOfRange, "span resolved to no runs", anchorId);
+
+        var rPrSource = (after ?? before)?.Element(W.rPr);
+        XElement? rPr = null;
+        if (rPrSource is not null)
+        {
+            rPr = new XElement(rPrSource);
+            rPr.Elements(W.rPrChange).Remove();
+            if (!rPr.HasElements) rPr = null;
+        }
+
+        // Step out of an inline container whose EDGE the boundary sits on: `after` the last run
+        // of another author's w:ins (or a w:moveTo, hyperlink or smart tag) means after the
+        // container, not inside it — text typed at the end of B's tracked insertion with tracking
+        // off must not become part of B's change, and Word does not grow a link from text typed
+        // at its end. A boundary strictly inside the container stays inside it. Then step out of
+        // a complex field: `after` inside a field means "after the field's end run"; `before`
+        // inside one means "before its begin run". Containers first, so a field whose result
+        // wraps its runs in a hyperlink (every TOC entry does) is still stepped out of.
+        var afterBeforeFieldStep = after;
+        var beforeBeforeFieldStep = before;
+        if (after is not null) after = FieldEndRunOrSelf(StepOutOfContainersAtEnd(after, element));
+        if (before is not null) before = FieldBeginRunOrSelf(StepOutOfContainersAtStart(before, element));
+
+        // Coalesce into the adjacent run rather than fragmenting the paragraph. Appending "foo"
+        // after a run should extend that run's text, not drop a sibling run beside it: a separate
+        // run whose text has a leading or trailing space forces the converter to emit that space
+        // as &#160; (a run boundary is where HTML would otherwise collapse it), so a plain typed
+        // space came back as a non-breaking one. Merge only into a run we did NOT step out of a
+        // field to reach (its identity is unchanged by the step above), that is a direct child of
+        // the paragraph holding only text, and only with tracked changes off — a tracked insertion
+        // needs its own w:ins run. The rPr already came from this same run, so formatting matches.
+        if (_trackedChanges != TrackedChangeMode.RenderInline)
+        {
+            XElement? mergeInto = null;
+            bool appendAtEnd = false;
+            if (after is not null && ReferenceEquals(after, afterBeforeFieldStep)
+                && ReferenceEquals(after.Parent, element) && IsPlainTextRun(after))
+            {
+                mergeInto = after;
+                appendAtEnd = true;
+            }
+            else if (before is not null && ReferenceEquals(before, beforeBeforeFieldStep)
+                && ReferenceEquals(before.Parent, element) && IsPlainTextRun(before))
+            {
+                mergeInto = before;
+                appendAtEnd = false;
+            }
+
+            if (mergeInto is not null)
+            {
+                _history.RecordPreOp(TakeSnapshot());
+                try
+                {
+                    var text = appendAtEnd
+                        ? mergeInto.Elements(W.t).Last()
+                        : mergeInto.Elements(W.t).First();
+                    text.SetAttributeValue(XNamespace.Xml + "space", "preserve");
+                    text.Value = appendAtEnd ? text.Value + replace : replace + text.Value;
+                    InvalidateProjectionCache();
+                    return new EditResult
+                    {
+                        Success = true,
+                        Modified = new[] { target.Anchor },
+                        Patch = PatchFor(target),
+                    };
+                }
+                catch (Exception ex)
+                {
+                    LastInternalError = ex;
+                    RollbackFailedOp();
+                    return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+                }
+            }
+        }
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            var run = new XElement(W.r, rPr,
+                new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), replace));
+            XElement node = run;
+            if (_trackedChanges == TrackedChangeMode.RenderInline)
+            {
+                node = CreateRevisionEnvelope(
+                    W.ins, _revisionAuthor ?? "docxodus", DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"));
+                node.Add(run);
+            }
+            UnidHelper.AssignToSelfAndDescendants(node);
+            if (after is not null) after.AddAfterSelf(node);
+            else if (before is not null) before.AddBeforeSelf(node);
+            else if (element.Elements().FirstOrDefault(e => e.Name != W.pPr) is { } firstContent)
+            {
+                // No run has any text (a paragraph holding only a field with an empty cached
+                // result), so offset 0 matched nothing — but it is still the START of the
+                // paragraph, and "Page " typed before a PAGE field belongs before it.
+                firstContent.AddBeforeSelf(node);
+            }
+            else element.Add(node);
+
+            InvalidateProjectionCache();
+            return new EditResult
+            {
+                Success = true,
+                Modified = new[] { target.Anchor },
+                Patch = PatchFor(target),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            RollbackFailedOp();
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+        }
+    }
+
+    /// <summary>If <paramref name="run"/> sits inside a complex field (between a <c>begin</c> and
+    /// its <c>end</c> <c>w:fldChar</c> among its siblings), the field's <c>end</c> run; else the run.</summary>
+    /// <summary>
+    /// True when <paramref name="run"/> is an ordinary text run — a <c>w:r</c> carrying only its
+    /// optional <c>w:rPr</c> and one or more <c>w:t</c>, with no field char, break, tab, drawing,
+    /// symbol or other run content. Only such a run can safely absorb inserted text by extending
+    /// a <c>w:t</c>; anything else keeps the insertion in its own sibling run.
+    /// </summary>
+    private static bool IsPlainTextRun(XElement run) =>
+        run.Name == W.r
+        && run.Elements().All(e => e.Name == W.rPr || e.Name == W.t)
+        && run.Elements(W.t).Any();
+
+    private static XElement FieldEndRunOrSelf(XElement run)
+    {
+        int depth = 0;
+        foreach (var sibling in run.ElementsBeforeSelf(W.r))
+        {
+            var kind = (string?)sibling.Element(W.fldChar)?.Attribute(W.fldCharType);
+            if (kind == "begin") depth++;
+            else if (kind == "end" && depth > 0) depth--;
+        }
+        var self = (string?)run.Element(W.fldChar)?.Attribute(W.fldCharType);
+        if (self == "begin") depth++;
+        else if (self == "end" && depth > 0) depth--;
+        if (depth == 0) return run;
+        foreach (var sibling in run.ElementsAfterSelf(W.r))
+        {
+            var kind = (string?)sibling.Element(W.fldChar)?.Attribute(W.fldCharType);
+            if (kind == "begin") depth++;
+            else if (kind == "end" && --depth == 0) return sibling;
+        }
+        return run;
+    }
+
+    /// <summary>
+    /// Inline containers a boundary insert steps out of when the boundary is at their edge. Not
+    /// <c>w:sdt</c>: the caret at either end of a content control is inside it, as Word's is.
+    /// </summary>
+    private static readonly HashSet<XName> BoundaryContainers = new() { W.ins, W.moveTo, W.hyperlink, W.smartTag };
+
+    /// <summary>Range markers and proofing marks — siblings that do not make a run anything but
+    /// the container's first or last content.</summary>
+    private static bool IsInlineMarker(XElement e) =>
+        e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd
+        || e.Name == W.commentRangeStart || e.Name == W.commentRangeEnd
+        || e.Name == W.permStart || e.Name == W.permEnd
+        || e.Name == W.proofErr;
+
+    /// <summary>Climb from <paramref name="node"/> through every <see cref="BoundaryContainers"/>
+    /// ancestor (short of <paramref name="paragraph"/>) in which it is the last content, so an
+    /// insert "after" it lands after the container.</summary>
+    private static XElement StepOutOfContainersAtEnd(XElement node, XElement paragraph)
+    {
+        while (node.Parent is { } parent && !ReferenceEquals(parent, paragraph)
+            && BoundaryContainers.Contains(parent.Name)
+            && !node.ElementsAfterSelf().Any(e => !IsInlineMarker(e)))
+            node = parent;
+        return node;
+    }
+
+    /// <summary>The mirror of <see cref="StepOutOfContainersAtEnd"/> for an insert "before"
+    /// the container's first content.</summary>
+    private static XElement StepOutOfContainersAtStart(XElement node, XElement paragraph)
+    {
+        while (node.Parent is { } parent && !ReferenceEquals(parent, paragraph)
+            && BoundaryContainers.Contains(parent.Name)
+            && !node.ElementsBeforeSelf().Any(e => !IsInlineMarker(e)))
+            node = parent;
+        return node;
+    }
+
+    /// <summary>The mirror of <see cref="FieldEndRunOrSelf"/>: the field's <c>begin</c> run when
+    /// <paramref name="run"/> sits inside one, else the run.</summary>
+    private static XElement FieldBeginRunOrSelf(XElement run)
+    {
+        int depth = 0;
+        foreach (var sibling in run.ElementsAfterSelf(W.r))
+        {
+            var kind = (string?)sibling.Element(W.fldChar)?.Attribute(W.fldCharType);
+            if (kind == "end") depth++;
+            else if (kind == "begin" && depth > 0) depth--;
+        }
+        var self = (string?)run.Element(W.fldChar)?.Attribute(W.fldCharType);
+        if (self == "end") depth++;
+        else if (self == "begin" && depth > 0) depth--;
+        if (depth == 0) return run;
+        foreach (var sibling in run.ElementsBeforeSelf(W.r).Reverse())
+        {
+            var kind = (string?)sibling.Element(W.fldChar)?.Attribute(W.fldCharType);
+            if (kind == "end") depth++;
+            else if (kind == "begin" && --depth == 0) return sibling;
+        }
+        return run;
     }
 
     /// <summary>
@@ -6804,6 +7169,7 @@ public sealed partial class DocxSession : IDisposable
                 Internal.OwnedPartRelationships.SweepOrphanedImages(owner.Part);
             }
 
+            if (target.Anchor.Scope == "cmt") CommentsVersion++;
             InvalidateProjectionCache();
             // A declared style can flip the anchor kind (p → h); report the fresh identity.
             var updated = declaredStyle is not null
@@ -6936,6 +7302,7 @@ public sealed partial class DocxSession : IDisposable
                 new HashSet<string>(removed.Select(a => a.Id), StringComparer.Ordinal));
             if (hyperlinkOwner is { } owner)
                 SweepOrphanedStoryRelationships(owner.Part);
+            if (target.Anchor.Kind == "cmt") CommentsVersion++;
             InvalidateProjectionCache();
             return new EditResult
             {
@@ -8095,16 +8462,49 @@ public sealed partial class DocxSession : IDisposable
     // — i.e. when a format op adds a style / numbering level. Text edits never touch those parts, so
     // the shell survives normal typing.
     internal WordprocessingDocument? RenderShellDoc;
+
+    /// <summary>
+    /// Monotonic counter of comment-family mutations (definition create/update/remove, reply,
+    /// resolve/reopen, a body edit of a comment paragraph, and every snapshot restore). The render
+    /// shell copies the comments parts, so <c>HtmlConversionOps</c> mixes this into
+    /// <see cref="RenderShellSignature"/>: a shell built before the first comment would otherwise
+    /// render highlights against an empty comments part forever, while rebuilding on every text
+    /// edit would throw away the whole point of caching the shell.
+    /// </summary>
+    internal int CommentsVersion;
     internal MemoryStream? RenderShellStream;
     internal long RenderShellSignature;
 
     /// <summary>Release the cached block-render shell (rebuild happens lazily on next render).</summary>
     internal void DisposeRenderShell()
     {
-        RenderShellDoc?.Dispose();
-        RenderShellStream?.Dispose();
+        DiscardPackage(RenderShellDoc, RenderShellStream);
         RenderShellDoc = null;
         RenderShellStream = null;
+    }
+
+    /// <summary>
+    /// Lets go of a package whose contents nobody will read again, without closing it.
+    /// </summary>
+    /// <remarks>
+    /// Closing a package opened for editing rewrites its whole archive into the backing stream,
+    /// deflating every part touched since it was opened. The session's own package, the render
+    /// shell, and the package a snapshot restore replaces all reach this point with no reader
+    /// for that rewrite: the stream is discarded with them. So the package is dropped for the
+    /// garbage collector instead of disposed, and only the stream is closed. The package owns
+    /// nothing else — the SDK reads a part through a stream it closes as it goes, and the
+    /// uncompressed part data it keeps between reads is managed memory. Besides skipping a
+    /// deflate pass into a dead buffer, this keeps the editor's close path out of that rewrite:
+    /// in the browser runtime it hung inside it in one reproducible sequence (save, convert the
+    /// saved bytes, format three paragraphs, close), and the .NET runtime never did. Closing
+    /// the stream first and letting the package's dispose fail on it is not an alternative: the
+    /// exception that raises from inside the SDK's dispose chain trips a Mono assertion in the
+    /// WASM runtime and takes the whole page down.
+    /// </remarks>
+    private static void DiscardPackage(WordprocessingDocument? doc, MemoryStream? stream)
+    {
+        _ = doc;
+        stream?.Dispose();
     }
 
     internal EditResult RawInsertXmlInternal(string anchorId, Position pos, string xml)
@@ -8918,10 +9318,15 @@ public sealed partial class DocxSession : IDisposable
 
         // Already set? Return BEFORE snapshotting. A UI that calls this on every kind selection
         // (the editor's band does) would otherwise push a no-op snapshot per click into the
-        // bounded undo ring and evict the user's real history.
+        // bounded undo ring and evict the user's real history. The test is the flag's VALUE, not
+        // its presence: Word writes <w:titlePg w:val="0"/> when the box is cleared, and
+        // SectionInfo reads it the same way — an enable that saw "present" as "on" left the
+        // checkbox unable to stick.
+        var settingsRootForCheck = main.DocumentSettingsPart?.GetXDocument().Root;
         bool alreadySet = kind == HeaderFooterKind.First
-            ? sectPr.Element(W.titlePg) is not null
-            : main.DocumentSettingsPart?.GetXDocument().Root?.Element(W.evenAndOddHeaders) is not null;
+            ? WordprocessingMLUtil.GetBoolProp(sectPr, W.titlePg)
+            : settingsRootForCheck is not null
+                && WordprocessingMLUtil.GetBoolProp(settingsRootForCheck, W.evenAndOddHeaders);
         if (alreadySet)
             return new EditResult { Success = true, Modified = new[] { target.Anchor } };
 
@@ -8930,6 +9335,84 @@ public sealed partial class DocxSession : IDisposable
         {
             if (kind == HeaderFooterKind.First) InsertSectPrTitlePg(sectPr);
             else WordprocessingMLUtil.EnsureEvenAndOddHeaders(main);
+            InvalidateProjectionCache();
+            return new EditResult { Success = true, Modified = new[] { target.Anchor } };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            RollbackFailedOp();
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+        }
+    }
+
+    /// <summary>
+    /// Word's "Different first page" / "Different odd &amp; even pages" checkboxes as one verb:
+    /// switch the <paramref name="kind"/> story of the section owning <paramref name="anchorId"/>
+    /// (any body block in it) on or off. <c>enabled</c> is exactly
+    /// <see cref="EnsureHeaderFooterVisible"/>; <c>!enabled</c> removes the flag that selects the
+    /// story — <c>w:titlePg</c> from the governing <c>w:sectPr</c> for <see cref="HeaderFooterKind.First"/>,
+    /// the document-global <c>w:evenAndOddHeaders</c> from the settings part for
+    /// <see cref="HeaderFooterKind.Even"/>. The story PARTS and their references are left in place,
+    /// which is what Word does when the checkbox is cleared: the content survives, it just stops
+    /// being selected, and re-enabling brings it straight back.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="HeaderFooterKind.Default"/> has no flag, so disabling it is refused with
+    /// <see cref="EditErrorCode.InvalidPageSetup"/> (enabling it is the same successful no-op
+    /// <see cref="EnsureHeaderFooterVisible"/> returns). A flag already in the requested state is a
+    /// successful no-op that records NO undo snapshot — a checkbox handler that fires on every
+    /// render must not evict the user's real history from the bounded ring. Read the current state
+    /// from <see cref="SectionInfo.TitlePage"/> / <see cref="SectionInfo.EvenAndOddHeaders"/>.
+    /// </remarks>
+    public EditResult SetHeaderFooterKindEnabled(string anchorId, HeaderFooterKind kind, bool enabled)
+    {
+        if (enabled) return EnsureHeaderFooterVisible(anchorId, kind);
+
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        var target = FindAnchor(anchorId);
+        if (target is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
+        if (target.Anchor.Scope != "body")
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                "SetHeaderFooterKindEnabled requires a body block anchor (the section the header/footer belongs to)",
+                anchorId);
+        if (kind == HeaderFooterKind.Default)
+            return EditResult.Fail(EditErrorCode.InvalidPageSetup,
+                "the default header/footer story has no on/off flag; only First (w:titlePg) and Even (w:evenAndOddHeaders) can be disabled",
+                anchorId);
+
+        var element = target.Resolve(_doc!);
+        if (element is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId);
+        var main = _doc!.MainDocumentPart;
+        if (main is null)
+            return EditResult.Fail(EditErrorCode.InternalError, "no main document part", anchorId);
+
+        var sectPr = Internal.BlockMetadataOps.FindGoverningSectPr(element);
+        var settingsPart = main.DocumentSettingsPart;
+        var settingsRoot = settingsPart?.GetXDocument().Root;
+
+        // Already off? Return BEFORE snapshotting (same reasoning as EnsureHeaderFooterVisible).
+        // The element is removed whatever its w:val, so "present" is the test, not "on".
+        bool alreadyOff = kind == HeaderFooterKind.First
+            ? sectPr?.Element(W.titlePg) is null
+            : settingsRoot?.Element(W.evenAndOddHeaders) is null;
+        if (alreadyOff)
+            return new EditResult { Success = true, Modified = new[] { target.Anchor } };
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            if (kind == HeaderFooterKind.First)
+            {
+                sectPr!.Elements(W.titlePg).Remove();
+            }
+            else
+            {
+                settingsRoot!.Elements(W.evenAndOddHeaders).Remove();
+                settingsPart!.PutXDocument();
+            }
             InvalidateProjectionCache();
             return new EditResult { Success = true, Modified = new[] { target.Anchor } };
         }
@@ -9051,7 +9534,7 @@ public sealed partial class DocxSession : IDisposable
             Internal.OwnedPartRelationships.SweepOrphanedImages(part);
 
             // Visibility flags so Word actually shows the First/Even stories.
-            if (kind == HeaderFooterKind.First && sectPr.Element(W.titlePg) is null)
+            if (kind == HeaderFooterKind.First && !WordprocessingMLUtil.GetBoolProp(sectPr, W.titlePg))
                 InsertSectPrTitlePg(sectPr);
             else if (kind == HeaderFooterKind.Even)
                 WordprocessingMLUtil.EnsureEvenAndOddHeaders(main);
@@ -9121,7 +9604,10 @@ public sealed partial class DocxSession : IDisposable
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            foreach (var r in BuildPageNumberFieldRuns(field, format))
+            var runs = field == PageNumberField.PageOfTotal
+                ? BuildPageOfTotalRuns(element, format)
+                : BuildPageNumberFieldRuns(field, format);
+            foreach (var r in runs)
             {
                 UnidHelper.AssignToSelfAndDescendants(r);
                 element.Add(r);
@@ -9187,6 +9673,38 @@ public sealed partial class DocxSession : IDisposable
         };
     }
 
+    /// <summary>
+    /// Word's "Page X of Y" gallery entry as runs: <c>Page </c>, a PAGE field, <c> of </c>, a
+    /// NUMPAGES field. Exists because the pieces cannot be composed from the single-field op —
+    /// text after a field cannot be appended without rewriting the field's result run. Every run
+    /// (text and field alike) carries a copy of the paragraph's last run properties, minus any
+    /// revision marker, so the composite takes the formatting the paragraph already has, as the
+    /// gallery does. The literal text runs are <c>xml:space="preserve"</c> so their spaces survive.
+    /// </summary>
+    private static XElement[] BuildPageOfTotalRuns(XElement paragraph, NumberFormat? format)
+    {
+        var inherited = InlineRuns(paragraph).LastOrDefault(r => r.Element(W.rPr) is not null)?.Element(W.rPr);
+        XElement? InheritedRPr()
+        {
+            if (inherited is null) return null;
+            var copy = new XElement(inherited);
+            copy.Elements(W.rPrChange).Remove();
+            return copy.HasElements ? copy : null;
+        }
+        static XElement Text(XElement? rPr, string text) =>
+            new XElement(W.r, rPr, new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), text));
+
+        var runs = new List<XElement> { Text(InheritedRPr(), "Page ") };
+        runs.AddRange(BuildPageNumberFieldRuns(PageNumberField.CurrentPage, format));
+        runs.Add(Text(InheritedRPr(), " of "));
+        runs.AddRange(BuildPageNumberFieldRuns(PageNumberField.TotalPages, format));
+        foreach (var run in runs)
+        {
+            if (run.Element(W.rPr) is null && InheritedRPr() is { } rPr) run.AddFirst(rPr);
+        }
+        return runs.ToArray();
+    }
+
     // ─── Section page numbering (w:pgNumType, issue #277) ─────────────────────
     //
     // The section-level half of page numbering: which number the section starts at and which format
@@ -9216,7 +9734,7 @@ public sealed partial class DocxSession : IDisposable
             return EditResult.Fail(EditErrorCode.InvalidPageNumbering,
                 $"{f} cannot format a page number", anchorId);
 
-        return EditSectionPageNumbering(anchorId, "SetPageNumbering", sectPr =>
+        return EditGoverningSectPr(anchorId, "SetPageNumbering", sectPr =>
         {
             var existing = sectPr.Element(W.pgNumType);
             var start = op.Start?.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -9253,7 +9771,7 @@ public sealed partial class DocxSession : IDisposable
     /// page numbering to clear is a successful no-op that consumes no undo history.
     /// </remarks>
     public EditResult ClearPageNumbering(string anchorId) =>
-        EditSectionPageNumbering(anchorId, "ClearPageNumbering", sectPr =>
+        EditGoverningSectPr(anchorId, "ClearPageNumbering", sectPr =>
         {
             var pgNumType = sectPr.Element(W.pgNumType);
             if (pgNumType is null) return false;
@@ -9270,12 +9788,172 @@ public sealed partial class DocxSession : IDisposable
         });
 
     /// <summary>
-    /// Shared body of the section page-numbering verbs: resolve a body anchor to its governing
-    /// <c>w:sectPr</c> (synthesizing the document-final one if the body has none, as
-    /// <see cref="SetHeaderText"/> does), then apply <paramref name="mutate"/>. The mutator returns
-    /// false when the document already says what was asked, and NOTHING is snapshotted in that case.
+    /// Set the page geometry (<c>w:pgSz</c> / <c>w:pgMar</c>) of the section that owns
+    /// <paramref name="anchorId"/> (any body block in that section) — Word's <i>Page Setup</i>
+    /// dialog. Null fields on <paramref name="op"/> leave that attribute alone; the elements are
+    /// created in their <c>CT_SectPr</c> schema slots when absent, as is a trailing
+    /// <c>w:sectPr</c> for a body that has none. Read back through <see cref="GetSectionInfo"/>.
     /// </summary>
-    private EditResult EditSectionPageNumbering(string anchorId, string opName, Func<XElement, bool> mutate)
+    /// <remarks>
+    /// <para>
+    /// <see cref="PageSetupOp.Landscape"/> follows Word: <c>true</c> with no explicit size swaps a
+    /// portrait-shaped page's width and height and writes <c>w:orient="landscape"</c>; <c>false</c>
+    /// removes the attribute and swaps a landscape-shaped page back. With an explicit size the
+    /// dimensions are written as given and only the attribute changes.
+    /// </para>
+    /// <para>
+    /// Validation runs against the section's EFFECTIVE values after the op (the op merged over
+    /// the current <c>w:pgSz</c>/<c>w:pgMar</c>, with Word's Letter/1-inch/0.5-inch defaults for
+    /// absent attributes): width and height positive, margins and header/footer distances
+    /// non-negative, <c>left + right &lt; width</c> and <c>top + bottom &lt; height</c>. A failure
+    /// is <see cref="EditErrorCode.InvalidPageSetup"/>, leaves the document untouched and records no
+    /// undo step. Values the section already has are a successful no-op that consumes no undo
+    /// history either (same reasoning as <see cref="SetPageNumbering"/>).
+    /// </para>
+    /// </remarks>
+    public EditResult SetPageSetup(string anchorId, PageSetupOp op)
+    {
+        ArgumentNullException.ThrowIfNull(op);
+        if (op.PageWidthTwips is { } pw && pw <= 0)
+            return EditResult.Fail(EditErrorCode.InvalidPageSetup, "page width must be positive", anchorId);
+        if (op.PageHeightTwips is { } ph && ph <= 0)
+            return EditResult.Fail(EditErrorCode.InvalidPageSetup, "page height must be positive", anchorId);
+        foreach (var (name, value) in new[]
+        {
+            ("top margin", op.MarginTopTwips), ("bottom margin", op.MarginBottomTwips),
+            ("left margin", op.MarginLeftTwips), ("right margin", op.MarginRightTwips),
+            ("header distance", op.HeaderDistanceTwips), ("footer distance", op.FooterDistanceTwips),
+        })
+        {
+            if (value is { } v && v < 0)
+                return EditResult.Fail(EditErrorCode.InvalidPageSetup, $"{name} cannot be negative", anchorId);
+        }
+
+        // The cross-field checks need the section's CURRENT values, so they run inside the
+        // mutator on the detached copy; a validation failure there throws and is mapped below,
+        // before anything is snapshotted.
+        EditResult result;
+        try
+        {
+            result = EditGoverningSectPr(anchorId, "SetPageSetup", sectPr => ApplyPageSetup(sectPr, op));
+        }
+        catch (PageSetupException ex)
+        {
+            return EditResult.Fail(EditErrorCode.InvalidPageSetup, ex.Message, anchorId);
+        }
+        return result;
+    }
+
+    private sealed class PageSetupException : Exception
+    {
+        public PageSetupException(string message) : base(message) { }
+    }
+
+    /// <summary>The <see cref="SetPageSetup"/> mutator: returns false when the sectPr already
+    /// carries the requested geometry, throws <see cref="PageSetupException"/> when the merged
+    /// geometry is invalid, and otherwise writes it.</summary>
+    private static bool ApplyPageSetup(XElement sectPr, PageSetupOp op)
+    {
+        var pgSz = sectPr.Element(W.pgSz);
+        var pgMar = sectPr.Element(W.pgMar);
+        static int Read(XElement? e, XName attr, int fallback) =>
+            int.TryParse((string?)e?.Attribute(attr), System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : fallback;
+
+        int curWidth = Read(pgSz, W._w, 12240);
+        int curHeight = Read(pgSz, W.h, 15840);
+        bool curLandscape = string.Equals((string?)pgSz?.Attribute(W.orient), "landscape", StringComparison.Ordinal);
+
+        int width = op.PageWidthTwips ?? curWidth;
+        int height = op.PageHeightTwips ?? curHeight;
+        bool landscape = op.Landscape ?? curLandscape;
+        bool explicitSize = op.PageWidthTwips is not null || op.PageHeightTwips is not null;
+        if (op.Landscape is { } wantLandscape && !explicitSize)
+        {
+            // Word's orientation toggle rotates the sheet: only swap when the current shape
+            // disagrees with the requested orientation, so a square or already-rotated page is
+            // left alone.
+            if (wantLandscape && width < height) (width, height) = (height, width);
+            else if (!wantLandscape && width > height) (width, height) = (height, width);
+        }
+
+        int top = op.MarginTopTwips ?? Read(pgMar, W.top, 1440);
+        int bottom = op.MarginBottomTwips ?? Read(pgMar, W.bottom, 1440);
+        int left = op.MarginLeftTwips ?? Read(pgMar, W.left, 1440);
+        int right = op.MarginRightTwips ?? Read(pgMar, W.right, 1440);
+        int header = op.HeaderDistanceTwips
+            ?? Read(pgMar, W.header, SectionInfo.DefaultHeaderFooterDistanceTwips);
+        int footer = op.FooterDistanceTwips
+            ?? Read(pgMar, W.footer, SectionInfo.DefaultHeaderFooterDistanceTwips);
+
+        if (left + right >= width)
+            throw new PageSetupException(
+                $"left + right margins ({left} + {right} twips) leave no room on a {width}-twip-wide page");
+        if (top + bottom >= height)
+            throw new PageSetupException(
+                $"top + bottom margins ({top} + {bottom} twips) leave no room on a {height}-twip-tall page");
+
+        // w:pgSz is touched only when the op names size/orientation; w:pgMar only when it names a
+        // margin. An op that touches neither is a no-op even on a section with no elements at all.
+        bool touchesSize = explicitSize || op.Landscape is not null;
+        bool touchesMargins = op.MarginTopTwips is not null || op.MarginBottomTwips is not null
+            || op.MarginLeftTwips is not null || op.MarginRightTwips is not null
+            || op.HeaderDistanceTwips is not null || op.FooterDistanceTwips is not null;
+
+        static string S(int v) => v.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        bool changed = false;
+
+        if (touchesSize)
+        {
+            var target = pgSz;
+            if (target is null)
+            {
+                target = new XElement(W.pgSz);
+                WordprocessingMLUtil.InsertSectPrChildInOrder(sectPr, target);
+                changed = true;
+            }
+            changed |= SetAttr(target, W._w, S(width));
+            changed |= SetAttr(target, W.h, S(height));
+            changed |= SetAttr(target, W.orient, landscape ? "landscape" : null);
+        }
+
+        if (touchesMargins)
+        {
+            var target = pgMar;
+            if (target is null)
+            {
+                target = new XElement(W.pgMar);
+                WordprocessingMLUtil.InsertSectPrChildInOrder(sectPr, target);
+                changed = true;
+            }
+            changed |= SetAttr(target, W.top, S(top));
+            changed |= SetAttr(target, W.bottom, S(bottom));
+            changed |= SetAttr(target, W.left, S(left));
+            changed |= SetAttr(target, W.right, S(right));
+            changed |= SetAttr(target, W.header, S(header));
+            changed |= SetAttr(target, W.footer, S(footer));
+        }
+
+        return changed;
+    }
+
+    /// <summary>Set (or, for a null value, remove) an attribute; true when the element changed.</summary>
+    private static bool SetAttr(XElement element, XName name, string? value)
+    {
+        var current = (string?)element.Attribute(name);
+        if (string.Equals(current, value, StringComparison.Ordinal)) return false;
+        element.SetAttributeValue(name, value);
+        return true;
+    }
+
+    /// <summary>
+    /// Shared body of the section-level verbs (page numbering, page setup): resolve a body anchor
+    /// to its governing <c>w:sectPr</c> (synthesizing the document-final one if the body has none,
+    /// as <see cref="SetHeaderText"/> does), then apply <paramref name="mutate"/>. The mutator
+    /// returns false when the document already says what was asked, and NOTHING is snapshotted in
+    /// that case.
+    /// </summary>
+    private EditResult EditGoverningSectPr(string anchorId, string opName, Func<XElement, bool> mutate)
     {
         if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
         var target = FindAnchor(anchorId);
@@ -9283,7 +9961,7 @@ public sealed partial class DocxSession : IDisposable
             return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
         if (target.Anchor.Scope != "body")
             return EditResult.Fail(EditErrorCode.AnchorWrongKind,
-                $"{opName} requires a body block anchor (the section the page numbering belongs to)",
+                $"{opName} requires a body block anchor (the section it belongs to)",
                 anchorId);
         var element = target.Resolve(_doc!);
         if (element is null)
@@ -9321,8 +9999,19 @@ public sealed partial class DocxSession : IDisposable
         }
     }
 
-    private static void InsertSectPrTitlePg(XElement sectPr) =>
+    /// <summary>Turn the section's "Different first page" flag on. An existing
+    /// <c>w:titlePg</c> loses its <c>w:val</c> (Word writes <c>w:val="0"</c> when the box is
+    /// cleared, so presence is not "on"); otherwise one is inserted at its schema slot.</summary>
+    private static void InsertSectPrTitlePg(XElement sectPr)
+    {
+        var existing = sectPr.Element(W.titlePg);
+        if (existing is not null)
+        {
+            existing.Attributes(W.val).Remove();
+            return;
+        }
         WordprocessingMLUtil.InsertSectPrChildInOrder(sectPr, new XElement(W.titlePg));
+    }
 
     // ─── Reference fields: TOC / TOF / TOA (issue #607) ───────────────────────
     //
@@ -10072,6 +10761,7 @@ public sealed partial class DocxSession : IDisposable
             UnidHelper.AssignToSelfAndDescendants(comment);
             part.PutXDocument();
 
+            CommentsVersion++;
             InvalidateProjectionCache();
 
             var created = new List<Anchor>();
@@ -10204,6 +10894,7 @@ public sealed partial class DocxSession : IDisposable
             Internal.CommentOps.EnsureThreadingMetadata(main, reply,
                 parentParaId: parentParaId, resolved: false);
 
+            CommentsVersion++;
             InvalidateProjectionCache();
 
             var created = new List<Anchor>();
@@ -10304,6 +10995,7 @@ public sealed partial class DocxSession : IDisposable
                 entry.SetAttributeValue(Internal.CommentOps.W15 + "done", resolved ? "1" : "0");
             exPart.PutXDocument();
 
+            CommentsVersion++;
             InvalidateProjectionCache();
             var modified = new List<Anchor>();
             foreach (var affectedComment in main.WordprocessingCommentsPart.GetXDocument().Root!
@@ -10398,6 +11090,7 @@ public sealed partial class DocxSession : IDisposable
             main.WordprocessingCommentsPart.PutXDocument();
             SweepOrphanedStoryRelationships(main.WordprocessingCommentsPart);
 
+            CommentsVersion++;
             InvalidateProjectionCache();
 
             var created = new List<Anchor>();
@@ -12722,8 +13415,7 @@ public sealed partial class DocxSession : IDisposable
         try
         {
             DisposeRenderShell();
-            _doc?.Dispose();
-            _stream?.Dispose();
+            DiscardPackage(_doc, _stream);
             _doc = null;
             _stream = null;
             _raw = null;
@@ -13051,6 +13743,7 @@ public sealed partial class DocxSession : IDisposable
 
     internal void RestoreSnapshot(DocumentSnapshot snapshot)
     {
+        CommentsVersion++;
         // The restored markup is different markup: re-seed the revision counter from it on
         // next use. Seeding only ever raises the counter, so this can never hand out an id
         // that is already live.
@@ -13158,8 +13851,7 @@ public sealed partial class DocxSession : IDisposable
     private void RestorePackage(byte[] packageBytes)
     {
         DisposeRenderShell();
-        _doc?.Dispose();
-        _stream?.Dispose();
+        DiscardPackage(_doc, _stream);
 
         _stream = new MemoryStream(packageBytes.Length);
         _stream.Write(packageBytes, 0, packageBytes.Length);
@@ -13896,6 +14588,49 @@ public sealed partial class DocxSession : IDisposable
                 WordprocessingMLUtil.InsertRPrChildInOrder(rPr, rFonts);
             }
         }
+
+        if (op.Highlight is not null)
+        {
+            // w:highlight is ST_HighlightColor — a closed set of Word swatch names, not a hex
+            // value (that would be w:shd). "" / "none" clears; anything outside the set is
+            // refused rather than written, because Word ignores an unknown token silently.
+            rPr.Element(W.highlight)?.Remove();
+            var name = op.Highlight.Trim();
+            if (name.Length > 0 && !string.Equals(name, "none", StringComparison.OrdinalIgnoreCase))
+            {
+                var canonical = CanonicalHighlightName(name)
+                    ?? throw new ArgumentException($"invalid highlight: {op.Highlight}");
+                WordprocessingMLUtil.InsertRPrChildInOrder(
+                    rPr, new XElement(W.highlight, new XAttribute(W.val, canonical)));
+            }
+        }
+
+        // Caps and small caps are one either/or slot in Word's UI: turning one on removes the
+        // other, exactly as the Font dialog does. An op that sets BOTH true is resolved in
+        // declaration order, so SmallCaps wins.
+        if (op.Caps is true) rPr.Element(W.smallCaps)?.Remove();
+        Toggle(rPr, W.caps, op.Caps);
+        if (op.SmallCaps is true) rPr.Element(W.caps)?.Remove();
+        Toggle(rPr, W.smallCaps, op.SmallCaps);
+    }
+
+    /// <summary>The sixteen <c>ST_HighlightColor</c> swatch names Word accepts on <c>w:highlight</c>,
+    /// in their canonical casing (the attribute is case-sensitive in Word).</summary>
+    private static readonly string[] HighlightColorNames =
+    {
+        "yellow", "green", "cyan", "magenta", "blue", "red",
+        "darkBlue", "darkCyan", "darkGreen", "darkMagenta", "darkRed", "darkYellow",
+        "darkGray", "lightGray", "black", "white",
+    };
+
+    /// <summary>Map a caller-supplied highlight token to its canonical swatch name (matching
+    /// case-insensitively, so <c>darkblue</c> and <c>DarkBlue</c> both write <c>darkBlue</c>), or
+    /// null when it is not a Word highlight colour.</summary>
+    private static string? CanonicalHighlightName(string name)
+    {
+        foreach (var candidate in HighlightColorNames)
+            if (string.Equals(candidate, name, StringComparison.OrdinalIgnoreCase)) return candidate;
+        return null;
     }
 
     /// <summary>

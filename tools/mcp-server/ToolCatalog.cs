@@ -260,7 +260,10 @@ internal static class ToolCatalog
                     "strike": { "type": "boolean" }, "code": { "type": "boolean" },
                     "color": { "type": "string", "description": "Hex RGB, no '#'." },
                     "vertAlign": { "type": "string", "enum": ["superscript", "subscript", "none"] },
-                    "fontSizePts": { "type": "number" }, "fontFamily": { "type": "string" }
+                    "fontSizePts": { "type": "number" }, "fontFamily": { "type": "string" },
+                    "highlight": { "type": "string", "description": "Word highlight swatch name (w:highlight): yellow, green, cyan, magenta, blue, red, darkBlue, darkCyan, darkGreen, darkMagenta, darkRed, darkYellow, darkGray, lightGray, black, white. \"\" or \"none\" clears; any other value is rejected." },
+                    "caps": { "type": "boolean", "description": "All capitals (w:caps). true also removes smallCaps — Word treats them as one either/or slot." },
+                    "smallCaps": { "type": "boolean", "description": "Small capitals (w:smallCaps). true also removes caps." }
                   }
                 },
                 "styleId": { "type": "string", "description": "set_paragraph_style: a style id from the document's style definitions (e.g. Heading1)." },
@@ -330,7 +333,7 @@ internal static class ToolCatalog
                 "ruleStyle": { "type": "string", "enum": ["single", "double", "thick"], "description": "insert_horizontal_rule." },
                 "characterOffset": { "type": "integer", "description": "insert_footnote/insert_endnote: character offset within the citing paragraph." },
                 "kind": { "type": "string", "enum": ["default", "first", "even"], "description": "set_header_text/set_footer_text/ensure_header_footer_visible: running-story kind. first/even authoring also enables the corresponding Word visibility setting; ensure_header_footer_visible enables it for an already-referenced story." },
-                "field": { "type": "string", "enum": ["current_page", "total_pages"], "description": "insert_page_number_field." },
+                "field": { "type": "string", "enum": ["current_page", "total_pages", "page_of_total"], "description": "insert_page_number_field: current_page appends a PAGE field, total_pages a NUMPAGES field, page_of_total Word's \"Page X of Y\" gallery entry (the text 'Page ', PAGE, ' of ', NUMPAGES)." },
                 "numberFormat": { "type": "string", "enum": ["decimal", "upperLetter", "lowerLetter", "upperRoman", "lowerRoman"], "description": "insert_page_number_field: optional explicit \\* switch format." },
                 "levels": { "type": "string", "description": "insert_table_of_contents: heading levels to list, a level or range within 1-9 (default \"1-3\")." },
                 "title": { "type": "string", "description": "insert_table_of_contents: heading above the table (default \"Contents\"); empty inserts none." },
@@ -365,7 +368,7 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_comment",
-            "Create and manage native Word review comments (real w:comment markup — visible in Word/Google Docs/LibreOffice's Reviewing pane): comment on a character span or tracked revision, reply in the same native thread, resolve/reopen, update, remove, or list. Comments are addressed by their cmt anchor (from add/reply's created list or the projection's # Comments section). list reports parentAnchorId/resolved when Word extension metadata exists. For the semantic highlight/label overlay see docxodus_annotate.",
+            "Create and manage native Word review comments (real w:comment markup — visible in Word/Google Docs/LibreOffice's Reviewing pane): comment on a character span or tracked revision, reply in the same native thread, resolve/reopen, update, remove, or list. Comments are addressed by their cmt anchor (from add/reply's created list or the projection's # Comments section). list reports each comment's numeric id (the w:id rendered HTML carries as data-comment-id) plus parentAnchorId/resolved when Word extension metadata exists. For the semantic highlight/label overlay see docxodus_annotate.",
             """
             {
               "type": "object",

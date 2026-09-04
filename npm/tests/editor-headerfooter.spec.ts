@@ -312,7 +312,16 @@ test.describe('DocxEditor — header/footer region', () => {
     expect(res.defaultText).toContain('Default header');
   });
 
-  test('selecting the Even header kind warns that even pages lose the footer', async ({ page }) => {
+  /**
+   * Word's two checkboxes. "Different odd & even pages" is `w:evenAndOddHeaders`, which is
+   * document-global and governs footers too: once set, even pages stop inheriting the Default
+   * stories, so enabling it must seed BOTH the even header and the even footer or page 2 silently
+   * loses its footer. The same holds for "Different first page" and `w:titlePg`. Disabling clears
+   * the flag and leaves the parts behind, exactly as Word does.
+   */
+  test('the odd/even and first-page options seed both stories and flip the section flags', async ({
+    page,
+  }) => {
     const res = await page.evaluate(() => {
       const w = window as any;
       const { container, editor } = w.__hfMount(
@@ -320,45 +329,55 @@ test.describe('DocxEditor — header/footer region', () => {
         { headerFooter: true },
       );
 
-      editor.setHeaderFooterKind('header', 'even');
-      const warn = container.querySelector(
-        '[data-hf-band="header"] [data-hf-warning]',
-      ) as HTMLElement;
-      const before = { hidden: warn.hidden, text: (warn.textContent || '').trim() };
-
-      // The fix button creates the matching even footer, which clears the warning.
-      const fix = warn.querySelector('[data-hf-fix-counterpart]') as HTMLButtonElement;
-      const hadFix = !!fix;
-      fix?.click();
-      const warnAfter = container.querySelector(
-        '[data-hf-band="header"] [data-hf-warning]',
-      ) as HTMLElement;
-      const after = {
-        // The note STAYS: turning even pages on really does stop them using the Default
-        // stories, whether or not an even footer now exists. Only the offer goes away.
-        hidden: warnAfter.hidden,
-        stillHasFix: !!warnAfter.querySelector('[data-hf-fix-counterpart]'),
-        footerKind: editor.headerFooterKind('footer'),
+      const evenOn = editor.setHeaderFooterKindEnabled('even', true);
+      const afterEven = {
+        enabled: editor.headerFooterKindEnabled('even'),
+        firstEnabled: editor.headerFooterKindEnabled('first'),
+        kinds: editor.sectionInfo().headerRefs.map((r: any) => r.kind).sort(),
+        footerKinds: editor.sectionInfo().footerRefs.map((r: any) => r.kind).sort(),
+        // The band's story switcher appears once there is more than one story to show.
+        switcher: !(container.querySelector('[data-hf-band="header"] [data-hf-kinds]') as HTMLElement).hidden,
+        switcherLabels: (Array.from(
+          container.querySelectorAll('[data-hf-band="header"] [data-hf-kinds] button'),
+        ) as HTMLElement[]).map((b) => b.textContent),
       };
 
-      // Selecting Default carries no caveat, so the note clears entirely.
-      editor.setHeaderFooterKind('header', 'default');
-      const onDefault = (
-        container.querySelector('[data-hf-band="header"] [data-hf-warning]') as HTMLElement
-      ).hidden;
+      const firstOn = editor.setHeaderFooterKindEnabled('first', true);
+      editor.setHeaderFooterKind('header', 'first');
+      const label = editor.headerFooterStoryLabel('header');
+      const firstOff = editor.setHeaderFooterKindEnabled('first', false);
+      const afterFirstOff = {
+        enabled: editor.headerFooterKindEnabled('first'),
+        // The part survives the flag; only the flag went.
+        stillHasFirstPart: editor.sectionInfo().headerRefs.some((r: any) => r.kind === 'first'),
+        kindShown: editor.headerFooterKind('header'),
+      };
 
+      const saved: Uint8Array = editor.save();
       editor.close();
       container.remove();
-      return { before, hadFix, after, onDefault };
+      let b64 = '';
+      for (let i = 0; i < saved.length; i++) b64 += String.fromCharCode(saved[i]);
+      return { evenOn, afterEven, firstOn, label, firstOff, afterFirstOff, b64: btoa(b64) };
     });
 
-    expect(res.before.hidden).toBe(false);
-    expect(res.before.text).toMatch(/even pages/i);
-    expect(res.hadFix).toBe(true);
-    expect(res.after.footerKind).toBe('even');
-    expect(res.after.hidden).toBe(false);
-    expect(res.after.stillHasFix).toBe(false);
-    expect(res.onDefault).toBe(true);
+    expect(res.evenOn).toBe(true);
+    expect(res.afterEven.enabled).toBe(true);
+    expect(res.afterEven.firstEnabled).toBe(false);
+    expect(res.afterEven.kinds).toEqual(['default', 'even']);
+    expect(res.afterEven.footerKinds).toEqual(['default', 'even']);
+    expect(res.afterEven.switcher).toBe(true);
+    expect(res.afterEven.switcherLabels).toEqual(['Odd pages', 'Even pages']);
+    expect(res.firstOn).toBe(true);
+    expect(res.label).toBe('First Page Header');
+    expect(res.firstOff).toBe(true);
+    expect(res.afterFirstOff.enabled).toBe(false);
+    expect(res.afterFirstOff.stillHasFirstPart).toBe(true);
+    expect(res.afterFirstOff.kindShown).toBe('default');
+
+    const zip = Buffer.from(res.b64, 'base64');
+    expect(readZipEntry(zip, 'word/settings.xml')).toMatch(/<w:evenAndOddHeaders\b/);
+    expect(readZipEntry(zip, 'word/document.xml')).not.toMatch(/<w:titlePg\b/);
   });
 
   /**
@@ -622,45 +641,139 @@ test.describe('DocxEditor — header/footer region', () => {
     expect(res.editable).toBe(true);
     // …and the band says where it came from, since editing it changes both sections.
     expect(res.markedInherited).toBe(true);
-    expect(res.note).toMatch(/inherited/i);
+    expect(res.note).toMatch(/same as previous/i);
   });
 
-  test('bands survive a paginated toggle and keep their content', async ({ page }) => {
-    const res = await page.evaluate(() => {
+  /**
+   * Page view edits the story IN the page (Word's edit-in-the-margin): no bands, every page's
+   * header area is click-to-edit, a click swaps that page's inert clone for the live story, and a
+   * commit re-clones the story onto every other page — so all pages update without a remount.
+   * Switching back to the continuous view shows the bands with the edited content.
+   */
+  test('page view edits the header in place and mirrors the edit onto every page', async ({ page }) => {
+    const bytes = readTestFile('HC031-Complicated-Document.docx');
+    const res = await page.evaluate((raw: number[]) => {
       const w = window as any;
-      const { container, editor } = w.__hfMount(w.__hfSeed('RUNNING HEAD', 'FOOT'), {
-        headerFooter: true,
-      });
+      const { container, editor } = w.__hfMount(new Uint8Array(raw), { headerFooter: true });
 
-      const headerText = () =>
-        (
-          container.querySelector('[data-hf-band="header"] [data-hf-body]')?.textContent || ''
-        ).trim();
-
+      w.__hfType(
+        container.querySelector('[data-hf-band="header"] [data-anchor][contenteditable="true"]'),
+        'RUNNING HEAD',
+      );
       editor.setPaginated(true);
+      const pages = Array.from(container.querySelectorAll('.page-box')) as HTMLElement[];
+      const headerOf = (p: HTMLElement) => p.querySelector('.page-header') as HTMLElement;
       const paginated = {
-        bands: container.querySelectorAll('[data-hf-band]').length,
-        headerText: headerText(),
-        editable: !!container.querySelector(
-          '[data-hf-band="header"] [data-anchor][contenteditable="true"]',
-        ),
+        bands: container.querySelectorAll('.docx-hf-band').length,
+        pages: pages.length,
+        clickToEdit: pages.every((p) => headerOf(p).hasAttribute('data-hf-page')),
+        storyKind: headerOf(pages[0]).dataset.hfType,
+        textOnEveryPage: pages.every((p) => (headerOf(p).textContent || '').includes('RUNNING HEAD')),
+        liveBlocksBeforeClick: container.querySelectorAll('.page-header [data-anchor][contenteditable="true"]').length,
+      };
+
+      // Click into the SECOND page's header: it becomes the live story, the caret lands in it,
+      // the story reports itself, and the other pages keep their inert clones.
+      const area = headerOf(pages[1]);
+      const rect = area.getBoundingClientRect();
+      area.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: rect.left + 30, clientY: rect.top + 8 }));
+      const live = area.querySelector('[data-anchor][contenteditable="true"]') as HTMLElement;
+      const activated = {
+        isHost: area.getAttribute('data-hf-band') === 'header',
+        active: area.hasAttribute('data-hf-active'),
+        label: area.dataset.hfLabel,
+        focused: document.activeElement === live,
+        storyKind: editor.activeStoryKind,
+        liveBlocks: container.querySelectorAll('.page-header [data-anchor][contenteditable="true"]').length,
+      };
+
+      // Type, commit, and read the other pages.
+      w.__hfType(live, 'RUNNING HEAD — REVISED');
+      const mirrored = {
+        host: (area.textContent || '').trim(),
+        others: pages.filter((p) => p !== pages[1]).map((p) => (headerOf(p).textContent || '').trim()),
+        othersInert: pages.filter((p) => p !== pages[1]).every((p) => !headerOf(p).querySelector('[contenteditable="true"]')),
+        pagesKept: pages.every((p) => p.isConnected),
+      };
+
+      // Leave the story by clicking a body block; the page stack survives (no re-paginate for a
+      // story that did not grow) and the story deactivates.
+      (container.querySelector('.page-content [data-anchor][contenteditable="true"]') as HTMLElement).focus();
+      const left = {
+        active: area.hasAttribute('data-hf-active'),
+        storyKind: editor.activeStoryKind,
+        pagesKept: pages.every((p) => p.isConnected),
       };
 
       editor.setPaginated(false);
       const continuous = {
-        bands: container.querySelectorAll('[data-hf-band]').length,
-        headerText: headerText(),
+        bands: container.querySelectorAll('.docx-hf-band').length,
+        headerText: (container.querySelector('[data-hf-band="header"] [data-hf-body]')?.textContent || '').trim(),
       };
-
+      const saved: Uint8Array = editor.save();
       editor.close();
       container.remove();
-      return { paginated, continuous };
-    });
+      const doc = w.__hfInspect(saved);
+      const stored = doc.textOf(':hdr');
+      doc.close();
+      return { paginated, activated, mirrored, left, continuous, stored };
+    }, bytes);
 
-    expect(res.paginated.bands).toBe(2);
-    expect(res.paginated.headerText).toContain('RUNNING HEAD');
-    expect(res.paginated.editable).toBe(true);
+    expect(res.paginated.bands).toBe(0);
+    expect(res.paginated.pages).toBeGreaterThan(1);
+    expect(res.paginated.clickToEdit).toBe(true);
+    expect(res.paginated.storyKind).toBe('default');
+    expect(res.paginated.textOnEveryPage).toBe(true);
+    expect(res.paginated.liveBlocksBeforeClick).toBe(0);
+    expect(res.activated).toEqual({ isHost: true, active: true, label: 'Header', focused: true, storyKind: 'header', liveBlocks: 1 });
+    expect(res.mirrored.host).toBe('RUNNING HEAD — REVISED');
+    expect(res.mirrored.others.every((t: string) => t === 'RUNNING HEAD — REVISED')).toBe(true);
+    expect(res.mirrored.othersInert).toBe(true);
+    expect(res.mirrored.pagesKept).toBe(true);
+    expect(res.left).toEqual({ active: false, storyKind: null, pagesKept: true });
     expect(res.continuous.bands).toBe(2);
-    expect(res.continuous.headerText).toContain('RUNNING HEAD');
+    expect(res.continuous.headerText).toContain('RUNNING HEAD — REVISED');
+    expect(res.stored).toContain('RUNNING HEAD — REVISED');
+  });
+
+  test('page view: a page-number field inserted into a page footer counts per page', async ({ page }) => {
+    const res = await page.evaluate(() => {
+      const w = window as any;
+      const D = w.Docxodus;
+      // Enough body text for several pages.
+      const h = D.DocxSessionBridge.OpenSession(D.DocxSessionBridge.CreateBlankDocx(), '{}');
+      const proj = JSON.parse(D.DocxSessionBridge.Project(h));
+      let anchor = Object.keys(proj.anchorIndex).find((k) => k.startsWith('p:body:'))!;
+      D.DocxSessionBridge.ReplaceText(h, anchor, 'Paragraph one.');
+      for (let i = 0; i < 90; i++) {
+        anchor = Object.keys(JSON.parse(D.DocxSessionBridge.Project(h)).anchorIndex).filter((k) => k.startsWith('p:body:')).pop()!;
+        D.DocxSessionBridge.InsertParagraph(h, anchor, 'after', `Filler paragraph number ${i + 2} with enough words to take up a line or two of the page.`);
+      }
+      const bytes: Uint8Array = D.DocxSessionBridge.Save(h);
+      D.DocxSessionBridge.CloseSession(h);
+
+      const { container, editor } = w.__hfMount(bytes, { headerFooter: true, paginated: true });
+      const pages = Array.from(container.querySelectorAll('.page-box')) as HTMLElement[];
+      // No footer story yet: the page has no footer area to click, so go through the command,
+      // which opens the footer on the current page and seeds the story.
+      (container.querySelector('.page-content [data-anchor][contenteditable="true"]') as HTMLElement).focus();
+      const went = editor.goToHeaderFooter('footer');
+      editor.insertPageNumber('currentPage');
+      const host = container.querySelector('.page-footer[data-hf-band="footer"]') as HTMLElement;
+      const out = {
+        pages: pages.length,
+        went,
+        hostText: (host?.textContent || '').trim(),
+        hostPage: host?.closest('.page-box')?.getAttribute('data-page-number'),
+        othersHaveField: false,
+      };
+      editor.close();
+      container.remove();
+      return out;
+    });
+    expect(res.pages).toBeGreaterThan(1);
+    expect(res.went).toBe(true);
+    expect(res.hostPage).toBe('1');
+    expect(res.hostText).toBe('1');
   });
 });

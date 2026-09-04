@@ -93,6 +93,7 @@ export type {
   EditErrorCode,
   EditResult,
   FindOptions,
+  EditorRenderOptions,
   FormatOp,
   HyperlinkInfo,
   HyperlinkKind,
@@ -130,6 +131,7 @@ export type {
   PageMapStatus,
   PageNumberField,
   PageNumberingOp,
+  PageSetupOp,
   ParagraphBorderEdge,
   ParagraphFormatOp,
   RevisionDiagnostic,
@@ -323,7 +325,19 @@ export { DocumentViewport } from "./viewport.js";
 export type { ColumnWidth, DocumentViewportOptions } from "./viewport.js";
 
 export { DocxEditor } from "./editor.js";
-export type { DocxEditorOptions, DocxEditorExports } from "./editor.js";
+export type {
+  DocxEditorOptions,
+  DocxEditorExports,
+  EditorAlignment,
+  EditorMatch,
+  EditorPageSetup,
+  FormatKey,
+} from "./editor.js";
+// The comment gutter and header/footer region are the editor's own; exported for hosts that
+// build their own chrome and want to drive them directly.
+export { CommentGutter } from "./editor-comments.js";
+export type { CommentGutterHost, CommentGutterOptions } from "./editor-comments.js";
+export type { BandWhich } from "./editor-headerfooter.js";
 
 // The ribbon is the editor's UI shell: tabbed chrome, anchor rail, table picker and
 // loading overlay wired onto DocxEditor's command surface. `createRibbonEditor`

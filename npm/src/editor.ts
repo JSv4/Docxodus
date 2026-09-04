@@ -22,6 +22,8 @@ import { DocumentViewport } from "./viewport.js";
 import type { ColumnWidth } from "./viewport.js";
 import { HeaderFooterRegion } from "./editor-headerfooter.js";
 import type { BandWhich } from "./editor-headerfooter.js";
+import { CommentGutter, COMMENT_GUTTER_CSS } from "./editor-comments.js";
+import type { CommentTarget } from "./editor-comments.js";
 import {
   draggable,
   dropTargetForElements,
@@ -34,7 +36,21 @@ import {
   autoScrollWindowForElements,
 } from "@atlaskit/pragmatic-drag-and-drop-auto-scroll/element";
 import { TrackedChangeMode } from "./types.js";
-import type { CommentListEntry, HeaderFooterKind, NumberFormat } from "./types.js";
+import type {
+  CommentListEntry,
+  FormattingInspection,
+  HeaderFooterKind,
+  HyperlinkInfo,
+  ImageInsertOptions,
+  ListFormat,
+  NumberFormat,
+  PageSetupOp,
+  RevisionListEntry,
+  SectionInfo,
+  StyleInfo,
+  TableBorderSpec,
+  TableOfContentsOptions,
+} from "./types.js";
 import { diffUnits, needsRemount, tokenOf, unidOf } from "./editor-reconcile.js";
 import { imageOnlyDelta, patchImageAttributes } from "./editor-image-patch.js";
 import type { RenderPlan, RenderUnit, UnitDiff } from "./editor-reconcile.js";
@@ -148,6 +164,61 @@ export interface DocxEditorExports {
     ) => string;
     SetCommentResolved?: (handle: number, commentAnchor: string, resolved: boolean) => string;
     ListComments?: (handle: number) => string;
+    AddCommentReply?: (
+      handle: number,
+      parentCommentAnchor: string,
+      author: string,
+      initials: string,
+      date: string,
+      markdown: string,
+    ) => string;
+    UpdateComment?: (handle: number, commentAnchor: string, markdown: string) => string;
+    RemoveComment?: (handle: number, commentAnchor: string) => string;
+    /** The editor's own render profile as one JSON object — the comment-aware twin of
+     *  RenderHtml / RenderBlockHtml / RenderBlocksHtml (optional: older bundles lack it). */
+    RenderEditorHtml?: (handle: number, optionsJson: string) => string;
+    RenderEditorBlockHtml?: (handle: number, anchorId: string, optionsJson: string) => string;
+    RenderEditorBlocksHtml?: (handle: number, anchorIdsJson: string, optionsJson: string) => string;
+    /** Review-mode controls (optional). */
+    SetTrackedChanges?: (handle: number, mode: number) => void;
+    SetRevisionAuthor?: (handle: number, author: string) => void;
+    ListRevisions?: (handle: number) => string;
+    AcceptRevision?: (handle: number, revisionId: string) => string;
+    RejectRevision?: (handle: number, revisionId: string) => string;
+    AcceptAllRevisions?: (handle: number) => string;
+    RejectAllRevisions?: (handle: number) => string;
+    /** Links, images, references (optional). */
+    ListHyperlinks?: (handle: number, scopes: number) => string;
+    AddHyperlink?: (
+      handle: number,
+      anchor: string,
+      start: number,
+      length: number,
+      kind: string,
+      target: string,
+    ) => string;
+    RemoveHyperlink?: (handle: number, hyperlinkId: string) => string;
+    InsertImage?: (
+      handle: number,
+      anchor: string,
+      characterOffset: number,
+      imageBase64: string,
+      optionsJson: string,
+    ) => string;
+    InsertTableOfContents?: (handle: number, anchor: string, pos: string, optionsJson: string) => string;
+    /** Table cell structure and appearance (optional). */
+    MergeCells?: (handle: number, cellAnchor: string, rowSpan: number, colSpan: number, content: string) => string;
+    UnmergeCells?: (handle: number, cellAnchor: string) => string;
+    SetTableBorders?: (handle: number, cellAnchor: string, specJson: string) => string;
+    SetCellShading?: (handle: number, cellAnchor: string, fill: string, scope: string) => string;
+    SetRepeatHeaderRow?: (handle: number, cellAnchor: string, repeat: boolean) => string;
+    /** Section page setup and header/footer flags (optional). */
+    SetPageSetup?: (handle: number, anchor: string, opJson: string) => string;
+    SetHeaderFooterKindEnabled?: (handle: number, anchor: string, kind: string, enabled: boolean) => string;
+    /** Introspection (optional). */
+    ListStyles?: (handle: number) => string;
+    GetFormatting?: (handle: number, anchorId: string) => string;
+    ReplaceTextRange?: (handle: number, anchor: string, find: string, replace: string, optionsJson: string) => string;
     /** Incremental-reconcile endpoints (optional: older WASM bundles predate them;
      *  the editor falls back to full remounts / full projections without them). */
     ListBlocks?: (handle: number) => string;
@@ -213,10 +284,35 @@ export interface DocxEditorOptions {
   trackedChanges?: TrackedChangeMode;
   /** Author stamped on native Word revisions. Default "docxodus". */
   revisionAuthor?: string;
+  /**
+   * Render comments Word-style: the commented range highlighted inline and each thread as a
+   * bubble in a gutter beside the page. Default true. With it off the document renders without
+   * comment markup at all (the pre-gutter behaviour).
+   */
+  comments?: boolean;
+  /** Author stamped on comments posted from the gutter. Defaults to `revisionAuthor`. */
+  commentAuthor?: string;
   /** Called after a block edit commits (with the affected anchor). */
   onEdit?: (info: { anchorId: string; unid: string }) => void;
   /** Called after a successful block move. */
   onMove?: (info: { sourceAnchorId: string; destinationAnchorId: string }) => void;
+  /** Called when the caret enters or leaves a header/footer story (`null` = back in the body). */
+  onStoryChange?: (which: BandWhich | null) => void;
+  /** Called after every comment-gutter layout with thread counts and the active thread. */
+  onCommentsChange?: (info: { threads: number; open: number; active: string | null }) => void;
+}
+
+/**
+ * Word's Page Setup, as {@link DocxEditor.setPageSetup} takes it — the session's own
+ * {@link PageSetupOp} (all twips; omit = unchanged), so the two cannot drift.
+ */
+export type EditorPageSetup = PageSetupOp;
+
+/** One hit from {@link DocxEditor.find}: a content-offset span inside an editable block. */
+export interface EditorMatch {
+  block: HTMLElement;
+  start: number;
+  length: number;
 }
 
 interface AnchorTargetLite {
@@ -365,6 +461,12 @@ function collectInlineSegments(node: Node, out: InlineSeg[]): void {
     // Skip converter-generated chrome (list markers, note citation markers, note backrefs) —
     // it isn't part of the paragraph's content and must never be committed as text.
     if (isGeneratedChrome(child)) return;
+    if (isField(child)) {
+      // A field serializes as its cached result (the session's own text for it).
+      const text = fieldText(child);
+      if (text) out.push({ text, bold: false, italic: false, href: null });
+      return;
+    }
     if (child.nodeType === 3 /* TEXT_NODE */) {
       const text = child.textContent ?? "";
       if (!text) return;
@@ -433,7 +535,41 @@ export function serializeInlineMarkdown(block: HTMLElement): string {
       merged.push({ ...s });
     }
   }
-  return escapeLeadingBlockMarkers(merged.map(segToMarkdown).join("").trim());
+  // Leading whitespace is never content (a rendered empty paragraph carries a placeholder
+  // space, and typing lands after it). Trailing whitespace usually is not either — the
+  // browser's bogus trailing <br> serializes as a hard break — EXCEPT the single space a user
+  // types before a page-number field goes in: "Page " + PAGE must not commit as "Page". The
+  // engine writes it with xml:space="preserve"; `trimBounds` counts it the same way.
+  const md = merged.map(segToMarkdown).join("").replace(/^\s+/, "").replace(/\s+$/, "");
+  return escapeLeadingBlockMarkers(md + (keepsTrailingSpace(block) ? " " : ""));
+}
+
+/**
+ * Whether a block's content text ends in a space the commit should keep: a plain or no-break
+ * space (contenteditable turns a typed trailing space into U+00A0) after some non-whitespace
+ * text. A whitespace-only block (the placeholder an empty paragraph renders as) keeps nothing.
+ */
+function keepsTrailingSpace(block: HTMLElement): boolean {
+  const text = blockContentText(block);
+  if (text.trim().length === 0) return false;
+  // An ordinary trailing space can only have come from the document (the converter renders
+  // it from a preserved w:t), so it is content. A trailing NBSP is ambiguous: the browser
+  // writes one for a typed space, but the placeholder an empty paragraph renders as is one
+  // too, and typing at the start of such a paragraph leaves it dangling at the end. Only the
+  // typed one counts, which `wireBlock` records from the input event.
+  if (/ $/.test(text)) return true;
+  return /\u00a0$/.test(text) && block.dataset.typedTrailingSpace === "1";
+}
+
+/** Record whether the last input left a typed space at the end of the block \u2014 see
+ *  {@link keepsTrailingSpace}. */
+function noteTypedSpace(block: HTMLElement, event: Event): void {
+  const input = event as InputEvent;
+  const typedSpace =
+    input.inputType === "insertText" && typeof input.data === "string" && /[ \u00a0]$/.test(input.data);
+  const atEnd = typedSpace && caretOffsetIn(block) === blockContentText(block).length;
+  if (atEnd) block.dataset.typedTrailingSpace = "1";
+  else delete block.dataset.typedTrailingSpace;
 }
 
 // ─── M2: structural editing (split / merge) ─────────────────────────────────
@@ -512,10 +648,40 @@ function ensureListMarkerSeparator(block: HTMLElement): void {
  * run); left editable and the user can delete a marker outright, orphaning the note.
  */
 const GENERATED_CHROME_SELECTOR =
-  '[data-list-marker], a.footnote-ref, a.endnote-ref, a[class$="-backref"]';
+  '[data-list-marker], a.footnote-ref, a.endnote-ref, a[class$="-backref"], a.comment-marker';
 
 function isGeneratedChrome(node: Node | null | undefined): boolean {
   return node?.nodeType === 1 && !!(node as Element).matches?.(GENERATED_CHROME_SELECTOR);
+}
+
+/**
+ * A rendered field — PAGE / NUMPAGES in a running story, stamped `[data-field]` by the editor
+ * render profile. Fields are ATOMIC for editing (`contenteditable=false`, the caret lands on
+ * either side), and their content length is the field's CACHED result — the text the session
+ * holds in the result run — even after the page view substituted the per-page number into the
+ * DOM. Counting the substituted text instead would shift every offset after the field and make
+ * the commit diff rewrite the field runs.
+ */
+function fieldOf(node: Node | null): HTMLElement | null {
+  const el = node && node.nodeType === 1 ? (node as Element) : node?.parentElement ?? null;
+  return (el?.closest?.("[data-field]") as HTMLElement | null) ?? null;
+}
+
+function isField(node: Node): node is HTMLElement {
+  return node.nodeType === 1 && (node as HTMLElement).hasAttribute("data-field");
+}
+
+/** The text a field counts for: the cached result the session holds, else what it shows. */
+function fieldText(field: HTMLElement): string {
+  return field.dataset.fieldCached ?? field.textContent ?? "";
+}
+
+/** Freeze a field's rendered result as its cached text (once) and keep the caret out of it. */
+function adoptFields(block: HTMLElement): void {
+  for (const field of Array.from(block.querySelectorAll<HTMLElement>("[data-field]"))) {
+    if (field.dataset.fieldCached === undefined) field.dataset.fieldCached = field.textContent ?? "";
+    field.setAttribute("contenteditable", "false");
+  }
 }
 
 /** True if `node` is, or is inside, generated chrome (not editable content). */
@@ -565,6 +731,14 @@ function contentOffsetOf(block: HTMLElement, container: Node, offset: number): n
   let done = false;
   const walk = (node: Node): void => {
     if (done) return;
+    if (isField(node)) {
+      // Atomic: a point inside a field resolves to the field's end; the field counts its
+      // cached text either way.
+      const inside = node === container || node.contains(container);
+      if (!inside || offset > 0 || node !== container) count += stripBidi(fieldText(node)).length;
+      if (inside) done = true;
+      return;
+    }
     if (node.nodeType === 3 /* TEXT_NODE */) {
       if (node === container) {
         if (!isInMarker(node)) count += stripBidi((node.textContent ?? "").slice(0, offset)).length;
@@ -600,7 +774,9 @@ function caretOffsetIn(block: HTMLElement): number | null {
 function blockContentText(block: HTMLElement): string {
   let out = "";
   const walk = (node: Node): void => {
-    if (node.nodeType === 3 /* TEXT_NODE */) {
+    if (isField(node)) {
+      out += stripBidi(fieldText(node));
+    } else if (node.nodeType === 3 /* TEXT_NODE */) {
       if (!isInMarker(node)) out += stripBidi(node.textContent ?? "");
     } else {
       node.childNodes.forEach(walk);
@@ -630,7 +806,9 @@ function trimBounds(block: HTMLElement): { leading: number; trimmedLen: number }
   const content = blockContentText(block);
   return {
     leading: content.length - content.replace(/^\s+/, "").length,
-    trimmedLen: content.trim().length,
+    // Mirrors serializeInlineMarkdown: leading and trailing whitespace dropped, plus the one
+    // trailing space a commit keeps.
+    trimmedLen: content.trim().length + (keepsTrailingSpace(block) ? 1 : 0),
   };
 }
 
@@ -669,6 +847,19 @@ function contentPositionIn(el: HTMLElement, offset: number): { node: Node; offse
   let lastText: Node | null = null;
   const walk = (node: Node): void => {
     if (result) return;
+    if (isField(node)) {
+      // Never land inside a field: an offset at its start sits before it, anything up to its
+      // cached length sits after it.
+      const len = stripBidi(fieldText(node)).length;
+      const parent = node.parentNode;
+      if (parent && remaining <= len) {
+        const index = Array.prototype.indexOf.call(parent.childNodes, node);
+        result = { node: parent, offset: index + (remaining > 0 ? 1 : 0) };
+        return;
+      }
+      remaining -= len;
+      return;
+    }
     if (node.nodeType === 3 /* TEXT_NODE */) {
       if (isInMarker(node)) return;
       const raw = node.textContent ?? "";
@@ -740,34 +931,21 @@ function setSelectionBetween(anchor: DomSelectionPoint, focus: DomSelectionPoint
 /** Place the caret at content offset `offset` within `el`, skipping marker text. */
 function placeCaretAtOffset(el: HTMLElement, offset: number): void {
   const sel = typeof window !== "undefined" ? window.getSelection() : null;
-  if (!sel) return;
+  // A remount can detach the block between a caller's lookup and this call; addRange on a
+  // detached node throws "the given range isn't in document".
+  if (!sel || !el.isConnected) return;
   el.focus();
   const range = document.createRange();
-  let remaining = offset;
-  let placed = false;
-  const walk = (node: Node): void => {
-    if (placed) return;
-    if (node.nodeType === 3 /* TEXT_NODE */) {
-      if (isInMarker(node)) return; // never land the caret in the marker
-      const raw = node.textContent ?? "";
-      const len = stripBidi(raw).length; // content length excludes injected bidi marks
-      if (remaining <= len) {
-        range.setStart(node, domOffsetForContentOffset(raw, remaining));
-        placed = true;
-      } else {
-        remaining -= len;
-      }
-    } else {
-      node.childNodes.forEach(walk);
-    }
-  };
-  walk(el);
-  if (!placed) {
+  // contentPositionIn clamps a past-end offset to the end of the last text node, and never
+  // lands inside marker chrome or a field — the same rules every other offset helper uses.
+  const pos = contentPositionIn(el, offset);
+  try {
+    range.setStart(pos.node, pos.offset);
+  } catch {
     range.selectNodeContents(el);
     range.collapse(false);
-  } else {
-    range.collapse(true);
   }
+  range.collapse(true);
   sel.removeAllRanges();
   sel.addRange(range);
 }
@@ -803,34 +981,16 @@ function selectRange(el: HTMLElement, start: number, length: number): void {
   if (!sel || !el.isConnected) return;
   el.focus();
   const range = document.createRange();
-  const end = start + length;
-  let pos = 0;
-  let startSet = false;
-  const walk = (node: Node): boolean => {
-    for (const child of Array.from(node.childNodes)) {
-      if (child.nodeType === 3 /* TEXT_NODE */) {
-        if (isInMarker(child)) continue; // marker text isn't part of the content offset space
-        const raw = child.textContent ?? "";
-        const len = stripBidi(raw).length; // content length excludes injected bidi marks
-        if (!startSet && pos + len >= start) {
-          range.setStart(child, domOffsetForContentOffset(raw, start - pos));
-          startSet = true;
-        }
-        if (startSet && pos + len >= end) {
-          range.setEnd(child, domOffsetForContentOffset(raw, end - pos));
-          return true;
-        }
-        pos += len;
-      } else if (walk(child)) {
-        return true;
-      }
-    }
-    return false;
-  };
-  if (walk(el) || startSet) {
-    sel.removeAllRanges();
-    sel.addRange(range);
+  const from = contentPositionIn(el, start);
+  const to = contentPositionIn(el, start + length);
+  try {
+    range.setStart(from.node, from.offset);
+    range.setEnd(to.node, to.offset);
+  } catch {
+    return;
   }
+  sel.removeAllRanges();
+  sel.addRange(range);
 }
 
 /**
@@ -875,9 +1035,13 @@ function completeArgs(
   paginated: boolean,
   scale: number,
   renderTrackedChanges: boolean,
+  comments: boolean,
 ): any[] {
   return [
-    bytes, "Document", cssPrefix, fabricate, "", -1, "comment-",
+    // Comment mode 1 = Inline: the commented runs are wrapped in highlight spans and the
+    // reference becomes an (editor-hidden) marker, which is what the comment gutter positions
+    // its bubbles against. -1 renders no comment markup at all.
+    bytes, "Document", cssPrefix, fabricate, "", comments ? 1 : -1, "comment-",
     /* paginationMode */ paginated ? 1 : 0, /* paginationScale */ scale, "page-",
     false, 0, "annot-",
     // Footnotes/endnotes ON: they are document content, and the editor makes the rendered note
@@ -892,8 +1056,10 @@ export class DocxEditor {
   private readonly exports: DocxEditorExports;
   private readonly container: HTMLElement;
   private readonly handle: number;
-  private readonly options: Required<Omit<DocxEditorOptions, "onEdit" | "onMove">> &
-    Pick<DocxEditorOptions, "onEdit" | "onMove">;
+  private readonly options: Required<
+    Omit<DocxEditorOptions, "onEdit" | "onMove" | "onStoryChange" | "onCommentsChange">
+  > &
+    Pick<DocxEditorOptions, "onEdit" | "onMove" | "onStoryChange" | "onCommentsChange">;
   /** Map a block's current bare unid → its full kind:scope:unid (DocxSession anchor). */
   private readonly unidToFullId = new Map<string, string>();
   /** The element whose [data-anchor] descendants are the editable blocks (container or page container). */
@@ -957,6 +1123,12 @@ export class DocxEditor {
 
   /** The docked header/footer bands, when `options.headerFooter` is on. */
   private region: HeaderFooterRegion | null = null;
+
+  /** The comment gutter, when `options.comments` is on. */
+  private gutter: CommentGutter | null = null;
+
+  /** Story host the caret is in (page view / band), published for chrome via `onStoryChange`. */
+  private activeStory: BandWhich | null = null;
 
   /** Page geometry + fit-to-width zoom for the mounted document. Re-attached on every mount. */
   private readonly viewport: DocumentViewport;
@@ -1176,8 +1348,12 @@ export class DocxEditor {
       blockDrag: options.blockDrag ?? false,
       trackedChanges: options.trackedChanges ?? TrackedChangeMode.Accept,
       revisionAuthor: options.revisionAuthor ?? "docxodus",
+      comments: options.comments ?? true,
+      commentAuthor: options.commentAuthor ?? options.revisionAuthor ?? "Reviewer",
       onEdit: options.onEdit,
       onMove: options.onMove,
+      onStoryChange: options.onStoryChange,
+      onCommentsChange: options.onCommentsChange,
     };
     // NOT persistAnchorIds: that setting applies to every Save on the session, so it put the
     // projector's Unid bookkeeping into the bytes the USER downloads — ~6x the file size for
@@ -1193,16 +1369,15 @@ export class DocxEditor {
     const editor = new DocxEditor(container, exports, handle, opts);
     editor.refreshAnchorMap();
     if (opts.headerFooter) editor.createRegion();
-    const fullHtml = exports.DocumentConverter.ConvertDocxToHtmlComplete(
-      ...completeArgs(
-        bytes, opts.cssPrefix, opts.fabricateClasses, opts.paginated, opts.scale,
-        opts.trackedChanges === TrackedChangeMode.RenderInline,
-      ),
-    );
+    // First paint goes through the session-attached editor render when the bundle has it, so
+    // the comment markup (and everything else in the profile) is exactly what a remount will
+    // produce; older bundles take the bytes path with the same profile.
+    const fullHtml = editor.renderFullHtml(bytes);
     if (opts.paginated) editor.mountPaginated(fullHtml);
     else editor.mountHtml(fullHtml);
     editor.syncRegionToBody();
     editor.setupBlockDrag();
+    if (opts.comments) editor.createGutter();
     return editor;
   }
 
@@ -1237,6 +1412,9 @@ export class DocxEditor {
     }
     this.clearDragSelection();
     this.teardownBlockDrag();
+    this.gutter?.dispose();
+    this.gutter = null;
+    this.region?.detachPages();
     this.viewport.dispose();
     this.exports.DocxSessionBridge.CloseSession(this.handle);
   }
@@ -1976,11 +2154,38 @@ export class DocxEditor {
     this.region = new HeaderFooterRegion(
       this.exports.DocxSessionBridge,
       this.handle,
-      { cssPrefix: this.options.cssPrefix, fabricateClasses: this.options.fabricateClasses },
       {
         wireBlock: (el) => this.wireBlock(el),
+        renderBlock: (anchorId) => this.renderInto(anchorId),
         refreshAnchorMap: () => this.refreshAnchorMap(),
+        bodyAnchorIdOf: (unid) => this.unidToFullId.get(unid),
+        remount: () => {
+          if (!this.closed) this.remount();
+        },
+        onActiveChange: (_host, which) => {
+          this.activeStory = which;
+          this.options.onStoryChange?.(which);
+        },
       },
+    );
+  }
+
+  /** Build the comment gutter over the container (called once, after the first mount). */
+  private createGutter(): void {
+    ensureCommentGutterStyles(this.container.ownerDocument);
+    this.gutter = new CommentGutter(
+      {
+        container: this.container,
+        commentAuthor: this.options.commentAuthor,
+        listComments: () => this.listComments(),
+        addComment: (markdown, author, target) => this.addComment(markdown, author, target),
+        addCommentReply: (parent, markdown, author) => this.addCommentReply(parent, markdown, author),
+        updateComment: (anchorId, markdown) => this.updateComment(anchorId, markdown),
+        removeComment: (anchorId) => this.removeComment(anchorId),
+        setCommentResolved: (anchorId, resolved) => this.setCommentResolved(anchorId, resolved),
+        commentTarget: () => this.commentTarget(),
+      },
+      { onChange: (info) => this.options.onCommentsChange?.(info) },
     );
   }
 
@@ -2018,11 +2223,13 @@ export class DocxEditor {
    * and the scaled page, which are different boxes.
    */
   private mountHtml(fullHtml: string): void {
+    this.region?.detachPages();
     const parsed = new DOMParser().parseFromString(fullHtml, "text/html");
     const styles = Array.from(parsed.querySelectorAll("style"))
       .map((s) => s.outerHTML)
       .join("");
     this.container.innerHTML = styles;
+    this.readoptGutter();
     const flow = document.createElement("div");
     flow.className = "docx-body-flow";
     flow.innerHTML = parsed.body.innerHTML;
@@ -2036,15 +2243,14 @@ export class DocxEditor {
 
   /** Paginated mount: flow blocks into page boxes via pagination.ts, wire the page clones. */
   private mountPaginated(fullHtml: string): void {
-    // With bands docked, pagination writes into its own wrapper so the bands can sit outside the
-    // page stack (and so pagination's innerHTML reset can never eat them).
-    let target = this.container;
-    if (this.region) {
-      this.container.innerHTML = "";
-      target = document.createElement("div");
-      target.className = "docx-body-flow";
-      this.container.appendChild(target);
-    }
+    this.region?.detachPages();
+    // Pagination writes into its own wrapper so the container can also hold the comment gutter
+    // (and so pagination's innerHTML reset can never eat it).
+    this.container.innerHTML = "";
+    this.readoptGutter();
+    const target = document.createElement("div");
+    target.className = "docx-body-flow";
+    this.container.appendChild(target);
     // Fragmented paragraphs intentionally have only one addressable head and
     // are therefore unsuitable for the editor's one-block editing model.
     paginateHtml(fullHtml, target, {
@@ -2063,9 +2269,10 @@ export class DocxEditor {
     const pageRoot = target.querySelector<HTMLElement>("#pagination-container") ?? target;
     this.editRoot = pageRoot;
     if (this.options.editable) this.wireBlocks(pageRoot);
-    // The page boxes render their own (read-only) header/footer margins; the editable bands dock
-    // around the page stack, so there is still exactly one addressable node per story paragraph.
-    if (this.region) this.dockBands(target);
+    // The page boxes render their own header/footer margins as inert clones; the region turns
+    // the clicked one into the live story in place (Word's edit-in-the-margin), so there is
+    // still exactly one addressable node per story paragraph at any time.
+    if (this.region) this.region.attachPages(pageRoot);
     // Page boxes already carry the section's dimensions, so the viewport contributes only the
     // fit zoom — a full page is far wider than a phone, and clipping it is not an option.
     this.viewport.attach(pageRoot, false);
@@ -2099,6 +2306,9 @@ export class DocxEditor {
     // a citation marker can't be deleted directly (which would orphan its note definition).
     el.querySelectorAll<HTMLElement>(GENERATED_CHROME_SELECTOR)
       .forEach((m) => m.setAttribute("contenteditable", "false"));
+    // Page-number fields are atomic, and remember their cached result so per-page substitution
+    // in the page view never shifts the offset space (see `fieldText`).
+    adoptFields(el);
     // Baseline for the commit diff: CONTENT text (list markers + injected bidi marks excluded),
     // matching the session's flat run-text offset space.
     el.dataset.committedText = blockContentText(el);
@@ -2108,8 +2318,10 @@ export class DocxEditor {
       // actually apply. Focusing a BAND block must not re-sync: it has no governing section of
       // its own, and re-resolving would clobber the user's kind selection.
       if (this.region && !this.isBandBlock(el)) this.syncRegionToBody(el);
+      this.region?.noteFocus(el);
     });
     el.addEventListener("blur", () => this.commitBlock(el));
+    el.addEventListener("input", (ev) => noteTypedSpace(el, ev));
     el.addEventListener("keydown", (ev) => this.onKeydown(el, ev as KeyboardEvent));
     // A band block re-rendered by an incremental swap is a fresh DOM node; re-adopt it (with the
     // anchor its caller already stamped) so the band chrome can still address it.
@@ -2193,6 +2405,7 @@ export class DocxEditor {
         if (this.activeBlock === el) this.activeBlock = fresh; // keep ribbon target valid
         // The throwaway render numbers citation markers from 1 — repair in place.
         this.maybeRenumberNotes(fresh);
+        if (inBand) this.region!.afterStoryEdit(fresh);
       }
     }
 
@@ -2362,6 +2575,7 @@ export class DocxEditor {
     }
     this.wireBlock(firstEl);
     this.wireBlock(secondEl);
+    if (inBand) this.region!.afterStoryEdit(secondEl);
     placeCaretAtOffset(secondEl, 0);
     this.options.onEdit?.({ anchorId: second.id, unid: second.unid });
   }
@@ -2412,6 +2626,7 @@ export class DocxEditor {
       this.unidToFullId.set(merged.unid, merged.id);
     }
     this.wireBlock(mergedEl);
+    if (inBand) this.region!.afterStoryEdit(mergedEl);
     placeCaretAtOffset(mergedEl, caret);
     this.options.onEdit?.({ anchorId: merged.id, unid: merged.unid });
   }
@@ -2430,11 +2645,20 @@ export class DocxEditor {
     // but wireBlock may have stored textContent before this Task 2 change, and the bidi test
     // explicitly stores textContent). Using stripBidi keeps the baseline consistent with the
     // session's offset space regardless of how committedText was stored.
-    const old = stripBidi(el.dataset.committedText ?? "");
-    const next = blockContentText(el);
+    // contenteditable keeps a typed trailing space as U+00A0 so it stays visible; the document
+    // wants an ordinary space there (Word's own), and the two are the same length, so the
+    // offset space is unchanged. Both sides are normalized the same way, so an untouched
+    // placeholder (the NBSP an empty paragraph renders as) never reads as an edit \u2014 a blur that
+    // committed "" over a paragraph another op just filled would wipe that op's work.
+    const old = stripBidi(el.dataset.committedText ?? "").replace(/\u00a0$/, " ");
+    const next = blockContentText(el).replace(/\u00a0$/, " ");
     if (old === next) return null;
 
-    if (old.trim().length === 0) {
+    // A whitespace-only baseline means the paragraph was (or rendered as) empty, so the typed
+    // text replaces it wholesale — unless it holds a field whose cached result is empty (a PAGE
+    // field in a tool-generated footer): that is content, and the span path below keeps it
+    // while inserting the typed text beside it.
+    if (old.trim().length === 0 && !el.querySelector("[data-field]")) {
       return this.parseEdit(
         this.exports.DocxSessionBridge.ReplaceText(this.handle, fullId, serializeInlineMarkdown(el)),
       );
@@ -2450,10 +2674,17 @@ export class DocxEditor {
     let len = old.length - p - s;
     let middle = next.slice(p, next.length - s);
 
-    // A pure insertion is a zero-length span, which resolves to no runs and is rejected. Anchor a
-    // neighbor char so the span is non-empty and the inserted text inherits an adjacent run's rPr
-    // (the LEFT run when there is one, matching contenteditable; the first run at the very start).
     if (len === 0) {
+      // A pure insertion. The engine inserts a NEW run at a run boundary (and steps outside a
+      // field's chrome, so typing after "Page X of Y" never lands inside the NUMPAGES result);
+      // an offset inside a run's text is not a boundary and is refused, as is the op on an
+      // older engine build. Then anchor a neighbour char so the span is non-empty and the
+      // inserted text inherits an adjacent run's rPr (the LEFT run when there is one, matching
+      // contenteditable; the first run at the very start).
+      const inserted = this.parseEdit(
+        this.exports.DocxSessionBridge.ReplaceTextAtSpan(this.handle, fullId, start, 0, middle),
+      );
+      if (inserted.success) return inserted;
       if (start > 0) { start -= 1; len = 1; middle = old[start] + middle; }
       else { len = 1; middle = middle + old[0]; }
     }
@@ -2484,6 +2715,9 @@ export class DocxEditor {
 
   private renderBlockHtml(anchorId: string): string {
     const bridge = this.exports.DocxSessionBridge;
+    if (typeof bridge.RenderEditorBlockHtml === "function") {
+      return bridge.RenderEditorBlockHtml(this.handle, anchorId, this.editorRenderProfile());
+    }
     if (typeof bridge.RenderBlockHtmlForReview === "function") {
       return bridge.RenderBlockHtmlForReview(
         this.handle, anchorId, this.options.cssPrefix, this.options.fabricateClasses,
@@ -2502,6 +2736,24 @@ export class DocxEditor {
       : bridge.ListBlocks!(this.handle);
   }
 
+  /** Batch-render `idsJson` anchors through the richest endpoint the bundle carries; the JSON
+   *  maps each anchor to its HTML (null when it failed to resolve), or carries `error`. */
+  private renderBlocksJson(idsJson: string): string {
+    const bridge = this.exports.DocxSessionBridge;
+    if (typeof bridge.RenderEditorBlocksHtml === "function") {
+      return bridge.RenderEditorBlocksHtml(this.handle, idsJson, this.editorRenderProfile());
+    }
+    if (typeof bridge.RenderBlocksHtmlForReview === "function") {
+      return bridge.RenderBlocksHtmlForReview(
+        this.handle, idsJson, this.options.cssPrefix, this.options.fabricateClasses,
+        this.renderTrackedChanges,
+      );
+    }
+    return bridge.RenderBlocksHtml!(
+      this.handle, idsJson, this.options.cssPrefix, this.options.fabricateClasses,
+    );
+  }
+
   /** Render two blocks in ONE batched bridge call when the bundle carries RenderBlocksHtml —
    *  the per-render shell/converter setup is paid once instead of twice, which matters on the
    *  Enter path (split renders both halves synchronously under the keystroke). Falls back to
@@ -2512,17 +2764,7 @@ export class DocxEditor {
     if (typeof bridge.RenderBlocksHtml === "function") {
       try {
         const idsJson = JSON.stringify([a, b]);
-        const json = typeof bridge.RenderBlocksHtmlForReview === "function"
-          ? bridge.RenderBlocksHtmlForReview(
-              this.handle, idsJson, this.options.cssPrefix, this.options.fabricateClasses,
-              this.renderTrackedChanges,
-            )
-          : bridge.RenderBlocksHtml(
-            this.handle,
-            idsJson,
-            this.options.cssPrefix,
-            this.options.fabricateClasses,
-          );
+        const json = this.renderBlocksJson(idsJson);
         const map = JSON.parse(json) as Record<string, string | null> & { error?: string };
         if (!map.error) {
           const parse = (h: string | null | undefined): HTMLElement | null =>
@@ -2553,7 +2795,10 @@ export class DocxEditor {
   private parseEdit(json: string): EditResultLite {
     try {
       const result = JSON.parse(json) as EditResultLite;
-      if (result.success) this.invalidateBlockMoveTargets();
+      if (result.success) {
+        this.invalidateBlockMoveTargets();
+        this.gutter?.schedule();
+      }
       return result;
     } catch {
       return { success: false };
@@ -3140,24 +3385,134 @@ export class DocxEditor {
    * annotation type legal review runs on, finally authorable from the shipped surface
    * (issue #580).
    */
-  addComment(markdown = "New comment.", author = "Reviewer"): void {
-    const block = this.activeBlock;
-    if (this.closed || !block) return;
+  addComment(
+    markdown = "New comment.",
+    author = this.options.commentAuthor,
+    target?: CommentTarget,
+  ): CommentListEntry | null {
+    let block = target?.block.isConnected ? target.block : this.activeBlock;
+    let span = target ? target.span : null;
+    if (target && !target.block.isConnected) {
+      // The draft's block was swapped since it was captured — the click that posts a draft
+      // blurs and commits the paragraph. Find the same paragraph by anchor rather than taking
+      // whatever block is active now, and keep the span only while the text it was measured
+      // on is unchanged; otherwise comment the whole paragraph rather than the wrong characters.
+      const live = target.anchor === undefined ? null : this.blockByAnchor(target.anchor);
+      if (live) block = live;
+      if (!live || target.text === undefined || blockContentText(live) !== target.text) span = null;
+    }
+    if (this.closed || !block) return null;
     const bridge = this.exports.DocxSessionBridge;
-    if (!bridge.AddComment) return; // bridge predates comment authoring
+    if (!bridge.AddComment) return null; // bridge predates comment authoring
     let fullId = this.anchorIdOf(block);
-    if (!fullId) return;
+    if (!fullId) return null;
     const idx = this.blockIndex(block);
-    // Span first: syncBlock re-renders the block and would drop the live selection.
-    const span = selectionSpanIn(block);
+    // Span first: syncBlock re-renders the block and would drop the live selection. A target
+    // captured earlier (the gutter's draft bubble) wins over whatever the selection is now.
+    if (!target) span = selectionSpanIn(block);
     fullId = this.syncBlock(block, fullId);
     const res = this.parseEdit(
       bridge.AddComment(
         this.handle, fullId, span ? JSON.stringify(span) : "", author, "", "", markdown,
       ),
     );
-    if (!res.success) return;
-    this.reconcile(idx, false);
+    if (!res.success) return null;
+    const created = res.created?.find((a) => a.kind === "cmt")?.id ?? null;
+    // Comment markup lands inside the host paragraph, so it re-renders like any text edit; the
+    // gutter then picks the new highlight up on its next layout.
+    if (this.isBandBlock(block)) this.refreshAfter(block, idx, false);
+    else this.reconcile(idx, false);
+    const entry = created ? this.listComments().find((c) => c.anchorId === created) ?? null : null;
+    return entry;
+  }
+
+  /** Reply to a thread root (or any comment) as a native Word reply (`commentsExtended`). */
+  addCommentReply(parentAnchorId: string, markdown: string, author = this.options.commentAuthor): boolean {
+    if (this.closed) return false;
+    const bridge = this.exports.DocxSessionBridge;
+    if (!bridge.AddCommentReply) return false;
+    const res = this.parseEdit(
+      bridge.AddCommentReply(this.handle, parentAnchorId, author, "", "", markdown),
+    );
+    if (!res.success) return false;
+    // A reply adds a reference run beside the parent's, so the host paragraph re-renders.
+    this.reconcile();
+    return true;
+  }
+
+  /** Replace a comment's body text; author/date are preserved. */
+  updateComment(commentAnchorId: string, markdown: string): boolean {
+    if (this.closed) return false;
+    const bridge = this.exports.DocxSessionBridge;
+    if (!bridge.UpdateComment) return false;
+    return this.parseEdit(bridge.UpdateComment(this.handle, commentAnchorId, markdown)).success;
+  }
+
+  /** Delete a comment: the definition and its range markers everywhere. */
+  removeComment(commentAnchorId: string): boolean {
+    if (this.closed) return false;
+    const bridge = this.exports.DocxSessionBridge;
+    if (!bridge.RemoveComment) return false;
+    const res = this.parseEdit(bridge.RemoveComment(this.handle, commentAnchorId));
+    if (!res.success) return false;
+    this.reconcile();
+    return true;
+  }
+
+  /** What "New comment" would comment on right now: the active block and the selection in it. */
+  commentTarget(): CommentTarget | null {
+    const block = this.activeBlock;
+    if (this.closed || !block || !block.isConnected) return null;
+    let span = selectionSpanIn(block);
+    const unid = block.getAttribute("data-anchor");
+    if (!span && this.lastSelection && this.lastSelection.unid === unid) span = this.lastSelection.span;
+    return { block, span, anchor: this.anchorIdOf(block), text: blockContentText(block) };
+  }
+
+  /** The live block for a full anchor id, or null when no mounted block resolves to it. */
+  private blockByAnchor(anchor: string): HTMLElement | null {
+    for (const el of Array.from(this.container.querySelectorAll<HTMLElement>("[data-anchor]"))) {
+      if (this.anchorIdOf(el) === anchor) return el;
+    }
+    return null;
+  }
+
+  /** Open a draft comment bubble beside the selection (Word's "New Comment"). */
+  beginComment(): boolean {
+    return this.gutter?.beginDraft() ?? false;
+  }
+
+  cancelComment(): void {
+    this.gutter?.cancelDraft();
+  }
+
+  /** Activate a thread by `cmt` anchor id or numeric comment id (null clears). */
+  activateComment(id: string | null): void {
+    this.gutter?.setActive(id, { scrollBubble: true, scrollAnchor: true });
+  }
+
+  /** Step to the next (+1) / previous (−1) thread in document order. */
+  stepComment(direction: 1 | -1): CommentListEntry | null {
+    return this.gutter?.step(direction) ?? null;
+  }
+
+  /** The active thread root's anchor id, or null. */
+  get activeComment(): string | null {
+    return this.gutter?.active ?? null;
+  }
+
+  /** Show or hide the comment gutter (the markup stays in the document). */
+  showComments(visible: boolean): void {
+    this.gutter?.setVisible(visible);
+  }
+
+  get commentsVisible(): boolean {
+    return this.gutter?.isVisible ?? false;
+  }
+
+  /** Force the gutter to lay out now (tests). */
+  layoutComments(): void {
+    this.gutter?.layout();
   }
 
   /** The document's native comment threads (session truth), for review UIs — flat entries
@@ -3176,16 +3531,22 @@ export class DocxEditor {
   /** Resolve or reopen a comment thread by its `cmt` anchor id (from {@link listComments}).
    *  Resolution is thread metadata (`commentsExtended`), not body markup, so no re-render is
    *  needed — a review UI re-reads {@link listComments} for the new state. */
-  setCommentResolved(commentAnchorId: string, resolved: boolean): void {
-    if (this.closed) return;
+  setCommentResolved(commentAnchorId: string, resolved: boolean): boolean {
+    if (this.closed) return false;
     const bridge = this.exports.DocxSessionBridge;
-    if (!bridge.SetCommentResolved) return;
-    this.parseEdit(bridge.SetCommentResolved(this.handle, commentAnchorId, resolved));
+    if (!bridge.SetCommentResolved) return false;
+    return this.parseEdit(bridge.SetCommentResolved(this.handle, commentAnchorId, resolved)).success;
   }
 
   private applyParagraphFormat(op: {
     alignment?: EditorAlignment;
     indentDelta?: number;
+    firstLineIndent?: number;
+    hangingIndent?: number;
+    spacingBefore?: number;
+    spacingAfter?: number;
+    lineSpacing?: number;
+    lineSpacingRule?: "auto" | "exact" | "atLeast";
     pageBreakBefore?: boolean;
     clearBorders?: boolean;
   }): void {
@@ -3281,14 +3642,17 @@ export class DocxEditor {
    * Append a page-number field to the focused header/footer story paragraph (falling back to the
    * band's last paragraph — Word's convention). No-op outside a band.
    */
-  insertPageNumber(field: "currentPage" | "totalPages" = "currentPage"): void {
+  insertPageNumber(field: "currentPage" | "totalPages" | "pageOfTotal" = "currentPage"): void {
     this.assertOpen();
     if (!this.region) return;
     const block = this.activeBlock;
     const band = block ? this.region.bandOf(block) : null;
     const anchorId = block?.getAttribute("data-hf-anchor");
-    if (band && anchorId) {
-      this.region.insertPageNumber(this.region.whichOf(band), anchorId, field);
+    if (block && band && anchorId) {
+      // Flush uncommitted typing first: the field appends to the SESSION paragraph, and the
+      // story repaint that follows would otherwise blur-commit stale DOM text over it.
+      const synced = this.syncBlock(block, anchorId);
+      this.region.insertPageNumber(this.region.whichOf(band), synced, field);
       return;
     }
     // No band block focused — target the footer, where page numbers overwhelmingly live.
@@ -3321,6 +3685,644 @@ export class DocxEditor {
    *  sets neither (it continues the previous section in the default format). */
   pageNumbering(): { start?: number; format?: NumberFormat } {
     return this.region?.pageNumbering() ?? {};
+  }
+
+  // ─── Font group ──────────────────────────────────────────────────────
+
+  /**
+   * Apply one inline `FormatOp` to the selection: a sub-range of the active block, the whole
+   * block when the caret is collapsed, or every block of a multi-block selection. The last real
+   * selection is used when a focus-stealing control (a colour picker) collapsed the live one.
+   */
+  private applyInlineFormat(op: Record<string, unknown>): void {
+    const block = this.activeBlock;
+    if (this.closed || !block) return;
+    const blocks = this.selectedBlocks();
+    if (blocks.length > 1 && this.applyInlineOpAcrossBlocks(blocks, op)) return;
+    const unid = block.getAttribute("data-anchor");
+    if (!unid) return;
+    let fullId = this.anchorIdOf(block);
+    if (!fullId) return;
+    let span = selectionSpanIn(block);
+    if (!span && this.lastSelection && this.lastSelection.unid === unid) span = this.lastSelection.span;
+    fullId = this.syncBlock(block, fullId);
+    const res = this.parseEdit(
+      this.exports.DocxSessionBridge.ApplyFormat(
+        this.handle, fullId, span ? JSON.stringify(span) : "", JSON.stringify(op),
+      ),
+    );
+    if (!res.success) return;
+    if (this.affectsList(res)) { this.refreshAfter(block, this.blockIndex(block), false); return; }
+    const fresh = this.swapBlock(block, unid, res.modified?.[0]);
+    if (fresh && span) selectRange(fresh, span.start, span.length);
+    else fresh?.focus();
+  }
+
+  /** Font colour as a hex triplet (with or without '#'); `""` clears the explicit colour. */
+  setFontColor(hex: string): void {
+    this.applyInlineFormat({ color: hex.replace(/^#/, "").toUpperCase() });
+  }
+
+  /** Word highlight colour name (`"yellow"`, `"green"`, …); `""` removes the highlight. */
+  setHighlight(name: string): void {
+    this.applyInlineFormat({ highlight: name });
+  }
+
+  setAllCaps(on: boolean): void {
+    this.applyInlineFormat({ caps: on });
+  }
+
+  setSmallCaps(on: boolean): void {
+    this.applyInlineFormat({ smallCaps: on });
+  }
+
+  /** Word's "Clear All Formatting": drop every direct run property on the selection. */
+  clearFormatting(): void {
+    this.applyInlineFormat({
+      bold: false, italic: false, underline: false, strike: false, code: false, color: "",
+      highlight: "", vertAlign: "", fontSizePts: 0, fontFamily: "", runStyle: "",
+      caps: false, smallCaps: false,
+    });
+  }
+
+  /** The caret's rendered font size in points (from computed style), or null. */
+  fontSizeAtCaret(): number | null {
+    const sel = typeof window !== "undefined" ? window.getSelection() : null;
+    let el: HTMLElement | null = this.activeBlock;
+    if (sel && sel.rangeCount > 0) {
+      const n = sel.getRangeAt(0).startContainer;
+      const candidate = n.nodeType === 3 ? n.parentElement : (n as HTMLElement);
+      if (candidate && this.container.contains(candidate)) el = candidate;
+    }
+    if (!el || typeof getComputedStyle !== "function") return null;
+    const px = parseFloat(getComputedStyle(el).fontSize);
+    return px > 0 ? Math.round(px * 0.75 * 2) / 2 : null;
+  }
+
+  /** Grow (+) or shrink (−) the selection's font size by `delta` points (Word's A↑ / A↓). */
+  adjustFontSize(delta: number): void {
+    const size = this.fontSizeAtCaret();
+    if (size == null) return;
+    this.setFontSize(Math.max(1, Math.round((size + delta) * 2) / 2));
+  }
+
+  // ─── Paragraph group ─────────────────────────────────────────────────
+
+  /** Line spacing as a multiple of single (1, 1.15, 1.5, 2 …) — `w:spacing/@w:line` under `auto`. */
+  setLineSpacing(multiple: number): void {
+    this.applyParagraphFormat({ lineSpacing: Math.round(multiple * 240), lineSpacingRule: "auto" });
+  }
+
+  /** Space before/after the paragraph, in POINTS (Word's Paragraph dialog units). */
+  setParagraphSpacing(op: { beforePt?: number; afterPt?: number }): void {
+    const payload: { spacingBefore?: number; spacingAfter?: number } = {};
+    if (op.beforePt != null) payload.spacingBefore = Math.max(0, Math.round(op.beforePt * 20));
+    if (op.afterPt != null) payload.spacingAfter = Math.max(0, Math.round(op.afterPt * 20));
+    if (Object.keys(payload).length === 0) return;
+    this.applyParagraphFormat(payload);
+  }
+
+  /** First-line indent in twips (0 = none); removes any hanging indent. */
+  setFirstLineIndent(twips: number): void {
+    this.applyParagraphFormat({ firstLineIndent: Math.max(0, twips) });
+  }
+
+  /** Hanging indent in twips (0 = none); removes any first-line indent. */
+  setHangingIndent(twips: number): void {
+    this.applyParagraphFormat({ hangingIndent: Math.max(0, twips) });
+  }
+
+  /**
+   * Make the active block (or every selected block) a list item of `kind` — the full Word
+   * numbering gallery, not just bullets/decimal — or a plain paragraph with `"none"`.
+   */
+  setListFormat(kind: ListFormat): void {
+    const block = this.activeBlock;
+    if (this.closed || !block) return;
+    const blocks = this.selectedBlocks();
+    if (
+      blocks.length > 1 &&
+      this.applyParagraphOpAcrossBlocks(
+        blocks,
+        (id) => this.exports.DocxSessionBridge.ApplyListFormat(this.handle, id, kind),
+        true,
+      )
+    )
+      return;
+    const unid = block.getAttribute("data-anchor");
+    if (!unid) return;
+    let fullId = this.anchorIdOf(block);
+    if (!fullId) return;
+    const idx = this.blockIndex(block);
+    fullId = this.syncBlock(block, fullId);
+    const res = this.parseEdit(this.exports.DocxSessionBridge.ApplyListFormat(this.handle, fullId, kind));
+    if (!res.success) return;
+    this.refreshAfter(block, idx, false, /* forceRemount */ true);
+  }
+
+  /** The active block's list format (`"bullet"`, `"decimal"`, …), or null when it is not a list item. */
+  listFormatAtCaret(): string | null {
+    const block = this.activeBlock;
+    if (this.closed || !block || !isListBlock(block)) return null;
+    const fullId = this.anchorIdOf(block);
+    if (!fullId) return null;
+    try {
+      const membership = JSON.parse(this.exports.DocxSessionBridge.GetListMembership(this.handle, fullId)) as { format?: string } | null;
+      return membership?.format ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Paragraph formatting (direct + effective) of the active block, for ribbon state. */
+  paragraphFormatting(): FormattingInspection | null {
+    const block = this.activeBlock;
+    const bridge = this.exports.DocxSessionBridge;
+    if (this.closed || !block || typeof bridge.GetFormatting !== "function") return null;
+    const fullId = this.anchorIdOf(block);
+    if (!fullId) return null;
+    try {
+      const parsed = JSON.parse(bridge.GetFormatting(this.handle, fullId)) as FormattingInspection | null;
+      return parsed && typeof parsed === "object" && "effectiveParagraph" in parsed ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // ─── Links, images, references ───────────────────────────────────────
+
+  /** Wrap the selection in a hyperlink (external URL, or an internal bookmark name). */
+  insertHyperlink(target: string, kind: "external" | "internal" = "external"): boolean {
+    const block = this.activeBlock;
+    const bridge = this.exports.DocxSessionBridge;
+    if (this.closed || !block || typeof bridge.AddHyperlink !== "function") return false;
+    const unid = block.getAttribute("data-anchor");
+    if (!unid) return false;
+    let fullId = this.anchorIdOf(block);
+    if (!fullId) return false;
+    let span = selectionSpanIn(block);
+    if (!span && this.lastSelection && this.lastSelection.unid === unid) span = this.lastSelection.span;
+    if (!span) return false; // Word needs a range to link
+    fullId = this.syncBlock(block, fullId);
+    const res = this.parseEdit(
+      bridge.AddHyperlink(this.handle, fullId, span.start, span.length, kind, target),
+    );
+    if (!res.success) return false;
+    const fresh = this.swapBlock(block, unid, res.modified?.[0]);
+    if (fresh) selectRange(fresh, span.start, span.length);
+    return true;
+  }
+
+  /** The hyperlink the caret (or selection start) sits in, or null. */
+  hyperlinkAtCaret(): HyperlinkInfo | null {
+    const block = this.activeBlock;
+    const bridge = this.exports.DocxSessionBridge;
+    if (this.closed || !block || typeof bridge.ListHyperlinks !== "function") return null;
+    const fullId = this.anchorIdOf(block);
+    if (!fullId) return null;
+    const sel = typeof window !== "undefined" ? window.getSelection() : null;
+    let offset = 0;
+    if (sel && sel.rangeCount > 0 && block.contains(sel.getRangeAt(0).startContainer)) {
+      const r = sel.getRangeAt(0);
+      offset = contentOffsetOf(block, r.startContainer, r.startOffset);
+    }
+    try {
+      const links = JSON.parse(bridge.ListHyperlinks(this.handle, 63)) as HyperlinkInfo[];
+      return (
+        links.find(
+          (l) => l.anchorId === fullId && offset >= l.span.start && offset <= l.span.start + l.span.length,
+        ) ?? null
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  /** Remove the hyperlink at the caret, keeping its text. */
+  removeHyperlink(): boolean {
+    const link = this.hyperlinkAtCaret();
+    const bridge = this.exports.DocxSessionBridge;
+    const block = this.activeBlock;
+    if (!link || !block || typeof bridge.RemoveHyperlink !== "function") return false;
+    const unid = block.getAttribute("data-anchor");
+    const res = this.parseEdit(bridge.RemoveHyperlink(this.handle, link.id));
+    if (!res.success) return false;
+    if (unid) this.swapBlock(block, unid, res.modified?.[0]);
+    return true;
+  }
+
+  /** Insert an inline image (base64 bytes) at the caret in the active body block. */
+  insertImage(imageBase64: string, options: ImageInsertOptions = {}): boolean {
+    const block = this.activeBlock;
+    const bridge = this.exports.DocxSessionBridge;
+    if (this.closed || !block || typeof bridge.InsertImage !== "function") return false;
+    let fullId = this.anchorIdOf(block);
+    if (!fullId) return false;
+    const idx = this.blockIndex(block);
+    const raw = caretOffsetIn(block);
+    fullId = this.syncBlock(block, fullId);
+    const offset = trimmedSplitOffset(block, raw ?? (block.textContent ?? "").length);
+    const res = this.parseEdit(
+      bridge.InsertImage(this.handle, fullId, offset, imageBase64, JSON.stringify(options)),
+    );
+    if (!res.success) return false;
+    // Image parts are not in the block-render shell, so a single-block swap would drop the
+    // picture; the full render is the only path that shows it.
+    this.refreshAfter(block, idx, true, /* forceRemount */ true);
+    return true;
+  }
+
+  /** Read a picked file and insert it as an inline image. */
+  async insertImageFile(file: Blob, options: ImageInsertOptions = {}): Promise<boolean> {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let binary = "";
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    }
+    return this.insertImage(btoa(binary), options);
+  }
+
+  /** Insert a table of contents (a real TOC field) before the active block. */
+  insertTableOfContents(options: TableOfContentsOptions = {}): boolean {
+    const block = this.activeBlock;
+    const bridge = this.exports.DocxSessionBridge;
+    if (this.closed || !block || typeof bridge.InsertTableOfContents !== "function") return false;
+    if (this.isBandBlock(block) || block.closest("table, .footnotes, .endnotes")) return false;
+    let fullId = this.anchorIdOf(block);
+    if (!fullId) return false;
+    const idx = this.blockIndex(block);
+    fullId = this.syncBlock(block, fullId);
+    const res = this.parseEdit(
+      bridge.InsertTableOfContents(this.handle, fullId, "before", JSON.stringify(options)),
+    );
+    if (!res.success) return false;
+    this.refreshAfter(block, idx, false, /* forceRemount */ true);
+    return true;
+  }
+
+  // ─── Table group (extended) ──────────────────────────────────────────
+
+  /** Merge the active cell with `rowSpan`×`colSpan` neighbours (down and right). */
+  mergeCells(rowSpan: number, colSpan: number): void {
+    const bridge = this.exports.DocxSessionBridge;
+    if (typeof bridge.MergeCells !== "function") return;
+    this.tableEdit((a) => bridge.MergeCells!(this.handle, a, rowSpan, colSpan, ""));
+  }
+
+  /** Split a merged cell back into its grid cells. */
+  unmergeCells(): void {
+    const bridge = this.exports.DocxSessionBridge;
+    if (typeof bridge.UnmergeCells !== "function") return;
+    this.tableEdit((a) => bridge.UnmergeCells!(this.handle, a));
+  }
+
+  /** Set (or with `style: "none"` remove) the borders of the active cell's table. */
+  setTableBorders(spec: TableBorderSpec): void {
+    const bridge = this.exports.DocxSessionBridge;
+    if (typeof bridge.SetTableBorders !== "function") return;
+    this.tableEdit((a) => bridge.SetTableBorders!(this.handle, a, JSON.stringify(spec)));
+  }
+
+  /** Shade the active cell (or its row/column/table) with a hex fill; `""` clears. */
+  setCellShading(fill: string, scope: "cell" | "row" | "column" | "table" = "cell"): void {
+    const bridge = this.exports.DocxSessionBridge;
+    if (typeof bridge.SetCellShading !== "function") return;
+    this.tableEdit((a) => bridge.SetCellShading!(this.handle, a, fill.replace(/^#/, ""), scope));
+  }
+
+  /** Repeat the active cell's row at the top of every page the table spans. */
+  setRepeatHeaderRow(repeat: boolean): void {
+    const bridge = this.exports.DocxSessionBridge;
+    if (typeof bridge.SetRepeatHeaderRow !== "function") return;
+    this.tableEdit((a) => bridge.SetRepeatHeaderRow!(this.handle, a, repeat));
+  }
+
+  /** Delete the whole table the caret is in. */
+  deleteTable(): void {
+    const block = this.activeBlock;
+    const table = block?.closest<HTMLElement>("table");
+    if (this.closed || !block || !table) return;
+    const tableId = this.anchorIdOf(table);
+    if (!tableId) return;
+    const idx = this.blockIndex(block);
+    const res = this.parseEdit(this.exports.DocxSessionBridge.DeleteBlock(this.handle, tableId));
+    if (!res.success) return;
+    this.refreshAfter(block, Math.max(0, idx - 1), true);
+  }
+
+  // ─── Review group ────────────────────────────────────────────────────
+
+  /** How edits are being recorded right now. */
+  get trackedChanges(): TrackedChangeMode {
+    return this.options.trackedChanges;
+  }
+
+  /**
+   * Switch tracked-changes mode mid-session (Word's "Track Changes" toggle). Undo history and
+   * edits survive; the document re-renders so revisions show (or stop showing) inline.
+   */
+  setTrackedChanges(mode: TrackedChangeMode): void {
+    this.assertOpen();
+    if (this.options.trackedChanges === mode) return;
+    const bridge = this.exports.DocxSessionBridge;
+    if (typeof bridge.SetTrackedChanges !== "function") return;
+    bridge.SetTrackedChanges(this.handle, mode);
+    this.options.trackedChanges = mode;
+    this.remount();
+  }
+
+  setRevisionAuthor(author: string): void {
+    this.assertOpen();
+    this.options.revisionAuthor = author;
+    this.exports.DocxSessionBridge.SetRevisionAuthor?.(this.handle, author);
+  }
+
+  /** Every tracked revision in the document, from the session's registry. */
+  listRevisions(): RevisionListEntry[] {
+    const bridge = this.exports.DocxSessionBridge;
+    if (this.closed || typeof bridge.ListRevisions !== "function") return [];
+    try {
+      const parsed = JSON.parse(bridge.ListRevisions(this.handle)) as RevisionListEntry[] | { error?: string };
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  acceptRevision(revisionId: string): boolean {
+    return this.resolveRevision("AcceptRevision", revisionId);
+  }
+
+  rejectRevision(revisionId: string): boolean {
+    return this.resolveRevision("RejectRevision", revisionId);
+  }
+
+  acceptAllRevisions(): boolean {
+    return this.resolveRevision("AcceptAllRevisions");
+  }
+
+  rejectAllRevisions(): boolean {
+    return this.resolveRevision("RejectAllRevisions");
+  }
+
+  private resolveRevision(
+    op: "AcceptRevision" | "RejectRevision" | "AcceptAllRevisions" | "RejectAllRevisions",
+    revisionId?: string,
+  ): boolean {
+    const bridge = this.exports.DocxSessionBridge;
+    if (this.closed) return false;
+    const idx = this.activeBlock ? this.blockIndex(this.activeBlock) : -1;
+    let json: string;
+    if (op === "AcceptRevision" || op === "RejectRevision") {
+      const fn = bridge[op];
+      if (typeof fn !== "function" || !revisionId) return false;
+      json = fn(this.handle, revisionId);
+    } else {
+      const fn = bridge[op];
+      if (typeof fn !== "function") return false;
+      json = fn(this.handle);
+    }
+    const res = this.parseEdit(json);
+    if (!res.success) return false;
+    // Resolution rewrites markup across the document; the reconciler proves what it can.
+    this.reconcile(idx, false);
+    return true;
+  }
+
+  /** Rendered revision marks in document order — what Previous/Next step through. */
+  revisionElements(): HTMLElement[] {
+    return Array.from(
+      this.container.querySelectorAll<HTMLElement>(
+        'ins[class*="-ins"], del[class*="-del"], ins[class*="move-to"], del[class*="move-from"], ' +
+          'tr[class*="row-ins"], tr[class*="row-del"]',
+      ),
+    ).filter((el) => !el.closest("#pagination-staging, .docx-comment-gutter"));
+  }
+
+  /** The registry entry a rendered revision mark belongs to (matched by block, then by text). */
+  revisionAt(el: HTMLElement): RevisionListEntry | null {
+    const block = el.closest<HTMLElement>("[data-anchor]");
+    const unid = block?.getAttribute("data-anchor");
+    const candidates = this.listRevisions().filter((r) => r.resolutionStatus === "supported");
+    if (!unid) return candidates[0] ?? null;
+    const inBlock = candidates.filter(
+      (r) => r.anchorId?.endsWith(unid) || r.affectedAnchors?.some((a) => a.unid === unid),
+    );
+    if (inBlock.length === 0) return null;
+    const text = (el.textContent ?? "").trim();
+    return inBlock.find((r) => text && r.text.trim() === text) ?? inBlock[0];
+  }
+
+  // ─── Find & replace ──────────────────────────────────────────────────
+
+  /** Every occurrence of `query` in the editable blocks, in document order. */
+  find(query: string, options: { matchCase?: boolean } = {}): EditorMatch[] {
+    if (!query) return [];
+    const needle = options.matchCase ? query : query.toLowerCase();
+    const blocks = this.editableList().concat(
+      Array.from(this.container.querySelectorAll<HTMLElement>('[data-hf-band] [data-anchor][contenteditable="true"]')),
+    );
+    const out: EditorMatch[] = [];
+    for (const block of blocks) {
+      const text = blockContentText(block);
+      const hay = options.matchCase ? text : text.toLowerCase();
+      let from = 0;
+      for (;;) {
+        const at = hay.indexOf(needle, from);
+        if (at < 0) break;
+        out.push({ block, start: at, length: query.length });
+        from = at + Math.max(1, query.length);
+      }
+    }
+    return out;
+  }
+
+  /** Select a match and scroll it into view. */
+  selectMatch(match: EditorMatch): void {
+    if (!match.block.isConnected) return;
+    this.activeBlock = match.block;
+    selectRange(match.block, match.start, match.length);
+    match.block.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  /** Replace one match's text (formatting of the surrounding run is inherited). */
+  replaceMatch(match: EditorMatch, replacement: string): boolean {
+    const block = match.block;
+    if (this.closed || !block.isConnected) return false;
+    const unid = block.getAttribute("data-anchor");
+    if (!unid) return false;
+    let fullId = this.anchorIdOf(block);
+    if (!fullId) return false;
+    fullId = this.syncBlock(block, fullId);
+    const span = trimmedSpan(block, { start: match.start, length: match.length });
+    if (span.length === 0) return false;
+    const res = this.parseEdit(
+      this.exports.DocxSessionBridge.ReplaceTextAtSpan(
+        this.handle, fullId, span.start, span.length, replacement,
+      ),
+    );
+    if (!res.success) return false;
+    const fresh = this.swapBlock(block, unid, res.modified?.[0]);
+    if (fresh) selectRange(fresh, span.start, replacement.length);
+    return true;
+  }
+
+  /** Replace every occurrence; returns how many were replaced. */
+  replaceAll(query: string, replacement: string, options: { matchCase?: boolean } = {}): number {
+    if (this.closed || !query) return 0;
+    const matches = this.find(query, options);
+    let count = 0;
+    // Group by block and replace from the END so earlier offsets stay valid.
+    const byBlock = new Map<HTMLElement, EditorMatch[]>();
+    for (const m of matches) {
+      const list = byBlock.get(m.block) ?? [];
+      list.push(m);
+      byBlock.set(m.block, list);
+    }
+    for (const [block, list] of byBlock) {
+      let current: HTMLElement = block;
+      for (const m of list.slice().sort((a, b) => b.start - a.start)) {
+        if (!current.isConnected) break;
+        const before = current;
+        if (this.replaceMatch({ block: current, start: m.start, length: m.length }, replacement)) {
+          count++;
+          // swapBlock replaced the node; keep following it.
+          current = this.activeBlock && this.activeBlock !== before ? this.activeBlock : current;
+        }
+      }
+    }
+    return count;
+  }
+
+  // ─── View ────────────────────────────────────────────────────────────
+
+  /** Set the author-pinned zoom (1 = 100%). Fit-to-width still caps it on narrow hosts. */
+  setZoom(scale: number): void {
+    this.assertOpen();
+    this.viewport.setScale(scale);
+    this.gutter?.schedule();
+  }
+
+  /** The zoom the user asked for (what a zoom control shows), before fit-to-width caps it. */
+  get requestedZoom(): number {
+    return this.viewport.requestedScale;
+  }
+
+  /** Word count over the body's editable text. */
+  wordCount(): number {
+    let count = 0;
+    for (const block of this.editableList()) {
+      // Notes are not body words in either view (the paginator's per-page note block carries
+      // the "page-footnotes" class; the continuous view's sections are ".footnotes"/".endnotes").
+      if (block.closest('.footnotes, .endnotes, [class$="-footnotes"], [class$="-endnotes"]')) continue;
+      const text = blockContentText(block);
+      const words = text.match(/[\p{L}\p{N}][\p{L}\p{N}'’.-]*/gu);
+      count += words ? words.length : 0;
+    }
+    return count;
+  }
+
+  /** In page view, the active block's page and the page total; null in continuous view. */
+  pageInfo(): { page: number; total: number } | null {
+    if (!this.options.paginated) return null;
+    const boxes = this.editRoot.querySelectorAll<HTMLElement>(".page-box:not([data-section-filler])");
+    const total = boxes.length;
+    const box = this.activeBlock?.closest<HTMLElement>(".page-box");
+    const page = box ? parseInt(box.dataset.pageNumber || "1", 10) : 1;
+    return { page, total };
+  }
+
+  // ─── Layout: section page setup ──────────────────────────────────────
+
+  /** The section governing the active block (or the first body block). */
+  sectionInfo(): SectionInfo | null {
+    if (this.closed) return null;
+    const block =
+      this.activeBlock && !this.isBandBlock(this.activeBlock) ? this.activeBlock : this.editableList()[0];
+    const unid = block?.getAttribute("data-anchor");
+    const fullId = unid ? this.unidToFullId.get(unid) : undefined;
+    if (!fullId) return null;
+    try {
+      const parsed = JSON.parse(this.exports.DocxSessionBridge.GetSectionInfo(this.handle, fullId)) as SectionInfo | null;
+      return parsed && typeof parsed.sectionUnid === "string" ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Word's Page Setup on the section holding the caret: size, orientation, margins. */
+  setPageSetup(op: EditorPageSetup): boolean {
+    this.assertOpen();
+    const bridge = this.exports.DocxSessionBridge;
+    if (typeof bridge.SetPageSetup !== "function") return false;
+    const info = this.sectionInfo();
+    if (!info) return false;
+    const res = this.parseEdit(bridge.SetPageSetup(this.handle, info.anchorId, JSON.stringify(op)));
+    if (!res.success) return false;
+    // Geometry is whole-document context (sheet width, page boxes).
+    this.remount(this.activeBlock ? this.blockIndex(this.activeBlock) : -1, false);
+    return true;
+  }
+
+  // ─── Header & footer (extended) ──────────────────────────────────────
+
+  /** Word's "Different first page" (`first`) / "Different odd & even pages" (`even`). */
+  setHeaderFooterKindEnabled(kind: "first" | "even", enabled: boolean): boolean {
+    this.assertOpen();
+    return this.region?.setKindEnabled(kind, enabled) ?? false;
+  }
+
+  headerFooterKindEnabled(kind: "first" | "even"): boolean {
+    return this.region?.kindEnabled(kind) ?? false;
+  }
+
+  /** "First Page Header", "Footer", … for the story a band (or the active page area) shows. */
+  headerFooterStoryLabel(which: BandWhich): string {
+    return this.region?.storyLabel(which) ?? (which === "header" ? "Header" : "Footer");
+  }
+
+  /** Put the caret in the header or footer (Word's "Go to Header / Go to Footer"). */
+  goToHeaderFooter(which: BandWhich): boolean {
+    this.assertOpen();
+    return this.region?.focusStory(which, this.activeBlock) ?? false;
+  }
+
+  /** Leave the header/footer and put the caret back in the body. */
+  closeHeaderFooter(): void {
+    this.assertOpen();
+    this.region?.close();
+    const body = this.editableList();
+    const target =
+      this.activeBlock && !this.isBandBlock(this.activeBlock) && this.activeBlock.isConnected
+        ? this.activeBlock
+        : body[0];
+    if (target) placeCaretAtOffset(target, 0);
+  }
+
+  /** Which story the caret is in, or null in the body. */
+  get activeStoryKind(): BandWhich | null {
+    return this.activeStory;
+  }
+
+  // ─── Introspection for chrome ────────────────────────────────────────
+
+  /** The document's style definitions (for a styles gallery); empty on older bundles. */
+  styles(): StyleInfo[] {
+    const bridge = this.exports.DocxSessionBridge;
+    if (this.closed || typeof bridge.ListStyles !== "function") return [];
+    try {
+      const parsed = JSON.parse(bridge.ListStyles(this.handle)) as StyleInfo[] | { error?: string };
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** The active block's paragraph style id (from the render), or null. */
+  styleAtCaret(): string | null {
+    const info = this.paragraphFormatting();
+    return info?.effectiveParagraph.styleId ?? info?.directParagraph.styleId ?? null;
   }
 
   /** Which inline formats the current selection carries — for ribbon button highlighting. */
@@ -3357,6 +4359,7 @@ export class DocxEditor {
     this.activeBlock = fresh;
     // The throwaway render numbers citation markers from 1 — repair in place.
     this.maybeRenumberNotes(fresh);
+    if (inBand) this.region!.afterStoryEdit(fresh);
     this.options.onEdit?.({ anchorId, unid: newUnid });
     return fresh;
   }
@@ -3368,8 +4371,45 @@ export class DocxEditor {
    * Save + ConvertDocxToHtmlComplete for older WASM bundles. Both paths use
    * the same option profile, so the rendered HTML is identical.
    */
-  private renderFullHtml(): string {
+  /** The editor's render profile, as the comment-aware bridge endpoints take it. */
+  private editorRenderProfile(): string {
+    return JSON.stringify({
+      cssPrefix: this.options.cssPrefix,
+      fabricateClasses: this.options.fabricateClasses,
+      paginated: this.options.paginated,
+      scale: this.options.scale,
+      renderTrackedChanges: this.renderTrackedChanges,
+      comments: this.options.comments,
+    });
+  }
+
+  /**
+   * Full-document HTML from the live session. Prefers the session-attached
+   * `RenderEditorHtml` (comment-aware) or `RenderHtml` bridge — the saved bytes never cross the
+   * JS/WASM boundary — and falls back to `ConvertDocxToHtmlComplete` over `bytes` (the opened
+   * document on first paint, else a fresh save) for older WASM bundles. Every path uses the
+   * same option profile, so the rendered HTML is identical.
+   */
+  private renderFullHtml(bytes?: Uint8Array): string {
     const bridge = this.exports.DocxSessionBridge;
+    if (typeof bridge.RenderEditorHtml === "function") {
+      const html = bridge.RenderEditorHtml(this.handle, this.editorRenderProfile());
+      if (html.charCodeAt(0) !== 0x7b) return html;
+    }
+    if (this.options.comments) {
+      // Only the bytes path can render comment markup on a bundle without RenderEditorHtml.
+      const source =
+        bytes ??
+        (typeof bridge.SaveWithAnchorIds === "function"
+          ? bridge.SaveWithAnchorIds(this.handle)
+          : bridge.Save(this.handle));
+      return this.exports.DocumentConverter.ConvertDocxToHtmlComplete(
+        ...completeArgs(
+          source, this.options.cssPrefix, this.options.fabricateClasses,
+          this.options.paginated, this.options.scale, this.renderTrackedChanges, true,
+        ),
+      );
+    }
     if (typeof bridge.RenderHtmlForReview === "function") {
       const html = bridge.RenderHtmlForReview(
         this.handle,
@@ -3395,21 +4435,26 @@ export class DocxEditor {
     // discarded, and the re-render has to resolve to the SAME anchors the live session holds — a
     // content change re-derives a block's content-hashed unid, which would leave it unwired. So ask
     // for the Unid-bearing save here, and here only; DocxEditor.save() stays clean.
-    const bytes =
-      typeof bridge.SaveWithAnchorIds === "function"
+    const source =
+      bytes ??
+      (typeof bridge.SaveWithAnchorIds === "function"
         ? bridge.SaveWithAnchorIds(this.handle)
-        : bridge.Save(this.handle);
+        : bridge.Save(this.handle));
     return this.exports.DocumentConverter.ConvertDocxToHtmlComplete(
       ...completeArgs(
-        bytes, this.options.cssPrefix, this.options.fabricateClasses,
-        this.options.paginated, this.options.scale, this.renderTrackedChanges,
+        source, this.options.cssPrefix, this.options.fabricateClasses,
+        this.options.paginated, this.options.scale, this.renderTrackedChanges, false,
       ),
     );
   }
 
-  /** Editable BODY blocks in document order (band blocks are enumerated by `ownerRoot`). */
+  /** Editable BODY blocks in document order (band blocks are enumerated by `ownerRoot`). In page
+   *  view a live story sits INSIDE a page box, so it is excluded here explicitly — a remount
+   *  rebuilds the pages without it, and a focus index that counted it would land one block off. */
   private editableList(): HTMLElement[] {
-    return Array.from(this.editRoot.querySelectorAll<HTMLElement>('[data-anchor][contenteditable="true"]'));
+    return Array.from(
+      this.editRoot.querySelectorAll<HTMLElement>('[data-anchor][contenteditable="true"]'),
+    ).filter((el) => !el.closest("[data-hf-band]"));
   }
 
   private blockIndex(el: HTMLElement): number {
@@ -3507,6 +4552,7 @@ export class DocxEditor {
       }
     }
     this.syncRegionToBody(this.activeBlock ?? undefined);
+    this.gutter?.schedule();
   }
 
   /** The patch itself. Returns false to request the remount fallback. */
@@ -3547,14 +4593,7 @@ export class DocxEditor {
     let rendered: Record<string, string | null> = {};
     if (allIds.length > 0) {
       const idsJson = JSON.stringify(allIds);
-      const renderedJson = typeof bridge.RenderBlocksHtmlForReview === "function"
-        ? bridge.RenderBlocksHtmlForReview(
-            this.handle, idsJson, this.options.cssPrefix, this.options.fabricateClasses,
-            this.renderTrackedChanges,
-          )
-        : bridge.RenderBlocksHtml!(
-            this.handle, idsJson, this.options.cssPrefix, this.options.fabricateClasses,
-          );
+      const renderedJson = this.renderBlocksJson(idsJson);
       rendered = JSON.parse(renderedJson);
       if ((rendered as { error?: string }).error) return this.bail(`render error: ${(rendered as { error?: string }).error}`);
       for (const id of allIds) if (!rendered[id]) return this.bail(`unrenderable: ${id}`);
@@ -3980,5 +5019,21 @@ export class DocxEditor {
     // section-affecting edit (or a pagination toggle) leaves the bands describing the right one.
     this.syncRegionToBody(this.activeBlock ?? undefined);
     this.setupBlockDrag();
+    this.gutter?.schedule();
   }
+
+  /** Re-append the gutter after a mount emptied the container (mounts replace `innerHTML`). */
+  private readoptGutter(): void {
+    this.gutter?.reattach();
+  }
+}
+
+const commentGutterStyledDocuments = new WeakSet<Document>();
+function ensureCommentGutterStyles(doc: Document): void {
+  if (commentGutterStyledDocuments.has(doc)) return;
+  commentGutterStyledDocuments.add(doc);
+  const style = doc.createElement("style");
+  style.dataset.docxodusCommentGutter = "true";
+  style.textContent = COMMENT_GUTTER_CSS;
+  (doc.head ?? doc.documentElement).appendChild(style);
 }

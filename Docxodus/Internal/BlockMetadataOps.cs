@@ -78,6 +78,18 @@ internal static class BlockMetadataOps
         int bottom = ParseInt((string?)pgMar?.Attribute(W.bottom)) ?? 1440;
         int left = ParseInt((string?)pgMar?.Attribute(W.left)) ?? 1440;
         int right = ParseInt((string?)pgMar?.Attribute(W.right)) ?? 1440;
+        int headerDistance = ParseInt((string?)pgMar?.Attribute(W.header))
+            ?? SectionInfo.DefaultHeaderFooterDistanceTwips;
+        int footerDistance = ParseInt((string?)pgMar?.Attribute(W.footer))
+            ?? SectionInfo.DefaultHeaderFooterDistanceTwips;
+
+        // Both flags are CT_OnOff: present-and-bare or w:val="1"/"true"/"on" means on; an explicit
+        // off value reads as off even though the element is there (Word writes w:titlePg w:val="0"
+        // when the checkbox is cleared in some builds).
+        bool titlePage = WordprocessingMLUtil.GetBoolProp(sectPr, W.titlePg);
+        var settingsRoot = doc.MainDocumentPart?.DocumentSettingsPart?.GetXDocument().Root;
+        bool evenAndOddHeaders = settingsRoot is not null
+            && WordprocessingMLUtil.GetBoolProp(settingsRoot, W.evenAndOddHeaders);
 
         int colCount = 1;
         if (cols is not null && int.TryParse((string?)cols.Attribute(W.num), out var parsedCols))
@@ -109,6 +121,10 @@ internal static class BlockMetadataOps
             MarginBottomTwips = bottom,
             MarginLeftTwips = left,
             MarginRightTwips = right,
+            HeaderDistanceTwips = headerDistance,
+            FooterDistanceTwips = footerDistance,
+            TitlePage = titlePage,
+            EvenAndOddHeaders = evenAndOddHeaders,
             Columns = colCount,
             // The URI lists keep their original meaning — this section's OWN references — so only
             // the (new) *Refs lists carry inherited stories.

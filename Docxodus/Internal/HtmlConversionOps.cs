@@ -43,6 +43,22 @@ internal sealed class HtmlConversionOptions
     /// blocks in the DOM. Anchors match the markdown projector / DocxSession.
     /// </summary>
     public bool StampAnchors { get; init; }
+
+    /// <summary>
+    /// Block renders only: wrap PAGE / NUMPAGES field results in <c>&lt;span data-field&gt;</c>
+    /// (the marker the paginated full render emits) so a client that paginates the block itself
+    /// can substitute each page's number. Off by default so the pinned block-render output is
+    /// untouched; the editor profile sets it from its <c>paginated</c> flag.
+    /// </summary>
+    public bool StampPageNumberFields { get; init; }
+
+    /// <summary>
+    /// Block renders only: also stamp the marker when the batch contains a block from a header or
+    /// footer part, whatever <see cref="StampPageNumberFields"/> says. Running stories are only
+    /// ever shown inside page boxes, where the number must be substituted per page, so a client
+    /// re-rendering one gets the marker even if its profile forgot to say it was paginated.
+    /// </summary>
+    public bool StampPageNumberFieldsInRunningStories { get; init; }
 }
 
 /// <summary>
@@ -420,7 +436,9 @@ internal static class HtmlConversionOps
     private static Dictionary<string, string?> RenderTargetsFromShell(
         DocxSession session, WordprocessingDocument liveDoc, List<XElement> targets, HtmlConversionOptions options)
     {
-        long sig = ComputeFormattingSignature(liveDoc);
+        // The shell also carries the comments family, so a comment mutation must rebuild it —
+        // the formatting parts alone cannot see one (see DocxSession.CommentsVersion).
+        long sig = unchecked(ComputeFormattingSignature(liveDoc) * 1000003 + session.CommentsVersion);
         if (session.RenderShellDoc is null || session.RenderShellSignature != sig)
         {
             session.DisposeRenderShell();
@@ -463,7 +481,7 @@ internal static class HtmlConversionOps
             : null;
 
         // Per parent: order block-level children, merge each target's ±1 window into runs.
-        var bodyContent = new List<XElement>();
+        var runs = new List<(List<XElement> Siblings, int Start, int End)>();
         foreach (var parentGroup in targets.Where(t => t.Parent is not null).GroupBy(t => t.Parent!))
         {
             var siblings = parentGroup.Key.Elements()
@@ -485,13 +503,40 @@ internal static class HtmlConversionOps
                     end = Math.Min(siblings.Count - 1, positions[idx] + 1);
                 }
                 idx++;
-                for (int i = start; i <= end; i++)
-                {
-                    var clone = CloneWithListAnnotations(siblings[i]);
-                    RetargetEmbeddedImages(liveDoc, siblings[i], clone, renderMain, copiedImages);
-                    identity?.Record(siblings[i], clone);
-                    bodyContent.Add(clone);
-                }
+                runs.Add((siblings, start, end));
+            }
+        }
+
+        // A comment range that opened in an EARLIER block than the run's first clone has no
+        // w:commentRangeStart inside the shell body, so the converter's tracker would never open
+        // it and the covered runs would render unhighlighted. Reconstruct the open set at each
+        // run's start from one ordered walk of the owning part and bracket the run with synthetic
+        // markers — a start for each range already open, an end for each still open afterwards so
+        // nothing leaks into the next run (which may belong to a different part). Paid only when
+        // comments are being rendered AND the document defines any.
+        var rangeIndex = options.CommentRenderMode >= 0 && HasCommentDefinitions(liveDoc) && runs.Count > 0
+            ? CommentRangeIndex.Build(runs.Select(r => r.Siblings[r.Start]))
+            : null;
+
+        var bodyContent = new List<XElement>();
+        foreach (var (siblings, start, end) in runs)
+        {
+            if (rangeIndex is not null)
+            {
+                foreach (var id in rangeIndex.OpenBefore(siblings[start]))
+                    bodyContent.Add(new XElement(W.commentRangeStart, new XAttribute(W.id, id)));
+            }
+            for (int i = start; i <= end; i++)
+            {
+                var clone = CloneWithListAnnotations(siblings[i]);
+                RetargetEmbeddedImages(liveDoc, siblings[i], clone, renderMain, copiedImages);
+                identity?.Record(siblings[i], clone);
+                bodyContent.Add(clone);
+            }
+            if (rangeIndex is not null)
+            {
+                foreach (var id in rangeIndex.OpenAfterRun(siblings, start, end))
+                    bodyContent.Add(new XElement(W.commentRangeEnd, new XAttribute(W.id, id)));
             }
         }
 
@@ -511,6 +556,12 @@ internal static class HtmlConversionOps
 
         var blockSettings = BuildBlockConverterSettings(options);
         if (identity is not null) blockSettings.SourceAnchorIdentityProvider = identity.Resolve;
+        else if (options.CommentRenderMode >= 0) blockSettings.SourceAnchorIdentityProvider = CommentStoryIdentity;
+        if (!blockSettings.StampPageNumberFields && options.StampPageNumberFieldsInRunningStories
+            && runs.Any(r => IsRunningStoryRoot(r.Siblings[r.Start].AncestorsAndSelf().Last())))
+        {
+            blockSettings.StampPageNumberFields = true;
+        }
 
         var htmlElement = WmlToHtmlConverter.ConvertToHtml(renderDoc, blockSettings);
         foreach (var e in htmlElement.Descendants())
@@ -535,6 +586,68 @@ internal static class HtmlConversionOps
             htmlByUnid[u] = outer.ToString(SaveOptions.DisableFormatting);
         }
         return htmlByUnid;
+    }
+
+    /// <summary>True for the root of a header or footer part (<c>w:hdr</c> / <c>w:ftr</c>).</summary>
+    private static bool IsRunningStoryRoot(XElement root) => root.Name == W.hdr || root.Name == W.ftr;
+
+    /// <summary>True when the main part has a comments part that defines at least one comment.</summary>
+    private static bool HasCommentDefinitions(WordprocessingDocument doc) =>
+        doc.MainDocumentPart?.WordprocessingCommentsPart?.GetXDocument().Root?
+            .Elements(W.comment).Any() == true;
+
+    /// <summary>
+    /// Which comment ranges are open at the start of each block a shell render begins a run
+    /// with — built by ONE pre-order walk per owning part over the live tree, so the cost is
+    /// linear in the part regardless of how many runs a batch has.
+    /// </summary>
+    private sealed class CommentRangeIndex
+    {
+        private readonly Dictionary<XElement, List<string>> _openBefore = new();
+
+        public static CommentRangeIndex Build(IEnumerable<XElement> runStarts)
+        {
+            var index = new CommentRangeIndex();
+            var wanted = new HashSet<XElement>(runStarts);
+            foreach (var root in wanted.Select(e => e.AncestorsAndSelf().Last()).Distinct())
+            {
+                // Insertion-ordered so the synthetic starts come out in document order.
+                var open = new List<string>();
+                foreach (var el in root.DescendantsAndSelf())
+                {
+                    if (wanted.Contains(el)) index._openBefore[el] = new List<string>(open);
+                    Step(el, open);
+                }
+            }
+            return index;
+        }
+
+        /// <summary>Ids of the ranges open immediately before <paramref name="block"/>.</summary>
+        public IReadOnlyList<string> OpenBefore(XElement block) =>
+            _openBefore.TryGetValue(block, out var ids) ? ids : Array.Empty<string>();
+
+        /// <summary>Ids still open after the run <c>siblings[start..end]</c> — the state before
+        /// its first block, replayed through every marker the run's blocks contain.</summary>
+        public IReadOnlyList<string> OpenAfterRun(List<XElement> siblings, int start, int end)
+        {
+            var open = new List<string>(OpenBefore(siblings[start]));
+            for (int i = start; i <= end; i++)
+                foreach (var el in siblings[i].DescendantsAndSelf())
+                    Step(el, open);
+            return open;
+        }
+
+        private static void Step(XElement el, List<string> open)
+        {
+            if (el.Name == W.commentRangeStart)
+            {
+                if ((string?)el.Attribute(W.id) is { } id && !open.Contains(id)) open.Add(id);
+            }
+            else if (el.Name == W.commentRangeEnd)
+            {
+                if ((string?)el.Attribute(W.id) is { } id) open.Remove(id);
+            }
+        }
     }
 
     /// <summary>
@@ -647,10 +760,11 @@ internal static class HtmlConversionOps
         public string? Resolve(XElement element)
         {
             if (_idByClone.TryGetValue(element, out var id)) return id;
-            return (string?)element.Attribute(PtOpenXml.Unid) is { Length: > 0 } unid
-                && _idByUnid.TryGetValue(unid, out var byUnid)
-                    ? byUnid
-                    : null;
+            if ((string?)element.Attribute(PtOpenXml.Unid) is { Length: > 0 } unid
+                && _idByUnid.TryGetValue(unid, out var byUnid))
+                return byUnid;
+            // The comments story is copied into the shell whole, never recorded clone-by-clone.
+            return CommentStoryIdentity(element);
         }
     }
 
@@ -726,8 +840,42 @@ internal static class HtmlConversionOps
         using var renderDoc = WordprocessingDocument.Open(blockStream, true);
         var blockSettings = BuildBlockConverterSettings(options);
         if (identity is not null) blockSettings.SourceAnchorIdentityProvider = identity.Resolve;
+        else if (options.CommentRenderMode >= 0) blockSettings.SourceAnchorIdentityProvider = CommentStoryIdentity;
         var htmlElement = WmlToHtmlConverter.ConvertToHtml(renderDoc, blockSettings);
         return ExtractBlockHtml(htmlElement, unid);
+    }
+
+    /// <summary>
+    /// Canonical <c>kind:cmt:unid</c> identity for an element of the comments story (a
+    /// <c>w:comment</c> definition or a block inside one), or null for anything else.
+    /// </summary>
+    /// <remarks>
+    /// Inline comment rendering stamps <c>data-source-anchor-id</c> on the highlight span (the
+    /// definition's id) and wraps the highlighted content in one span per comment paragraph (that
+    /// paragraph's id) — the identities PageMap/search use for <c>p:cmt</c>-scoped lookups. The
+    /// full render resolves them through the anchor index. A block render reads them from the
+    /// shell's CLONED comments part, which the index never saw, so this derives them the way the
+    /// index would: the projector's kind for the element and its stamped-or-derived Unid. Without
+    /// it a re-rendered commented block would drop the wrapper span and change the DOM shape the
+    /// first paint established. Used directly when the editor's incremental path renders with
+    /// comments and no index-backed identity, and as the fallback of
+    /// <see cref="BlockSourceIdentity.Resolve"/> otherwise.
+    /// </remarks>
+    private static string? CommentStoryIdentity(XElement element)
+    {
+        bool inCommentsStory = element.Name == W.comment;
+        if (!inCommentsStory)
+        {
+            foreach (var ancestor in element.Ancestors())
+            {
+                if (ancestor.Name != W.comment) continue;
+                inCommentsStory = true;
+                break;
+            }
+        }
+        if (!inCommentsStory) return null;
+        var kind = WmlToMarkdownConverter.KindFor(element);
+        return kind is null ? null : $"{kind}:cmt:{UnidHelper.ReadOrDeriveUnid(element)}";
     }
 
     /// <summary>
@@ -780,8 +928,11 @@ internal static class HtmlConversionOps
         return sig;
     }
 
-    /// <summary>Copy the formatting parts (styles/numbering/theme/font/settings) from src into the
-    /// throwaway doc. Settings may be absent; ConvertToHtml defaults tab stop to 720 twips.</summary>
+    /// <summary>Copy the formatting parts (styles/numbering/theme/font/settings) and the comments
+    /// family from src into the throwaway doc. Settings may be absent; ConvertToHtml defaults tab
+    /// stop to 720 twips. The comments parts are what a block render with comment rendering on
+    /// resolves highlight tooltips, reply parentage and resolved state against; with it off the
+    /// converter never reads them, so copying them costs the non-comment profile nothing.</summary>
     private static void AddFormattingParts(WordprocessingDocument blockDoc, WordprocessingDocument sourceDoc)
     {
         CopyPartXml(sourceDoc, blockDoc, p => p.StyleDefinitionsPart);
@@ -790,6 +941,10 @@ internal static class HtmlConversionOps
         CopyPartXml(sourceDoc, blockDoc, p => p.ThemePart);
         CopyPartXml(sourceDoc, blockDoc, p => p.FontTablePart);
         CopyPartXml(sourceDoc, blockDoc, p => p.DocumentSettingsPart);
+        CopyPartXml(sourceDoc, blockDoc, p => p.WordprocessingCommentsPart);
+        CopyPartXml(sourceDoc, blockDoc, p => p.WordprocessingCommentsExPart);
+        CopyPartXml(sourceDoc, blockDoc, p => p.WordprocessingCommentsIdsPart);
+        CopyPartXml(sourceDoc, blockDoc, p => p.WordprocessingPeoplePart);
     }
 
     /// <summary>
@@ -848,6 +1003,20 @@ internal static class HtmlConversionOps
             RenderTrackedChanges = options.RenderTrackedChanges,
             ShowDeletedContent = options.ShowDeletedContent,
             RenderMoveOperations = options.RenderMoveOperations,
+            // Native comment markup follows the caller's profile exactly as the full render's
+            // does (ConvertToHtml above): the editor's comments-aware profile asks for Inline
+            // mode, every other caller leaves the default (-1) and gets no comment markup — so
+            // the pinned RenderBlockHtml output is untouched.
+            RenderComments = options.CommentRenderMode >= 0,
+            CommentRenderMode = options.CommentRenderMode >= 0
+                ? (CommentRenderMode)options.CommentRenderMode
+                : CommentRenderMode.EndnoteStyle,
+            CommentCssClassPrefix = options.CommentCssClassPrefix,
+            IncludeCommentMetadata = true,
+            // A block render never paginates, so the converter's own data-field stamping (paginated
+            // mode only) never fires here; the editor profile asks for it explicitly when it is
+            // itself painting page boxes. Default false keeps the pinned output identical.
+            StampPageNumberFields = options.StampPageNumberFields,
             // Incremental block renders must carry the same native image
             // contract as a full-document render. Without an image handler
             // WmlToHtmlConverter deliberately drops w:drawing/w:pict content,

@@ -110,45 +110,218 @@ public class DocxDiffGapArrangementTests
     [Fact]
     public void TrailingSurplusEmptyDelete_StaysMarked_NoVirtualPairOnSingleSidedGap()
     {
-        // base [W1, E1, E2] → next [N1, E]: the aligner anchors the content-equal empties (E1 ↔ E),
-        // leaving an INTERIOR wordful replace (separate ¶INS/¶DEL) and a trailing PURE-DELETE gap
-        // [E2]. A single-sided gap never pairs virtually — its blocks stay fully marked so accept
-        // stays pilcrow-exact (no stray live empty paragraph survives into the accepted view).
+        // base [W1, E1, E2] → next [N1, E]: a blank never anchors on its own evidence, so E1 does NOT
+        // pair with E across the unrelated W1/N1 content; only the story-final pilcrows pair (E2 ↔ E,
+        // structural). The region is ONE trailing replace whose tail chain cannot open (E1 ↔ N1 is
+        // empty↔wordful): N1 ¶INS first, then W1 and the surplus E1 fully ¶DEL, then the shared
+        // final pilcrow — no stray live empty paragraph survives into the accepted view.
         var left = Doc("shared head", "alpha bravo charlie", "", "");
         var right = Doc("shared head", "delta echo foxtrot", "");
         var result = DocxDiff.Compare(left, right);
 
         var shape = BodyShape(result);
-        Assert.Equal(new[] { "RET", "INS:INS", "DEL:DEL", "EMPTY:-", "EMPTY_DEL:DEL" }, shape);
+        Assert.Equal(new[] { "RET", "INS:INS", "DEL:DEL", "EMPTY_DEL:DEL", "EMPTY:-" }, shape);
         AssertRoundTrip(result, left, right);
     }
 
     [Fact]
     public void TrailingSurplusInsert_InteriorReplace_StaysSeparate()
     {
-        // base [W1, E1, E2] → next [N1, N2, E]: empties anchor (E1 ↔ E), N2 is a surplus insert in
-        // the same interior gap as the W1→N1 replace: all separate, inserts before deletes.
+        // base [W1, E1, E2] → next [N1, N2, E]: only the story-final pilcrows pair (E2 ↔ E); the
+        // unsupported blank E1 stays with its own side. One trailing replace whose chain cannot open
+        // (E1 ↔ N2 is empty↔wordful): inserts before deletes, the surplus E1 fully ¶DEL.
         var left = Doc("shared head", "alpha bravo charlie", "", "");
         var right = Doc("shared head", "delta echo foxtrot", "golf hotel", "");
         var result = DocxDiff.Compare(left, right);
 
         var shape = BodyShape(result);
-        Assert.Equal(new[] { "RET", "INS:INS", "INS:INS", "DEL:DEL", "EMPTY:-", "EMPTY_DEL:DEL" }, shape);
+        Assert.Equal(new[] { "RET", "INS:INS", "INS:INS", "DEL:DEL", "EMPTY_DEL:DEL", "EMPTY:-" }, shape);
         AssertRoundTrip(result, left, right);
     }
 
     [Fact]
     public void TrailingSurplusEmptyDeletes_AfterAnchoredEmpties_StayMarked()
     {
-        // base [W1, E1, E2, E3] → next [N1, E1', E2']: the aligner anchors E1↔E1' and E2↔E2';
-        // the interior W1→N1 replace stays separate and the trailing pure-delete [E3] stays ¶DEL.
+        // base [W1, E1, E2, E3] → next [N1, E1', E2']: no blank anchors on its own evidence, so the
+        // whole region is one trailing replace and the tail chain runs backwards from the structural
+        // final pair: E3 ↔ E2' (shared), E2 ↔ E1' (empty↔empty opens the chain), E1 ↔ N1 (continues
+        // while one side is empty) — N1's inserted runs fuse into W1's ¶DEL paragraph and every
+        // paired pilcrow is shared. Accept coalesces the fused runs forward onto the first shared
+        // pilcrow (= next), reject drops the inserted runs and restores W1's mark (= base).
         var left = Doc("shared head", "alpha bravo charlie", "", "", "");
         var right = Doc("shared head", "delta echo foxtrot", "", "");
         var result = DocxDiff.Compare(left, right);
 
         var shape = BodyShape(result);
-        Assert.Equal(new[] { "RET", "INS:INS", "DEL:DEL", "EMPTY:-", "EMPTY:-", "EMPTY_DEL:DEL" }, shape);
+        Assert.Equal(new[] { "RET", "MIXED:DEL", "EMPTY:-", "EMPTY:-", "EMPTY:-" }, shape);
         AssertRoundTrip(result, left, right);
+    }
+
+    [Fact]
+    public void WordfulFinalPair_BlocksTailChain_BlanksStayMarked()
+    {
+        // base [W1, E1, E2] → next [N1, E1', N2]: the structural final pair is E2 ↔ N2 with a
+        // WORDFUL next member, so no earlier pilcrow can pair — N2's words sit between its pilcrow
+        // and E1's. The empty↔empty candidate E1 ↔ E1' therefore does NOT open a chain: E1' stays
+        // ¶INS ahead of the deletions and E1 stays ¶DEL, while N2's runs fuse at the head (into W1's
+        // ¶DEL paragraph) and E2 keeps the shared final pilcrow — the reference output's shape.
+        var left = Doc("shared head", "alpha bravo charlie", "", "");
+        var right = Doc("shared head", "delta echo foxtrot", "", "golf hotel india");
+        var result = DocxDiff.Compare(left, right);
+
+        var shape = BodyShape(result);
+        Assert.Equal(new[] { "RET", "INS:INS", "EMPTY_INS:INS", "MIXED:DEL", "EMPTY_DEL:DEL", "EMPTY:-" }, shape);
+        AssertRoundTrip(result, left, right);
+    }
+
+    [Fact]
+    public void RestyledBlankAfterEditedParagraph_PairsWithFormatChange()
+    {
+        // base [W1, E, W2] → next [W1', E(centered), W2']: the blank follows an EDITED pair, so it
+        // pairs with the blank across from it although the next side restyled it — a retained mark
+        // carrying the next side's pPr with a pPrChange (as Word writes it), never a deleted blank
+        // followed by an inserted one.
+        var left = Doc(("alpha bravo charlie delta", null), ("", null), ("echo foxtrot golf hotel", null));
+        var right = Doc(("alpha bravo charlie ZULU", null), ("", "center"), ("echo foxtrot golf YANKEE", null));
+        var result = DocxDiff.Compare(left, right);
+
+        var shape = BodyShape(result);
+        Assert.Equal(3, shape.Length);
+        Assert.Equal("EMPTY:-", shape[1]);
+        var blank = BodyParas(result)[1];
+        Assert.NotNull(blank.Element(W + "pPr")?.Element(W + "pPrChange"));
+        Assert.Equal("center", (string?)blank.Element(W + "pPr")?.Element(W + "jc")?.Attribute(W + "val"));
+        AssertRoundTrip(result, left, right);
+    }
+
+    [Fact]
+    public void InteriorRegion_TrailingBlanks_ChainWhileBaseMemberIsEmpty()
+    {
+        // Interior regions end at the shared "tail" paragraph. [W1, E, E] vs [N1, N2, E]: the backward
+        // chain opens on E ↔ E, continues through E ↔ N2 (base member empty; N2's runs fuse into W1's
+        // ¶DEL paragraph) and stops at W1 ↔ N1 with one paragraph left on each side, so it survives.
+        // [W1, E] vs [N1, E, E]: after the E ↔ E opener the next candidate is a WORDFUL base member
+        // facing an EMPTY next member, which cancels the chain — every mark stays on its own side,
+        // inserts first — exactly the reference output's shape for a 2-vs-3 region.
+        var equalLeft = Doc("alpha bravo charlie", "", "", "shared tail words");
+        var equalRight = Doc("delta echo foxtrot", "golf hotel india", "", "shared tail words");
+        var equal = BodyShape(DocxDiff.Compare(equalLeft, equalRight));
+        Assert.Equal(new[] { "INS:INS", "MIXED:DEL", "EMPTY:-", "EMPTY:-", "RET" }, equal);
+        AssertRoundTrip(DocxDiff.Compare(equalLeft, equalRight), equalLeft, equalRight);
+
+        var unequalLeft = Doc("alpha bravo charlie", "", "shared tail words");
+        var unequalRight = Doc("delta echo foxtrot", "", "", "shared tail words");
+        var unequal = BodyShape(DocxDiff.Compare(unequalLeft, unequalRight));
+        Assert.Equal(new[] { "INS:INS", "EMPTY_INS:INS", "EMPTY_INS:INS", "DEL:DEL", "EMPTY_DEL:DEL", "RET" }, unequal);
+        AssertRoundTrip(DocxDiff.Compare(unequalLeft, unequalRight), unequalLeft, unequalRight);
+    }
+
+    [Fact]
+    public void InteriorRegion_OneSideOnlyABlank_SharesIt()
+    {
+        // [W1, W2, E] vs [E] before the shared tail: the chain opens on the blanks and the next side
+        // is exhausted, so the opener survives — the blank mark is shared and the deletions stay
+        // ahead of it.
+        var left = Doc("alpha bravo charlie", "delta echo foxtrot", "", "shared tail words");
+        var right = Doc("", "shared tail words");
+        var result = DocxDiff.Compare(left, right);
+        Assert.Equal(new[] { "DEL:DEL", "DEL:DEL", "EMPTY:-", "RET" }, BodyShape(result));
+        AssertRoundTrip(result, left, right);
+    }
+
+    [Fact]
+    public void UnrelatedContent_UniqueBlankNeverAnchors_RegionStaysWhole()
+    {
+        // base [W1, W2, E, W3] → next [E, N1, N2]: the only content-equal block pair is the blank
+        // (unique on each side, so the exact-match spine would pin it). A blank has no words — its
+        // pilcrow is "the same paragraph" only inside matched content — so it must NOT split these
+        // unrelated regions into two halves with the deletions scattered between them. The whole
+        // body is one replace: next content ¶INS first (the leading blank included), then the base
+        // content ¶DEL, fused at the structural final pair. No live empty paragraph survives mid-body.
+        var left = Doc("alpha bravo charlie", "delta echo", "", "foxtrot golf");
+        var right = Doc("", "hotel india juliet", "kilo lima");
+        var result = DocxDiff.Compare(left, right);
+
+        var shape = BodyShape(result);
+        Assert.DoesNotContain("EMPTY:-", shape);
+        Assert.Equal("EMPTY_INS:INS", shape[0]);
+        Assert.Equal(new[] { "INS:INS" }, shape.Skip(1).TakeWhile(c => c == "INS:INS").ToArray());
+        Assert.DoesNotContain("DEL:DEL", shape.Take(2));
+        AssertRoundTrip(result, left, right);
+    }
+
+    [Fact]
+    public void BlankBesideEditedNeighbours_StaysRetained()
+    {
+        // base [W1, E, W2] → next [W1', E, W2'] with each neighbour EDITED (shares words with its
+        // counterpart): the blank sits inside matched content, so it keeps its retained (shared,
+        // unmarked) pilcrow exactly as before — support comes from the paired neighbours, not from
+        // the blank's own (empty) content.
+        var left = Doc("alpha bravo charlie delta", "", "echo foxtrot golf hotel");
+        var right = Doc("alpha bravo charlie ZULU", "", "echo foxtrot golf YANKEE");
+        var result = DocxDiff.Compare(left, right);
+
+        var shape = BodyShape(result);
+        Assert.Equal(3, shape.Length);
+        Assert.Equal("EMPTY:-", shape[1]);
+        AssertRoundTrip(result, left, right);
+    }
+
+    [Fact]
+    public void BaseEndsWithTable_NextEndsWithBlank_FinalPilcrowLandsAfterDeletedTable()
+    {
+        // base [W1, TBL] → next [N1, E]: the base story physically ends with a table, so the virtual
+        // structural pair applies — and with an EMPTY final next paragraph there is nothing to fuse:
+        // N1 stays ¶INS ahead of the deletions, W1 and the whole table are deleted, and the next
+        // side's final pilcrow lands AFTER the deleted table as the document's last paragraph (Word
+        // keeps it live there; our contract marks it ¶INS so reject ≡ base exactly). Before this rule
+        // the trailing blank was emitted with the other inserts and the document ENDED with the
+        // deleted table.
+        var left = TableDoc("shared head", "alpha bravo charlie", new[] { "cell one", "cell two" }, afterTable: null);
+        var right = Doc("shared head", "delta echo foxtrot", "");
+        var result = DocxDiff.Compare(left, right);
+
+        var shape = BodyShape(result);
+        Assert.Equal(new[] { "RET", "INS:INS", "DEL:DEL", "EMPTY_INS:INS" }, shape);
+        using (var stream = new MemoryStream(result.DocumentByteArray))
+        using (var word = WordprocessingDocument.Open(stream, false))
+        {
+            var blocks = word.MainDocumentPart!.Document!.Body!.ChildElements
+                .Where(e => e is DocumentFormat.OpenXml.Wordprocessing.Paragraph or DocumentFormat.OpenXml.Wordprocessing.Table)
+                .ToList();
+            Assert.IsType<DocumentFormat.OpenXml.Wordprocessing.Table>(blocks[^2]);
+            Assert.IsType<DocumentFormat.OpenXml.Wordprocessing.Paragraph>(blocks[^1]);
+        }
+        AssertRoundTrip(result, left, right);
+    }
+
+    [Fact]
+    public void PairedRows_SurplusBaseCell_StaysInRowAsDeletedCell()
+    {
+        // base row [c1, c2, c3] → next row [c1, C2']: the rows pair, the first two cells pair, and the
+        // third cell has no next counterpart. The table stays ONE modified table: the surplus base
+        // cell is emitted in place, whole-marked deleted (w:tcPr/w:cellDel + struck content), so
+        // accept removes it (= next) and reject restores it (= base). It used to lower the whole
+        // table to a deleted table followed by an inserted one.
+        var left = TableDoc("shared head", "before table", new[] { "cell one", "cell two", "cell three" }, "after table");
+        var right = TableDoc("shared head", "before table", new[] { "cell one", "cell TWO" }, "after table");
+        var result = DocxDiff.Compare(left, right);
+
+        using (var stream = new MemoryStream(result.DocumentByteArray))
+        using (var word = WordprocessingDocument.Open(stream, false))
+        {
+            var body = word.MainDocumentPart!.Document!.Body!;
+            var table = Assert.Single(body.Elements<DocumentFormat.OpenXml.Wordprocessing.Table>());
+            var row = Assert.Single(table.Elements<DocumentFormat.OpenXml.Wordprocessing.TableRow>());
+            var cells = row.Elements<DocumentFormat.OpenXml.Wordprocessing.TableCell>().ToList();
+            Assert.Equal(3, cells.Count);
+            Assert.Null(cells[0].TableCellProperties?.GetFirstChild<DocumentFormat.OpenXml.Wordprocessing.CellDeletion>());
+            Assert.Null(cells[1].TableCellProperties?.GetFirstChild<DocumentFormat.OpenXml.Wordprocessing.CellDeletion>());
+            Assert.NotNull(cells[2].TableCellProperties?.GetFirstChild<DocumentFormat.OpenXml.Wordprocessing.CellDeletion>());
+            Assert.Equal("cell three", string.Concat(cells[2].Descendants<DocumentFormat.OpenXml.Wordprocessing.DeletedText>().Select(t => t.Text)));
+        }
+        Assert.Equal(BodyTextOf(right), BodyTextOf(RevisionProcessor.AcceptRevisions(result)));
+        Assert.Equal(BodyTextOf(left), BodyTextOf(RevisionProcessor.RejectRevisions(result)));
     }
 
     [Fact]
@@ -261,7 +434,7 @@ public class DocxDiffGapArrangementTests
         return new WmlDocument("gap-arrangement-table-tail.docx", stream.ToArray());
     }
 
-    private static WmlDocument TableDoc(string head, string beforeTable, string[] cells, string afterTable)
+    private static WmlDocument TableDoc(string head, string beforeTable, string[] cells, string? afterTable)
     {
         using var stream = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
@@ -285,8 +458,9 @@ public class DocxDiffGapArrangementTests
                 new DocumentFormat.OpenXml.Wordprocessing.TableGrid(
                     cells.Select(_ => new DocumentFormat.OpenXml.Wordprocessing.GridColumn { Width = "2000" })),
                 row));
-            body.Append(new DocumentFormat.OpenXml.Wordprocessing.Paragraph(
-                new DocumentFormat.OpenXml.Wordprocessing.Run(new DocumentFormat.OpenXml.Wordprocessing.Text(afterTable))));
+            if (afterTable is not null)
+                body.Append(new DocumentFormat.OpenXml.Wordprocessing.Paragraph(
+                    new DocumentFormat.OpenXml.Wordprocessing.Run(new DocumentFormat.OpenXml.Wordprocessing.Text(afterTable))));
             main.Document = new DocumentFormat.OpenXml.Wordprocessing.Document(body);
             doc.Save();
         }

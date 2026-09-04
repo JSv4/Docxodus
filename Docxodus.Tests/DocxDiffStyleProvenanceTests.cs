@@ -895,7 +895,7 @@ public class DocxDiffStyleProvenanceTests
 
     /// <summary>A doc whose docDefaults optionally declare paragraph spacing / kern / ligatures, with a
     /// Normal style whose own pPr payload is <paramref name="normalPPrXml"/> (may be empty).</summary>
-    private static WmlDocument DocWithDefaultsAndNormalPPr(bool declareDefaults, string normalPPrXml, string text)
+    private static WmlDocument DocWithDefaultsAndNormalPPr(bool declareDefaults, string normalPPrXml, string text, string rightPPrDefaultXml = "<w:pPrDefault/>")
     {
         using var stream = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
@@ -913,7 +913,7 @@ public class DocxDiffStyleProvenanceTests
                   "</w:pPr></w:pPrDefault></w:docDefaults>"
                 : "<w:docDefaults><w:rPrDefault><w:rPr>" +
                   "<w:rFonts w:ascii=\"Inter\" w:hAnsi=\"Inter\"/><w:sz w:val=\"22\"/>" +
-                  "</w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults>";
+                  $"</w:rPr></w:rPrDefault>{rightPPrDefaultXml}</w:docDefaults>";
             using (var writer = new StreamWriter(styles.GetStream(FileMode.Create, FileAccess.Write)))
             {
                 writer.Write(
@@ -959,6 +959,168 @@ public class DocxDiffStyleProvenanceTests
         Assert.Equal("0", (string?)rPr!.Element(W + "kern")?.Attribute(W + "val"));
         XNamespace w14 = "http://schemas.microsoft.com/office/word/2010/wordml";
         Assert.Equal("none", (string?)rPr.Element(w14 + "ligatures")?.Attribute(w14 + "val"));
+    }
+
+    /// <summary>
+    /// Spacing attributes inherit one by one. When the right's docDefaults declare only line/lineRule
+    /// (a common web-authored shape) against a left declaring after=160 line=278, the right's line
+    /// must be materialized AND the left's after neutralized on the same current payload — Word writes
+    /// spacing after=0 line=276 on the updated Normal. An element-level check let after=160 leak
+    /// through and spaced every accepted paragraph apart.
+    /// </summary>
+    [Fact]
+    public void LeftDocDefaultsSpacing_PartiallyDeclaredByRight_IsNeutralizedAttributeWise()
+    {
+        var left = DocWithDefaultsAndNormalPPr(true, "<w:widowControl w:val=\"0\"/>", "Shared body line.");
+        var right = DocWithDefaultsAndNormalPPr(false, string.Empty, "Shared body line revised.",
+            "<w:pPrDefault><w:pPr><w:spacing w:line=\"276\" w:lineRule=\"auto\"/></w:pPr></w:pPrDefault>");
+
+        var result = DocxDiff.Compare(left, right);
+
+        var spacing = StyleOf(StylesOf(result), "Normal").Element(W + "pPr")?.Element(W + "spacing");
+        Assert.NotNull(spacing);
+        Assert.Equal("0", (string?)spacing!.Attribute(W + "after"));
+        Assert.Equal("276", (string?)spacing.Attribute(W + "line"));
+    }
+
+    /// <summary>
+    /// The complement of the attribute-wise neutralizer: an attribute the RIGHT's own docDefaults
+    /// declare (line=300 against the left's line=278) is not left-only. It must be materialized with
+    /// the right's value on a style whose own payload carries before/after, never reset to the
+    /// built-in 240 — Word's updated heading reads before/after from the style and line from the
+    /// right's defaults.
+    /// </summary>
+    [Fact]
+    public void RightDocDefaultsSpacingAttribute_IsMaterializedNotNeutralized_OnStyleWithOwnSpacing()
+    {
+        var left = DocWithDefaultsAndNormalPPr(true, "<w:spacing w:before=\"360\" w:after=\"80\"/>", "Shared body line.");
+        var right = DocWithDefaultsAndNormalPPr(false, "<w:spacing w:before=\"360\" w:after=\"80\"/><w:keepNext/>", "Shared body line revised.",
+            "<w:pPrDefault><w:pPr><w:spacing w:after=\"160\" w:line=\"300\" w:lineRule=\"auto\"/></w:pPr></w:pPrDefault>");
+
+        var result = DocxDiff.Compare(left, right);
+
+        var spacing = StyleOf(StylesOf(result), "Normal").Element(W + "pPr")?.Element(W + "spacing");
+        Assert.NotNull(spacing);
+        Assert.Equal("360", (string?)spacing!.Attribute(W + "before"));
+        Assert.Equal("80", (string?)spacing.Attribute(W + "after"));
+        Assert.Equal("300", (string?)spacing.Attribute(W + "line"));
+    }
+
+    /// <summary>
+    /// A right-only paragraph style imported into the output lives under the LEFT docDefaults from
+    /// then on, so it gets the same docDefaults delta an updated shared style gets: the right's
+    /// line=300 (which the left values differently) materialized, the left's after=160 (which the
+    /// right never declared) neutralized to 0. Word writes the imported heading exactly so; copying
+    /// it raw left every paragraph in the style at the left's spacing.
+    /// </summary>
+    [Fact]
+    public void ImportedRightOnlyParagraphStyle_CarriesDocDefaultsDelta()
+    {
+        WmlDocument Doc(bool leftDefaults, bool withHeading, string text)
+        {
+            using var stream = new MemoryStream();
+            using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+            {
+                var main = doc.AddMainDocumentPart();
+                var p = new Paragraph(new Run(new Text(text)));
+                if (withHeading)
+                    p.PrependChild(new ParagraphProperties(new ParagraphStyleId { Val = "SideHeading" }));
+                main.Document = new Document(new Body(p));
+                var styles = main.AddNewPart<StyleDefinitionsPart>();
+                string defaults = leftDefaults
+                    ? "<w:docDefaults><w:pPrDefault><w:pPr><w:spacing w:after=\"160\" w:line=\"278\" w:lineRule=\"auto\"/></w:pPr></w:pPrDefault></w:docDefaults>"
+                    : "<w:docDefaults><w:pPrDefault><w:pPr><w:spacing w:line=\"300\" w:lineRule=\"auto\"/></w:pPr></w:pPrDefault></w:docDefaults>";
+                string heading = withHeading
+                    ? "<w:style w:type=\"paragraph\" w:styleId=\"SideHeading\"><w:name w:val=\"Side Heading\"/><w:basedOn w:val=\"Normal\"/><w:pPr><w:keepNext/><w:spacing w:before=\"240\"/></w:pPr><w:rPr><w:b/></w:rPr></w:style>"
+                    : string.Empty;
+                using (var writer = new StreamWriter(styles.GetStream(FileMode.Create, FileAccess.Write)))
+                    writer.Write($"<w:styles xmlns:w=\"{W.NamespaceName}\">{defaults}<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\"><w:name w:val=\"Normal\"/></w:style>{heading}</w:styles>");
+                main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+                doc.Save();
+            }
+            return new WmlDocument("import.docx", stream.ToArray());
+        }
+
+        var left = Doc(leftDefaults: true, withHeading: false, "Alpha bravo charlie.");
+        var right = Doc(leftDefaults: false, withHeading: true, "Delta echo foxtrot.");
+
+        var result = DocxDiff.Compare(left, right);
+
+        // The delta is stated once along the chain (on Normal when the equal-definitions projection
+        // carries it there, else on the import itself); what matters is what the imported style
+        // resolves to under the retained left docDefaults.
+        var styles = StylesOf(result);
+        var imported = StyleOf(styles, "SideHeading");
+        Assert.Equal("240", EffectiveSpacingAttribute(styles, "SideHeading", "before"));
+        Assert.Equal("0", EffectiveSpacingAttribute(styles, "SideHeading", "after"));
+        Assert.Equal("300", EffectiveSpacingAttribute(styles, "SideHeading", "line"));
+        Assert.NotNull(imported.Element(W + "pPr")?.Element(W + "keepNext"));
+        Assert.NotNull(imported.Element(W + "rPr")?.Element(W + "b"));
+    }
+
+    /// <summary>A spacing attribute resolved along the style's basedOn chain (current payloads only).</summary>
+    private static string? EffectiveSpacingAttribute(XDocument styles, string styleId, string attribute)
+    {
+        var seen = new HashSet<string>();
+        string? id = styleId;
+        while (id is not null && seen.Add(id))
+        {
+            var style = styles.Root!.Elements(W + "style").FirstOrDefault(st => (string?)st.Attribute(W + "styleId") == id);
+            if (style is null)
+                break;
+            var value = (string?)style.Element(W + "pPr")?.Element(W + "spacing")?.Attribute(W + attribute);
+            if (value is not null)
+                return value;
+            id = (string?)style.Element(W + "basedOn")?.Attribute(W + "val");
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The delta is stated ONCE along the chain: when Normal itself differs between the sides and is
+    /// updated (its payload then carries the docDefaults delta), an imported style based on Normal
+    /// inherits it and Word writes nothing more on the import — no spacing appears on it.
+    /// </summary>
+    [Fact]
+    public void ImportedStyle_UnderUpdatedNormal_InheritsDeltaAndStaysRaw()
+    {
+        WmlDocument Doc(bool leftSide, string text)
+        {
+            using var stream = new MemoryStream();
+            using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+            {
+                var main = doc.AddMainDocumentPart();
+                var p = new Paragraph(new Run(new Text(text)));
+                if (!leftSide)
+                    p.PrependChild(new ParagraphProperties(new ParagraphStyleId { Val = "SideNote" }));
+                main.Document = new Document(new Body(p));
+                var styles = main.AddNewPart<StyleDefinitionsPart>();
+                string defaults = leftSide
+                    ? "<w:docDefaults><w:pPrDefault><w:pPr><w:spacing w:after=\"160\" w:line=\"278\" w:lineRule=\"auto\"/></w:pPr></w:pPrDefault></w:docDefaults>"
+                    : "<w:docDefaults><w:pPrDefault><w:pPr><w:spacing w:line=\"300\" w:lineRule=\"auto\"/></w:pPr></w:pPrDefault></w:docDefaults>";
+                // Normal DIFFERS between the sides (widowControl only on the right) so it is updated.
+                string normal = leftSide
+                    ? "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\"><w:name w:val=\"Normal\"/></w:style>"
+                    : "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\"><w:name w:val=\"Normal\"/><w:pPr><w:widowControl w:val=\"0\"/></w:pPr></w:style>";
+                string side = leftSide ? string.Empty
+                    : "<w:style w:type=\"paragraph\" w:styleId=\"SideNote\"><w:name w:val=\"Side Note\"/><w:basedOn w:val=\"Normal\"/><w:pPr><w:keepNext/></w:pPr></w:style>";
+                using (var writer = new StreamWriter(styles.GetStream(FileMode.Create, FileAccess.Write)))
+                    writer.Write($"<w:styles xmlns:w=\"{W.NamespaceName}\">{defaults}{normal}{side}</w:styles>");
+                main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+                doc.Save();
+            }
+            return new WmlDocument("import2.docx", stream.ToArray());
+        }
+
+        var result = DocxDiff.Compare(Doc(true, "Alpha bravo charlie."), Doc(false, "Delta echo foxtrot."));
+        var styles = StylesOf(result);
+        var normalSpacing = StyleOf(styles, "Normal").Element(W + "pPr")?.Element(W + "spacing");
+        Assert.NotNull(normalSpacing);
+        Assert.Equal("300", (string?)normalSpacing!.Attribute(W + "line"));
+        Assert.Equal("0", (string?)normalSpacing.Attribute(W + "after"));
+        var imported = StyleOf(styles, "SideNote");
+        Assert.Null(imported.Element(W + "pPr")?.Element(W + "spacing"));
+        Assert.NotNull(imported.Element(W + "pPr")?.Element(W + "keepNext"));
     }
 
     /// <summary>

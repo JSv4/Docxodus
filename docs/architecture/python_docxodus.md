@@ -133,7 +133,7 @@ Every Python value type is `@dataclass(frozen=True, slots=True)`. Wire keys rema
 | `Anchor` record | `Anchor(id, kind, scope, unid)` | `{id, kind, scope, unid}` |
 | `CharSpan` | `CharSpan(start, length)` | `{start, length}` |
 | `Position` enum | `Position(Enum)`: `BEFORE="before"`, `AFTER="after"` | `"before"`/`"after"` |
-| `FormatOp` record | `FormatOp(bold=None, italic=None, underline=None, strike=None, code=None, color=None, run_style=None)` | nullable fields omitted when None |
+| `FormatOp` record | `FormatOp(bold=None, italic=None, underline=None, strike=None, code=None, color=None, run_style=None, vert_align=None, font_size_pts=None, font_family=None, highlight=None, caps=None, small_caps=None)` | nullable fields omitted when None; `small_caps` crosses as `smallCaps` |
 | `EditErrorCode` (22) | `EditErrorCode(Enum)`, values match `EnumToSnake` output | e.g. `"anchor_not_found"` |
 | `EditError` | `EditError(code, message, anchor_id=None)` | `{code, message, anchorId?}` |
 | `EditResult` | `EditResult(success, created=(), removed=(), modified=(), patch=None, error=None)` | tuples, not lists |

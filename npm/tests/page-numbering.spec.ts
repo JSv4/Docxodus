@@ -193,13 +193,16 @@ test.describe('Section page numbering (WASM bridge)', () => {
   });
 });
 
-test.describe('DocxEditor — page-numbering band chrome', () => {
+test.describe('DocxEditor — page-numbering controls', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/test-harness.html');
     await waitForDocxodus(page);
   });
 
-  test('the band format/start controls write w:pgNumType and reflect the live section', async ({
+  // The format/start controls live on the ribbon's Layout tab now (Word's Format Page Numbers…),
+  // driving these two editor commands; the section is the one holding the caret, and the
+  // read-back is the live sectPr rather than what was last clicked.
+  test('setPageNumbering writes w:pgNumType and pageNumbering() reflects the live section', async ({
     page,
   }) => {
     const res = await page.evaluate(() => {
@@ -210,39 +213,35 @@ test.describe('DocxEditor — page-numbering band chrome', () => {
         headerFooter: true,
       });
 
-      // Focus a body block so the bands know which section they describe.
+      // Focus a body block so the region knows which section it describes.
       const block = container.querySelector('[data-anchor]') as HTMLElement;
       block.focus();
       block.dispatchEvent(new Event('focus', { bubbles: true }));
 
-      const fmt = container.querySelector('[data-hf-pagefmt]') as HTMLSelectElement;
-      const start = container.querySelector('[data-hf-pagestart]') as HTMLInputElement;
-
-      fmt.value = 'lowerRoman';
-      fmt.dispatchEvent(new Event('change'));
-      start.value = '7';
-      start.dispatchEvent(new Event('blur'));
-
+      const before = editor.pageNumbering();
+      editor.setPageNumbering({ format: 'lowerRoman' });
+      editor.setPageNumbering({ start: 7 });
       const readBack = editor.pageNumbering();
-      // Both bands describe the SAME section, so both must show the same values.
-      const fmtValues = Array.from(
-        container.querySelectorAll('[data-hf-pagefmt]'),
-      ).map((s) => (s as HTMLSelectElement).value);
 
       const saved = editor.save();
+      editor.clearPageNumbering();
+      const cleared = editor.pageNumbering();
       editor.close();
       container.remove();
       return {
+        before,
         readBackStart: readBack.start ?? null,
         readBackFormat: readBack.format ?? null,
-        fmtValues,
+        cleared,
         saved: Array.from(saved as Uint8Array),
       };
     });
 
+    // A fresh section sets neither: "continues the previous section" is reported as absence.
+    expect(res.before).toEqual({});
     expect(res.readBackStart).toBe(7);
     expect(res.readBackFormat).toBe('lowerRoman');
-    expect(res.fmtValues).toEqual(['lowerRoman', 'lowerRoman']);
+    expect(res.cleared).toEqual({});
 
     const documentXml = readZipEntry(Buffer.from(res.saved), 'word/document.xml');
     expect(documentXml).toContain('w:start="7"');

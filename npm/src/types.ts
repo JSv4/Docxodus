@@ -1625,6 +1625,18 @@ export interface DocxodusWasmExports {
       scale: number,
       renderTrackedChanges: boolean
     ) => string;
+    /** The editor's comments-aware render profile: `optionsJson` is a serialized
+     *  {@link EditorRenderOptions}. With `comments: true` the output carries the converter's
+     *  Inline comment markup (`comment-highlight` spans with `data-comment-id`, `comment-marker`
+     *  anchors) using the `comment-` class prefix; with `comments: false` it is byte-identical to
+     *  `RenderHtml` / `RenderHtmlForReview`. Same error convention: HTML starts with '<', an
+     *  error object with '{'. Optional: absent on older WASM bundles. */
+    RenderEditorHtml?: (handle: number, optionsJson: string) => string;
+    /** Batch block render with the editor profile — `RenderBlocksHtml` plus comment markup;
+     *  same JSON-object result (`{ [anchorId]: html | null }`, or `{"error": …}`). */
+    RenderEditorBlocksHtml?: (handle: number, anchorIdsJson: string, optionsJson: string) => string;
+    /** Single-block render with the editor profile — `RenderBlockHtml` plus comment markup. */
+    RenderEditorBlockHtml?: (handle: number, anchorId: string, optionsJson: string) => string;
     ReplaceText: (handle: number, anchor: string, md: string) => string;
     DeleteBlock: (handle: number, anchor: string) => string;
     MoveBlock: (handle: number, sourceAnchor: string, targetAnchor: string, pos: string) => string;
@@ -1664,6 +1676,14 @@ export interface DocxodusWasmExports {
     InsertTableOfAuthorities: (handle: number, anchor: string, pos: string, optionsJson: string) => string;
     ClearPageNumbering: (handle: number, anchor: string) => string;
     EnsureHeaderFooterVisible: (handle: number, anchor: string, kind: string) => string;
+    /** Word's "Different first page" / "Different odd & even pages" checkboxes. `kind` is
+     *  "first" | "even"; `enabled: false` removes `w:titlePg` / `w:evenAndOddHeaders` and leaves
+     *  the story parts in place. Optional: absent on older WASM bundles. */
+    SetHeaderFooterKindEnabled?: (handle: number, anchor: string, kind: string, enabled: boolean) => string;
+    /** Page size / orientation / margins / header-footer distance of the section owning
+     *  `anchor`; `opJson` is a serialized {@link PageSetupOp}. Optional: absent on older WASM
+     *  bundles. */
+    SetPageSetup?: (handle: number, anchor: string, opJson: string) => string;
     InsertFootnote: (handle: number, anchor: string, characterOffset: number, markdown: string) => string;
     InsertCrossReference: (
       handle: number,
@@ -1850,6 +1870,7 @@ export type EditErrorCode =
   | "invalid_list_level"
   | "invalid_list_start_value"
   | "invalid_page_numbering"
+  | "invalid_page_setup"
   | "invalid_reference_field"
   | "invalid_paragraph_format"
   | "invalid_table_styling"
@@ -2224,11 +2245,15 @@ export interface BookmarkInfo {
  * `date` is the raw `w:date` attribute string; `text` is the flattened body.
  * `parentAnchorId` and `resolved` are present when the comment has a
  * `commentsExtended.xml` entry; their absence distinguishes a legacy/flat comment from an
- * explicitly reopened one. The numeric `w:id` is deliberately not surfaced — comments are
- * addressed by anchor everywhere.
+ * explicitly reopened one. `id` is the numeric `w:id` — the value rendered comment markup
+ * carries as `data-comment-id`, which is how a highlight in the DOM is matched back to its
+ * entry. Mutations still address comments by `anchorId`.
  */
 export interface CommentListEntry {
   anchorId: string;
+  /** The comment's numeric `w:comment/@w:id`; equals the `data-comment-id` of its rendered
+   *  highlight spans and marker. */
+  id: number;
   author: string;
   initials?: string;
   date?: string;
@@ -2307,6 +2332,20 @@ export interface FormatOp {
    * the explicit font so the run inherits the style/default. Lets a run match a serif filing.
    */
   fontFamily?: string;
+  /**
+   * Text highlight colour (`w:highlight`) — one of Word's sixteen `ST_HighlightColor` names:
+   * "yellow", "green", "cyan", "magenta", "blue", "red", "darkBlue", "darkCyan", "darkGreen",
+   * "darkMagenta", "darkRed", "darkYellow", "darkGray", "lightGray", "black", "white". Omit to
+   * leave unchanged; `""` or `"none"` clears. Any other value fails the op (`internal_error`
+   * with the message, like an invalid `vertAlign`) — Word has no free-form highlight.
+   */
+  highlight?: string;
+  /** All capitals (`w:caps`). `true` sets it and removes `w:smallCaps` (Word's either/or rule);
+   *  `false` removes it; omit to leave unchanged. */
+  caps?: boolean;
+  /** Small capitals (`w:smallCaps`). `true` sets it and removes `w:caps`; `false` removes it;
+   *  omit to leave unchanged. */
+  smallCaps?: boolean;
 }
 
 /** One edge of a paragraph border (`w:pBdr` top/bottom) — drives S-1 horizontal rules. */
@@ -2443,8 +2482,10 @@ export interface TableOfAuthoritiesOptions {
 }
 
 /** Which page-number field `DocxSession.insertPageNumberField` emits: `"currentPage"` → PAGE,
- * `"totalPages"` → NUMPAGES. */
-export type PageNumberField = "currentPage" | "totalPages";
+ * `"totalPages"` → NUMPAGES, `"pageOfTotal"` → Word's "Page X of Y" gallery entry (the text
+ * `Page `, a PAGE field, ` of `, a NUMPAGES field, every run inheriting the paragraph's last run
+ * formatting). */
+export type PageNumberField = "currentPage" | "totalPages" | "pageOfTotal";
 
 /**
  * Section-level page-numbering setup for {@link DocxSession.setPageNumbering} — the `w:pgNumType`
@@ -2465,6 +2506,63 @@ export interface PageNumberingOp {
    *  matter. Omitted leaves it unchanged; absent means Word's default `1, 2, 3`. `"bullet"` is
    *  rejected — pages cannot be bulleted. */
   format?: NumberFormat;
+}
+
+/**
+ * Page geometry for {@link DocxSession.setPageSetup} — the `w:pgSz` / `w:pgMar` of the governing
+ * `w:sectPr`, i.e. what Word's *Page Setup* dialog writes. Every field is tri-state: an omitted
+ * field leaves that attribute exactly as it is. All values are twips (1440 = 1 inch). Read the
+ * current values back from {@link SectionInfo}.
+ *
+ * Validation runs against the section's effective values after the op: width and height must be
+ * positive, margins and header/footer distances non-negative, and `left + right < width`,
+ * `top + bottom < height`; a violation fails with `invalid_page_setup` and touches nothing.
+ */
+export interface PageSetupOp {
+  /** Page width (`w:pgSz/@w:w`). */
+  pageWidthTwips?: number;
+  /** Page height (`w:pgSz/@w:h`). */
+  pageHeightTwips?: number;
+  /** Orientation (`w:pgSz/@w:orient`). `true` writes `landscape` and — when no explicit size is
+   *  given and the page is currently taller than wide — swaps width and height; `false` removes
+   *  the attribute and swaps back when the page is wider than tall. With an explicit size only
+   *  the attribute is written. */
+  landscape?: boolean;
+  /** Top margin (`w:pgMar/@w:top`). */
+  marginTopTwips?: number;
+  /** Bottom margin (`w:pgMar/@w:bottom`). */
+  marginBottomTwips?: number;
+  /** Left margin (`w:pgMar/@w:left`). */
+  marginLeftTwips?: number;
+  /** Right margin (`w:pgMar/@w:right`). */
+  marginRightTwips?: number;
+  /** Header distance from the page's top edge (`w:pgMar/@w:header`). */
+  headerDistanceTwips?: number;
+  /** Footer distance from the page's bottom edge (`w:pgMar/@w:footer`). */
+  footerDistanceTwips?: number;
+}
+
+/**
+ * The browser editor's render profile, passed as one JSON object to the `RenderEditorHtml` /
+ * `RenderEditorBlocksHtml` / `RenderEditorBlockHtml` bridge exports. Defaults match the editor's
+ * first paint: `"docx-"`, no fabricated classes, continuous, scale 1, revisions and comments off.
+ */
+export interface EditorRenderOptions {
+  /** CSS class prefix for the document's own classes. Default `"docx-"`. */
+  cssPrefix?: string;
+  /** Emit fabricated per-run CSS classes instead of inline styles. Default false. */
+  fabricateClasses?: boolean;
+  /** Paginated (page-box) output with headers/footers. Default false. Full-document render only. */
+  paginated?: boolean;
+  /** Pagination scale. Default 1. Full-document render only. */
+  scale?: number;
+  /** Render tracked changes as redlines instead of accepting them. Default false. */
+  renderTrackedChanges?: boolean;
+  /** Render native Word comments inline: `comment-highlight` spans carrying `data-comment-id`
+   *  around every run inside a comment range, `comment-marker` anchors at each reference. The
+   *  ids match {@link CommentListEntry.id}. Default false, which renders exactly as the
+   *  comment-less `RenderHtml` / `RenderBlockHtml` do. */
+  comments?: boolean;
 }
 
 /** Options for `DocxSession.insertTable`. */
@@ -3166,6 +3264,20 @@ export interface SectionInfo {
   marginBottomTwips: number;
   marginLeftTwips: number;
   marginRightTwips: number;
+  /** Header distance from the page's top edge (`w:pgMar/@w:header`); Word's default 720 when
+   *  the attribute is absent. */
+  headerDistanceTwips: number;
+  /** Footer distance from the page's bottom edge (`w:pgMar/@w:footer`); Word's default 720 when
+   *  the attribute is absent. */
+  footerDistanceTwips: number;
+  /** Word's "Different first page" flag — true when the governing `w:sectPr` carries an
+   *  on-valued `w:titlePg`, so the section's first-page stories actually render. Toggle with
+   *  {@link DocxSession.setHeaderFooterKindEnabled}. */
+  titlePage: boolean;
+  /** Word's "Different odd & even pages" flag — true when the settings part carries an
+   *  on-valued `w:evenAndOddHeaders`. Document-global, so every section reports the same
+   *  value. Toggle with {@link DocxSession.setHeaderFooterKindEnabled}. */
+  evenAndOddHeaders: boolean;
   columns: number;
   headerPartUris: string[];
   footerPartUris: string[];

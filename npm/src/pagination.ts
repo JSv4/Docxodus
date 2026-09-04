@@ -3077,6 +3077,25 @@ export class PaginationEngine {
     return sectionHf.headerDefault;
   }
 
+  /**
+   * The story KIND (`"first"` / `"even"` / `"default"`) a page position selects — the same
+   * decision {@link selectHeader} / {@link selectFooter} make, named rather than resolved to
+   * an element, so a page can advertise which OOXML story it is showing.
+   */
+  private storyKindFor(
+    which: "header" | "footer",
+    sectionIndex: number,
+    pageInSection: number,
+    displayedPageNumber: number,
+  ): "first" | "even" | "default" {
+    const sectionHf = this.hfRegistry.get(sectionIndex);
+    const first = which === "header" ? sectionHf?.headerFirst : sectionHf?.footerFirst;
+    const even = which === "header" ? sectionHf?.headerEven : sectionHf?.footerEven;
+    if (pageInSection === 1 && first) return "first";
+    if (displayedPageNumber % 2 === 0 && even) return "even";
+    return "default";
+  }
+
   /** Select the section's first/odd/even footer from its one-based page position. */
   private selectFooter(
     sectionIndex: number,
@@ -4244,6 +4263,11 @@ export class PaginationEngine {
     if (headerSource) {
       const headerDiv = this.document.createElement("div");
       headerDiv.className = `${this.cssPrefix}header`;
+      // Which story this page shows, so an editor can map the page back to the OOXML part it
+      // edits in place (a first-page header is a different part from the default one).
+      headerDiv.dataset.hfType = this.storyKindFor(
+        "header", sectionIndex, pageInSection, displayedPageNumber,
+      );
       headerDiv.style.position = "absolute";
       // `w:header` is the distance to the TOP of the story, and the story grows downward from
       // there; `flex-start` therefore pins the edge the OOXML actually declares, and content
@@ -4340,6 +4364,9 @@ export class PaginationEngine {
     if (footerSource) {
       const footerDiv = this.document.createElement("div");
       footerDiv.className = `${this.cssPrefix}footer`;
+      footerDiv.dataset.hfType = this.storyKindFor(
+        "footer", sectionIndex, pageInSection, displayedPageNumber,
+      );
       footerDiv.style.position = "absolute";
       // `w:footer` is the distance to the BOTTOM of the story, and the story grows upward from
       // there — the mirror of the header, so `flex-end` and a bottom anchor.
