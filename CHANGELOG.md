@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [12.0.1] - 2026-09-05
+
 ### Fixed
 
 - The browser build no longer hangs on a comparison that follows a session read. The first
