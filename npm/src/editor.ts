@@ -355,6 +355,16 @@ interface BlockDropZone {
   marginAfter: number;
 }
 
+/** The floating handle's own box and its gap to the block, as `ensureBlockDragStyles` sizes it. */
+const BLOCK_HANDLE_WIDTH = 26;
+const BLOCK_HANDLE_HEIGHT = 28;
+const BLOCK_HANDLE_GAP = 6;
+
+/** `value` pulled into [`low`, `high`]; `low` wins when the range is narrower than the box. */
+function clampToRange(value: number, low: number, high: number): number {
+  return Math.max(low, Math.min(value, high));
+}
+
 function ensureBlockDragStyles(doc: Document): void {
   if (blockDragStyledDocuments.has(doc)) return;
   blockDragStyledDocuments.add(doc);
@@ -1081,6 +1091,10 @@ export class DocxEditor {
   private blockMoveMenu: HTMLElement | null = null;
   private blockMoveLive: HTMLElement | null = null;
   private blockDragSource: HTMLElement | null = null;
+  /** Whether hover or focus currently wants a handle for `blockDragSource`.
+   *  Tracked apart from the handle's `display`, which the viewport clip also drives: a handle
+   *  withdrawn because its block scrolled out of view has to come back when it scrolls in. */
+  private blockHandleWanted = false;
   private blockDragCleanup: Array<() => void> = [];
   /** Block boxes measured at drag start — see `BlockDropZone`. Empty when no drag is in flight. */
   private dropZones: BlockDropZone[] = [];
@@ -1572,11 +1586,48 @@ export class DocxEditor {
     return null;
   }
 
+  /**
+   * The rectangle the floating handle may occupy: the window, narrowed by every ancestor that
+   * clips its overflow.
+   *
+   * The handle is `position: fixed`, so it is placed in viewport coordinates and no ancestor's
+   * overflow clips it for us. But the editor is routinely mounted inside a bounded scroller —
+   * the ribbon puts its surface in one, inside a clipped card — and a block scrolled out of that
+   * scroller has to take its handle with it rather than leave it parked over the host's chrome.
+   *
+   * Gated on the computed `overflow` rather than on whether an element scrolls right now, so the
+   * answer does not depend on how much content happens to be loaded.
+   */
+  private blockHandleClipRect(): { top: number; right: number; bottom: number; left: number } {
+    const view = this.container.ownerDocument.defaultView;
+    const clip = {
+      top: 0,
+      left: 0,
+      right: view?.innerWidth ?? Number.MAX_SAFE_INTEGER,
+      bottom: view?.innerHeight ?? Number.MAX_SAFE_INTEGER,
+    };
+    for (let el: HTMLElement | null = this.editRoot; el; el = el.parentElement) {
+      const style = view?.getComputedStyle(el);
+      if (!style || (style.overflowX === "visible" && style.overflowY === "visible")) continue;
+      const box = el.getBoundingClientRect();
+      if (style.overflowY !== "visible") {
+        clip.top = Math.max(clip.top, box.top);
+        clip.bottom = Math.min(clip.bottom, box.bottom);
+      }
+      if (style.overflowX !== "visible") {
+        clip.left = Math.max(clip.left, box.left);
+        clip.right = Math.min(clip.right, box.right);
+      }
+    }
+    return clip;
+  }
+
   private showBlockHandle(unit: HTMLElement): void {
     const handle = this.blockDragHandle;
     if (!handle || !this.isMovableBlockUnit(unit)) return;
     const changed = unit !== this.blockDragSource;
     this.blockDragSource = unit;
+    this.blockHandleWanted = true;
     // A block the engine will not move anywhere — one owning a section break, or already carrying
     // revision markup a tracked move would have to re-wrap — gets no handle rather than a handle
     // that always fails. Asking costs an engine round trip, so hovering only ever CONSUMES a
@@ -1589,21 +1640,46 @@ export class DocxEditor {
     }
     if (changed && known === undefined) this.prefetchBlockMoveTargets(unit);
     const rect = unit.getBoundingClientRect();
+    // The handle belongs to the editor's viewport, not the window's. A block scrolled out of that
+    // viewport gets no handle at all: clamping one back into view would leave a grip sitting next
+    // to a block that is not there — and clamping to the WINDOW, as this used to, parked it on
+    // whatever chrome the host draws above the editor.
+    const clip = this.blockHandleClipRect();
+    if (
+      rect.bottom <= clip.top || rect.top >= clip.bottom
+      || rect.right <= clip.left || rect.left >= clip.right
+    ) {
+      // A gesture in flight owns the handle: it is the drag's own source element, and an open
+      // move menu is anchored to it and hands focus back to it on Escape. Withdrawing it
+      // mid-gesture is the same mistake as leaving it behind — mirror `hideBlockHandle`'s guard
+      // and leave it where the gesture put it.
+      if (!this.blockDragging && this.blockMoveMenu?.style.display !== "block")
+        handle.style.display = "none";
+      return;
+    }
     handle.style.display = "flex";
-    handle.style.left = `${Math.max(4, rect.left - 32)}px`;
-    handle.style.top = `${Math.max(4, rect.top + (unit.tagName === "TABLE" ? 6 : Math.max(0, (rect.height - 28) / 2)))}px`;
+    // A block only partly in view keeps its handle, pulled to the edge it is disappearing past.
+    const top = rect.top
+      + (unit.tagName === "TABLE" ? 6 : Math.max(0, (rect.height - BLOCK_HANDLE_HEIGHT) / 2));
+    handle.style.left = `${clampToRange(
+      rect.left - (BLOCK_HANDLE_WIDTH + BLOCK_HANDLE_GAP),
+      clip.left,
+      clip.right - BLOCK_HANDLE_WIDTH,
+    )}px`;
+    handle.style.top = `${clampToRange(top, clip.top, clip.bottom - BLOCK_HANDLE_HEIGHT)}px`;
     const preview = blockPreviewText(unit);
     handle.setAttribute("aria-label", preview ? `Move block: ${preview}` : "Move block");
   }
 
   private hideBlockHandle(): void {
     if (this.blockDragging || this.blockMoveMenu?.style.display === "block") return;
+    this.blockHandleWanted = false;
     if (this.blockDragHandle) this.blockDragHandle.style.display = "none";
   }
 
   private positionBlockHandle(): void {
     const source = this.currentBlockDragSource();
-    if (source && this.blockDragHandle?.style.display !== "none") this.showBlockHandle(source);
+    if (source && this.blockHandleWanted) this.showBlockHandle(source);
   }
 
   /** Draw the drop line on `zone`'s requested edge, or take it away when there is no target. */
@@ -2093,6 +2169,7 @@ export class DocxEditor {
     this.blockMoveMenu = null;
     this.blockMoveLive = null;
     this.blockDragSource = null;
+    this.blockHandleWanted = false;
     this.blockDragging = false;
     this.blockDragPointerDown = false;
   }

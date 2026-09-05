@@ -532,6 +532,36 @@ paragraph it coalesces for a deleted/moved-away paragraph mark **without its att
 the surviving block lost its `pt:Unid` and rendered with no `data-anchor` — unaddressable,
 and invisible to the reconciler. Identity now comes from the same member the properties do.
 
+### The handle belongs to the editor's viewport, not the window
+
+The handle is `position: fixed`: it is measured with `getBoundingClientRect()` and placed in
+viewport coordinates, which is what lets it float in the page margin without being a child of the
+block it points at. Nothing in the document clips a fixed element, though, and its position was
+then clamped into the *window* (`Math.max(4, ...)`). Hosted the way the ribbon hosts it — the
+surface inside a bounded `.dxr-scroll` region, inside a card that clips — a block scrolled past
+the top of that region left its handle behind at the top of the *page*: a grip floating over the
+host's own chrome, pointing at a block that was no longer on screen. Measured on the demo surface
+(scroll region y 159–874), the handle sat at y=141 after a 200px scroll and at y=4 for every
+scroll beyond that, which is where the clamp puts it.
+
+The clip rectangle is now the window narrowed by every ancestor whose computed `overflow` is not
+`visible`, so a nested scroller and a clipping card both count. Gating on the computed overflow
+rather than on whether an element scrolls *right now* keeps the answer independent of how much
+content happens to be loaded. A block clear of that rectangle withdraws its handle rather than
+clamping it to an edge — a grip pinned to the top of the document area would point at a block
+that is not there — while a block only partly in view keeps its handle, pulled to the edge it is
+disappearing past.
+
+Repositioning on scroll also stopped using the handle's own `display` as its record of whether a
+handle is wanted; that intent is tracked separately now. Without the split, a handle withdrawn by
+the clip could never come back, and the focus-driven path — which keeps a handle for the focused
+block with no pointer hovering it — would lose its handle permanently on a scroll round trip.
+
+The clip does not fire mid-gesture, mirroring `hideBlockHandle`'s existing guard. The handle is
+the drag's own source element, and an open move menu is anchored to it and returns focus to it on
+Escape; withdrawing it from under a gesture is the same mistake as leaving it behind, in the
+other direction.
+
 ### Still open
 
 - Paginated dragging (handle is not mounted in paginated mode).
@@ -539,3 +569,10 @@ and invisible to the reconciler. Identity now comes from the same member the pro
   reconciles incrementally (~0.8 s).
 - No ribbon control toggles track changes; `trackedChanges`/`revisionAuthor` are mount-time
   options on `DocxEditor`/`mountRibbon`.
+- The drop line and the move menu are positioned the same way as the handle was (viewport
+  coordinates clamped into the window) and are not clipped to the editor's viewport. The menu is
+  placed once when it opens and never repositioned, so scrolling with it open leaves it behind:
+  measured, its top stayed at y=274 while the block it belongs to scrolled away under it. It
+  stays inside the viewport in that case rather than escaping, and both surfaces are only on
+  screen during an interaction that keeps the pointer or the focus inside the editor, so they
+  were left alone rather than changed speculatively.
