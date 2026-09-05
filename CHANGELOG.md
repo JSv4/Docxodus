@@ -4,6 +4,52 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **REDLINE THEATER (`docs/demo/redline.html`) — the agent protocol as the demo.** Three
+  counsel negotiate a Master Services Agreement, and every edit that lands is dispatched
+  from a real JSON-RPC 2.0 `tools/call` frame in the shape `docxodus-mcp` accepts over
+  stdio, streamed on a wire console beside the document. Nothing renders a diff: the
+  session records in `render_inline` mode, so each call writes native `w:ins`/`w:del`
+  into the live package and the editor repaints only the block that changed — what you
+  watch is the file that downloads, attributed per counsel because the three reviewers
+  are three values of the session's revision author. The finale proves the result rather
+  than asserting it: `proveRedlineReversibility` plus a `docxDiffGetRevisions` pass
+  confirm accept-all reaches the negotiated final and reject-all restores the baseline
+  with zero content differences, with reject-path package divergences classified against
+  a closed set of parts that review comments legitimately explain. One scripted call is
+  *expected to be refused* — list membership has no reversible tracked-change encoding,
+  so the engine declines it rather than writing a mark reject-all could not undo. That
+  closed-set classification is also what found the note-insertion defect fixed in #625:
+  a footnote's definition survived reject-all, and because `/word/footnotes.xml` is not
+  a part a comment can explain, the demo reported the redline unreversible instead of
+  absorbing it into a pattern match. Act II footnotes the negotiated cap again now, so
+  the proof exercises that path on every run.
+  The page carries a second mode, **diff stress**, because "redline" means two things
+  here and only one was on screen: where the negotiation RECORDS its markup, the stress
+  meter RECOMPUTES the redline from scratch after every edit and times it, appending a
+  clause per frame so the input grows under the engine. Three selectable pipeline depths
+  measure ~52 ms (`docxDiffGetRevisions`), ~74 ms (`docxDiffCompareProducts` → package +
+  revisions) and ~141 ms (plus `convertDocxToHtml`) — that is 33× to 78× the cost of the
+  ~2 ms mutation path measured through the same endpoint, so a redline-per-edit loop runs
+  between roughly 7 and 19 frames per second: not an animation rate, but no longer far
+  from one. The panel
+  reports the ratio it just measured, not a number written into the page, which is how it
+  picked up three successive engine improvements — the read-amplification fix from the
+  DocxDiff stress work, the normalizer gating, and the read-identity change — without a
+  line of its own changing. `benchmarks/docxdiff-stress/FINDINGS.md` remains the authority on engine
+  performance; this mode is the watchable version of the same question.
+  A browser MCP endpoint (`docs/demo/mcp-wire.js`) reimplements the server's front half
+  (envelope parsing, (tool, action) routing, the `content[].text` + `isError` result
+  shape, business failures as tool results rather than protocol errors) over `DocxSession`
+  via WASM; `docs/demo/tools/redline-theater.test.mjs` parses the real
+  `tools/mcp-server/ToolCatalog.cs` so that correspondence is checked rather than
+  claimed, and `npm/tests/demo-redline.spec.ts` guards the run, the attribution, the
+  proof and a latency budget. Demo content only — not shipped in the npm package.
+
+
+## [12.0.1] - 2026-09-05
+
 ### Fixed
 
 - The browser build no longer hangs on a comparison that follows a session read. The first
@@ -98,50 +144,6 @@ All notable changes to this project will be documented in this file.
   paragraph pair adopted the right's heading or list style — or an edited title paragraph in a
   document whose inserted body uses the same title style — rendered with the default paragraph
   style while the definition it needed sat, imported, in the output styles part.
-
-### Added
-
-- **REDLINE THEATER (`docs/demo/redline.html`) — the agent protocol as the demo.** Three
-  counsel negotiate a Master Services Agreement, and every edit that lands is dispatched
-  from a real JSON-RPC 2.0 `tools/call` frame in the shape `docxodus-mcp` accepts over
-  stdio, streamed on a wire console beside the document. Nothing renders a diff: the
-  session records in `render_inline` mode, so each call writes native `w:ins`/`w:del`
-  into the live package and the editor repaints only the block that changed — what you
-  watch is the file that downloads, attributed per counsel because the three reviewers
-  are three values of the session's revision author. The finale proves the result rather
-  than asserting it: `proveRedlineReversibility` plus a `docxDiffGetRevisions` pass
-  confirm accept-all reaches the negotiated final and reject-all restores the baseline
-  with zero content differences, with reject-path package divergences classified against
-  a closed set of parts that review comments legitimately explain. One scripted call is
-  *expected to be refused* — list membership has no reversible tracked-change encoding,
-  so the engine declines it rather than writing a mark reject-all could not undo. That
-  closed-set classification is also what found the note-insertion defect fixed in #625:
-  a footnote's definition survived reject-all, and because `/word/footnotes.xml` is not
-  a part a comment can explain, the demo reported the redline unreversible instead of
-  absorbing it into a pattern match. Act II footnotes the negotiated cap again now, so
-  the proof exercises that path on every run.
-  The page carries a second mode, **diff stress**, because "redline" means two things
-  here and only one was on screen: where the negotiation RECORDS its markup, the stress
-  meter RECOMPUTES the redline from scratch after every edit and times it, appending a
-  clause per frame so the input grows under the engine. Three selectable pipeline depths
-  measure ~52 ms (`docxDiffGetRevisions`), ~74 ms (`docxDiffCompareProducts` → package +
-  revisions) and ~141 ms (plus `convertDocxToHtml`) — that is 33× to 78× the cost of the
-  ~2 ms mutation path measured through the same endpoint, so a redline-per-edit loop runs
-  between roughly 7 and 19 frames per second: not an animation rate, but no longer far
-  from one. The panel
-  reports the ratio it just measured, not a number written into the page, which is how it
-  picked up three successive engine improvements — the read-amplification fix from the
-  DocxDiff stress work, the normalizer gating, and the read-identity change — without a
-  line of its own changing. `benchmarks/docxdiff-stress/FINDINGS.md` remains the authority on engine
-  performance; this mode is the watchable version of the same question.
-  A browser MCP endpoint (`docs/demo/mcp-wire.js`) reimplements the server's front half
-  (envelope parsing, (tool, action) routing, the `content[].text` + `isError` result
-  shape, business failures as tool results rather than protocol errors) over `DocxSession`
-  via WASM; `docs/demo/tools/redline-theater.test.mjs` parses the real
-  `tools/mcp-server/ToolCatalog.cs` so that correspondence is checked rather than
-  claimed, and `npm/tests/demo-redline.spec.ts` guards the run, the attribution, the
-  proof and a latency budget. Demo content only — not shipped in the npm package.
-
 
 ## [12.0.0] - 2026-09-04
 

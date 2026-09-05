@@ -399,7 +399,7 @@
   </main>
 
   <footer>Engine delivered by <a href="https://www.jsdelivr.com/package/npm/docxodus">jsDelivr</a> from
-    <a href="https://www.npmjs.com/package/docxodus">docxodus@12.0.0</a>. Everything runs client-side.</footer>
+    <a href="https://www.npmjs.com/package/docxodus">docxodus@12.0.1</a>. Everything runs client-side.</footer>
 
   <dialog id="embedDialog" aria-labelledby="embedTitle">
     <div class="embed-inner">
@@ -426,7 +426,7 @@
   <script type="module">
     const params = new URLSearchParams(location.search);
     const ENGINE = params.get("engine")
-      ?? "https://cdn.jsdelivr.net/npm/docxodus@12.0.0/dist/embed.bundle.js";
+      ?? "https://cdn.jsdelivr.net/npm/docxodus@12.0.1/dist/embed.bundle.js";
     const DOC = params.get("doc")
       ?? "./docxodus-demo-guide.docx";
     // The arcade and its controls are demo content living beside this page, so
@@ -450,7 +450,7 @@
     const moduleSnippet = `<div id="docx-editor" style="height:80vh"></div>
 <script type="module">
   import { createRibbonEditor } from
-    "https://cdn.jsdelivr.net/npm/docxodus@12.0.0/dist/embed.bundle.js";
+    "https://cdn.jsdelivr.net/npm/docxodus@12.0.1/dist/embed.bundle.js";
 
   await createRibbonEditor("#docx-editor", "/documents/example.docx");
 <\/script>`;

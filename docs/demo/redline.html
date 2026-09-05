@@ -88,7 +88,7 @@
     // retargets only the library (the Playwright spec points it at the local
     // bundle).
     const ENGINE = params.get("engine")
-      ?? "https://cdn.jsdelivr.net/npm/docxodus@12.0.0/dist/embed.bundle.js";
+      ?? "https://cdn.jsdelivr.net/npm/docxodus@12.0.1/dist/embed.bundle.js";
     const engineUrl = new URL(ENGINE, location.href);
     // The show is demo content, not library machinery: it lives beside this page
     // (docs/demo/ deploys verbatim; pretest copies the same files into the local
