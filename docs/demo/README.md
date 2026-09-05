@@ -1,6 +1,6 @@
 # GitHub Pages demo
 
-Six static pages, no application server. All host the **same** editor
+Seven static pages, no application server. All host the **same** editor
 surface — `createRibbonEditor` from the pinned `docxodus@12.0.1` embed bundle on
 jsDelivr — and differ only in how much of the page belongs to the editor:
 
@@ -12,6 +12,169 @@ jsDelivr — and differ only in how much of the page belongs to the editor:
 | `observatory.html` | The DOCX Observatory inside the live editor: procedural ASCII phenomena animated onto a Word paragraph in the editor's own session (`raw.replaceXml` + `editor.refresh()`). Pause — or click the water — and it is only a document: edit with the ribbon, Undo rewinds frame by frame, Save downloads the caught wave. The phenomena and frame loop are demo content, not library machinery: they live in `ascii-scenes.js` **in this directory** (also imported, via the test-webroot copy, by the two `npm/examples/ascii-animation*` pages), so `?engine=` pins the library alone and the scenes version with the site. Needs `DocxEditor.refresh()`, which 9.5.0 predates — it was pinned to `docxodus@9.6.0` ahead of that release and healed on its own when it published; it now shares the pin with its siblings. |
 | `arcade.html` | THE DOCX ARCADE — four playable games rendered through the editor's ordinary incremental document path. The text cartridges replace colored runs in one Word paragraph; **DOOM** runs id Software's GPL engine on Freedoom's BSD IWAD and replaces the media payload of one native **320 × 200 full-color inline DOCX image** through the public session API. It is guarded at the ten-visible-FPS design point, including browser decode and presentation. Four separate static **18pt document paragraphs** keep the complete controls legible. Doom's world remains in its WebAssembly heap, so its honest document round trip is pause, copy/paste, undo and save; the other cartridges additionally re-parse edited terrain on resume. The games live in `ascii-arcade.js`; Doom lives in the GPL `doom-cart.js`, with pinned engine/IWAD URLs documented below. Specs in `npm/tests/demo-arcade-doom.spec.ts` prove exact framebuffer pixels, readable displayed HUD dimensions, real play, sustained visible throughput, input, copy/paste, and save/reopen fidelity. **DOOM's image now renders on this page** — the pin is `docxodus@12.0.1`, which fixes the gap that blocked it through 10.0.0: up to and including that version the single-block renderer cloned a block's XML into a throwaway shell without copying the referenced media part, and its converter settings carried no image handler, so `WmlToHtmlConverter` omitted the `w:drawing` and the frame paragraph refreshed to blank even though the image was genuinely in the package the whole time (Save and reopen showed it). `paintImage`'s three-frame capability probe — not a version check — is what caught this originally, and it stays in place as a guard against a future regression rather than being removed now that the surface proves itself. `?cart=e1m1` / `?cart=dungeon` / `?cart=platformer` (run-based, no image) always played regardless. |
 | `golf.html` | DOCX GOLF — course play on the editing surface itself, the inverse bet from the arcade: where the arcade painted frames INTO one paragraph through `raw.replaceXml` (the escape hatch), golf makes the real clubs the game. Six holes, each a start document loaded into the live ribbon editor and a target document built beside it; the referee is the comparison engine — a hole is CLEARED when `docxDiffGetRevisions` between your document and the target returns **zero revisions**, and the caddie panel phrases whatever revisions remain as the work left (`remove "Purchasr"`, `move "Governing Law"`, `reformat "Duties" (style)`). Holes escalate across the surface: a one-word fix, clause reordering, scoped defined-term conformance, heading styles (the Style dropdown is the club — the diff cares about `w:pStyle`, not just words), and a table hole (fix a cell, delete a duplicated row from the table toolbar), plus a footnote hole played with Insert → Footnote (the referee reads note parts too). On a phone the caddie collapses to its head strip behind a toggle, and a stuck player can concede with "Show me" — the caddie plays the content-addressed reference line and the scorecard marks the hole assisted. Strokes are counted from the document, not the toolbar: the driver fingerprints `session.save()` on a poll, so one committed burst of editing is one swing, and undo counts. Par/birdie/bogey scoring, a Target view, and a live redline view (`docxDiffCompare` → `convertDocxToHtml`) round out the caddie. The game lives in `docx-golf.js` in this directory (same `?engine=` split as its siblings); its pure logic is tested by `tools/docx-golf.test.mjs`, and `npm/tests/demo-golf.spec.ts` keeps the course honest the way the engine's own evals are kept honest — no hole starts solved, and every hole's content-addressed reference solution reaches zero revisions within par. Boots on tap when iframed. |
+| `redline.html` | REDLINE THEATER — the agent-facing surface as the show. Three counsel negotiate a Master Services Agreement, and every edit you watch land is dispatched from a real JSON-RPC 2.0 `tools/call` frame in the shape `docxodus-mcp` accepts over stdio, streamed on a wire console beside the document. Nothing here renders a diff: the session runs in `render_inline` recording mode, so each call writes native `w:ins`/`w:del` into the live package and the editor repaints only the block that changed — what you are watching IS the file that downloads, and the three counsel are three values of the session's revision author, so it is genuinely per-reviewer. Ends by proving itself: `proveRedlineReversibility` plus a `docxDiffGetRevisions` pass confirm accept-all reaches the negotiated final and reject-all restores the baseline with **zero content differences**. One scripted call is *expected to be refused* — converting the carve-outs to a Word-native list has no reversible tracked-change encoding, so the engine declines it rather than writing a mark reject-all could not undo, and the wire shows that in amber. Speed is a display choice the HUD is honest about (1× / 4× / MAX, with measured p50 and calls/s); the run is ~3 s of wall clock at 4×, and the median tool call is under 6 ms. The show lives in `redline-theater.js` and the browser MCP endpoint in `mcp-wire.js`, both in this directory (same `?engine=` split as its siblings), plus `?speed=read\|brisk\|max` and `?autorun=1`. Specs: `npm/tests/demo-redline.spec.ts` (fourteen browser assertions across both modes, including the reversibility proof, the latency budget, and that a deeper diff pipeline actually costs more) and `docs/demo/tools/redline-theater.test.mjs`, whose contract test parses the real `tools/mcp-server/ToolCatalog.cs` so the demo's claim to speak the shipped tool contract is checked rather than asserted. |
+
+![REDLINE THEATER](../images/demo/redline-theater.gif)
+
+### Diff stress: the other pipeline, and what it costs
+
+The page has a second mode, and it exists because "redline" means two different
+things in this codebase and only one of them was on screen. The negotiation
+above **records** its redline — each MCP call writes `w:ins`/`w:del` into the
+live package as it lands. **Diff stress** does the other thing: it recomputes
+the redline from scratch after every single edit, baseline against current, and
+times it, while each frame appends a clause so the input grows under the engine
+instead of sitting at one fixed size that would measure nothing.
+
+![DIFF STRESS](../images/demo/diff-stress.gif)
+
+The meter in that GIF reads slower than the table below — 132 ms where the table
+says 74 — and should: capturing it runs a screenshot recorder at 10fps against the
+same CPU, and the clip starts after a full negotiation has already grown the
+document. Both are the confound described further down; the stress p50 measures the
+machine and the input as much as the engine. The GIF is there to show the loop
+running, not to be read off.
+
+Three depths, because "how fast is the diff engine" has three honest answers:
+
+| depth | engine calls | measured |
+|---|---|---|
+| `revisions` | `docxDiffGetRevisions` | ~19 diffs/s, p50 **52 ms** |
+| `redline` | `docxDiffCompareProducts` → redline package + revisions | ~13 diffs/s, p50 **74 ms** |
+| `full + HTML` | the above, then `convertDocxToHtml` with tracked changes | ~7 diffs/s, p50 **141 ms** |
+
+Against a mutation costing ~2 ms through the same MCP endpoint, that is **33× to
+78×**, and the panel reports the ratio it just measured rather than the one
+written here. So the honest answer to "can we animate a diff per edit at 60fps"
+is still no — but it is a much closer no than it was. A redline-per-edit loop now
+lives between 7 and 19 frames per second on a document this size, where a month of
+engine work ago it was 2 to 6. The shallow depth is inside the range a viewer
+reads as motion rather than as a series of updates. That gap is the entire argument for
+recording a redline when you are the one making the edits, and for computing one
+when somebody hands you a document they changed. Both emit the same native
+markup; the meter shows what each costs to get there.
+
+The `redline` depth uses `docxDiffCompareProducts` rather than `docxDiffCompare`
+followed by `docxDiffGetRevisions`, because one memoized alignment pass yielding
+both products measured **51 ms against 85 ms** for the two calls separately —
+about a third saved, which is what that API is for. That pair is measured the
+controlled way described below, not read off the panel.
+
+These figures track the engine, and have moved repeatedly without a line of demo
+code changing — which is the argument for a panel that measures rather than a page
+that quotes. Three of those movements have a cause; the most recent refresh does
+not, and saying which is which is the whole point of keeping the list:
+
+- **#616** roughly halved `docxDiffCompare` on this document (278 ms → 153 ms) by
+  removing a read amplification.
+- **#626** gated the compatibility normalizer on a streaming scan instead of a full
+  parse. The two deeper rows came down 10–18% (`redline` 206 → 181, `full`
+  422 → 352) while `revisions` held inside the noise band — the saving growing with
+  pipeline depth is what a load-path change looks like, since the deeper the
+  pipeline the more packages it opens.
+- **#627** stopped giving the diff engine's reads an identity nothing asks for, and
+  this time all three rows moved together, 13–18% (152 → 124, 181 → 157,
+  352 → 307). A saving that is uniform across depths is the signature of a change
+  on the path every depth shares. (#629 landed alongside it, but its snapshot reuse
+  is across comparisons and this loop makes one comparison per frame, so it has
+  nothing to reuse — the panel would not see it.)
+- **A refresh with no attribution, which is sometimes the honest answer.** The table
+  was re-read after #620 merged its `WmlToHtmlConverter` / `MarkupSimplifier`
+  speedup, and every row came out 5–15% *slower*. Nothing in that merge could do it:
+  `revisions` never calls the converter at all. Decomposing said the opposite — the
+  conversion stage on its own (`full` − `redline`, controlled) went 154 ms → 143 ms,
+  cheaper, exactly as #620 intends, while the compare stage read dearer with no cause
+  in the diff. The reading that changed was the machine, on a different day. Kept as
+  a worked example of a movement that fits nothing and should be labelled as such.
+- **#653 compiles the browser build's hot paths ahead of time from a recorded
+  profile, and it is the largest movement this page has recorded: everything roughly
+  halved.** `revisions` 143 → 52 ms, `redline` 170 → 74, `full + HTML` 324 → 141;
+  `docxDiffCompareProducts` on fixed inputs 125 → 51 ms, and the conversion stage in
+  isolation 144 → 60. Both methods agreed and the controlled figures were pooled over
+  two sessions, because a claimed 2× deserves more than the one session that made an
+  earlier baseline look better than it was. Uniform across depths again, but this
+  time the shared thing is not a code path — it is the .NET execution underneath all
+  of them, which is what ahead-of-time compilation buys and why even the ratio
+  against the recording path moved (68–157× down to 33–78×: recording got faster
+  too).
+
+Those attributions are what the shape of the movement suggests, not what the panel
+proves; it measures the total, and the commit messages are the authority on cause.
+Where the shape fits nothing in the diff, as above, the honest label is "no cause
+found" rather than the nearest PR.
+
+Read them as one machine's order of magnitude, not as a benchmark. Two things
+make the last digit meaningless. Repeated medians on the same container spread
+5–20% run to run. And the p50 the meter reports is taken over a run during which
+the document is *growing*, so it depends on how far the loop got — which makes
+stress p50 unsuitable for comparing one engine build against another, however
+tempting the number looks sitting there. (Checked after #623: a controlled
+fixed-input measurement showed no regression, while the stress readout appeared
+to move by a third. The controlled one was right.) The rows above are therefore
+each a median of three full 40-frame runs on one container, refreshed together so
+they describe one machine on one build rather than an accumulation of readings. To compare builds, use a fixed
+input and medians of many — which is what the harness below does properly.
+
+**The ratio column survives what the millisecond columns do not, and that is the most
+useful thing measured here.** Two pooled measurements of the same build family — three
+40-frame stress runs plus two controlled sessions each — came out 21–28% apart on every
+absolute figure (`revisions` 52 → 41 ms, `redline` 74 → 55, `full + HTML` 141 → 101) while
+the ratios against the recording path barely moved: 33 → 34×, 45 → 45×, 78 → 80×. Nothing
+in the engine changed between them to explain a quarter; what changed is how fast the
+container was that hour. The mutation path scaled by the same factor as the diff path, so
+the ratio held. That gives a sharper test than "is the movement uniform across depths":
+**when the absolutes move and the ratio holds, it is the machine; when the ratio itself
+moves, the two paths changed by different amounts and something real happened** — which is
+exactly how #653 announced itself, dragging 68–157× down to 33–78×. The table keeps its
+original pooled figures rather than being refreshed to the newer ones, because chasing the
+faster reading would just be chasing weather, and the panel recomputes the ratio live
+anyway.
+
+That test needs a threshold, or it will fire on noise. Two consecutive `full + HTML` runs on
+one build within one hour read **77× and 84×** — so the ratio itself carries roughly ±10%,
+and a movement inside that band means nothing. #653 is the calibration for the other end: it
+halved the ratio, and there was no ambiguity about reading it as real. The rule is worth
+stating with the number attached — **a ratio movement under about 10% is noise; one that
+approaches a halving or doubling is the engine.** In between, measure again before believing
+it.
+
+The rigorous headless counterpart — the same question asked of a 147 KB certificate of
+incorporation, with stage attribution and allocation figures — lives in
+`benchmarks/docxdiff-stress/FINDINGS.md`. That harness is the authority on engine
+performance; this mode is the one you can watch.
+
+The meter resets on every run: carrying frames across a depth change would report
+a p50 describing neither pipeline. Switching back to the wire stops the loop, so
+it cannot keep burning the engine behind a hidden pane.
+
+### Why the frames are real, and where the resemblance stops
+
+`tools/mcp-server` is a .NET process on stdio; a browser cannot subprocess it. So
+`mcp-wire.js` reimplements the server's **front half** — envelope parsing, the
+(tool, action) routing table, the MCP result shape (`content[].text` +
+`isError`), and the convention that a business-level failure is a tool *result*
+rather than a JSON-RPC error — over `DocxSession` via WASM instead of over a
+pipe. The frames are the frames; the transport under them differs.
+
+That claim is checked, not asserted:
+`docs/demo/tools/redline-theater.test.mjs` parses the shipped `ToolCatalog.cs`
+and fails if any (tool, action) pair the endpoint routes, any search `mode`, any
+`set_mode` value, or any argument the script puts on the wire is absent from the
+real catalog. It caught two mismatches while the demo was being written (a batch
+argument named `atomic` that the catalog calls `mode`, and the `set_mode` wire
+names needing to map to the `TrackedChangeMode` enum rather than being passed
+through as strings).
+
+What the endpoint deliberately does **not** reimplement: the document store and
+its containment checks (a tab has no filesystem, so sessions are opened by the
+host page rather than by `docxodus_open` with a path), the transaction/retry
+journal, the delivery-bundle host, and the MCP Apps UI extension.
+
+One thing the demo surfaces about the tool surface itself: attribution is a
+session setting (`revisionAuthor`, taken at `docxodus_open`), so three counsel in
+one session is a host-side switch with no tool behind it. The wire shows the two
+`docxodus_track_changes/set_mode` calls that bracket the baseline build, but the
+author changes between acts happen off-wire.
 
 ### Playable Doom walkthrough, in the real editor
 

@@ -4,6 +4,50 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **REDLINE THEATER (`docs/demo/redline.html`) — the agent protocol as the demo.** Three
+  counsel negotiate a Master Services Agreement, and every edit that lands is dispatched
+  from a real JSON-RPC 2.0 `tools/call` frame in the shape `docxodus-mcp` accepts over
+  stdio, streamed on a wire console beside the document. Nothing renders a diff: the
+  session records in `render_inline` mode, so each call writes native `w:ins`/`w:del`
+  into the live package and the editor repaints only the block that changed — what you
+  watch is the file that downloads, attributed per counsel because the three reviewers
+  are three values of the session's revision author. The finale proves the result rather
+  than asserting it: `proveRedlineReversibility` plus a `docxDiffGetRevisions` pass
+  confirm accept-all reaches the negotiated final and reject-all restores the baseline
+  with zero content differences, with reject-path package divergences classified against
+  a closed set of parts that review comments legitimately explain. One scripted call is
+  *expected to be refused* — list membership has no reversible tracked-change encoding,
+  so the engine declines it rather than writing a mark reject-all could not undo. That
+  closed-set classification is also what found the note-insertion defect fixed in #625:
+  a footnote's definition survived reject-all, and because `/word/footnotes.xml` is not
+  a part a comment can explain, the demo reported the redline unreversible instead of
+  absorbing it into a pattern match. Act II footnotes the negotiated cap again now, so
+  the proof exercises that path on every run.
+  The page carries a second mode, **diff stress**, because "redline" means two things
+  here and only one was on screen: where the negotiation RECORDS its markup, the stress
+  meter RECOMPUTES the redline from scratch after every edit and times it, appending a
+  clause per frame so the input grows under the engine. Three selectable pipeline depths
+  measure ~52 ms (`docxDiffGetRevisions`), ~74 ms (`docxDiffCompareProducts` → package +
+  revisions) and ~141 ms (plus `convertDocxToHtml`) — that is 33× to 78× the cost of the
+  ~2 ms mutation path measured through the same endpoint, so a redline-per-edit loop runs
+  between roughly 7 and 19 frames per second: not an animation rate, but no longer far
+  from one. The panel
+  reports the ratio it just measured, not a number written into the page, which is how it
+  picked up three successive engine improvements — the read-amplification fix from the
+  DocxDiff stress work, the normalizer gating, and the read-identity change — without a
+  line of its own changing. `benchmarks/docxdiff-stress/FINDINGS.md` remains the authority on engine
+  performance; this mode is the watchable version of the same question.
+  A browser MCP endpoint (`docs/demo/mcp-wire.js`) reimplements the server's front half
+  (envelope parsing, (tool, action) routing, the `content[].text` + `isError` result
+  shape, business failures as tool results rather than protocol errors) over `DocxSession`
+  via WASM; `docs/demo/tools/redline-theater.test.mjs` parses the real
+  `tools/mcp-server/ToolCatalog.cs` so that correspondence is checked rather than
+  claimed, and `npm/tests/demo-redline.spec.ts` guards the run, the attribution, the
+  proof and a latency budget. Demo content only — not shipped in the npm package.
+
+
 ## [12.0.1] - 2026-09-05
 
 ### Fixed
@@ -294,6 +338,8 @@ All notable changes to this project will be documented in this file.
   already had, so an untouched part comes back byte-identical and a package diff shows the edit
   instead of burying it. This holds for every transport, because they all save through the same
   serializer.
+
+### Fixed
 
 - **Editor: replacing an image no longer flashes white in Firefox and Safari.** When a block's
   fresh render differed from its live DOM node only in `<img>` attributes — a host replacing an
@@ -818,6 +864,7 @@ All notable changes to this project will be documented in this file.
   inserted bullet list tight), while document defaults remain the stock backfill — matching what
   Word emits for this shape. Previously the output had no style definitions, so inserted content
   styled through `pStyle` lost its formatting.
+### Changed
 - **The corpus differential's consolidate rows now observe their calls (#632).** The N-way half of
   the differential recorded its warnings and order-variance channels as `n/a` on two premises that
   were both false when they were written down: that the consolidate settings type carries no
