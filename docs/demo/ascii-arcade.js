@@ -113,7 +113,10 @@ function hash2(x, y) {
 // blocks do. While the game plays it claims ONLY the game keys (never a
 // chorded shortcut — Ctrl/Cmd/Alt pass through untouched); paused, it claims
 // nothing, which is why typing into the document just works.
-const GAME_CODES = new Set([
+/** The keys the arcade claims from the document while a cartridge is playing.
+ *  Exported so the headless logic checks can hold the touch pad to it: a pad
+ *  button whose code is not in here sends a key the game never receives. */
+export const ARCADE_KEY_CODES = new Set([
   'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
   'KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'KeyR',
   'ShiftLeft', 'ShiftRight',
@@ -122,6 +125,38 @@ const GAME_CODES = new Set([
   // reason: unclaimed, it would split the screen paragraph in two.
   ...DOOM_KEY_CODES,
 ]);
+
+// ─── Touch: the same map, for a thumb ─────────────────────────────────
+// A cartridge declares what the on-screen pad should offer the same way it
+// declares its keyboard `controls` line — beside the keys themselves, so the
+// two cannot drift. `arcade-dock.js` owns the geometry (fixed slots); a
+// cartridge fills in only the slots it has a key for, and the pad hides the
+// rest rather than offering a button that sends a key nothing reads.
+//
+// Turning ROTATES (↺ ↻) and strafing TRANSLATES (◀ ▶): two pairs of side
+// buttons that do different things must not wear the same arrow.
+export const TOUCH = {
+  /** The platformer walks with the middle row and jumps with everything else;
+   *  it has no back, no strafe and no sprint. */
+  quest: {
+    up: { code: 'KeyW', glyph: '▲', label: 'Jump' },
+    left: { code: 'ArrowLeft', glyph: '◀', label: 'Run left' },
+    right: { code: 'ArrowRight', glyph: '▶', label: 'Run right' },
+    fire: { code: 'Space', glyph: 'JUMP', label: 'Jump' },
+  },
+  /** Both raycasters: forward/back, turn, strafe, and Shift as a LATCH —
+   *  a thumb cannot hold a modifier and steer with the same hand. */
+  raycaster: {
+    up: { code: 'KeyW', glyph: '▲', label: 'Forward' },
+    down: { code: 'KeyS', glyph: '▼', label: 'Back' },
+    left: { code: 'ArrowLeft', glyph: '↺', label: 'Turn left' },
+    right: { code: 'ArrowRight', glyph: '↻', label: 'Turn right' },
+    strafeLeft: { code: 'KeyA', glyph: '◀', label: 'Strafe left' },
+    strafeRight: { code: 'KeyD', glyph: '▶', label: 'Strafe right' },
+    fire: { code: 'Space', glyph: 'FIRE', label: 'Fire' },
+    run: { code: 'ShiftLeft', glyph: 'RUN', label: 'Run (stays on until tapped again)', toggle: true },
+  },
+};
 
 function createInput(isPlaying) {
   const down = new Set();
@@ -136,7 +171,7 @@ function createInput(isPlaying) {
   };
   const onKeyDown = (e) => {
     if (!isPlaying() || e.metaKey || e.ctrlKey || e.altKey) return;
-    if (!GAME_CODES.has(e.code)) return;
+    if (!ARCADE_KEY_CODES.has(e.code)) return;
     e.preventDefault();
     e.stopPropagation();
     if (!down.has(e.code)) { pressed.add(e.code); log(e.code, true); }
@@ -421,6 +456,7 @@ export function platformerCart() {
   return {
     name: 'quest',
     label: '¶ Pilcrow’s Quest',
+    touch: TOUCH.quest,
     controls: [
       'CONTROLS · RUN A/D or ←/→',
       'JUMP W/↑/SPACE',
@@ -583,6 +619,7 @@ const DUNGEON_MAP = [
  *  corridors survive the grid — hence its doubled stride and wall height. */
 const DUNGEON_PACK = {
   name: 'dungeon',
+  touch: TOUCH.raycaster,
   label: '▓ The Docx Dungeon',
   controls: [
     'CONTROLS · MOVE W/S · STRAFE A/D',
@@ -607,6 +644,7 @@ const DUNGEON_PACK = {
 
 const FREEDOOM_PACK = {
   name: 'e1m1',
+  touch: TOUCH.raycaster,
   label: '☩ Freedoom E1M1',
   controls: [
     'CONTROLS · MOVE W/S · STRAFE A/D',
@@ -1160,6 +1198,7 @@ function raycastCart(pack) {
   return {
     name: pack.name,
     label: pack.label,
+    touch: pack.touch,
     controls: pack.controls,
     caption: pack.caption,
     hint: pack.hint,
@@ -1405,6 +1444,10 @@ export function introFrame(t) {
  */
 export const IMAGE_ENGINE_MINIMUM = '11.0.0';
 
+/** The attract screen's one live control: Space is the coin drop, so the pad's
+ *  round button says so rather than offering to fire at a title card. */
+const INTRO_FIRE = { code: 'Space', glyph: 'START', label: 'Start the selected cartridge' };
+
 /**
  * Seed the Arcade into a ribbon-hosted editor's session and run the game loop
  * against it. Owns the dock (cartridge switch, pause/resume, restart, pace,
@@ -1414,7 +1457,8 @@ export const IMAGE_ENGINE_MINIMUM = '11.0.0';
  * commits on blur), re-parses the game world from the session's XML, and
  * hands the keyboard back to the game.
  *
- * `ui`: { carts, playpause, restart, pace, stats, hint, pad? } — dock DOM.
+ * `ui`: { carts, playpause, restart, pace, stats, hint, pad?, setPad? } — dock DOM,
+ * plus the hook that re-points the touch pad at the selected cartridge's keys.
  * `intro` (default true) opens on the attract screen — the same canvas
  * paragraph running the title card until Space (or any dock action) drops
  * the coin. Returns the controller the host page publishes as
@@ -1463,6 +1507,22 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
 
   const input = createInput(() => playing);
 
+  // What the on-screen pad is currently holding down: pressed buttons keyed by
+  // the pointer holding them, plus the latched modifiers (RUN) that stay down
+  // after the thumb leaves. Declared here, beside the input they feed, because
+  // pausing releases them and pausing can happen before the pad is wired.
+  const padHeld = new Map();
+  const padLatched = new Map();
+  function releasePad() {
+    for (const { code } of padHeld.values()) input.set(code, false);
+    padHeld.clear();
+    for (const [button, code] of padLatched) {
+      input.set(code, false);
+      button.setAttribute('aria-pressed', 'false');
+    }
+    padLatched.clear();
+  }
+
   const unidOf = (anchor) => anchor.split(':')[2];
   const canvasEl = () => editor.root.querySelector(`[data-anchor="${unidOf(canvasAnchor)}"]`);
   const controlsEls = () => seeded.controlsAnchors.map((anchor) =>
@@ -1483,6 +1543,9 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
   }
 
   function setCaption() {
+    // The pad follows the cartridge — and stands down on the attract screen,
+    // where nothing steers anything and the only live control is the coin.
+    ui.setPad?.(mode === 'intro' ? { fire: INTRO_FIRE } : cart.touch);
     if (mode === 'intro') {
       setControls([
         'CONTROLS · START SPACE',
@@ -1761,6 +1824,9 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
       loop();
     } else {
       playing = false;
+      // A latched RUN (or a key still down when the frame froze) must not
+      // survive into the paused document, nor into the next resume.
+      releasePad();
       clearTimeout(timer);
       ui.playpause.textContent = '▶ Resume';
       ui.stats.innerHTML = lastSurface === 'image'
@@ -1783,6 +1849,9 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
   function setCart(name) {
     const next = carts.find((c) => c.name === name);
     if (!next) return;
+    // The pad is about to be re-pointed at another cartridge's keys; anything
+    // it is holding down belongs to the one being left.
+    releasePad();
     cart = next;
     cart.reset();
     cartBtns.forEach((b, n) => b.setAttribute('aria-pressed', String(n === name)));
@@ -1900,17 +1969,46 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
     editor.refresh();
   });
 
-  // On-screen pad (touch): buttons carry data-code="ArrowLeft" etc.
+  // On-screen pad (touch): buttons carry data-code="ArrowLeft" etc. Wired by
+  // DELEGATION, and reading the code at event time, because the dock re-points
+  // those buttons whenever the cartridge changes and mints the tray's keys on
+  // the spot — a listener that captured a code at boot would go on sending the
+  // previous cartridge's key.
+  //
+  // Presses are tracked BY POINTER ID: steering with one thumb while firing
+  // with the other is two live pointers, and releasing one must not lift the
+  // other's key. The release listener sits on the window so a thumb that
+  // slides off the button it pressed still lifts that key rather than leaving
+  // it stuck down for the rest of the game.
   if (ui.pad) {
-    ui.pad.querySelectorAll('[data-code]').forEach((btn) => {
-      const code = btn.getAttribute('data-code');
-      const press = (e) => { e.preventDefault(); if (!playing) setPlaying(true); input.set(code, true); };
-      const release = (e) => { e.preventDefault(); input.set(code, false); };
-      btn.addEventListener('pointerdown', press);
-      btn.addEventListener('pointerup', release);
-      btn.addEventListener('pointercancel', release);
-      btn.addEventListener('pointerleave', release);
+    ui.pad.addEventListener('pointerdown', (e) => {
+      const button = e.target.closest?.('[data-code]');
+      if (!button) return;
+      e.preventDefault();
+      if (!playing) setPlaying(true);
+      const code = button.getAttribute('data-code');
+      // data-mode="toggle" LATCHES (RUN): holding a modifier is a keyboard
+      // affordance, and on a phone that hand is busy steering.
+      if (button.dataset.mode === 'toggle') {
+        const latched = padLatched.has(button);
+        if (latched) padLatched.delete(button);
+        else padLatched.set(button, code);
+        button.setAttribute('aria-pressed', String(!latched));
+        input.set(code, !latched);
+        return;
+      }
+      try { button.setPointerCapture(e.pointerId); } catch { /* mouse rigs */ }
+      padHeld.set(e.pointerId, { button, code });
+      input.set(code, true);
     });
+    const release = (e) => {
+      const entry = padHeld.get(e.pointerId);
+      if (!entry) return;
+      padHeld.delete(e.pointerId);
+      input.set(entry.code, false);
+    };
+    window.addEventListener('pointerup', release);
+    window.addEventListener('pointercancel', release);
   }
 
   setCaption();
