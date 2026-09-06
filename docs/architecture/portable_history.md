@@ -49,7 +49,7 @@ captured chain; a restore target may retain another same-document version branch
 Effects are checked against exact endpoint entry names/digests, without materializing
 changed payloads or constructing a ZIP from untrusted effects. Original text proposals
 and accepted maps are checked separately. Snapshot buffers are transient; graph metadata,
-blobs, edges, raw validation reads, and conservative package-expansion work have distinct
+blobs, edges, graph-blob validation reads, and conservative package-expansion work have distinct
 limits. Expansion work is charged with conservative multipliers, so the allowance is
 not a promise that an archive of that size will open. Package-level ZIP/XML limits also
 apply. This proves bounded structural/content consistency, not authorship or trust in
@@ -61,3 +61,31 @@ those choices by rerunning reconciliation. A verified contribution proves its re
 before/after content, not that accepting that contribution was the right response to
 an operation proposal. The authoritative backend owns that decision. Opening a history
 file must not reinterpret recorded outcomes using a newer conflict policy.
+
+## Archive v1
+
+The container is a narrow [ZIP/ZIP64 profile](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT):
+one disk, stored/deflate entries, no encryption, directories, links, or ZIP comments.
+Entry names are exactly `history.json` and `blobs/<lowercase-sha256>`; extra fields are
+bounded. ZIP metadata uses these container/count/manifest limits, not the graph-blob
+`MaxValidationBytes` allowance. The central directory is checked before allocating ZIP entry objects. No entry
+is extracted to a filesystem path. All inventory entries must be reachable, and all
+reachable entries must be present.
+
+`history.json` has five required fields and rejects unknown/duplicate properties:
+
+```json
+{
+  "schema": "https://docxodus.dev/schemas/history/archive/v1",
+  "schemaVersion": 1,
+  "documentId": "host-owned-stable-id",
+  "head": { "revision": "8", "state": { "sha256": "<64 lowercase hex>", "length": 1234 } },
+  "blobs": [{ "sha256": "<64 lowercase hex>", "length": 1234 }]
+}
+```
+
+Inventory is sorted by digest, with no duplicates. Revision is a canonical positive
+Int64 decimal string; lengths are nonnegative Int32 numbers. Blob contents use their
+existing versioned codecs, copied verbatim. Outer ZIP compression/serialization is not
+an identity guarantee; raw blob bytes, snapshot bytes, version IDs, and the captured
+head are. Reopening does not need the original store or any sidecar files.

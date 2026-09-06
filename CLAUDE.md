@@ -79,8 +79,9 @@ the access modifier while the whole codebase writes it the other way. Count what
 actually add rather than assuming one apiece.
 
 Update the two numbers here in the same commit rather than leaving them stale. They had
-drifted before (113/707 described a tree ~30 warnings behind, then 175/788 briefly, then
-177/791 while `stylecop.json` still expected Microsoft's name); re-measure, don't extrapolate.
+drifted before (113/707 described a tree ~30 warnings behind, then 175/788, then briefly
+177/791 and 184/800 while `stylecop.json` still expected Microsoft's name for files that had
+moved to John Scrudato IV's); re-measure, don't extrapolate.
 
 ## Repository Layout
 
