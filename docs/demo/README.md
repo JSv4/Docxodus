@@ -45,11 +45,39 @@ is narrow.
 | | |
 |---|---|
 | **wide** | One bar under the document: cartridges, transport, pacing, embed, telemetry, hint. Unchanged from the cabinet's original dock. |
-| **compact** | A slim HUD strip keeps the two controls you touch mid-game (play/pause and pacing); cartridges, restart, embed, telemetry and the hint move behind a `⋯` sheet. A thumb D-pad and a round **FIRE** button float over the bottom corners of the game. Nothing is dropped, only re-placed. |
+| **compact** | A slim HUD strip keeps the two controls you touch mid-game (play/pause and pacing); cartridges, restart, embed, telemetry and the hint move behind a `⋯` sheet. A thumb D-pad and an action cluster float over the bottom corners of the game. Nothing is dropped, only re-placed. |
 
 `FIRE` sends `Space` — jump in the platformer, the weapon in the raycasters and
 in Doom, and the coin drop on the attract screen. The old touch row had no
 Space at all, so the shooters could be walked but never fought on a phone.
+
+**What the pad offers is the cartridge's call.** Each cartridge declares a touch
+profile beside the keyboard map it mirrors (`cart.touch`), and the dock fills
+its fixed slots from it through `setPad` — geometry here, control map there:
+
+| cartridge | pad |
+|---|---|
+| ¶ Pilcrow's Quest | walk `←/→`, `▲` and a round **JUMP** |
+| ▓ Dungeon · ☩ Freedoom E1M1 | forward/back, turn (`↺ ↻`), strafe (`◀ ▶`), **FIRE**, **RUN** |
+| ☩ DOOM | all of the above plus **USE**, and a **KEYS** tray: weapons 1–7, **MAP**, **MENU**, `⏎` |
+| attract screen | one round **START** — nothing on a title card is steerable |
+
+Turning rotates and strafing translates, so the two pairs of side buttons never
+wear the same arrow. `RUN` latches rather than asking to be held — on a phone
+that hand is steering. A slot the cartridge does not use is hidden *and* loses
+its `data-code`, so a button can never send a key the cartridge ignores; the
+driver wires the pad by delegation and reads each button's code at press time,
+which is what lets one set of buttons follow the cartridge. Presses are tracked
+per pointer, so firing with one thumb while turning with the other releases only
+the key that came up, and pausing releases everything the pad holds.
+
+This is the gap the pad's first version left: movement and fire are the whole
+control map of the platformer and about half of a Doom-format level's. On a
+touch screen Doom could be walked as far as E1M1's first door and no further —
+a door is a key press (`E`), and a phone had no key to press. The headless
+checks in `tools/ascii-arcade.test.mjs` hold every profile to the keyboard map
+beside it, including that a thumb can reach every function Doom gives a
+keyboard.
 
 Doom's complete keyboard map also appears immediately above the framebuffer as
 four centered 18pt document paragraphs. Each line is deliberately short enough

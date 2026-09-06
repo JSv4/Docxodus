@@ -17,9 +17,17 @@
 //   compact a slim HUD strip keeps the two controls you touch mid-game
 //           (play/pause and pacing); cartridges, restart, embed, telemetry and
 //           the hint move behind a "⋯" sheet. A thumb D-pad and an action
-//           button float over the bottom corners of the game — where the
+//           cluster float over the bottom corners of the game — where the
 //           thumbs already are, and clear of the centre of the screen they are
 //           steering. Nothing is dropped, only re-placed.
+//
+// WHAT THE PAD OFFERS IS THE CARTRIDGE'S CALL, not this module's. `setPad`
+// takes a touch profile — fixed slots, because the geometry is fixed — and a
+// cartridge fills in only the slots it has a key for: the platformer wants
+// three buttons, the raycasters want strafe and a run latch, and Doom wants
+// USE, its own menu, the automap and seven weapons as well. A phone that can
+// only walk and shoot cannot open a door, and E1M1's first door is thirty
+// seconds in, which is where this started.
 //
 // The pad is deliberately NOT a descendant of the editor root. The driver
 // pauses on any pointerdown inside the document — "the frame you clicked is
@@ -33,6 +41,16 @@
 // its listeners to those nodes once and never learns that layout exists.
 
 const BREAKPOINT = 640;
+
+/** What the pad offers before any cartridge has spoken for it — the arcade's
+ *  common denominator, and what a host that never calls `setPad` keeps. */
+const DEFAULT_PAD = {
+  up: { code: 'KeyW', glyph: '▲', label: 'Forward / jump' },
+  down: { code: 'KeyS', glyph: '▼', label: 'Back' },
+  left: { code: 'ArrowLeft', glyph: '◀', label: 'Left / turn left' },
+  right: { code: 'ArrowRight', glyph: '▶', label: 'Right / turn right' },
+  fire: { code: 'Space', glyph: 'FIRE', label: 'Fire / jump / start' },
+};
 
 const CSS = `
 .dxa-controls { position: fixed; inset: 0; z-index: 60; pointer-events: none; }
@@ -127,22 +145,67 @@ const CSS = `
   font: 16px/1 system-ui, sans-serif; cursor: pointer;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
 }
+/* A slot the current cartridge does not use is hidden, and the author
+   author display value above would otherwise beat the UA's [hidden] rule. */
+.dxa-pad button[hidden] { display: none; }
 .dxa-pad button:active { color: #5eead4; background: #123a34; border-color: #14b8a6; }
+/* Latched modifiers (RUN) read as pressed until you tap them off. */
+.dxa-pad button[aria-pressed="true"] { color: #5eead4; background: #123a34; border-color: #14b8a6; }
+
+/* Movement, as a 3 × 3 whose corners the cartridge fills in only if it has
+   something to put there: turning rotates (↺ ↻) on the middle row, sidestep
+   translates (◀ ▶) on the bottom corners beside it, so the two pairs never
+   read as the same control. The platformer has neither and uses the middle
+   row to walk. */
 .dxa-dpad {
   position: absolute; left: 12px; bottom: 0;
   display: grid; gap: 4px;
   grid-template-columns: repeat(3, 46px); grid-template-rows: repeat(3, 42px);
 }
-.dxa-dpad button { width: 46px; height: 42px; }
+.dxa-dpad button { width: 46px; height: 42px; font-size: 19px; font-weight: 600; }
 .dxa-up { grid-area: 1 / 2; }
 .dxa-left { grid-area: 2 / 1; }
 .dxa-right { grid-area: 2 / 3; }
 .dxa-down { grid-area: 3 / 2; }
-.dxa-fire {
-  position: absolute; right: 14px; bottom: 6px;
-  width: 74px; height: 74px; border-radius: 50% !important;
-  font-size: 11px !important; font-weight: 700; letter-spacing: .08em;
-  color: #5eead4 !important; border-color: #14b8a6 !important;
+.dxa-strafe-left { grid-area: 3 / 1; }
+.dxa-strafe-right { grid-area: 3 / 3; }
+
+/* Actions, stacked under the right thumb: FIRE where the thumb rests, USE
+   directly above it (Doom's other one-hand-on-the-phone verb), RUN beside it,
+   and the tray toggle on top — the rows collapse for a cartridge that wants
+   none of them. */
+.dxa-actions {
+  position: absolute; right: 12px; bottom: 0;
+  display: grid; gap: 8px; justify-items: end; align-items: end;
+  grid-template-areas: "keys keys" "run use" "fire fire";
+}
+.dxa-pad .dxa-keys {
+  grid-area: keys; min-width: 58px; height: 34px;
+  font-size: 11px; letter-spacing: .06em;
+}
+.dxa-pad .dxa-run { grid-area: run; width: 58px; height: 56px; font-size: 11px; font-weight: 700; }
+.dxa-pad .dxa-use {
+  grid-area: use; width: 58px; height: 56px; border-radius: 50%;
+  font-size: 11px; font-weight: 700;
+}
+.dxa-pad .dxa-fire {
+  grid-area: fire; width: 74px; height: 74px; border-radius: 50%;
+  font-size: 11px; font-weight: 700; letter-spacing: .08em;
+  color: #5eead4; border-color: #14b8a6;
+}
+
+/* The tray: the keys a Doom player reaches for between fights rather than
+   during one — weapons, the automap, Doom's own menu and its Enter. It opens
+   over the game above the action cluster (180px of buttons + its gap) and
+   stays open, because working Doom's menu takes several taps in a row. */
+.dxa-extras {
+  position: absolute; right: 12px; left: 12px; bottom: 190px;
+  display: none; flex-wrap: wrap; gap: 6px; justify-content: flex-end;
+}
+.dxa-extras[data-open="true"] { display: flex; }
+.dxa-pad .dxa-extras button {
+  min-width: 40px; height: 38px; padding: 0 8px;
+  border-radius: 10px; font-size: 12px; font-weight: 600;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -217,24 +280,84 @@ export function mountArcadeDock(host, { anchor = 'viewport', embed = null, ids =
   const strip = el('div', { className: 'row dxa-strip' });
   const dock = el('div', { className: 'dxa-dock', ...id('dock'), hidden: true }, [sheet, strip]);
 
-  const padButton = (code, cls, glyph, label) => {
-    const button = el('button', { className: cls, type: 'button', textContent: glyph });
-    button.setAttribute('data-code', code);
-    button.setAttribute('aria-label', label);
-    return button;
+  const padButton = (cls) => el('button', { className: cls, type: 'button' });
+  const slots = {
+    up: padButton('dxa-up'),
+    down: padButton('dxa-down'),
+    left: padButton('dxa-left'),
+    right: padButton('dxa-right'),
+    strafeLeft: padButton('dxa-strafe-left'),
+    strafeRight: padButton('dxa-strafe-right'),
+    // Space is jump in the platformer, fire in the raycasters and in Doom, and
+    // the coin drop on the attract screen — the one button a phone was missing
+    // entirely, which is why Freedoom could be walked but not fought on a
+    // touch screen. USE is the one it was missing after that: doors.
+    fire: padButton('dxa-fire'),
+    use: padButton('dxa-use'),
+    run: padButton('dxa-run'),
   };
-  const dpad = el('div', { className: 'dxa-dpad' }, [
-    padButton('KeyW', 'dxa-up', '▲', 'Forward / jump'),
-    padButton('ArrowLeft', 'dxa-left', '◀', 'Left / turn left'),
-    padButton('ArrowRight', 'dxa-right', '▶', 'Right / turn right'),
-    padButton('KeyS', 'dxa-down', '▼', 'Back'),
-  ]);
-  // Space is jump in the platformer, fire in the raycasters, and the coin drop
-  // on the attract screen — the one button a phone was missing entirely, which
-  // is why Freedoom could be walked but not fought on a touch screen.
-  const fire = padButton('Space', 'dxa-fire', 'FIRE', 'Fire / jump / start');
-  const pad = el('div', { className: 'dxa-pad', ...id('pad') }, [dpad, fire]);
+  const dpad = el('div', { className: 'dxa-dpad' },
+    [slots.up, slots.left, slots.right, slots.down, slots.strafeLeft, slots.strafeRight]);
+
+  const extras = el('div', { className: 'dxa-extras', ...id('padextras') });
+  extras.setAttribute('aria-label', 'More game keys');
+  const keys = el('button', { className: 'dxa-keys', ...id('padkeys'), type: 'button' });
+  keys.setAttribute('aria-label', 'More game keys');
+  keys.setAttribute('aria-expanded', 'false');
+  keys.textContent = 'KEYS';
+
+  const actions = el('div', { className: 'dxa-actions' }, [keys, slots.run, slots.use, slots.fire]);
+  const pad = el('div', { className: 'dxa-pad', ...id('pad') }, [extras, dpad, actions]);
   pad.setAttribute('aria-label', 'Touch controls');
+
+  const setTray = (open) => {
+    extras.dataset.open = String(open && extras.childElementCount > 0);
+    keys.setAttribute('aria-expanded', extras.dataset.open);
+  };
+  keys.addEventListener('click', () => setTray(extras.dataset.open !== 'true'));
+  setTray(false);
+
+  /** Fill one pad slot from a profile entry, or hide it. A hidden slot keeps
+   *  its grid cell — the pad must not re-flow under a thumb when a cartridge
+   *  changes — but loses its `data-code`, so a stale key can never be sent. */
+  const applySlot = (button, spec) => {
+    if (!spec) {
+      button.hidden = true;
+      button.removeAttribute('data-code');
+      button.removeAttribute('data-mode');
+      button.removeAttribute('aria-pressed');
+      return;
+    }
+    button.hidden = false;
+    button.setAttribute('data-code', spec.code);
+    button.textContent = spec.glyph;
+    button.setAttribute('aria-label', spec.label);
+    button.title = spec.label;
+    if (spec.toggle) {
+      button.dataset.mode = 'toggle';
+      if (!button.hasAttribute('aria-pressed')) button.setAttribute('aria-pressed', 'false');
+    } else {
+      button.removeAttribute('data-mode');
+      button.removeAttribute('aria-pressed');
+    }
+  };
+
+  /** Point the pad at a cartridge's touch profile. Slots the profile omits are
+   *  hidden; `extras` (empty for every cartridge but Doom) fills the tray and
+   *  supplies — or withdraws — its toggle. */
+  function setPad(profile = DEFAULT_PAD) {
+    for (const name of Object.keys(slots)) applySlot(slots[name], profile[name] ?? null);
+    extras.replaceChildren(...(profile.extras ?? []).map((spec) => {
+      const chip = el('button', { type: 'button', textContent: spec.glyph });
+      chip.setAttribute('data-code', spec.code);
+      chip.setAttribute('aria-label', spec.label);
+      chip.title = spec.label;
+      return chip;
+    }));
+    keys.hidden = extras.childElementCount === 0;
+    if (keys.hidden) setTray(false);
+  }
+  setPad();
 
   const controls = el('div', { className: 'dxa-controls' }, [dock, pad]);
   controls.dataset.anchor = anchor;
@@ -299,7 +422,8 @@ export function mountArcadeDock(host, { anchor = 'viewport', embed = null, ids =
     /** Reveal the controls — hosts keep them hidden until the arcade boots. */
     show: () => { dock.hidden = false; },
     isCompact: () => compact,
-    ui: { carts, playpause, restart, pace, stats, hint, pad },
+    setPad,
+    ui: { carts, playpause, restart, pace, stats, hint, pad, setPad },
     destroy: () => {
       observer.disconnect();
       coarse.removeEventListener('change', remeasure);
