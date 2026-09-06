@@ -22,6 +22,9 @@ the actual editing surface. Its timestamps are preserved; the GIF is encoded at
 8 FPS and 880×840, with the MP4 retaining the full 1100×1050 browser view.
 The measured gameplay rate and input-asset digests are recorded in
 [`arcade-doom-ascii-capture.json`](../images/arcade-doom-ascii-capture.json).
+The recording lets DOOM's title transition to its attract demo before opening
+the menu. Opening it directly over the title artwork produces two overlapping
+DOOM logos in the original framebuffer; the level provides a clearer backdrop.
 
 <p align="center">
   <img src="../images/arcade-doom-ascii.gif" alt="Original DOOM title, menus and E1M1 gameplay rendered as colored ASCII in a live Word document" width="720">

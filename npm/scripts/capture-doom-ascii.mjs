@@ -42,6 +42,12 @@ try {
     null, { timeout: 180000 });
   await page.selectOption('#pace', '0');
   await page.evaluate(() => document.fonts.ready);
+  const titlePixels = await page.evaluate(() => {
+    const game = window.__arcade.game(), pixels = [];
+    for (let y = 4; y < 200; y += 8) for (let x = 4; x < 320; x += 8)
+      pixels.push(game.pixel(x, y));
+    return pixels;
+  });
   const frameBox = () => page.evaluate(() => {
     const { x, y, width, height } = window.__arcade.canvasElement().getBoundingClientRect();
     return { x, y, width, height };
@@ -72,7 +78,20 @@ try {
     await browser.close();
     process.exit(0);
   }
-  await page.waitForTimeout(800);
+  // Original DOOM draws its menu logo over the title artwork, producing two
+  // overlapping DOOM logos. Let its natural attract transition finish before
+  // opening the menu, so the recording shows it against the level instead.
+  // Observe the actual source pixels rather than guessing a load-dependent delay.
+  await page.waitForFunction(reference => {
+    const game = window.__arcade.game();
+    let changed = 0, i = 0;
+    for (let y = 4; y < 200; y += 8) for (let x = 4; x < 320; x += 8) {
+      const rgb = game.pixel(x, y), previous = reference[i++];
+      if (rgb.some((channel, c) => Math.abs(channel - previous[c]) > 24)) changed++;
+    }
+    return changed / reference.length > .92;
+  }, titlePixels, { polling: 100, timeout: 30000 });
+  await page.waitForTimeout(400); // allow the last columns of Doom's wipe to settle
   await page.keyboard.press('Enter'); // main menu
   await page.waitForTimeout(1000);
   await page.screenshot({ path: join(output, 'arcade-doom-ascii-menu.png') });
@@ -148,6 +167,7 @@ try {
     wadSha256: wadSha, viewport, gif: { width: 880, height: 840, framesPerSecond: 8 },
     durationSeconds: duration,
     deliveredGameplayFps: (end.frames - start.frames) * 1000 / (end.time - start.time),
+    menuBackdrop: 'Natural attract demo, after the title-screen transition finishes.',
     capture: 'Lossless Chromium PNG screencast of the live editor, driven by Playwright; original timestamps preserved.' };
   writeFileSync(join(output, 'arcade-doom-ascii-capture.json'), JSON.stringify(metadata, null, 2) + '\n');
   console.log(JSON.stringify(metadata, null, 2));

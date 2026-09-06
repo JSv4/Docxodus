@@ -16,7 +16,8 @@
     "height": 840,
     "framesPerSecond": 8
   },
-  "durationSeconds": 25.320723056793213,
-  "deliveredGameplayFps": 7.612058281036668,
+  "durationSeconds": 25.968191862106323,
+  "deliveredGameplayFps": 7.766062307701458,
+  "menuBackdrop": "Natural attract demo, after the title-screen transition finishes.",
   "capture": "Lossless Chromium PNG screencast of the live editor, driven by Playwright; original timestamps preserved."
 }
