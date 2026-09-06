@@ -22,9 +22,7 @@ the actual editing surface. Its timestamps are preserved; the GIF is encoded at
 8 FPS and 880×840, with the MP4 retaining the full 1100×1050 browser view.
 The measured gameplay rate and input-asset digests are recorded in
 [`arcade-doom-ascii-capture.json`](../images/arcade-doom-ascii-capture.json).
-The recording lets DOOM's title transition to its attract demo before opening
-the menu. Opening it directly over the title artwork produces two overlapping
-DOOM logos in the original framebuffer; the level provides a clearer backdrop.
+The recording opens the menu directly from the title screen.
 
 <p align="center">
   <img src="../images/arcade-doom-ascii.gif" alt="Original DOOM title, menus and E1M1 gameplay rendered as colored ASCII in a live Word document" width="720">
@@ -47,10 +45,12 @@ and levels are played. The original shareware capture uses
 
 Each of the 320×200 source pixels contributes one printable ASCII glyph,
 including the complete status bar. A measured glyph-coverage ramp carries tone;
-a 16-ink palette carries hue. Adjacent color runs are merged by visible color
-error, with a 700-segment budget, preserving every source pixel's glyph and
-strong color boundaries. There are no per-cell backgrounds, block/Braille
-glyphs, or separately reconstructed HUD labels. Each row also has a printable
+a 19-ink palette, including saturated primaries, carries hue. Coverage is
+calibrated in packed rows at the actual document font size so dark outlines
+retain their contrast. Adjacent color runs are merged toward a 700-segment
+target, with a per-cell color-error bound: complex pictures can exceed the
+target rather than lose contrasting strokes. There are no per-cell backgrounds,
+block/Braille glyphs, or separately reconstructed HUD labels. Each row also has a printable
 `|` guard for safe paragraph editing: 321×200 = **64,200 document characters**,
 with 199 line breaks, 2.5pt bold monospaced text, and exact 1.7pt line spacing.
 

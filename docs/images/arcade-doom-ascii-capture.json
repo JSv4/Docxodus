@@ -14,10 +14,11 @@
   "gif": {
     "width": 880,
     "height": 840,
-    "framesPerSecond": 8
+    "framesPerSecond": 8,
+    "paletteColors": 256,
+    "transparentFrames": false
   },
-  "durationSeconds": 25.968191862106323,
-  "deliveredGameplayFps": 7.766062307701458,
-  "menuBackdrop": "Natural attract demo, after the title-screen transition finishes.",
+  "durationSeconds": 26.723355770111084,
+  "deliveredGameplayFps": 6.322323549686465,
   "capture": "Lossless Chromium PNG screencast of the live editor, driven by Playwright; original timestamps preserved."
 }

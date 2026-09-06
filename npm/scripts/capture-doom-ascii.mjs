@@ -42,12 +42,6 @@ try {
     null, { timeout: 180000 });
   await page.selectOption('#pace', '0');
   await page.evaluate(() => document.fonts.ready);
-  const titlePixels = await page.evaluate(() => {
-    const game = window.__arcade.game(), pixels = [];
-    for (let y = 4; y < 200; y += 8) for (let x = 4; x < 320; x += 8)
-      pixels.push(game.pixel(x, y));
-    return pixels;
-  });
   const frameBox = () => page.evaluate(() => {
     const { x, y, width, height } = window.__arcade.canvasElement().getBoundingClientRect();
     return { x, y, width, height };
@@ -78,20 +72,8 @@ try {
     await browser.close();
     process.exit(0);
   }
-  // Original DOOM draws its menu logo over the title artwork, producing two
-  // overlapping DOOM logos. Let its natural attract transition finish before
-  // opening the menu, so the recording shows it against the level instead.
-  // Observe the actual source pixels rather than guessing a load-dependent delay.
-  await page.waitForFunction(reference => {
-    const game = window.__arcade.game();
-    let changed = 0, i = 0;
-    for (let y = 4; y < 200; y += 8) for (let x = 4; x < 320; x += 8) {
-      const rgb = game.pixel(x, y), previous = reference[i++];
-      if (rgb.some((channel, c) => Math.abs(channel - previous[c]) > 24)) changed++;
-    }
-    return changed / reference.length > .92;
-  }, titlePixels, { polling: 100, timeout: 30000 });
-  await page.waitForTimeout(400); // allow the last columns of Doom's wipe to settle
+  // Exercise the direct title-to-menu transition that players see.
+  await page.waitForTimeout(800);
   await page.keyboard.press('Enter'); // main menu
   await page.waitForTimeout(1000);
   await page.screenshot({ path: join(output, 'arcade-doom-ascii-menu.png') });
@@ -161,13 +143,15 @@ try {
   encode([...input, '-vf', 'fps=30', '-c:v', 'libx264', '-crf', '18', '-pix_fmt', 'yuv420p',
     '-movflags', '+faststart', join(output, 'arcade-doom-ascii.mp4')]);
   encode([...input, '-filter_complex',
-    'fps=8,scale=880:-2:flags=lanczos,split[a][b];[a]palettegen=max_colors=128:stats_mode=diff[p];[b][p]paletteuse=dither=none',
-    '-loop', '0', join(output, 'arcade-doom-ascii.gif')]);
+    'fps=8,scale=880:-2:flags=lanczos,format=rgb24,split[a][b];[a]palettegen=max_colors=256:reserve_transparent=0:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4',
+    // Opaque update rectangles replace changed pixels completely. Ordered
+    // dithering keeps soft UI shadows smooth without noise changing each frame.
+    '-gifflags', 'offsetting', '-loop', '0', join(output, 'arcade-doom-ascii.gif')]);
   const metadata = { ...proof, source: 'Original DOOM v1.9 shareware', engineSha256: engineSha,
-    wadSha256: wadSha, viewport, gif: { width: 880, height: 840, framesPerSecond: 8 },
+    wadSha256: wadSha, viewport, gif: { width: 880, height: 840, framesPerSecond: 8,
+      paletteColors: 256, transparentFrames: false },
     durationSeconds: duration,
     deliveredGameplayFps: (end.frames - start.frames) * 1000 / (end.time - start.time),
-    menuBackdrop: 'Natural attract demo, after the title-screen transition finishes.',
     capture: 'Lossless Chromium PNG screencast of the live editor, driven by Playwright; original timestamps preserved.' };
   writeFileSync(join(output, 'arcade-doom-ascii-capture.json'), JSON.stringify(metadata, null, 2) + '\n');
   console.log(JSON.stringify(metadata, null, 2));

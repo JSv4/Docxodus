@@ -44,6 +44,21 @@ test('invalid framebuffer dimensions are rejected', () => {
   assert.throws(() => asciiFramebuffer(new Uint8Array(4)), RangeError);
 });
 
+test('a run budget cannot repaint small blue strokes with the surrounding white ink', () => {
+  const fb = new Uint8Array(320 * 200 * 4);
+  for (let y = 0; y < 200; y++) for (let x = 0; x < 320; x++) {
+    const o = (y * 320 + x) * 4;
+    // More than 700 boundaries, including dark saturated single-pixel strokes.
+    fb.set(x % 16 === 8 ? [64, 0, 0, 255] : [220, 220, 220, 255], o);
+  }
+  const grid = asciiFramebuffer(fb);
+  for (let y = 0; y < 200; y++) for (let x = 8; x < 320; x += 16) {
+    assert.notEqual(grid.chars[y][x + 1], ' ');
+    assert.equal(grid.colors[y][x + 1], '0000FF', 'dark blue must not become pale grey');
+    assert.equal(grid.colors[y][x], 'FFFFFF', 'the neighboring white stroke must survive too');
+  }
+});
+
 test('cached hues do not depend on previously rendered frames', async () => {
   const cold = await import('../doom-ascii.js?cold');
   const warm = await import('../doom-ascii.js?warm');

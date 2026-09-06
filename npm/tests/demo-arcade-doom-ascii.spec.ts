@@ -1,5 +1,53 @@
 import { test, expect, Page } from '@playwright/test';
 
+test.describe('ASCII projection contrast in the native surface', () => {
+  test.use({ viewport: { width: 1100, height: 1050 }, deviceScaleFactor: 2 });
+  test('keeps dark tones proportional and saturated blue free of pale ink', async ({ page }) => {
+    await page.goto('/demo-arcade.html?engine=./embed.bundle.js&intro=0&sound=0');
+    await page.waitForFunction(() => (window as any).__arcade?.frames() > 0);
+    await page.evaluate(() => (window as any).__arcade.pause());
+    const box = await page.evaluate(async () => {
+      const a = (window as any).__arcade;
+      const { asciiFramebuffer, ASCII_METRICS } = await import(/* @vite-ignore */ '/doom-ascii.js' as string);
+      const { frameXml } = await import(/* @vite-ignore */ '/ascii-scenes.js' as string);
+      const fb = new Uint8Array(320 * 200 * 4);
+      for (let y = 0; y < 200; y++) for (let x = 0; x < 320; x++)
+        fb.set(x < 107 ? [64, 64, 64, 255] : x < 214 ? [192, 192, 192, 255]
+          : [96, 0, 0, 255], (y * 320 + x) * 4);
+      const xml = a.session.raw.getXml(a.canvasAnchor());
+      const open = xml.slice(0, xml.indexOf('>') + 1);
+      const frame = frameXml(open, asciiFramebuffer(fb), '000000', ASCII_METRICS);
+      const result = a.session.raw.replaceXml(a.canvasAnchor(), frame.xml);
+      if (!result.success) throw new Error(JSON.stringify(result));
+      a.editor.refresh();
+      await document.fonts.ready;
+      const { x, y, width, height } = a.canvasElement().getBoundingClientRect();
+      return { x, y, width, height };
+    });
+    const screenshot = await page.screenshot({ clip: box });
+    // Measure the browser's actual painted pixels, not the projection's own
+    // lookup table. Each patch contains many complete glyphs and row pitches.
+    const patches = await page.evaluate(async base64 => {
+      const img = new Image(); img.src = `data:image/png;base64,${base64}`;
+      await img.decode();
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width; canvas.height = img.height;
+      const ctx = canvas.getContext('2d')!; ctx.drawImage(img, 0, 0);
+      return [.08, .40, .75].map(left => {
+        const pixels = ctx.getImageData(Math.floor(img.width * left), Math.floor(img.height * .2),
+          Math.floor(img.width * .14), Math.floor(img.height * .5)).data;
+        const sum = [0, 0, 0];
+        for (let i = 0; i < pixels.length; i += 4)
+          for (let c = 0; c < 3; c++) sum[c] += pixels[i + c];
+        return sum.map(n => n / (pixels.length / 4));
+      });
+    }, screenshot.toString('base64'));
+    expect(Math.abs(patches[0][0] / patches[1][0] - 64 / 192)).toBeLessThan(.06);
+    expect(patches[2][2]).toBeGreaterThan(30);
+    expect(Math.max(patches[2][0], patches[2][1]) / patches[2][2]).toBeLessThan(.03);
+  });
+});
+
 async function boot(page: Page, rendering = 'image') {
   await page.goto('/demo-arcade.html?engine=./embed.bundle.js&intro=0&sound=0&cart=doom'
     + `&wad=./vendor/freedoom1.wad.gz&render=${rendering}`);
@@ -84,8 +132,10 @@ test.describe('DOOM as native ASCII document text', () => {
     await boot(page, 'ascii');
     await page.keyboard.down('ArrowRight');
     await page.waitForTimeout(1500);
-    await page.keyboard.up('ArrowRight');
+    // Catch a moving frame. Releasing first can let a second identical resting
+    // frame enter history before pause, which does not test the scrubbed image.
     await page.evaluate(() => (window as any).__arcade.pause());
+    await page.keyboard.up('ArrowRight');
     const result = await page.evaluate(() => {
       const a = (window as any).__arcade;
       const current = a.canvasElement().textContent;
