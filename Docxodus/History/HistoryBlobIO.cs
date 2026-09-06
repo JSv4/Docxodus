@@ -41,6 +41,16 @@ internal static class HistoryBlobIO
         return reference;
     }
 
+    internal static async ValueTask<byte[]> ReadBytesAsync(IHistoryBlobStore store, HistoryBlobReference reference,
+        int maximumBytes, CancellationToken cancellationToken)
+    {
+        Validate(reference, maximumBytes);
+        cancellationToken.ThrowIfCancellationRequested();
+        using var content = await store.OpenReadAsync(reference, cancellationToken).ConfigureAwait(false);
+        if (content is null) throw new PackageChangeException(PackageChangeError.PayloadMissing, "History blob is missing.");
+        return await PackageChangeSetCodec.ReadPayloadAsync(reference, content, cancellationToken).ConfigureAwait(false);
+    }
+
     // Used for filesystem writes and collision checks without allocating a blob-sized buffer.
     internal static async ValueTask CopyVerifiedAsync(HistoryBlobReference reference, Stream input,
         Stream output, CancellationToken cancellationToken)
