@@ -1,5 +1,9 @@
 # Named version history (.NET)
 
+The [backend operation producer](history-backend.md) now reconciles submitted text/package
+intents on this same history, preserving explicit conflicts and durable resolutions. It is
+separate from the live editor and installs no transport or GUI.
+
 `Docxodus.History.DocxVersionHistory` captures exact DOCX versions over host-owned storage. It supports create, read, paginated list, get, export, lazy semantic/native-redline comparison, non-destructive restore, sequence materialization, timestamp lookup, recorded-effect replay, and validated ordered log updates. Content-changing versions produce the same reversible package contributions used by the package fallback. [Browser/Python bindings and a host-driven live viewer](history-clients.md) share this core without a new transport layer. Fine-grained live session recording and concurrent-edit transforms remain in the [implementation plan](architecture/collaboration_and_version_history.md).
 
 ```csharp

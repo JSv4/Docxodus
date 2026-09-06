@@ -47,3 +47,27 @@ lookup writes nothing and corruption is not treated as an absent request.
 These are deterministic model/fault campaigns, not a claim of exhaustive state-space coverage,
 power-loss certification, or a distributed-filesystem guarantee. Actual process-kill and backend
 reconciliation evidence are separate gates; in-process service recreation is not a process kill.
+
+## Backend reconciliation and fault tests
+
+On 2026-09-06, all 18 `DocxBackend*` tests passed (`history-backend-core.trx`, 20.43 seconds).
+These execute the real shared history backend over DOCX packages, not a standalone string model:
+same-gap/disjoint text, contested ranges with exported proposals, explicit one-winner resolutions,
+disjoint header/footnote package changes, read dependencies, no-ops/discards, restore epochs,
+unknown structural boundaries, delayed duplicate requests, and input identity conflicts.
+Four race cases (memory/filesystem × seeded left/right winner) force both head CAS attempts;
+different compatible intents require a third reconciled publication attempt, while identical
+requests require exactly two attempts and return one original outcome.
+
+Four additional matrix cases enumerate every immutable write before/after its durable call and
+both sides of CAS/cancellation for accepted AND conflicting operations on memory AND filesystem
+storage. Recovery validates exact original receipts, preserved contender text, visible text,
+version/decision counts, and recorded-effect replay. Record negatives reject malformed/future
+codecs, missing/corrupt metadata/proposals, altered fingerprints, and forged valid-range text maps.
+The decision audit is forbidden from reading even a single radix-index root and has exact budget
+boundary tests including intervening named versions. Untouched package parts (notes, headers,
+comment topology, relationships, and an opaque binary custom part) retain their entry bytes;
+saved/reopened packages introduce no OpenXML validation errors beyond the independent baseline.
+
+Actual process-kill recovery and a larger seeded backend stream campaign remain follow-up gates;
+these results do not claim either one or full real-time/editor collaboration.
