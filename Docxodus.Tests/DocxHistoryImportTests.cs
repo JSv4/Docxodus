@@ -59,7 +59,10 @@ public sealed class DocxHistoryImportTests
             var comparisonPath = Path.Combine(root, "selected-comparison.docx");
             await File.WriteAllBytesAsync(comparisonPath, compared.ToRedline().DocumentByteArray);
             using var comparison = new DocxSession(await File.ReadAllBytesAsync(comparisonPath));
-            Assert.NotEmpty(compared.GetRevisions()); Assert.NotNull(comparison);
+            // The written redline must be a document Word could open with the tracked changes intact,
+            // not merely bytes: reopening it has to surface the same revisions the comparison reported.
+            Assert.NotEmpty(compared.GetRevisions());
+            Assert.NotEmpty(comparison.ListRevisions());
             Assert.Equal(bytes, await Artifact(name + ".docxhistory"));
         }
         finally { Directory.Delete(root, recursive: true); }
@@ -77,6 +80,20 @@ public sealed class DocxHistoryImportTests
         Assert.Equal(DocxHistoryError.InitializationUnsupported, (await Assert.ThrowsAsync<DocxHistoryException>(async () =>
             await unsupported.ImportHistoryArchiveAsync(bytes))).Code);
         Assert.Equal(0, target.Writes); Assert.Equal(0, target.Publications);
+        // Rejections that happen before the archive reader takes over still honour the transferred
+        // ownership: leaveOpen: false must never leave the caller holding an undisposed stream.
+        using (var owned = new MemoryStream(bytes))
+        {
+            await Assert.ThrowsAsync<DocxHistoryException>(async () =>
+                await unsupported.ImportHistoryArchiveAsync(owned, leaveOpen: false));
+            Assert.False(owned.CanRead);
+        }
+        using (var borrowed = new MemoryStream(bytes))
+        {
+            await Assert.ThrowsAnyAsync<ArgumentException>(async () => await history.ImportHistoryArchiveAsync(
+                borrowed, limits: new DocxHistoryArchiveLimits { MaxBlobs = 0 }));
+            Assert.True(borrowed.CanRead);
+        }
         var index = await DocxHistoryArchiveArtifactTests.ReadIndexAsync("agreement");
         var existing = await history.Document(index.DocumentId).CreateVersionAsync("local", null,
             await Artifact(index.Versions[0].File), HistoryArchiveFixture.Metadata("Local unrelated history"));
