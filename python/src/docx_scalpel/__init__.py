@@ -31,6 +31,12 @@ from __future__ import annotations
 from importlib.metadata import PackageNotFoundError, version as _pkg_version
 
 from ._transport import shutdown_host
+from .history import (
+    DocxHistoryLogEntry, DocxHistoryUpdate, PackageHistoryCommit,
+    DocxHistoryClient, DocxHistoryError, DocxHistoryState, DocxHistoryView,
+    DocxSnapshotReference, DocxStoredVersion, DocxVersionMetadata, DocxVersionPage,
+    DocxVersionRecord, HistoryBlobReference, HistoryHead, open_history,
+)
 from .enums import (
     AnchorIdRendering,
     AnchorRenderMode,
@@ -260,6 +266,10 @@ except PackageNotFoundError:
     __version__ = "0.0.0+source"
 
 __all__ = [
+    "DocxHistoryLogEntry", "DocxHistoryUpdate", "PackageHistoryCommit",
+    "DocxHistoryClient", "DocxHistoryError", "DocxHistoryState", "DocxHistoryView",
+    "DocxSnapshotReference", "DocxStoredVersion", "DocxVersionMetadata", "DocxVersionPage",
+    "DocxVersionRecord", "HistoryBlobReference", "HistoryHead", "open_history",
     "__version__",
     # entry points
     "DocxSession",

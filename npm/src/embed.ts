@@ -36,6 +36,8 @@ import type { DocxEditorExports, DocxEditorOptions } from "./editor.js";
 import { mountRibbon } from "./ribbon.js";
 import type { RibbonEditor, RibbonOptions } from "./ribbon.js";
 import type { ConversionOptions } from "./types.js";
+import { DocxHistoryError } from './history.js';
+import type { DocxHistoryClient, DocxHistoryUpdate, HistoryHead, HistoryPosition } from './history.js';
 
 // Everything the main entry exports is re-exported so the CDN bundle is a
 // one-stop surface (convert, compare, diff, sessions, annotations, ...).
@@ -340,6 +342,21 @@ export interface DocxViewer {
   destroy(): void;
 }
 
+function scopedDocumentFragment(mount: ScopedMount, html: string): DocumentFragment {
+  const parsed = new DOMParser().parseFromString(html, 'text/html');
+  const fragment = document.createDocumentFragment();
+  parsed.querySelectorAll('style').forEach((sourceStyle) => {
+    const style = document.createElement('style');
+    style.textContent = sourceStyle.textContent;
+    scopeStyleElement(style, mount.selector);
+    fragment.appendChild(style);
+  });
+  const body = document.createElement('template');
+  body.innerHTML = parsed.body.innerHTML;
+  fragment.appendChild(body.content);
+  return fragment;
+}
+
 /**
  * Render a read-only DOCX viewer into `container`.
  *
@@ -365,18 +382,7 @@ export async function createViewer(
       renderFootnotesAndEndnotes: true,
       ...opts,
     });
-    const parsed = new DOMParser().parseFromString(lastHtml, "text/html");
-    const fragment = document.createDocumentFragment();
-    parsed.querySelectorAll("style").forEach((sourceStyle) => {
-      const style = document.createElement("style");
-      style.textContent = sourceStyle.textContent;
-      scopeStyleElement(style, mount.selector);
-      fragment.appendChild(style);
-    });
-    const body = document.createElement("template");
-    body.innerHTML = parsed.body.innerHTML;
-    fragment.appendChild(body.content);
-    mount.root.replaceChildren(fragment);
+    mount.root.replaceChildren(scopedDocumentFragment(mount, lastHtml));
   };
 
   await render(source, conversion);
@@ -390,6 +396,124 @@ export async function createViewer(
       el.innerHTML = "";
     },
   };
+}
+
+export interface DocxHistoryViewerOptions extends DocxViewerOptions {
+  /** Explicit metadata ancestry budget per refresh/time/sequence lookup; default 10,000. */
+  maxEntriesToScan?: number;
+}
+
+/** Read-only live collaboration view. Hosts deliver notifications then call refresh().
+ * No network/timer/subscription is created and no editing session is ever replaced. */
+export interface DocxHistoryViewer {
+  readonly element: HTMLElement;
+  readonly html: string;
+  /** Last verified live head, including while a historical preview remains displayed. */
+  readonly head: HistoryHead;
+  /** Displayed content sequence (may be earlier than head while previewing). */
+  readonly sequence: HistoryPosition;
+  readonly following: boolean;
+  refresh(): Promise<DocxHistoryUpdate>;
+  showSequence(sequence: HistoryPosition): Promise<void>;
+  showTime(cutoff: string): Promise<void>;
+  resume(): Promise<DocxHistoryUpdate>;
+  exportDisplayed(): Uint8Array;
+  /** Releases only this view. Await outstanding history calls before closing the shared client. */
+  destroy(): void;
+}
+
+/** Render accepted DOCX history and follow host-delivered log notifications.
+ * Storage/replay validation stays in the core. A refresh prepares verified bytes and HTML before
+ * advancing the displayed head; failures retain the previous frame. Calls serialize in order.
+ * Historical previews pause live painting, not log catch-up; resume explicitly returns to live.
+ * This coarse path renders full checkpoints, not fine-grained keystrokes or concurrent rebasing. */
+export async function createHistoryViewer(container: string | HTMLElement, history: DocxHistoryClient,
+  documentId: string, options: DocxHistoryViewerOptions = {}): Promise<DocxHistoryViewer> {
+  const el = resolveContainer(container);
+  const { wasmBasePath, maxEntriesToScan = 10_000, ...conversion } = options;
+  if (!Number.isSafeInteger(maxEntriesToScan) || maxEntriesToScan <= 0 || maxEntriesToScan > 0x7fffffff)
+    throw new RangeError('Invalid history scan budget.');
+  await ensureWasm(wasmBasePath);
+  const mount = createScopedMount(el);
+  let accepted: DocxHistoryUpdate | null = null;
+  let acceptedBytes: Uint8Array | null = null;
+  let displayedBytes: Uint8Array | null = null;
+  let shownSequence: HistoryPosition = '0';
+  let following = true;
+  let closed = false;
+  let html = '';
+  let queue = Promise.resolve();
+  const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
+  const assertOpen = () => {
+    if (closed) throw new DocxHistoryError('Closed', 'History viewer is destroyed.');
+  };
+  const enqueue = <T>(action: () => Promise<T>): Promise<T> => {
+    const result = queue.then(() => { assertOpen(); return action(); });
+    queue = result.then(() => undefined, () => undefined);
+    return result;
+  };
+  const sameHead = (a: HistoryHead, b: HistoryHead) => a.revision === b.revision
+    && a.state.length === b.state.length && a.state.digest.algorithm === b.state.digest.algorithm
+    && a.state.digest.value === b.state.digest.value;
+
+  const paint = async (bytes: Uint8Array, sequence: HistoryPosition) => {
+    const nextHtml = await convertDocxToHtml(bytes, { renderFootnotesAndEndnotes: true, ...conversion });
+    assertOpen();
+    const fragment = scopedDocumentFragment(mount, nextHtml);
+    // The only DOM commit point. No awaits or fallible conversion follows it.
+    mount.root.replaceChildren(fragment);
+    html = nextHtml; displayedBytes = bytes; shownSequence = sequence;
+  };
+  const refresh = async (resume = false): Promise<DocxHistoryUpdate> => {
+    const update = await history.readChangesSince(documentId, accepted?.view.head ?? null, maxEntriesToScan);
+    assertOpen();
+    const duplicate = accepted !== null && sameHead(accepted.view.head, update.view.head);
+    const bytes = duplicate ? acceptedBytes! : await history.exportVersion(documentId, update.view.version.id);
+    assertOpen();
+    const wantLive = following || resume;
+    const changedContent = accepted === null
+      || accepted.view.state.snapshot.contentDigest.value !== update.view.state.snapshot.contentDigest.value
+      || accepted.view.state.epoch !== update.view.state.epoch;
+    if (wantLive && (changedContent || !following)) await paint(bytes, update.view.state.sequence);
+    else if (wantLive) {
+      // A tail can return to the same OPC content without an epoch change. The DOM need not
+      // change, but its logical position and exact downloadable checkpoint must still advance.
+      displayedBytes = bytes; shownSequence = update.view.state.sequence;
+    }
+    assertOpen();
+    accepted = update; acceptedBytes = bytes;
+    if (wantLive) following = true;
+    return clone(update);
+  };
+  const showSequence = async (sequence: HistoryPosition) => {
+    const bytes = await history.materialize(documentId, sequence, maxEntriesToScan);
+    assertOpen();
+    await paint(bytes, sequence);
+    following = false;
+  };
+  const viewer: DocxHistoryViewer = {
+    element: el,
+    get html() { return html; },
+    get head() { assertOpen(); return clone(accepted!.view.head); },
+    get sequence() { return shownSequence; },
+    get following() { return following; },
+    refresh: () => enqueue(() => refresh()),
+    showSequence: (sequence) => enqueue(() => showSequence(sequence)),
+    showTime: (cutoff) => enqueue(async () => {
+      const sequence = await history.resolveSequenceAtTime(documentId, cutoff, maxEntriesToScan);
+      assertOpen();
+      await showSequence(sequence);
+    }),
+    resume: () => enqueue(() => refresh(true)),
+    exportDisplayed: () => { assertOpen(); return displayedBytes!.slice(); },
+    destroy: () => {
+      if (closed) return;
+      closed = true; acceptedBytes = null; displayedBytes = null;
+      mount.root.remove();
+    },
+  };
+  try { await viewer.refresh(); return viewer; }
+  catch (error) { viewer.destroy(); throw error; }
 }
 
 export interface CreateEditorOptions extends DocxEditorOptions {

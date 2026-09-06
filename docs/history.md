@@ -1,6 +1,6 @@
 # Named version history (.NET)
 
-`Docxodus.History.DocxVersionHistory` captures exact DOCX versions over host-owned storage. It currently supports create, read, paginated list, get, export, lazy semantic/native-redline comparison, and non-destructive restore. Content-changing versions produce the same reversible package contributions used by the package fallback. Live session recording, sequence/time reconstruction, collaboration, and browser/agent bindings follow in the [implementation plan](architecture/collaboration_and_version_history.md).
+`Docxodus.History.DocxVersionHistory` captures exact DOCX versions over host-owned storage. It supports create, read, paginated list, get, export, lazy semantic/native-redline comparison, non-destructive restore, sequence materialization, timestamp lookup, recorded-effect replay, and validated ordered log updates. Content-changing versions produce the same reversible package contributions used by the package fallback. [Browser/Python bindings and a host-driven live viewer](history-clients.md) share this core without a new transport layer. Fine-grained live session recording and concurrent-edit transforms remain in the [implementation plan](architecture/collaboration_and_version_history.md).
 
 ```csharp
 using Docxodus.History;
@@ -46,6 +46,18 @@ Inputs are captured before awaiting host storage. The service does not mutate a 
 `GetVersionAsync`, `ExportVersionAsync`, and explicit list cursors also accept retained branch references belonging to the same document. A reference is neither authorization nor proof that a version is on the current published branch. The host must authorize access before invoking these APIs. Cross-document references are rejected.
 
 `ExportVersionAsync` verifies exact length/SHA-256 and bounded DOCX/content identity before returning the original stored bytes. `CompareVersionsAsync` verifies both snapshots and returns the existing lazy `DocxDiffComparison`; use `GetSemanticChanges()` or `ToRedline()` as needed. It retains DocxDiff's compatibility warnings, pre-existing-revision policy, and unsupported-feature limitations. A redline is a review artifact, not a lossless package patch.
+
+## Historical sequences and replay
+
+`MaterializeAsync(documentId, sequence)` returns verified content at a recorded content sequence. This coarse producer retains a complete exact snapshot at each import/restore boundary, so materialization selects that checkpoint instead of replaying the entire document. It scans immutable commit metadata backwards to find older sequences; an initial or current checkpoint is directly addressable. Multiple named versions/ZIP serializations can share a sequence—use `ExportVersionAsync` when a particular version's exact download matters.
+
+`ReplayAsync(documentId, sequence)` is a deliberately slower, read-only validation path. It verifies contiguous sequence/epoch/content ancestry and commit-to-version/parent/restore relationships, loads the initial checkpoint, then applies recorded `PackageChangeSet` effects and restore snapshots through the requested sequence. It never reruns high-level editing commands, clocks, or ID allocators, and it does not publish anything. Intermediate import snapshots are not normally read; if a metadata-only repack changed empty ZIP directory artifacts excluded from content identity, replay aligns to the verified before checkpoint before applying that import. Restore snapshots are required. Replay output preserves OPC content rather than original ZIP packaging.
+
+Both methods support cancellation and an explicit `maxCommitsToScan` budget (default 10,000). Reaching the budget raises `DocxHistoryError.TraversalLimit`, not a false missing-history result; the host can explicitly increase it. Missing history/blobs, corrupted payloads, invalid graph relationships, and unsupported codecs fail explicitly. The head and old versions remain unchanged. Indexed long-history lookup and incremental live-edit checkpoints remain later performance layers; do not use the coarse replay path for typing.
+
+`ResolveSequenceAtTimeAsync(documentId, cutoff)` resolves the greatest committed content sequence whose host-recorded `CreatedAt` is at or before the cutoff. Sequence breaks timestamp ties; the lookup does not assume clocks are monotonic. It uses the version recorded with each content commit, ignoring later metadata-only labels. Sequence zero is dated by the original initial version, not a later label. The host must supply authoritative timestamps; this is not inferred from transport arrival or Word revision dates.
+
+Pass the resolved sequence to `MaterializeAsync` (or `ReplayAsync`). Resolution captures one immutable head, reads metadata only, and has an explicit `maxEntriesToScan` budget covering commits plus initial-sequence version ancestors. A cutoff before the first recorded content state returns `HistoryUnavailable`; a scan limit remains the distinct `TraversalLimit`. Indexed timestamp lookup is a later performance layer.
 
 ## Restore
 

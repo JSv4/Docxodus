@@ -44,6 +44,9 @@ internal static class Dispatcher
     private static string DispatchCore(string op, JsonElement args) => op switch
     {
         "ping" => Ping(),
+        "open_history" => HistoryBindings.Open(args),
+        "close_history" => HistoryBindings.Close(args),
+        "history" => HistoryBindings.Invoke(args),
         "open_session" => OpenSession(args),
         "close_session" => CloseSession(args),
         "save" => Save(args),

@@ -68,6 +68,12 @@ jobs:
           DOCXODUS_EVAL_ARTIFACTS: ${{ github.workspace }}/eval-artifacts
         run: dotnet test Docxodus.Tests/Docxodus.Tests.csproj -c Release --verbosity normal --logger "trx;LogFileName=test-results.trx"
 
+      - name: Run Python history binding integration tests
+        run: |
+          dotnet build tools/python-host/pyhost.csproj -c Release
+          python3 -m pip install -e './python[test]'
+          python3 -m pytest python/tests/test_history.py -q
+
       - name: Upload test results
         uses: actions/upload-artifact@v7
         if: always()

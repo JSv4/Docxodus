@@ -1279,6 +1279,8 @@ export interface PackageManifestInspectionLimits {
  * Internal WASM exports structure
  */
 export interface DocxodusWasmExports {
+  /** Available in builds with durable history bindings. */
+  HistoryBridge?: import('./history.js').HistoryBridge;
   DocumentConverter: {
     GeneratePackageManifest: (bytes: Uint8Array) => string;
     VerifyDeliverable: (bytes: Uint8Array) => string;

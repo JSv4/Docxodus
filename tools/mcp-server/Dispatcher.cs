@@ -57,6 +57,7 @@ internal static class Dispatcher
         {
             "docxodus_save" => Save(store, args),
             "docxodus_get_content" => GetContent(store, args),
+            "docxodus_history" => HistoryTool.Execute(store, Session(store, args), args),
             "docxodus_preview" => Preview(store, args),
             "docxodus_pagination" => Pagination(store, args),
             "docxodus_search" => Search(store, args),

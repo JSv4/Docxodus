@@ -7,7 +7,7 @@ using Docxodus.Verification;
 
 namespace Docxodus.History;
 
-public enum DocxHistoryError { StaleHead, ForeignDocument, InvalidHistory }
+public enum DocxHistoryError { StaleHead, ForeignDocument, InvalidHistory, HistoryUnavailable, TraversalLimit }
 
 /// <summary>A publication precondition or cross-record history invariant failed.</summary>
 public sealed class DocxHistoryException : Exception
@@ -55,6 +55,12 @@ public sealed partial class DocxVersionHistory
         cancellationToken.ThrowIfCancellationRequested();
         var head = await _heads.ReadAsync(documentId, cancellationToken).ConfigureAwait(false);
         if (head is null) return null;
+        return await ReadHeadViewAsync(documentId, head, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async ValueTask<DocxHistoryView> ReadHeadViewAsync(string documentId, HistoryHead head,
+        CancellationToken cancellationToken)
+    {
         var state = await _records.LoadStateAsync(head.State, cancellationToken).ConfigureAwait(false);
         SameDocument(documentId, state.DocumentId);
         Consistent(state.Sequence < head.Revision && state.Epoch <= state.Sequence, "Invalid head publication position.");
