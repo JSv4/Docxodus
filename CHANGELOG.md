@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Portable-history foundation: bounded, document-scoped graph validation retains exact
+  snapshots, package effects, restore targets, retry receipts, and operation proposals
+  without enumerating shared storage. Includes real legal-document and hostile-graph tests.
+
 ### Fixed
 
 - The editor's find bar no longer loses the keyboard the moment a query matches. It re-scanned on
