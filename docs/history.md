@@ -83,6 +83,19 @@ retirement/fencing, not a best-effort TTL. No retention deletion or transport is
 
 ## Reading and comparison
 
+Backend-enabled histories use state schema V3: `ParentPublication` binds the immediately prior
+head, while `Operation` references the latest immutable backend decision. This permits an
+identified conflict/no-op decision to advance publication revision without creating a version
+or content commit. Ordinary creates/restores carry the decision tip forward. V1/V2 history stays
+readable and retains its original wire format until enabled; older codecs reject V3 explicitly.
+The storage layer treats the decision reference as opaque; the backend owner must validate its
+record, outcome, and effects. A stored reference alone is not proof of acceptance.
+
+Ordered updates validate exact V3 publication parents, then legacy version ancestry if the tail
+crosses the schema boundary. The traversal budget includes publication edges as well as legacy
+version edges and content commits. Decision-only updates have an empty content tail, not a fake
+document edit; history consumers can still advance their accepted head.
+
 `ReadAsync` validates the current document and the state/version/commit tip relationships. `ListVersionsAsync` starts at that published head and returns newest-first pages (1–100 records); pass a non-null `Next` to continue the same immutable chain while newer versions publish. A null `Next` means the page reached the end.
 
 `GetVersionAsync`, `ExportVersionAsync`, and explicit list cursors also accept retained branch references belonging to the same document. A reference is neither authorization nor proof that a version is on the current published branch. The host must authorize access before invoking these APIs. Cross-document references are rejected.
