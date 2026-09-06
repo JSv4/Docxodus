@@ -39,8 +39,11 @@ public sealed class HistoryClientOps
                 "read" => new HistoryClientResult { View = await _history.ReadAsync(id, cancellationToken).ConfigureAwait(false) },
                 "updates" => new HistoryClientResult { Update = await _history.ReadChangesSinceAsync(id, request.ExpectedHead,
                     budget, cancellationToken).ConfigureAwait(false) },
-                "create" => new HistoryClientResult { View = await _history.CreateVersionAsync(id, request.ExpectedHead,
-                    Required(docxBytes), Required(request.Metadata), cancellationToken).ConfigureAwait(false) },
+                "create" => new HistoryClientResult { View = request.RequestId is null
+                    ? await _history.CreateVersionAsync(id, request.ExpectedHead,
+                        Required(docxBytes), Required(request.Metadata), cancellationToken).ConfigureAwait(false)
+                    : await _history.CreateVersionAsync(id, request.RequestId, request.ExpectedHead,
+                        Required(docxBytes), Required(request.Metadata), cancellationToken).ConfigureAwait(false) },
                 "list" => new HistoryClientResult { Page = await _history.ListVersionsAsync(id, request.VersionId,
                     request.Limit, cancellationToken).ConfigureAwait(false) },
                 "get" => new HistoryClientResult { Version = await _history.GetVersionAsync(id, Required(request.VersionId),
@@ -53,8 +56,11 @@ public sealed class HistoryClientOps
                     budget, cancellationToken).ConfigureAwait(false) },
                 "resolveTime" => new HistoryClientResult { Sequence = await _history.ResolveSequenceAtTimeAsync(id,
                     Required(request.Cutoff), budget, cancellationToken).ConfigureAwait(false) },
-                "restore" => new HistoryClientResult { View = await _history.RestoreVersionAsync(id, Required(request.ExpectedHead),
-                    Required(request.VersionId), Required(request.Metadata), cancellationToken).ConfigureAwait(false) },
+                "restore" => new HistoryClientResult { View = request.RequestId is null
+                    ? await _history.RestoreVersionAsync(id, Required(request.ExpectedHead),
+                        Required(request.VersionId), Required(request.Metadata), cancellationToken).ConfigureAwait(false)
+                    : await _history.RestoreVersionAsync(id, request.RequestId, Required(request.ExpectedHead),
+                        Required(request.VersionId), Required(request.Metadata), cancellationToken).ConfigureAwait(false) },
                 _ => throw new ArgumentException("Unknown history operation."),
             };
             return HistoryClientJson.Write(result);
@@ -82,6 +88,9 @@ public sealed record HistoryClientRequest
     public required int SchemaVersion { get; init; }
     public required string Operation { get; init; }
     public required string DocumentId { get; init; }
+    /// <summary>Optional durable create/restore identity. Null/absent preserves the legacy contract.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RequestId { get; init; }
     public HistoryHead? ExpectedHead { get; init; }
     public HistoryBlobReference? VersionId { get; init; }
     public DocxVersionMetadata? Metadata { get; init; }

@@ -117,3 +117,47 @@ history operations plus generated V3/output graph round-trips must work without 
 These tests do not interrupt inside the file adapter's flush/rename internals and do not certify
 filesystem power-loss durability. The host still owns storage guarantees, retention, transport,
 authorization, and aggregate quotas. No GUI, real-time editor, or outbox is implemented.
+
+## Final client integration and scoped completion audit
+
+On 2026-09-06, the final optional request-ID binding layer passed:
+
+- 178 focused native history/storage/package/backend/client/MCP regressions, including all eight
+  subprocess recovery cases, with normal Release build policies (`history-final-strict-regression.trx`,
+  21 seconds). The probe's missing source header was corrected; its separate normal Release build
+  passed with zero warnings/errors. The wider test build still reports repository analyzer warnings.
+- All five Python history integration tests, including a real host shutdown/restart followed by
+  exact original create/restore retries and unchanged current head (8.64 seconds).
+- TypeScript production/test type checks and the TypeScript build.
+- All eight Chromium history client/existing-viewer regressions against freshly built, fully trimmed
+  interpreter WASM (19.6 seconds). The new case loses a durable CAS acknowledgement, retries after
+  later writes/reopen, rejects changed input, and checks lossless journal revisions. This validates
+  the existing renderer binding; it adds no GUI or real-time collaboration implementation.
+
+Reproduction commands (from the repository root unless noted):
+
+```sh
+dotnet build tools/history-recovery-probe/HistoryRecoveryProbe.csproj -c Release
+dotnet test Docxodus.Tests/Docxodus.Tests.csproj -c Release --filter '(FullyQualifiedName~History|FullyQualifiedName~PackageChange|FullyQualifiedName~DocxVersion|FullyQualifiedName~DocxSnapshot|FullyQualifiedName~DocxPublication|FullyQualifiedName~DocxBackend|FullyQualifiedName~McpTool)&FullyQualifiedName!~ModelFuzz'
+dotnet build tools/python-host/pyhost.csproj -c Release
+PYTHONPATH=python/src python3 -m pytest python/tests/test_history.py -q
+bash scripts/build-wasm.sh -p:RunAOTCompilation=false
+cd npm
+npm run typecheck
+npm run build:ts
+npm run build:embed-bundle
+npx playwright test history-client.spec.ts history-live-viewer.spec.ts --project=chromium --reporter=line
+```
+
+Use `DOCXODUS_HOST` for an explicit built Python host and `DOCXODUS_CHROMIUM_PATH` for an installed
+Chromium when needed. This browser run is trimmed interpreter evidence, not a full-AOT claim.
+
+The [six scoped completion gates](architecture/shared_history_infrastructure.md) map to the evidence
+above: request/index and fault tests prove durable atomic receipts; the independent version corpus
+checks bytes, metadata, lineage, sequence/epoch, time and replay; backend deterministic/model tests
+check reconciliation, ordered outcomes, retained conflicts and explicit resolution; process tests
+prove restart recovery; and client regressions verify the shared API boundaries. Each of the six
+PR layers received a clean GPT-5.6-sol self-review after fixes, including a final scoped audit.
+Storage/retry/retention contracts and bounded reconciliation rules are documented in
+[history](history.md), [backend reconciliation](history-backend.md), and [client bindings](history-clients.md).
+This completes the shared infrastructure scope, not the larger GUI/live-editor issue acceptance suites.

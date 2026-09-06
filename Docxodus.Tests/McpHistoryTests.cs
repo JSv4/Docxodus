@@ -28,6 +28,21 @@ public sealed class McpHistoryTests : IDisposable
     }
 
     [Fact]
+    public void RestoreRequestIdsRetryOriginalResultButCreateCannotRecaptureRetryBytes()
+    {
+        Assert.Throws<McpToolException>(() => Call("create", Metadata + ",\"requestId\":\"unsafe-recapture\""));
+        Assert.Null(Result(Call("read")).View);
+        var first = Result(Call("create", Metadata)).View!;
+        var args = Metadata + ",\"requestId\":\"restore-id\",\"expectedHead\":" + HistoryClientJson.Write(first.Head)
+            + ",\"versionId\":" + HistoryClientJson.Write(first.Version.Id);
+        var restored = Result(Call("restore", args)).View!;
+        var later = Result(Call("create", Metadata + ",\"expectedHead\":" + HistoryClientJson.Write(restored.Head))).View!;
+        Assert.Equal(restored.Head, Result(Call("restore", args)).View!.Head);
+        Assert.Equal(later.Head, Result(Call("read")).View!.Head);
+        Assert.Equal("restore-id", restored.State.Requests!.Current!.Id);
+    }
+
+    [Fact]
     public void PublishReadRenderReplayRestoreLeavesLocalWorkAndSourceUntouched()
     {
         var first = Result(Call("create", Metadata)).View!;

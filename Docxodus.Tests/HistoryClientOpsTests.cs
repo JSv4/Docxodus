@@ -12,6 +12,33 @@ namespace Docxodus.Tests;
 public class HistoryClientOpsTests
 {
     [Fact]
+    public async Task RequestIdsReachSharedCreateRestoreReceiptsAndOldCallsStayCompatible()
+    {
+        var blobs = new MemoryHistoryBlobStore(); var heads = new MemoryHistoryHeadStore();
+        var client = new HistoryClientOps(blobs, heads);
+        var bytes = DocxVersionRequestTests.Document("client input");
+        var request = new HistoryClientRequest { SchemaVersion = 1, DocumentId = "doc", Operation = "create",
+            RequestId = "create-id", Metadata = DocxVersionRequestTests.Metadata("create") };
+        async Task<HistoryClientResult> Invoke(HistoryClientRequest value, byte[]? candidate = null) =>
+            HistoryClientJson.Read<HistoryClientResult>(await client.InvokeAsync(HistoryClientJson.Write(value), candidate));
+        var first = (await Invoke(request, bytes)).View!;
+        var restore = request with { Operation = "restore", RequestId = "restore-id", ExpectedHead = first.Head, VersionId = first.Version.Id };
+        var restored = (await Invoke(restore)).View!;
+        var legacy = request with { RequestId = null, ExpectedHead = restored.Head };
+        var later = (await Invoke(legacy, bytes)).View!;
+        client = new HistoryClientOps(blobs, heads);
+        Assert.Equal(first.Head, (await Invoke(request, bytes)).View!.Head);
+        Assert.Equal(restored.Head, (await Invoke(restore)).View!.Head);
+        Assert.Equal(later.Head, (await Call(client, "read")).View!.Head);
+        Assert.Equal("create-id", first.State.Requests!.Current!.Id);
+        Assert.Equal("restore-id", restored.State.Requests!.Current!.Id);
+        Assert.Null(later.State.Requests!.Current); Assert.NotNull(later.State.Requests.Index);
+        Assert.Equal("RequestConflict", (await Invoke(request with { ExpectedHead = later.Head }, bytes)).ErrorCode);
+        Assert.Equal("InvalidRequest", (await Invoke(request with { RequestId = " " }, bytes)).ErrorCode);
+        Assert.DoesNotContain("requestId", HistoryClientJson.Write(legacy));
+    }
+
+    [Fact]
     public async Task OmittedOptionalFieldsUseWireDefaultsWithGeneratedMetadata()
     {
         const string request = """

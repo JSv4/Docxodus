@@ -137,3 +137,46 @@ test('memory adapter makes one concurrent CAS winner and owns its blobs and head
   expect(result.digest).toBe(result.expectedDigest);
   expect(result.mismatch).toBe('PayloadMismatch');
 });
+
+test('durable request IDs recover lost acknowledgements and return original results after later writes', async ({ page }) => {
+  const result = await page.evaluate(async () => {
+    const api = (window as any).historyApi;
+    const backing = api.createMemoryHistoryStorage();
+    let loseAck = true;
+    const storage = {
+      ...backing,
+      async advanceHead(id: string, expected: any, state: any) {
+        const head = await backing.advanceHead(id, expected, state);
+        if (head && loseAck) { loseAck = false; throw new Error('Lost durable acknowledgement'); }
+        return head;
+      },
+    };
+    const a = api.openDocxHistory(storage);
+    const bytes = api.createBlankDocx();
+    const metadata = { author: 'actor', createdAt: '2026-01-01T12:00:00Z' };
+    let lost = false;
+    try { await a.createVersion('doc', null, bytes, metadata, 'create-id'); } catch { lost = true; }
+    const first = await a.read('doc');
+    const recovered = await a.createVersion('doc', null, bytes, metadata, 'create-id');
+    const restored = await a.restoreVersion('doc', first.head, first.version.id, metadata, 'restore-id');
+    const later = await a.createVersion('doc', restored.head, bytes, metadata);
+    a.close();
+    const b = api.openDocxHistory(storage);
+    const oldCreate = await b.createVersion('doc', null, bytes, metadata, 'create-id');
+    const oldRestore = await b.restoreVersion('doc', first.head, first.version.id, metadata, 'restore-id');
+    let conflict = '';
+    try { await b.createVersion('doc', later.head, bytes, metadata, 'create-id'); }
+    catch (error: any) { conflict = error.code; }
+    const current = await b.read('doc');
+    const versions = await b.listVersions('doc'); b.close();
+    return { lost, recovered: recovered.head, oldCreate: oldCreate.head, first: first.head,
+      oldRestore: oldRestore.head, restored: restored.head, current: current.head, later: later.head,
+      conflict, count: versions.versions.length, requestId: first.state.requests.current.id,
+      revisionType: typeof first.state.requests.revision };
+  });
+  expect(result.lost).toBe(true);
+  expect(result.recovered).toEqual(result.first); expect(result.oldCreate).toEqual(result.first);
+  expect(result.oldRestore).toEqual(result.restored); expect(result.current).toEqual(result.later);
+  expect(result.conflict).toBe('RequestConflict'); expect(result.count).toBe(3);
+  expect(result.requestId).toBe('create-id'); expect(result.revisionType).toBe('string');
+});

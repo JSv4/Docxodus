@@ -96,6 +96,7 @@ internal static class ToolCatalog
                 "sessionId": { "type": "string" },
                 "action": { "type": "string", "enum": ["read", "updates", "create", "list", "get", "export", "materialize", "replay", "resolveTime", "restore", "render"] },
                 "expectedHead": { "anyOf": [{ "$ref": "#/$defs/head" }, { "type": "null" }], "description": "create: null/absent only for initial publication, otherwise exact last head. restore: required exact head. updates: last accepted head, or null for initial latest checkpoint." },
+                "requestId": { "type": "string", "minLength": 1, "maxLength": 1024, "pattern": "\\S", "description": "Optional durable restore retry ID. Reuse exact original head/target/metadata to recover its original result. Rejected for create, which recaptures live bytes; use a captured-byte history client for idempotent create." },
                 "versionId": { "$ref": "#/$defs/blob", "description": "Required for get/export/restore; optional exclusive pagination cursor for list." },
                 "metadata": {
                   "type": "object", "additionalProperties": false,
