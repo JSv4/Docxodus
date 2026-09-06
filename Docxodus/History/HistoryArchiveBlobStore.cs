@@ -26,10 +26,16 @@ internal sealed class HistoryArchiveBlobStore(ZipArchive zip, Stream input, bool
             { _gate.Release(); return null; }
             if (entry.Length != reference.Length)
                 throw new PackageChangeException(PackageChangeError.PayloadMismatch, "Archive blob length disagrees with its reference.");
-            return new EntryLease(entry.Open(), _gate);
+            // OpenAsync normalizes malformed ZIP input; per-read container damage (a caller mutating
+            // the buffer it still owns) must surface the same way instead of a raw InvalidDataException.
+            try { return new EntryLease(entry.Open(), _gate); }
+            catch (InvalidDataException error) { throw Corrupt(error); }
         }
         catch { _gate.Release(); throw; }
     }
+
+    internal static PackageChangeException Corrupt(Exception error) => new(PackageChangeError.PayloadMismatch,
+        "Archive ZIP entry is corrupt or its backing bytes changed after the archive was opened.", error);
 
     public void Dispose()
     {
@@ -54,12 +60,16 @@ internal sealed class HistoryArchiveBlobStore(ZipArchive zip, Stream input, bool
         public override long Length => inner.Length;
         public override long Position { get => inner.Position; set => throw new NotSupportedException(); }
         public override void Flush() => throw new NotSupportedException();
-        public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, count);
-        public override int Read(Span<byte> buffer) => inner.Read(buffer);
-        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
-            inner.ReadAsync(buffer, cancellationToken);
+        public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+        public override int Read(Span<byte> buffer)
+        { try { return inner.Read(buffer); } catch (InvalidDataException error) { throw Corrupt(error); } }
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            try { return await inner.ReadAsync(buffer, cancellationToken).ConfigureAwait(false); }
+            catch (InvalidDataException error) { throw Corrupt(error); }
+        }
         public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
-            inner.ReadAsync(buffer, offset, count, cancellationToken);
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
         protected override void Dispose(bool disposing)
         {
             if (disposing && Interlocked.Exchange(ref _closed, 1) == 0)

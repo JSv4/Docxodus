@@ -9,6 +9,9 @@ All notable changes to this project will be documented in this file.
 - Portable `.docxhistory` files: stream export of one captured document, independently
   reopenable read-only document APIs, strict ZIP/manifest validation, and real legal-document
   archives with exact snapshot/proposal/comparison files under `TestFiles/HistoryArchive`.
+  Reading a blob out of an open archive whose backing bytes changed underneath it now reports
+  `PackageChangeError.PayloadMismatch`, matching what `OpenAsync` already guaranteed, instead of
+  surfacing the raw `InvalidDataException` from the ZIP decoder.
 - Portable-history foundation: bounded, document-scoped graph validation retains exact
   snapshots, package effects, restore targets, retry receipts, and operation proposals
   without enumerating shared storage. Includes real legal-document and hostile-graph tests.
