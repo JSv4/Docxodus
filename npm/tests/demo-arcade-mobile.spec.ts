@@ -431,8 +431,11 @@ test.describe('The pad takes its controls from the cartridge', () => {
     await page.goto('/demo-arcade.html?boot=tap'); // boot=tap: nothing streams a runtime
     return page.evaluate(async () => {
       document.getElementById('boot')?.remove(); // …and nothing over the controls
+      // Loaded through a computed specifier, as the CDN specs do: these modules
+      // are served to the browser beside the page, not resolvable from here.
+      const load = (name: string) => import(/* @vite-ignore */ `./${name}.js`);
       const [{ mountArcadeDock }, { TOUCH }, { DOOM_TOUCH }] = await Promise.all([
-        import('./arcade-dock.js'), import('./ascii-arcade.js'), import('./doom-cart.js'),
+        load('arcade-dock'), load('ascii-arcade'), load('doom-cart'),
       ]);
       const host = document.createElement('div');
       host.style.cssText = 'position:relative;width:100%;height:420px';
