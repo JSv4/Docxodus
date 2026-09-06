@@ -88,7 +88,7 @@ public sealed class HistoryRequestJournalStore
     {
         HistoryHeadCodec.Key(documentId);
         ValidatePublication(documentId, currentHead, journal);
-        if (request is not null) ValidateIdentity(request);
+        if (request is not null) { ValidateIdentity(request); ValidateIndexable(documentId, request); }
         cancellationToken.ThrowIfCancellationRequested();
         var index = journal?.Index;
         if (journal?.Current is not null)
@@ -193,11 +193,39 @@ public sealed class HistoryRequestJournalStore
 
     private async ValueTask<HistoryBlobReference> SaveAsync(HistoryRequestIndexNode node, CancellationToken cancellationToken)
     {
-        ValidateNode(node);
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(new HistoryRequestIndexEnvelope
-        { SchemaVersion = 1, Schema = "https://docxodus.dev/schemas/history/request-index/v1", Node = node }, Json.HistoryRequestIndexEnvelope);
+        var bytes = Serialize(node);
         if (bytes.Length > MaxNodeBytes) throw new PackageChangeException(PackageChangeError.ResourceLimit, "Request-index node exceeds its limit.");
         return await HistoryBlobIO.PutBytesAsync(_blobs, bytes, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static byte[] Serialize(HistoryRequestIndexNode node)
+    {
+        ValidateNode(node);
+        return JsonSerializer.SerializeToUtf8Bytes(new HistoryRequestIndexEnvelope
+        { SchemaVersion = 1, Schema = "https://docxodus.dev/schemas/history/request-index/v1", Node = node }, Json.HistoryRequestIndexEnvelope);
+    }
+
+    /// <summary>
+    /// A receipt published inline must also fit the ONE index node that the next publication
+    /// promotes it into. Both IDs are bounded in characters, but JSON escapes each non-ASCII or
+    /// reserved character to six bytes, so legal IDs can still exceed a node. Rejecting that here
+    /// fails the call supplying the ID instead of the next unrelated publication, which could
+    /// otherwise never promote the receipt and would leave the document permanently unpublishable.
+    /// The probe uses the largest head a publication can carry, so it never accepts a receipt the
+    /// promotion would refuse.
+    /// </summary>
+    private static void ValidateIndexable(string documentId, HistoryRequestIdentity request)
+    {
+        var widest = new HistoryHead(long.MaxValue, new HistoryBlobReference(new VerificationDigest
+        { Algorithm = "SHA-256", Value = new string('f', 64) }, int.MaxValue));
+        var probe = new HistoryRequestIndexNode
+        {
+            DocumentId = documentId, Bit = 256, Key = Key(request.Id), Zero = null, One = null,
+            Receipt = new HistoryRequestReceipt(documentId, request, widest),
+        };
+        if (Serialize(probe).Length > MaxNodeBytes)
+            throw new PackageChangeException(PackageChangeError.ResourceLimit,
+                "Document and request ID exceed the request-index node limit.");
     }
 
     private static void ValidateNode(HistoryRequestIndexNode node)
