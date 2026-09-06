@@ -7,7 +7,7 @@ using Docxodus.Verification;
 
 namespace Docxodus.History;
 
-public enum DocxHistoryError { StaleHead, ForeignDocument, InvalidHistory, HistoryUnavailable, TraversalLimit, RequestConflict }
+public enum DocxHistoryError { StaleHead, ForeignDocument, InvalidHistory, HistoryUnavailable, TraversalLimit, RequestConflict, Contention }
 
 /// <summary>A publication precondition or cross-record history invariant failed.</summary>
 public sealed class DocxHistoryException : Exception
