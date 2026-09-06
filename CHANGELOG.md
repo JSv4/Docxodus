@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Writable history-file import validates before copying and atomically preserves the original
+  head without overwriting local history; document-scoped APIs expose explicit checkpoint/restore.
 - Portable `.docxhistory` files: stream export of one captured document, independently
   reopenable read-only document APIs, strict ZIP/manifest validation, and real legal-document
   archives with exact snapshot/proposal/comparison files under `TestFiles/HistoryArchive`.
