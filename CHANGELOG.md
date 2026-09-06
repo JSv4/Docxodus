@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Portable `.docxhistory` files: stream export of one captured document, independently
+  reopenable read-only document APIs, strict ZIP/manifest validation, and real legal-document
+  archives with exact snapshot/proposal/comparison files under `TestFiles/HistoryArchive`.
 - Portable-history foundation: bounded, document-scoped graph validation retains exact
   snapshots, package effects, restore targets, retry receipts, and operation proposals
   without enumerating shared storage. Includes real legal-document and hostile-graph tests.

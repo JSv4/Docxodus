@@ -74,7 +74,7 @@ internal sealed class HistoryArchiveGraph
     {
         if (reference is null) return;
         Spend();
-        HistoryBlobIO.Validate(reference, _limits.MaxBlobBytes);
+        HistoryBlobIO.Validate(reference, role == Role.Snapshot ? Math.Min(_limits.MaxBlobBytes, _limits.MaxSnapshotBytes) : _limits.MaxBlobBytes);
         if (_inventory.TryGetValue(reference.Digest.Value, out var known))
             Require(known == reference, "One digest has conflicting lengths.");
         else
@@ -448,7 +448,8 @@ internal sealed class HistoryArchiveGraph
         DocxSnapshotReference snapshot, CancellationToken ct)
     {
         ChargeRead(snapshot.Blob.Length);
-        var bytes = await HistoryBlobIO.ReadBytesAsync(_blobs, snapshot.Blob, _limits.MaxBlobBytes, ct).ConfigureAwait(false);
+        var bytes = await HistoryBlobIO.ReadBytesAsync(_blobs, snapshot.Blob,
+            Math.Min(_limits.MaxBlobBytes, _limits.MaxSnapshotBytes), ct).ConfigureAwait(false);
         var manifest = InspectSnapshot(bytes);
         Require(manifest.OrderedOpcContentDigest == snapshot.ContentDigest, "Snapshot OPC identity changed.");
         return (bytes, manifest);
@@ -488,7 +489,7 @@ internal sealed class HistoryArchiveGraph
         var remaining = (_limits.MaxExpandedBytes - _expandedBytes) / 8;
         Budget(remaining > 0, "Archive package-expansion budget reached.");
         var options = _packageOptions ?? new PackageManifestOptions();
-        var manifest = new DocxSnapshotStore(_blobs, _limits.MaxBlobBytes, options with
+        var manifest = new DocxSnapshotStore(_blobs, Math.Min(_limits.MaxBlobBytes, _limits.MaxSnapshotBytes), options with
         {
             MaxTotalUncompressedBytes = Math.Min(options.MaxTotalUncompressedBytes, remaining),
             MaxEntryUncompressedBytes = Math.Min(options.MaxEntryUncompressedBytes, remaining),
@@ -516,7 +517,7 @@ internal sealed class HistoryArchiveGraph
 
     private void ChargeRead(long bytes)
     {
-        Budget(bytes <= _limits.MaxValidationBytes - _validationBytes, "Archive validation work exceeds its byte budget.");
+        Budget(bytes <= _limits.MaxValidationBytes - _validationBytes, "Archive graph-blob validation exceeds its byte budget.");
         _validationBytes += bytes;
     }
 

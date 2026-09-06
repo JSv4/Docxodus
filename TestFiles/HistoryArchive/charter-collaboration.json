@@ -1,0 +1,90 @@
+{
+  "documentId": "matter-nvca-charter",
+  "head": {
+    "revision": 8,
+    "state": {
+      "digest": {
+        "algorithm": "SHA-256",
+        "value": "ee712a9a2cfbe6a95c4213aa6a04c9c5b83efdd14a7582a7fb752f0422cadc21"
+      },
+      "length": 1588
+    }
+  },
+  "archiveSha256": "eeb22c99fd9f1d49c2a95a1c49938886dcc903281ba9810a221d1939b441fc23",
+  "versions": [
+    {
+      "id": {
+        "digest": {
+          "algorithm": "SHA-256",
+          "value": "079c851290827012b09298a677ae677b82eef3e4a889b499e5ebd208befd614b"
+        },
+        "length": 654
+      },
+      "file": "charter-collaboration-v1.docx",
+      "sha256": "d75600769c12724990de48149d7a2bb161f3522daa54b1783672f93697d87d29"
+    },
+    {
+      "id": {
+        "digest": {
+          "algorithm": "SHA-256",
+          "value": "d728221163c1f1a7094454006c1baee1b89bf563051067d55a9e3118dbaa155c"
+        },
+        "length": 770
+      },
+      "file": "charter-collaboration-v2.docx",
+      "sha256": "d75600769c12724990de48149d7a2bb161f3522daa54b1783672f93697d87d29"
+    },
+    {
+      "id": {
+        "digest": {
+          "algorithm": "SHA-256",
+          "value": "28e1c83a1571c0fdf25f14f04bab5885aaab87c3b8f8ed403f9d33844fd39e32"
+        },
+        "length": 771
+      },
+      "file": "charter-collaboration-v3.docx",
+      "sha256": "a208b046d26deed1681989384b4f3d26d7149520dbb1d8586ff9cbee22bfd389"
+    },
+    {
+      "id": {
+        "digest": {
+          "algorithm": "SHA-256",
+          "value": "c8046b81ee14621a525f56437a4323efcf2ecd539e891488f0d7b990009fc82e"
+        },
+        "length": 890
+      },
+      "file": "charter-collaboration-v4.docx",
+      "sha256": "d75600769c12724990de48149d7a2bb161f3522daa54b1783672f93697d87d29"
+    },
+    {
+      "id": {
+        "digest": {
+          "algorithm": "SHA-256",
+          "value": "8e57a6febca4117064a51c26c6f22aac935162849f989d954516be75f78f410a"
+        },
+        "length": 766
+      },
+      "file": "charter-collaboration-v5.docx",
+      "sha256": "635f14f57d9f11f3c002529f765ad94dcf6e28d21cd050fc1086d705f8d18a3f"
+    },
+    {
+      "id": {
+        "digest": {
+          "algorithm": "SHA-256",
+          "value": "79e82b7e356f65583ac44b5247af0a7fecfbc917105fb1894ccb9610b9d8ee36"
+        },
+        "length": 765
+      },
+      "file": "charter-collaboration-v6.docx",
+      "sha256": "635f14f57d9f11f3c002529f765ad94dcf6e28d21cd050fc1086d705f8d18a3f"
+    }
+  ],
+  "conflict": {
+    "digest": {
+      "algorithm": "SHA-256",
+      "value": "7396097f904b7fd58e48f95b632c6d21b5702c68d5470900ca9679c71e5da72e"
+    },
+    "length": 1322
+  },
+  "proposalFile": "charter-collaboration-conflicting-proposal.docx"
+}

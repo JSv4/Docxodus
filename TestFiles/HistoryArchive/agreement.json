@@ -1,0 +1,62 @@
+{
+  "documentId": "matter-services-agreement",
+  "head": {
+    "revision": 4,
+    "state": {
+      "digest": {
+        "algorithm": "SHA-256",
+        "value": "df34036f4a1398079b69bfe9b570c75848edced5e9a5cbf452b50d39898276f4"
+      },
+      "length": 1288
+    }
+  },
+  "archiveSha256": "211d4b75859fd4a121817b12212e1326104da390e8d961fe9e780af9863f209d",
+  "versions": [
+    {
+      "id": {
+        "digest": {
+          "algorithm": "SHA-256",
+          "value": "ea42a8802534094962d04e734f7a2bad27797e684ec428fcba506f7e77c629a0"
+        },
+        "length": 660
+      },
+      "file": "agreement-v1.docx",
+      "sha256": "5ad0115afae50d06da1fc7cb21aa61714026fa59b9fa67e454741622d2689346"
+    },
+    {
+      "id": {
+        "digest": {
+          "algorithm": "SHA-256",
+          "value": "83485259d9d48ac028bf588472a237cdd0c8381806c2f63c90271e7db12c55e8"
+        },
+        "length": 776
+      },
+      "file": "agreement-v2.docx",
+      "sha256": "57368637326be4a20495eb5d4baa6b1d4f586022d512ac82d040e8ec40c9715e"
+    },
+    {
+      "id": {
+        "digest": {
+          "algorithm": "SHA-256",
+          "value": "62dc400d5976c405b05e69f057937a0996bc50aa6caa0b7d68dee6e1a4fd0b3a"
+        },
+        "length": 779
+      },
+      "file": "agreement-v3.docx",
+      "sha256": "57368637326be4a20495eb5d4baa6b1d4f586022d512ac82d040e8ec40c9715e"
+    },
+    {
+      "id": {
+        "digest": {
+          "algorithm": "SHA-256",
+          "value": "0597ff8571d4a372f1d0d8f06e35059c82ee7c448a0e882089d7a4f00fb966f3"
+        },
+        "length": 894
+      },
+      "file": "agreement-v4.docx",
+      "sha256": "5ad0115afae50d06da1fc7cb21aa61714026fa59b9fa67e454741622d2689346"
+    }
+  ],
+  "conflict": null,
+  "proposalFile": null
+}

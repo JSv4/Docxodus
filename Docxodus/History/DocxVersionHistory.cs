@@ -33,6 +33,7 @@ public sealed partial class DocxVersionHistory
     private readonly HistoryRequestJournalStore _requests;
     private readonly DocxSnapshotStore _snapshots;
     private readonly int _maxSnapshotBytes;
+    private readonly int _maxRecordBytes;
     private readonly PackageManifestOptions? _packageOptions;
 
     public DocxVersionHistory(IHistoryBlobStore blobs, IHistoryHeadStore heads,
@@ -47,6 +48,7 @@ public sealed partial class DocxVersionHistory
         _requests = new HistoryRequestJournalStore(blobs);
         _snapshots = new DocxSnapshotStore(blobs, maxSnapshotBytes, packageOptions);
         _maxSnapshotBytes = maxSnapshotBytes;
+        _maxRecordBytes = maxRecordBytes;
         _packageOptions = packageOptions;
     }
 
