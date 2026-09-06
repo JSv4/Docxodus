@@ -12,7 +12,7 @@ internal sealed record ToolDefinition(string Name, string Description, string In
 
 /// <summary>
 /// The tool surface this server advertises: three session-lifecycle tools (open/save/close), four
-/// read/preview tools, twelve grouped-intent mutation tools, and three sessionless operations.
+/// read/preview tools, thirteen grouped-intent tools, and three sessionless operations.
 /// Grouped tools accept an <c>action</c> discriminator and action-specific arguments. See
 /// <c>docs/architecture/docx_agent_server.md</c> for the full contract, the mapping of every action
 /// onto the underlying Docxodus API, and the documented capability gaps.
@@ -84,6 +84,62 @@ internal static class ToolCatalog
                 "preconditions": { "type": "object", "description": "check_preconditions: expectedVersion and/or anchorId plus expectedContentHash, expectedText/expectedTextRange, expectedKind, expectedScope, or expectedMatchCount." }
               },
               "required": ["sessionId", "format"]
+            }
+            """),
+        new ToolDefinition(
+            "docxodus_history",
+            "Read, publish, reconstruct, or render immutable timestamped history for the session's scoped document. Requires host configuration DOCXODUS_HISTORY_ROOT. No subscription or transport is created. create captures clean current session bytes; restore appends history only, never overwriting the open session or source file. Use exact expectedHead for publication; stale heads fail explicitly.",
+            """
+            {
+              "type": "object", "additionalProperties": false,
+              "properties": {
+                "sessionId": { "type": "string" },
+                "action": { "type": "string", "enum": ["read", "updates", "create", "list", "get", "export", "materialize", "replay", "resolveTime", "restore", "render"] },
+                "expectedHead": { "anyOf": [{ "$ref": "#/$defs/head" }, { "type": "null" }], "description": "create: null/absent only for initial publication, otherwise exact last head. restore: required exact head. updates: last accepted head, or null for initial latest checkpoint." },
+                "versionId": { "$ref": "#/$defs/blob", "description": "Required for get/export/restore; optional exclusive pagination cursor for list." },
+                "metadata": {
+                  "type": "object", "additionalProperties": false,
+                  "properties": {
+                    "author": { "type": "string" },
+                    "createdAt": { "type": "string", "format": "date-time" },
+                    "label": { "type": ["string", "null"] },
+                    "message": { "type": ["string", "null"] },
+                    "applicationMetadata": { "type": "object", "additionalProperties": { "type": "string" } }
+                  },
+                  "required": ["author", "createdAt"],
+                  "description": "Required for create/restore. Timestamps select history; accepted sequence determines order. The host owns author authentication."
+                },
+                "sequence": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "description": "Nonnegative Int64 decimal string; required for materialize/replay. render takes exactly one sequence or cutoff." },
+                "cutoff": { "type": "string", "format": "date-time", "description": "Required for resolveTime; optional alternative to sequence for render." },
+                "limit": { "type": "integer", "minimum": 1, "description": "list page size; default 25." },
+                "maxEntriesToScan": { "type": "integer", "minimum": 1, "description": "Bounded ancestry/replay/time traversal; default 10000." }
+              },
+              "required": ["sessionId", "action"],
+              "$defs": {
+                "blob": {
+                  "type": "object", "additionalProperties": false,
+                  "properties": {
+                    "digest": {
+                      "type": "object", "additionalProperties": false,
+                      "properties": {
+                        "algorithm": { "type": "string", "const": "SHA-256" },
+                        "value": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+                      },
+                      "required": ["algorithm", "value"]
+                    },
+                    "length": { "type": "integer", "minimum": 0 }
+                  },
+                  "required": ["digest", "length"]
+                },
+                "head": {
+                  "type": "object", "additionalProperties": false,
+                  "properties": {
+                    "revision": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+                    "state": { "$ref": "#/$defs/blob" }
+                  },
+                  "required": ["revision", "state"]
+                }
+              }
             }
             """),
         new ToolDefinition(

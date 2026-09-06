@@ -61,17 +61,20 @@ internal sealed class SessionStore
     /// passes the environment-configured store from <see cref="DocumentStores.FromEnvironment"/>.</param>
     public SessionStore(
         IDocumentStore? documents = null,
-        System.Func<MutationTransactions>? mutationTransactionsFactory = null)
+        System.Func<MutationTransactions>? mutationTransactionsFactory = null,
+        HistoryClientOps? history = null)
     {
         Documents = documents
             ?? new LocalFileDocumentStore(System.IO.Directory.GetCurrentDirectory());
         _mutationTransactionsFactory = mutationTransactionsFactory
             ?? (() => new MutationTransactions());
+        History = history;
     }
 
     /// <summary>Where this server's documents are read from and written to. Every session in the
     /// process shares it, and it is already rooted at the configured scope.</summary>
     public IDocumentStore Documents { get; }
+    public HistoryClientOps? History { get; }
 
     public DocSession Open(byte[] bytes, string? location, DocxSessionSettings settings)
     {
