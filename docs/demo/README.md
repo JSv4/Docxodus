@@ -47,12 +47,30 @@ Each of the 320×200 source pixels contributes one printable ASCII glyph,
 including the complete status bar. A measured glyph-coverage ramp carries tone;
 a 19-ink palette, including saturated primaries, carries hue. Coverage is
 calibrated in packed rows at the actual document font size so dark outlines
-retain their contrast. Adjacent color runs are merged toward a 700-segment
+retain their contrast. The selected glyphs fit within a row and have similar
+measured coverage at DPR 1 and 2. Taller glyphs previously bled into adjacent
+rows, mixing foreground and background colors; screenshot regressions now
+check that neighboring saturated rows stay separate. Adjacent color runs are merged toward a 700-segment
 target, with a per-cell color-error bound: complex pictures can exceed the
 target rather than lose contrasting strokes. There are no per-cell backgrounds,
 block/Braille glyphs, or separately reconstructed HUD labels. Each row also has a printable
 `|` guard for safe paragraph editing: 321×200 = **64,200 document characters**,
-with 199 line breaks, 2.5pt bold monospaced text, and exact 1.7pt line spacing.
+with 199 line breaks, 2pt bold monospaced text, 0.2pt character spacing, and exact
+1.7pt line spacing. The tighter color-error bound also preserves small red
+strokes against orange backgrounds.
+
+To measure the authored ramp in the browser, run
+`DPR=1 node docs/demo/tools/calibrate-ascii.mjs` from the repository root with
+the staged demo served on port 8082, then repeat with `DPR=2`. The optional
+`--all` flag measures all 95 printable glyphs. Normalize to the densest eligible
+glyph at each density; exclude ink outside the baseline/cap-height band and
+glyphs whose normalized coverage differs by more than five percentage points.
+The authored table averages the remaining measurements.
+
+The [raw menu source](../images/arcade-doom-ascii-menu-source.png) shows that
+original DOOM draws its menu over the title artwork, including the large
+background logo and smaller menu logo. The projection preserves that source
+composition; it does not hide the title art or detect menu states.
 
 The library improvements are independent of the cartridge: repeated-format,
 fixed-line ASCII paragraphs can resolve each distinct format once during an
@@ -66,7 +84,7 @@ an undo-scrubbed frame, gameplay input, and phone layout.
 
 **Release status:** the static pages still pin `docxodus@12.1.0`. These captures
 use the locally built `?engine=./embed.bundle.js`, which includes the new general
-renderer improvements and condensed character spacing. Publish a library release
+renderer improvements and authored character spacing. Publish a library release
 and update the shared demo pin before expecting the same ASCII geometry and
 throughput from the default CDN-backed page.
 

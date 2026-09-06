@@ -72,3 +72,15 @@ test('cached hues do not depend on previously rendered frames', async () => {
   warm.asciiFramebuffer(preceding);
   assert.deepEqual(warm.asciiFramebuffer(frame), cold.asciiFramebuffer(frame));
 });
+
+test('small red strokes retain their saturation against an orange backdrop', () => {
+  const fb = new Uint8Array(320 * 200 * 4);
+  for (let y = 0; y < 200; y++) for (let x = 0; x < 320; x++)
+    fb.set(x % 16 === 8 ? [0, 0, 192, 255] : [56, 100, 255, 255], (y * 320 + x) * 4);
+  const grid = asciiFramebuffer(fb);
+  for (let y = 0; y < 200; y++) for (let x = 8; x < 320; x += 16) {
+    const ink = grid.colors[y][x + 1];
+    const red = parseInt(ink.slice(0, 2), 16), green = parseInt(ink.slice(2, 4), 16);
+    assert.ok(green / red < .25, 'the run budget must not turn a red stroke orange');
+  }
+});

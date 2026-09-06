@@ -16,6 +16,12 @@ const here = dirname(fileURLToPath(import.meta.url));
 const output = resolve(here, '../../docs/images');
 const scratch = mkdtempSync(join(tmpdir(), 'docxodus-ascii-capture-'));
 const base = process.env.ARCADE_URL ?? 'http://localhost:8082';
+const ffmpeg = process.env.FFMPEG ?? 'ffmpeg';
+if (!process.argv.includes('--preview')) {
+  const encoder = spawnSync(ffmpeg, ['-version'], { encoding: 'utf8' });
+  if (encoder.error || encoder.status !== 0)
+    throw new Error('ffmpeg is unavailable; set FFMPEG to its executable path before recording.');
+}
 const engineSha = 'efd7c34714e3753a84cf6873f2c2ae0e1a41bde1f10aaa2b0a95cb6935e8cce9';
 const wadSha = '1d7d43be501e67d927e415e0b8f3e29c3bf33075e859721816f652a526cac771';
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -41,6 +47,7 @@ try {
   await page.waitForFunction(() => window.__arcade?.game().doomFrames >= 2,
     null, { timeout: 180000 });
   await page.selectOption('#pace', '0');
+  await page.waitForFunction(() => document.querySelector('[data-dxr="loader"]').hidden);
   await page.evaluate(() => document.fonts.ready);
   const frameBox = () => page.evaluate(() => {
     const { x, y, width, height } = window.__arcade.canvasElement().getBoundingClientRect();
@@ -63,8 +70,6 @@ try {
     recorded.push({ file, time: event.metadata.timestamp, received: Date.now() / 1000 });
     cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => {});
   });
-  await cdp.send('Page.startScreencast', { format: 'png', maxWidth: viewport.width,
-    maxHeight: viewport.height, everyNthFrame: 1 });
   await page.screenshot({ path: join(output, 'arcade-doom-ascii-title.png') });
   console.log('Captured original DOOM title screen');
   if (process.argv.includes('--preview')) {
@@ -72,11 +77,25 @@ try {
     await browser.close();
     process.exit(0);
   }
+  // The high-resolution still is capture preparation, not part of playback.
+  await cdp.send('Page.startScreencast', { format: 'png', maxWidth: viewport.width,
+    maxHeight: viewport.height, everyNthFrame: 1 });
   // Exercise the direct title-to-menu transition that players see.
-  await page.waitForTimeout(800);
+  await page.waitForTimeout(1600);
   await page.keyboard.press('Enter'); // main menu
   await page.waitForTimeout(1000);
   await page.screenshot({ path: join(output, 'arcade-doom-ascii-menu.png') });
+  // Keep the original source art beside the showcase for visual comparisons.
+  // DOOM draws this menu over TITLEPIC; both logo layers exist in its pixels.
+  const sourceMenu = await page.evaluate(() => {
+    const canvas = document.createElement('canvas'); canvas.width = 320; canvas.height = 200;
+    const ctx = canvas.getContext('2d'), frame = ctx.createImageData(320, 200);
+    for (let y = 0; y < 200; y++) for (let x = 0; x < 320; x++)
+      frame.data.set([...window.__arcade.game().pixel(x, y), 255], (y * 320 + x) * 4);
+    ctx.putImageData(frame, 0, 0);
+    return canvas.toDataURL('image/png').split(',')[1];
+  });
+  writeFileSync(join(output, 'arcade-doom-ascii-menu-source.png'), Buffer.from(sourceMenu, 'base64'));
   await page.keyboard.press('Enter'); // New Game
   await page.waitForTimeout(900);
   await page.keyboard.press('Enter'); // Knee-Deep in the Dead
@@ -124,7 +143,6 @@ try {
   if (errors.length) throw new Error(errors.join('\n'));
   if (proof.images || proof.textCharacters !== 64200 || !proof.incremental)
     throw new Error('Capture did not remain a complete native ASCII document frame');
-  const ffmpeg = process.env.FFMPEG ?? 'ffmpeg';
   const encode = args => {
     const result = spawnSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', ...args], { encoding: 'utf8' });
     if (result.error || result.status !== 0) throw new Error(result.error?.message ?? result.stderr);

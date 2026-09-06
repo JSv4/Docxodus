@@ -3,18 +3,20 @@
 // is a character sampled from the same picture the native renderer displays.
 export const ASCII_COLS = 320;
 export const ASCII_ROWS = 200;
-export const ASCII_METRICS = { sz: 5, lineTwips: 34, bold: true, spacingTwips: -2 };
+export const ASCII_METRICS = { sz: 4, lineTwips: 34, bold: true, spacingTwips: 4 };
 
 // Tone lives in the glyph, hue in the ink. Separating them lets textured grey
-// walls use one Word run while preserving a different intensity in every cell.
-// Coverage is measured in repeated rows in the actual editor at the authored
-// size, tracking and line pitch (Canvas Mono, synthetic bold, DPR 2), normalized
-// to the densest glyph. Isolated, large-font measurements underestimate the
-// brightness of small packed glyphs and wash out dark outlines. Keep source
-// contrast linear; lifting shadows makes overlays look transparent.
-export const ASCII_RAMP = ' .,:;ris235hSXGA&9HB#M@';
-const coverage = [0, 130, 188, 258, 301, 475, 577, 642, 690, 692, 696,
-  798, 704, 761, 770, 896, 829, 808, 869, 947, 972, 1000, 973];
+// walls use one Word run while preserving intensity in every cell. Use glyphs
+// whose ink stays between the baseline and the cap height: descenders and tall
+// glyphs in an undersized line box bleed into neighboring source pixels.
+// At 2pt the selected ink fits the 1.7pt row pitch, including synthetic bold;
+// positive tracking keeps the original pixel width without enlarging the ink.
+// Coverage is measured in the pinned Canvas Mono font, in packed native-editor
+// rows at DPR 1 and 2. Exclude glyphs whose normalized coverage shifts by more
+// than 5% between the two densities, then average. Keep contrast linear.
+export const ASCII_RAMP = " .-':\"^*+?>z<iL71TnIhZVwP4ARWM";
+const coverage = [0, 113, 140, 150, 239, 280, 315, 416, 434, 481, 492, 500, 501, 506, 508,
+  565, 575, 578, 593, 623, 679, 688, 699, 700, 735, 745, 781, 847, 975, 999];
 const tones = Array.from({ length: 256 }, (_, value) => {
   const target = value / 255 * 1000;
   let best = 0;
@@ -33,7 +35,7 @@ const paletteNorm = palette.map(([r, g, b]) => .3 * r * r + .59 * g * g + .11 * 
 // Otherwise a small contrasting stroke can be sacrificed to a long backdrop.
 const compatible = palette.map(a => palette.reduce((mask, b, i) =>
   .3 * (a[0] - b[0]) ** 2 + .59 * (a[1] - b[1]) ** 2 + .11 * (a[2] - b[2]) ** 2
-    <= 80 ** 2 ? mask | (1 << i) : mask, 0));
+    <= 60 ** 2 ? mask | (1 << i) : mask, 0));
 const anyInk = (1 << palette.length) - 1;
 const lookup = new Int8Array(32768).fill(-1);
 

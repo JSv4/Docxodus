@@ -1,11 +1,13 @@
 import { test, expect, Page } from '@playwright/test';
 
-test.describe('ASCII projection contrast in the native surface', () => {
-  test.use({ viewport: { width: 1100, height: 1050 }, deviceScaleFactor: 2 });
+for (const deviceScaleFactor of [1, 2]) test.describe(`ASCII projection contrast at DPR ${deviceScaleFactor}`, () => {
+  test.use({ viewport: { width: 1100, height: 1050 }, deviceScaleFactor });
   test('keeps dark tones proportional and saturated blue free of pale ink', async ({ page }) => {
     await page.goto('/demo-arcade.html?engine=./embed.bundle.js&intro=0&sound=0');
     await page.waitForFunction(() => (window as any).__arcade?.frames() > 0);
     await page.evaluate(() => (window as any).__arcade.pause());
+    // Frames can start while the loading card is still fading over the editor.
+    await page.waitForFunction(() => (document.querySelector('[data-dxr="loader"]') as HTMLElement).hidden);
     const box = await page.evaluate(async () => {
       const a = (window as any).__arcade;
       const { asciiFramebuffer, ASCII_METRICS } = await import(/* @vite-ignore */ '/doom-ascii.js' as string);
@@ -42,9 +44,52 @@ test.describe('ASCII projection contrast in the native surface', () => {
         return sum.map(n => n / (pixels.length / 4));
       });
     }, screenshot.toString('base64'));
+    await test.info().attach('patch-means.json', { body: JSON.stringify(patches), contentType: 'application/json' });
     expect(Math.abs(patches[0][0] / patches[1][0] - 64 / 192)).toBeLessThan(.06);
     expect(patches[2][2]).toBeGreaterThan(30);
     expect(Math.max(patches[2][0], patches[2][1]) / patches[2][2]).toBeLessThan(.03);
+  });
+
+  test('keeps adjacent red and green source rows from bleeding into each other', async ({ page }) => {
+    await page.goto('/demo-arcade.html?engine=./embed.bundle.js&intro=0&sound=0');
+    await page.waitForFunction(() => (window as any).__arcade?.frames() > 0);
+    await page.evaluate(() => (window as any).__arcade.pause());
+    await page.waitForFunction(() => (document.querySelector('[data-dxr="loader"]') as HTMLElement).hidden);
+    const anchor = await page.evaluate(async () => {
+      const a = (window as any).__arcade;
+      const { asciiFramebuffer, ASCII_METRICS } = await import(/* @vite-ignore */ '/doom-ascii.js' as string);
+      const { frameXml } = await import(/* @vite-ignore */ '/ascii-scenes.js' as string);
+      const fb = new Uint8Array(320 * 200 * 4);
+      for (let y = 0; y < 200; y++) for (let x = 0; x < 320; x++)
+        fb.set(y % 3 === 0 ? [0, 0, 255, 255] : y % 3 === 1 ? [0, 255, 0, 255]
+          : [0, 0, 0, 255], (y * 320 + x) * 4);
+      const xml = a.session.raw.getXml(a.canvasAnchor());
+      const frame = frameXml(xml.slice(0, xml.indexOf('>') + 1), asciiFramebuffer(fb), '000000', ASCII_METRICS);
+      const result = a.session.raw.replaceXml(a.canvasAnchor(), frame.xml);
+      if (!result.success) throw new Error(JSON.stringify(result));
+      a.editor.refresh();
+      await document.fonts.ready;
+      return a.canvasElement().getAttribute('data-anchor');
+    });
+    const screenshot = await page.locator(`[data-anchor="${anchor}"]`).screenshot();
+    const pixels = await page.evaluate(async base64 => {
+      const img = new Image(); img.src = `data:image/png;base64,${base64}`; await img.decode();
+      const canvas = document.createElement('canvas'); canvas.width = img.width; canvas.height = img.height;
+      const ctx = canvas.getContext('2d')!; ctx.drawImage(img, 0, 0);
+      const data = ctx.getImageData(Math.floor(img.width * .1), Math.floor(img.height * .2),
+        Math.floor(img.width * .7), Math.floor(img.height * .5)).data;
+      let red = 0, green = 0, mixed = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        if (data[i] > 80) red++;
+        if (data[i + 1] > 80) green++;
+        if (Math.min(data[i], data[i + 1]) > 25) mixed++;
+      }
+      return { red, green, mixed };
+    }, screenshot.toString('base64'));
+    await test.info().attach('row-colors.json', { body: JSON.stringify(pixels), contentType: 'application/json' });
+    expect(pixels.red).toBeGreaterThan(1000);
+    expect(pixels.green).toBeGreaterThan(1000);
+    expect(pixels.mixed / (pixels.red + pixels.green)).toBeLessThan(.01);
   });
 });
 
