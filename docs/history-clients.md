@@ -94,8 +94,7 @@ An old client fails against its original dead process rather than attaching its 
 to an unrelated newly opened history. No new transport/server has been added.
 
 This binding layer is package-boundary history, not fine-grained typing, automatic
-concurrent-edit merging, or pending-work management. Live log followers
-are subsequent stacked layers. See [history API](history.md) for durability and retention
+concurrent-edit merging, or pending-work management. See [history API](history.md) for durability and retention
 responsibilities and [the architecture](architecture/collaboration_and_version_history.md)
 for the larger collaboration roadmap.
 
@@ -123,3 +122,44 @@ before installing that checkpoint. This API does not authorize dropping local ed
 stale intents, or implement last-writer-wins. Exact-head publication failures keep the caller's
 candidate untouched. Use the returned view's exact version reference to load its snapshot for
 rendering; that reference remains stable even if newer versions publish during the load.
+
+## Live browser viewer
+
+```ts
+import { initialize, openDocxHistory, createHistoryViewer } from 'docxodus/embed';
+await initialize();
+const history = openDocxHistory(hostStorage);
+const viewer = await createHistoryViewer('#document', history, 'contract');
+
+// Call from YOUR existing log/notification delivery mechanism. Nothing subscribes automatically.
+const update = await viewer.refresh();
+console.log(update.entries.map(e => [e.commit.sequence, e.metadata.createdAt]));
+
+await viewer.showTime('2026-01-01T12:30:00Z'); // or showSequence('42')
+await viewer.refresh(); // catches up its verified live head, but keeps the historical view visible
+await viewer.resume();  // explicitly return to the latest verified live state
+const bytes = viewer.exportDisplayed(); // independent copy of the displayed checkpoint
+viewer.destroy();
+history.close(); // await outstanding client operations first
+```
+
+`createHistoryViewer` is an opt-in, read-only collaboration surface. It renders complete
+accepted DOCX checkpoints through the existing scoped viewer pipeline. It does not replace
+an editing session or discard local edits. Publish edited candidate bytes with an exact
+expected head through the normal client API; a stale candidate requires host/caller
+reconciliation. No conflict-transform engine, keystroke recorder, network, timer, or
+subscription is introduced here.
+
+`head` reports the last verified live publication; `sequence` reports the displayed content
+position, which can be older during a historical preview. `following` distinguishes those
+modes. Refreshes and preview/resume calls are serialized in invocation order. Duplicate
+notifications do not reread snapshots or rerender. A content-equivalent tail still advances
+the displayed sequence and exact downloadable bytes. Restore epochs install a new frame.
+Historical previews remain visible during log catch-up until `resume()`.
+
+Snapshot and rendering failures leave the previously accepted head and visible frame intact.
+A later refresh can retry from that head. Destruction prevents pending work from painting into
+the removed mount; it does not delete or close shared history storage. The viewer retains the
+live checkpoint and, while previewing, the displayed historical checkpoint. Full-checkpoint
+loading/rendering and package-boundary publication can scale with document size; this is not
+the architecture's future incremental typing performance path.
