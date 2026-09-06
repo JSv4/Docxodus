@@ -50,6 +50,10 @@ var restored = await history.RestoreVersionAsync(documentId, restoreRequestId, p
 ```
 
 IDs are opaque, document-scoped strings of 1–1024 UTF-16 characters (nonblank, valid Unicode).
+The document ID and the request ID must also fit together in one 16 KiB index node once escaped
+(JSON escapes each non-ASCII or reserved character to six bytes), so a pair of long IDs made
+entirely of such characters is refused with `ResourceLimit` by the call that supplies it rather
+than by the next publication. Plain identifiers are nowhere near that bound.
 The host owns authentication and ID allocation; a persisted replica UUID plus monotonic counter,
 or a persisted unique request UUID, can distinguish independent intents. Never infer identity
 from timestamps or snapshot hashes. Two intentional saves of identical bytes use different IDs.
