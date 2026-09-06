@@ -98,3 +98,28 @@ concurrent-edit merging, or pending-work management. Live log followers
 are subsequent stacked layers. See [history API](history.md) for durability and retention
 responsibilities and [the architecture](architecture/collaboration_and_version_history.md)
 for the larger collaboration roadmap.
+
+## Ordered live log updates
+
+`ReadChangesSinceAsync` (.NET), `readChangesSince` (npm), and `read_changes_since` (Python)
+accept the exact last accepted `HistoryHead` and return one captured `DocxHistoryUpdate`.
+Each update contains that `after` head, its new `view`, an ascending contiguous list of
+`entries` (immutable commit reference, commit record, and recorded author/time metadata),
+and `reset`. Sequence determines order even when timestamps move backwards. Metadata-only
+labels advance the publication head without creating content entries. A repeated accepted
+head returns an empty tail. First join passes `null`/`None` and starts at the latest checkpoint
+with an empty historical tail and `reset: true`.
+
+Both immutable version ancestry and content-commit ancestry must extend the accepted head.
+Rewinds, same-revision forks, same-content version branches, broken commit links, and absent
+history fail explicitly. The scan budget covers traversed version ancestors plus content
+commits; each can require several bounded metadata reads. The update call reads no snapshot
+or effect bytes. Hosts must retain all metadata needed to establish ancestry.
+
+Hosts invoke refresh when their own notification/log delivery mechanism says there is new
+work. No library timer, subscribe loop, socket, transport, or service is created. A reset means
+the epoch changed (for example a restore); a client must preserve local pending work separately
+before installing that checkpoint. This API does not authorize dropping local edits, rebase
+stale intents, or implement last-writer-wins. Exact-head publication failures keep the caller's
+candidate untouched. Use the returned view's exact version reference to load its snapshot for
+rendering; that reference remains stable even if newer versions publish during the load.

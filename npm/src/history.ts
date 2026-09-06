@@ -33,6 +33,24 @@ export interface DocxHistoryState {
 }
 export interface DocxHistoryView { head: HistoryHead; state: DocxHistoryState; version: DocxStoredVersion }
 export interface DocxVersionPage { versions: DocxStoredVersion[]; next: HistoryBlobReference | null }
+export interface PackageHistoryCommit {
+  after: DocxSnapshotReference;
+  before: DocxSnapshotReference;
+  contribution: HistoryBlobReference | null;
+  documentId: string;
+  epoch: HistoryPosition;
+  kind: 'import' | 'restore';
+  parent: HistoryBlobReference | null;
+  sequence: HistoryPosition;
+  version: HistoryBlobReference;
+}
+export interface DocxHistoryLogEntry { id: HistoryBlobReference; commit: PackageHistoryCommit; metadata: DocxVersionMetadata }
+export interface DocxHistoryUpdate {
+  after: HistoryHead | null;
+  view: DocxHistoryView;
+  entries: DocxHistoryLogEntry[];
+  reset: boolean;
+}
 
 /** Host-owned storage. Persist blobs before returning; advanceHead must be an atomic CAS.
  * References and returned bytes are verified in the core. Methods must settle their promises.
@@ -63,6 +81,7 @@ interface Result {
   page: DocxVersionPage | null;
   sequence: HistoryPosition | null;
   bytes: string | null;
+  update: DocxHistoryUpdate | null;
 }
 
 const adapters = new Map<number, HistoryStorage>();
@@ -127,6 +146,10 @@ export class DocxHistoryClient {
 
   async read(documentId: string): Promise<DocxHistoryView | null> {
     return (await this.call('read', documentId)).view;
+  }
+  /** Host-triggered validated metadata tail; first join starts at the latest checkpoint. */
+  async readChangesSince(documentId: string, after: HistoryHead | null, maxEntriesToScan = 10_000): Promise<DocxHistoryUpdate> {
+    return (await this.call('updates', documentId, { expectedHead: after, maxEntriesToScan })).update!;
   }
   async createVersion(documentId: string, expectedHead: HistoryHead | null, bytes: Uint8Array,
     metadata: DocxVersionMetadata): Promise<DocxHistoryView> {

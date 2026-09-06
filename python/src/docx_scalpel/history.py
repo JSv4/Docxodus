@@ -154,6 +154,40 @@ class DocxVersionPage:
     next: HistoryBlobReference | None
 
 
+@dataclass(frozen=True, slots=True)
+class PackageHistoryCommit:
+    after: DocxSnapshotReference
+    before: DocxSnapshotReference
+    contribution: HistoryBlobReference | None
+    document_id: str
+    epoch: int
+    kind: str
+    parent: HistoryBlobReference | None
+    sequence: int
+    version: HistoryBlobReference
+
+    @classmethod
+    def _from_wire(cls, data: Mapping[str, Any]) -> PackageHistoryCommit:
+        return cls(DocxSnapshotReference._from_wire(data["after"]), DocxSnapshotReference._from_wire(data["before"]),
+                   _reference(data["contribution"]), data["documentId"], int(data["epoch"]), data["kind"],
+                   _reference(data["parent"]), int(data["sequence"]), HistoryBlobReference._from_wire(data["version"]))
+
+
+@dataclass(frozen=True, slots=True)
+class DocxHistoryLogEntry:
+    id: HistoryBlobReference
+    commit: PackageHistoryCommit
+    metadata: DocxVersionMetadata
+
+
+@dataclass(frozen=True, slots=True)
+class DocxHistoryUpdate:
+    after: HistoryHead | None
+    view: DocxHistoryView
+    entries: tuple[DocxHistoryLogEntry, ...]
+    reset: bool
+
+
 class DocxHistoryClient:
     """Use open_history(); a client is bound to its original subprocess, never a reused handle."""
 
@@ -193,6 +227,15 @@ class DocxHistoryClient:
     def read(self, document_id: str) -> DocxHistoryView | None:
         value = self._call("read", document_id)["view"]
         return None if value is None else DocxHistoryView._from_wire(value)
+
+    def read_changes_since(self, document_id: str, after: HistoryHead | None, max_entries_to_scan: int = 10_000) -> DocxHistoryUpdate:
+        """Host-triggered validated tail; first join starts at the latest checkpoint."""
+        update = self._call("updates", document_id, expectedHead=None if after is None else after.to_wire(),
+                            maxEntriesToScan=max_entries_to_scan)["update"]
+        return DocxHistoryUpdate(None if update["after"] is None else HistoryHead._from_wire(update["after"]),
+            DocxHistoryView._from_wire(update["view"]), tuple(DocxHistoryLogEntry(
+                HistoryBlobReference._from_wire(entry["id"]), PackageHistoryCommit._from_wire(entry["commit"]),
+                DocxVersionMetadata._from_wire(entry["metadata"])) for entry in update["entries"]), update["reset"])
 
     def create_version(self, document_id: str, expected_head: HistoryHead | None, docx_bytes: bytes,
                        metadata: DocxVersionMetadata) -> DocxHistoryView:

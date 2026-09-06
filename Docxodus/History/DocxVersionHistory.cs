@@ -55,6 +55,12 @@ public sealed partial class DocxVersionHistory
         cancellationToken.ThrowIfCancellationRequested();
         var head = await _heads.ReadAsync(documentId, cancellationToken).ConfigureAwait(false);
         if (head is null) return null;
+        return await ReadHeadViewAsync(documentId, head, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async ValueTask<DocxHistoryView> ReadHeadViewAsync(string documentId, HistoryHead head,
+        CancellationToken cancellationToken)
+    {
         var state = await _records.LoadStateAsync(head.State, cancellationToken).ConfigureAwait(false);
         SameDocument(documentId, state.DocumentId);
         Consistent(state.Sequence < head.Revision && state.Epoch <= state.Sequence, "Invalid head publication position.");

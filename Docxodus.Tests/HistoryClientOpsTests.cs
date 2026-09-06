@@ -55,6 +55,10 @@ public class HistoryClientOpsTests
         Assert.True(restored.Success);
         Assert.Equal(1, restored.View!.State.Epoch);
         Assert.Equal(1, restored.View.State.Sequence);
+        var updates = (await Call(client, "updates", expected: first.View.Head)).Update!;
+        Assert.True(updates.Reset);
+        Assert.Equal(1, Assert.Single(updates.Entries).Commit.Sequence);
+        Assert.Equal(restored.View.Head, updates.View.Head);
         var stale = await Call(client, "create", bytes, metadata: metadata, expected: first.View.Head);
         Assert.False(stale.Success);
         Assert.Equal("StaleHead", stale.ErrorCode);
