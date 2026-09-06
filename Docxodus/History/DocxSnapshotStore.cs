@@ -80,7 +80,7 @@ public sealed class DocxSnapshotStore
         return DocxDiff.CreateComparison(new WmlDocument("before.docx", left), new WmlDocument("after.docx", right), settings);
     }
 
-    private PackageManifest Inspect(byte[] bytes)
+    internal PackageManifest Inspect(byte[] bytes)
     {
         var manifest = PackageManifestGenerator.Generate(bytes, _packageOptions);
         if (!manifest.IsValid || manifest.PackageKind != "opc" || manifest.Facts.MainDocumentUri is null

@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Portable-history foundation: bounded, document-scoped graph validation retains exact
+  snapshots, package effects, restore targets, retry receipts, and operation proposals
+  without enumerating shared storage. Includes real legal-document and hostile-graph tests.
+
 ### Fixed
 
 - ~195 source files written after this repo forked from Microsoft's `OpenXmlPowerTools` carried

@@ -167,7 +167,7 @@ public sealed class HistoryRequestJournalStore
         }
     }
 
-    private async ValueTask<HistoryRequestIndexNode> LoadAsync(string documentId, HistoryBlobReference reference,
+    internal async ValueTask<HistoryRequestIndexNode> LoadAsync(string documentId, HistoryBlobReference reference,
         CancellationToken cancellationToken)
     {
         HistoryBlobIO.Validate(reference, MaxNodeBytes);
@@ -257,6 +257,13 @@ public sealed class HistoryRequestJournalStore
         if (parent is null) return;
         Require(child.Bit > parent.Bit && PrefixMatches(child.Key, parent.Key, parent.Bit)
             && Bit(child.Key, parent.Bit) == Bit(key, parent.Bit), "Request-index path is inconsistent or cyclic.");
+    }
+
+    // Archive validation visits BOTH sides, not merely one request's lookup path.
+    internal static void ValidateArchiveChild(HistoryRequestIndexNode parent, HistoryRequestIndexNode child, bool one)
+    {
+        Require(child.Bit > parent.Bit && PrefixMatches(child.Key, parent.Key, parent.Bit)
+            && Bit(child.Key, parent.Bit) == one, "Request-index branch is inconsistent or cyclic.");
     }
 
     private static void Match(HistoryRequestIdentity stored, HistoryRequestIdentity requested)
