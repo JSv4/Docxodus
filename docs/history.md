@@ -1,6 +1,6 @@
 # Named version history (.NET)
 
-`Docxodus.History.DocxVersionHistory` captures exact DOCX versions over host-owned storage. It currently supports create, read, paginated list, get, export, and lazy semantic/native-redline comparison. Content-changing versions produce the same reversible package contributions used by the package fallback. Live session recording, restore, sequence/time reconstruction, collaboration, and browser/agent bindings follow in the [implementation plan](architecture/collaboration_and_version_history.md).
+`Docxodus.History.DocxVersionHistory` captures exact DOCX versions over host-owned storage. It currently supports create, read, paginated list, get, export, lazy semantic/native-redline comparison, and non-destructive restore. Content-changing versions produce the same reversible package contributions used by the package fallback. Live session recording, sequence/time reconstruction, collaboration, and browser/agent bindings follow in the [implementation plan](architecture/collaboration_and_version_history.md).
 
 ```csharp
 using Docxodus.History;
@@ -46,5 +46,22 @@ Inputs are captured before awaiting host storage. The service does not mutate a 
 `GetVersionAsync`, `ExportVersionAsync`, and explicit list cursors also accept retained branch references belonging to the same document. A reference is neither authorization nor proof that a version is on the current published branch. The host must authorize access before invoking these APIs. Cross-document references are rejected.
 
 `ExportVersionAsync` verifies exact length/SHA-256 and bounded DOCX/content identity before returning the original stored bytes. `CompareVersionsAsync` verifies both snapshots and returns the existing lazy `DocxDiffComparison`; use `GetSemanticChanges()` or `ToRedline()` as needed. It retains DocxDiff's compatibility warnings, pre-existing-revision policy, and unsupported-feature limitations. A redline is a review artifact, not a lossless package patch.
+
+## Restore
+
+```csharp
+var restored = await history.RestoreVersionAsync(
+    "document-123", previewedHead, selectedVersionId,
+    new DocxVersionMetadata
+    {
+        Author = authenticatedUserId,
+        CreatedAt = DateTimeOffset.UtcNow,
+        Message = "Restored the approved draft",
+    }, cancellationToken);
+```
+
+For `V1 → V2 → V3`, restoring V1 creates V4 with parent V3 and `RestoredFrom = V1`; V1–V3 remain untouched and exportable. The service verifies the target's exact bytes before writing new metadata, then atomically publishes the restore commit, new version, and state. It reuses V1's exact snapshot reference without reserializing it. Content sequence and epoch each advance, including when explicitly restoring already-current content. Missing/corrupt/foreign targets and stale previewed heads fail without publishing a reset; any metadata written before a failed CAS remains unreferenced.
+
+Restore changes durable history, not an existing live `DocxSession`. Hosts must notify open clients of the new epoch, install the restored state through their lifecycle, invalidate derived caches, and preserve pre-reset pending edits as an explicit recoverable branch. The core service does not silently replay those edits or discard them; the integrated editor/client lifecycle remains a later layer.
 
 The filesystem adapters require a protected local directory with working exclusive file sharing and atomic rename semantics. They do not coordinate distributed/network filesystems. Never delete active `.lock` files. The host owns authorization, aggregate quotas, retention, and filesystem-dependent power-loss durability; readers verify content and report corruption or missing history explicitly.
