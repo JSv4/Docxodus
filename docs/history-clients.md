@@ -65,8 +65,36 @@ and call the existing `docxDiffCompareProducts` API. The package-boundary WASM b
 base64 for asynchronously read/exported bytes, incurring temporary allocation overhead;
 it is not a low-latency keystroke path.
 
+## Python
+
+```python
+from docx_scalpel import open_history, DocxVersionMetadata, convert_docx_to_html
+
+with open_history('/host-owned/matter-history') as history:
+    saved = history.create_version('contract', None, docx_bytes,
+        DocxVersionMetadata('application-user-id', '2026-01-01T12:00:00Z', label='Draft'))
+    sequence = history.resolve_sequence_at_time('contract', '2026-01-02T00:00:00Z')
+    html = convert_docx_to_html(history.materialize('contract', sequence))
+```
+
+The Python client exposes `read`, `create_version`, `list_versions`, `get_version`,
+`export_version`, `materialize`, `replay`, `resolve_sequence_at_time`, and `restore_version`.
+Frozen value types use snake_case attributes and arbitrary-precision Python integers;
+Int64 bounds are enforced before positions are encoded as decimal strings. Timestamp strings
+retain their exact recorded precision. `DocxHistoryError.code` carries core domain errors;
+host/process failures remain `DocxodusTransportError`. Compare exact exports with the existing
+`docx_diff_compare_products` API, or open them with `open_session` for headless editing.
+
+The existing local stdio host owns the C# adapters. An explicit root creates/uses its `blobs`
+and `heads` directories, subject to the [filesystem adapter contract](history.md); multiple
+clients/processes may cooperate over that protected local directory. With no root,
+`open_history()` creates a private ephemeral memory history. Use the context manager or
+call `close()`; closing never removes persisted data. After a host restart, reopen the root.
+An old client fails against its original dead process rather than attaching its numeric handle
+to an unrelated newly opened history. No new transport/server has been added.
+
 This binding layer is package-boundary history, not fine-grained typing, automatic
-concurrent-edit merging, or pending-work management. Python bindings and live log followers
+concurrent-edit merging, or pending-work management. Live log followers
 are subsequent stacked layers. See [history API](history.md) for durability and retention
 responsibilities and [the architecture](architecture/collaboration_and_version_history.md)
 for the larger collaboration roadmap.
