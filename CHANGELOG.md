@@ -4,44 +4,6 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Changed
-
-- The Arcade's touch controls are now the cartridge's own control map rather than a fixed set
-  of four arrows and a FIRE button. Each cartridge declares a touch profile beside the keyboard
-  map it mirrors (`cart.touch`), and `arcade-dock.js` fills its fixed pad slots from it: the
-  platformer gets walk and jump; the two raycasters add strafe and a sprint latch; Doom adds
-  **USE** and a tray holding its seven weapons, the automap, its own menu and the Enter that
-  works it. What a phone could reach before was movement and fire, so a touch player could walk
-  Freedoom's E1M1 as far as its first door and no further — a door is a key press, and there was
-  no key to press. Slots a cartridge does not use are hidden and lose their key code, so a
-  button can never send a key the cartridge ignores. On the attract screen the pad shows one
-  round **START**, since nothing on a title card is steerable.
-  RUN latches instead of asking to be held: on a phone the hand that would hold Shift is the one
-  steering. Pad presses are tracked per pointer, so firing with one thumb while turning with the
-  other lifts only the key that was released, and pausing releases everything the pad is holding
-  — a latched sprint no longer survives into the paused document. The pad's buttons are wired by
-  delegation and read their key at press time, which is what lets one set of buttons follow the
-  cartridge.
-### Fixed
-
-- The editor's block drag handle no longer escapes the editor when its block scrolls out of
-  view. The handle is a `position: fixed` element, so it is measured and placed in viewport
-  coordinates and no ancestor's overflow clips it — but its position was then clamped into the
-  *window* (`Math.max(4, ...)`). Mounted the way the ribbon mounts it, inside a bounded scrolling
-  region within a clipped card, a block scrolled past the top of that region left its handle
-  behind at the top of the page: a grip floating over the host's own chrome, pointing at a block
-  that was no longer on screen. The handle is now clipped to the editor's own viewport instead —
-  the window narrowed by every ancestor that clips its overflow, so a nested scroller and a
-  clipped card both count, and the test is the computed `overflow` rather than whether an element
-  happens to be scrolling right now. A block scrolled clear of that viewport withdraws its handle
-  rather than clamping it to an edge, and a block only partly in view keeps its handle pulled to
-  the edge it is disappearing past. Repositioning on scroll also no longer uses the handle's own
-  `display` as its memory of whether a handle is wanted, so a handle withdrawn by a scroll comes
-  back when its block scrolls into view again. A gesture already in flight keeps its handle
-  either way: the handle is the drag's own source element, and an open move menu is anchored to
-  it and hands focus back to it on Escape, so withdrawing it mid-gesture would strand a keyboard
-  user with nothing to return focus to.
-
 ### Added
 
 - **REDLINE THEATER (`docs/demo/redline.html`) — the agent protocol as the demo.** Three
@@ -84,6 +46,47 @@ All notable changes to this project will be documented in this file.
   `tools/mcp-server/ToolCatalog.cs` so that correspondence is checked rather than
   claimed, and `npm/tests/demo-redline.spec.ts` guards the run, the attribution, the
   proof and a latency budget. Demo content only — not shipped in the npm package.
+
+## [12.1.0] - 2026-09-05
+
+### Changed
+
+- The Arcade's touch controls are now the cartridge's own control map rather than a fixed set
+  of four arrows and a FIRE button. Each cartridge declares a touch profile beside the keyboard
+  map it mirrors (`cart.touch`), and `arcade-dock.js` fills its fixed pad slots from it: the
+  platformer gets walk and jump; the two raycasters add strafe and a sprint latch; Doom adds
+  **USE** and a tray holding its seven weapons, the automap, its own menu and the Enter that
+  works it. What a phone could reach before was movement and fire, so a touch player could walk
+  Freedoom's E1M1 as far as its first door and no further — a door is a key press, and there was
+  no key to press. Slots a cartridge does not use are hidden and lose their key code, so a
+  button can never send a key the cartridge ignores. On the attract screen the pad shows one
+  round **START**, since nothing on a title card is steerable.
+  RUN latches instead of asking to be held: on a phone the hand that would hold Shift is the one
+  steering. Pad presses are tracked per pointer, so firing with one thumb while turning with the
+  other lifts only the key that was released, and pausing releases everything the pad is holding
+  — a latched sprint no longer survives into the paused document. The pad's buttons are wired by
+  delegation and read their key at press time, which is what lets one set of buttons follow the
+  cartridge.
+
+### Fixed
+
+- The editor's block drag handle no longer escapes the editor when its block scrolls out of
+  view. The handle is a `position: fixed` element, so it is measured and placed in viewport
+  coordinates and no ancestor's overflow clips it — but its position was then clamped into the
+  *window* (`Math.max(4, ...)`). Mounted the way the ribbon mounts it, inside a bounded scrolling
+  region within a clipped card, a block scrolled past the top of that region left its handle
+  behind at the top of the page: a grip floating over the host's own chrome, pointing at a block
+  that was no longer on screen. The handle is now clipped to the editor's own viewport instead —
+  the window narrowed by every ancestor that clips its overflow, so a nested scroller and a
+  clipped card both count, and the test is the computed `overflow` rather than whether an element
+  happens to be scrolling right now. A block scrolled clear of that viewport withdraws its handle
+  rather than clamping it to an edge, and a block only partly in view keeps its handle pulled to
+  the edge it is disappearing past. Repositioning on scroll also no longer uses the handle's own
+  `display` as its memory of whether a handle is wanted, so a handle withdrawn by a scroll comes
+  back when its block scrolls into view again. A gesture already in flight keeps its handle
+  either way: the handle is the drag's own source element, and an open move menu is anchored to
+  it and hands focus back to it on Escape, so withdrawing it mid-gesture would strand a keyboard
+  user with nothing to return focus to.
 
 ## [12.0.1] - 2026-09-05
 
