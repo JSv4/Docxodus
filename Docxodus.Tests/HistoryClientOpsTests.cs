@@ -12,6 +12,28 @@ namespace Docxodus.Tests;
 public class HistoryClientOpsTests
 {
     [Fact]
+    public async Task OmittedOptionalFieldsUseWireDefaultsWithGeneratedMetadata()
+    {
+        const string request = """
+            {"schemaVersion":1,"documentId":"doc","operation":"create",
+             "metadata":{"author":"actor","createdAt":"2026-01-01T00:00:00Z"}}
+            """;
+        var client = new HistoryClientOps(new MemoryHistoryBlobStore(), new MemoryHistoryHeadStore());
+        var parsed = HistoryClientJson.Read<HistoryClientRequest>(request);
+        Assert.Equal(25, parsed.Limit);
+        Assert.Equal(10_000, parsed.MaxEntriesToScan);
+        Assert.Empty(parsed.Metadata!.ApplicationMetadata);
+        var created = HistoryClientJson.Read<HistoryClientResult>(await client.InvokeAsync(request, DocxSession.CreateBlankDocxBytes()));
+        Assert.True(created.Success, created.Message);
+        var listed = HistoryClientJson.Read<HistoryClientResult>(await client.InvokeAsync(
+            """{"schemaVersion":1,"documentId":"doc","operation":"list"}"""));
+        Assert.Single(listed.Page!.Versions);
+        var invalid = HistoryClientJson.Read<HistoryClientResult>(await client.InvokeAsync(
+            """{"schemaVersion":1,"documentId":"doc","operation":"list","limit":0}"""));
+        Assert.Equal("InvalidRequest", invalid.ErrorCode);
+    }
+
+    [Fact]
     public async Task SharedClientBoundaryPublishesExportsReplaysAndRestores()
     {
         var client = new HistoryClientOps(new MemoryHistoryBlobStore(), new MemoryHistoryHeadStore());

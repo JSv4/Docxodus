@@ -119,7 +119,25 @@ public static class HistoryClientJson
     {
         ArgumentNullException.ThrowIfNull(json);
         if (json.Length > MaxRequestChars) throw new ArgumentException("History client metadata exceeds its limit.");
-        return JsonSerializer.Deserialize(json, Info<T>()) ?? throw new JsonException("History metadata is null.");
+        var value = JsonSerializer.Deserialize(json, Info<T>()) ?? throw new JsonException("History metadata is null.");
+        if (value is HistoryClientRequest request)
+        {
+            // Generated init-only construction can supply default(T) for omitted optional
+            // properties instead of preserving their C# initializer. Apply wire defaults by
+            // presence, never by value, so explicit null/zero remains invalid downstream.
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+            var metadata = request.Metadata;
+            if (metadata is not null && !root.GetProperty("metadata").TryGetProperty("applicationMetadata", out _))
+                metadata = metadata with { ApplicationMetadata = new Dictionary<string, string>() };
+            value = (T)(object)(request with
+            {
+                Metadata = metadata,
+                Limit = root.TryGetProperty("limit", out _) ? request.Limit : 25,
+                MaxEntriesToScan = root.TryGetProperty("maxEntriesToScan", out _) ? request.MaxEntriesToScan : 10_000,
+            });
+        }
+        return value;
     }
     private static JsonTypeInfo<T> Info<T>() => (JsonTypeInfo<T>)(Context.GetTypeInfo(typeof(T))
         ?? throw new ArgumentException("Unsupported history client JSON type."));
