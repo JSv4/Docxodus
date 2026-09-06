@@ -982,25 +982,95 @@ function selectionSpanIn(block: HTMLElement): { start: number; length: number } 
   return span.length > 0 ? span : null;
 }
 
-/** Restore a content-text selection spanning [start, start+length) within `el` (skips markers). */
-function selectRange(el: HTMLElement, start: number, length: number): void {
-  const sel = typeof window !== "undefined" ? window.getSelection() : null;
+/**
+ * A DOM Range over the content text spanning [start, start+length) within `el` (skips markers),
+ * or null when the block is detached or the offsets do not resolve. Building the range is kept
+ * separate from selecting it so a caller that only wants to PAINT a span (find preview) does not
+ * have to touch the selection — and therefore focus — at all.
+ */
+function contentRangeIn(el: HTMLElement, start: number, length: number): Range | null {
   // The block may have been swapped out of the document by a re-render before this runs
   // (e.g. a focus-stealing toolbar control firing twice). addRange on a detached range
   // throws "the given range isn't in document" — skip rather than warn.
-  if (!sel || !el.isConnected) return;
-  el.focus();
-  const range = document.createRange();
+  if (!el.isConnected) return null;
+  const doc = el.ownerDocument;
+  const range = doc.createRange();
   const from = contentPositionIn(el, start);
   const to = contentPositionIn(el, start + length);
   try {
     range.setStart(from.node, from.offset);
     range.setEnd(to.node, to.offset);
   } catch {
-    return;
+    return null;
   }
+  return range;
+}
+
+/** Restore a content-text selection spanning [start, start+length) within `el` (skips markers). */
+function selectRange(el: HTMLElement, start: number, length: number): void {
+  const sel = typeof window !== "undefined" ? window.getSelection() : null;
+  if (!sel || !el.isConnected) return;
+  el.focus();
+  const range = contentRangeIn(el, start, length);
+  if (!range) return;
   sel.removeAllRanges();
   sel.addRange(range);
+}
+
+// ─── Find painting ──────────────────────────────────────────────────────────
+//
+// A find box has to show WHERE the hits are while the user is still typing into it, so it cannot
+// express "the current match" as a selection: putting a caret in a contenteditable block focuses
+// that block, and the next keystroke lands in the document instead of the search field. These
+// highlights paint the same information with no focus and no DOM mutation — the CSS Custom
+// Highlight API takes plain Ranges over the live text and styles them from the stylesheet.
+
+/** Every match currently on screen. */
+const FIND_HIGHLIGHT = "docxodus-find";
+/** The one the find bar's counter is pointing at. */
+const FIND_HIGHLIGHT_ACTIVE = "docxodus-find-active";
+/** Ranges are cheap, but a pathological query ("e" in a book) is not worth painting in full. */
+const FIND_PAINT_LIMIT = 500;
+
+const findHighlightStyledDocuments = new WeakSet<Document>();
+/**
+ * Which editor last painted into the shared registry. Only that instance may clear it, so a
+ * second surface on the page cannot wipe the first one's find painting when its own find bar
+ * closes. Two live searches still share one painting — the newer one wins, which is what a
+ * single visible "current match" should mean.
+ */
+let findPaintOwner: object | null = null;
+
+function ensureFindHighlightStyles(doc: Document): void {
+  if (findHighlightStyledDocuments.has(doc)) return;
+  findHighlightStyledDocuments.add(doc);
+  const style = doc.createElement("style");
+  style.dataset.docxodusFindHighlight = "true";
+  style.textContent = `
+::highlight(${FIND_HIGHLIGHT}) { background-color: rgba(15, 118, 110, .16); }
+::highlight(${FIND_HIGHLIGHT_ACTIVE}) { background-color: rgba(15, 118, 110, .38); }
+`;
+  (doc.head ?? doc.documentElement).appendChild(style);
+}
+
+/** The highlight registry is global to the document, so two editors on one page share it. */
+interface HighlightRegistry {
+  set(name: string, highlight: unknown): void;
+  delete(name: string): void;
+}
+
+function highlightRegistry(): HighlightRegistry | null {
+  if (typeof CSS === "undefined") return null;
+  const registry = (CSS as unknown as { highlights?: HighlightRegistry }).highlights;
+  const ctor = (globalThis as unknown as { Highlight?: unknown }).Highlight;
+  return registry && typeof ctor === "function" ? registry : null;
+}
+
+function makeHighlight(ranges: Range[]): unknown {
+  const ctor = (globalThis as unknown as {
+    Highlight: new (...ranges: Range[]) => unknown;
+  }).Highlight;
+  return new ctor(...ranges);
 }
 
 /**
@@ -1425,6 +1495,7 @@ export class DocxEditor {
       document.removeEventListener("mouseup", this.onMouseUp, true);
     }
     this.clearDragSelection();
+    this.clearFindMatches();
     this.teardownBlockDrag();
     this.gutter?.dispose();
     this.gutter = null;
@@ -4215,16 +4286,75 @@ export class DocxEditor {
     return out;
   }
 
-  /** Select a match and scroll it into view. */
+  /**
+   * Select a match, focus its block and scroll it into view — the caret lands on the hit, so
+   * typing continues in the document. A find box that is still being typed into wants
+   * `showFindMatches` instead; this is the commit step (closing the bar, jumping in to edit).
+   */
   selectMatch(match: EditorMatch): void {
     if (!match.block.isConnected) return;
+    this.clearFindMatches();
     this.activeBlock = match.block;
     selectRange(match.block, match.start, match.length);
     match.block.scrollIntoView({ block: "center", behavior: "smooth" });
   }
 
-  /** Replace one match's text (formatting of the surrounding run is inherited). */
-  replaceMatch(match: EditorMatch, replacement: string): boolean {
+  /**
+   * Paint `matches` and scroll the one at `activeIndex` into view WITHOUT moving focus or the
+   * caret. This is what a find field calls on every keystroke: the document shows where the hits
+   * are and rides to the current one, while the keyboard stays in the search box.
+   *
+   * Falls back to the document selection where the CSS Custom Highlight API is missing — still
+   * without focusing the block, so the next character typed goes to the search field either way.
+   */
+  showFindMatches(matches: EditorMatch[], activeIndex: number): void {
+    const active = matches[activeIndex];
+    this.clearFindMatches();
+    if (!active || !active.block.isConnected) return;
+    this.activeBlock = active.block;
+    const activeRange = contentRangeIn(active.block, active.start, active.length);
+    const registry = highlightRegistry();
+    if (registry && activeRange) {
+      ensureFindHighlightStyles(this.container.ownerDocument);
+      const rest: Range[] = [];
+      for (let i = 0; i < matches.length && rest.length < FIND_PAINT_LIMIT; i++) {
+        if (i === activeIndex) continue;
+        const range = contentRangeIn(matches[i].block, matches[i].start, matches[i].length);
+        if (range) rest.push(range);
+      }
+      if (rest.length > 0) registry.set(FIND_HIGHLIGHT, makeHighlight(rest));
+      registry.set(FIND_HIGHLIGHT_ACTIVE, makeHighlight([activeRange]));
+      findPaintOwner = this;
+    } else if (activeRange) {
+      // No highlight registry (older Firefox/Safari): the document selection is the only paint
+      // available. It is not registry-owned, so `clearFindMatches` leaves it — the next
+      // `showFindMatches` or the closing `selectMatch` overwrites it.
+      const sel = this.container.ownerDocument.defaultView?.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(activeRange);
+    }
+    active.block.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  /** Drop the find painting (closing the find bar, or committing a match to the caret). */
+  clearFindMatches(): void {
+    if (findPaintOwner !== this) return;
+    const registry = highlightRegistry();
+    registry?.delete(FIND_HIGHLIGHT);
+    registry?.delete(FIND_HIGHLIGHT_ACTIVE);
+    findPaintOwner = null;
+  }
+
+  /**
+   * Replace one match's text (formatting of the surrounding run is inherited). `focus: false`
+   * leaves the keyboard where it is — a Replace button pressed from the find bar must not drag
+   * the caret into the document mid-search.
+   */
+  replaceMatch(
+    match: EditorMatch,
+    replacement: string,
+    options: { focus?: boolean } = {},
+  ): boolean {
     const block = match.block;
     if (this.closed || !block.isConnected) return false;
     const unid = block.getAttribute("data-anchor");
@@ -4241,12 +4371,16 @@ export class DocxEditor {
     );
     if (!res.success) return false;
     const fresh = this.swapBlock(block, unid, res.modified?.[0]);
-    if (fresh) selectRange(fresh, span.start, replacement.length);
+    if (fresh && options.focus !== false) selectRange(fresh, span.start, replacement.length);
     return true;
   }
 
   /** Replace every occurrence; returns how many were replaced. */
-  replaceAll(query: string, replacement: string, options: { matchCase?: boolean } = {}): number {
+  replaceAll(
+    query: string,
+    replacement: string,
+    options: { matchCase?: boolean; focus?: boolean } = {},
+  ): number {
     if (this.closed || !query) return 0;
     const matches = this.find(query, options);
     let count = 0;
@@ -4262,7 +4396,9 @@ export class DocxEditor {
       for (const m of list.slice().sort((a, b) => b.start - a.start)) {
         if (!current.isConnected) break;
         const before = current;
-        if (this.replaceMatch({ block: current, start: m.start, length: m.length }, replacement)) {
+        if (this.replaceMatch(
+          { block: current, start: m.start, length: m.length }, replacement, { focus: options.focus },
+        )) {
           count++;
           // swapBlock replaced the node; keep following it.
           current = this.activeBlock && this.activeBlock !== before ? this.activeBlock : current;

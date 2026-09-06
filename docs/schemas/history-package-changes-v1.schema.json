@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docxodus.dev/schemas/history/package-changes/v1",
+  "title": "Reversible OPC package changes",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["afterDigest", "beforeDigest", "changes", "payloads", "schema", "schemaVersion"],
+  "properties": {
+    "schema": { "const": "https://docxodus.dev/schemas/history/package-changes/v1" },
+    "schemaVersion": { "const": 1 },
+    "beforeDigest": { "$ref": "#/$defs/digest" },
+    "afterDigest": { "$ref": "#/$defs/digest" },
+    "changes": { "type": "array", "items": { "$ref": "#/$defs/change" } },
+    "payloads": { "type": "array", "items": { "$ref": "#/$defs/payload" } }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "optionalDigest": { "anyOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] },
+    "optionalName": { "type": ["string", "null"] },
+    "change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["afterDigest", "afterEntryName", "beforeDigest", "beforeEntryName", "uri"],
+      "properties": {
+        "afterDigest": { "$ref": "#/$defs/optionalDigest" },
+        "afterEntryName": { "$ref": "#/$defs/optionalName" },
+        "beforeDigest": { "$ref": "#/$defs/optionalDigest" },
+        "beforeEntryName": { "$ref": "#/$defs/optionalName" },
+        "uri": { "type": "string", "minLength": 2 }
+      }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["digest", "length"],
+      "properties": {
+        "digest": { "$ref": "#/$defs/digest" },
+        "length": { "type": "integer", "minimum": 0, "maximum": 2147483647 }
+      }
+    }
+  }
+}

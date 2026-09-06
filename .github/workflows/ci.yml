@@ -4,7 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    # Validate each layer of the collaboration/history PR stack before it targets main.
+    branches: [main, 'feat/package-change-*', 'feat/history-*', 'feat/collaboration-*']
 
 permissions:
   contents: read

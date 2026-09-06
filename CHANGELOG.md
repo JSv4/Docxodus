@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- The editor's find bar no longer loses the keyboard the moment a query matches. It re-scanned on
+  every keystroke and then *selected* the first hit, and selecting inside a contenteditable block
+  focuses that block — so as soon as a partial query matched, the caret jumped into the document
+  and the rest of the query was typed into the text: searching for "fox" left an "ox" behind. The
+  jump-to-hit is kept, but expressed as a painted highlight instead of a selection: `showFindMatches`
+  registers the matches with the CSS Custom Highlight API (all hits washed, the current one
+  stronger) and scrolls the active one into view without moving focus, so typing goes on refining
+  the search. The caret is handed the match by `selectMatch` when the bar closes, which is when the
+  user is going back to the document anyway. Find-bar buttons now swallow `mousedown` like the
+  format buttons do, so clicking Next or Replace does not end the query either, and `replaceMatch`
+  / `replaceAll` take `focus: false` for the same reason. Browsers without the highlight registry
+  fall back to painting the active hit with the document selection — still without focusing it.
+
 ### Added
 
 - **REDLINE THEATER (`docs/demo/redline.html`) — the agent protocol as the demo.** Three

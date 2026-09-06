@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docxodus.dev/schemas/history/records/v1",
+  "$comment": "Runtime validation also enforces UTF-16 limits, strict text encoding, sequence/epoch relationships and commit-kind invariants.",
+  "title": "Immutable version and coarse package-history records",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["record", "schema", "schemaVersion"],
+  "properties": {
+    "record": { "type": "object" },
+    "schema": { "enum": ["https://docxodus.dev/schemas/history/version/v1", "https://docxodus.dev/schemas/history/package-commit/v1", "https://docxodus.dev/schemas/history/package-state/v1"] },
+    "schemaVersion": { "const": 1 }
+  },
+  "allOf": [
+    { "if": { "properties": { "schema": { "const": "https://docxodus.dev/schemas/history/version/v1" } } }, "then": { "properties": { "record": { "$ref": "#/$defs/version" } } } },
+    { "if": { "properties": { "schema": { "const": "https://docxodus.dev/schemas/history/package-commit/v1" } } }, "then": { "properties": { "record": { "$ref": "#/$defs/commit" } } } },
+    { "if": { "properties": { "schema": { "const": "https://docxodus.dev/schemas/history/package-state/v1" } } }, "then": { "properties": { "record": { "$ref": "#/$defs/state" } } } }
+  ],
+  "$defs": {
+    "documentId": { "type": "string", "minLength": 1, "maxLength": 1024, "pattern": "\\S" },
+    "sequence": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 },
+    "digest": {
+      "type": "object", "additionalProperties": false, "required": ["algorithm", "value"],
+      "properties": { "algorithm": { "const": "SHA-256" }, "value": { "type": "string", "pattern": "^[a-f0-9]{64}$" } }
+    },
+    "blob": {
+      "type": "object", "additionalProperties": false, "required": ["digest", "length"],
+      "properties": { "digest": { "$ref": "#/$defs/digest" }, "length": { "type": "integer", "minimum": 0, "maximum": 2147483647 } }
+    },
+    "optionalBlob": { "anyOf": [{ "$ref": "#/$defs/blob" }, { "type": "null" }] },
+    "snapshot": {
+      "type": "object", "additionalProperties": false, "required": ["blob", "contentDigest"],
+      "properties": { "blob": { "$ref": "#/$defs/blob" }, "contentDigest": { "$ref": "#/$defs/digest" } }
+    },
+    "metadata": {
+      "type": "object", "additionalProperties": false, "required": ["author", "createdAt"],
+      "properties": {
+        "applicationMetadata": { "type": "object", "maxProperties": 64, "propertyNames": { "minLength": 1, "maxLength": 256, "pattern": "\\S" }, "additionalProperties": { "type": "string", "maxLength": 4096 } },
+        "author": { "type": "string", "minLength": 1, "maxLength": 1024, "pattern": "\\S" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "label": { "type": ["string", "null"], "maxLength": 4096 },
+        "message": { "type": ["string", "null"], "maxLength": 16384 }
+      }
+    },
+    "version": {
+      "type": "object", "additionalProperties": false,
+      "required": ["documentId", "metadata", "nonce", "parent", "restoredFrom", "sequence", "snapshot"],
+      "properties": {
+        "documentId": { "$ref": "#/$defs/documentId" }, "metadata": { "$ref": "#/$defs/metadata" },
+        "nonce": { "type": "string", "format": "uuid", "not": { "const": "00000000-0000-0000-0000-000000000000" } },
+        "parent": { "$ref": "#/$defs/optionalBlob" }, "restoredFrom": { "$ref": "#/$defs/optionalBlob" },
+        "sequence": { "$ref": "#/$defs/sequence" }, "snapshot": { "$ref": "#/$defs/snapshot" }
+      }
+    },
+    "commit": {
+      "type": "object", "additionalProperties": false,
+      "required": ["after", "before", "contribution", "documentId", "epoch", "kind", "parent", "sequence", "version"],
+      "properties": {
+        "after": { "$ref": "#/$defs/snapshot" }, "before": { "$ref": "#/$defs/snapshot" },
+        "contribution": { "$ref": "#/$defs/optionalBlob" }, "documentId": { "$ref": "#/$defs/documentId" },
+        "epoch": { "$ref": "#/$defs/sequence" }, "kind": { "enum": ["import", "restore"] },
+        "parent": { "$ref": "#/$defs/optionalBlob" }, "sequence": { "allOf": [{ "$ref": "#/$defs/sequence" }, { "minimum": 1 }] },
+        "version": { "$ref": "#/$defs/blob" }
+      }
+    },
+    "state": {
+      "type": "object", "additionalProperties": false,
+      "required": ["commit", "documentId", "epoch", "initialSnapshot", "sequence", "snapshot", "version"],
+      "properties": {
+        "commit": { "$ref": "#/$defs/optionalBlob" }, "documentId": { "$ref": "#/$defs/documentId" },
+        "epoch": { "$ref": "#/$defs/sequence" }, "initialSnapshot": { "$ref": "#/$defs/snapshot" },
+        "sequence": { "$ref": "#/$defs/sequence" }, "snapshot": { "$ref": "#/$defs/snapshot" }, "version": { "$ref": "#/$defs/blob" }
+      }
+    }
+  }
+}
