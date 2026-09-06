@@ -56,6 +56,12 @@ public sealed record PackageHistoryCommitRecord
 /// </summary>
 public sealed record DocxHistoryStateRecord
 {
+    /// <summary>V3 explicit publication ancestry, including decisions that create no version.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public HistoryHead? ParentPublication { get; init; }
+    /// <summary>V3 immutable backend decision-log tip, carried through later saves and restores.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public HistoryBlobReference? Operation { get; init; }
     /// <summary>V2 publication metadata. Absent in legacy V1 states; older records remain readable.</summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public HistoryRequestJournal? Requests { get; init; }
