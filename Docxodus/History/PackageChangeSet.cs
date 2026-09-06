@@ -17,6 +17,10 @@ public enum PackageChangeError
     BaseMismatch,
     PayloadMismatch,
     ResultMismatch,
+    InvalidManifest,
+    UnsupportedVersion,
+    PayloadMissing,
+    ResourceLimit,
 }
 
 /// <summary>A package contribution failed before publishing any output.</summary>
@@ -56,7 +60,7 @@ public sealed class PackageChangeSet
     private static readonly DateTimeOffset ZipEpoch = new(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
     private readonly IReadOnlyDictionary<VerificationDigest, byte[]> _payloads;
 
-    private PackageChangeSet(
+    internal PackageChangeSet(
         VerificationDigest beforeDigest,
         VerificationDigest afterDigest,
         IReadOnlyList<PackageEntryChange> changes,
@@ -79,6 +83,9 @@ public sealed class PackageChangeSet
 
     /// <summary>A defensive copy of a retained before/after payload.</summary>
     public byte[] GetPayload(VerificationDigest digest) => _payloads[digest].ToArray();
+
+    internal Stream OpenPayload(VerificationDigest digest) => new MemoryStream(_payloads[digest], writable: false);
+    internal int PayloadLength(VerificationDigest digest) => _payloads[digest].Length;
 
     /// <summary>
     /// Compare bounded, valid OPC packages without modifying either input. Only changed
@@ -135,6 +142,14 @@ public sealed class PackageChangeSet
         if (manifest.OrderedOpcContentDigest != BeforeDigest)
             throw new PackageChangeException(PackageChangeError.BaseMismatch,
                 "The package content does not match the contribution's expected base.");
+        var identities = manifest.Entries.ToDictionary(e => e.Uri, StringComparer.Ordinal);
+        foreach (var change in Changes)
+        {
+            identities.TryGetValue(change.Uri, out var entry);
+            if (entry?.RawBytesDigest != change.BeforeDigest)
+                throw new PackageChangeException(PackageChangeError.BaseMismatch,
+                    $"Entry {change.Uri} does not match the contribution's expected before payload.");
+        }
         if (Changes.Count == 0) return packageBytes.ToArray();
 
         using var source = Open(packageBytes);
