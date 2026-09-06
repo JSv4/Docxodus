@@ -140,6 +140,27 @@ public sealed class DocxVersionRequestTests
         Assert.Null(await history.ReadAsync("doc"));
     }
 
+    [Fact]
+    public async Task RequestIdsTooLargeToIndexAreRefusedBeforeTheyCanStrandLaterPublications()
+    {
+        var history = new DocxVersionHistory(new MemoryHistoryBlobStore(), new MemoryHistoryHeadStore());
+        var bytes = Document("bounded");
+        // Each ID is within its own limit, but the pair cannot fit the receipt index node that the
+        // NEXT publication would have to promote it into. The refusal must happen here: accepting
+        // it would publish a head no later publication of this document could ever extend.
+        var documentId = new string('\u5408', 1024);
+        Assert.Equal(PackageChangeError.ResourceLimit, (await Assert.ThrowsAsync<PackageChangeException>(async () =>
+            await history.CreateVersionAsync(documentId, new string('\u540c', 1024), null, bytes, Metadata("oversized")))).Code);
+        Assert.Null(await history.ReadAsync(documentId));
+
+        // The same document keeps working with a request ID that fits, including across the
+        // publication that promotes the first receipt and a later retry of it.
+        var first = await history.CreateVersionAsync(documentId, "matter-42", null, bytes, Metadata("first"));
+        var second = await history.CreateVersionAsync(documentId, "matter-43", first.Head, Document("changed"), Metadata("second"));
+        Assert.Equal(first.Head, (await history.CreateVersionAsync(documentId, "matter-42", null, bytes, Metadata("first"))).Head);
+        Assert.Equal(second.Head, (await history.ReadAsync(documentId))!.Head);
+    }
+
     internal static DocxVersionMetadata Metadata(string label) => new()
     { Author = "actor", CreatedAt = DateTimeOffset.Parse("2026-01-01T12:00:00Z"), Label = label };
 
