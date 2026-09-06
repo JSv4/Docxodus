@@ -4,6 +4,7 @@
 #nullable enable
 
 using System.Security.Cryptography;
+using Docxodus.Verification;
 
 namespace Docxodus.History;
 
@@ -24,6 +25,21 @@ internal static class HistoryBlobIO
 
     internal static int ValidateLimit(int maximumBytes) => maximumBytes > 0 ? maximumBytes
         : throw new ArgumentOutOfRangeException(nameof(maximumBytes));
+
+    // The caller owns these already-captured bytes and must not mutate them during storage.
+    internal static async ValueTask<HistoryBlobReference> PutBytesAsync(IHistoryBlobStore store, byte[] bytes,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var reference = new HistoryBlobReference(new VerificationDigest
+        {
+            Algorithm = "SHA-256", Value = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
+        }, bytes.Length);
+        using var content = new MemoryStream(bytes, writable: false);
+        await store.PutAsync(reference, content, cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        return reference;
+    }
 
     // Used for filesystem writes and collision checks without allocating a blob-sized buffer.
     internal static async ValueTask CopyVerifiedAsync(HistoryBlobReference reference, Stream input,

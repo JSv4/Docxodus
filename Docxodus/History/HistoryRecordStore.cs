@@ -110,7 +110,7 @@ public sealed class HistoryRecordStore
                 Require(version.Nonce != Guid.Empty && version.Sequence >= 0, "Invalid version identity or sequence.");
                 Reference(version.Parent); Reference(version.RestoredFrom); Snapshot(version.Snapshot);
                 Require(version.RestoredFrom is null || version.Parent is not null, "A restore requires a parent version.");
-                return (T)(object)(version with { Metadata = Metadata(version.Metadata) });
+                return (T)(object)(version with { Metadata = PrepareMetadata(version.Metadata) });
             case PackageHistoryCommitRecord commit:
                 HistoryHeadCodec.Key(commit.DocumentId);
                 Require(commit.Sequence > 0 && commit.Epoch >= 0
@@ -140,7 +140,7 @@ public sealed class HistoryRecordStore
         return record;
     }
 
-    private static DocxVersionMetadata Metadata(DocxVersionMetadata metadata)
+    internal static DocxVersionMetadata PrepareMetadata(DocxVersionMetadata metadata)
     {
         ArgumentNullException.ThrowIfNull(metadata);
         Text(metadata.Author, 1024, required: true);
