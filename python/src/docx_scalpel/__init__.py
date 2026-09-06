@@ -35,7 +35,7 @@ from .history import (
     DocxHistoryLogEntry, DocxHistoryUpdate, PackageHistoryCommit,
     DocxHistoryClient, DocxHistoryError, DocxHistoryState, DocxHistoryView,
     DocxSnapshotReference, DocxStoredVersion, DocxVersionMetadata, DocxVersionPage,
-    DocxVersionRecord, HistoryBlobReference, HistoryHead, open_history,
+    DocxVersionRecord, HistoryBlobReference, HistoryHead, HistoryRequestIdentity, HistoryRequestJournal, open_history,
 )
 from .enums import (
     AnchorIdRendering,
@@ -269,7 +269,7 @@ __all__ = [
     "DocxHistoryLogEntry", "DocxHistoryUpdate", "PackageHistoryCommit",
     "DocxHistoryClient", "DocxHistoryError", "DocxHistoryState", "DocxHistoryView",
     "DocxSnapshotReference", "DocxStoredVersion", "DocxVersionMetadata", "DocxVersionPage",
-    "DocxVersionRecord", "HistoryBlobReference", "HistoryHead", "open_history",
+    "DocxVersionRecord", "HistoryBlobReference", "HistoryHead", "HistoryRequestIdentity", "HistoryRequestJournal", "open_history",
     "__version__",
     # entry points
     "DocxSession",

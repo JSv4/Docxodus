@@ -54,6 +54,8 @@ internal static class HistoryTool
             writer.WriteEndObject();
         }
         var request = HistoryClientJson.Read<HistoryClientRequest>(Encoding.UTF8.GetString(buffer.ToArray()));
+        if (action == "create" && request.RequestId is not null)
+            throw new McpToolException("MCP create recaptures live session bytes. Use a captured-byte history client for durable create request IDs; restore supports requestId.");
         if (action == "render")
         {
             if ((request.Sequence is null) == (request.Cutoff is null))

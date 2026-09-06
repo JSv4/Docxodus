@@ -4,6 +4,13 @@ import type { VerificationDigest } from './types.js';
 export type HistoryPosition = string;
 export interface HistoryBlobReference { digest: VerificationDigest; length: number }
 export interface HistoryHead { revision: HistoryPosition; state: HistoryBlobReference }
+export interface HistoryRequestIdentity { id: string; fingerprint: VerificationDigest }
+export interface HistoryRequestJournal {
+  documentId: string;
+  revision: HistoryPosition;
+  index: HistoryBlobReference | null;
+  current: HistoryRequestIdentity | null;
+}
 export interface DocxSnapshotReference { blob: HistoryBlobReference; contentDigest: VerificationDigest }
 export interface DocxVersionMetadata {
   author: string;
@@ -23,6 +30,9 @@ export interface DocxVersionRecord {
 }
 export interface DocxStoredVersion { id: HistoryBlobReference; record: DocxVersionRecord }
 export interface DocxHistoryState {
+  requests?: HistoryRequestJournal;
+  parentPublication?: HistoryHead;
+  operation?: HistoryBlobReference;
   commit: HistoryBlobReference | null;
   documentId: string;
   epoch: HistoryPosition;
@@ -152,8 +162,8 @@ export class DocxHistoryClient {
     return (await this.call('updates', documentId, { expectedHead: after, maxEntriesToScan })).update!;
   }
   async createVersion(documentId: string, expectedHead: HistoryHead | null, bytes: Uint8Array,
-    metadata: DocxVersionMetadata): Promise<DocxHistoryView> {
-    return (await this.call('create', documentId, { expectedHead, metadata }, bytes)).view!;
+    metadata: DocxVersionMetadata, requestId?: string): Promise<DocxHistoryView> {
+    return (await this.call('create', documentId, { expectedHead, metadata, requestId }, bytes)).view!;
   }
   async listVersions(documentId: string, cursor: HistoryBlobReference | null = null, limit = 25): Promise<DocxVersionPage> {
     return (await this.call('list', documentId, { versionId: cursor, limit })).page!;
@@ -174,8 +184,8 @@ export class DocxHistoryClient {
     return (await this.call('resolveTime', documentId, { cutoff, maxEntriesToScan })).sequence!;
   }
   async restoreVersion(documentId: string, expectedHead: HistoryHead, versionId: HistoryBlobReference,
-    metadata: DocxVersionMetadata): Promise<DocxHistoryView> {
-    return (await this.call('restore', documentId, { expectedHead, versionId, metadata })).view!;
+    metadata: DocxVersionMetadata, requestId?: string): Promise<DocxHistoryView> {
+    return (await this.call('restore', documentId, { expectedHead, versionId, metadata, requestId })).view!;
   }
 
   private async call(operation: string, documentId: string, fields: object = {}, bytes: Uint8Array = new Uint8Array()): Promise<Result> {

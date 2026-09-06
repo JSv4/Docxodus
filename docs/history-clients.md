@@ -28,6 +28,26 @@ changes. `resolveTime` finds a content sequence; `materialize` or `replay` retur
 for the existing rendering/session APIs. Opening a historical view never changes a shared
 head. Comparison composes two exact exports with the existing DocxDiff client API.
 
+## Durable retry identities
+
+Create/restore accept optional `requestId` in the shared JSON request. npm adds an optional final
+`requestId` argument to `createVersion`/`restoreVersion`; Python adds keyword-only `request_id`.
+Absent/null retains the legacy non-idempotent contract. A nonblank ID with identical ORIGINAL
+bytes/metadata/expected head returns the exact original result, including after later writes or
+lost acknowledgements. Changed input under the ID raises `RequestConflict`; blank IDs fail.
+Keep the original captured bytes rather than saving a live session again for a retry. Allocate
+IDs once and persist them with the request in host-owned storage; no client-side outbox is added.
+
+Returned state exposes optional durable `requests`, `parentPublication`, and `operation` metadata
+(`parent_publication` in Python). Journal/publication revisions remain lossless decimal strings
+on the wire, decoded as Python integers. A retry's head may be old: read the current head separately
+before initiating another operation. Receipt-index and original-result retention rules apply.
+
+MCP `restore` accepts `requestId`. MCP `create` explicitly rejects it because that action recaptures
+the current live session and does not retain the caller's original request bytes across retries.
+Use the captured-byte npm/Python/.NET create API for durable create identities. This distinction
+prevents the MCP surface from claiming retry guarantees it cannot supply without a durable outbox.
+
 ## Browser and npm
 
 ```ts
