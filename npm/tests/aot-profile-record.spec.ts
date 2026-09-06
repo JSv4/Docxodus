@@ -6,7 +6,8 @@
 // builds the bundle with <WasmProfilers>aot</WasmProfilers> and AOT off (AOT-compiled
 // methods are invisible to the profiler), runs this spec, then rebuilds the shipped
 // configuration. The Mono AOT profiler records every method the runtime compiles, so
-// the workload — shared with wasm-steady-state.spec.ts — is exactly what ends up AOT'd.
+// the workload — the steady-state suite plus a dense-text editor sample below —
+// is exactly what ends up AOT'd.
 // The profile is written once, when the write-at method (DocumentComparer.Warmup, armed
 // by test-harness.html?aotProfile=1) is first compiled, into INTERNAL.aotProfileData.
 import { test, expect } from '@playwright/test';
@@ -42,6 +43,32 @@ test.describe('AOT profile recording', () => {
     for (const t of result.timings) {
       expect(result.outputSizes[t.op], `${t.op} produced output`).toBeGreaterThan(0);
     }
+
+    // Dense formatted text is also an ordinary editor workload: code listings,
+    // terminal captures and text diagrams can have thousands of short runs.
+    // Exercise the generic mutation + formatting-template path so newly added
+    // hot methods do not silently remain on the WASM interpreter.
+    await page.evaluate(() => {
+      const bridge = (window as any).Docxodus.DocxSessionBridge;
+      const handle = bridge.OpenSession(bridge.CreateBlankDocx(), '');
+      try {
+        const blocks = JSON.parse(bridge.ListBlocks(handle));
+        const anchor = blocks.body[0].id;
+        const seed = bridge.RawGetXml(handle, anchor) as string;
+        const open = seed.slice(0, seed.indexOf('>') + 1).replace(/\/>$/, '>');
+        for (let frame = 0; frame < 3; frame++) {
+          const runs = Array.from({ length: 1200 }, (_, i) =>
+            '<w:r><w:rPr><w:rFonts w:ascii="Courier New" w:hAnsi="Courier New"/>' +
+            `<w:color w:val="${i % 2 ? 'FF8844' : 'FFFFFF'}"/><w:spacing w:val="-2"/>` +
+            '<w:sz w:val="6"/></w:rPr><w:t xml:space="preserve">' +
+            `| ${frame}: terminal text ${i}   </w:t>${i % 10 === 0 ? '<w:br/>' : ''}</w:r>`).join('');
+          const changed = JSON.parse(bridge.RawReplaceXml(handle, anchor, open +
+            '<w:pPr><w:spacing w:line="48" w:lineRule="exact"/></w:pPr>' + runs + '</w:p>'));
+          if (!changed.success) throw new Error(JSON.stringify(changed));
+          bridge.RenderBlockHtml(handle, anchor, 'profile-', false);
+        }
+      } finally { bridge.CloseSession(handle); }
+    });
 
     const profile = await page.evaluate(() => {
       (window as any).Docxodus.DocumentComparer.Warmup();

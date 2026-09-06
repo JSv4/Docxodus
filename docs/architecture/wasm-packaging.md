@@ -96,6 +96,13 @@ DocxDiff compare of a small pair and of a 147 KB legal form against an edited va
 itself, DOCX→HTML on two documents, and the editor's per-mutation ReplaceText + single-block
 re-render), so what is measured is by construction what is compiled.
 
+The recording spec also exercises a dense terminal-style paragraph through
+`RawReplaceXml` and incremental rendering: 1,200 runs with repeated formats and
+explicit line and character spacing. This covers the general formatting-template
+optimization and batched identity assignment without depending on any game code.
+With that additional coverage, the release framework measures **5,172,053 bytes
+(4.93 MiB) Brotli**, within the unchanged 5 MiB wire budget.
+
 ### Measured frontier (2026-09, 8-core Linux, Playwright Chromium; medians of a warm loop)
 
 All four columns were measured on one tree, just before the WmlComparer engine was removed
@@ -147,7 +154,7 @@ skipped. The steady-state spec's numbers are how you notice drift.
 
 The Mono AOT profiler records every method the runtime compiles (there is no hotness
 threshold), so the profile is exactly the code the workload touched; widen the workload in
-`wasm-workload.ts` if a new user-facing path needs the tier, and expect the wire total to
+`wasm-workload.ts` (or the supplemental recording-spec workload) if a new user-facing path needs the tier, and expect the wire total to
 follow. Three things about the recording that are not obvious from the SDK docs:
 
 - **`WasmAotProfilePath`, not `AOTProfilePath`.** `WasmApp.Common.targets` passes both to

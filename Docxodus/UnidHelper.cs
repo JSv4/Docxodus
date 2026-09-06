@@ -224,12 +224,33 @@ internal static class UnidHelper
     /// </summary>
     internal static void AssignToSelfAndDescendants(XElement root)
     {
-        if (root.Attribute(PtOpenXml.Unid) == null)
-            root.Add(new XAttribute(PtOpenXml.Unid, GenerateUnid()));
-        foreach (var d in root.Descendants())
+        // A dense text paragraph has thousands of property elements. On WASM,
+        // Guid.NewGuid crosses into the browser's crypto provider each time.
+        // Fill a batch once, retaining independent random v4 GUIDs and every
+        // pre-existing identity, instead of making one host call per element.
+        const int batchSize = 1024;
+        var pending = root.DescendantsAndSelf()
+            .Where(e => e.Attribute(PtOpenXml.Unid) == null).ToArray();
+        if (pending.Length == 0) return;
+        byte[] random = ArrayPool<byte>.Shared.Rent(Math.Min(pending.Length, batchSize) * 16);
+        try
         {
-            if (d.Attribute(PtOpenXml.Unid) == null)
-                d.Add(new XAttribute(PtOpenXml.Unid, GenerateUnid()));
+            for (int start = 0; start < pending.Length; start += batchSize)
+            {
+                int count = Math.Min(pending.Length - start, batchSize);
+                RandomNumberGenerator.Fill(random.AsSpan(0, count * 16));
+                for (int i = 0; i < count; i++)
+                {
+                    var bytes = random.AsSpan(i * 16, 16);
+                    bytes[7] = (byte)((bytes[7] & 0x0f) | 0x40);
+                    bytes[8] = (byte)((bytes[8] & 0x3f) | 0x80);
+                    pending[start + i].Add(new XAttribute(PtOpenXml.Unid, new Guid(bytes).ToString("N")));
+                }
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(random);
         }
     }
 

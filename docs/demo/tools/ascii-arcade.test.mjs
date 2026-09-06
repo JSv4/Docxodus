@@ -81,8 +81,8 @@ test('the checked-in Doom GIFs keep their native, tightly framed embed size', ()
     `walkthrough GIF grew to ${walkthrough.bytes} bytes`);
   assert.deepEqual(readGif('arcade-doom-bitmap.gif').size, [656, 660]);
   const readme = readFileSync(join(DEMO_DIR, 'README.md'), 'utf8');
-  assert.match(readme, /arcade-doom\.gif[^>]+width="656"/);
-  assert.match(readme, /opener[\s\S]+movement and fire[\s\S]+caption strip/i);
+  assert.match(readme, /arcade-doom\.gif\)/, 'the earlier native-image recording remains linked');
+  assert.match(readme, /arcade-doom-ascii\.gif[^>]+width="720"/);
   assert.doesNotMatch(readme, /arcade-doom-bitmap\.gif/,
     'the slow bitmap inspection mode must not be showcased as playable');
   assert.doesNotMatch(readme, /arcade-doom\.gif[^>]+width="(?:100%|60%)"/);

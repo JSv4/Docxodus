@@ -8615,11 +8615,20 @@ public sealed partial class DocxSession : IDisposable
             {
                 removed.Add(target.Anchor);
             }
+            // Most new Unids belong to run/property/text elements, which are
+            // not addressable blocks. Resolve against the small anchor index
+            // once rather than scanning it for every element of a dense frame.
+            var anchorsByUnid = new Dictionary<string, AnchorTarget>(StringComparer.Ordinal);
+            foreach (var candidate in freshIndex.Values)
+            {
+                if (!anchorsByUnid.TryGetValue(candidate.Unid, out var prior)
+                    || (prior.PartUri != target.PartUri && candidate.PartUri == target.PartUri))
+                    anchorsByUnid[candidate.Unid] = candidate;
+            }
             foreach (var unid in newUnids)
             {
                 if (unid == target.Unid) continue;
-                var hit = AnchorForUnid(unid, target.PartUri);
-                if (hit is { } h) created.Add(h);
+                if (anchorsByUnid.TryGetValue(unid, out var hit)) created.Add(hit.Anchor);
             }
 
             return new EditResult
