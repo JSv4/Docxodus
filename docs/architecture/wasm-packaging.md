@@ -5,7 +5,8 @@ is the reference for `wasm/DocxodusWasm/DocxodusWasm.csproj`, `scripts/build-was
 `scripts/record-aot-profile.sh`, and the size guardrail. (The original investigation/plan
 doc was folded into this overview after implementation; measured numbers below are from
 real builds, .NET SDK 10.0.301 / wasm-tools 10.0.109 / DocumentFormat.OpenXml 3.5.1,
-2026-08 for trimming and 2026-09 for the AOT tier.)
+2026-08 for trimming and 2026-09 for the AOT tier, except where a newer toolchain is
+listed explicitly.)
 
 ## What ships
 
@@ -100,8 +101,19 @@ The recording spec also exercises a dense terminal-style paragraph through
 `RawReplaceXml` and incremental rendering: 1,200 runs with repeated formats and
 explicit line and character spacing. This covers the general formatting-template
 optimization and batched identity assignment without depending on any game code.
-With that additional coverage, the release framework measures **5,172,053 bytes
-(4.93 MiB) Brotli**, within the unchanged 5 MiB wire budget.
+That additional coverage initially measured **5,172,053 bytes (4.93 MiB) Brotli**
+on SDK 10.0.301. After merging the history bridge and building with CI's SDK
+10.0.400 / wasm-tools workload set 10.0.400.1 / runtime 10.0.11, the combined
+payload reached 5128 KiB and exceeded the unchanged 5 MiB wire budget.
+
+Release builds now add `WasmOptConfigurationFlags Include="-Oz"` to the SDK's
+post-link Binaryen pass. This optimizes the complete native WASM before the SDK
+generates asset hashes. AOT bitcode compilation and linking retain their default
+`-O2`; the recorded profile, exported APIs, and runtime features remain intact.
+The combined release framework measures **5,214,762 bytes (4.973 MiB) Brotli**
+on that CI toolchain, 28,118 bytes below the same budget. The setting applies to
+all document workloads. Validate code generation changes with the trim canaries,
+history clients/viewers, dense-text rendering tests, and steady-state workload.
 
 ### Measured frontier (2026-09, 8-core Linux, Playwright Chromium; medians of a warm loop)
 
