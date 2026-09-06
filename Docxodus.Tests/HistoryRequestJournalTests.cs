@@ -66,6 +66,29 @@ public sealed class HistoryRequestJournalTests
     }
 
     [Fact]
+    public async Task IdentitiesTooLargeToIndexAreRefusedWhenSuppliedAndLeaveTheDocumentPublishable()
+    {
+        var blobs = new CountingBlobs();
+        var store = new HistoryRequestJournalStore(blobs);
+        // Both IDs sit exactly on their own documented character limits, but JSON escapes each of
+        // these characters to six bytes, so the receipt cannot fit one 16 KiB index node.
+        var documentId = new string('\u5408', 1024);
+        var oversized = Identity(new string('\u540c', 1024));
+        Assert.Equal(PackageChangeError.ResourceLimit, (await Assert.ThrowsAsync<PackageChangeException>(async () =>
+            await store.AdvanceAsync(documentId, null, null, oversized))).Code);
+        Assert.Equal(0, blobs.Writes); // Refused before any blob is written, so nothing is abandoned.
+
+        // The refusal is about the pair, not the character set: an ID that fits still publishes,
+        // and the NEXT publication promotes it into the index rather than failing to.
+        var accepted = Identity("\u5408\u540c/matter-42");
+        var first = await store.AdvanceAsync(documentId, null, null, accepted);
+        var second = await store.AdvanceAsync(documentId, Head(1), first, null);
+        Assert.Null(second!.Current);
+        Assert.Equal(Head(1), await store.FindAsync(documentId, Head(2), second, accepted));
+        Assert.True(blobs.MaximumLength <= HistoryRequestJournalStore.MaxNodeBytes);
+    }
+
+    [Fact]
     public async Task MissingCorruptAndCanceledIndexLookupsFailClosed()
     {
         var blobs = new CountingBlobs();
