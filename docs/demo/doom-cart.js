@@ -82,7 +82,7 @@ const KEY = {
 // Esc is NOT in this table on purpose: the arcade owns Esc (it pauses the
 // game and hands the paragraph back to the editor), so Doom's own menu is on
 // Q instead. Everything else is where a Doom player's hands expect it.
-const KEY_MAP = {
+export const DOOM_KEY_MAP = {
   KeyW: KEY.UPARROW, ArrowUp: KEY.UPARROW,
   KeyS: KEY.DOWNARROW, ArrowDown: KEY.DOWNARROW,
   KeyA: KEY.STRAFE_L, KeyD: KEY.STRAFE_R,
@@ -100,7 +100,38 @@ const KEY_MAP = {
 /** The arcade key codes this cartridge wants to be handed. ascii-arcade.js
  *  unions this into the set its capture-phase listener claims while playing,
  *  so Doom gets Enter/E/Q/M/digits without the other cartridges caring. */
-export const DOOM_KEY_CODES = [...Object.keys(KEY_MAP)];
+export const DOOM_KEY_CODES = [...Object.keys(DOOM_KEY_MAP)];
+
+/** What the on-screen pad offers a thumb — the same map as the table above,
+ *  minus the aliases a keyboard has room for. Doom is the cartridge that
+ *  needed this: a pad with movement and fire can walk E1M1 up to its first
+ *  door and no further, because USE is a key and a phone had none. Its rarer
+ *  keys — seven weapons, the automap, Doom's own menu and the Enter that
+ *  works it — go in the pad's tray rather than under a thumb, since they are
+ *  what you reach for between fights, not during one. */
+export const DOOM_TOUCH = {
+  up: { code: 'KeyW', glyph: '▲', label: 'Forward' },
+  down: { code: 'KeyS', glyph: '▼', label: 'Back' },
+  left: { code: 'ArrowLeft', glyph: '↺', label: 'Turn left' },
+  right: { code: 'ArrowRight', glyph: '↻', label: 'Turn right' },
+  strafeLeft: { code: 'KeyA', glyph: '◀', label: 'Strafe left' },
+  strafeRight: { code: 'KeyD', glyph: '▶', label: 'Strafe right' },
+  fire: { code: 'Space', glyph: 'FIRE', label: 'Fire' },
+  use: { code: 'KeyE', glyph: 'USE', label: 'Open doors and switches' },
+  run: { code: 'ShiftLeft', glyph: 'RUN', label: 'Run (stays on until tapped again)', toggle: true },
+  extras: [
+    { code: 'Digit1', glyph: '1', label: 'Fist / chainsaw' },
+    { code: 'Digit2', glyph: '2', label: 'Pistol' },
+    { code: 'Digit3', glyph: '3', label: 'Shotgun' },
+    { code: 'Digit4', glyph: '4', label: 'Chaingun' },
+    { code: 'Digit5', glyph: '5', label: 'Rocket launcher' },
+    { code: 'Digit6', glyph: '6', label: 'Plasma rifle' },
+    { code: 'Digit7', glyph: '7', label: 'BFG 9000' },
+    { code: 'KeyM', glyph: 'MAP', label: 'Automap' },
+    { code: 'KeyQ', glyph: 'MENU', label: 'Doom’s own menu' },
+    { code: 'Enter', glyph: '⏎', label: 'Enter — confirm in Doom’s menu' },
+  ],
+};
 
 // ─── Grid helpers ─────────────────────────────────────────────────────
 function makeGrid() {
@@ -800,7 +831,7 @@ export function doomCart(options = {}) {
     // cartridge wants the log rather than the held/pressed sets the other two
     // cartridges use.
     for (const { code, down } of input.drain?.() ?? []) {
-      const key = KEY_MAP[code];
+      const key = DOOM_KEY_MAP[code];
       if (key !== undefined) handle.keys.push([key, down ? 1 : 0]);
     }
 
@@ -859,6 +890,7 @@ export function doomCart(options = {}) {
   return {
     name: 'doom',
     label: '☩ DOOM',
+    touch: DOOM_TOUCH,
     controls: [
       'CONTROLS · MOVE W/S · STRAFE A/D',
       'TURN ←/→ · FIRE SPACE · USE E',

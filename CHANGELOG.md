@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- The Arcade's touch controls are now the cartridge's own control map rather than a fixed set
+  of four arrows and a FIRE button. Each cartridge declares a touch profile beside the keyboard
+  map it mirrors (`cart.touch`), and `arcade-dock.js` fills its fixed pad slots from it: the
+  platformer gets walk and jump; the two raycasters add strafe and a sprint latch; Doom adds
+  **USE** and a tray holding its seven weapons, the automap, its own menu and the Enter that
+  works it. What a phone could reach before was movement and fire, so a touch player could walk
+  Freedoom's E1M1 as far as its first door and no further — a door is a key press, and there was
+  no key to press. Slots a cartridge does not use are hidden and lose their key code, so a
+  button can never send a key the cartridge ignores. On the attract screen the pad shows one
+  round **START**, since nothing on a title card is steerable.
+  RUN latches instead of asking to be held: on a phone the hand that would hold Shift is the one
+  steering. Pad presses are tracked per pointer, so firing with one thumb while turning with the
+  other lifts only the key that was released, and pausing releases everything the pad is holding
+  — a latched sprint no longer survives into the paused document. The pad's buttons are wired by
+  delegation and read their key at press time, which is what lets one set of buttons follow the
+  cartridge.
 ### Fixed
 
 - The editor's block drag handle no longer escapes the editor when its block scrolls out of

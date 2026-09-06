@@ -4,7 +4,10 @@ import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { dungeonCart, freedoomCart, rowsFromXml } from '../ascii-arcade.js';
+import {
+  ARCADE_KEY_CODES, TOUCH, dungeonCart, freedoomCart, platformerCart, rowsFromXml,
+} from '../ascii-arcade.js';
+import { DOOM_KEY_MAP, DOOM_TOUCH, doomCart } from '../doom-cart.js';
 import { frameXml } from '../ascii-scenes.js';
 
 const DEMO_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -279,3 +282,107 @@ test(`the fast headless ${packName} run reaches every objective and the exit`, (
   assert.equal(final.mode, 'won');
 });
 }
+
+// ─── The touch pad's control map ──────────────────────────────────────
+// A phone reaches the games through `arcade-dock.js`'s pad, and the pad only
+// offers what the cartridge declares in its `touch` profile. These checks hold
+// that declaration to the keyboard map beside it: the pad shipped with
+// movement and fire, so on a touch screen Doom could be walked to E1M1's first
+// door and no further — USE is a key, and a phone had no way to send one.
+
+/** Every button a profile puts on the pad, tray included. */
+function touchButtons(profile) {
+  const { extras = [], ...slots } = profile;
+  return [...Object.values(slots), ...extras];
+}
+
+test('every touch button sends a key the arcade actually claims', () => {
+  for (const cart of [platformerCart(), dungeonCart(), freedoomCart(), doomCart()]) {
+    assert.ok(cart.touch, `${cart.name} declares no touch profile`);
+    for (const button of touchButtons(cart.touch)) {
+      assert.ok(ARCADE_KEY_CODES.has(button.code),
+        `${cart.name}: the pad's "${button.glyph}" sends ${button.code}, which the arcade `
+        + 'does not claim while playing — the press would reach the document, not the game');
+      assert.ok(button.glyph && button.label, `${cart.name}: ${button.code} needs a glyph and a label`);
+    }
+  }
+});
+
+test('a thumb can reach every function Doom gives a keyboard', () => {
+  // Compared as Doom's OWN key bytes, not as browser codes: the keyboard map
+  // has aliases (ArrowUp for KeyW, ShiftRight for ShiftLeft) that a pad has no
+  // reason to draw twice. What may not go missing is a Doom function.
+  const byTouch = new Set(touchButtons(DOOM_TOUCH).map((button) => {
+    const key = DOOM_KEY_MAP[button.code];
+    assert.ok(key !== undefined, `the pad's ${button.code} means nothing to Doom`);
+    return key;
+  }));
+  const byKeyboard = new Set(Object.values(DOOM_KEY_MAP));
+  const missing = [...byKeyboard].filter((key) => !byTouch.has(key));
+  assert.deepEqual(missing, [],
+    'Doom functions a keyboard can reach and a thumb cannot: '
+    + missing.map((key) => `0x${key.toString(16)}`).join(', '));
+});
+
+test('turning and strafing never wear the same arrow', () => {
+  // Two pairs of side buttons that do different things; told apart by shape
+  // (rotate vs translate), because on a phone they sit one row apart.
+  for (const cart of [dungeonCart(), freedoomCart(), doomCart()]) {
+    const { left, right, strafeLeft, strafeRight } = cart.touch;
+    assert.ok(strafeLeft && strafeRight, `${cart.name} moves in a Doom-format level and must strafe`);
+    assert.notEqual(left.glyph, strafeLeft.glyph, `${cart.name}: turn and strafe look identical`);
+    assert.notEqual(right.glyph, strafeRight.glyph, `${cart.name}: turn and strafe look identical`);
+    const labels = touchButtons(cart.touch).map((button) => button.label);
+    assert.equal(new Set(labels).size, labels.length, `${cart.name} has two buttons with one name`);
+  }
+});
+
+test('a modifier a steering thumb cannot hold is offered as a latch', () => {
+  for (const cart of [dungeonCart(), freedoomCart(), doomCart()]) {
+    assert.equal(cart.touch.run.code, 'ShiftLeft');
+    assert.equal(cart.touch.run.toggle, true, `${cart.name}: RUN must latch, not ask for a held thumb`);
+  }
+  // The platformer runs by walking and has no sprint key to offer.
+  assert.equal(platformerCart().touch.run, undefined);
+  assert.equal(platformerCart().touch.strafeLeft, undefined);
+});
+
+test('the code the pad labels "strafe" sidesteps without turning', () => {
+  // The pad draws turning and strafing as two pairs of side buttons one row
+  // apart. This is the claim that makes that worth the pixels: the strafe
+  // code moves the player perpendicular to where they are looking, and leaves
+  // where they are looking alone. Driven through TOUCH's own codes, so a
+  // profile that quietly re-pointed strafe at the turn keys fails here.
+  const cart = dungeonCart();
+  const input = new TestInput();
+  const tick = (code, ticks = 10) => {
+    for (let i = 0; i < ticks; i++) {
+      input.set(code, true);
+      cart.tick(0.05, input);
+      input.endTick();
+    }
+    input.set(code, false);
+  };
+
+  // Face up the open hall first: the spawn looks along a corridor one cell
+  // wide, where a sidestep in either direction is a wall.
+  const spawn = cart.state().player;
+  while (Math.abs(cart.state().player.dy + 1) > 0.02) tick(TOUCH.raycaster.left.code, 1);
+  const facing = cart.state().player;
+  assert.ok(Math.abs(facing.x - spawn.x) < 1e-9 && Math.abs(facing.y - spawn.y) < 1e-9,
+    'turning must not move the player');
+
+  tick(TOUCH.raycaster.strafeRight.code, 20);
+  const after = cart.state().player;
+  const move = { x: after.x - facing.x, y: after.y - facing.y };
+  const distance = Math.hypot(move.x, move.y);
+  // Perpendicular to the heading, not merely "moved": a sidestep and a step
+  // forward are both movement, and only one of them is a strafe.
+  const forward = Math.abs(move.x * facing.dx + move.y * facing.dy) / distance;
+  const rightOfHeading = -facing.dy * move.x + facing.dx * move.y;
+  assert.ok(distance > 0.3, `strafing must move the player, moved ${distance.toFixed(3)}`);
+  assert.ok(forward < 0.05, `a sidestep is not a step forward (${forward.toFixed(3)} along the heading)`);
+  assert.ok(rightOfHeading > 0, 'strafe right must step to the player\'s right');
+  assert.ok(Math.abs(after.dx - facing.dx) < 1e-9 && Math.abs(after.dy - facing.dy) < 1e-9,
+    'strafing must not turn the player');
+});
