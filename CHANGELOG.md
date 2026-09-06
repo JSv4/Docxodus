@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [12.1.0] - 2026-09-05
+
 ### Changed
 
 - The Arcade's touch controls are now the cartridge's own control map rather than a fixed set
@@ -22,6 +24,7 @@ All notable changes to this project will be documented in this file.
   — a latched sprint no longer survives into the paused document. The pad's buttons are wired by
   delegation and read their key at press time, which is what lets one set of buttons follow the
   cartridge.
+
 ### Fixed
 
 - The editor's block drag handle no longer escapes the editor when its block scrolls out of
