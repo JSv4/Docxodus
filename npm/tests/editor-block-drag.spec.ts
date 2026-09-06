@@ -31,6 +31,48 @@ async function openParagraphDocument(page: Page, names: string[], options: Recor
   });
 }
 
+/**
+ * Mount the editor inside a bounded, scrolling viewport with page above it. The shipped ribbon
+ * has exactly this shape — the editor surface lives in a `.dxr-scroll` region inside the card —
+ * and it is the shape in which a window-clamped floating handle becomes visible as a grip
+ * hovering over the host's chrome.
+ */
+async function openScrollingDocument(page: Page, names: string[]) {
+  await page.evaluate(() => {
+    const D = (window as any).Docxodus;
+    const scroller = document.createElement('div');
+    scroller.id = 'block-drag-scroller';
+    scroller.style.cssText =
+      'width:700px;height:100px;overflow:auto;margin:160px auto 0;background:#eee';
+    const container = document.createElement('div');
+    container.id = 'block-drag-host';
+    container.style.cssText = 'padding:16px;background:white';
+    scroller.appendChild(container);
+    document.body.appendChild(scroller);
+    const editor = D.DocxEditor.open(container, D.DocxSessionBridge.CreateBlankDocx(), D, {
+      blockDrag: true,
+    });
+    (window as any).__drag = { editor, container, scroller };
+    (container.querySelector('p[data-anchor][contenteditable="true"]') as HTMLElement).focus();
+  });
+  for (let i = 0; i < names.length; i++) {
+    if (i > 0) await page.keyboard.press('Enter');
+    await page.keyboard.type(names[i]);
+  }
+  await page.evaluate(() => {
+    (document.activeElement as HTMLElement)?.blur();
+    (window as any).__drag.editor['remount']();
+  });
+}
+
+/** Scroll the bounded viewport and let the handle's scroll listener settle. */
+async function scrollViewportTo(page: Page, top: number) {
+  await page.evaluate(async (value) => {
+    (window as any).__drag.scroller.scrollTop = value;
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  }, top);
+}
+
 const unitState = (page: Page) => page.evaluate(() => {
   const { editor } = (window as any).__drag;
   return (editor['bodyUnitNodes']() as HTMLElement[]).map((el) => ({
@@ -357,5 +399,89 @@ test.describe('DocxEditor — block drag handle', () => {
     // plan's per-unit content signature makes it diff as changed; if that ever stops holding the
     // op falls back to a whole-document remount, which is seconds on a real document.
     expect(review.fallback).toBeNull();
+  });
+
+  // The handle is `position: fixed`, so nothing in the document clips it and it was clamped into
+  // the WINDOW (`Math.max(4, ...)`). Mounted in a bounded scroller — which is how the shipped
+  // ribbon mounts it — a block scrolled out of the editor's viewport left its handle behind,
+  // parked over the host's own chrome, pointing at a block no longer there. The handle belongs
+  // to the editor's viewport, not the window's.
+  test('the handle is clipped to the editor viewport, not the window', async ({ page }) => {
+    await openScrollingDocument(page, [
+      'One', 'Two', 'Three', 'Four', 'Five', 'Six',
+      'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve',
+    ]);
+    const first = page.locator('#block-drag-host p[data-anchor]').filter({ hasText: 'One' });
+    const handle = page.locator('.docx-block-handle');
+    await first.hover();
+    await expect(handle).toBeVisible();
+
+    // Guard the fixture itself: with content that fits, nothing here scrolls out of view and
+    // every assertion below would hold whether or not the handle is clipped.
+    const geometry = await page.evaluate(() => {
+      const { scroller } = (window as any).__drag;
+      const box = scroller.getBoundingClientRect();
+      return {
+        maxScroll: scroller.scrollHeight - scroller.clientHeight,
+        top: box.top,
+        bottom: box.bottom,
+      };
+    });
+    expect(geometry.maxScroll).toBeGreaterThan(60);
+    expect(geometry.top).toBeGreaterThan(100); // there IS chrome above for a handle to escape onto
+
+    // At every offset the handle is either withdrawn or inside the editor's viewport.
+    for (let top = 0; top <= geometry.maxScroll; top += 20) {
+      await scrollViewportTo(page, top);
+      const box = await handle.boundingBox();
+      if (!box) continue; // withdrawn — its block is out of view
+      expect(box.y).toBeGreaterThanOrEqual(geometry.top - 1);
+      expect(box.y + box.height).toBeLessThanOrEqual(geometry.bottom + 1);
+    }
+
+    // Scrolled clear past its block, the handle is gone rather than clamped to an edge.
+    await scrollViewportTo(page, geometry.maxScroll);
+    expect(await page.evaluate(() => {
+      const one = Array.from(document.querySelectorAll<HTMLElement>('#block-drag-host p[data-anchor]'))
+        .find((el) => el.textContent?.includes('One'))!;
+      const { scroller } = (window as any).__drag;
+      return one.getBoundingClientRect().bottom <= scroller.getBoundingClientRect().top;
+    })).toBe(true);
+    await expect(handle).toBeHidden();
+
+    // ...and it comes back with its block. Hiding must not latch: `positionBlockHandle` used the
+    // handle's own `display` as its memory, so one withdrawn by the clip would never return.
+    await scrollViewportTo(page, 0);
+    await expect(handle).toBeVisible();
+    const back = (await handle.boundingBox())!;
+    const block = (await first.boundingBox())!;
+    expect(Math.abs(back.y - block.y)).toBeLessThan(20);
+  });
+
+  // The clip must not fire mid-gesture. An open move menu is anchored to the handle and hands
+  // focus back to it on Escape, so a handle withdrawn from under its own menu would strand a
+  // keyboard user with no focus to return to.
+  test('an open move menu keeps its handle even when the block scrolls out of view', async ({ page }) => {
+    await openScrollingDocument(page, [
+      'One', 'Two', 'Three', 'Four', 'Five', 'Six',
+      'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve',
+    ]);
+    const handle = page.locator('.docx-block-handle');
+    await page.locator('#block-drag-host p[data-anchor]').filter({ hasText: 'One' }).hover();
+    await handle.click();
+    await expect(page.locator('.docx-block-move-menu')).toBeVisible();
+
+    await page.evaluate(async () => {
+      const { scroller } = (window as any).__drag;
+      scroller.scrollTop = scroller.scrollHeight;
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    });
+    await expect(handle).toBeVisible();
+
+    // Escape closes the menu and returns focus to the handle it was opened from.
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.docx-block-move-menu')).toBeHidden();
+    expect(await page.evaluate(() =>
+      document.activeElement?.classList.contains('docx-block-handle'))).toBe(true);
   });
 });
