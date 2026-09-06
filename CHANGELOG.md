@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- The editor's block drag handle no longer escapes the editor when its block scrolls out of
+  view. The handle is a `position: fixed` element, so it is measured and placed in viewport
+  coordinates and no ancestor's overflow clips it — but its position was then clamped into the
+  *window* (`Math.max(4, ...)`). Mounted the way the ribbon mounts it, inside a bounded scrolling
+  region within a clipped card, a block scrolled past the top of that region left its handle
+  behind at the top of the page: a grip floating over the host's own chrome, pointing at a block
+  that was no longer on screen. The handle is now clipped to the editor's own viewport instead —
+  the window narrowed by every ancestor that clips its overflow, so a nested scroller and a
+  clipped card both count, and the test is the computed `overflow` rather than whether an element
+  happens to be scrolling right now. A block scrolled clear of that viewport withdraws its handle
+  rather than clamping it to an edge, and a block only partly in view keeps its handle pulled to
+  the edge it is disappearing past. Repositioning on scroll also no longer uses the handle's own
+  `display` as its memory of whether a handle is wanted, so a handle withdrawn by a scroll comes
+  back when its block scrolls into view again. A gesture already in flight keeps its handle
+  either way: the handle is the drag's own source element, and an open move menu is anchored to
+  it and hands focus back to it on Escape, so withdrawing it mid-gesture would strand a keyboard
+  user with nothing to return focus to.
+
 ## [12.0.1] - 2026-09-05
 
 ### Fixed
