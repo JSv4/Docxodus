@@ -23,9 +23,9 @@ public sealed partial class DocxVersionHistory
             return await _snapshots.ExportAsync(current.State.Snapshot, cancellationToken).ConfigureAwait(false);
         if (sequence == 0)
             return await _snapshots.ExportAsync(current.State.InitialSnapshot, cancellationToken).ConfigureAwait(false);
-        await foreach (var commit in ReadBackwardsAsync(documentId, current, maxCommitsToScan, cancellationToken).ConfigureAwait(false))
-            if (commit.Sequence == sequence)
-                return await _snapshots.ExportAsync(commit.After, cancellationToken).ConfigureAwait(false);
+        await foreach (var entry in ReadBackwardsAsync(documentId, current, maxCommitsToScan, cancellationToken).ConfigureAwait(false))
+            if (entry.Commit.Sequence == sequence)
+                return await _snapshots.ExportAsync(entry.Commit.After, cancellationToken).ConfigureAwait(false);
         throw new DocxHistoryException(DocxHistoryError.HistoryUnavailable, "The requested sequence is unavailable.");
     }
 
@@ -40,8 +40,8 @@ public sealed partial class DocxVersionHistory
     {
         var current = await ReadForReconstructionAsync(documentId, sequence, maxCommitsToScan, cancellationToken).ConfigureAwait(false);
         var commits = new List<PackageHistoryCommitRecord>();
-        await foreach (var commit in ReadBackwardsAsync(documentId, current, maxCommitsToScan, cancellationToken).ConfigureAwait(false))
-            if (commit.Sequence <= sequence) commits.Add(commit);
+        await foreach (var entry in ReadBackwardsAsync(documentId, current, maxCommitsToScan, cancellationToken).ConfigureAwait(false))
+            if (entry.Commit.Sequence <= sequence) commits.Add(entry.Commit);
         commits.Reverse();
         var package = await _snapshots.ExportAsync(current.State.InitialSnapshot, cancellationToken).ConfigureAwait(false);
         var contentDigest = current.State.InitialSnapshot.ContentDigest;
@@ -86,7 +86,9 @@ public sealed partial class DocxVersionHistory
         return current;
     }
 
-    private async IAsyncEnumerable<PackageHistoryCommitRecord> ReadBackwardsAsync(string documentId,
+    private sealed record TraversedCommit(PackageHistoryCommitRecord Commit, DocxVersionRecord Version);
+
+    private async IAsyncEnumerable<TraversedCommit> ReadBackwardsAsync(string documentId,
         DocxHistoryView current, int maximum, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var cursor = current.State.Commit;
@@ -116,7 +118,7 @@ public sealed partial class DocxVersionHistory
                 var target = await GetVersionAsync(documentId, version.Record.RestoredFrom!, cancellationToken).ConfigureAwait(false);
                 Consistent(target.Record.Snapshot == commit.After, "Restore target disagrees with its recorded snapshot.");
             }
-            yield return commit;
+            yield return new TraversedCommit(commit, version.Record);
             cursor = commit.Parent;
             sequence--;
             if (commit.Kind == "restore") epoch--;
