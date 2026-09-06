@@ -31,6 +31,12 @@ public sealed partial class DocxVersionHistory
         if (maxEntriesToScan <= 0) throw new ArgumentOutOfRangeException(nameof(maxEntriesToScan));
         var current = await ReadAsync(documentId, cancellationToken).ConfigureAwait(false)
             ?? throw new DocxHistoryException(DocxHistoryError.HistoryUnavailable, "Document history is unavailable.");
+        return await ReadChangesBetweenAsync(documentId, current, after, maxEntriesToScan, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async ValueTask<DocxHistoryUpdate> ReadChangesBetweenAsync(string documentId, DocxHistoryView current,
+        HistoryHead? after, int maxEntriesToScan, CancellationToken cancellationToken)
+    {
         if (after is null) return new DocxHistoryUpdate(null, current, Array.Empty<DocxHistoryLogEntry>(), true);
         if (current.Head == after) return new DocxHistoryUpdate(after, current, Array.Empty<DocxHistoryLogEntry>(), false);
         Consistent(current.Head.Revision > after.Revision, "The supplied history head rewinds or forks the accepted publication.");
@@ -46,9 +52,24 @@ public sealed partial class DocxVersionHistory
                 "History update scan budget reached; increase it explicitly to continue.");
         }
 
+        // V3 binds every publication, including a conflict/no-op decision that creates no version.
+        // Follow exact parent heads before falling back to V1/V2's one-version-per-publication chain.
+        var publication = current;
+        while (publication.Head != after && publication.State.ParentPublication is { } parentHead)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Spend();
+            Consistent(parentHead.Revision >= after.Revision, "Accepted publication is not an ancestor of the new head.");
+            var parent = await ReadHeadViewAsync(documentId, parentHead, cancellationToken).ConfigureAwait(false);
+            ValidatePublicationEdge(publication, parent);
+            publication = parent;
+        }
+        Consistent(publication.Head == after || (publication.Head.Revision > after.Revision && previous.State.Operation is null),
+            "Accepted publication is not an ancestor of the new head.");
+
         // Content sequence alone cannot prove ancestry: competing labels and same-content forks
-        // also have distinct immutable version chains. Check the previously accepted version ID.
-        var version = current.Version;
+        // also have distinct immutable version chains. Check the accepted legacy version ID.
+        var version = publication.Version;
         long versionEdges = 0;
         while (version.Id != previous.Version.Id)
         {
@@ -65,7 +86,7 @@ public sealed partial class DocxVersionHistory
                     && version.Record.RestoredFrom is null, "A metadata-only version cannot change content or restore.");
             version = parent;
         }
-        Consistent(versionEdges == current.Head.Revision - after.Revision,
+        Consistent(versionEdges == publication.Head.Revision - after.Revision,
             "Publication revision does not match the accepted version ancestry.");
 
         var entries = new List<DocxHistoryLogEntry>();
@@ -96,5 +117,28 @@ public sealed partial class DocxVersionHistory
         }
         cancellationToken.ThrowIfCancellationRequested();
         return new DocxHistoryUpdate(after, current, entries.AsReadOnly(), current.State.Epoch != previous.State.Epoch);
+    }
+
+    private static void ValidatePublicationEdge(DocxHistoryView child, DocxHistoryView parent)
+    {
+        Consistent(child.State.InitialSnapshot == parent.State.InitialSnapshot
+            && child.State.Sequence >= parent.State.Sequence && child.State.Sequence - parent.State.Sequence <= 1
+            && child.State.Epoch >= parent.State.Epoch && child.State.Epoch - parent.State.Epoch <= 1,
+            "Publication ancestry is discontinuous.");
+        if (child.Version.Id == parent.Version.Id)
+        {
+            Consistent(child.State.Snapshot == parent.State.Snapshot && child.State.Sequence == parent.State.Sequence
+                && child.State.Commit == parent.State.Commit && child.State.Epoch == parent.State.Epoch
+                && child.State.Operation != parent.State.Operation && child.State.Requests?.Current is not null,
+                "A version-free publication must record a new identified decision without changing content.");
+        }
+        else
+        {
+            Consistent(child.Version.Record.Parent == parent.Version.Id, "Publication skipped its parent version.");
+            if (child.State.Sequence == parent.State.Sequence)
+                Consistent(child.State.Commit == parent.State.Commit && child.State.Epoch == parent.State.Epoch
+                    && child.State.Snapshot.ContentDigest == parent.State.Snapshot.ContentDigest
+                    && child.Version.Record.RestoredFrom is null, "A metadata-only publication cannot change content or restore.");
+        }
     }
 }

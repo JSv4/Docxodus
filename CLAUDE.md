@@ -37,16 +37,21 @@ file that could fire them.
 **`Docxodus.csproj` and `Docxodus.Tests.csproj` both override it to `false`**, so the core
 library and the test project do *not* fail on warnings. The CLI tools, MCP server,
 python-host and WASM project do inherit it. Current baseline: the library builds with
-**113 warnings**, the test project with **707** (mostly StyleCop `SA1633`/`SA1636` file
-headers and `SA1206` using-order). Don't add to either baseline. Measure with
+**175 warnings**, the test project with **788** (mostly StyleCop `SA1633`/`SA1636` file
+headers and `SA1206` modifier/using order). Don't add to either baseline. Measure with
 `--no-incremental` — a warm incremental build reports zero because nothing recompiles.
 
-The one movement that is not a regression: no file in the library carries a StyleCop file
-header, so `SA1633` fires once per file and **every new `.cs` file under `Docxodus/` moves
-both counts by exactly one** (the test build compiles the library through its project
-reference). A change that adds one file and one warning is at baseline; anything more is not.
+What a new file costs depends on whether it carries a StyleCop file header. Most of the
+library has none, so `SA1633` fires once per file and such a file moves both counts by
+exactly one (the test build compiles the library through its project reference). Files that
+*do* carry the header — everything under `History/`, which follows the inherited
+`// Copyright (c) Microsoft.` two-line form — cost no `SA1633` but fire one `SA1206` per
+`public required` member, because StyleCop wants `required` ahead of the access modifier
+while the whole codebase writes it the other way. Count what your own files actually add
+rather than assuming one apiece.
 
-Update the two numbers here in the same commit rather than leaving them stale.
+Update the two numbers here in the same commit rather than leaving them stale. They had
+drifted before (113/707 described a tree ~30 warnings behind); re-measure, don't extrapolate.
 
 ## Repository Layout
 

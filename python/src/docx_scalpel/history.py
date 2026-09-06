@@ -120,6 +120,29 @@ class DocxStoredVersion:
 
 
 @dataclass(frozen=True, slots=True)
+class HistoryRequestIdentity:
+    id: str
+    fingerprint: VerificationDigest
+
+    @classmethod
+    def _from_wire(cls, data: Mapping[str, Any]) -> HistoryRequestIdentity:
+        return cls(data["id"], VerificationDigest._from_wire(data["fingerprint"]))
+
+
+@dataclass(frozen=True, slots=True)
+class HistoryRequestJournal:
+    document_id: str
+    revision: int
+    index: HistoryBlobReference | None
+    current: HistoryRequestIdentity | None
+
+    @classmethod
+    def _from_wire(cls, data: Mapping[str, Any]) -> HistoryRequestJournal:
+        return cls(data["documentId"], int(data["revision"]), _reference(data["index"]),
+                   None if data["current"] is None else HistoryRequestIdentity._from_wire(data["current"]))
+
+
+@dataclass(frozen=True, slots=True)
 class DocxHistoryState:
     commit: HistoryBlobReference | None
     document_id: str
@@ -128,12 +151,18 @@ class DocxHistoryState:
     sequence: int
     snapshot: DocxSnapshotReference
     version: HistoryBlobReference
+    requests: HistoryRequestJournal | None = None
+    parent_publication: HistoryHead | None = None
+    operation: HistoryBlobReference | None = None
 
     @classmethod
     def _from_wire(cls, data: Mapping[str, Any]) -> DocxHistoryState:
         return cls(_reference(data["commit"]), data["documentId"], int(data["epoch"]),
                    DocxSnapshotReference._from_wire(data["initialSnapshot"]), int(data["sequence"]),
-                   DocxSnapshotReference._from_wire(data["snapshot"]), HistoryBlobReference._from_wire(data["version"]))
+                   DocxSnapshotReference._from_wire(data["snapshot"]), HistoryBlobReference._from_wire(data["version"]),
+                   None if data.get("requests") is None else HistoryRequestJournal._from_wire(data["requests"]),
+                   None if data.get("parentPublication") is None else HistoryHead._from_wire(data["parentPublication"]),
+                   _reference(data.get("operation")))
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,9 +267,11 @@ class DocxHistoryClient:
                 DocxVersionMetadata._from_wire(entry["metadata"])) for entry in update["entries"]), update["reset"])
 
     def create_version(self, document_id: str, expected_head: HistoryHead | None, docx_bytes: bytes,
-                       metadata: DocxVersionMetadata) -> DocxHistoryView:
+                       metadata: DocxVersionMetadata, *, request_id: str | None = None) -> DocxHistoryView:
+        """With request_id, retry the original captured bytes/metadata/head to recover its original result."""
         return DocxHistoryView._from_wire(self._call("create", document_id, docx_bytes=docx_bytes,
-            expectedHead=None if expected_head is None else expected_head.to_wire(), metadata=metadata.to_wire())["view"])
+            expectedHead=None if expected_head is None else expected_head.to_wire(), metadata=metadata.to_wire(),
+            **({} if request_id is None else {"requestId": request_id}))["view"])
 
     def list_versions(self, document_id: str, cursor: HistoryBlobReference | None = None, limit: int = 25) -> DocxVersionPage:
         page = self._call("list", document_id, versionId=None if cursor is None else cursor.to_wire(), limit=limit)["page"]
@@ -264,9 +295,10 @@ class DocxHistoryClient:
         return int(self._call("resolveTime", document_id, cutoff=cutoff, maxEntriesToScan=max_entries_to_scan)["sequence"])
 
     def restore_version(self, document_id: str, expected_head: HistoryHead, version_id: HistoryBlobReference,
-                        metadata: DocxVersionMetadata) -> DocxHistoryView:
+                        metadata: DocxVersionMetadata, *, request_id: str | None = None) -> DocxHistoryView:
         return DocxHistoryView._from_wire(self._call("restore", document_id, expectedHead=expected_head.to_wire(),
-                                                   versionId=version_id.to_wire(), metadata=metadata.to_wire())["view"])
+            versionId=version_id.to_wire(), metadata=metadata.to_wire(),
+            **({} if request_id is None else {"requestId": request_id}))["view"])
 
 
 def open_history(root: str | Path | None = None) -> DocxHistoryClient:

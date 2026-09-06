@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docxodus.dev/schemas/history/operation-input/v1",
+  "title": "Canonical backend operation input",
+  "$comment": "Register adjacent state-v2 and history-records-v1 schemas. Runtime also enforces 512 KiB envelope size, valid XML/Unicode, canonical part URIs, sorted unique reads, kind/payload relationships, and canonical manifest fingerprint.",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "schemaVersion", "record"],
+  "properties": {
+    "schema": { "const": "https://docxodus.dev/schemas/history/operation-input/v1" },
+    "schemaVersion": { "const": 1 },
+    "record": {
+      "type": "object", "additionalProperties": false, "required": ["documentId", "request", "candidate"],
+      "properties": {
+        "documentId": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/id" },
+        "candidate": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/optionalBlob" },
+        "request": { "$ref": "#/$defs/request" }
+      }
+    }
+  },
+  "$defs": {
+    "text": {
+      "type": "object", "additionalProperties": false, "required": ["partUri", "textNode", "offset", "deleteCount", "insert"],
+      "properties": {
+        "partUri": { "type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/" },
+        "textNode": { "$ref": "#/$defs/index" }, "offset": { "$ref": "#/$defs/index" }, "deleteCount": { "$ref": "#/$defs/index" },
+        "insert": { "type": "string", "maxLength": 65536 }
+      }
+    },
+    "index": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+    "request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["requestId", "base", "kind", "metadata", "text", "readParts", "resolves"],
+      "properties": {
+        "requestId": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/id" },
+        "base": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/head" },
+        "kind": { "enum": ["text", "package", "discard"] },
+        "metadata": { "$ref": "https://docxodus.dev/schemas/history/records/v1#/$defs/metadata" },
+        "text": { "anyOf": [{ "$ref": "#/$defs/text" }, { "type": "null" }] },
+        "readParts": { "type": "array", "maxItems": 256, "uniqueItems": true, "items": { "type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/" } },
+        "resolves": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/optionalBlob" }
+      }
+    }
+  }
+}

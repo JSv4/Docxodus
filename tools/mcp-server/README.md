@@ -127,6 +127,11 @@ its sequence. Use `updates` with the exact last head to consume a validated log 
 decides when to call again. No transport, timer, or subscription has been added.
 See [history clients](../../docs/history-clients.md#mcp) for the shared fields and workflow.
 
+`restore` optionally accepts a durable `requestId`: retrying the exact original head/target/metadata
+returns its original result even after later publications. `create` rejects `requestId` because it
+recaptures the live session rather than retaining original bytes; use the captured-byte npm/Python/
+.NET API for idempotent creation. Neither action adds an outbox or changes the open session.
+
 `docxodus_deliver` uses the same `DeliveryBundleService` as the .NET API and
 `docxodus-deliver` CLI. The MCP response returns canonical manifest bytes plus available artifacts
 as base64, with a 64 MiB pre-base64 byte limit. Production HTML/PDF/PageMap/report rendering uses

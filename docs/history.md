@@ -1,5 +1,9 @@
 # Named version history (.NET)
 
+The [backend operation producer](history-backend.md) now reconciles submitted text/package
+intents on this same history, preserving explicit conflicts and durable resolutions. It is
+separate from the live editor and installs no transport or GUI.
+
 `Docxodus.History.DocxVersionHistory` captures exact DOCX versions over host-owned storage. It supports create, read, paginated list, get, export, lazy semantic/native-redline comparison, non-destructive restore, sequence materialization, timestamp lookup, recorded-effect replay, and validated ordered log updates. Content-changing versions produce the same reversible package contributions used by the package fallback. [Browser/Python bindings and a host-driven live viewer](history-clients.md) share this core without a new transport layer. Fine-grained live session recording and concurrent-edit transforms remain in the [implementation plan](architecture/collaboration_and_version_history.md).
 
 ```csharp
@@ -31,7 +35,7 @@ Use `MemoryHistoryBlobStore` and `MemoryHistoryHeadStore` for process-local use 
 
 ## Publication and identity
 
-`CreateVersionAsync` requires the exact previously read `HistoryHead`; null initializes an absent document. A stale expectation raises `DocxHistoryException` with `StaleHead`. Do not silently retry with a new expectation: a host should decide whether the submitted document still represents the desired next version. Every successful create produces a distinct version ID. After an uncertain storage response, inspect the head/list before deciding whether to issue a new create; operation-level retry deduplication is not yet implemented.
+`CreateVersionAsync` requires the exact previously read `HistoryHead`; null initializes an absent document. A stale expectation raises `DocxHistoryException` with `StaleHead`. Do not silently retry with a new expectation: a host should decide whether the submitted document still represents the desired next version. Every successful new create produces a distinct version ID. Use the request-ID overload described below for safe retries after uncertain storage responses; the legacy overload remains non-idempotent.
 
 A version ID is its immutable manifest's `HistoryBlobReference` (SHA-256 plus byte length), not a mutable filename or array index. It retains a parent link, exact snapshot, creation nonce, host metadata, and content-log sequence. Raw snapshot SHA-256 binds the downloadable bytes; the independent ordered OPC digest identifies package content. No provenance is inserted into the DOCX.
 
@@ -39,7 +43,66 @@ Initial capture establishes sequence 0. Naming unchanged content increments only
 
 Inputs are captured before awaiting host storage. The service does not mutate a `DocxSession` or the supplied byte array. These full-package captures and inspections belong at version/import boundaries, not on the typing path.
 
+## Durable request identity
+
+```csharp
+// Allocate/persist once with the original bytes, metadata, and expected head before submission.
+var saved = await history.CreateVersionAsync(documentId, requestId, expectedHead,
+    capturedBytes, capturedMetadata, cancellationToken);
+var restored = await history.RestoreVersionAsync(documentId, restoreRequestId, previewedHead,
+    selectedVersionId, restoreMetadata, cancellationToken);
+```
+
+IDs are opaque, document-scoped strings of 1–1024 UTF-16 characters (nonblank, valid Unicode).
+The document ID and the request ID must also fit together in one 16 KiB index node once escaped
+(JSON escapes each non-ASCII or reserved character to six bytes), so a pair of long IDs made
+entirely of such characters is refused with `ResourceLimit` by the call that supplies it rather
+than by the next publication. Plain identifiers are nowhere near that bound.
+The host owns authentication and ID allocation; a persisted replica UUID plus monotonic counter,
+or a persisted unique request UUID, can distinguish independent intents. Never infer identity
+from timestamps or snapshot hashes. Two intentional saves of identical bytes use different IDs.
+
+The same ID and canonical input returns the exact original `DocxHistoryView`, even after later
+saves/restores, concurrent retries, or a restart. Its head is the original publication, NOT the
+latest head: read current history separately before making a new edit. Changed input raises
+`RequestConflict`, including a changed expected head, metadata, operation, restore target, or
+exact snapshot bytes. Metadata dictionary insertion order is normalized; timestamps include
+their stored offset/precision. Repacked ZIP bytes are different input even if OPC content agrees.
+Keep the original captured bytes; do not re-save/re-capture a live session for a retry.
+
+One head CAS publishes state plus `HistoryRequestJournal`. The current receipt is inline; the
+next publication promotes it into an immutable compressed SHA-256 radix index with its now-known
+head. This avoids circular hashes and binds the original result durably. Legacy calls carry the
+index forward too. Lookup verifies only its selected path (at most 257 bounded 16 KiB nodes), not
+the entire unvisited tree. Missing/corrupt index data fails; it is never treated as a new request.
+
+Failures before CAS do not bind the request. A concurrent identical winner is resolved through
+its receipt. An I/O exception may have occurred after a successful CAS; retry the same request
+to resolve that uncertainty. Cancellation after this call's successful CAS cannot change its
+success into cancellation. Receipts are not a separate process-local cache or mutable table.
+State schema V2 carries journals; V1 records remain readable and are still written for histories
+that never opted in. Old readers must fail on V2 rather than discard the journal.
+
+Retention must keep reachable receipt-index nodes AND the original result state/version records.
+Deleting the request index would reopen old IDs to duplicate publication and is not permitted as
+routine compaction. Snapshot retention is separate: a receipt identifies a version but does not
+make deleted snapshot bytes recoverable. A future bounded dedup policy needs explicit namespace
+retirement/fencing, not a best-effort TTL. No retention deletion or transport is supplied here.
+
 ## Reading and comparison
+
+Backend-enabled histories use state schema V3: `ParentPublication` binds the immediately prior
+head, while `Operation` references the latest immutable backend decision. This permits an
+identified conflict/no-op decision to advance publication revision without creating a version
+or content commit. Ordinary creates/restores carry the decision tip forward. V1/V2 history stays
+readable and retains its original wire format until enabled; older codecs reject V3 explicitly.
+The storage layer treats the decision reference as opaque; the backend owner must validate its
+record, outcome, and effects. A stored reference alone is not proof of acceptance.
+
+Ordered updates validate exact V3 publication parents, then legacy version ancestry if the tail
+crosses the schema boundary. The traversal budget includes publication edges as well as legacy
+version edges and content commits. Decision-only updates have an empty content tail, not a fake
+document edit; history consumers can still advance their accepted head.
 
 `ReadAsync` validates the current document and the state/version/commit tip relationships. `ListVersionsAsync` starts at that published head and returns newest-first pages (1–100 records); pass a non-null `Next` to continue the same immutable chain while newer versions publish. A null `Next` means the page reached the end.
 

@@ -17,6 +17,31 @@ def metadata(hour: int = 12) -> DocxVersionMetadata:
     return DocxVersionMetadata("python-actor", f"2026-01-01T{hour:02}:00:00Z", application_metadata={"matter": "123"})
 
 
+def test_durable_request_ids_survive_process_restart_and_return_original_results(tmp_path, tour_plan_bytes):
+    with open_history(tmp_path) as history:
+        first = history.create_version("doc", None, tour_plan_bytes, metadata(), request_id="first")
+        restored = history.restore_version("doc", first.head, first.version.id, metadata(13), request_id="restore")
+        later = history.create_version("doc", restored.head, tour_plan_bytes, metadata(14))
+        assert first.state.requests.current.id == "first"
+        assert restored.state.requests.current.id == "restore"
+        assert later.state.requests.current is None and later.state.requests.index is not None
+        assert isinstance(restored.state.requests.revision, int)
+        with pytest.raises(DocxHistoryError) as conflict:
+            history.create_version("doc", later.head, tour_plan_bytes, metadata(), request_id="first")
+        assert conflict.value.code == "RequestConflict"
+        with pytest.raises(DocxHistoryError) as invalid:
+            history.create_version("new", None, tour_plan_bytes, metadata(), request_id=" ")
+        assert invalid.value.code == "InvalidRequest"
+        assert history.read("new") is None
+    shutdown_host()
+    with open_history(tmp_path) as reopened:
+        assert reopened.create_version("doc", None, tour_plan_bytes, metadata(), request_id="first").head == first.head
+        assert reopened.restore_version("doc", first.head, first.version.id, metadata(13), request_id="restore").head == restored.head
+        assert reopened.read("doc").head == later.head
+        assert len(reopened.list_versions("doc").versions) == 3
+        assert reopened.export_version("doc", first.version.id) == tour_plan_bytes
+
+
 def test_file_history_exact_reopen_time_render_restore_and_compare(tmp_path, tour_plan_bytes):
     root = tmp_path / "history"
     with open_history(root) as a, open_history(root) as b:
