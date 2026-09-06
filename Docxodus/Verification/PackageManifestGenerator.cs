@@ -39,6 +39,8 @@ public static class PackageManifestGenerator
         "http://schemas.microsoft.com/office/word/2010/wordml";
     private static readonly AsciiCaseInsensitiveComparer PartNameComparer =
         AsciiCaseInsensitiveComparer.Instance;
+
+    internal static IEqualityComparer<string> CanonicalPartNameComparer => PartNameComparer;
     private static readonly uint[] Crc32Table = CreateCrc32Table();
     private static readonly byte[] OleSignature = { 0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1 };
     private static readonly HashSet<string> WordprocessingXmlContentTypes = new(
