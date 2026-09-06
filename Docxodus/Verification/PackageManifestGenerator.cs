@@ -1324,7 +1324,7 @@ public static class PackageManifestGenerator
     private static bool IsAsciiLetter(char value) =>
         value is >= 'A' and <= 'Z' or >= 'a' and <= 'z';
 
-    private static bool TryCanonicalizeEntryName(string name, out string canonical)
+    internal static bool TryCanonicalizeEntryName(string name, out string canonical)
     {
         canonical = "/" + name.Replace('\\', '/').TrimStart('/');
 
