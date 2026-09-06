@@ -54,3 +54,10 @@ limits. Expansion work is charged with conservative multipliers, so the allowanc
 not a promise that an archive of that size will open. Package-level ZIP/XML limits also
 apply. This proves bounded structural/content consistency, not authorship or trust in
 host timestamps and metadata.
+
+Archive validation is **not a backend decision-policy audit**. It retains acceptance
+statuses, conflict reasons, and chosen text-map offsets; it does not re-adjudicate
+those choices by rerunning reconciliation. A verified contribution proves its recorded
+before/after content, not that accepting that contribution was the right response to
+an operation proposal. The authoritative backend owns that decision. Opening a history
+file must not reinterpret recorded outcomes using a newer conflict policy.
