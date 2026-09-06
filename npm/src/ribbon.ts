@@ -1378,11 +1378,20 @@ class RibbonSurface implements RibbonEditor {
       if (!this.live || !text.value) return;
       let count = 0;
       this.run("replace all", () => {
-        count = this.live!.replaceAll(text.value, replace.value, { matchCase: matchCase.checked });
+        count = this.live!.replaceAll(text.value, replace.value, {
+          matchCase: matchCase.checked,
+          focus: false,
+        });
       });
       this.setStatus(`Replaced ${count} occurrence${count === 1 ? "" : "s"}`);
       this.refreshFind(true);
     });
+    // Every find-bar button acts on the search, not on the caret: swallowing mousedown keeps the
+    // keyboard in the field that was being typed into, so a click on Next does not end the query.
+    for (const id of ["findprev", "findnext", "replaceone", "replaceall"]) {
+      const button = this.control(id);
+      if (button) this.keepSelection(button);
+    }
     bar.hidden = true;
   }
 
@@ -1394,23 +1403,40 @@ class RibbonSurface implements RibbonEditor {
     const text = this.require<HTMLInputElement>("findtext");
     text.focus();
     text.select();
-    this.refreshFind(false);
+    // Painting is focus-safe, so a reopened bar can show its hits without taking the keyboard.
+    this.refreshFind(true);
   }
 
+  /**
+   * Close the bar and hand the current hit over to the caret: the document is where the user is
+   * going next, and Word leaves the insertion point on the match it stopped at. Until this runs
+   * the match is only PAINTED (see `showFindMatches`), so the search field keeps the keyboard for
+   * as long as the bar is open.
+   */
   private closeFindBar(): void {
     const bar = this.control("findbar");
     if (bar) bar.hidden = true;
+    const match = this.findMatches[this.findIndex];
+    if (match) this.live?.selectMatch(match);
+    else this.live?.clearFindMatches();
     this.findMatches = [];
     this.findIndex = -1;
   }
 
-  private refreshFind(select: boolean): void {
+  /**
+   * Re-scan for the current query. `show` paints the hits and rides to the first one — it never
+   * focuses the document, so typing the second character of a query that already matched goes on
+   * refining the search instead of being typed into the document.
+   */
+  private refreshFind(show: boolean): void {
     const text = this.require<HTMLInputElement>("findtext");
     const matchCase = this.require<HTMLInputElement>("findcase").checked;
     this.findMatches = this.live && text.value ? this.live.find(text.value, { matchCase }) : [];
     this.findIndex = this.findMatches.length > 0 ? 0 : -1;
     this.updateFindCount();
-    if (select && this.findIndex >= 0) this.live?.selectMatch(this.findMatches[this.findIndex]);
+    if (!show) return;
+    if (this.findIndex >= 0) this.live?.showFindMatches(this.findMatches, this.findIndex);
+    else this.live?.clearFindMatches();
   }
 
   private stepFind(direction: 1 | -1): void {
@@ -1418,7 +1444,7 @@ class RibbonSurface implements RibbonEditor {
     if (this.findMatches.length === 0) this.refreshFind(false);
     if (this.findMatches.length === 0) return;
     this.findIndex = (this.findIndex + direction + this.findMatches.length) % this.findMatches.length;
-    this.live.selectMatch(this.findMatches[this.findIndex]);
+    this.live.showFindMatches(this.findMatches, this.findIndex);
     this.updateFindCount();
   }
 
@@ -1428,13 +1454,13 @@ class RibbonSurface implements RibbonEditor {
     const match = this.findMatches[this.findIndex];
     if (!match) return;
     const replacement = this.require<HTMLInputElement>("replacetext").value;
-    this.run("replace", () => this.live!.replaceMatch(match, replacement));
+    this.run("replace", () => this.live!.replaceMatch(match, replacement, { focus: false }));
     // Offsets after the replacement shifted; re-scan and continue from the same slot.
     const keep = this.findIndex;
     this.refreshFind(false);
     if (this.findMatches.length > 0) {
       this.findIndex = Math.min(keep, this.findMatches.length - 1);
-      this.live.selectMatch(this.findMatches[this.findIndex]);
+      this.live.showFindMatches(this.findMatches, this.findIndex);
       this.updateFindCount();
     }
   }

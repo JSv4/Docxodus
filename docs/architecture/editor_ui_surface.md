@@ -95,7 +95,16 @@ from editor state.
 | Line spacing menu | `setLineSpacing(multiple)` | `SetParagraphFormat` (`LineSpacing` in 240ths, rule `auto`) |
 | Style gallery | `setParagraphStyle(id)` | `SetParagraphStyle` |
 | Delete block | `deleteBlock()` | `DeleteBlock` — inert inside a table and when it is the only editable block |
-| Find / Replace | `find(query)`, `selectMatch`, `replaceMatch`, `replaceAll` | text scan over the rendered blocks; `ReplaceTextAtSpan` per replacement |
+| Find / Replace | `find(query)`, `showFindMatches`, `clearFindMatches`, `selectMatch`, `replaceMatch`, `replaceAll` | text scan over the rendered blocks; `ReplaceTextAtSpan` per replacement |
+
+While the find bar is open the current hit is **painted, not selected**: `showFindMatches` puts
+the matches into the CSS Custom Highlight registry (`::highlight(docxodus-find)` and
+`docxodus-find-active`) and scrolls the active one into view without touching focus, because
+selecting inside a contenteditable block focuses that block — which would send the next character
+of the query into the document. `selectMatch` is the commit step the bar runs when it closes: it
+drops the painting and puts the caret on the hit, so editing resumes where the search stopped. The
+find-bar buttons swallow `mousedown` for the same reason the format buttons do, and `replaceMatch`
+/ `replaceAll` take `focus: false` so a Replace press does not pull the caret out of the bar.
 
 The font menu lists the families the open document actually uses first, then the fonts every
 Word install has. The style gallery is read from the document (`ListStyles`: paragraph styles,
