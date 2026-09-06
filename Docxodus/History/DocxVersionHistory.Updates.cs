@@ -119,7 +119,7 @@ public sealed partial class DocxVersionHistory
         return new DocxHistoryUpdate(after, current, entries.AsReadOnly(), current.State.Epoch != previous.State.Epoch);
     }
 
-    private static void ValidatePublicationEdge(DocxHistoryView child, DocxHistoryView parent)
+    internal static void ValidatePublicationEdge(DocxHistoryView child, DocxHistoryView parent)
     {
         Consistent(child.State.InitialSnapshot == parent.State.InitialSnapshot
             && child.State.Sequence >= parent.State.Sequence && child.State.Sequence - parent.State.Sequence <= 1
