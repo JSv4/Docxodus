@@ -31,13 +31,55 @@ Use `MemoryHistoryBlobStore` and `MemoryHistoryHeadStore` for process-local use 
 
 ## Publication and identity
 
-`CreateVersionAsync` requires the exact previously read `HistoryHead`; null initializes an absent document. A stale expectation raises `DocxHistoryException` with `StaleHead`. Do not silently retry with a new expectation: a host should decide whether the submitted document still represents the desired next version. Every successful create produces a distinct version ID. After an uncertain storage response, inspect the head/list before deciding whether to issue a new create; operation-level retry deduplication is not yet implemented.
+`CreateVersionAsync` requires the exact previously read `HistoryHead`; null initializes an absent document. A stale expectation raises `DocxHistoryException` with `StaleHead`. Do not silently retry with a new expectation: a host should decide whether the submitted document still represents the desired next version. Every successful new create produces a distinct version ID. Use the request-ID overload described below for safe retries after uncertain storage responses; the legacy overload remains non-idempotent.
 
 A version ID is its immutable manifest's `HistoryBlobReference` (SHA-256 plus byte length), not a mutable filename or array index. It retains a parent link, exact snapshot, creation nonce, host metadata, and content-log sequence. Raw snapshot SHA-256 binds the downloadable bytes; the independent ordered OPC digest identifies package content. No provenance is inserted into the DOCX.
 
 Initial capture establishes sequence 0. Naming unchanged content increments only `HistoryHead.Revision`, even if ZIP timestamps/compression differ. Changed content appends one import commit, its reversible package contribution, and its named version; one head CAS publishes them together. A failed blob write or CAS leaves the prior history visible. Unreferenced blobs may remain and belong to the host's retention/cleanup policy.
 
 Inputs are captured before awaiting host storage. The service does not mutate a `DocxSession` or the supplied byte array. These full-package captures and inspections belong at version/import boundaries, not on the typing path.
+
+## Durable request identity
+
+```csharp
+// Allocate/persist once with the original bytes, metadata, and expected head before submission.
+var saved = await history.CreateVersionAsync(documentId, requestId, expectedHead,
+    capturedBytes, capturedMetadata, cancellationToken);
+var restored = await history.RestoreVersionAsync(documentId, restoreRequestId, previewedHead,
+    selectedVersionId, restoreMetadata, cancellationToken);
+```
+
+IDs are opaque, document-scoped strings of 1–1024 UTF-16 characters (nonblank, valid Unicode).
+The host owns authentication and ID allocation; a persisted replica UUID plus monotonic counter,
+or a persisted unique request UUID, can distinguish independent intents. Never infer identity
+from timestamps or snapshot hashes. Two intentional saves of identical bytes use different IDs.
+
+The same ID and canonical input returns the exact original `DocxHistoryView`, even after later
+saves/restores, concurrent retries, or a restart. Its head is the original publication, NOT the
+latest head: read current history separately before making a new edit. Changed input raises
+`RequestConflict`, including a changed expected head, metadata, operation, restore target, or
+exact snapshot bytes. Metadata dictionary insertion order is normalized; timestamps include
+their stored offset/precision. Repacked ZIP bytes are different input even if OPC content agrees.
+Keep the original captured bytes; do not re-save/re-capture a live session for a retry.
+
+One head CAS publishes state plus `HistoryRequestJournal`. The current receipt is inline; the
+next publication promotes it into an immutable compressed SHA-256 radix index with its now-known
+head. This avoids circular hashes and binds the original result durably. Legacy calls carry the
+index forward too. Lookup verifies only its selected path (at most 257 bounded 16 KiB nodes), not
+the entire unvisited tree. Missing/corrupt index data fails; it is never treated as a new request.
+
+Failures before CAS do not bind the request. A concurrent identical winner is resolved through
+its receipt. An I/O exception may have occurred after a successful CAS; retry the same request
+to resolve that uncertainty. Cancellation after this call's successful CAS cannot change its
+success into cancellation. Receipts are not a separate process-local cache or mutable table.
+State schema V2 carries journals; V1 records remain readable and are still written for histories
+that never opted in. Old readers must fail on V2 rather than discard the journal.
+
+Retention must keep reachable receipt-index nodes AND the original result state/version records.
+Deleting the request index would reopen old IDs to duplicate publication and is not permitted as
+routine compaction. Snapshot retention is separate: a receipt identifies a version but does not
+make deleted snapshot bytes recoverable. A future bounded dedup policy needs explicit namespace
+retirement/fencing, not a best-effort TTL. No retention deletion or transport is supplied here.
 
 ## Reading and comparison
 

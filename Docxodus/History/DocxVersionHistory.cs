@@ -7,7 +7,7 @@ using Docxodus.Verification;
 
 namespace Docxodus.History;
 
-public enum DocxHistoryError { StaleHead, ForeignDocument, InvalidHistory, HistoryUnavailable, TraversalLimit }
+public enum DocxHistoryError { StaleHead, ForeignDocument, InvalidHistory, HistoryUnavailable, TraversalLimit, RequestConflict }
 
 /// <summary>A publication precondition or cross-record history invariant failed.</summary>
 public sealed class DocxHistoryException : Exception
@@ -30,6 +30,7 @@ public sealed partial class DocxVersionHistory
     private readonly IHistoryBlobStore _blobs;
     private readonly IHistoryHeadStore _heads;
     private readonly HistoryRecordStore _records;
+    private readonly HistoryRequestJournalStore _requests;
     private readonly DocxSnapshotStore _snapshots;
     private readonly int _maxSnapshotBytes;
     private readonly PackageManifestOptions? _packageOptions;
@@ -43,6 +44,7 @@ public sealed partial class DocxVersionHistory
         _blobs = blobs;
         _heads = heads;
         _records = new HistoryRecordStore(blobs, maxRecordBytes);
+        _requests = new HistoryRequestJournalStore(blobs);
         _snapshots = new DocxSnapshotStore(blobs, maxSnapshotBytes, packageOptions);
         _maxSnapshotBytes = maxSnapshotBytes;
         _packageOptions = packageOptions;
@@ -63,6 +65,7 @@ public sealed partial class DocxVersionHistory
     {
         var state = await _records.LoadStateAsync(head.State, cancellationToken).ConfigureAwait(false);
         SameDocument(documentId, state.DocumentId);
+        HistoryRequestJournalStore.ValidatePublication(documentId, head, state.Requests);
         Consistent(state.Sequence < head.Revision && state.Epoch <= state.Sequence, "Invalid head publication position.");
         var version = await GetVersionAsync(documentId, state.Version, cancellationToken).ConfigureAwait(false);
         Consistent(version.Record.Sequence == state.Sequence && version.Record.Snapshot == state.Snapshot,
@@ -88,8 +91,21 @@ public sealed partial class DocxVersionHistory
     /// Changed OPC content appends an import commit with lossless effects; unchanged content adds
     /// metadata only, even when ZIP serialization differs. All blobs precede the one CAS commit point.
     /// </summary>
-    public async ValueTask<DocxHistoryView> CreateVersionAsync(string documentId, HistoryHead? expected,
-        byte[] docxBytes, DocxVersionMetadata metadata, CancellationToken cancellationToken = default)
+    public ValueTask<DocxHistoryView> CreateVersionAsync(string documentId, HistoryHead? expected,
+        byte[] docxBytes, DocxVersionMetadata metadata, CancellationToken cancellationToken = default) =>
+        CreateVersionCoreAsync(documentId, expected, docxBytes, metadata, null, cancellationToken);
+
+    /// <summary>
+    /// Idempotent publication. Persist requestId with the original input before submission. An
+    /// identical retry returns the original view, even after later writes; changed input fails.
+    /// </summary>
+    public ValueTask<DocxHistoryView> CreateVersionAsync(string documentId, string requestId, HistoryHead? expected,
+        byte[] docxBytes, DocxVersionMetadata metadata, CancellationToken cancellationToken = default) =>
+        CreateVersionCoreAsync(documentId, expected, docxBytes, metadata,
+            requestId ?? throw new ArgumentNullException(nameof(requestId)), cancellationToken);
+
+    private async ValueTask<DocxHistoryView> CreateVersionCoreAsync(string documentId, HistoryHead? expected,
+        byte[] docxBytes, DocxVersionMetadata metadata, string? requestId, CancellationToken cancellationToken)
     {
         HistoryHeadCodec.Key(documentId);
         ArgumentNullException.ThrowIfNull(docxBytes);
@@ -98,8 +114,13 @@ public sealed partial class DocxVersionHistory
             throw new PackageChangeException(PackageChangeError.ResourceLimit, "Snapshot exceeds the byte limit.");
         var captured = docxBytes.ToArray();
         var capturedMetadata = HistoryRecordStore.PrepareMetadata(metadata);
+        var request = requestId is null ? null : VersionRequest("create", documentId, expected,
+            capturedMetadata, requestId, captured, null);
         var nonce = Guid.NewGuid();
-        var current = await ReadExpectedAsync(documentId, expected, cancellationToken).ConfigureAwait(false);
+        var current = await ReadAsync(documentId, cancellationToken).ConfigureAwait(false);
+        var repeated = await FindRequestAsync(documentId, current, request, cancellationToken).ConfigureAwait(false);
+        if (repeated is not null) return repeated;
+        if (current?.Head != expected) throw Stale();
         var snapshot = await _snapshots.CaptureAsync(captured, cancellationToken).ConfigureAwait(false);
         var changed = current is not null && current.State.Snapshot.ContentDigest != snapshot.ContentDigest;
         var sequence = checked((current?.State.Sequence ?? 0) + (changed ? 1 : 0));
@@ -133,7 +154,8 @@ public sealed partial class DocxVersionHistory
             InitialSnapshot = current?.State.InitialSnapshot ?? snapshot, Sequence = sequence,
             Snapshot = snapshot, Version = versionId,
         };
-        return await PublishAsync(documentId, expected, state, new DocxStoredVersion(versionId, version), cancellationToken).ConfigureAwait(false);
+        return await PublishAsync(documentId, expected, state, new DocxStoredVersion(versionId, version),
+            cancellationToken, request, current?.State.Requests).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -186,20 +208,22 @@ public sealed partial class DocxVersionHistory
         return await _snapshots.CompareAsync(left.Record.Snapshot, right.Record.Snapshot, settings, cancellationToken).ConfigureAwait(false);
     }
 
-    private async ValueTask<DocxHistoryView?> ReadExpectedAsync(string documentId, HistoryHead? expected, CancellationToken cancellationToken)
-    {
-        var current = await ReadAsync(documentId, cancellationToken).ConfigureAwait(false);
-        if (current?.Head != expected) throw Stale();
-        return current;
-    }
-
     private async ValueTask<DocxHistoryView> PublishAsync(string documentId, HistoryHead? expected,
-        DocxHistoryStateRecord state, DocxStoredVersion version, CancellationToken cancellationToken)
+        DocxHistoryStateRecord state, DocxStoredVersion version, CancellationToken cancellationToken,
+        HistoryRequestIdentity? request = null, HistoryRequestJournal? previousRequests = null)
     {
+        state = state with { Requests = await _requests.AdvanceAsync(documentId, expected, previousRequests,
+            request, cancellationToken).ConfigureAwait(false) };
         var stateId = await _records.SaveStateAsync(state, cancellationToken).ConfigureAwait(false);
         var head = await _heads.TryAdvanceAsync(documentId, expected, stateId, cancellationToken).ConfigureAwait(false);
         // Do not throw cancellation after publication: the CAS is the definitive commit point.
-        return head is null ? throw Stale() : new DocxHistoryView(head, state, version);
+        if (head is not null) return new DocxHistoryView(head, state, version);
+        // A concurrent identical retry may have won the CAS. Resolve its durable receipt rather
+        // than reporting that successfully published request stale. Unknown storage exceptions
+        // propagate: the caller retries the same identity to resolve a possibly lost acknowledgement.
+        var repeated = await FindRequestAsync(documentId,
+            await ReadAsync(documentId, cancellationToken).ConfigureAwait(false), request, cancellationToken).ConfigureAwait(false);
+        return repeated ?? throw Stale();
     }
 
     private static DocxHistoryException Stale() => new(DocxHistoryError.StaleHead, "History head changed; recapture the expected head before publishing.");

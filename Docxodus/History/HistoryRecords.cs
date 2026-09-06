@@ -56,6 +56,9 @@ public sealed record PackageHistoryCommitRecord
 /// </summary>
 public sealed record DocxHistoryStateRecord
 {
+    /// <summary>V2 publication metadata. Absent in legacy V1 states; older records remain readable.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public HistoryRequestJournal? Requests { get; init; }
     public required HistoryBlobReference? Commit { get; init; }
     public required string DocumentId { get; init; }
     public required long Epoch { get; init; }
