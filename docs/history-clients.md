@@ -28,8 +28,45 @@ changes. `resolveTime` finds a content sequence; `materialize` or `replay` retur
 for the existing rendering/session APIs. Opening a historical view never changes a shared
 head. Comparison composes two exact exports with the existing DocxDiff client API.
 
-This first binding layer is package-boundary history, not fine-grained typing, automatic
-concurrent-edit merging, or pending-work management. Language bindings and live log followers
+## Browser and npm
+
+```ts
+import { initialize, openDocxHistory, createMemoryHistoryStorage, openDocxSession } from 'docxodus';
+await initialize();
+const storage = createMemoryHistoryStorage(); // or implement HistoryStorage for your host
+const history = openDocxHistory(storage);
+const saved = await history.createVersion('contract', null, docxBytes, {
+  author: 'application-user-id', createdAt: '2026-01-01T12:00:00Z', label: 'Draft',
+});
+const sequence = await history.resolveSequenceAtTime('contract', '2026-01-02T00:00:00Z');
+const session = openDocxSession(await history.materialize('contract', sequence));
+console.log(session.project().markdown);
+session.close();
+history.close(); // closes the binding, not the host's retained data
+```
+
+`HistoryStorage` supplies asynchronous `readBlob`, `putBlob`, `readHead`, and atomic
+`advanceHead(documentId, expectedHead, stateReference)` callbacks. Missing blobs/heads and
+failed compare-and-swap return `null`. Successful CAS returns its incremented revision plus
+the published state reference, just like `IHistoryHeadStore`. Storage callbacks must settle;
+this binding does not impose a timeout or network-cancellation policy. Host exceptions propagate.
+`DocxHistoryError.code` preserves domain error codes such as `StaleHead` and `PayloadMismatch`.
+
+The memory reference adapter verifies SHA-256 and copies inputs/outputs. Multiple clients may
+share it, but a page/process restart loses it. Supply durable storage for restart recovery.
+`close()` rejects while calls are active; await outstanding calls, then close. A custom WASM
+loader calls `installHistoryStorageImports(runtime.setModuleImports)` before opening a
+`DocxHistoryClient` over `exports.DocxodusWasm.HistoryBridge`. Normal npm `initialize()` does
+this automatically. The existing worker RPC does not yet expose these host callbacks.
+
+Methods are `read`, `createVersion`, `listVersions`, `getVersion`, `exportVersion`, `materialize`,
+`replay`, `resolveSequenceAtTime`, and `restoreVersion`. For comparisons, export both versions
+and call the existing `docxDiffCompareProducts` API. The package-boundary WASM bridge uses
+base64 for asynchronously read/exported bytes, incurring temporary allocation overhead;
+it is not a low-latency keystroke path.
+
+This binding layer is package-boundary history, not fine-grained typing, automatic
+concurrent-edit merging, or pending-work management. Python bindings and live log followers
 are subsequent stacked layers. See [history API](history.md) for durability and retention
 responsibilities and [the architecture](architecture/collaboration_and_version_history.md)
 for the larger collaboration roadmap.

@@ -68,6 +68,16 @@ import type {
 } from "./types.js";
 
 import { DocxSession, openDocxSession as openDocxSessionImpl } from "./session.js";
+import { DocxHistoryClient, installHistoryStorageImports } from './history.js';
+import type { HistoryStorage } from './history.js';
+export * from './history.js';
+
+/** Open history over host-owned storage after initialize(). No network layer is installed. */
+export function openDocxHistory(storage: HistoryStorage): DocxHistoryClient {
+  const bridge = ensureInitialized().HistoryBridge;
+  if (!bridge) throw new Error('This WASM build does not include history bindings.');
+  return new DocxHistoryClient(bridge, storage);
+}
 
 export { DocxSession } from "./session.js";
 export type {
@@ -566,10 +576,11 @@ async function tryLoadFromPath(basePath: string): Promise<boolean> {
     const dotnetPath = basePath + "_framework/dotnet.js";
     const { dotnet } = await import(/* webpackIgnore: true */ /* @vite-ignore */ dotnetPath);
 
-    const { getAssemblyExports, getConfig } = await dotnet
+    const { getAssemblyExports, getConfig, setModuleImports } = await dotnet
       .withDiagnosticTracing(false)
       .create();
 
+    installHistoryStorageImports(setModuleImports);
     const config = getConfig();
     const exports = await getAssemblyExports(config.mainAssemblyName);
 
@@ -578,6 +589,7 @@ async function tryLoadFromPath(basePath: string): Promise<boolean> {
       DocumentComparer: exports.DocxodusWasm.DocumentComparer,
       DocxDiffBridge: exports.DocxodusWasm.DocxDiffBridge,
       DocxSessionBridge: exports.DocxodusWasm.DocxSessionBridge,
+      HistoryBridge: exports.DocxodusWasm.HistoryBridge,
     };
     return true;
   } catch {
