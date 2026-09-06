@@ -31,7 +31,8 @@ internal static class Program
         try
         {
             documents = DocumentStores.FromEnvironment();
-            store = new SessionStore(documents);
+            store = new SessionStore(documents, history: HistoryTool.Configure(
+                Environment.GetEnvironmentVariable(HistoryTool.RootVariable)));
         }
         catch (McpToolException ex)
         {
