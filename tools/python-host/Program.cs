@@ -68,6 +68,7 @@ internal static class Program
                     WriteOk(stdout, requestId, "null");
                     stdout.Flush();
                     SessionRegistry.DisposeAll();
+                    HistoryBindings.CloseAll();
                     return 0;
                 }
 
@@ -102,6 +103,7 @@ internal static class Program
         }
 
         SessionRegistry.DisposeAll();
+        HistoryBindings.CloseAll();
         return 0;
     }
 
