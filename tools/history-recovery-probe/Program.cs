@@ -13,8 +13,8 @@ using Docxodus.History;
 // Test-only subprocess. The parent supplies a private existing test directory. No server,
 // network protocol, product transport, or process-local recovery state is involved.
 if (args.Length != 4 || args[0] is not ("seed" or "crash" or "recover")
-    || args[2] is not ("version" or "restore" or "text" or "conflict") || args[3] is not ("before" or "after"))
-    throw new ArgumentException("Usage: HistoryRecoveryProbe seed|crash|recover EXISTING_TEST_ROOT version|restore|text|conflict before|after");
+    || args[2] is not ("version" or "restore" or "text" or "conflict" or "archive") || args[3] is not ("before" or "after"))
+    throw new ArgumentException("Usage: HistoryRecoveryProbe seed|crash|recover EXISTING_TEST_ROOT version|restore|text|conflict|archive before|after");
 if (JsonSerializer.IsReflectionEnabledByDefault) throw new Exception("This probe must run with reflection serialization disabled.");
 var root = Path.GetFullPath(args[1]);
 if (!Directory.Exists(root)) throw new ArgumentException("Parent must create the private test directory.");
@@ -22,6 +22,39 @@ var kind = args[2]; var boundary = args[3];
 var blobs = new FileHistoryBlobStore(Path.Combine(root, "blobs"));
 IHistoryHeadStore heads = new FileHistoryHeadStore(Path.Combine(root, "heads"));
 var history = new DocxVersionHistory(blobs, heads);
+if (kind == "archive")
+{
+    var path = Path.Combine(root, "agreement.docxhistory");
+    using var archiveInput = File.OpenRead(path);
+    using var archive = await DocxHistoryArchive.OpenAsync(archiveInput);
+    var id = archive.DocumentId;
+    if (args[0] == "seed") { Console.WriteLine("validated real portable archive; reflection disabled"); return; }
+    if (args[0] == "crash")
+    {
+        using var input = File.OpenRead(path);
+        await new DocxVersionHistory(blobs, new CrashHeads(heads, boundary)).ImportHistoryArchiveAsync(input);
+        throw new Exception("Import crash boundary unexpectedly returned.");
+    }
+    Check(await heads.ReadAsync(id) == (boundary == "after" ? archive.View.Head : null), "Import crash visibility differs.");
+    DocxHistoryImportResult imported;
+    using (var input = File.OpenRead(path)) imported = await history.ImportHistoryArchiveAsync(input);
+    Check(imported.View.Head == archive.View.Head && imported.AlreadyPresent == (boundary == "after"), "Exact import recovery differs.");
+    var document = history.Document(id);
+    var first = (await archive.ListVersionsAsync(limit: 100)).Versions[^1];
+    var retry = await document.CreateVersionAsync("initial", null, await archive.ExportDocxAsync(first.Id), first.Record.Metadata);
+    Check(retry.Version.Id == first.Id && retry.Head.Revision == 1, "Imported retry receipt was lost.");
+    var next = await document.CreateVersionAsync("after-restart", imported.View.Head, await document.ExportDocxAsync(), Metadata("continued"));
+    Check(next.Head.Revision == imported.View.Head.Revision + 1, "Import did not continue from original revision.");
+    var restored = await document.RestoreVersionAsync("restore-restart", next.Head, first.Id, Metadata("restore"));
+    Check(restored.Head.Revision == next.Head.Revision + 1, "Post-import restore did not append.");
+    await File.WriteAllBytesAsync(Path.Combine(root, "latest.docx"), await document.ExportDocxAsync());
+    using (var output = File.Create(Path.Combine(root, "continued.docxhistory"))) await document.ExportHistoryArchiveAsync(output);
+    using var continuedInput = File.OpenRead(Path.Combine(root, "continued.docxhistory"));
+    using var continued = await DocxHistoryArchive.OpenAsync(continuedInput);
+    Check(continued.View.Head == restored.Head, "Re-export after process recovery differs.");
+    Console.WriteLine($"recovered archive {boundary}: exact head, original receipt, continue, restore, files; reflection disabled");
+    return;
+}
 var scenarioPath = Path.Combine(root, "scenario.json");
 if (args[0] == "seed")
 {
@@ -104,9 +137,18 @@ static void Check(bool condition, string message) { if (!condition) throw new Ex
 
 internal sealed record Scenario(DocxHistoryView First, DocxHistoryView Seed, byte[] Candidate);
 
-internal sealed class CrashHeads(IHistoryHeadStore inner, string boundary) : IHistoryHeadStore
+internal sealed class CrashHeads(IHistoryHeadStore inner, string boundary) : IHistoryHeadInitializer
 {
     public ValueTask<HistoryHead?> ReadAsync(string id, CancellationToken cancellationToken = default) => inner.ReadAsync(id, cancellationToken);
+    public async ValueTask<HistoryHeadInitializationResult> TryInitializeAsync(string id, HistoryHead head,
+        CancellationToken cancellationToken = default)
+    {
+        if (boundary == "before") await KillAsync();
+        var result = await ((IHistoryHeadInitializer)inner).TryInitializeAsync(id, head, cancellationToken);
+        if (!result.Initialized) throw new Exception("Unexpected existing import in process probe.");
+        await KillAsync();
+        return result;
+    }
     public async ValueTask<HistoryHead?> TryAdvanceAsync(string id, HistoryHead? expected, HistoryBlobReference state,
         CancellationToken cancellationToken = default)
     {

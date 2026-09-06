@@ -5,7 +5,7 @@ using Docxodus.History;
 namespace Docxodus.Tests;
 
 /// <summary>Real reference adapters beneath deterministic faults; shared by history/backend fuzzers.</summary>
-internal sealed class HistoryFaultHarness : IHistoryBlobStore, IHistoryHeadStore, IDisposable
+internal sealed class HistoryFaultHarness : IHistoryBlobStore, IHistoryHeadInitializer, IDisposable
 {
     internal enum Fault { None, BeforeBlob, AfterBlob, BeforeHead, AfterHead, CancelBeforeHead, CancelAfterHead }
     private readonly IHistoryBlobStore _blobs;
@@ -78,6 +78,18 @@ internal sealed class HistoryFaultHarness : IHistoryBlobStore, IHistoryHeadStore
 
     public ValueTask<HistoryHead?> ReadAsync(string documentId, CancellationToken cancellationToken = default) =>
         _heads.ReadAsync(documentId, cancellationToken);
+
+    public async ValueTask<HistoryHeadInitializationResult> TryInitializeAsync(string documentId, HistoryHead head,
+        CancellationToken cancellationToken = default)
+    {
+        Interlocked.Increment(ref Publications);
+        if (_fault == Fault.BeforeHead) throw new IOException("Injected failure before initialization.");
+        if (_fault == Fault.CancelBeforeHead) Cancellation!.Cancel();
+        var result = await ((IHistoryHeadInitializer)_heads).TryInitializeAsync(documentId, head, cancellationToken);
+        if (result.Initialized && _fault == Fault.AfterHead) throw new IOException("Injected lost initialization acknowledgement.");
+        if (result.Initialized && _fault == Fault.CancelAfterHead) Cancellation!.Cancel();
+        return result;
+    }
 
     public async ValueTask<HistoryHead?> TryAdvanceAsync(string documentId, HistoryHead? expected,
         HistoryBlobReference state, CancellationToken cancellationToken = default)
