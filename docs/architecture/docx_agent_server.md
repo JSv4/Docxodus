@@ -214,7 +214,7 @@ problem that has no good answer at this layer.
 
 ## Tool reference
 
-Three lifecycle tools, four read/preview tools, twelve grouped-intent tools, and three sessionless
+Three lifecycle tools, four read/preview tools, thirteen grouped-intent tools, and three sessionless
 operations (`docxodus_compare`, `docxodus_deliver`, `docxodus_verify_receipt`). Every grouped tool takes `sessionId` plus an
 `action` string; see `tools/mcp-server/ToolCatalog.cs` for the exact JSON Schema advertised over
 `tools/list` (this section is the narrative version).
@@ -226,6 +226,16 @@ operations (`docxodus_compare`, `docxodus_deliver`, `docxodus_verify_receipt`). 
 | `docxodus_open` | `path` (a location within the configured scope — see Document storage), `trackedChanges?` (`accept`\|`render_inline`\|`strip_deletions`), `revisionAuthor?`, `undoDepth?`, `persistAnchorIds?` (default false — see Anchor stability below), `captureInitialProjection?` (default true; false frees the per-session baseline copy of the opening package and makes `semantic_changes`/diff formats refuse) | `{ sessionId, path }` — `path` is the **resolved** location |
 | `docxodus_save` | `sessionId`, `path?` (resolved the same way; defaults to the location the session was opened from), `persistAnchorIds?` (per-call override of the session's open-time setting; absent = use it) | `{ path, bytesWritten }` |
 | `docxodus_close` | `sessionId` | `{ closed: true }` |
+
+### `docxodus_history` — grouped history
+
+Session-scoped immutable history over the opt-in host-configured `DOCXODUS_HISTORY_ROOT`.
+Actions: `read`, `updates`, `create`, `list`, `get`, `export`, `materialize`, `replay`,
+`resolveTime`, `restore`, and `render`. Shares the .NET/npm/Python history facade and existing
+MCP dispatch/session gate; adds no transport. `create` captures the session's clean bytes,
+while restore appends history without modifying the session or source file. Document identity
+is the canonical scoped session location, never a caller-selected history key.
+See [history clients](../history-clients.md#mcp) for fields, precise counters, and rendering.
 
 ### `docxodus_get_content` — read
 

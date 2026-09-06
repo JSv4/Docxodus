@@ -6,7 +6,7 @@ use `Docxodus.Internal.HistoryClientOps` with host-supplied `IHistoryBlobStore` 
 provided. Hosts decide when to deliver a new head or ask a client to refresh.
 
 The version-1 client request includes `schemaVersion: 1`, `operation`, and `documentId`.
-Operations are `read`, `create`, `list`, `get`, `export`, `materialize`, `replay`,
+Operations are `read`, `updates`, `create`, `list`, `get`, `export`, `materialize`, `replay`,
 `resolveTime`, and `restore`. Additional fields are `expectedHead`, `versionId` (also
 the list cursor), `metadata`, `sequence`, `cutoff`, `limit`, and `maxEntriesToScan`.
 Create receives DOCX bytes separately from its JSON request. Export/materialize/replay
@@ -18,7 +18,7 @@ and limits are numbers. The existing durable record codecs are unchanged. Reques
 bounded to 512 Ki UTF-16 characters and reject missing required, unknown, duplicate,
 null-required, and malformed fields. Generated JSON metadata supports trimmed WASM.
 
-Responses contain `success` and the relevant `view`, `version`, `page`, `sequence`, or
+Responses contain `success` and the relevant `view`, `update`, `version`, `page`, `sequence`, or
 `bytes` field. Expected domain/argument failures return `success: false`, `errorCode`, and
 `message`; unexpected host-storage failures propagate. Cancellation before publication
 returns `Canceled`; a successful atomic head publication is not later reported canceled.
@@ -59,7 +59,7 @@ loader calls `installHistoryStorageImports(runtime.setModuleImports)` before ope
 `DocxHistoryClient` over `exports.DocxodusWasm.HistoryBridge`. Normal npm `initialize()` does
 this automatically. The existing worker RPC does not yet expose these host callbacks.
 
-Methods are `read`, `createVersion`, `listVersions`, `getVersion`, `exportVersion`, `materialize`,
+Methods are `read`, `readChangesSince`, `createVersion`, `listVersions`, `getVersion`, `exportVersion`, `materialize`,
 `replay`, `resolveSequenceAtTime`, and `restoreVersion`. For comparisons, export both versions
 and call the existing `docxDiffCompareProducts` API. The package-boundary WASM bridge uses
 base64 for asynchronously read/exported bytes, incurring temporary allocation overhead;
@@ -77,7 +77,7 @@ with open_history('/host-owned/matter-history') as history:
     html = convert_docx_to_html(history.materialize('contract', sequence))
 ```
 
-The Python client exposes `read`, `create_version`, `list_versions`, `get_version`,
+The Python client exposes `read`, `read_changes_since`, `create_version`, `list_versions`, `get_version`,
 `export_version`, `materialize`, `replay`, `resolve_sequence_at_time`, and `restore_version`.
 Frozen value types use snake_case attributes and arbitrary-precision Python integers;
 Int64 bounds are enforced before positions are encoded as decimal strings. Timestamp strings
@@ -97,6 +97,38 @@ This binding layer is package-boundary history, not fine-grained typing, automat
 concurrent-edit merging, or pending-work management. See [history API](history.md) for durability and retention
 responsibilities and [the architecture](architecture/collaboration_and_version_history.md)
 for the larger collaboration roadmap.
+
+## MCP
+
+Launch the existing server with `DOCXODUS_HISTORY_ROOT=/host-owned/matter-history` to enable
+`docxodus_history`. It reuses existing MCP dispatch, with no new transport or subscription.
+The directory contains the same protected `blobs`/`heads` layout as Python's file binding.
+Host configuration controls storage and retention; tool arguments cannot widen it.
+
+Open a scoped document with `docxodus_open`, then call `docxodus_history` with its `sessionId`
+and an `action` from the shared operation list above. Do not send `schemaVersion`, `operation`,
+or `documentId`: the binding assigns these, using the session's canonical scoped location as
+the history identity. Other fields and results match the version-1 facade. Positions are
+decimal strings; `versionId` and `expectedHead` are the exact objects returned by prior calls.
+Saving a copy to another location does not change the session's original history identity;
+open the copy to use that location's separate history.
+
+`create` captures clean current session bytes without saving the source file. Pass `metadata`
+and the exact `expectedHead` (null only for first publication). `restore` requires the target
+`versionId`, metadata, and exact expected head, and appends history only: it leaves both the
+open editing session and source file untouched. Hosts authenticate the supplied author.
+
+The extra `render` action takes exactly one `sequence` or `cutoff`; it reconstructs the
+checkpoint through the shared service and converts it to HTML with the existing renderer,
+returning `{ success: true, sequence, html }`. For example:
+
+```json
+{ "sessionId": "<open-session-capability>", "action": "render", "cutoff": "2026-01-01T12:30:00Z" }
+```
+
+Use `updates` with the last accepted `expectedHead` to retrieve the ordered log described
+below. An unknown/closed session or foreign-document version cannot read another history.
+There is no implicit follow loop, source-file write, or live-session reset.
 
 ## Ordered live log updates
 

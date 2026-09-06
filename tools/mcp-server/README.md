@@ -78,8 +78,8 @@ path stay as they are.
 
 ## Tool surface
 
-**22 tools.** Three session-lifecycle tools, four read/preview tools, twelve grouped-intent
-mutation tools, and three sessionless operations — the same arithmetic as the tool reference in
+**23 tools.** Three session-lifecycle tools, four read/preview tools, thirteen grouped-intent
+tools, and three sessionless operations — the same arithmetic as the tool reference in
 `docs/architecture/docx_agent_server.md`. Everything except the three sessionless tools takes the
 `sessionId` that `docxodus_open` returns, and addresses content by the anchor ids the markdown
 projection and search tools hand back. Each grouped tool takes an `action` discriminator plus
@@ -94,6 +94,7 @@ action-specific arguments.
 | `docxodus_preview` | read | Render the same HTML as `format: "html"` but shaped for an MCP Apps widget: the markup rides in `_meta` so a large render costs the model's context nothing. |
 | `docxodus_pagination` | read | Register, inspect, or query an externally materialized PageMap; the server never paginates or bundles a browser itself. |
 | `docxodus_search` | read | Find text (literal or regex), or find blocks by kind, annotation, or bookmark, returning reusable anchor ids. |
+| `docxodus_history` | grouped-intent | Publish/read exact versions, consume ordered timestamped log tails, reconstruct/render history, or append a guarded restore. Opt-in host storage; never overwrites the open session on restore. |
 | `docxodus_edit` | grouped-intent | Insert, replace, and delete text and blocks; split and merge paragraphs; undo and redo. |
 | `docxodus_format` | grouped-intent | Character and paragraph formatting, and list level. |
 | `docxodus_create` | grouped-intent | New paragraphs, headings, tables, horizontal rules, footnotes/endnotes, running headers/footers, and page-number fields. |
@@ -113,6 +114,18 @@ action-specific arguments.
 `McpToolInventoryDocumentationTests` asserts this table and `ToolCatalog.Tools` name exactly the
 same set of tools, and that the count above is the live one, so a tool cannot be added or removed
 without this section moving with it.
+
+History is disabled unless the launching host sets `DOCXODUS_HISTORY_ROOT` to an absolute,
+protected directory (with `blobs` and `heads` subdirectories). The host owns permissions,
+retention, and author authentication. Tool arguments cannot choose a root or document identity:
+`docxodus_history` derives identity from the session's canonical scoped opening location.
+Saving a copy elsewhere does not retarget it; open that copy to use its separate history. `create`
+captures clean current session bytes; it does not save the source file. `restore` appends a new
+history checkpoint without replacing either the open session or the source file. `render`
+accepts exactly one `sequence` (decimal string) or `cutoff` (timestamp), returning HTML and
+its sequence. Use `updates` with the exact last head to consume a validated log tail; the host
+decides when to call again. No transport, timer, or subscription has been added.
+See [history clients](../../docs/history-clients.md#mcp) for the shared fields and workflow.
 
 `docxodus_deliver` uses the same `DeliveryBundleService` as the .NET API and
 `docxodus-deliver` CLI. The MCP response returns canonical manifest bytes plus available artifacts
