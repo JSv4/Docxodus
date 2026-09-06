@@ -86,7 +86,7 @@ public sealed partial class DocxVersionHistory
         return current;
     }
 
-    private sealed record TraversedCommit(PackageHistoryCommitRecord Commit, DocxVersionRecord Version);
+    private sealed record TraversedCommit(HistoryBlobReference Id, PackageHistoryCommitRecord Commit, DocxVersionRecord Version);
 
     private async IAsyncEnumerable<TraversedCommit> ReadBackwardsAsync(string documentId,
         DocxHistoryView current, int maximum, [EnumeratorCancellation] CancellationToken cancellationToken)
@@ -118,7 +118,7 @@ public sealed partial class DocxVersionHistory
                 var target = await GetVersionAsync(documentId, version.Record.RestoredFrom!, cancellationToken).ConfigureAwait(false);
                 Consistent(target.Record.Snapshot == commit.After, "Restore target disagrees with its recorded snapshot.");
             }
-            yield return new TraversedCommit(commit, version.Record);
+            yield return new TraversedCommit(cursor, commit, version.Record);
             cursor = commit.Parent;
             sequence--;
             if (commit.Kind == "restore") epoch--;

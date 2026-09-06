@@ -45,6 +45,8 @@ test('two host-backed clients reopen, replay, render at time, and restore exact 
     try { await a.createVersion('doc', first.head, original, metadata); }
     catch (error: any) { stale = error.code; }
     const restored = await b.restoreVersion('doc', second.head, first.version.id, metadata);
+    const updates = await a.readChangesSince('doc', first.head);
+    const duplicate = await b.readChangesSince('doc', restored.head);
     a.close(); b.close();
     const reopened = api.openDocxHistory(storage);
     const latest = await reopened.read('doc');
@@ -57,6 +59,7 @@ test('two host-backed clients reopen, replay, render at time, and restore exact 
       exact: bytes.every((n: number, i: number) => n === original[i]) && bytes.length === original.length,
       restored: materialized.every((n: number, i: number) => n === original[i]) && materialized.length === original.length,
       firstId: first.version.id.digest.value, listedId: rest.versions[0].id.digest.value,
+      updates: updates.entries.map((entry: any) => entry.commit.sequence), reset: updates.reset, duplicates: duplicate.entries.length,
     };
   });
   expect(result.sequence).toBe('1');
@@ -68,6 +71,9 @@ test('two host-backed clients reopen, replay, render at time, and restore exact 
   expect(result.exact).toBe(true);
   expect(result.restored).toBe(true);
   expect(result.listedId).toBe(result.firstId);
+  expect(result.updates).toEqual(['1', '2']);
+  expect(result.reset).toBe(true);
+  expect(result.duplicates).toBe(0);
 });
 
 test('async storage retains captured inputs, rejects close while active, and detects corrupted payloads', async ({ page }) => {

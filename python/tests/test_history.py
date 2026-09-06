@@ -46,6 +46,12 @@ def test_file_history_exact_reopen_time_render_restore_and_compare(tmp_path, tou
         assert restored.state.sequence == 2 and restored.state.epoch == 1
         assert restored.version.record.restored_from == first.version.id
         assert a.export_version("doc", second.version.id) == edited
+        updates = a.read_changes_since("doc", first.head)
+        assert [entry.commit.sequence for entry in updates.entries] == [1, 2]
+        assert updates.entries[0].id == second.state.commit
+        assert updates.entries[1].metadata.author == "python-actor"
+        assert updates.reset and updates.view.head == restored.head
+        assert a.read_changes_since("doc", restored.head).entries == ()
 
     shutdown_host()
     with open_history(root) as reopened:

@@ -37,6 +37,8 @@ public sealed class HistoryClientOps
             var result = request.Operation switch
             {
                 "read" => new HistoryClientResult { View = await _history.ReadAsync(id, cancellationToken).ConfigureAwait(false) },
+                "updates" => new HistoryClientResult { Update = await _history.ReadChangesSinceAsync(id, request.ExpectedHead,
+                    budget, cancellationToken).ConfigureAwait(false) },
                 "create" => new HistoryClientResult { View = await _history.CreateVersionAsync(id, request.ExpectedHead,
                     Required(docxBytes), Required(request.Metadata), cancellationToken).ConfigureAwait(false) },
                 "list" => new HistoryClientResult { Page = await _history.ListVersionsAsync(id, request.VersionId,
@@ -99,6 +101,7 @@ public sealed record HistoryClientResult
     public DocxVersionPage? Page { get; init; }
     public long? Sequence { get; init; }
     public byte[]? Bytes { get; init; }
+    public DocxHistoryUpdate? Update { get; init; }
 }
 
 /// <summary>Client JSON only: 64-bit positions are decimal strings, preserving precision in JS.</summary>
