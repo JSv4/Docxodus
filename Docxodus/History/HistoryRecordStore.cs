@@ -58,9 +58,10 @@ public sealed class HistoryRecordStore
     {
         cancellationToken.ThrowIfCancellationRequested();
         var normalized = Validate(record);
+        var schemaVersion = normalized is DocxHistoryStateRecord { Requests: not null } ? 2 : 1;
         var bytes = JsonSerializer.SerializeToUtf8Bytes(new HistoryRecordEnvelope<T>
         {
-            Record = normalized, Schema = Schema(kind), SchemaVersion = 1,
+            Record = normalized, Schema = Schema(kind, schemaVersion), SchemaVersion = schemaVersion,
         }, TypeInfo<T>());
         Budget(bytes.Length <= _maxRecordBytes);
         var reference = new HistoryBlobReference(new VerificationDigest
@@ -85,12 +86,19 @@ public sealed class HistoryRecordStore
             using var header = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = 12, AllowDuplicateProperties = false });
             var fields = header.RootElement.EnumerateObject().Select(p => p.Name).ToHashSet(StringComparer.Ordinal);
             Require(fields.SetEquals(["record", "schema", "schemaVersion"]), "Malformed history envelope.");
-            if (header.RootElement.GetProperty("schemaVersion").GetInt32() != 1)
+            var schemaVersion = header.RootElement.GetProperty("schemaVersion").GetInt32();
+            if (schemaVersion != 1 && !(schemaVersion == 2 && kind == "package-state"))
                 throw new PackageChangeException(PackageChangeError.UnsupportedVersion, "Unsupported history record version.");
-            Require(header.RootElement.GetProperty("schema").GetString() == Schema(kind), "Unexpected history record schema.");
+            Require(header.RootElement.GetProperty("schema").GetString() == Schema(kind, schemaVersion), "Unexpected history record schema.");
             var envelope = JsonSerializer.Deserialize(bytes, TypeInfo<T>());
             Require(envelope is not null, "History envelope is required.");
             var record = Validate(envelope!.Record);
+            if (record is DocxHistoryStateRecord state)
+            {
+                Require((state.Requests is not null) == (schemaVersion == 2), "Request journals require state schema V2.");
+                Require(schemaVersion != 1 || !header.RootElement.GetProperty("record").TryGetProperty("requests", out _),
+                    "V1 states cannot declare request journals, including null.");
+            }
             cancellationToken.ThrowIfCancellationRequested();
             return record;
         }
@@ -128,6 +136,8 @@ public sealed class HistoryRecordStore
                 break;
             case DocxHistoryStateRecord state:
                 HistoryHeadCodec.Key(state.DocumentId);
+                HistoryRequestJournalStore.ValidateJournal(state.Requests);
+                Require(state.Requests is null || state.Requests.DocumentId == state.DocumentId, "Foreign request journal.");
                 Require(state.Sequence >= 0 && state.Epoch >= 0
                     && (state.Commit is null) == (state.Sequence == 0), "Invalid history state position.");
                 Reference(state.Commit); RequiredReference(state.Version);
@@ -179,7 +189,7 @@ public sealed class HistoryRecordStore
         Budget(value.Length <= maximumLength);
         _ = new UTF8Encoding(false, true).GetByteCount(value);
     }
-    private static string Schema(string kind) => $"https://docxodus.dev/schemas/history/{kind}/v1";
+    private static string Schema(string kind, int version) => $"https://docxodus.dev/schemas/history/{kind}/v{version}";
     private static JsonTypeInfo<HistoryRecordEnvelope<T>> TypeInfo<T>() =>
         (JsonTypeInfo<HistoryRecordEnvelope<T>>)JsonContext.GetTypeInfo(typeof(HistoryRecordEnvelope<T>))!;
     private static void Require(bool condition, string message)

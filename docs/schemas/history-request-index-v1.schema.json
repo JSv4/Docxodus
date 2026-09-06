@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docxodus.dev/schemas/history/request-index/v1",
+  "title": "Immutable compressed binary request-receipt index",
+  "$comment": "Resolve shared definitions from the adjacent history-state-v2.schema.json. Runtime also enforces a 16 KiB blob limit, SHA-256/length integrity, document identity, canonical zero-padded branch prefixes, leaf key = SHA-256(UTF-8 request ID), strictly increasing child bit positions, and parent/child path agreement. Reads are bounded by 257 nodes.",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "schemaVersion", "node"],
+  "properties": {
+    "schema": { "const": "https://docxodus.dev/schemas/history/request-index/v1" },
+    "schemaVersion": { "const": 1 },
+    "node": {
+      "type": "object", "additionalProperties": false,
+      "required": ["documentId", "bit", "key", "receipt", "zero", "one"],
+      "properties": {
+        "documentId": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/id" },
+        "bit": { "type": "integer", "minimum": 0, "maximum": 256 },
+        "key": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "receipt": { "anyOf": [{ "$ref": "#/$defs/receipt" }, { "type": "null" }] },
+        "zero": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/optionalBlob" },
+        "one": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/optionalBlob" }
+      },
+      "if": { "properties": { "bit": { "const": 256 } } },
+      "then": { "properties": { "receipt": { "$ref": "#/$defs/receipt" }, "zero": { "type": "null" }, "one": { "type": "null" } } },
+      "else": { "properties": { "receipt": { "type": "null" }, "zero": { "$ref": "#/$defs/nodeRef" }, "one": { "$ref": "#/$defs/nodeRef" } } }
+    }
+  },
+  "$defs": {
+    "nodeRef": { "allOf": [{ "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/blob" }, { "properties": { "length": { "maximum": 16384 } } }] },
+    "receipt": {
+      "type": "object", "additionalProperties": false, "required": ["documentId", "request", "head"],
+      "properties": {
+        "documentId": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/id" },
+        "request": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/request" },
+        "head": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/head" }
+      }
+    }
+  }
+}

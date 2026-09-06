@@ -14,16 +14,31 @@ public sealed partial class DocxVersionHistory
     /// when target content is already current. Does not silently replace any live DocxSession.
     /// Hosts must preserve pre-reset pending work as a recoverable branch when notifying clients.
     /// </summary>
-    public async ValueTask<DocxHistoryView> RestoreVersionAsync(string documentId, HistoryHead expected,
-        HistoryBlobReference targetVersion, DocxVersionMetadata metadata, CancellationToken cancellationToken = default)
+    public ValueTask<DocxHistoryView> RestoreVersionAsync(string documentId, HistoryHead expected,
+        HistoryBlobReference targetVersion, DocxVersionMetadata metadata, CancellationToken cancellationToken = default) =>
+        RestoreVersionCoreAsync(documentId, expected, targetVersion, metadata, null, cancellationToken);
+
+    /// <summary>Restore with a durable caller-owned retry identity, without repeating the reset.</summary>
+    public ValueTask<DocxHistoryView> RestoreVersionAsync(string documentId, string requestId, HistoryHead expected,
+        HistoryBlobReference targetVersion, DocxVersionMetadata metadata, CancellationToken cancellationToken = default) =>
+        RestoreVersionCoreAsync(documentId, expected, targetVersion, metadata,
+            requestId ?? throw new ArgumentNullException(nameof(requestId)), cancellationToken);
+
+    private async ValueTask<DocxHistoryView> RestoreVersionCoreAsync(string documentId, HistoryHead expected,
+        HistoryBlobReference targetVersion, DocxVersionMetadata metadata, string? requestId, CancellationToken cancellationToken)
     {
         HistoryHeadCodec.Key(documentId);
         ArgumentNullException.ThrowIfNull(expected);
         ArgumentNullException.ThrowIfNull(targetVersion);
         cancellationToken.ThrowIfCancellationRequested();
         var capturedMetadata = HistoryRecordStore.PrepareMetadata(metadata);
+        var request = requestId is null ? null : VersionRequest("restore", documentId, expected,
+            capturedMetadata, requestId, null, targetVersion);
         var nonce = Guid.NewGuid();
-        var current = await ReadExpectedAsync(documentId, expected, cancellationToken).ConfigureAwait(false);
+        var current = await ReadAsync(documentId, cancellationToken).ConfigureAwait(false);
+        var repeated = await FindRequestAsync(documentId, current, request, cancellationToken).ConfigureAwait(false);
+        if (repeated is not null) return repeated;
+        if (current?.Head != expected) throw Stale();
         var target = await GetVersionAsync(documentId, targetVersion, cancellationToken).ConfigureAwait(false);
         // Verify exact target bytes and package identity before publishing a reset. Reuse its
         // immutable snapshot reference; restore never reserializes or rewrites the target blob.
@@ -46,6 +61,7 @@ public sealed partial class DocxVersionHistory
         {
             Commit = commitId, Epoch = epoch, Sequence = sequence, Snapshot = target.Record.Snapshot, Version = versionId,
         };
-        return await PublishAsync(documentId, expected, state, new DocxStoredVersion(versionId, version), cancellationToken).ConfigureAwait(false);
+        return await PublishAsync(documentId, expected, state, new DocxStoredVersion(versionId, version),
+            cancellationToken, request, current.State.Requests).ConfigureAwait(false);
     }
 }
