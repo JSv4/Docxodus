@@ -76,6 +76,7 @@ public sealed class HistoryArchiveGraphTests
             new DocxHistoryArchiveLimits { MaxValidationBytes = 1 },
             new DocxHistoryArchiveLimits { MaxExpandedBytes = 1 },
             new DocxHistoryArchiveLimits { MaxBlobBytes = 1 },
+            new DocxHistoryArchiveLimits { MaxSnapshotBytes = 1 },
             new DocxHistoryArchiveLimits { MaxRecordBytes = 1 },
             new DocxHistoryArchiveLimits { MaxManifestBytes = 1 },
         })

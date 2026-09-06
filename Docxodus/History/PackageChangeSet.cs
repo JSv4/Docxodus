@@ -29,6 +29,9 @@ public sealed class PackageChangeException : Exception
     internal PackageChangeException(PackageChangeError code, string message) : base(message) =>
         Code = code;
 
+    internal PackageChangeException(PackageChangeError code, string message, Exception innerException)
+        : base(message, innerException) => Code = code;
+
     public PackageChangeError Code { get; }
 }
 

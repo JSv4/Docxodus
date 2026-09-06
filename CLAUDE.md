@@ -37,7 +37,7 @@ file that could fire them.
 **`Docxodus.csproj` and `Docxodus.Tests.csproj` both override it to `false`**, so the core
 library and the test project do *not* fail on warnings. The CLI tools, MCP server,
 python-host and WASM project do inherit it. Current baseline: the library builds with
-**177 warnings**, the test project with **791** (mostly StyleCop `SA1633`/`SA1636` file
+**184 warnings**, the test project with **800** (mostly StyleCop `SA1633`/`SA1636` file
 headers and `SA1206` modifier/using order). Don't add to either baseline. Measure with
 `--no-incremental` — a warm incremental build reports zero because nothing recompiles.
 
@@ -52,7 +52,7 @@ rather than assuming one apiece.
 
 Update the two numbers here in the same commit rather than leaving them stale. They had
 drifted before (113/707 described a tree ~30 warnings behind); re-measure, don't extrapolate.
-The three portable-history foundation files use John Scrudato IV's copyright; the
+The portable-history files use John Scrudato IV's copyright; the
 still-Microsoft-only StyleCop configuration reports `SA1636` for those correct headers.
 
 ## Repository Layout
