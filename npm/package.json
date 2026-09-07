@@ -75,6 +75,7 @@
     "test:generated-pdf-parity": "npm run build && npm --prefix ../npm-export run build && npm run test:generated-pdf-parity:prebuilt",
     "test:generated-pdf-parity:prebuilt": "npm run pretest && DOCXODUS_VISUAL_PARITY=1 DOCXODUS_GENERATED_PDF_PARITY=1 playwright test generated-pdf-parity.spec.ts --project=chromium --reporter=line",
     "capture:doom-ascii": "node scripts/capture-doom-ascii.mjs",
+    "benchmark:doom-ascii": "node scripts/benchmark-doom-ascii.mjs",
     "capture:word-reference": "mkdir -p dist/wasm && playwright test word-reference-capture.spec.ts --project=chromium --reporter=line",
     "test:ui": "playwright test --ui",
     "demo": "npm run build && npm run demo:serve",

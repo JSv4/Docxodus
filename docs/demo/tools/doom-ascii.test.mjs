@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { asciiFramebuffer, ASCII_COLS, ASCII_ROWS, ASCII_METRICS } from '../doom-ascii.js';
+import { asciiFramebuffer, ASCII_COLS, ASCII_ROWS, ASCII_METRICS, ASCII_PALETTE } from '../doom-ascii.js';
 import { frameXml } from '../ascii-scenes.js';
 import { rowsFromXml } from '../ascii-arcade.js';
 
@@ -82,5 +82,26 @@ test('small red strokes retain their saturation against an orange backdrop', () 
     const ink = grid.colors[y][x + 1];
     const red = parseInt(ink.slice(0, 2), 16), green = parseInt(ink.slice(2, 4), 16);
     assert.ok(green / red < .25, 'the run budget must not turn a red stroke orange');
+  }
+});
+
+test('linear ink grouping respects the color bound for every pixel in a busy frame', () => {
+  const rgb = ASCII_PALETTE.map(hex => [0, 2, 4].map(i => parseInt(hex.slice(i, i + 2), 16)));
+  const fb = new Uint8Array(320 * 200 * 4);
+  const wanted = [];
+  let seed = 12345;
+  for (let i = 0; i < 320 * 200; i++) {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    const ink = seed % rgb.length;
+    wanted.push(ink);
+    const [r, g, b] = rgb[ink];
+    fb.set([b, g, r, 255], i * 4);
+  }
+  const grid = asciiFramebuffer(fb);
+  for (let i = 0; i < wanted.length; i++) {
+    const a = rgb[wanted[i]], b = rgb[ASCII_PALETTE.indexOf(grid.colors[Math.floor(i / 320)][i % 320 + 1])];
+    const error = .3 * (a[0] - b[0]) ** 2 + .59 * (a[1] - b[1]) ** 2 + .11 * (a[2] - b[2]) ** 2;
+    assert.ok(error <= 60 ** 2, `pixel ${i}: color error ${error}`);
+    assert.notEqual(grid.chars[Math.floor(i / 320)][i % 320 + 1], ' ');
   }
 });
