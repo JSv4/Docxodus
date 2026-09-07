@@ -94,7 +94,12 @@ class HistoryPanel implements HistoryControls {
       this.status.textContent = 'Checkpoint saved. Your draft remains open.';
     });
     this.button('restore', 'Restore selected', async () => {
-      const view = await options.checkpoints!.restore(this.selected().id, this.metadata());
+      const version = this.selected();
+      if (!doc.defaultView?.confirm(`Restore ${versionTitle(version)} as a new checkpoint?\n\nYour current draft and all later versions will be kept.`)) {
+        this.status.textContent = 'Restore canceled. Your draft and history are unchanged.';
+        return;
+      }
+      const view = await options.checkpoints!.restore(version.id, this.metadata());
       await options.onCheckpoint?.(view, 'restore');
       await this.load(false);
       this.status.textContent = 'Restored as a new checkpoint. Your draft and later versions are kept.';

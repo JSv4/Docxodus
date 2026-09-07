@@ -55,6 +55,11 @@ public sealed class DocxHistoryArchiveArtifactTests
             Assert.Equal(committed, comparison.ToRedline().DocumentByteArray);
             using (var redline = new DocxSession(committed))
                 Assert.NotEmpty(redline.ListRevisions());
+            var compared = new WmlDocument(index.ComparisonFile, committed);
+            Assert.Empty(DocxDiff.GetRevisions(new WmlDocument("before.docx", await archive.ExportDocxAsync(before)),
+                RevisionProcessor.RejectRevisions(compared)));
+            Assert.Empty(DocxDiff.GetRevisions(new WmlDocument("after.docx", await archive.ExportDocxAsync(after)),
+                RevisionProcessor.AcceptRevisions(compared)));
             if (index.Conflict is { } conflict)
             {
                 Assert.Equal("conflict", (await archive.GetOperationAsync(conflict)).Record.Status);
