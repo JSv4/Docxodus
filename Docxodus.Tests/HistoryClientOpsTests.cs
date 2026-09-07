@@ -85,7 +85,8 @@ public class HistoryClientOpsTests
         using var result = System.Text.Json.JsonDocument.Parse(compared);
         Assert.True(result.RootElement.GetProperty("success").GetBoolean());
         var bytes = result.RootElement.GetProperty("bytes").GetBytesFromBase64();
-        using var session = new DocxSession(bytes); Assert.NotNull(session);
+        using var session = new DocxSession(bytes);
+        Assert.NotEmpty(session.ListRevisions()); // A redline, not merely a well-formed package.
         using var zip = new ZipArchive(new MemoryStream(bytes));
         using var xml = zip.GetEntry("word/document.xml")!.Open();
         Assert.Contains(System.Xml.Linq.XDocument.Load(xml).Descendants(), e => e.Name == W.ins || e.Name == W.del);
@@ -106,7 +107,10 @@ public class HistoryClientOpsTests
             Assert.Equal("ReadOnly", (await Invoke(reader, request with { Operation = op }, bytes)).ErrorCode);
         Assert.Equal("ForeignDocument", (await Invoke(reader, request with { DocumentId = "foreign" })).ErrorCode);
         var exported = await Invoke(reader, request with { Operation = "exportArchive" });
-        Assert.Equal(info, exported.Archive); Assert.NotNull(exported.Bytes);
+        Assert.Equal(info, exported.Archive);
+        // A readonly binding's export is a real archive: reopen it and require the same identity.
+        using (var reexported = await HistoryClientOps.OpenArchiveAsync(exported.Bytes!))
+            Assert.Equal(info, reexported.ArchiveInfo);
         using var target = new HistoryFaultHarness(); using var writable = new HistoryClientOps(target, target);
         var import = request with { Operation = "importArchive" };
         Assert.Equal("ForeignDocument", (await Invoke(writable, import with { DocumentId = "wrong-scope" }, bytes)).ErrorCode);
