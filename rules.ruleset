@@ -92,7 +92,13 @@
     <Rule Id="SA1633" Action="Warning" />
     <Rule Id="SA1634" Action="Warning" />
     <Rule Id="SA1635" Action="Warning" />
-    <Rule Id="SA1636" Action="Warning" />
+    <!-- SA1636 compares every file header against stylecop.json's single companyName. This
+         repository has two legitimate copyright holders - Microsoft for the ~41 files inherited
+         from OpenXmlPowerTools, John Scrudato IV for everything written after the fork - so the
+         rule flags one group or the other no matter which name is configured. Attribution is
+         enforced per file by Docxodus.Tests/SourceFileCopyrightTests.cs instead, which can tell
+         the two groups apart. SA1633/SA1634/SA1635/SA1637 still require a well-formed header. -->
+    <Rule Id="SA1636" Action="None" />
     <Rule Id="SA1637" Action="Warning" />
     <Rule Id="SA1649" Action="None" />
   </Rules>

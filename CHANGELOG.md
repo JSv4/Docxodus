@@ -33,8 +33,12 @@ All notable changes to this project will be documented in this file.
   derivatives of an original file (`DocumentBuilder.cs`, `PtOpenXmlUtil.cs`, `WmlToHtmlConverter.cs`,
   and the like, plus their like-named tests) keep the Microsoft notice, matching the repository
   `LICENSE`, which has always credited both; everything else now reads
-  `// Copyright (c) John Scrudato IV. All rights reserved.` CLAUDE.md documents the rule and the
-  keep-list so it isn't reintroduced.
+  `// Copyright (c) John Scrudato IV. All rights reserved.` `SourceFileCopyrightTests` asserts the
+  keep-list in both directions, so neither reintroducing the Microsoft header on new source nor
+  stripping it off inherited source can pass CI. StyleCop's `SA1636` — which compared every header
+  against a single configured company name, and so could only ever be right about one of this
+  repository's two copyright holders — is switched off in its favour, taking the build's warning
+  baseline from 187/804 down to 175/671.
 
 - The editor's find bar no longer loses the keyboard the moment a query matches. It re-scanned on
   every keystroke and then *selected* the first hit, and selecting inside a contenteditable block
