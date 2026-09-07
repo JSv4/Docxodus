@@ -8474,6 +8474,7 @@ public sealed partial class DocxSession : IDisposable
     internal int CommentsVersion;
     internal MemoryStream? RenderShellStream;
     internal long RenderShellSignature;
+    internal readonly Dictionary<(Internal.HtmlConversionOptions Options, string Xml), XElement> DenseTextRenderTemplates = new();
 
     /// <summary>Release the cached block-render shell (rebuild happens lazily on next render).</summary>
     internal void DisposeRenderShell()
@@ -8481,6 +8482,7 @@ public sealed partial class DocxSession : IDisposable
         DiscardPackage(RenderShellDoc, RenderShellStream);
         RenderShellDoc = null;
         RenderShellStream = null;
+        DenseTextRenderTemplates.Clear();
     }
 
     /// <summary>

@@ -50,9 +50,9 @@ calibrated in packed rows at the actual document font size so dark outlines
 retain their contrast. The selected glyphs fit within a row and have similar
 measured coverage at DPR 1 and 2. Taller glyphs previously bled into adjacent
 rows, mixing foreground and background colors; screenshot regressions now
-check that neighboring saturated rows stay separate. Adjacent color runs are merged toward a 700-segment
-target, with a per-cell color-error bound: complex pictures can exceed the
-target rather than lose contrasting strokes. There are no per-cell backgrounds,
+check that neighboring saturated rows stay separate in Chromium. A linear scan
+extends each color run to the longest prefix that satisfies the existing
+per-cell color-error bound, preserving small contrasting strokes. There are no per-cell backgrounds,
 block/Braille glyphs, or separately reconstructed HUD labels. Each row also has a printable
 `|` guard for safe paragraph editing: 321×200 = **64,200 document characters**,
 with 199 line breaks, 2pt bold monospaced text, 0.2pt character spacing, and exact
@@ -75,7 +75,10 @@ composition; it does not hide the title art or detect menu states.
 The library improvements are independent of the cartridge: repeated-format,
 fixed-line ASCII paragraphs can resolve each distinct format once during an
 incremental render, then expand every original character and break. Unsupported
-structures use the ordinary converter. Batched random anchor IDs and indexed
+structures use the ordinary converter. Unchanged dense formatting templates are
+cached across frames, and ASCII frames omit unused complex-script font properties.
+The [performance measurements and benchmark instructions](../architecture/doom-ascii-performance.md)
+record throughput, full-resolution checks, and browser limitations. Batched random anchor IDs and indexed
 anchor lookup reduce work for any large XML replacement; negative Word character
 spacing now renders correctly. The document's authoritative OOXML is never
 abbreviated. Native tests compare incremental output with a full saved-document

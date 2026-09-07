@@ -1,5 +1,36 @@
 import { test, expect, Page } from '@playwright/test';
 
+test('ASCII uses identical rendered fonts when unused complex-script properties are omitted', async ({ page }) => {
+  await page.goto('/demo-arcade.html?engine=./embed.bundle.js&intro=0&sound=0&cart=platformer');
+  await page.waitForFunction(() => (window as any).__arcade?.frames() > 0);
+  await page.evaluate(() => (window as any).__arcade.pause());
+  const result = await page.evaluate(async () => {
+    const a = (window as any).__arcade;
+    const { asciiFramebuffer, ASCII_METRICS } = await import(/* @vite-ignore */ '/doom-ascii.js' as string);
+    const { frameXml } = await import(/* @vite-ignore */ '/ascii-scenes.js' as string);
+    const fb = new Uint8Array(320 * 200 * 4);
+    for (let i = 0; i < 320 * 200; i++) {
+      const band = Math.floor((i % 320) / 64) % 3;
+      fb.set(band === 0 ? [192, 192, 192, 255] : band === 1 ? [0, 0, 192, 255]
+        : [192, 0, 0, 255], i * 4);
+    }
+    const grid = asciiFramebuffer(fb), current = a.session.raw.getXml(a.canvasAnchor());
+    const open = current.slice(0, current.indexOf('>') + 1);
+    const render = (asciiOnly: boolean) => {
+      const { xml } = frameXml(open, grid, '000000', { ...ASCII_METRICS, asciiOnly });
+      const changed = a.session.raw.replaceXml(a.canvasAnchor(), xml);
+      if (!changed.success) throw new Error(JSON.stringify(changed));
+      a.editor.refresh();
+      const el = a.canvasElement();
+      return { xmlLength: xml.length, style: el.getAttribute('style'), html: el.innerHTML };
+    };
+    return { before: render(false), after: render(true) };
+  });
+  expect(result.after.xmlLength).toBeLessThan(result.before.xmlLength);
+  expect(result.after.style).toBe(result.before.style);
+  expect(result.after.html).toBe(result.before.html);
+});
+
 for (const deviceScaleFactor of [1, 2]) test.describe(`ASCII projection contrast at DPR ${deviceScaleFactor}`, () => {
   test.use({ viewport: { width: 1100, height: 1050 }, deviceScaleFactor });
   test('keeps dark tones proportional and saturated blue free of pale ink', async ({ page }) => {
