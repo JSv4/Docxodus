@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { test, expect } from './history-controls-harness.js';
 import type { HistoryControls } from '../src/history-controls.js';
+import type { HistoryCheckpointRequest } from '../src/history-checkpoints.js';
 
 declare global {
   interface Window {
@@ -234,4 +235,61 @@ test('keyboard version selection and a local-time lookup export the intended agr
   await expect.poll(() => page.evaluate(() => window.historyPreview?.title)).toBe('Version at selected time');
   expect(Buffer.from(await page.evaluate(() => window.historyPreview!.bytes))).toEqual(Buffer.from(original, 'base64'));
   await page.evaluate(() => window.disposeHistory());
+});
+
+test('mounting refuses an out-of-range page size and controls bound to another document', async ({ page }) => {
+  const result = await page.evaluate(async () => {
+    const api = window.historyApi;
+    const client = api.openDocxHistory(api.createMemoryHistoryStorage());
+    const reader = client.document('agreement');
+    const elsewhere = client.document('a-different-agreement');
+    let stored: HistoryCheckpointRequest | null = null;
+    const checkpoints = await api.HistoryCheckpoints.open(elsewhere, {
+      read: async () => stored,
+      put: async (request: HistoryCheckpointRequest) => (stored ??= request),
+      remove: async (requestId: string) => { if (stored?.id === requestId) stored = null; },
+    });
+    const container = document.querySelector<HTMLElement>('#controls')!;
+    const sizes: string[] = [];
+    for (const pageSize of [0, 101, 2.5]) {
+      try { api.mountHistoryControls(container, { reader, preview() {}, pageSize }); sizes.push('mounted'); }
+      catch (error) { sizes.push((error as Error).name); }
+    }
+    let mismatch = '';
+    try { api.mountHistoryControls(container, { reader, checkpoints, preview() {} }); }
+    catch (error) { mismatch = (error as Error).message; }
+    client.close();
+    return { sizes, mismatch, mounted: container.childElementCount };
+  });
+  expect(result.sizes).toEqual(['RangeError', 'RangeError', 'RangeError']);
+  expect(result.mismatch).toContain('same document');
+  // A refused mount leaves the host's container exactly as it found it.
+  expect(result.mounted).toBe(0);
+});
+
+test('history control errors stay distinct and name the failure a host can act on', async ({ page }) => {
+  const messages = await page.evaluate(() => {
+    const api = window.historyApi;
+    const of = (code: string, pending = false) =>
+      api.historyControlError(new api.DocxHistoryError(code, `raw ${code} detail`), pending);
+    return {
+      stale: of('StaleHead'), conflict: of('ImportConflict'), unsupported: of('InitializationUnsupported'),
+      resource: of('ResourceLimit'),
+      // Codes with no dedicated explanation still reach the host: pending draws attention to the
+      // unconfirmed checkpoint, everything else surfaces the underlying message.
+      pending: of('Timeout', true), unrecognised: of('Timeout'),
+      plain: api.historyControlError(new Error('network unavailable')),
+      thrownValue: api.historyControlError('not an error object'),
+    };
+  });
+  expect(messages.stale).toContain('Your draft is safe');
+  expect(messages.conflict).toContain('read-only');
+  expect(messages.unsupported).toContain('import history');
+  expect(messages.resource).toContain('64 MiB');
+  expect(messages.pending).toContain('Retry checkpoint');
+  expect(messages.unrecognised).toContain('raw Timeout detail');
+  expect(messages.plain).toContain('network unavailable');
+  expect(messages.thrownValue).toContain('Please try again.');
+  // Nothing collapses into a single unhelpful sentence.
+  expect(new Set(Object.values(messages)).size).toBe(Object.values(messages).length);
 });
