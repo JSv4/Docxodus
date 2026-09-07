@@ -48,7 +48,7 @@ returns `Canceled`; a successful atomic head publication is not later reported c
 Timestamps are recorded metadata, not ordering authority: sequence orders accepted content
 changes. `resolveTime` finds a content sequence; `materialize` or `replay` returns its DOCX
 for the existing rendering/session APIs. Opening a historical view never changes a shared
-head. Comparison composes two exact exports with the existing DocxDiff client API.
+head. `compareVersions` compares exact snapshots using the existing product revision policy.
 
 ## Durable retry identities
 
@@ -105,7 +105,8 @@ Methods include `read`, `readChangesSince`, `readOperationsSince`, `getOperation
 `compareVersions`, `createVersion`, `listVersions`, `getVersion`, `exportVersion`, `materialize`,
 `replay`, `resolveSequenceAtTime`, `restoreVersion`, `exportHistoryArchive`, `importHistoryArchive`,
 and `document(id)`. `openDocxHistoryArchive(bytes)` returns a standalone readonly scoped reader.
-For custom comparison settings, export both versions into the existing `docxDiffCompareProducts` API.
+For custom comparison settings, export both versions into `compareDocuments`; use the
+lower-level `docxDiffCompareProducts` only when explicitly choosing its raw revision policy.
 The package-boundary WASM bridge uses
 base64 for asynchronously read/exported bytes, incurring temporary allocation overhead;
 it is not a low-latency keystroke path.
@@ -126,7 +127,7 @@ with open_history(private_app_directory) as history:
 
 `open_history_archive` needs no root/store. `history.document(id)` borrows its client's
 lifetime. Scoped checkpoint/restore methods require durable IDs; legacy client signatures
-remain unchanged. Compare two `export_docx(id)` results with `docx_diff_compare_products`.
+remain unchanged. `doc.compare_versions(before_id, after_id)` returns a redlined DOCX.
 
 ```python
 from docx_scalpel import open_history, DocxVersionMetadata, convert_docx_to_html
@@ -138,13 +139,13 @@ with open_history('/host-owned/matter-history') as history:
     html = convert_docx_to_html(history.materialize('contract', sequence))
 ```
 
-The Python client exposes `read`, `read_changes_since`, `create_version`, `list_versions`, `get_version`,
-`export_version`, `materialize`, `replay`, `resolve_sequence_at_time`, and `restore_version`.
+The Python client exposes the npm methods above in snake_case, including `document(id)`,
+`compare_versions`, `read_operations_since`, `get_operation`, and `export_operation_proposal`.
 Frozen value types use snake_case attributes and arbitrary-precision Python integers;
 Int64 bounds are enforced before positions are encoded as decimal strings. Timestamp strings
 retain their exact recorded precision. `DocxHistoryError.code` carries core domain errors;
-host/process failures remain `DocxodusTransportError`. Compare exact exports with the existing
-`docx_diff_compare_products` API, or open them with `open_session` for headless editing.
+host/process failures remain `DocxodusTransportError`. Open exact exports with `open_session`
+for headless editing; comparison does not change either the stored snapshots or an open editor.
 
 The existing local stdio host owns the C# adapters. An explicit root creates/uses its `blobs`
 and `heads` directories, subject to the [filesystem adapter contract](history.md); multiple

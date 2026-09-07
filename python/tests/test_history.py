@@ -53,6 +53,9 @@ def test_real_portable_files_drive_readonly_and_writable_controls_after_process_
     shutdown_host()
     with open_history(tmp_path / "store") as history:
         doc = history.document(info.document_id)
+        with pytest.raises(AttributeError):
+            doc.document_id = "other"
+        assert doc.document_id == info.document_id
         assert doc.read().head == info.head
         if name == "agreement":
             retry = doc.create_version(None, expected, first.record.metadata, request_id="initial")

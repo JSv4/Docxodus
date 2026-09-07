@@ -13,6 +13,37 @@ namespace Docxodus.Tests;
 public class HistoryClientOpsTests
 {
     [Fact]
+    public async Task NativeAndClientProductComparisonMatchOnRevisionBearingSnapshotsWithoutChangingRawApi()
+    {
+        var original = DocxVersionRequestTests.Document("The original clause.");
+        var revised = DocxVersionRequestTests.Document("The accepted revised clause.");
+        var tracked = DocxCompare.Compare(new WmlDocument("original.docx", original), new WmlDocument("revised.docx", revised),
+            new DocxDiffSettings { AuthorForRevisions = "Earlier counsel", DateTimeForRevisions = "2020-01-01T00:00:00Z" }).DocumentByteArray;
+        var final = DocxVersionRequestTests.Document("The accepted final clause.");
+        using (var session = new DocxSession(tracked)) Assert.NotEmpty(session.ListRevisions());
+        var blobs = new MemoryHistoryBlobStore(); var heads = new MemoryHistoryHeadStore();
+        var history = new DocxVersionHistory(blobs, heads); var doc = history.Document("reviewed");
+        var first = await doc.CreateVersionAsync("first", null, tracked, HistoryArchiveFixture.Metadata("Tracked input"));
+        var second = await doc.CreateVersionAsync("second", first.Head, final, HistoryArchiveFixture.Metadata("Final"));
+        using var client = new HistoryClientOps(blobs, heads);
+        foreach (var (afterId, afterBytes) in new[] { (second.Version.Id, final), (first.Version.Id, tracked) })
+        {
+            var settings = new DocxDiffSettings();
+            var native = await doc.CompareVersionsToDocxAsync(first.Version.Id, afterId, settings);
+            Assert.False(settings.PreAcceptInputRevisions); // Product policy never mutates caller settings.
+            var expected = DocxCompare.Compare(new WmlDocument("before.docx", tracked), new WmlDocument("after.docx", afterBytes));
+            Assert.Equal(expected.DocumentByteArray, native);
+            var reply = HistoryClientJson.Read<HistoryClientResult>(await client.InvokeAsync(HistoryClientJson.Write(
+                new HistoryClientRequest { SchemaVersion = 1, DocumentId = doc.DocumentId, Operation = "compare",
+                    BeforeVersionId = first.Version.Id, AfterVersionId = afterId })));
+            Assert.Equal(native, reply.Bytes);
+        }
+        // Existing rich raw comparison remains available with its original signature/defaults.
+        DocxDiffComparison raw = await doc.CompareVersionsAsync(first.Version.Id, second.Version.Id);
+        Assert.NotEmpty(raw.GetRevisions());
+    }
+
+    [Fact]
     public async Task CompressedOversizedEntryIsRejectedBeforeInflationByTheByteClientProfile()
     {
         using var output = new MemoryStream();

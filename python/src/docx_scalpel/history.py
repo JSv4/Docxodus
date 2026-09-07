@@ -432,7 +432,11 @@ class DocxHistoryReader:
 
     def __init__(self, client: DocxHistoryClient, document_id: str) -> None:
         self._client = client
-        self.document_id = document_id
+        self._document_id = document_id
+
+    @property
+    def document_id(self) -> str:
+        return self._document_id
 
     def read(self) -> DocxHistoryView | None:
         return self._client.read(self.document_id)

@@ -258,8 +258,10 @@ type HistoryCall = (operation: string, fields?: object, bytes?: Uint8Array) => P
 
 /** Document-scoped reads. No method publishes or changes an editor. */
 export class DocxHistoryReader {
+  readonly #documentId: string;
+  get documentId(): string { return this.#documentId; }
   /** @internal Obtain through client.document() or openDocxHistoryArchive(). */
-  constructor(public readonly documentId: string, protected readonly call: HistoryCall) {}
+  constructor(documentId: string, protected readonly call: HistoryCall) { this.#documentId = documentId; }
   async read(): Promise<DocxHistoryView | null> { return (await this.call('read')).view; }
   async listVersions(cursor: HistoryBlobReference | null = null, limit = 25): Promise<DocxVersionPage> {
     return (await this.call('list', { versionId: cursor, limit })).page!;

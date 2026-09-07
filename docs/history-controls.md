@@ -4,7 +4,7 @@ Users handle documents, not storage directories. Your app owns persistence, requ
 loading indicators, download dialogs and the editor; Docxodus supplies the history calls.
 
 ```ts
-import { initialize, openDocxHistory, openDocxHistoryArchive, compareDocuments } from 'docxodus';
+import { initialize, openDocxHistory, openDocxHistoryArchive } from 'docxodus';
 await initialize('/wasm/');
 const history = openDocxHistory(storage); // Your durable HistoryStorage adapter.
 const doc = history.document(stableDocumentId);
@@ -31,8 +31,7 @@ Restore appends history; it never modifies an open editor or deletes later versi
 Compare any pair without storing pairwise diffs:
 
 ```ts
-const [before, after] = await Promise.all([doc.exportDocx(beforeId), doc.exportDocx(afterId)]);
-const redline = await compareDocuments(before, after); // DOCX bytes; existing revision policy.
+const redline = await doc.compareVersions(beforeId, afterId); // DOCX bytes; existing revision policy.
 ```
 
 For recorded collaboration: `readOperationsSince(headOrNull)` returns decisions in

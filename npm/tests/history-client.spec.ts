@@ -216,6 +216,8 @@ test('real history file opens readonly, drives controls, imports and continues w
     try { await history.importHistoryArchive(decode(encoded)); } catch { lost = true; }
     const imported = await history.importHistoryArchive(decode(encoded));
     const doc = history.document(imported.archive.documentId);
+    // page.evaluate need not execute in strict mode: assert refusal, not a thrown assignment.
+    const immutableId = !Reflect.set(doc, 'documentId', 'other') && doc.documentId === imported.archive.documentId;
     const retry = await doc.createVersion(null, before, first.record.metadata, 'initial');
     const saved = await doc.createVersion(imported.view.head, before,
       { author: 'frontend', createdAt: '2026-09-01T12:00:00Z', label: 'Browser checkpoint' }, 'browser-checkpoint');
@@ -228,12 +230,13 @@ test('real history file opens readonly, drives controls, imports and continues w
     const current = await standalone.read(); const latest = await standalone.exportDocx(); standalone.close();
     const parsed = api.openDocxSession(latest); parsed.close();
     return { readOnly, readonlyShape, closed, originalHead, importedHead: imported.view.head,
-      alreadyPresent: imported.alreadyPresent, lost, retryRevision: retry.head.revision, savedRevision: saved.head.revision,
+      alreadyPresent: imported.alreadyPresent, lost, immutableId, retryRevision: retry.head.revision, savedRevision: saved.head.revision,
       restoredHead: restored.head, currentHead: current.head, conflict, count: rest.versions.length + 1,
       exact: encode(before) === expected, redline: encode(redline), archive: encode(portable), latest: encode(latest) };
   }, { encoded: input.toString('base64'), expected: expected.toString('base64') });
   expect(result.readOnly).toBe('ReadOnly'); expect(result.readonlyShape).toBe(true); expect(result.closed).toBe('Closed');
   expect(result.importedHead).toEqual(result.originalHead); expect(result.alreadyPresent).toBe(true); expect(result.lost).toBe(true);
+  expect(result.immutableId).toBe(true);
   expect(result.retryRevision).toBe('1'); expect(result.savedRevision).toBe('5'); expect(result.currentHead).toEqual(result.restoredHead);
   expect(result.conflict).toBe('ImportConflict'); expect(result.exact).toBe(true); expect(result.count).toBe(4);
   await writeFile(testInfo.outputPath('browser-continued.docxhistory'), Buffer.from(result.archive, 'base64'));

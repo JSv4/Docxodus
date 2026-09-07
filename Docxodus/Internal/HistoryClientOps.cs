@@ -115,12 +115,8 @@ public sealed class HistoryClientOps : IDisposable
 
     private async Task<HistoryClientResult> CompareAsync(string id, HistoryBlobReference before, HistoryBlobReference after, CancellationToken ct)
     {
-        var left = await _history.ExportVersionAsync(id, before, ct).ConfigureAwait(false);
-        var right = await _history.ExportVersionAsync(id, after, ct).ConfigureAwait(false);
-        ct.ThrowIfCancellationRequested();
-        var redline = DocxCompare.Compare(new WmlDocument("before.docx", left), new WmlDocument("after.docx", right));
-        ct.ThrowIfCancellationRequested();
-        return new HistoryClientResult { Bytes = redline.DocumentByteArray };
+        return new HistoryClientResult { Bytes = await _history.Document(id).CompareVersionsToDocxAsync(before, after,
+            cancellationToken: ct).ConfigureAwait(false) };
     }
 
     internal static bool IsClientError(Exception error) => error is DocxHistoryException or PackageChangeException or JsonException

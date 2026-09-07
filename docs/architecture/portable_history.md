@@ -121,6 +121,12 @@ streaming to native hosts. Existing browser adapters remain valid; only adapters
 critical section with ordinary CAS. WASM verifies length/hash before passing copied blobs to
 the host callback. No storage callbacks are installed for readonly archive opening.
 
+Client `compareVersions` delegates native `CompareVersionsToDocxAsync` and the existing
+DocxCompare accepted-input product policy. The already-shipped native `CompareVersionsAsync`
+still exposes the richer raw DocxDiff comparison with caller-controlled settings; its
+signature and defaults do not change. Recorded operation reads expose decisions, resolutions
+and exact proposals on every client surface, without adding submission or reconciliation.
+
 MCP uses its existing session capability and canonical location. The embedded archive ID
 must match before destination reads/writes, so moving a history to a differently named MCP
 document is not supported. Import does not change an open session or source file. Shared
