@@ -125,15 +125,28 @@ and writes a gzipped copy into the Playwright webroot. The specs then pass
 depended on a CDN being up, and on a sibling repository being reachable, would
 fail for reasons that have nothing to do with the change under test.
 
-### Why not the shareware `doom1.wad`
+### Original DOOM showcase (opt-in shareware data)
 
-doomgenericjs carries id Software's shareware `doom1.wad` in its tree, so it is
-already CDN-addressable and is a third the size. It is not used here. id's
-shareware terms cover redistributing the complete, unmodified shareware
-*package*; building a product's default experience on an IWAD lifted out of it
-is not that, and the data is copyrighted commercial game content either way.
-Freedoom exists precisely so a project can ship a playable Doom without that
-question.
+The committed `docs/images/arcade-doom-ascii-*` screenshots, GIF, MP4 and saved
+text-frame document depict **original DOOM v1.9 shareware**, using the original
+`DOOM1.WAD` extracted locally from the complete Doom95 shareware archive.
+The WAD and engine binaries are not committed or included in the npm package.
+The game's artwork remains id Software's copyrighted content; the captures do
+not change its license. Freedoom remains the public page's default IWAD.
+
+| | |
+|---|---|
+| Source archive | `https://www.gamers.org/pub/idgames/idstuff/doom/win95/doom95.zip` |
+| Member | `DOOM1.WAD` |
+| Size (uncompressed) | 4,196,020 bytes |
+| SHA-256 (uncompressed) | `1d7d43be501e67d927e415e0b8f3e29c3bf33075e859721816f652a526cac771` |
+| Local cache | `npm/dist/wasm/vendor/doom1.wad.gz` |
+| Fetch command | `node npm/scripts/fetch-doom-iwad.mjs --shareware` |
+
+The opt-in fetcher downloads the complete upstream archive, verifies the
+extracted IWAD digest, and makes a same-origin copy for local play and recording.
+It does not replace the default Freedoom cache. The capture script verifies
+both the original IWAD and any local engine mirror before recording.
 
 Nothing in the code prefers one IWAD over the other. `doomCart({ wadUrl })`
 takes an IWAD URL and `arcade.html?wad=…` passes one through, so anyone holding

@@ -1,0 +1,24 @@
+{
+  "engineTitle": "DOOM Shareware",
+  "rendering": "ascii",
+  "textCharacters": 64200,
+  "images": 0,
+  "incremental": true,
+  "source": "Original DOOM v1.9 shareware",
+  "engineSha256": "efd7c34714e3753a84cf6873f2c2ae0e1a41bde1f10aaa2b0a95cb6935e8cce9",
+  "wadSha256": "1d7d43be501e67d927e415e0b8f3e29c3bf33075e859721816f652a526cac771",
+  "viewport": {
+    "width": 1100,
+    "height": 1050
+  },
+  "gif": {
+    "width": 880,
+    "height": 840,
+    "framesPerSecond": 8,
+    "paletteColors": 256,
+    "transparentFrames": false
+  },
+  "durationSeconds": 28.340900897979736,
+  "deliveredGameplayFps": 6.147909237949936,
+  "capture": "Lossless Chromium PNG screencast of the live editor, driven by Playwright; original timestamps preserved."
+}

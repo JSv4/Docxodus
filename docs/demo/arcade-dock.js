@@ -260,6 +260,11 @@ export function mountArcadeDock(host, { anchor = 'viewport', embed = null, ids =
     el('option', { value: '0', textContent: 'unthrottled' }),
   ]);
   const stats = el('span', { className: 'dxa-stats', ...id('dockstats'), textContent: 'warming up…' });
+  const rendering = el('select', { ...id('rendering'), title: 'DOOM rendering mode', hidden: true }, [
+    el('option', { value: 'image', textContent: 'DOOM · Original' }),
+    el('option', { value: 'ascii', textContent: 'DOOM · ASCII' }),
+  ]);
+  rendering.setAttribute('aria-label', 'DOOM rendering mode');
   const hint = el('div', { className: 'dxa-hint', ...id('dockhint'), textContent: 'warming up…' });
   const embedButton = embed
     ? el('button', {
@@ -380,11 +385,11 @@ export function mountArcadeDock(host, { anchor = 'viewport', embed = null, ids =
     if (next) {
       // Everything you are not touching mid-frame goes behind "⋯"; the strip
       // keeps transport and pacing, and gains the sheet toggle.
-      sheet.append(carts, ...(embedButton ? [restart, embedButton] : [restart]), stats, hint);
+      sheet.append(carts, rendering, ...(embedButton ? [restart, embedButton] : [restart]), stats, hint);
       strip.append(playpause, pace, more);
     } else {
       setMenu(false);
-      strip.append(playpause, restart, pace, ...(embedButton ? [embedButton] : []), stats);
+      strip.append(playpause, restart, pace, rendering, ...(embedButton ? [embedButton] : []), stats);
       dock.append(carts, strip, hint); // the cabinet's original three rows
     }
   }
@@ -423,7 +428,7 @@ export function mountArcadeDock(host, { anchor = 'viewport', embed = null, ids =
     show: () => { dock.hidden = false; },
     isCompact: () => compact,
     setPad,
-    ui: { carts, playpause, restart, pace, stats, hint, pad, setPad },
+    ui: { carts, playpause, restart, pace, rendering, stats, hint, pad, setPad },
     destroy: () => {
       observer.disconnect();
       coarse.removeEventListener('change', remeasure);

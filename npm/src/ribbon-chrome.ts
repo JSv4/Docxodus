@@ -29,7 +29,7 @@
  */
 
 /** Bumped whenever RIBBON_CSS changes, so a stale injected stylesheet is replaced. */
-export const RIBBON_STYLE_VERSION = "10";
+export const RIBBON_STYLE_VERSION = "11";
 export const RIBBON_STYLE_ATTR = "data-docxodus-ribbon-styles";
 
 /** Width of the comment gutter the surface reserves beside the sheet, in px. */
@@ -471,9 +471,11 @@ export const RIBBON_CSS = `
   background: linear-gradient(to top, var(--dxr-desk), transparent);
 }
 .dxr[data-chrome] .dxr-surface { position: relative; margin: 26px auto; padding: 0 16px 96px; }
-/* The comment gutter sits to the right of the sheet; the surface reserves its width so the
-   page shifts left rather than the bubbles covering it — Word's markup area. */
-.dxr[data-chrome="full"] .dxr-surface[data-comments="on"] { padding-right: calc(var(--dxr-gutter) + 8px); }
+/* Reserve the markup area only while a visible comment or draft needs it. The gutter owns
+   its empty/hidden state, so ordinary documents stay centered without disabling comments. */
+.dxr[data-chrome="full"] .dxr-surface[data-comments="on"]:has(> .docx-comment-gutter:not([data-empty]):not([hidden])) {
+  padding-right: calc(var(--dxr-gutter) + 8px);
+}
 .dxr-surface [contenteditable="true"]:focus {
   outline: 2px solid var(--dxr-accent);
   outline-offset: 2px;

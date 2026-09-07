@@ -20,22 +20,23 @@
 // physics, monsters, doors, weapons, menus and status bar. Every lossless
 // frame becomes the media payload of one inline image in a Word paragraph.
 //
-// WHY AN INLINE IMAGE
-// -------------------
-// Character projections met the run budget only by destroying the evidence a
-// player needs: ammo, health and armor numerals. More cells restored fidelity
-// but pushed the standard converter below 10 fps. A native w:drawing is both
-// more honest and faster: `replaceImage` updates the actual package media,
-// `editor.refresh()` renders that one changed block, and Save/Undo/reopen see
-// the same frame. The browser never mounts an out-of-document game canvas.
+// TWO DOCUMENT RENDERERS
+// ----------------------
+// Original mode stores a lossless native w:drawing. ASCII mode gives every
+// source pixel a printable character, with tone-calibrated glyphs and colored
+// Word runs. Both project the same framebuffer, without advancing the engine
+// when the player switches modes. Save/Undo/reopen see the displayed frame.
+// The browser never mounts an out-of-document game canvas.
 // At 451 × 338.25 points the original 320×200 image is corrected to Doom's 4:3
 // display aspect; the 11-pixel HUD digits render about 25 CSS pixels tall.
 // The four controls remain separate 18pt Word paragraphs above the image.
 // ═══════════════════════════════════════════════════════════════════════
 
 // Loading and error states still use a text grid. The legacy framebuffer
-// painters below remain exported as pure compatibility/test helpers, but the
-// playable path returns a native image and does not call them.
+// painters below remain exported as pure compatibility/test helpers. Playable
+// ASCII uses doom-ascii.js; neither legacy block painter is an ASCII mode.
+import { asciiFramebuffer, ASCII_METRICS } from './doom-ascii.js';
+
 const COLS = 96, ROWS = 32;
 export const METRICS = { sz: 16, lineTwips: 229 };  // 8pt text, 11.45pt line
 
@@ -767,6 +768,7 @@ export function doomCart(options = {}) {
   const engineUrl = options.engineUrl ?? DEFAULT_ENGINE;
   const wadUrl = options.wadUrl ?? DEFAULT_WAD;
   const sound = options.sound !== false;
+  let rendering = options.rendering === 'ascii' ? 'ascii' : 'image';
 
   let handle = null;
   let status = 'idle';           // idle → loading → playing | error
@@ -869,6 +871,9 @@ export function doomCart(options = {}) {
   function render() {
     if (status === 'playing' && handle) {
       paintedFrames++;
+      if (rendering === 'ascii') {
+        return { grid: asciiFramebuffer(handle.framebuffer), bg: BG, metrics: ASCII_METRICS };
+      }
       const png = framebufferPng(handle.framebuffer);
       return {
         imageBytes: png.bytes,
@@ -895,22 +900,20 @@ export function doomCart(options = {}) {
       'CONTROLS · MOVE W/S · STRAFE A/D',
       'TURN ←/→ · FIRE SPACE · USE E',
       'RUN SHIFT · MENU Q · MAP M · WEAPON 1–7',
-      'FULL-COLOR HUD · PAUSE/EDIT ESC',
+      'ORIGINAL / ASCII · PAUSE/EDIT ESC',
     ],
     caption:
       'The **actual** game: id Software’s Doom engine — GPL-2.0, compiled to JavaScript by ' +
-      '[doomgeneric](https://github.com/grubbyplaya/doomgenericjs) — running on Freedoom’s ' +
-      'BSD-licensed game data. Its lossless **320×200 framebuffer** is the media payload of a real ' +
-      'inline image in this Word paragraph. Every frame replaces that image through the public ' +
-      'session API, then follows the ordinary incremental OOXML→HTML conversion and DOM reconcile ' +
-      'path. It is not an overlay or a hidden canvas: pause, Undo, Save, or reopen the DOCX and the ' +
-      'full-color frame—including readable ammo, health and armor—is still document content. The ' +
-      'controls are four separate 18pt document paragraphs, so they remain readable without being ' +
-      'rewritten every frame. Move **W/S** · strafe ' +
+      '[doomgeneric](https://github.com/grubbyplaya/doomgenericjs) — running on ' +
+      (wadUrl === DEFAULT_WAD ? 'Freedoom’s BSD-licensed game data. ' : 'your selected DOOM game data. ') +
+      'Choose **Original** ' +
+      'for a lossless inline image, or **ASCII** for **320×200 printable characters** in colored ' +
+      'Word runs, including the original HUD. Switch modes on the same frame, even while paused. ' +
+      'Move **W/S** · strafe ' +
       '**A/D** · turn **←/→** · **Space** ' +
       'fires · **E** opens · **Q** is Doom’s own menu. **Esc** pauses — and then it is only a ' +
-      'document again: put your caret in the frame, Undo rewinds it, Save downloads it as .docx.',
-    hint: '<b>WASD</b> move · <b>←/→</b> turn · <b>Space</b> fire · <b>E</b> open · <b>Q</b> Doom’s menu · the full-color HUD is the live inline image stored in the DOCX.',
+      'document again: copy and paste the frame, Undo rewinds it, Save downloads it as .docx.',
+    hint: '<b>WASD</b> move · <b>←/→</b> turn · <b>Space</b> fire · <b>E</b> open · <b>Q</b> Doom’s menu · <b>Original / ASCII</b> switches the same frame, even while paused.',
     reset() {
       // Doom's own state lives inside the WebAssembly heap and the engine is
       // a page singleton, so a cartridge reset cannot restart the game. Q
@@ -920,6 +923,10 @@ export function doomCart(options = {}) {
     },
     tick,
     render,
+    setRendering(value) {
+      if (value !== 'ascii' && value !== 'image') throw new RangeError('Unknown Doom rendering mode');
+      rendering = value;
+    },
     /** The other two cartridges re-read their world from the paragraph on
      *  every resume — type a wall into the map, resume, walk into it. Real
      *  Doom cannot: the level is BSP geometry in the WebAssembly heap, not
@@ -935,6 +942,7 @@ export function doomCart(options = {}) {
       title: handle?.title ?? null,
       doomFrames: handle?.frames ?? 0,
       paintedFrames,
+      rendering,
       /** One live framebuffer pixel as [r, g, b] — the specs' probe for "Doom
        *  is playing", not merely "Doom booted": sampled bands of these prove
        *  the view swings under a held turn key while the status bar holds. */

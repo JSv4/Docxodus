@@ -262,6 +262,14 @@ test.describe('Arcade on a phone-shaped viewport', () => {
       const from = await page.evaluate(() => (window as any).__arcade.frames());
       await page.waitForFunction(
         (n) => (window as any).__arcade.frames() >= n, from + 20, { timeout: 60000 });
+      if (cart === 'doom') {
+        // Loading-card repaints are document frames too. Wait for a decoded
+        // game frame before pausing to measure the native image geometry.
+        await page.waitForFunction(() => {
+          const img = (window as any).__arcade.canvasElement()?.querySelector('img');
+          return img?.complete && img.naturalWidth === 320;
+        }, null, { timeout: 120000 });
+      }
       await page.evaluate(() => (window as any).__arcade.pause());
 
       if (cart === 'doom') {

@@ -7446,9 +7446,7 @@ namespace Docxodus
             var spacingInTwips = (decimal?) rPr.Elements(W.spacing).Attributes(W.val).FirstOrDefault();
             if (spacingInTwips != null)
                 style.AddIfMissing("letter-spacing",
-                    spacingInTwips > 0m
-                        ? string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", spacingInTwips/20)
-                        : "0");
+                    string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", spacingInTwips/20));
 
             // W.position
             var position = (decimal?) rPr.Elements(W.position).Attributes(W.val).FirstOrDefault();

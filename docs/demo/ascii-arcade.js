@@ -4,8 +4,8 @@
 // screen is ONE Word paragraph, animated through the session API plus
 // `DocxEditor.refresh()` — the editor's public "the session changed behind
 // your back" seam, which reconciles exactly one block in continuous mode.
-// The three text cartridges replace colored OOXML runs; Doom replaces one
-// native inline image because its HUD must remain genuinely readable. Nothing
+// The three text cartridges replace colored OOXML runs; Doom can replace one
+// native inline image or project every pixel to a colored ASCII character. Nothing
 // is mounted over the document: pause (or click the screen) and the game is
 // only a paragraph, Ctrl+Z rewinds frames, and Save stores the current frame
 // in a real .docx.
@@ -1328,7 +1328,7 @@ export function seedArcade(session) {
   // A real footnote, because the game screen is a real document.
   check(session.insertFootnote(captionAnchor, 7, // after "loading"
     'Every frame is OOXML document content: the text cartridges author colored runs and `w:br` ' +
-    'breaks, while Doom replaces the media payload of one native inline image through the public ' +
+    'breaks. Doom can use the same text path or replace one native inline image through the public ' +
     'session API. `DocxEditor.refresh()` repaints one block incrementally. Pause and Save: the frame ' +
     'downloads as a real .docx.'), 'footnote');
 
@@ -1500,6 +1500,7 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
   let imageSurfaceProven = false;
   let imageFramesPainted = 0;
   let lastSurface = 'runs';
+  let paintGeneration = 0;
   let lastImageOptions = null;
   let lastFrameEnd = performance.now();
   const timings = { mutate: 0, refresh: 0 };
@@ -1543,6 +1544,10 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
   }
 
   function setCaption() {
+    if (ui.rendering) {
+      ui.rendering.hidden = cart.name !== 'doom';
+      ui.rendering.value = cart.state().rendering ?? 'image';
+    }
     // The pad follows the cartridge — and stands down on the attract screen,
     // where nothing steers anything and the only live control is the coin.
     ui.setPad?.(mode === 'intro' ? { fire: INTRO_FIRE } : cart.touch);
@@ -1571,17 +1576,13 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
     const { xml, runs } = frameXml(openTag, frame.grid, frame.bg, frame.metrics);
     lastRuns = runs;
     lastSurface = 'runs';
-    lastImageOptions = null;
     const t0 = performance.now();
-    if (canvasImageId) {
-      const removed = session.removeImage(canvasImageId);
-      if (!removed.success) throw new Error(`removeImage: ${removed.error?.code} ${removed.error?.message}`);
-      canvasAnchor = removed.modified?.[0]?.id ?? canvasAnchor;
-      canvasImageId = null;
-    }
     const res = session.raw.replaceXml(canvasAnchor, xml);
     const t1 = performance.now();
     if (!res.success) throw new Error(`replaceXml: ${res.error?.code} ${res.error?.message}`);
+    // replaceXml sweeps the replaced drawing's orphaned relationship itself.
+    // One mutation keeps switching from an image to text a single undo step.
+    canvasImageId = null;
     canvasAnchor = res.modified[0]?.id ?? res.created[0]?.id ?? canvasAnchor;
     pinCanvas(canvasAnchor);
     editor.refresh();
@@ -1616,10 +1617,21 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
     if (canvasImageId) {
       res = session.replaceImage(canvasImageId, frame.imageBytes);
     } else {
-      const cleared = session.raw.replaceXml(canvasAnchor, openTag + '</w:p>');
-      if (!cleared.success) throw new Error(`clear image paragraph: ${cleared.error?.code} ${cleared.error?.message}`);
-      canvasAnchor = cleared.modified?.[0]?.id ?? cleared.created?.[0]?.id ?? canvasAnchor;
-      res = session.insertImage(canvasAnchor, 0, frame.imageBytes, frame.imageOptions);
+      const steps = [
+        { tool: 'raw', action: 'replaceXml', mutation: () =>
+          session.raw.replaceXml(canvasAnchor, openTag + '</w:p>') },
+        { tool: 'image', action: 'insert', mutation: () =>
+          (res = session.insertImage(canvasAnchor, 0, frame.imageBytes, frame.imageOptions)) },
+      ];
+      if (typeof session.executeBatch === 'function') {
+        const batch = session.executeBatch(steps);
+        if (!batch.success) throw new Error('Could not switch the document frame to an image');
+      } else {
+        for (const step of steps) {
+          const result = step.mutation();
+          if (!result.success) throw new Error(`image frame: ${result.error?.message}`);
+        }
+      }
       canvasImageId = res.imageId ?? null;
     }
     const t1 = performance.now();
@@ -1743,7 +1755,11 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
         const frame = cart.render();
         // A native-image frame is decoded before it enters the document (see
         // prewarmImage); text frames paint synchronously as they always have.
-        if (frame.imageBytes) pendingPaint = prewarmImage(frame).then(() => paintImage(frame, cart.label));
+        if (frame.imageBytes) {
+          const generation = paintGeneration;
+          pendingPaint = prewarmImage(frame).then(() =>
+            playing && generation === paintGeneration ? paintImage(frame, cart.label) : null);
+        }
         else paintGrid(frame, cart.label);
       }
     } catch (e) {
@@ -1791,6 +1807,7 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
     let tag = xml.slice(0, gt + 1);
     if (tag.endsWith('/>')) tag = tag.slice(0, -2) + '>';
     openTag = tag;
+    syncCanvasImageId();
     // The attract screen has no game world to parse back — whatever was typed
     // into the title card simply stays until the next frame repaints it.
     if (mode !== 'intro') cart.syncFromRows(rowsFromXml(xml));
@@ -1807,6 +1824,14 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
     if (from >= 0 && to > from + 1) {
       for (const id of ids.slice(from + 1, to)) session.deleteBlock(id);
     }
+  }
+
+  function syncCanvasImageId() {
+    // Undo, paste or deletion can replace a drawing while the game is paused.
+    // Resolve its current identity at these transitions, outside the hot loop.
+    canvasImageId = canvasEl()?.querySelector('img')
+      ? session.listImages().find(image => image.anchorId === canvasAnchor)?.id ?? null
+      : null;
   }
 
   function setPlaying(next) {
@@ -1832,6 +1857,9 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
       ui.stats.innerHTML = lastSurface === 'image'
         ? 'paused — this frame is a real DOCX image. <b>Ctrl+C / Ctrl+V</b> duplicates it; ' +
           '<b>Undo / Redo</b> scrubs backward and forward through frames.'
+        : cart.name === 'doom' && cart.state().rendering === 'ascii'
+          ? 'paused — this frame is colored ASCII text. <b>Ctrl+C / Ctrl+V</b> duplicates it; ' +
+            '<b>Undo / Redo</b> scrubs backward and forward through frames.'
         : 'paused — the screen is an ordinary paragraph now. ' +
           '<b>Type into it</b>, then Resume to make it real.';
     }
@@ -1852,6 +1880,7 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
     // The pad is about to be re-pointed at another cartridge's keys; anything
     // it is holding down belongs to the one being left.
     releasePad();
+    paintGeneration++;
     cart = next;
     cart.reset();
     cartBtns.forEach((b, n) => b.setAttribute('aria-pressed', String(n === name)));
@@ -1876,6 +1905,23 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
     if (!playing) { drawFrame(); setPlaying(true); }
   });
   ui.pace.addEventListener('change', () => { interval = Number(ui.pace.value); });
+  function setRendering(value) {
+    if (!cart.setRendering) return;
+    const visibleImage = !!canvasEl()?.querySelector('img');
+    if (value === cart.state().rendering && (mode !== 'game' ||
+        (value === 'image' ? visibleImage : !visibleImage))) return;
+    paintGeneration++;
+    syncCanvasImageId();
+    cart.setRendering(value);
+    fps = 0;
+    timings.mutate = 0; timings.refresh = 0;
+    lastFrameEnd = performance.now();
+    if (ui.rendering) ui.rendering.value = value;
+    // Project the same engine frame immediately, even while paused. No tick,
+    // reset, input transition or game-state change belongs to this control.
+    if (mode === 'game') drawFrame();
+  }
+  ui.rendering?.addEventListener('change', () => setRendering(ui.rendering.value));
 
   // Esc toggles play/pause from anywhere — including from inside the document.
   window.addEventListener('keydown', (e) => {
@@ -1914,7 +1960,7 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
     return bytes;
   }
 
-  editor.root.addEventListener('copy', () => {
+  editor.root.addEventListener('copy', (event) => {
     const sel = window.getSelection();
     const el = canvasEl();
     const overlaps = el && sel && !sel.isCollapsed && Array.from({ length: sel.rangeCount }, (_, i) =>
@@ -1930,6 +1976,13 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
         options: { ...lastImageOptions },
       },
     } : null;
+    if (copiedFrame && !copiedFrame.image && cart.name === 'doom' && event.clipboardData) {
+      // HTML uses nonbreaking spaces for layout; a text editor should receive
+      // the literal printable ASCII and newlines authored in the document.
+      event.preventDefault();
+      event.clipboardData.setData('text/plain', rowsFromXml(copiedFrame.xml).join('\n'));
+      event.clipboardData.setData('text/html', el.outerHTML);
+    }
   });
   editor.root.addEventListener('paste', (event) => {
     if (!copiedFrame) return;
@@ -2026,6 +2079,7 @@ export function startArcade({ editor, session, ui, cart: startCart, intro = true
     timings: () => ({ ...timings, runs: lastRuns }),
     cart: () => cart.name,
     setCart,
+    setRendering,
     game: () => cart.state(),
     playing: () => playing,
     introActive: () => mode === 'intro',

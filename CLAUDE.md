@@ -17,13 +17,40 @@ duplicated description is one that will go stale.
   validated. Don't invent terminology, lean on internal issue-number shorthand, or use
   jargon a reader outside the change wouldn't recognize — a reviewer who hasn't read the
   code should be able to follow the description on its own.
+- **Never put a Microsoft copyright header on a new file.** `// Copyright (c) Microsoft. All
+  rights reserved.` belongs only on the ~40 files that are genuine derivatives of the original
+  Microsoft `OpenXmlPowerTools` source: `ColorParser.cs`, `DocumentBuilder.cs`,
+  `FieldRetriever.cs`, `FormattingAssembler.cs`, the six `GetListItemText_*.cs` locale files,
+  `HtmlToWmlConverter.cs`, `HtmlToWmlConverterCore.cs`, `HtmlToWmlCssApplier.cs`,
+  `HtmlToWmlCssParser.cs`, `ListItemRetriever.cs`, `MarkupSimplifier.cs`, `MetricsGetter.cs`,
+  `OpenXmlRegex.cs`, `PtOpenXmlDocument.cs`, `PtOpenXmlUtil.cs`, `PtUtil.cs`,
+  `RevisionAccepter.cs`, `RevisionProcessor.cs`, `ScalarTypes.cs`, `TestUtil.cs`,
+  `UnicodeMapper.cs`, `WmlDocument.cs`, `WmlToHtmlConverter.cs`, `Properties/AssemblyInfo.cs`,
+  and their like-named test counterparts (`DocumentBuilderTests.cs`, `HtmlConverterTests.cs`,
+  `HtmlToWmlConverterTests.cs`, `HtmlToWmlReadAsXElement.cs`, `MarkupSimplifierTests.cs`,
+  `MetricsGetterTests.cs`, `OpenXmlRegexTests.cs`, `PtUtilTests.cs`, `RevisionAccepterTests.cs`,
+  `RevisionProcessorTests.cs`, `TestsBase.cs`, `UnicodeMapperTests.cs`). Everything else in this
+  repo — `DocxSession`, `History/`, `Verification/`, `Delivery/`, `Internal/`, `Ir/`, the editor,
+  the MCP server, the npm/Python/WASM layers, and every other file with no line-for-line ancestor
+  in [OfficeDev/Open-Xml-PowerTools](https://github.com/OfficeDev/Open-Xml-PowerTools) — is
+  original work and must not claim Microsoft's copyright. Give a new file no header at all, or
+  `// Copyright (c) John Scrudato IV. All rights reserved.` if you want the same two-line
+  `SA1633`-satisfying form the rest of the library uses. This was a real bug, not a hypothetical:
+  ~195 files had the Microsoft line copy-pasted onto wholly new post-fork source before a
+  dedicated pass corrected them — don't reintroduce it on the next one.
+- **Never add a `#nullable enable` or `#nullable disable` directive to a file.**
+  `Docxodus.csproj` already sets `<Nullable>enable</Nullable>` project-wide (see
+  [Nullable Reference Types](#nullable-reference-types) below), so a per-file directive is never
+  correct: `#nullable enable` is a redundant no-op and `#nullable disable` is a regression. New
+  and refactored files get neither.
 
 ## Coding Standards
 
 ### Nullable Reference Types
 
 `Docxodus.csproj` sets `<Nullable>enable</Nullable>` (issue #13): every file is
-nullable-checked by default, so a new file needs no directive. The inherited
+nullable-checked by default, so a new file needs no directive — not `#nullable enable` (redundant)
+and not `#nullable disable` (a regression). The inherited
 OpenXmlPowerTools core has fully migrated (issue #645): no file under `Docxodus/`
 carries a `#nullable disable` header anymore. `grep -l "^#nullable disable" Docxodus/*.cs`
 should return nothing — reintroducing the header on a new or refactored file is a
@@ -37,23 +64,24 @@ file that could fire them.
 **`Docxodus.csproj` and `Docxodus.Tests.csproj` both override it to `false`**, so the core
 library and the test project do *not* fail on warnings. The CLI tools, MCP server,
 python-host and WASM project do inherit it. Current baseline: the library builds with
-**187 warnings**, the test project with **804** (mostly StyleCop `SA1633`/`SA1636` file
+**204 warnings**, the test project with **829** (mostly StyleCop `SA1633`/`SA1636` file
 headers and `SA1206` modifier/using order). Don't add to either baseline. Measure with
 `--no-incremental` — a warm incremental build reports zero because nothing recompiles.
 
 What a new file costs depends on whether it carries a StyleCop file header. Most of the
 library has none, so `SA1633` fires once per file and such a file moves both counts by
 exactly one (the test build compiles the library through its project reference). Files that
-*do* carry the header — everything under `History/`, which follows the inherited
-`// Copyright (c) Microsoft.` two-line form — cost no `SA1633` but fire one `SA1206` per
-`public required` member, because StyleCop wants `required` ahead of the access modifier
-while the whole codebase writes it the other way. Count what your own files actually add
-rather than assuming one apiece.
+*do* carry the header — everything under `History/`, which follows the two-line
+`// Copyright (c) John Scrudato IV. All rights reserved.` form (see the copyright-attribution
+rule above; `History/` postdates the fork, so it is not the Microsoft form) — cost no `SA1633`
+but fire one `SA1206` per `public required` member, because StyleCop wants `required` ahead of
+the access modifier while the whole codebase writes it the other way. Count what your own files
+actually add rather than assuming one apiece.
 
 Update the two numbers here in the same commit rather than leaving them stale. They had
-drifted before (113/707 described a tree ~30 warnings behind); re-measure, don't extrapolate.
-The portable-history files use John Scrudato IV's copyright; the
-still-Microsoft-only StyleCop configuration reports `SA1636` for those correct headers.
+drifted before (113/707 described a tree ~30 warnings behind, then 175/788, then briefly
+177/791 and 184/800 while `stylecop.json` still expected Microsoft's name for files that had
+moved to John Scrudato IV's); re-measure, don't extrapolate.
 
 ## Repository Layout
 
