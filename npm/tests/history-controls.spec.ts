@@ -274,10 +274,13 @@ test('history control errors stay distinct and name the failure a host can act o
       api.historyControlError(new api.DocxHistoryError(code, `raw ${code} detail`), pending);
     return {
       stale: of('StaleHead'), conflict: of('ImportConflict'), unsupported: of('InitializationUnsupported'),
-      resource: of('ResourceLimit'),
+      resource: of('ResourceLimit'), unsupportedVersion: of('UnsupportedVersion'), damaged: of('InvalidManifest'),
       // Codes with no dedicated explanation still reach the host: pending draws attention to the
       // unconfirmed checkpoint, everything else surfaces the underlying message.
       pending: of('Timeout', true), unrecognised: of('Timeout'),
+      // An unconfirmed checkpoint outranks a file-shaped failure, because the draft is the thing
+      // at risk. Codes that already say what to do next keep their own instruction.
+      pendingFile: of('ResourceLimit', true), pendingStale: of('StaleHead', true),
       plain: api.historyControlError(new Error('network unavailable')),
       thrownValue: api.historyControlError('not an error object'),
     };
@@ -286,10 +289,15 @@ test('history control errors stay distinct and name the failure a host can act o
   expect(messages.conflict).toContain('read-only');
   expect(messages.unsupported).toContain('import history');
   expect(messages.resource).toContain('64 MiB');
+  expect(messages.unsupportedVersion).toContain('unsupported version');
+  expect(messages.damaged).toContain('damaged or incomplete');
+  expect(messages.pendingFile).toBe(messages.pending);
+  expect(messages.pendingStale).toBe(messages.stale);
   expect(messages.pending).toContain('Retry checkpoint');
   expect(messages.unrecognised).toContain('raw Timeout detail');
   expect(messages.plain).toContain('network unavailable');
   expect(messages.thrownValue).toContain('Please try again.');
-  // Nothing collapses into a single unhelpful sentence.
-  expect(new Set(Object.values(messages)).size).toBe(Object.values(messages).length);
+  // Nothing else collapses into a single unhelpful sentence.
+  const distinct = Object.entries(messages).filter(([key]) => !key.startsWith('pending') || key === 'pending');
+  expect(new Set(distinct.map(([, text]) => text)).size).toBe(distinct.length);
 });

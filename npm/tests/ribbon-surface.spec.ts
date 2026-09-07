@@ -292,3 +292,43 @@ test.describe('ribbon surface', () => {
     expect(persisted[0].text).toContain('Please reconsider this clause.');
   });
 });
+
+test('a host that hides the file actions can still open a document', async ({ page }) => {
+  // `fileActions: false` removes the quick group holding New/Open/Save. Opening a document used
+  // to require the Save button unconditionally, so every host that hides the file actions — the
+  // ones that supply their own persistence — crashed on the first open() with
+  // `Docxodus ribbon: template is missing "save"`.
+  await openEditorHost(page);
+  const hosted = await page.evaluate(() => {
+    const { mountRibbon } = (window as any).DocxodusEditor;
+    const demo = (window as any).__demo;
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const ribbon = mountRibbon(host, {
+      exports: demo.exports, fileActions: false, loader: false, hint: false, documentName: 'hosted.docx',
+    });
+    let failure = '';
+    try { ribbon.open(demo.getEditor().save(), 'hosted.docx'); }
+    catch (error) { failure = (error as Error).message; }
+    const result = {
+      failure,
+      files: host.querySelector('[data-dxr-files]') !== null,
+      save: ribbon.control('save') !== null,
+      // Only the file group goes: the rest of the surface still mounts and wires up.
+      undo: ribbon.control('undo') !== null,
+      state: ribbon.element.getAttribute('data-state'),
+      // The document really opened rather than open() merely not throwing.
+      blocks: ribbon.surface.querySelectorAll('[data-anchor][contenteditable="true"]').length,
+      session: ribbon.editor ? ribbon.editor.sessionHandle !== demo.getEditor().sessionHandle : false,
+    };
+    ribbon.destroy(); host.remove();
+    return result;
+  });
+  expect(hosted.failure).toBe('');
+  expect(hosted.files).toBe(false);
+  expect(hosted.save).toBe(false);
+  expect(hosted.undo).toBe(true);
+  expect(hosted.state).toBe('ready');
+  expect(hosted.blocks).toBeGreaterThan(0);
+  expect(hosted.session).toBe(true);
+});
