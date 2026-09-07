@@ -68,6 +68,13 @@
     <DefineConstants>$(DefineConstants);WASM_BUILD</DefineConstants>
   </PropertyGroup>
 
+  <!-- Apply size optimization in the SDK's post-link Binaryen pass, before it
+       generates asset hashes. Keep the default -O2 AOT compilation and link,
+       the full recorded profile, and every exported API. -->
+  <ItemGroup Condition="'$(Configuration)' == 'Release'">
+    <WasmOptConfigurationFlags Include="-Oz" />
+  </ItemGroup>
+
   <ItemGroup>
     <!-- Reference Docxodus library with WASM_BUILD property to exclude SkiaSharp dependencies -->
     <ProjectReference Include="../../Docxodus/Docxodus.csproj" AdditionalProperties="WASM_BUILD=true" />

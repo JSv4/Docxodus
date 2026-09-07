@@ -434,7 +434,8 @@ internal static class HtmlConversionOps
     /// requested unids are extracted (context clones are scaffolding).
     /// </summary>
     private static Dictionary<string, string?> RenderTargetsFromShell(
-        DocxSession session, WordprocessingDocument liveDoc, List<XElement> targets, HtmlConversionOptions options)
+        DocxSession session, WordprocessingDocument liveDoc, List<XElement> targets, HtmlConversionOptions options,
+        bool disableDenseText = false)
     {
         // The shell also carries the comments family, so a comment mutation must rebuild it —
         // the formatting parts alone cannot see one (see DocxSession.CommentsVersion).
@@ -519,6 +520,7 @@ internal static class HtmlConversionOps
             : null;
 
         var bodyContent = new List<XElement>();
+        var denseText = new Dictionary<string, DenseTextParagraph>(StringComparer.Ordinal);
         foreach (var (siblings, start, end) in runs)
         {
             if (rangeIndex is not null)
@@ -528,8 +530,20 @@ internal static class HtmlConversionOps
             }
             for (int i = start; i <= end; i++)
             {
-                var clone = CloneWithListAnnotations(siblings[i]);
-                RetargetEmbeddedImages(liveDoc, siblings[i], clone, renderMain, copiedImages);
+                // Comments/annotations can cover a paragraph from outside its
+                // subtree. Their full context must stay on the ordinary path.
+                DenseTextParagraph? dense = null;
+                if (!disableDenseText && !options.RenderAnnotations && !HasCommentDefinitions(liveDoc)
+                    && siblings[i].Parent?.Name == W.body
+                    && (string?)siblings[i].Attribute(PtOpenXml.Unid) is { } denseUnid
+                    && wantedUnids.Contains(denseUnid))
+                {
+                    dense = DenseTextParagraph.TryCompact(siblings[i]);
+                    if (dense is not null) denseText[denseUnid] = dense;
+                }
+                var clone = dense?.Template ?? CloneWithListAnnotations(siblings[i]);
+                if (dense is null)
+                    RetargetEmbeddedImages(liveDoc, siblings[i], clone, renderMain, copiedImages);
                 identity?.Record(siblings[i], clone);
                 bodyContent.Add(clone);
             }
@@ -568,6 +582,13 @@ internal static class HtmlConversionOps
         {
             var u = (string?)e.Attribute("data-anchor");
             if (u is null || !wantedUnids.Contains(u) || htmlByUnid.ContainsKey(u)) continue;
+            if (denseText.TryGetValue(u, out var dense) && !dense.TryExpand(e))
+            {
+                // A converter changed its wrapper shape. Fail back to the
+                // ordinary conversion, never expose a formatting template.
+                return RenderTargetsFromShell(session, liveDoc, targets,
+                    options, disableDenseText: true);
+            }
             // A table always renders inside a generated single-child alignment <div>
             // (see the converter's tableDiv). Return that wrapper so an incremental
             // renderer inserts the same node shape a full render produces — a bare
