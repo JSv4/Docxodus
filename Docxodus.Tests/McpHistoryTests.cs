@@ -57,7 +57,9 @@ public sealed class McpHistoryTests : IDisposable
         Assert.Equal(proposal, Call("exportOperationProposal", args).GetProperty("bytes").GetBytesFromBase64());
         var comparison = Call("compare", "\"beforeVersionId\":" + HistoryClientJson.Write(first.Version.Id)
             + ",\"afterVersionId\":" + HistoryClientJson.Write(winner.View.Version.Id)).GetProperty("bytes").GetBytesFromBase64();
-        using var session = new DocxSession(comparison); Assert.NotNull(session);
+        using var session = new DocxSession(comparison);
+        // The point of compare is a redline; a parseable-but-empty package would pass otherwise.
+        Assert.NotEmpty(session.ListRevisions());
         Assert.Equal(files, Directory.GetFiles(_root, "*", SearchOption.AllDirectories).OrderBy(p => p));
         Assert.Equal(_source, await File.ReadAllBytesAsync(_session.Location!));
     }
