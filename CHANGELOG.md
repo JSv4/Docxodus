@@ -15,6 +15,16 @@ All notable changes to this project will be documented in this file.
   replacing it, which is what makes a competing draft fail loudly instead of overwriting a
   publication whose outcome is still unknown. Only a genuine `StaleHead` (the compare-and-swap
   provably did not apply) clears a pending request.
+- `mountHistoryControls(container, options)`: an accessible, responsive document-history panel an
+  app mounts beside its own editor. It pages through version metadata, previews or downloads a
+  selected DOCX, compares any two versions as tracked changes, finds a version by time, lists
+  recorded collaboration with its resolved conflicts, and — when given `checkpoints` and a
+  `capture` callback — saves, restores and retries checkpoints. The panel never owns, replaces or
+  closes the host's editor or reader: previews go to a host callback so browsing cannot discard a
+  draft, `destroy()` awaits the command still in flight, and controls that would conflict with a
+  running call are disabled while it runs. Read-only `.docxhistory` archives mount the same panel
+  by omitting `checkpoints`. `historyControlError(error, pending)` is exported separately so a host
+  can render the same plain-language explanations outside the panel.
 - `openIndexedDbHistoryStore(name)`: optional browser-local `HistoryStorage` plus a per-document
   `HistoryCheckpointJournal`, backed by IndexedDB. Head initialization and compare-and-swap share
   one read/write transaction on the same object store, so independent connections — separate tabs

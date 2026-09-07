@@ -1,5 +1,42 @@
 # History controls (frontend)
 
+`mountHistoryControls` supplies an accessible, responsive panel for an app-owned reader.
+It pages through metadata, previews selected versions and comparisons, downloads DOCX or
+history files, finds versions by time, and shows recorded collaboration with resolved conflicts.
+Preview callbacks should render separately from the editor, so browsing never discards a draft.
+
+```ts
+import {
+  initialize, openDocxHistory, openIndexedDbHistoryStore,
+  HistoryCheckpoints, mountHistoryControls,
+} from 'docxodus';
+
+await initialize('/wasm/');
+const store = await openIndexedDbHistoryStore('my-app-history'); // Explicit, optional local persistence.
+const client = openDocxHistory(store.storage);
+const document = client.document(stableDocumentId);
+const checkpoints = await HistoryCheckpoints.open(document, store.journal(document.documentId));
+const panel = mountHistoryControls(container, {
+  reader: document, checkpoints, author: currentUserName,
+  capture: () => editor.save(),
+  preview: (bytes, title) => showSeparatePreview(bytes, title),
+});
+await panel.ready;
+// On teardown: await panel.destroy(); client.close(); store.close();
+```
+
+Omit `checkpoints` and `capture` when mounting a standalone archive reader. The panel never
+owns or closes its reader. It awaits preview/download callbacks and disables conflicting
+controls during calls. `ready` and `refresh()` reject on errors as well as showing feedback.
+The optional `download` callback lets your app choose its own download dialog.
+
+`HistoryCheckpoints` also works without the panel. Supply your own durable
+`HistoryCheckpointJournal`, or use the IndexedDB store's per-document journal. Complete
+requests survive reloads; Retry recovers the captured inputs, even if a later checkpoint
+exists. A stale draft stays open until the user refreshes history and decides what to save.
+IndexedDB data stays on this browser and can be removed by clearing site data; download a
+history file for a portable copy. No automatic checkpoint, network sync or retention is installed.
+
 Users handle documents, not storage directories. Your app owns persistence, request IDs,
 loading indicators, download dialogs and the editor; Docxodus supplies the history calls.
 
