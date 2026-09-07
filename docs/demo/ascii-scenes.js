@@ -355,12 +355,15 @@ export function frameXml(openTag, grid, bg, metrics) {
     }
   }
   for (const run of stream) {
+    // Printable ASCII only uses the Latin font/size/bold properties. Avoid
+    // duplicating their complex-script counterparts in every picture run.
+    const cs = !metrics?.asciiOnly;
     parts.push(
-      `<w:r><w:rPr><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/>` +
-      (metrics?.bold ? '<w:b/><w:bCs/>' : '') +
+      `<w:r><w:rPr><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}"${cs ? ` w:cs="${FONT}"` : ''}/>` +
+      (metrics?.bold ? '<w:b/>' + (cs ? '<w:bCs/>' : '') : '') +
       `<w:color w:val="${run.color}"/>` +
       (metrics?.spacingTwips ? `<w:spacing w:val="${metrics.spacingTwips}"/>` : '') +
-      `<w:sz w:val="${sz}"/><w:szCs w:val="${sz}"/>` +
+      `<w:sz w:val="${sz}"/>` + (cs ? `<w:szCs w:val="${sz}"/>` : '') +
       // w:shd is last in CT_RPr's sequence among the properties we emit, so
       // appending it here keeps the run properties schema-ordered.
       (run.bg ? `<w:shd w:val="clear" w:color="auto" w:fill="${run.bg}"/>` : '') +

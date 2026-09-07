@@ -3,7 +3,7 @@
 // is a character sampled from the same picture the native renderer displays.
 export const ASCII_COLS = 320;
 export const ASCII_ROWS = 200;
-export const ASCII_METRICS = { sz: 4, lineTwips: 34, bold: true, spacingTwips: 4 };
+export const ASCII_METRICS = { sz: 4, lineTwips: 34, bold: true, spacingTwips: 4, asciiOnly: true };
 
 // Tone lives in the glyph, hue in the ink. Separating them lets textured grey
 // walls use one Word run while preserving intensity in every cell. Use glyphs
@@ -61,103 +61,50 @@ function inkFor(r, g, b) {
 }
 
 /** One source pixel per glyph, including the original status bar, menus and
- * automap. No downsample or reconstructed game-state labels can lose a stroke. */
+ * automap. No downsample or reconstructed game-state labels can lose a stroke.
+ *
+ * Extend each ink run to the longest prefix that satisfies EVERY cell's color
+ * bound, then choose its least-squares ink. Taking the longest valid prefix
+ * minimizes the number of runs: no valid first run can end later, and removing
+ * that prefix cannot make the remaining suffix require more runs. This linear
+ * pass replaces the allocation-heavy, frame-wide merge heap. There is no hard
+ * budget that can erase a small contrasting stroke to save a formatting run. */
 export function asciiFramebuffer(fb) {
   if (fb.length !== 320 * 200 * 4) throw new RangeError('Expected a 320x200 BGRA framebuffer');
-  const chars = [], colors = [], segments = [];
+  const chars = [], colors = [];
   for (let y = 0; y < ASCII_ROWS; y++) {
-    const row = [], inks = [];
-    let last = null;
-    const sy = Math.floor((y + .5) * 200 / ASCII_ROWS);
-    for (let x = 0; x < ASCII_COLS; x++) {
-      const sx = Math.floor((x + .5) * 320 / ASCII_COLS);
-      const o = (sy * 320 + sx) * 4;
-      const r = fb[o + 2], g = fb[o + 1], b = fb[o];
-      const char = tones[Math.max(r, g, b)];
-      row.push(char);
-      const wanted = inkFor(r, g, b);
-      inks.push(ASCII_PALETTE[wanted]);
-      const weight = char === ' ' ? 0 : (Math.max(r, g, b) / 255) ** 2;
-      const allowed = char === ' ' ? anyInk : compatible[wanted];
-      const rgb = palette[wanted];
-      if (!last || last.ink !== wanted) {
-        const next = { y, x0: x, x1: x, ink: wanted, w: 0, r: 0, g: 0, b: 0, square: 0,
-          error: 0, allowed, prev: last, next: null, alive: true };
-        if (last) last.next = next;
-        segments.push(next); last = next;
+    const row = new Array(ASCII_COLS + 1), inks = new Array(ASCII_COLS + 1);
+    let start = 0, allowed = anyInk, w = 0, red = 0, green = 0, blue = 0;
+    const flush = end => {
+      let best = 0, error = Infinity;
+      for (let i = 0; i < palette.length; i++) {
+        if (!(allowed & (1 << i))) continue;
+        const p = palette[i];
+        const e = w * paletteNorm[i] - 2 * (.3 * p[0] * red + .59 * p[1] * green + .11 * p[2] * blue);
+        if (e < error) { best = i; error = e; }
       }
-      last.x1 = x + 1;
-      last.allowed &= allowed;
-      last.w += weight;
-      last.r += weight * rgb[0]; last.g += weight * rgb[1]; last.b += weight * rgb[2];
-      last.square += weight * paletteNorm[wanted];
+      inks.fill(ASCII_PALETTE[best], start + 1, end + 1);
+    };
+    for (let x = 0; x < ASCII_COLS; x++) {
+      const o = (y * ASCII_COLS + x) * 4;
+      const r = fb[o + 2], g = fb[o + 1], b = fb[o];
+      const peak = Math.max(r, g, b), char = tones[peak];
+      row[x + 1] = char;
+      const wanted = inkFor(r, g, b);
+      const next = char === ' ' ? anyInk : compatible[wanted];
+      if (!(allowed & next)) {
+        flush(x);
+        start = x; allowed = anyInk; w = red = green = blue = 0;
+      }
+      allowed &= next;
+      const weight = char === ' ' ? 0 : (peak / 255) ** 2, rgb = palette[wanted];
+      w += weight; red += weight * rgb[0]; green += weight * rgb[1]; blue += weight * rgb[2];
     }
+    flush(ASCII_COLS);
     // A printable guard prevents a paused row being interpreted as Markdown
     // syntax, and keeps completely black rows from splitting the paragraph.
-    row.unshift('|'); inks.unshift(inks[0]);
+    row[0] = '|'; inks[0] = inks[1];
     chars.push(row); colors.push(inks);
   }
-  allocateColorRuns(segments, colors, 700);
-  for (const row of colors) row[0] = row[1];
   return { chars, colors };
-}
-
-// Allocate the limited ink changes where they preserve the most visible hue.
-// Every pixel keeps its own glyph/tone. The frame-wide run target avoids fixed
-// tiles, but is soft: stop merging when no ink can satisfy every cell's color
-// bound. High-contrast pictures may need more runs to keep their edges intact.
-function allocateColorRuns(segments, colors, budget) {
-  const heap = [];
-  const push = e => {
-    let i = heap.length; heap.push(e);
-    while (i) { const p = (i - 1) >> 1; if (heap[p].cost <= e.cost) break;
-      heap[i] = heap[p]; i = p; }
-    heap[i] = e;
-  };
-  const pop = () => {
-    const first = heap[0], last = heap.pop();
-    if (heap.length) { let i = 0;
-      while (i * 2 + 1 < heap.length) {
-        let child = i * 2 + 1;
-        if (child + 1 < heap.length && heap[child + 1].cost < heap[child].cost) child++;
-        if (heap[child].cost >= last.cost) break;
-        heap[i] = heap[child]; i = child;
-      }
-      heap[i] = last;
-    }
-    return first;
-  };
-  const offer = a => {
-    const b = a?.next;
-    if (!b) return;
-    const allowed = a.allowed & b.allowed;
-    if (!allowed) return;
-    const w = a.w + b.w, r = a.r + b.r, g = a.g + b.g, blue = a.b + b.b;
-    const square = a.square + b.square;
-    let ink = 0, error = Infinity;
-    for (let i = 0; i < palette.length; i++) {
-      if (!(allowed & (1 << i))) continue;
-      const p = palette[i];
-      const e = Math.max(0, square + w * paletteNorm[i]
-        - 2 * (.3 * p[0] * r + .59 * p[1] * g + .11 * p[2] * blue));
-      if (e < error) { ink = i; error = e; }
-    }
-    push({ a, b, cost: error - a.error - b.error, w, r, g, blue, square, ink, error, allowed });
-  };
-  for (const s of segments) offer(s);
-  let count = segments.length;
-  const merged = [];
-  while (count > budget && heap.length) {
-    const e = pop(), { a, b } = e;
-    if (!a.alive || !b.alive || a.next !== b) continue;
-    const next = { w: e.w, r: e.r, g: e.g, b: e.blue, square: e.square, ink: e.ink, error: e.error, allowed: e.allowed,
-      y: a.y, x0: a.x0, x1: b.x1, prev: a.prev, next: b.next, alive: true };
-    a.alive = b.alive = false;
-    if (next.prev) next.prev.next = next;
-    if (next.next) next.next.prev = next;
-    merged.push(next); count--;
-    offer(next.prev); offer(next);
-  }
-  for (const s of [...segments, ...merged]) if (s.alive)
-    colors[s.y].fill(ASCII_PALETTE[s.ink], s.x0 + 1, s.x1 + 1);
 }
