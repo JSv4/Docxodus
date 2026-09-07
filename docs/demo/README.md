@@ -16,26 +16,36 @@ jsDelivr — and differ only in how much of the page belongs to the editor:
 ### Original DOOM, rendered as ASCII in the editor
 
 The [GIF](../images/arcade-doom-ascii.gif) and [MP4](../images/arcade-doom-ascii.mp4)
-show the original DOOM title screen, New Game / episode / difficulty selection,
-and initial E1M1 movement and firing. This is a real-time browser recording of
-the actual editing surface. Its timestamps are preserved; the GIF is encoded at
-8 FPS and 880×840, with the MP4 retaining the full 1100×1050 browser view.
-The measured gameplay rate and input-asset digests are recorded in
+start with original DOOM in **Original** image mode, enter E1M1, switch the visible
+selector to **ASCII**, and continue moving and firing. The player then pauses,
+selects and copies the dense frame, and pastes it as unformatted text into a real
+LibreOffice Writer window. A HUD text selection is enlarged to 12 pt so individual
+letters and punctuation are visible. This is a continuous, real-time recording of
+the actual desktop and OS clipboard transfer, with explanatory captions below it.
+The GIF is encoded at 12 FPS and 880×912; the MP4 is 1100×1140.
+The measured gameplay rate, clipboard proof, and input-asset digests are recorded in
 [`arcade-doom-ascii-capture.json`](../images/arcade-doom-ascii-capture.json).
-The recording opens the menu directly from the title screen.
+Writer independently verifies **64,200 printable ASCII characters, 199 line
+breaks, zero non-ASCII characters, and zero images**. Its text matches the browser
+source exactly and remains unchanged when the selected font size increases.
 
 <p align="center">
-  <img src="../images/arcade-doom-ascii.gif" alt="Original DOOM title, menus and E1M1 gameplay rendered as colored ASCII in a live Word document" width="720">
+  <img src="../images/arcade-doom-ascii.gif" alt="DOOM switches from Original to ASCII during gameplay, then its text is copied into LibreOffice Writer and enlarged" width="720">
 </p>
 
 Still captures: [title](../images/arcade-doom-ascii-title.png),
 [menu](../images/arcade-doom-ascii-menu.png),
 [gameplay in the editor](../images/arcade-doom-ascii-gameplay.png),
-[complete frame](../images/arcade-doom-ascii-frame.png), and
-[weapon and HUD detail](../images/arcade-doom-ascii-detail.png).
+[complete frame](../images/arcade-doom-ascii-frame.png),
+[weapon and HUD detail](../images/arcade-doom-ascii-detail.png),
+[the pasted Writer frame](../images/arcade-doom-ascii-libreoffice.png), and
+[enlarged ASCII in Writer](../images/arcade-doom-ascii-libreoffice-detail.png).
 The [saved DOCX](../images/arcade-doom-ascii-frame.docx) contains the paused
-ASCII frame as editable colored text. The earlier
-[native-image walkthrough](../images/arcade-doom.gif) uses Freedoom game data.
+ASCII frame as editable colored text. The [Writer ODT](../images/arcade-doom-ascii-libreoffice.odt)
+and [plain ASCII clipboard text](../images/arcade-doom-ascii-clipboard.txt) preserve
+the verified paste. Unformatted paste retains the tone glyphs and drops ink colors;
+the blank Writer destination uses a small white monospace font on black.
+The earlier [native-image walkthrough](../images/arcade-doom.gif) uses Freedoom game data.
 
 Select **DOOM · ASCII** in the dock, or start with `?cart=doom&render=ascii`.
 On a phone the renderer selector lives in the **⋯** controls sheet.
@@ -98,11 +108,15 @@ npm run build
 npm run pretest
 node scripts/fetch-doom-iwad.mjs --shareware
 python3 -m http.server 8082 --directory dist/wasm
-# In another terminal, with ffmpeg on PATH:
+# In another terminal, with ffmpeg, Xvfb and LibreOffice on PATH,
+# plus python3-uno and Pillow available to /usr/bin/python3:
 npm run capture:doom-ascii
 ```
 
-`ARCADE_URL` overrides the local origin, `FFMPEG` can point to an executable,
+The capture creates a private X11 desktop and a temporary LibreOffice profile.
+`ARCADE_URL` overrides the local origin. `FFMPEG`, `XVFB`, `LIBREOFFICE`, and
+`LO_PYTHON` can select executables; ffmpeg needs `x11grab` and `libass` support.
+`DOOM_CAPTURE_OUTPUT` selects another artifact directory,
 and `DOOM_ENGINE_PATH` can mirror the exact pinned engine for offline captures
 (the script verifies its SHA-256). The optional `--preview` flag captures only
 the title PNG. The engine and IWAD stay in local caches, outside the repository

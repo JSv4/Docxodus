@@ -4,6 +4,7 @@
   "textCharacters": 64200,
   "images": 0,
   "incremental": true,
+  "playing": false,
   "source": "Original DOOM v1.9 shareware",
   "engineSha256": "efd7c34714e3753a84cf6873f2c2ae0e1a41bde1f10aaa2b0a95cb6935e8cce9",
   "wadSha256": "1d7d43be501e67d927e415e0b8f3e29c3bf33075e859721816f652a526cac771",
@@ -13,12 +14,60 @@
   },
   "gif": {
     "width": 880,
-    "height": 840,
-    "framesPerSecond": 8,
+    "height": 912,
+    "framesPerSecond": 12,
     "paletteColors": 256,
     "transparentFrames": false
   },
-  "durationSeconds": 28.340900897979736,
-  "deliveredGameplayFps": 6.147909237949936,
-  "capture": "Lossless Chromium PNG screencast of the live editor, driven by Playwright; original timestamps preserved."
+  "durationSeconds": 27.80840672,
+  "documentGameplayFps": 29.099936916432448,
+  "desktopCaptureFramesPerSecond": 20,
+  "original": {
+    "rendering": "image",
+    "images": 1
+  },
+  "libreoffice": {
+    "ok": true,
+    "matchesClipboardSource": true,
+    "printableCharacters": 64200,
+    "lineBreaks": 199,
+    "nonAsciiCharacters": 0,
+    "graphicObjects": 0,
+    "textFrames": 0,
+    "sha256": "69c1839e8f3652bc8dc4b26c3b404bdf6ecd892cb75772810bd78ff562e4d4eb",
+    "charactersUnchanged": true,
+    "fontPoints": 12,
+    "selectedHudText": "AA47\"'\"\"^\"hh<77**4n\"':^\"hh<77**4n\"'+\"<n7\"'^*\"hnn\"''*7*^\"\"^M^\"*^'^*^\"*^LL\"*^'**^\"\"LLL\"*^'+ "
+  },
+  "captions": [
+    {
+      "time": 0.00011893400000008114,
+      "text": "Original mode: Doom inside a Word document"
+    },
+    {
+      "time": 6.6972289830000005,
+      "text": "Switch to ASCII, then keep moving and firing"
+    },
+    {
+      "time": 13.716761897,
+      "text": "Pause. Select the dense ASCII frame and copy it"
+    },
+    {
+      "time": 16.601681117000002,
+      "text": "LibreOffice Writer: paste as unformatted text"
+    },
+    {
+      "time": 18.291451046,
+      "text": "64,200 printable ASCII characters + 199 line breaks. Zero images."
+    },
+    {
+      "time": 21.542585299,
+      "text": "Select a HUD text sample and enlarge it to 12 pt"
+    },
+    {
+      "time": 24.77509034,
+      "text": "Editable letters and punctuation, copied from the live game"
+    }
+  ],
+  "capture": "Continuous real-time X11 recording of Chromium and LibreOffice Writer. Actual OS clipboard copy and unformatted paste; captions added below the desktop. No time acceleration."
 }
