@@ -109,3 +109,27 @@ increments by one. Different heads always conflict; exact equality is idempotent
 post-commit reads/cancellation can obscure this call's success. I/O can lose an acknowledgement:
 retry the same archive. If another writer has since advanced it, the retry reports conflict
 rather than rolling history back. Document IDs cannot be remapped because records bind them.
+
+## Client boundary
+
+The existing generated-JSON `HistoryClientOps` owns readonly capability checks and archive
+calls for WASM, Python and MCP. Standalone archive handles own their isolated reader; scoped
+documents borrow their writable client's lifetime. Closing releases handles, never host data.
+Byte-oriented clients cap files at 64 MiB, use copied/base64 buffers, and leave larger-file
+streaming to native hosts. Existing browser adapters remain valid; only adapters with optional
+`initializeHead` opt into exact-head import. The memory adapter shares the same synchronous
+critical section with ordinary CAS. WASM verifies length/hash before passing copied blobs to
+the host callback. No storage callbacks are installed for readonly archive opening.
+
+Client `compareVersions` delegates native `CompareVersionsToDocxAsync` and the existing
+DocxCompare accepted-input product policy. The already-shipped native `CompareVersionsAsync`
+still exposes the richer raw DocxDiff comparison with caller-controlled settings; its
+signature and defaults do not change. Recorded operation reads expose decisions, resolutions
+and exact proposals on every client surface, without adding submission or reconciliation.
+
+MCP uses its existing session capability and canonical location. The embedded archive ID
+must match before destination reads/writes, so moving a history to a differently named MCP
+document is not supported. Import does not change an open session or source file. Shared
+byte operations have no new transport; host permissions, durability and retention remain
+outside the library. [Frontend controls](../history-controls.md) intentionally document the
+small application-facing API rather than restating the underlying storage graph.

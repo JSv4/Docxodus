@@ -231,7 +231,11 @@ operations (`docxodus_compare`, `docxodus_deliver`, `docxodus_verify_receipt`). 
 
 Session-scoped immutable history over the opt-in host-configured `DOCXODUS_HISTORY_ROOT`.
 Actions: `read`, `updates`, `create`, `list`, `get`, `export`, `materialize`, `replay`,
-`resolveTime`, `restore`, and `render`. Shares the .NET/npm/Python history facade and existing
+`resolveTime`, `restore`, `render`, `exportDocx`, `exportArchive`, `importArchive`,
+`operations`, `getOperation`, `exportOperationProposal`, and `compare` (two retained IDs).
+Archive import accepts `archiveB64` (64 MiB decoded cap) only for the session's exact embedded
+document identity; never remaps it or overwrites a different local head.
+Shares the .NET/npm/Python history facade and existing
 MCP dispatch/session gate; adds no transport. `create` captures the session's clean bytes,
 while restore appends history without modifying the session or source file. Document identity
 is the canonical scoped session location, never a caller-selected history key.

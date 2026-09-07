@@ -94,7 +94,11 @@ internal static class ToolCatalog
               "type": "object", "additionalProperties": false,
               "properties": {
                 "sessionId": { "type": "string" },
-                "action": { "type": "string", "enum": ["read", "updates", "create", "list", "get", "export", "materialize", "replay", "resolveTime", "restore", "render"] },
+                "action": { "type": "string", "enum": ["read", "updates", "operations", "getOperation", "exportOperationProposal", "compare", "create", "list", "get", "export", "exportDocx", "exportArchive", "importArchive", "materialize", "replay", "resolveTime", "restore", "render"] },
+                "beforeVersionId": { "$ref": "#/$defs/blob", "description": "compare: original retained version in this session's history." },
+                "afterVersionId": { "$ref": "#/$defs/blob", "description": "compare: revised retained version; returns redlined DOCX bytes using the existing DocxCompare revision policy. No document-store writes." },
+                "operationId": { "$ref": "#/$defs/blob", "description": "Required for getOperation/exportOperationProposal. operations returns recorded backend decisions, including conflicts and explicit resolutions; no new reconciliation is performed." },
+                "archiveB64": { "type": "string", "description": "importArchive only: base64 .docxhistory, maximum 64 MiB before encoding. Embedded document ID must equal the session's canonical location; never remapped. Initializes absent history only, leaves the session/source unchanged." },
                 "expectedHead": { "anyOf": [{ "$ref": "#/$defs/head" }, { "type": "null" }], "description": "create: null/absent only for initial publication, otherwise exact last head. restore: required exact head. updates: last accepted head, or null for initial latest checkpoint." },
                 "requestId": { "type": "string", "minLength": 1, "maxLength": 1024, "pattern": "\\S", "description": "Optional durable restore retry ID. Reuse exact original head/target/metadata to recover its original result. Rejected for create, which recaptures live bytes; use a captured-byte history client for idempotent create." },
                 "versionId": { "$ref": "#/$defs/blob", "description": "Required for get/export/restore; optional exclusive pagination cursor for list." },

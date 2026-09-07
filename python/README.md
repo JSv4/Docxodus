@@ -259,6 +259,13 @@ for rev in docx_diff_get_revisions(left, right):
     print(rev.type, rev.text)
 ```
 
+## Portable history files
+
+`open_history_archive(bytes)` opens a standalone readonly history. `history.document(id)`
+binds version controls; `history.import_history_archive(bytes)` resumes exact history in
+host-owned storage. See the [short usage guide](../docs/history-clients.md#python) and
+[real archives](../TestFiles/HistoryArchive/README.md). No transport or autosave is added.
+
 ## License
 
 MIT. Built on top of [Docxodus](https://github.com/JSv4/Docxodus), which is itself a fork of Open-Xml-PowerTools.

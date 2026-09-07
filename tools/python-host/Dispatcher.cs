@@ -45,6 +45,7 @@ internal static class Dispatcher
     {
         "ping" => Ping(),
         "open_history" => HistoryBindings.Open(args),
+        "open_history_archive" => HistoryBindings.OpenArchive(args),
         "close_history" => HistoryBindings.Close(args),
         "history" => HistoryBindings.Invoke(args),
         "open_session" => OpenSession(args),

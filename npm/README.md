@@ -719,6 +719,11 @@ loaded on demand and cached by the browser.
 
 Requires WebAssembly SIMD support.
 
+## Portable document history
+
+See the [concise history-controls API guide](../docs/history-controls.md) for latest/version
+loading, comparison, checkpoint/restore and `.docxhistory` import/export over host-owned storage.
+
 ## License
 
 MIT

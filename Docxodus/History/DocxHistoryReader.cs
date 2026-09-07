@@ -30,10 +30,26 @@ public class DocxHistoryReader
         return await Core.ExportVersionAsync(DocumentId, versionId, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Compare any retained pair using the existing DocxDiff engine and its revision policy.</summary>
+    /// <summary>
+    /// Build a rich raw DocxDiff comparison with caller-controlled revision policy (unchanged legacy
+    /// semantics). For the client-equivalent accepted-input redline, use CompareVersionsToDocxAsync.
+    /// </summary>
     public ValueTask<DocxDiffComparison> CompareVersionsAsync(HistoryBlobReference before, HistoryBlobReference after,
         DocxDiffSettings? settings = null, CancellationToken cancellationToken = default) =>
         Core.CompareVersionsAsync(DocumentId, before, after, settings, cancellationToken);
+
+    /// <summary>Redlined DOCX through the existing DocxCompare product policy, matching npm/Python/MCP compareVersions.</summary>
+    public async ValueTask<byte[]> CompareVersionsToDocxAsync(HistoryBlobReference before, HistoryBlobReference after,
+        DocxDiffSettings? settings = null, CancellationToken cancellationToken = default)
+    {
+        var capturedSettings = settings?.Clone();
+        var left = await ExportDocxAsync(before, cancellationToken).ConfigureAwait(false);
+        var right = await ExportDocxAsync(after, cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        var redline = DocxCompare.Compare(new WmlDocument("before.docx", left), new WmlDocument("after.docx", right), capturedSettings);
+        cancellationToken.ThrowIfCancellationRequested();
+        return redline.DocumentByteArray;
+    }
 
     public ValueTask<byte[]> MaterializeAsync(long sequence, int maxEntriesToScan = 10_000,
         CancellationToken cancellationToken = default) => Core.MaterializeAsync(DocumentId, sequence, maxEntriesToScan, cancellationToken);

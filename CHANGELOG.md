@@ -6,6 +6,13 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Portable-history client bindings: standalone readonly files and document-scoped controls in
+  npm/Python; optional exact-head initialization for browser storage; session-scoped MCP
+  import/export; [concise frontend API guide](docs/history-controls.md). Reaching the
+  `.docxhistory` reader/writer from the browser adds 46 KB to the WASM wire payload, so the
+  size guardrail in `scripts/build-wasm.sh` moves from 5 MB to 5.25 MB (measured 5154 KB);
+  see [wasm-packaging.md](docs/architecture/wasm-packaging.md) for the measurements and the
+  re-recorded-profile alternative that was rejected.
 - Writable history-file import validates before copying and atomically preserves the original
   head without overwriting local history; document-scoped APIs expose explicit checkpoint/restore.
   `ImportHistoryArchiveAsync(stream, leaveOpen: false)` now disposes the stream it was given even
