@@ -22,6 +22,20 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- ~195 source files written after this repo forked from Microsoft's `OpenXmlPowerTools` carried
+  a copy-pasted `// Copyright (c) Microsoft. All rights reserved.` file header even though they
+  have no Microsoft-authored lineage — entire post-fork subsystems (`DocxSession`, `History/`,
+  `Verification/`, `Delivery/`, `Internal/`, `Ir/`, the editor, the MCP server, and the
+  npm/Python/WASM layers, among others) had picked up the header as boilerplate, presumably
+  copied file-to-file for StyleCop's `SA1633` rather than for attribution. Each file's fate was
+  decided by an exact-filename match against the real `OpenXmlPowerTools`/`OpenXmlPowerTools.Tests`
+  source tree (github.com/OfficeDev/Open-Xml-PowerTools): the ~40 files that are genuine
+  derivatives of an original file (`DocumentBuilder.cs`, `PtOpenXmlUtil.cs`, `WmlToHtmlConverter.cs`,
+  and the like, plus their like-named tests) keep the Microsoft notice, matching the repository
+  `LICENSE`, which has always credited both; everything else now reads
+  `// Copyright (c) John Scrudato IV. All rights reserved.` CLAUDE.md documents the rule and the
+  keep-list so it isn't reintroduced.
+
 - The editor's find bar no longer loses the keyboard the moment a query matches. It re-scanned on
   every keystroke and then *selected* the first hit, and selecting inside a contenteditable block
   focuses that block — so as soon as a partial query matched, the caret jumped into the document
