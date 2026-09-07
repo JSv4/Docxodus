@@ -81,6 +81,15 @@ jobs:
       - name: Run Playwright tests
         run: cd npm && npm test
 
+      - name: Verify browser history files in fresh Python/native hosts
+        env:
+          DOCXODUS_HISTORY_BROWSER_ARTIFACT_DIR: ${{ github.workspace }}/npm/test-results
+        run: |
+          dotnet build tools/python-host/pyhost.csproj -c Release
+          python3 -m pip install -e './python[test]'
+          mkdir -p history-artifacts
+          python3 -m pytest python/tests/test_history_browser_artifacts.py -q -s --basetemp=history-artifacts/python
+
       - name: Upload Playwright report and test artifacts
         uses: actions/upload-artifact@v7
         if: always()
@@ -91,5 +100,6 @@ jobs:
             npm/test-results/
             npm-export/test-artifacts/
             delivery-artifacts/
+            history-artifacts/
           if-no-files-found: ignore
           retention-days: 7
