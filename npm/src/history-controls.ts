@@ -1,5 +1,5 @@
 import { DocxHistoryError } from './history.js';
-import type { DocxHistoryReader, DocxHistoryView, DocxStoredVersion, HistoryBlobReference } from './history.js';
+import type { DocxHistoryReader, DocxHistoryView, DocxStoredOperation, DocxStoredVersion, HistoryBlobReference } from './history.js';
 import type { HistoryCheckpoints } from './history-checkpoints.js';
 
 export interface HistoryControlsOptions {
@@ -14,6 +14,8 @@ export interface HistoryControlsOptions {
   preview: (bytes: Uint8Array, title: string) => void | Promise<void>;
   /** Defaults to a browser download. */
   download?: (bytes: Uint8Array, filename: string) => void | Promise<void>;
+  /** Called after an acknowledged checkpoint, before the list refreshes. Retries may return an older view. */
+  onCheckpoint?: (view: DocxHistoryView, action: 'save' | 'restore' | 'retry') => void | Promise<void>;
   pageSize?: number;
 }
 
@@ -86,19 +88,27 @@ class HistoryPanel implements HistoryControls {
     this.label = this.input('Checkpoint name (optional)', 'text');
     this.author.parentElement!.hidden = this.label.parentElement!.hidden = !options.checkpoints;
     this.button('save', 'Save checkpoint', async () => {
-      await options.checkpoints!.save(await options.capture!(), this.metadata());
+      const view = await options.checkpoints!.save(await options.capture!(), this.metadata());
+      await options.onCheckpoint?.(view, 'save');
       await this.load(false); this.label.value = '';
       this.status.textContent = 'Checkpoint saved. Your draft remains open.';
     });
     this.button('restore', 'Restore selected', async () => {
-      await options.checkpoints!.restore(this.selected().id, this.metadata());
+      const version = this.selected();
+      if (!doc.defaultView?.confirm(`Restore ${versionTitle(version)} as a new checkpoint?\n\nYour current draft and all later versions will be kept.`)) {
+        this.status.textContent = 'Restore canceled. Your draft and history are unchanged.';
+        return;
+      }
+      const view = await options.checkpoints!.restore(version.id, this.metadata());
+      await options.onCheckpoint?.(view, 'restore');
       await this.load(false);
       this.status.textContent = 'Restored as a new checkpoint. Your draft and later versions are kept.';
     });
     const restoreNote = doc.createElement('p'); restoreNote.hidden = !options.checkpoints;
     restoreNote.textContent = 'Restore creates a new checkpoint. Open latest to preview it; your draft stays open.'; this.fieldset.append(restoreNote);
     this.button('retry', 'Retry checkpoint', async () => {
-      await options.checkpoints!.retry(); await this.load(false);
+      const view = await options.checkpoints!.retry();
+      await options.onCheckpoint?.(view, 'retry'); await this.load(false);
       this.status.textContent = 'Checkpoint recovered. Your draft remains open. Refresh history to check for newer versions.';
     });
     const sharing = this.disclosure('Download with history');
@@ -115,29 +125,23 @@ class HistoryPanel implements HistoryControls {
     }, time);
     const activity = this.disclosure('Recorded collaboration');
     const decisions = doc.createElement('ol');
+    let showOlderActivity = () => {};
     this.button('activity', 'Load activity', async () => {
       const { operations } = await options.reader.readOperationsSince(null);
       const resolved = new Set(operations.filter(op => op.record.status === 'accepted').map(op => op.input.request.resolves?.digest.value));
-      const items = operations.map(op => {
-        const item = doc.createElement('li');
-        const state = op.record.status === 'accepted' ? 'Accepted' : resolved.has(op.id.digest.value) ? 'Conflict resolved' : 'Conflict needs review';
-        const label = doc.createElement('p');
-        label.textContent = `${op.input.request.metadata.author} · ${state} · ${formatTime(op.input.request.metadata.createdAt)}`;
-        item.append(label);
-        const button = doc.createElement('button'); button.type = 'button'; button.textContent = 'Download proposal';
-        button.addEventListener('click', () => {
-          void this.run('Downloading proposal', async () => {
-            const decision = await options.reader.getOperation(op.id);
-            await this.download(await options.reader.exportOperationProposal(decision.id), `proposal-${decision.record.revision}.docx`);
-          }).catch(() => {});
-        }, { signal: this.events.signal });
-        item.append(button); return item;
-      });
-      decisions.replaceChildren(...items);
+      let shown = 0;
+      showOlderActivity = () => {
+        const page = operations.slice(Math.max(0, operations.length - shown - this.pageSize), operations.length - shown).reverse();
+        decisions.append(...page.map(op => this.activityItem(op, resolved.has(op.id.digest.value)))); shown += page.length;
+        this.actions.get('activity-more')!.hidden = shown >= operations.length;
+      };
+      decisions.replaceChildren(); showOlderActivity();
       this.status.textContent = operations.length ? 'Recorded activity loaded.' : 'No recorded collaboration.';
     }, activity);
     activity.append(decisions);
-    this.ready = this.refresh();
+    this.button('activity-more', 'Load older activity', async () => showOlderActivity(), activity);
+    this.actions.get('activity-more')!.hidden = true;
+    this.ready = this.run('Loading history', () => this.load(false));
   }
 
   refresh(): Promise<void> { return this.run('Loading history', () => this.load(true)); }
@@ -189,6 +193,26 @@ class HistoryPanel implements HistoryControls {
   }
 
   private selected(): DocxStoredVersion { return this.records[Number(this.versions.value)]; }
+  private activityItem(op: DocxStoredOperation, resolved: boolean): HTMLLIElement {
+    const doc = this.element.ownerDocument;
+    const item = doc.createElement('li');
+    const state = op.record.status === 'accepted' ? 'Accepted' : resolved ? 'Conflict resolved' : 'Conflict needs review';
+    const label = doc.createElement('p');
+    label.textContent = `${op.input.request.metadata.author} · ${state} · ${formatTime(op.input.request.metadata.createdAt)}`;
+    item.append(label);
+    const description = doc.createElement('p');
+    this.commandButton('View decision', async () => {
+      const decision = await this.options.reader.getOperation(op.id);
+      const { kind, metadata } = decision.input.request;
+      description.textContent = [{ text: 'Text edit', package: 'Document edit', discard: 'Discarded proposal' }[kind],
+        metadata.label, metadata.message, decision.record.conflict].filter(Boolean).join(' — ');
+    }, item);
+    item.append(description);
+    this.commandButton('Download proposal', async () => {
+      await this.download(await this.options.reader.exportOperationProposal(op.id), `proposal-${op.record.revision}.docx`);
+    }, item);
+    return item;
+  }
   private metadata() { return { author: this.author.value.trim() || 'You', createdAt: new Date().toISOString(), label: this.label.value.trim() || undefined }; }
   private async preview(bytes: Uint8Array, title: string): Promise<void> {
     if (!this.destroyed) await this.options.preview(bytes, title);
@@ -219,9 +243,12 @@ class HistoryPanel implements HistoryControls {
   }
 
   private button(key: string, title: string, action: () => Promise<void>, parent: HTMLElement = this.fieldset): void {
+    this.actions.set(key, this.commandButton(title, action, parent));
+  }
+  private commandButton(title: string, action: () => Promise<void>, parent: HTMLElement): HTMLButtonElement {
     const button = parent.ownerDocument.createElement('button'); button.type = 'button'; button.textContent = title;
     button.addEventListener('click', () => { void this.run(title, action).catch(() => {}); }, { signal: this.events.signal });
-    this.actions.set(key, button); parent.append(button);
+    parent.append(button); return button;
   }
   private select(title: string): HTMLSelectElement {
     const label = this.fieldset.ownerDocument.createElement('label'); label.textContent = title;
@@ -245,8 +272,10 @@ export function historyControlError(error: unknown, pending = false): string {
   if (code === 'StaleHead') return 'A newer checkpoint exists. Your draft is safe. Refresh history, review the newer version, then save again.';
   if (code === 'ImportConflict') return 'A different local history already exists. Open this file read-only to explore it.';
   if (code === 'InitializationUnsupported') return 'This storage cannot import history. Open read-only or choose storage that supports importing.';
-  if (code === 'ResourceLimit') return 'This history file exceeds browser processing limits, which can apply even below 64 MiB. Your document is unchanged.';
   if (pending) return 'The checkpoint could not be confirmed. Your draft is safe. Retry checkpoint to recover the original request.';
+  if (code === 'ResourceLimit') return 'This history file exceeds browser processing limits, which can apply even below 64 MiB. Your document is unchanged.';
+  if (code === 'UnsupportedVersion') return 'This history file uses an unsupported version. Open it with a newer app. Your document is unchanged.';
+  if (code === 'InvalidManifest') return 'This history file is damaged or incomplete. Choose another copy. Your document is unchanged.';
   return `History could not be loaded. Your document is unchanged. ${error instanceof Error ? error.message : 'Please try again.'}`;
 }
 

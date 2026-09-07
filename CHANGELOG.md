@@ -25,12 +25,34 @@ All notable changes to this project will be documented in this file.
   running call are disabled while it runs. Read-only `.docxhistory` archives mount the same panel
   by omitting `checkpoints`. `historyControlError(error, pending)` is exported separately so a host
   can render the same plain-language explanations outside the panel.
+- `mountHistoryControls` gained `onCheckpoint(view, action)`, which reports an acknowledged save,
+  restore or retry before the version list reloads. A host uses it to decide whether its open draft
+  is now saved: because a retry can acknowledge a *request captured earlier* — possibly by another
+  tab — only a fresh save whose capture is still the current draft may clear an unsaved-work
+  warning. Recorded collaboration also pages instead of rendering every operation at once, and each
+  entry can expand into its decision detail. `HistoryCheckpoints.open` takes an optional third
+  argument, an already captured view, so an editor opened at an exact version keeps that head
+  paired with the bytes on screen instead of silently adopting the latest.
+- A runnable TypeScript editor example (`npm/examples/history.ts`, built with
+  `npm run build:history-example`) pairing the ribbon editor, IndexedDB checkpoints and the history
+  panel: portable `.docxhistory` files open read-only, importing their embedded identity resumes
+  editing, previews render separately from the draft, and a pending save reopens its captured draft
+  after a reload.
 - `openIndexedDbHistoryStore(name)`: optional browser-local `HistoryStorage` plus a per-document
   `HistoryCheckpointJournal`, backed by IndexedDB. Head initialization and compare-and-swap share
   one read/write transaction on the same object store, so independent connections — separate tabs
   included — serialize against each other; stored bytes are SHA-256 verified against their
   reference before they are written. Nothing installs it: no storage, autosave or retention policy
   is created by using the history API, and clearing browser site data removes the store.
+
+### Fixed
+
+- `mountRibbon({ fileActions: false })` threw `Docxodus ribbon: template is missing "save"` on the
+  first `open()`. That option removes the quick group holding New/Open/Save, but opening a document
+  re-enabled the Save button unconditionally, so every host that hides the file actions — precisely
+  the hosts that supply their own persistence — could mount the ribbon and never open anything in
+  it. The rest of the surface already looked its controls up optionally; this was the last
+  unconditional lookup.
 
 ## [12.2.0] - 2026-09-07
 

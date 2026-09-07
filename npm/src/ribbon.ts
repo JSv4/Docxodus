@@ -681,7 +681,8 @@ class RibbonSurface implements RibbonEditor {
       comments: this.options.comments,
       commentAuthor: this.author,
     });
-    this.require<HTMLButtonElement>("save").disabled = false;
+    const saveButton = this.control<HTMLButtonElement>("save");
+    if (saveButton) saveButton.disabled = false;
     this.require("ribbon").setAttribute("aria-disabled", "false");
     this.setState("ready");
     this.setStatus(`Rendered in ${Math.round(performance.now() - started)} ms`);

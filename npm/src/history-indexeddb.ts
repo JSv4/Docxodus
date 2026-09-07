@@ -49,9 +49,10 @@ export async function openIndexedDbHistoryStore(name: string): Promise<IndexedDb
     async putBlob(reference, bytes) {
       const key = referenceKey(reference);
       const captured = bytes.slice();
+      if (captured.length !== reference.length) throw new DocxHistoryError('PayloadMismatch', 'Stored document length does not match its reference.');
       const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', captured)),
         byte => byte.toString(16).padStart(2, '0')).join('');
-      if (captured.length !== reference.length || hash !== reference.digest.value)
+      if (hash !== key.split(':')[0])
         throw new DocxHistoryError('PayloadMismatch', 'Stored document bytes do not match their reference.');
       await transaction<void>('blobs', 'readwrite', (store, result) => {
         store.put(captured, key); result();
@@ -131,7 +132,7 @@ function referenceKey(reference: HistoryBlobReference): string {
 }
 function validateHead(head: HistoryHead): void {
   referenceKey(head.state);
-  if (!/^[1-9][0-9]*$/.test(head.revision) || BigInt(head.revision) > 9223372036854775807n)
+  if (typeof head.revision !== 'string' || !/^[1-9][0-9]*$/.test(head.revision) || BigInt(head.revision) > 9223372036854775807n)
     throw new DocxHistoryError('InvalidRequest', 'Invalid history revision.');
 }
 function equalHead(a: HistoryHead | null, b: HistoryHead | null): boolean {

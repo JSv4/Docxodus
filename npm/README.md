@@ -723,6 +723,11 @@ Requires WebAssembly SIMD support.
 
 See the [concise history-controls API guide](../docs/history-controls.md) for latest/version
 loading, comparison, checkpoint/restore and `.docxhistory` import/export over host-owned storage.
+`mountHistoryControls` adds an accessible panel with separate previews, exact checkpoint retries
+and explicit history sharing. `openIndexedDbHistoryStore` provides optional browser persistence.
+These controls require `structuredClone` and `crypto.randomUUID`; the optional store also requires IndexedDB.
+The [TypeScript editor example](examples/history.ts) runs with `npm run build:history-example`
+and a local server serving `dist/wasm/history.html` after the WASM build.
 
 ## License
 

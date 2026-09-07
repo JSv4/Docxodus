@@ -57,6 +57,7 @@
   "scripts": {
     "build:wasm": "../scripts/build-wasm.sh",
     "build:ts": "tsc",
+    "build:history-example": "esbuild examples/history.ts --bundle --format=esm --outfile=dist/wasm/history-example.js && cp examples/history.html dist/wasm/history.html",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.tests.json",
     "build:pagination-bundle": "esbuild src/pagination.ts --bundle --format=iife --global-name=DocxodusPagination --outfile=dist/pagination.bundle.js",
     "build:session-bundle": "esbuild src/session.ts --bundle --format=iife --global-name=DocxodusSession --outfile=dist/session.bundle.js",
