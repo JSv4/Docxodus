@@ -87,6 +87,7 @@ jobs:
         run: |
           dotnet build tools/python-host/pyhost.csproj -c Release
           python3 -m pip install -e './python[test]'
+          mkdir -p history-artifacts
           python3 -m pytest python/tests/test_history_browser_artifacts.py -q -s --basetemp=history-artifacts/python
 
       - name: Upload Playwright report and test artifacts
