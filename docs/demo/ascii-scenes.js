@@ -357,7 +357,10 @@ export function frameXml(openTag, grid, bg, metrics) {
   for (const run of stream) {
     parts.push(
       `<w:r><w:rPr><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/>` +
-      `<w:color w:val="${run.color}"/><w:sz w:val="${sz}"/><w:szCs w:val="${sz}"/>` +
+      (metrics?.bold ? '<w:b/><w:bCs/>' : '') +
+      `<w:color w:val="${run.color}"/>` +
+      (metrics?.spacingTwips ? `<w:spacing w:val="${metrics.spacingTwips}"/>` : '') +
+      `<w:sz w:val="${sz}"/><w:szCs w:val="${sz}"/>` +
       // w:shd is last in CT_RPr's sequence among the properties we emit, so
       // appending it here keeps the run properties schema-ordered.
       (run.bg ? `<w:shd w:val="clear" w:color="auto" w:fill="${run.bg}"/>` : '') +
@@ -405,7 +408,8 @@ const CANVAS_GRID_RULES =
   ` font-family: "${CANVAS_FONT_FAMILY}", "Courier New", monospace !important;` +
   ' font-kerning: none !important; font-variant-ligatures: none !important;' +
   ' font-feature-settings: "liga" 0, "clig" 0, "calt" 0 !important;' +
-  ' letter-spacing: 0 !important; word-spacing: 0 !important;' +
+  ' letter-spacing: 0; word-spacing: 0 !important;' +
+  ' text-rendering: geometricPrecision;' +
   ' white-space: pre !important;' +
   ' -webkit-text-size-adjust: 100% !important; text-size-adjust: 100% !important;';
 

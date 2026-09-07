@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="light" />
   <title>Docxodus — THE DOCX ARCADE: a video game inside a Word document</title>
   <link rel="icon" href="../favicon.svg" type="image/svg+xml" />
-  <meta name="description" content="A platformer, a Doom-style raycaster, Freedoom&#39;s E1M1 rasterized from the real WAD, and DOOM — the actual id Software engine, GPL-2.0, compiled to JavaScript — playable as a full-color inline image in a live Word document. Pause anywhere: it is only a document. Save mid-game as .docx." />
+  <meta name="description" content="DOOM — the actual id Software engine — in a live Word document. Switch between its original framebuffer and 320×200 colored ASCII characters. Pause, copy a frame, undo, redo, and save as .docx. Plus three other playable cartridges." />
 
   <!-- Share THIS page's URL. Social platforms link through to the live game. -->
   <meta property="og:type" content="website" />
@@ -127,6 +127,7 @@
     const doomOptions = {
       wadUrl: params.get("wad") ?? undefined,
       sound: params.get("sound") !== "0",
+      rendering: params.get("render") ?? "image",
     };
 
     const embedSnippet = `<iframe

@@ -26,14 +26,21 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = join(HERE, '..', 'dist', 'wasm', 'vendor');
-const OUT = join(OUT_DIR, 'freedoom1.wad.gz');
+// Opt-in original shareware assets for the real DOOM showcase. Neither IWAD
+// is checked into the repository. Keep the published archive intact at its
+// source; only the locally hosted test/capture copy is extracted here.
+const shareware = process.argv.includes('--shareware');
+const OUT = join(OUT_DIR, shareware ? 'doom1.wad.gz' : 'freedoom1.wad.gz');
 
-const RELEASE =
-  'https://github.com/freedoom/freedoom/releases/download/v0.13.0/freedoom-0.13.0.zip';
-const MEMBER = 'freedoom1.wad';
+const RELEASE = shareware
+  ? 'https://www.gamers.org/pub/idgames/idstuff/doom/win95/doom95.zip'
+  : 'https://github.com/freedoom/freedoom/releases/download/v0.13.0/freedoom-0.13.0.zip';
+const MEMBER = shareware ? 'DOOM1.WAD' : 'freedoom1.wad';
 // From docs/demo/vendor/NOTICE.md. If this ever fails to match, the release
 // asset changed under a fixed tag and the notice is the thing to trust.
-const WAD_SHA256 = '7323bcc168c5a45ff10749b339960e98314740a734c30d4b9f3337001f9e703d';
+const WAD_SHA256 = shareware
+  ? '1d7d43be501e67d927e415e0b8f3e29c3bf33075e859721816f652a526cac771'
+  : '7323bcc168c5a45ff10749b339960e98314740a734c30d4b9f3337001f9e703d';
 
 /** Extract one member from a ZIP, without a dependency.
  *
