@@ -86,5 +86,7 @@
     },
     "length": 1322
   },
-  "proposalFile": "charter-collaboration-conflicting-proposal.docx"
+  "proposalFile": "charter-collaboration-conflicting-proposal.docx",
+  "comparisonFile": "charter-collaboration-comparison.docx",
+  "comparisonSha256": "e9872fb74a615b1638d86d0857fd868c01b57e24bc2acbe453c87a7f192ad60e"
 }

@@ -28,8 +28,14 @@ public sealed partial class DocxVersionHistory
     public ValueTask<DocxHistoryImportResult> ImportHistoryArchiveAsync(Stream input, bool leaveOpen = true,
         DocxHistoryArchiveLimits? limits = null, CancellationToken cancellationToken = default)
     {
-        var initializer = Initializer();
-        return ImportAsync(DocxHistoryArchive.OpenAsync(input, leaveOpen, ImportLimits(limits), _packageOptions, cancellationToken),
+        ArgumentNullException.ThrowIfNull(input);
+        IHistoryHeadInitializer initializer; DocxHistoryArchiveLimits bounded;
+        // leaveOpen: false hands this call the stream, exactly as the archive reader's own failure
+        // path does. Rejecting the store or the limits happens before the reader takes over, so
+        // dispose here too rather than leaking a stream the caller has already given up.
+        try { initializer = Initializer(); bounded = ImportLimits(limits); }
+        catch { if (!leaveOpen) input.Dispose(); throw; }
+        return ImportAsync(DocxHistoryArchive.OpenAsync(input, leaveOpen, bounded, _packageOptions, cancellationToken),
             initializer, cancellationToken);
     }
 

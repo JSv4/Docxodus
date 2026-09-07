@@ -11,9 +11,14 @@ All notable changes to this project will be documented in this file.
   import/export; [concise frontend API guide](docs/history-controls.md).
 - Writable history-file import validates before copying and atomically preserves the original
   head without overwriting local history; document-scoped APIs expose explicit checkpoint/restore.
+  `ImportHistoryArchiveAsync(stream, leaveOpen: false)` now disposes the stream it was given even
+  when the head store or the supplied limits are rejected before the archive reader takes over.
 - Portable `.docxhistory` files: stream export of one captured document, independently
   reopenable read-only document APIs, strict ZIP/manifest validation, and real legal-document
   archives with exact snapshot/proposal/comparison files under `TestFiles/HistoryArchive`.
+  Reading a blob out of an open archive whose backing bytes changed underneath it now reports
+  `PackageChangeError.PayloadMismatch`, matching what `OpenAsync` already guaranteed, instead of
+  surfacing the raw `InvalidDataException` from the ZIP decoder.
 - Portable-history foundation: bounded, document-scoped graph validation retains exact
   snapshots, package effects, restore targets, retry receipts, and operation proposals
   without enumerating shared storage. Includes real legal-document and hostile-graph tests.

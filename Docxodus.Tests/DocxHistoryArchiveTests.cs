@@ -42,7 +42,7 @@ public sealed class DocxHistoryArchiveTests
                     Assert.Equal(await fixture.History.ExportVersionAsync(HistoryArchiveFixture.Id, version.Id),
                         await File.ReadAllBytesAsync(versionPath));
                     using var reopened = new DocxSession(await File.ReadAllBytesAsync(versionPath));
-                    Assert.NotNull(reopened);
+                    Assert.NotEmpty(reopened.Project().Markdown);
                 }
                 Assert.Equal(fixture.Proposal, await archive.ExportOperationProposalAsync(fixture.Conflict.Operation.Id));
                 using var exportedAgain = new MemoryStream();
@@ -123,7 +123,24 @@ public sealed class DocxHistoryArchiveTests
         using var malformed = new MemoryStream(Pack(entries));
         var error = await Record.ExceptionAsync(async () => { using var _ = await DocxHistoryArchive.OpenAsync(malformed); });
         Assert.True(error is PackageChangeException or DocxHistoryException, error?.ToString() ?? "Archive unexpectedly opened.");
+        // Each hostile file must fail at the gate that actually covers it. Without this a check
+        // could rot away and the scenario would still "fail closed" for an unrelated reason.
+        Assert.Equal(Expected(scenario), error!.Message);
         Assert.True(malformed.CanRead);
+
+        static string Expected(string scenario) => scenario switch
+        {
+            "duplicate-zip" => "Duplicate archive ZIP entry.",
+            "unknown-zip" or "path-zip" or "uppercase-zip" => "Unknown or noncanonical archive entry.",
+            "duplicate-json" or "unknown-json" => "Unknown or duplicate archive manifest property.",
+            "numeric-revision" => "Malformed history archive manifest.",
+            "noncanonical-revision" => "Invalid archive head revision.",
+            "unsorted-inventory" => "Archive blob inventory must be unique and sorted.",
+            "extra-blob" => "Archive inventory contains unreferenced blobs.",
+            "missing-blob" or "wrong-blob-length" => "Archive ZIP entries disagree with the manifest inventory.",
+            "corrupt-blob" => "Payload SHA-256 does not match its reference.",
+            _ => throw new ArgumentOutOfRangeException(nameof(scenario), scenario, "Unmapped hostile scenario."),
+        };
     }
 
     [Fact]
@@ -250,7 +267,11 @@ public sealed class DocxHistoryArchiveTests
         var (bytes, _) = await SmallArchive(); using var input = new MemoryStream(bytes, writable: true);
         using var archive = await DocxHistoryArchive.OpenAsync(input);
         Array.Fill(bytes, (byte)0);
-        Assert.NotNull(await Record.ExceptionAsync(async () => await archive.ExportDocxAsync()));
+        // Entry bytes are re-read per call, so mutation must fail as a domain payload error — the same
+        // contract OpenAsync enforces — never as a raw InvalidDataException and never as stale content.
+        var error = await Assert.ThrowsAsync<PackageChangeException>(async () => await archive.ExportDocxAsync());
+        Assert.Equal(PackageChangeError.PayloadMismatch, error.Code);
+        Assert.IsType<InvalidDataException>(error.InnerException);
     }
 
     private static byte[] Zip64(byte[] bytes)

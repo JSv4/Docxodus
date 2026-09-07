@@ -58,5 +58,7 @@
     }
   ],
   "conflict": null,
-  "proposalFile": null
+  "proposalFile": null,
+  "comparisonFile": "agreement-comparison.docx",
+  "comparisonSha256": "3c68e804c3c74ab2337431b573c0516391e56cebe2adbb9c0e760d1d7da4962c"
 }

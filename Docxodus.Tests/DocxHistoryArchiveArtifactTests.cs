@@ -38,13 +38,23 @@ public sealed class DocxHistoryArchiveArtifactTests
                 var stored = await archive.GetVersionAsync(version.Id);
                 Assert.Equal(stored.Record.Snapshot.ContentDigest, PackageManifestGenerator.Generate(
                     await archive.ReplayAsync(stored.Record.Sequence)).OrderedOpcContentDigest);
-                using var docx = new DocxSession(expected); Assert.NotNull(docx);
+                // Every exported version must be a document a session can actually project, not just bytes.
+                using var docx = new DocxSession(expected);
+                Assert.NotEmpty(docx.Project().Markdown);
             }
             Assert.Equal(await File.ReadAllBytesAsync(Path.Combine(Root, index.Versions[^1].File)), await archive.ExportDocxAsync());
             // Select a non-latest pair from immutable version IDs. No pairwise diffs are stored in the archive.
             var before = index.Versions[0].Id; var after = index.Versions.First(v => v.Sha256 != index.Versions[0].Sha256).Id;
             var comparison = await archive.CompareVersionsAsync(before, after, ComparisonSettings());
             Assert.NotEmpty(comparison.GetRevisions());
+            // The committed comparison is a golden redline, not an unchecked by-product: comparing the
+            // same immutable pair out of the archive must reproduce that file exactly. Regenerate with
+            // DOCXODUS_REBUILD_HISTORY_FIXTURES=1 when a deliberate DocxDiff change moves the output.
+            var committed = await File.ReadAllBytesAsync(Path.Combine(Root, index.ComparisonFile));
+            Assert.Equal(index.ComparisonSha256, Digest(committed));
+            Assert.Equal(committed, comparison.ToRedline().DocumentByteArray);
+            using (var redline = new DocxSession(committed))
+                Assert.NotEmpty(redline.ListRevisions());
             if (index.Conflict is { } conflict)
             {
                 Assert.Equal("conflict", (await archive.GetOperationAsync(conflict)).Record.Status);
@@ -94,19 +104,22 @@ public sealed class DocxHistoryArchiveArtifactTests
             proposal = name + "-conflicting-proposal.docx";
             await File.WriteAllBytesAsync(Path.Combine(Root, proposal), await history.ExportOperationProposalAsync(id, conflict));
         }
+        var comparisonFile = name + "-comparison.docx";
         using (var archive = await DocxHistoryArchive.OpenAsync(await File.ReadAllBytesAsync(path)))
         {
             var after = versions.First(v => v.Sha256 != versions[0].Sha256);
             var comparison = await archive.CompareVersionsAsync(versions[0].Id, after.Id, ComparisonSettings());
-            await File.WriteAllBytesAsync(Path.Combine(Root, name + "-comparison.docx"), comparison.ToRedline().DocumentByteArray);
+            await File.WriteAllBytesAsync(Path.Combine(Root, comparisonFile), comparison.ToRedline().DocumentByteArray);
         }
-        var index = new GoldenIndex(id, info.Head, Digest(await File.ReadAllBytesAsync(path)), versions.ToArray(), conflict, proposal);
+        var index = new GoldenIndex(id, info.Head, Digest(await File.ReadAllBytesAsync(path)), versions.ToArray(), conflict, proposal,
+            comparisonFile, Digest(await File.ReadAllBytesAsync(Path.Combine(Root, comparisonFile))));
         await File.WriteAllTextAsync(Path.Combine(Root, name + ".json"), JsonSerializer.Serialize(index, Json) + "\n");
     }
 
     private static DocxDiffSettings ComparisonSettings() => new() { PreAcceptInputRevisions = true, PreserveInputRevisions = true };
     private static string Digest(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
     internal sealed record GoldenIndex(string DocumentId, HistoryHead Head, string ArchiveSha256,
-        GoldenVersion[] Versions, HistoryBlobReference? Conflict, string? ProposalFile);
+        GoldenVersion[] Versions, HistoryBlobReference? Conflict, string? ProposalFile,
+        string ComparisonFile, string ComparisonSha256);
     internal sealed record GoldenVersion(HistoryBlobReference Id, string File, string Sha256);
 }
