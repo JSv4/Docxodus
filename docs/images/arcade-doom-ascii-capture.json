@@ -18,7 +18,7 @@
     "paletteColors": 256,
     "transparentFrames": false
   },
-  "durationSeconds": 27.80142505264282,
-  "deliveredGameplayFps": 6.157110515394036,
+  "durationSeconds": 28.340900897979736,
+  "deliveredGameplayFps": 6.147909237949936,
   "capture": "Lossless Chromium PNG screencast of the live editor, driven by Playwright; original timestamps preserved."
 }
