@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft. All rights reserved.
+// Copyright (c) John Scrudato IV. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 #nullable enable
@@ -80,7 +80,7 @@ public sealed class DocxSnapshotStore
         return DocxDiff.CreateComparison(new WmlDocument("before.docx", left), new WmlDocument("after.docx", right), settings);
     }
 
-    private PackageManifest Inspect(byte[] bytes)
+    internal PackageManifest Inspect(byte[] bytes)
     {
         var manifest = PackageManifestGenerator.Generate(bytes, _packageOptions);
         if (!manifest.IsValid || manifest.PackageKind != "opc" || manifest.Facts.MainDocumentUri is null

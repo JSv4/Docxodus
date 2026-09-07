@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft. All rights reserved.
+// Copyright (c) John Scrudato IV. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 #nullable enable
@@ -119,7 +119,7 @@ public sealed partial class DocxVersionHistory
         return new DocxHistoryUpdate(after, current, entries.AsReadOnly(), current.State.Epoch != previous.State.Epoch);
     }
 
-    private static void ValidatePublicationEdge(DocxHistoryView child, DocxHistoryView parent)
+    internal static void ValidatePublicationEdge(DocxHistoryView child, DocxHistoryView parent)
     {
         Consistent(child.State.InitialSnapshot == parent.State.InitialSnapshot
             && child.State.Sequence >= parent.State.Sequence && child.State.Sequence - parent.State.Sequence <= 1

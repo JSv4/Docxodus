@@ -4,7 +4,37 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Writable history-file import validates before copying and atomically preserves the original
+  head without overwriting local history; document-scoped APIs expose explicit checkpoint/restore.
+  `ImportHistoryArchiveAsync(stream, leaveOpen: false)` now disposes the stream it was given even
+  when the head store or the supplied limits are rejected before the archive reader takes over.
+- Portable `.docxhistory` files: stream export of one captured document, independently
+  reopenable read-only document APIs, strict ZIP/manifest validation, and real legal-document
+  archives with exact snapshot/proposal/comparison files under `TestFiles/HistoryArchive`.
+  Reading a blob out of an open archive whose backing bytes changed underneath it now reports
+  `PackageChangeError.PayloadMismatch`, matching what `OpenAsync` already guaranteed, instead of
+  surfacing the raw `InvalidDataException` from the ZIP decoder.
+- Portable-history foundation: bounded, document-scoped graph validation retains exact
+  snapshots, package effects, restore targets, retry receipts, and operation proposals
+  without enumerating shared storage. Includes real legal-document and hostile-graph tests.
+
 ### Fixed
+
+- ~195 source files written after this repo forked from Microsoft's `OpenXmlPowerTools` carried
+  a copy-pasted `// Copyright (c) Microsoft. All rights reserved.` file header even though they
+  have no Microsoft-authored lineage — entire post-fork subsystems (`DocxSession`, `History/`,
+  `Verification/`, `Delivery/`, `Internal/`, `Ir/`, the editor, the MCP server, and the
+  npm/Python/WASM layers, among others) had picked up the header as boilerplate, presumably
+  copied file-to-file for StyleCop's `SA1633` rather than for attribution. Each file's fate was
+  decided by an exact-filename match against the real `OpenXmlPowerTools`/`OpenXmlPowerTools.Tests`
+  source tree (github.com/OfficeDev/Open-Xml-PowerTools): the ~40 files that are genuine
+  derivatives of an original file (`DocumentBuilder.cs`, `PtOpenXmlUtil.cs`, `WmlToHtmlConverter.cs`,
+  and the like, plus their like-named tests) keep the Microsoft notice, matching the repository
+  `LICENSE`, which has always credited both; everything else now reads
+  `// Copyright (c) John Scrudato IV. All rights reserved.` CLAUDE.md documents the rule and the
+  keep-list so it isn't reintroduced.
 
 - The editor's find bar no longer loses the keyboard the moment a query matches. It re-scanned on
   every keystroke and then *selected* the first hit, and selecting inside a contenteditable block

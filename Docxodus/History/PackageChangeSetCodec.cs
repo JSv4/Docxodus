@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft. All rights reserved.
+// Copyright (c) John Scrudato IV. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 #nullable enable
@@ -130,8 +130,16 @@ public static class PackageChangeSetCodec
         return bytes;
     }
 
-    private sealed record Manifest(VerificationDigest Before, VerificationDigest After,
+    internal sealed record Manifest(VerificationDigest Before, VerificationDigest After,
         IReadOnlyList<PackageEntryChange> Changes, IReadOnlyList<HistoryBlobReference> Payloads);
+
+    // Typed inventory without buffering all payloads. Uses the same strict codec as replay.
+    internal static Manifest ReadInventory(byte[] bytes, PackageChangeLimits limits)
+    {
+        limits.Validate();
+        Budget(bytes.Length <= limits.MaxManifestBytes, "Manifest exceeds the byte limit.");
+        return Parse(bytes, limits);
+    }
 
     private static Manifest Parse(byte[] bytes, PackageChangeLimits limits)
     {

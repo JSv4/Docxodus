@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft. All rights reserved.
+// Copyright (c) John Scrudato IV. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 #nullable enable
@@ -28,6 +28,9 @@ public sealed class PackageChangeException : Exception
 {
     internal PackageChangeException(PackageChangeError code, string message) : base(message) =>
         Code = code;
+
+    internal PackageChangeException(PackageChangeError code, string message, Exception innerException)
+        : base(message, innerException) => Code = code;
 
     public PackageChangeError Code { get; }
 }

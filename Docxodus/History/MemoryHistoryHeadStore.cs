@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft. All rights reserved.
+// Copyright (c) John Scrudato IV. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 #nullable enable
@@ -8,7 +8,7 @@ using System.Collections.Concurrent;
 namespace Docxodus.History;
 
 /// <summary>Thread-safe process-local compare-and-swap heads; hosts own aggregate quota/lifetime.</summary>
-public sealed class MemoryHistoryHeadStore : IHistoryHeadStore
+public sealed class MemoryHistoryHeadStore : IHistoryHeadInitializer
 {
     private readonly ConcurrentDictionary<string, HistoryHead> _heads = new(StringComparer.Ordinal);
 
@@ -27,5 +27,14 @@ public sealed class MemoryHistoryHeadStore : IHistoryHeadStore
         cancellationToken.ThrowIfCancellationRequested();
         var success = expected is null ? _heads.TryAdd(key, next) : _heads.TryUpdate(key, next, expected);
         return ValueTask.FromResult(success ? next : null);
+    }
+
+    public ValueTask<HistoryHeadInitializationResult> TryInitializeAsync(string documentId, HistoryHead head,
+        CancellationToken cancellationToken = default)
+    {
+        var key = HistoryHeadCodec.Key(documentId); HistoryHeadCodec.Validate(head);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_heads.TryAdd(key, head)) return ValueTask.FromResult(new HistoryHeadInitializationResult(true, head));
+        return ValueTask.FromResult(new HistoryHeadInitializationResult(false, _heads[key]));
     }
 }

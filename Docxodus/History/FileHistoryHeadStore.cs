@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft. All rights reserved.
+// Copyright (c) John Scrudato IV. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 #nullable enable
@@ -12,7 +12,7 @@ namespace Docxodus.History;
 /// Persistent .lock files must never be deleted while the store is in use. Power-loss durability
 /// depends on host filesystem directory guarantees, as with FileHistoryBlobStore.
 /// </summary>
-public sealed class FileHistoryHeadStore : IHistoryHeadStore
+public sealed class FileHistoryHeadStore : IHistoryHeadInitializer
 {
     private readonly string _directory;
 
@@ -49,6 +49,25 @@ public sealed class FileHistoryHeadStore : IHistoryHeadStore
         Directory.CreateDirectory(_directory);
         using var gate = await AcquireAsync(Path.Combine(_directory, key + ".lock"), cancellationToken).ConfigureAwait(false);
         if (await ReadAsync(documentId, cancellationToken).ConfigureAwait(false) != expected) return null;
+        await WriteAsync(key, next, overwrite: true, cancellationToken).ConfigureAwait(false);
+        return next;
+    }
+
+    public async ValueTask<HistoryHeadInitializationResult> TryInitializeAsync(string documentId, HistoryHead head,
+        CancellationToken cancellationToken = default)
+    {
+        var key = HistoryHeadCodec.Key(documentId); HistoryHeadCodec.Validate(head);
+        cancellationToken.ThrowIfCancellationRequested();
+        Directory.CreateDirectory(_directory);
+        using var gate = await AcquireAsync(Path.Combine(_directory, key + ".lock"), cancellationToken).ConfigureAwait(false);
+        var existing = await ReadAsync(documentId, cancellationToken).ConfigureAwait(false);
+        if (existing is not null) return new(false, existing);
+        await WriteAsync(key, head, overwrite: false, cancellationToken).ConfigureAwait(false);
+        return new(true, head);
+    }
+
+    private async ValueTask WriteAsync(string key, HistoryHead head, bool overwrite, CancellationToken cancellationToken)
+    {
         var temporary = Path.Combine(_directory, $".{Guid.NewGuid():N}.tmp");
         var ownsTemporary = false;
         try
@@ -57,13 +76,12 @@ public sealed class FileHistoryHeadStore : IHistoryHeadStore
                 4096, FileOptions.Asynchronous))
             {
                 ownsTemporary = true;
-                await file.WriteAsync(HistoryHeadCodec.Encode(next), cancellationToken).ConfigureAwait(false);
+                await file.WriteAsync(HistoryHeadCodec.Encode(head), cancellationToken).ConfigureAwait(false);
                 await file.FlushAsync(cancellationToken).ConfigureAwait(false);
                 file.Flush(flushToDisk: true);
             }
             cancellationToken.ThrowIfCancellationRequested();
-            File.Move(temporary, HeadPath(key), overwrite: true);
-            return next;
+            File.Move(temporary, HeadPath(key), overwrite);
         }
         finally
         {

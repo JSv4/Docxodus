@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft. All rights reserved.
+// Copyright (c) John Scrudato IV. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 #nullable enable
@@ -26,12 +26,15 @@ internal static class HistoryHeadCodec
     internal static HistoryHead Next(HistoryHead? expected, HistoryBlobReference state)
     {
         HistoryBlobIO.Validate(state, int.MaxValue);
-        if (expected is not null)
-        {
-            HistoryBlobIO.Validate(expected.State, int.MaxValue);
-            if (expected.Revision <= 0) throw new ArgumentOutOfRangeException(nameof(expected));
-        }
+        if (expected is not null) Validate(expected);
         return new HistoryHead(checked((expected?.Revision ?? 0) + 1), state);
+    }
+
+    internal static void Validate(HistoryHead head)
+    {
+        ArgumentNullException.ThrowIfNull(head);
+        HistoryBlobIO.Validate(head.State, int.MaxValue);
+        if (head.Revision <= 0) throw new ArgumentOutOfRangeException(nameof(head));
     }
 
     internal static byte[] Encode(HistoryHead head)

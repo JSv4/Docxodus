@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft. All rights reserved.
+// Copyright (c) John Scrudato IV. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 #nullable enable
@@ -12,6 +12,40 @@ namespace Docxodus.Tests;
 
 public class HistoryHeadStoreTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExactInitializationIsAbsentOnlyAndSharesTheOrdinaryPublicationLock(bool filesystem)
+    {
+        using var scope = new StoreScope(filesystem);
+        var initializer = (IHistoryHeadInitializer)scope.Store;
+        var imported = new HistoryHead(87, State('a'));
+        var results = await Task.WhenAll(Enumerable.Range(0, 12).Select(_ => Task.Run(async () =>
+            await (filesystem ? new FileHistoryHeadStore(scope.Directory) : initializer).TryInitializeAsync("doc", imported))));
+        Assert.Single(results, r => r.Initialized);
+        Assert.All(results, r => Assert.Equal(imported, r.Head));
+        var other = await initializer.TryInitializeAsync("doc", new HistoryHead(1000, State('b')));
+        Assert.False(other.Initialized); Assert.Equal(imported, other.Head);
+        var advanced = await scope.Store.TryAdvanceAsync("doc", imported, State('b'));
+        Assert.Equal(88, advanced!.Revision);
+        Assert.Equal(advanced, (await initializer.TryInitializeAsync("doc", imported)).Head);
+        Assert.Equal(advanced, await scope.Store.ReadAsync("doc"));
+        await Assert.ThrowsAnyAsync<ArgumentException>(async () =>
+            await initializer.TryInitializeAsync("other", imported with { Revision = 0 }));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await initializer.TryInitializeAsync("other", imported, new CancellationToken(true)));
+        Assert.Null(await scope.Store.ReadAsync("other"));
+        Assert.Empty(Directory.GetFiles(scope.Directory, "*.tmp"));
+
+        // Ordinary absent CAS and imported revision compete on the same key.
+        var raced = await Task.WhenAll(Task.Run(async () =>
+            (HistoryHead?)(await initializer.TryInitializeAsync("race", imported)).Head), Task.Run(async () =>
+            await scope.Store.TryAdvanceAsync("race", null, State('c'))));
+        var winner = await scope.Store.ReadAsync("race");
+        Assert.True(winner == imported || winner == new HistoryHead(1, State('c')));
+        Assert.All(raced.Where(r => r is not null), r => Assert.Equal(winner, r));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
