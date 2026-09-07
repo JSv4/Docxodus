@@ -303,6 +303,7 @@ test('a host that hides the file actions can still open a document', async ({ pa
     const { mountRibbon } = (window as any).DocxodusEditor;
     const demo = (window as any).__demo;
     const host = document.createElement('div');
+    host.style.cssText = 'height:400px';
     document.body.appendChild(host);
     const ribbon = mountRibbon(host, {
       exports: demo.exports, fileActions: false, loader: false, hint: false, documentName: 'hosted.docx',
