@@ -29,6 +29,9 @@ Omit `checkpoints` and `capture` when mounting a standalone archive reader. The 
 owns or closes its reader. It awaits preview/download callbacks and disables conflicting
 controls during calls. `ready` and `refresh()` reject on errors as well as showing feedback.
 The optional `download` callback lets your app choose its own download dialog.
+`onCheckpoint(view, action)` reports an acknowledged save, restore or retry before refreshing
+the list. Hosts can use it to mark a captured draft as saved, provided no edits arrived while
+the save ran. A restore leaves the draft untouched; a retry can acknowledge an older request.
 
 `HistoryCheckpoints` also works without the panel. Supply your own durable
 `HistoryCheckpointJournal`, or use the IndexedDB store's per-document journal. Complete
@@ -36,6 +39,35 @@ requests survive reloads; Retry recovers the captured inputs, even if a later ch
 exists. A stale draft stays open until the user refreshes history and decides what to save.
 IndexedDB data stays on this browser and can be removed by clearing site data; download a
 history file for a portable copy. No automatic checkpoint, network sync or retention is installed.
+
+The [runnable TypeScript example](../npm/examples/history.ts) pairs this panel with the ribbon
+editor and a separate preview. From `npm/`, with WASM already built:
+
+```sh
+npm run build:history-example
+python3 -m http.server 8088 --directory dist/wasm
+```
+
+Open `http://localhost:8088/history.html`. Open a DOCX, edit and save a checkpoint, or open one
+of the [sample history files](../TestFiles/HistoryArchive/README.md). History files open read-only
+first; **Resume editing this history** imports the embedded document identity. A conflicting
+local history leaves the archive open read-only. **Back to my draft** returns to the existing
+editor history. **Use as draft** in a saved-version preview asks before replacing unsaved work.
+Malformed or unsupported files leave the current editor intact; archive size is checked before
+reading upload bytes. Pending saves recover across reloads, and the example reopens their
+captured draft. Ordinary unsaved edits are not autosaved.
+
+When loading an already captured version, pass its view as the third argument to
+`HistoryCheckpoints.open(document, journal, view)`. This keeps the editor's expected head
+paired with its bytes, including when an import retry returns an older receipt.
+
+Run the artifact and browser-interaction checks with:
+
+```sh
+npm run build:ts
+npm run typecheck
+npx playwright test history-checkpoints.spec.ts history-controls.spec.ts history-example.spec.ts --project=chromium
+```
 
 Users handle documents, not storage directories. Your app owns persistence, request IDs,
 loading indicators, download dialogs and the editor; Docxodus supplies the history calls.

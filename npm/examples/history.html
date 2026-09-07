@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Docxodus — document history</title>
+<style>
+  *{box-sizing:border-box}body{margin:0!important;background:#f1f5f9;color:#203047;font:14px/1.5 system-ui,sans-serif}
+  header{padding:16px 24px;background:white;border-bottom:1px solid #cbd5e1}h1{font-size:24px;margin:0}header p{margin:6px 0}
+  fieldset{border:0;margin:0;padding:0}button,input{font:inherit}button{padding:8px 12px;margin:4px;border:1px solid #94a3b8;border-radius:6px;cursor:pointer;background:white;color:inherit}
+  button:focus-visible,input:focus-visible{outline:3px solid #2563eb}button:disabled{opacity:.5;cursor:default}[hidden]{display:none!important}
+  main{display:grid;grid-template-columns:minmax(0,1fr) 390px;gap:16px;padding:16px}#editor{height:calc(100dvh - 210px);min-height:520px;min-width:0}#editor>div{height:100%}
+  aside{min-width:0}#source{overflow-wrap:anywhere}dialog{width:min(1000px,95vw);max-height:94dvh;border:1px solid #94a3b8;border-radius:12px;padding:18px}dialog::backdrop{background:#0f172a99}
+  #preview{max-height:66dvh;overflow:auto;border:1px solid #cbd5e1;margin-top:12px}#preview-title{font-size:20px;margin:0}
+  @media(max-width:850px){main{grid-template-columns:minmax(0,1fr)}aside{grid-row:1}header{padding:12px}#editor{height:75dvh}}
+</style>
+<header>
+  <h1>Documents with history</h1>
+  <p>Keep checkpoints in this browser. Download a history file to take them with you.</p>
+  <fieldset id="files" disabled aria-label="Open documents">
+    <button id="new" type="button">New document</button>
+    <button id="download-draft" type="button">Download draft DOCX</button>
+    <label>Open a DOCX or history file <input id="file" type="file" accept=".docx,.docxhistory"></label>
+    <button id="resume" type="button" hidden>Resume editing this history</button>
+    <button id="back" type="button" hidden>Back to my draft</button>
+  </fieldset>
+  <p id="message" role="status">Loading document tools…</p>
+</header>
+<main><div id="editor" aria-label="Open draft"></div><aside><p id="source"></p><div id="history"></div></aside></main>
+<dialog id="preview-dialog" aria-labelledby="preview-title">
+  <h2 id="preview-title">Preview</h2>
+  <p>Your draft stays open while you browse.</p>
+  <button id="close-preview" type="button">Close preview</button>
+  <button id="use-preview" type="button">Use as draft</button>
+  <button id="download-preview" type="button">Download preview DOCX</button>
+  <div id="preview"></div>
+</dialog>
+<script type="module" src="./history-example.js"></script>
+</html>

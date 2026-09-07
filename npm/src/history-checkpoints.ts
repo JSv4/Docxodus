@@ -29,12 +29,16 @@ export class HistoryCheckpoints {
 
   private constructor(readonly document: DocxHistoryDocument, private readonly journal: HistoryCheckpointJournal) {}
 
-  static async open(document: DocxHistoryDocument, journal: HistoryCheckpointJournal): Promise<HistoryCheckpoints> {
+  /** Pass an already captured view when opening its exact version in an editor (for example, after import). */
+  static async open(document: DocxHistoryDocument, journal: HistoryCheckpointJournal,
+    view?: DocxHistoryView | null): Promise<HistoryCheckpoints> {
     const controls = new HistoryCheckpoints(document, journal);
     controls.request = structuredClone(await journal.read());
     if (controls.request && controls.request.documentId !== document.documentId)
       throw new DocxHistoryError('InvalidRequest', 'The pending checkpoint belongs to another document.');
-    controls.current = await document.read();
+    controls.current = view === undefined ? await document.read() : structuredClone(view);
+    if (controls.current && controls.current.state.documentId !== document.documentId)
+      throw new DocxHistoryError('InvalidRequest', 'The captured view belongs to another document.');
     return controls;
   }
 
