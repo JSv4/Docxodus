@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Portable-history client bindings: standalone readonly files and document-scoped controls in
+  npm/Python; optional exact-head initialization for browser storage; session-scoped MCP
+  import/export; [concise frontend API guide](docs/history-controls.md).
 - Writable history-file import validates before copying and atomically preserves the original
   head without overwriting local history; document-scoped APIs expose explicit checkpoint/restore.
 - Portable `.docxhistory` files: stream export of one captured document, independently

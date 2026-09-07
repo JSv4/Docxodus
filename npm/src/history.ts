@@ -4,6 +4,10 @@ import type { VerificationDigest } from './types.js';
 export type HistoryPosition = string;
 export interface HistoryBlobReference { digest: VerificationDigest; length: number }
 export interface HistoryHead { revision: HistoryPosition; state: HistoryBlobReference }
+export interface HistoryHeadInitializationResult { initialized: boolean; head: HistoryHead }
+export interface DocxHistoryArchiveInfo { documentId: string; head: HistoryHead; blobCount: number; totalBlobBytes: HistoryPosition }
+export interface DocxHistoryImportResult { archive: DocxHistoryArchiveInfo; view: DocxHistoryView; alreadyPresent: boolean }
+export const MAX_HISTORY_ARCHIVE_BYTES = 64 * 1024 * 1024;
 export interface HistoryRequestIdentity { id: string; fingerprint: VerificationDigest }
 export interface HistoryRequestJournal {
   documentId: string;
@@ -61,6 +65,20 @@ export interface DocxHistoryUpdate {
   entries: DocxHistoryLogEntry[];
   reset: boolean;
 }
+export interface DocxTextSplice { partUri: string; textNode: number; offset: number; deleteCount: number; insert: string }
+export interface DocxOperationRequest {
+  requestId: string; base: HistoryHead; kind: 'text' | 'package' | 'discard'; metadata: DocxVersionMetadata;
+  text: DocxTextSplice | null; readParts: string[]; resolves: HistoryBlobReference | null;
+}
+export interface DocxOperationInput { documentId: string; request: DocxOperationRequest; candidate: HistoryBlobReference | null }
+export interface DocxOperationRecord {
+  documentId: string; input: HistoryBlobReference; parent: HistoryBlobReference | null; revision: HistoryPosition;
+  before: HistoryHead; proposedSnapshot: DocxSnapshotReference; afterSnapshot: DocxSnapshotReference;
+  version: HistoryBlobReference; contentCommit: HistoryBlobReference | null; status: 'accepted' | 'conflict';
+  conflict: string | null; appliedText: DocxTextSplice | null;
+}
+export interface DocxStoredOperation { id: HistoryBlobReference; record: DocxOperationRecord; input: DocxOperationInput }
+export interface DocxOperationUpdate { after: HistoryHead | null; view: DocxHistoryView; operations: DocxStoredOperation[] }
 
 /** Host-owned storage. Persist blobs before returning; advanceHead must be an atomic CAS.
  * References and returned bytes are verified in the core. Methods must settle their promises.
@@ -70,10 +88,15 @@ export interface HistoryStorage {
   putBlob(reference: HistoryBlobReference, bytes: Uint8Array): Promise<void>;
   readHead(documentId: string): Promise<HistoryHead | null>;
   advanceHead(documentId: string, expected: HistoryHead | null, state: HistoryBlobReference): Promise<HistoryHead | null>;
+  /** Optional import capability. Atomically insert the exact head only if absent; otherwise return
+   * the unchanged existing head. Must share exclusion with advanceHead, never overwrite/revise it. */
+  initializeHead?(documentId: string, head: HistoryHead): Promise<HistoryHeadInitializationResult>;
 }
 
 export interface HistoryBridge {
   Open(adapterId: number): number;
+  OpenWithInitialization?(adapterId: number): number;
+  OpenArchive?(bytes: Uint8Array): Promise<string>;
   Close(handle: number): void;
   Invoke(handle: number, requestJson: string, bytes: Uint8Array): Promise<string>;
 }
@@ -83,6 +106,9 @@ export class DocxHistoryError extends Error {
 }
 
 interface Result {
+  handle: number | null;
+  archive: DocxHistoryArchiveInfo | null;
+  import: DocxHistoryImportResult | null;
   success: boolean;
   errorCode: string | null;
   message: string | null;
@@ -92,6 +118,8 @@ interface Result {
   sequence: HistoryPosition | null;
   bytes: string | null;
   update: DocxHistoryUpdate | null;
+  operationUpdate: DocxOperationUpdate | null;
+  operation: DocxStoredOperation | null;
 }
 
 const adapters = new Map<number, HistoryStorage>();
@@ -129,6 +157,11 @@ export function installHistoryStorageImports(setModuleImports: (name: string, im
       JSON.stringify(await adapter(id).readHead(documentId)),
     advanceHead: async (id: number, documentId: string, expected: string, state: string): Promise<string> =>
       JSON.stringify(await adapter(id).advanceHead(documentId, JSON.parse(expected), JSON.parse(state))),
+    initializeHead: async (id: number, documentId: string, head: string): Promise<string> => {
+      const storage = adapter(id);
+      if (!storage.initializeHead) throw new DocxHistoryError('InitializationUnsupported', 'Storage cannot import an exact head.');
+      return JSON.stringify(await storage.initializeHead(documentId, JSON.parse(head)));
+    },
   });
 }
 
@@ -143,7 +176,8 @@ export class DocxHistoryClient {
     if (nextAdapter >= 0x7fffffff) throw new Error('History adapter identifiers exhausted.');
     this.adapterId = ++nextAdapter;
     adapters.set(this.adapterId, storage);
-    try { this.handle = bridge.Open(this.adapterId); }
+    try { this.handle = storage.initializeHead && bridge.OpenWithInitialization
+      ? bridge.OpenWithInitialization(this.adapterId) : bridge.Open(this.adapterId); }
     catch (error) { adapters.delete(this.adapterId); throw error; }
   }
 
@@ -154,12 +188,37 @@ export class DocxHistoryClient {
     this.closed = true;
   }
 
+  /** Bind an identity without reading, creating a version, or taking ownership of this client. */
+  document(documentId: string): DocxHistoryDocument {
+    return new DocxHistoryDocument(documentId, (operation, fields, bytes) => this.call(operation, documentId, fields, bytes));
+  }
+
+  async exportHistoryArchive(documentId: string): Promise<Uint8Array> {
+    return fromBase64((await this.call('exportArchive', documentId)).bytes!);
+  }
+  async importHistoryArchive(bytes: Uint8Array): Promise<DocxHistoryImportResult> {
+    checkArchiveSize(bytes);
+    return (await this.call('importArchive', '', {}, bytes)).import!;
+  }
+
   async read(documentId: string): Promise<DocxHistoryView | null> {
     return (await this.call('read', documentId)).view;
   }
   /** Host-triggered validated metadata tail; first join starts at the latest checkpoint. */
   async readChangesSince(documentId: string, after: HistoryHead | null, maxEntriesToScan = 10_000): Promise<DocxHistoryUpdate> {
     return (await this.call('updates', documentId, { expectedHead: after, maxEntriesToScan })).update!;
+  }
+  async readOperationsSince(documentId: string, after: HistoryHead | null, maxEntriesToScan = 10_000): Promise<DocxOperationUpdate> {
+    return (await this.call('operations', documentId, { expectedHead: after, maxEntriesToScan })).operationUpdate!;
+  }
+  async getOperation(documentId: string, operationId: HistoryBlobReference): Promise<DocxStoredOperation> {
+    return (await this.call('getOperation', documentId, { operationId })).operation!;
+  }
+  async exportOperationProposal(documentId: string, operationId: HistoryBlobReference): Promise<Uint8Array> {
+    return fromBase64((await this.call('exportOperationProposal', documentId, { operationId })).bytes!);
+  }
+  async compareVersions(documentId: string, beforeVersionId: HistoryBlobReference, afterVersionId: HistoryBlobReference): Promise<Uint8Array> {
+    return fromBase64((await this.call('compare', documentId, { beforeVersionId, afterVersionId })).bytes!);
   }
   async createVersion(documentId: string, expectedHead: HistoryHead | null, bytes: Uint8Array,
     metadata: DocxVersionMetadata, requestId?: string): Promise<DocxHistoryView> {
@@ -190,11 +249,104 @@ export class DocxHistoryClient {
 
   private async call(operation: string, documentId: string, fields: object = {}, bytes: Uint8Array = new Uint8Array()): Promise<Result> {
     if (this.closed) throw new DocxHistoryError('Closed', 'History client is closed.');
-    const result: Result = JSON.parse(await this.bridge.Invoke(this.handle,
+    return parseResult(await this.bridge.Invoke(this.handle,
       JSON.stringify({ schemaVersion: 1, operation, documentId, ...fields }), bytes));
-    if (!result.success) throw new DocxHistoryError(result.errorCode!, result.message!);
-    return result;
   }
+}
+
+type HistoryCall = (operation: string, fields?: object, bytes?: Uint8Array) => Promise<Result>;
+
+/** Document-scoped reads. No method publishes or changes an editor. */
+export class DocxHistoryReader {
+  /** @internal Obtain through client.document() or openDocxHistoryArchive(). */
+  constructor(public readonly documentId: string, protected readonly call: HistoryCall) {}
+  async read(): Promise<DocxHistoryView | null> { return (await this.call('read')).view; }
+  async listVersions(cursor: HistoryBlobReference | null = null, limit = 25): Promise<DocxVersionPage> {
+    return (await this.call('list', { versionId: cursor, limit })).page!;
+  }
+  async getVersion(versionId: HistoryBlobReference): Promise<DocxStoredVersion> {
+    return (await this.call('get', { versionId })).version!;
+  }
+  /** Omit versionId for latest; pass an ID to keep a UI operation pinned to a captured version. */
+  async exportDocx(versionId: HistoryBlobReference | null = null): Promise<Uint8Array> {
+    return fromBase64((await this.call('exportDocx', { versionId })).bytes!);
+  }
+  async exportHistoryArchive(): Promise<Uint8Array> { return fromBase64((await this.call('exportArchive')).bytes!); }
+  async materialize(sequence: HistoryPosition, maxEntriesToScan = 10_000): Promise<Uint8Array> {
+    return fromBase64((await this.call('materialize', { sequence, maxEntriesToScan })).bytes!);
+  }
+  async replay(sequence: HistoryPosition, maxEntriesToScan = 10_000): Promise<Uint8Array> {
+    return fromBase64((await this.call('replay', { sequence, maxEntriesToScan })).bytes!);
+  }
+  async resolveSequenceAtTime(cutoff: string, maxEntriesToScan = 10_000): Promise<HistoryPosition> {
+    return (await this.call('resolveTime', { cutoff, maxEntriesToScan })).sequence!;
+  }
+  async readChangesSince(after: HistoryHead | null, maxEntriesToScan = 10_000): Promise<DocxHistoryUpdate> {
+    return (await this.call('updates', { expectedHead: after, maxEntriesToScan })).update!;
+  }
+  async readOperationsSince(after: HistoryHead | null, maxEntriesToScan = 10_000): Promise<DocxOperationUpdate> {
+    return (await this.call('operations', { expectedHead: after, maxEntriesToScan })).operationUpdate!;
+  }
+  async getOperation(operationId: HistoryBlobReference): Promise<DocxStoredOperation> {
+    return (await this.call('getOperation', { operationId })).operation!;
+  }
+  async exportOperationProposal(operationId: HistoryBlobReference): Promise<Uint8Array> {
+    return fromBase64((await this.call('exportOperationProposal', { operationId })).bytes!);
+  }
+  /** Redlined DOCX through DocxCompare's existing accepted-input revision policy. */
+  async compareVersions(beforeVersionId: HistoryBlobReference, afterVersionId: HistoryBlobReference): Promise<Uint8Array> {
+    return fromBase64((await this.call('compare', { beforeVersionId, afterVersionId })).bytes!);
+  }
+}
+
+/** Explicit checkpoint/restore controls over host-owned storage; request IDs are required here. */
+export class DocxHistoryDocument extends DocxHistoryReader {
+  async createVersion(expectedHead: HistoryHead | null, bytes: Uint8Array, metadata: DocxVersionMetadata,
+    requestId: string): Promise<DocxHistoryView> {
+    requireRequestId(requestId);
+    return (await this.call('create', { expectedHead, metadata, requestId }, bytes)).view!;
+  }
+  async restoreVersion(expectedHead: HistoryHead, versionId: HistoryBlobReference, metadata: DocxVersionMetadata,
+    requestId: string): Promise<DocxHistoryView> {
+    requireRequestId(requestId);
+    return (await this.call('restore', { expectedHead, versionId, metadata, requestId })).view!;
+  }
+}
+
+/** Standalone readonly file. Owns its handle and captured bytes; await calls before close(). */
+export class DocxHistoryArchive extends DocxHistoryReader {
+  private closed = false;
+  private constructor(private readonly bridge: HistoryBridge, private readonly handle: number,
+    public readonly info: DocxHistoryArchiveInfo) {
+    super(info.documentId, async (operation, fields = {}, bytes = new Uint8Array()) => {
+      if (this.closed) throw new DocxHistoryError('Closed', 'History archive is closed.');
+      return parseResult(await bridge.Invoke(handle,
+        JSON.stringify({ schemaVersion: 1, operation, documentId: this.documentId, ...fields }), bytes));
+    });
+  }
+  /** For custom loaders; normal callers use openDocxHistoryArchive(). */
+  static async open(bridge: HistoryBridge, bytes: Uint8Array): Promise<DocxHistoryArchive> {
+    checkArchiveSize(bytes);
+    if (!bridge.OpenArchive) throw new Error('This WASM build does not include portable history.');
+    const result = parseResult(await bridge.OpenArchive(bytes));
+    return new DocxHistoryArchive(bridge, result.handle!, result.archive!);
+  }
+  close(): void {
+    if (this.closed) return;
+    this.bridge.Close(this.handle); this.closed = true;
+  }
+}
+
+function parseResult(json: string): Result {
+  const result: Result = JSON.parse(json);
+  if (!result.success) throw new DocxHistoryError(result.errorCode!, result.message!);
+  return result;
+}
+function checkArchiveSize(bytes: Uint8Array): void {
+  if (bytes.length > MAX_HISTORY_ARCHIVE_BYTES) throw new DocxHistoryError('ResourceLimit', 'History archive exceeds 64 MiB.');
+}
+function requireRequestId(requestId: string): void {
+  if (typeof requestId !== 'string' || !requestId.trim()) throw new DocxHistoryError('InvalidRequest', 'A durable requestId is required.');
 }
 
 /** Reference process-local storage. Share one instance among local clients; it is not durable
@@ -236,6 +388,16 @@ export function createMemoryHistoryStorage(maxBlobBytes = 256 * 1024 * 1024): Hi
       // No awaits inside the compare/publication critical section, even under concurrent callers.
       heads.set(documentId, head);
       return copy(head);
+    },
+    async initializeHead(documentId, head) {
+      key(head.state);
+      if (typeof head.revision !== 'string' || !/^[1-9][0-9]*$/.test(head.revision) || BigInt(head.revision) > 9223372036854775807n)
+        throw new DocxHistoryError('InvalidRequest', 'Imported head revision must be a positive Int64 string.');
+      const existing = heads.get(documentId);
+      if (existing) return { initialized: false, head: copy(existing) };
+      // Same synchronous critical section as advanceHead; exact revision, no await/increment.
+      const captured = copy(head); heads.set(documentId, captured);
+      return { initialized: true, head: copy(captured) };
     },
   };
 }

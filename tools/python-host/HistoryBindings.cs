@@ -35,8 +35,25 @@ internal static class HistoryBindings
 
     public static string Close(JsonElement args)
     {
-        Clients.Remove(args.GetProperty("handle").GetInt32());
+        var handle = args.GetProperty("handle").GetInt32();
+        if (Clients.TryGetValue(handle, out var client)) client.Dispose();
+        Clients.Remove(handle);
         return "null";
+    }
+
+    public static string OpenArchive(JsonElement args)
+    {
+        HistoryClientOps? client = null;
+        try
+        {
+            client = HistoryClientOps.OpenArchiveAsync(Decode(args.GetProperty("docxB64"), HistoryClientOps.MaxArchiveBytes))
+                .GetAwaiter().GetResult();
+            var handle = checked(++_nextHandle);
+            var json = HistoryClientJson.Write(new HistoryClientResult { Handle = handle, Archive = client.ArchiveInfo });
+            Clients.Add(handle, client); client = null; return json;
+        }
+        catch (Exception error) when (HistoryClientOps.IsClientError(error)) { return HistoryClientOps.Failure(error); }
+        finally { client?.Dispose(); }
     }
 
     public static string Invoke(JsonElement args)
@@ -46,13 +63,19 @@ internal static class HistoryBindings
         byte[]? bytes = null;
         if (args.TryGetProperty("docxB64", out var data))
         {
-            var encoded = data.GetString() ?? throw new ArgumentException("DOCX base64 must not be null.");
-            if ((long)encoded.Length > ((256L * 1024 * 1024 + 2) / 3) * 4)
-                throw new ArgumentException("DOCX input exceeds the byte limit.");
-            bytes = Convert.FromBase64String(encoded);
+            var importing = args.GetProperty("request").GetProperty("operation").GetString() == "importArchive";
+            bytes = Decode(data, importing ? HistoryClientOps.MaxArchiveBytes : 256 * 1024 * 1024);
         }
         return client.InvokeAsync(args.GetProperty("request").GetRawText(), bytes).GetAwaiter().GetResult();
     }
 
-    public static void CloseAll() => Clients.Clear();
+    private static byte[] Decode(JsonElement value, int limit)
+    {
+        var encoded = value.GetString() ?? throw new ArgumentException("Binary base64 must not be null.");
+        if ((long)encoded.Length > ((long)limit + 2) / 3 * 4)
+            throw new PackageChangeException(PackageChangeError.ResourceLimit, "Binary input exceeds its byte limit.");
+        return Convert.FromBase64String(encoded);
+    }
+
+    public static void CloseAll() { foreach (var client in Clients.Values) client.Dispose(); Clients.Clear(); }
 }

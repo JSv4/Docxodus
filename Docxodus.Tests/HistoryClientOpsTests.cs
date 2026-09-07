@@ -5,12 +5,90 @@
 
 using Docxodus.History;
 using Docxodus.Internal;
+using System.IO.Compression;
 using Xunit;
 
 namespace Docxodus.Tests;
 
 public class HistoryClientOpsTests
 {
+    [Fact]
+    public async Task CompressedOversizedEntryIsRejectedBeforeInflationByTheByteClientProfile()
+    {
+        using var output = new MemoryStream();
+        using (var zip = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            using (var manifest = zip.CreateEntry("history.json").Open()) manifest.Write("{}"u8);
+            using var payload = zip.CreateEntry("blobs/" + new string('a', 64), CompressionLevel.SmallestSize).Open();
+            var zeros = new byte[1024 * 1024];
+            for (var i = 0; i < 65; i++) payload.Write(zeros);
+        }
+        Assert.True(output.Length < 100_000); // Actual deflate bomb, not a large uploaded file.
+        var error = await Assert.ThrowsAsync<PackageChangeException>(async () => await HistoryClientOps.OpenArchiveAsync(output.ToArray()));
+        Assert.Equal(PackageChangeError.ResourceLimit, error.Code);
+        Assert.Contains("Archive entry", error.Message); // Fails on entry metadata before graph/manifest inflation.
+    }
+
+    [Fact]
+    public async Task ClientArchiveExposesRealConflictDecisionsExactProposalsAndArbitraryPairComparison()
+    {
+        var index = await DocxHistoryArchiveArtifactTests.ReadIndexAsync("charter-collaboration");
+        using var reader = await HistoryClientOps.OpenArchiveAsync(await File.ReadAllBytesAsync(
+            Path.Combine(DocxHistoryArchiveArtifactTests.Root, "charter-collaboration.docxhistory")));
+        var request = new HistoryClientRequest { SchemaVersion = 1, DocumentId = index.DocumentId, Operation = "operations" };
+        async Task<HistoryClientResult> Invoke(HistoryClientRequest value) => HistoryClientJson.Read<HistoryClientResult>(
+            await reader.InvokeAsync(HistoryClientJson.Write(value)));
+        var operations = (await Invoke(request)).OperationUpdate!;
+        Assert.Equal(3, operations.Operations.Count);
+        var conflict = (await Invoke(request with { Operation = "getOperation", OperationId = index.Conflict })).Operation!;
+        Assert.Equal("conflict", conflict.Record.Status); Assert.Equal(index.Conflict, conflict.Id);
+        Assert.Contains(operations.Operations, op => op.Input.Request.Resolves == conflict.Id && op.Record.Status == "accepted");
+        // Binary replies can exceed the metadata parser cap, so inspect their JSON directly.
+        using var proposal = System.Text.Json.JsonDocument.Parse(await reader.InvokeAsync(HistoryClientJson.Write(
+            request with { Operation = "exportOperationProposal", OperationId = conflict.Id })));
+        Assert.Equal(await File.ReadAllBytesAsync(Path.Combine(DocxHistoryArchiveArtifactTests.Root, index.ProposalFile!)),
+            proposal.RootElement.GetProperty("bytes").GetBytesFromBase64());
+        Assert.Empty((await Invoke(request with { ExpectedHead = operations.View.Head })).OperationUpdate!.Operations);
+        var compared = await reader.InvokeAsync(HistoryClientJson.Write(request with { Operation = "compare",
+            BeforeVersionId = index.Versions[0].Id, AfterVersionId = index.Versions[2].Id }));
+        using var result = System.Text.Json.JsonDocument.Parse(compared);
+        Assert.True(result.RootElement.GetProperty("success").GetBoolean());
+        var bytes = result.RootElement.GetProperty("bytes").GetBytesFromBase64();
+        using var session = new DocxSession(bytes); Assert.NotNull(session);
+        using var zip = new ZipArchive(new MemoryStream(bytes));
+        using var xml = zip.GetEntry("word/document.xml")!.Open();
+        Assert.Contains(System.Xml.Linq.XDocument.Load(xml).Descendants(), e => e.Name == W.ins || e.Name == W.del);
+    }
+
+    [Fact]
+    public async Task ArchiveBindingIsReadonlyAndScopedAndImportRetainsExactIdentity()
+    {
+        var bytes = await File.ReadAllBytesAsync(Path.Combine(DocxHistoryArchiveArtifactTests.Root, "agreement.docxhistory"));
+        using var reader = await HistoryClientOps.OpenArchiveAsync(bytes);
+        var info = reader.ArchiveInfo!;
+        var request = new HistoryClientRequest { SchemaVersion = 1, DocumentId = info.DocumentId, Operation = "exportDocx" };
+        async Task<HistoryClientResult> Invoke(HistoryClientOps ops, HistoryClientRequest req, byte[]? data = null) =>
+            HistoryClientJson.Read<HistoryClientResult>(await ops.InvokeAsync(HistoryClientJson.Write(req), data));
+        var latest = (await Invoke(reader, request)).Bytes!;
+        Assert.Equal(await File.ReadAllBytesAsync(Path.Combine(DocxHistoryArchiveArtifactTests.Root, "agreement-v4.docx")), latest);
+        foreach (var op in new[] { "create", "restore", "importArchive" })
+            Assert.Equal("ReadOnly", (await Invoke(reader, request with { Operation = op }, bytes)).ErrorCode);
+        Assert.Equal("ForeignDocument", (await Invoke(reader, request with { DocumentId = "foreign" })).ErrorCode);
+        var exported = await Invoke(reader, request with { Operation = "exportArchive" });
+        Assert.Equal(info, exported.Archive); Assert.NotNull(exported.Bytes);
+        using var target = new HistoryFaultHarness(); using var writable = new HistoryClientOps(target, target);
+        var import = request with { Operation = "importArchive" };
+        Assert.Equal("ForeignDocument", (await Invoke(writable, import with { DocumentId = "wrong-scope" }, bytes)).ErrorCode);
+        Assert.Equal(0, target.Writes); Assert.Equal(0, target.Publications);
+        var result = await Invoke(writable, import with { DocumentId = "" }, bytes);
+        Assert.True(result.Success, result.Message); Assert.Equal(info.Head, result.Import!.View.Head);
+        Assert.True((await Invoke(writable, import, bytes)).Import!.AlreadyPresent);
+        var json = HistoryClientJson.Write(new HistoryHeadInitializationResult(true, info.Head));
+        Assert.Contains("\"initialized\":true", json);
+        Assert.Equal(info.Head, HistoryClientJson.Read<HistoryHeadInitializationResult>(json).Head);
+        reader.Dispose(); Assert.Equal("Closed", (await Invoke(reader, request)).ErrorCode);
+    }
+
     [Fact]
     public async Task RequestIdsReachSharedCreateRestoreReceiptsAndOldCallsStayCompatible()
     {

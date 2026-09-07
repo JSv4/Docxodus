@@ -68,7 +68,7 @@ import type {
 } from "./types.js";
 
 import { DocxSession, openDocxSession as openDocxSessionImpl } from "./session.js";
-import { DocxHistoryClient, installHistoryStorageImports } from './history.js';
+import { DocxHistoryArchive, DocxHistoryClient, installHistoryStorageImports } from './history.js';
 import type { HistoryStorage } from './history.js';
 export * from './history.js';
 
@@ -77,6 +77,13 @@ export function openDocxHistory(storage: HistoryStorage): DocxHistoryClient {
   const bridge = ensureInitialized().HistoryBridge;
   if (!bridge) throw new Error('This WASM build does not include history bindings.');
   return new DocxHistoryClient(bridge, storage);
+}
+
+/** Open a self-contained readonly .docxhistory file after initialize(); no storage adapter needed. */
+export function openDocxHistoryArchive(bytes: Uint8Array): Promise<DocxHistoryArchive> {
+  const bridge = ensureInitialized().HistoryBridge;
+  if (!bridge) throw new Error('This WASM build does not include history bindings.');
+  return DocxHistoryArchive.open(bridge, bytes);
 }
 
 export { DocxSession } from "./session.js";

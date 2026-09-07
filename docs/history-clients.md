@@ -1,16 +1,38 @@
 # History clients and log-driven rendering
 
+Building controls? Start with the [concise frontend guide](history-controls.md).
+
 The core history service remains the sole replay/publication implementation. Client bindings
 use `Docxodus.Internal.HistoryClientOps` with host-supplied `IHistoryBlobStore` and
 `IHistoryHeadStore` adapters. No networking, server, subscription, timer, or transit layer is
 provided. Hosts decide when to deliver a new head or ask a client to refresh.
 
 The version-1 client request includes `schemaVersion: 1`, `operation`, and `documentId`.
-Operations are `read`, `updates`, `create`, `list`, `get`, `export`, `materialize`, `replay`,
-`resolveTime`, and `restore`. Additional fields are `expectedHead`, `versionId` (also
-the list cursor), `metadata`, `sequence`, `cutoff`, `limit`, and `maxEntriesToScan`.
+Operations are `read`, `updates`, `operations`, `getOperation`, `exportOperationProposal`,
+`compare`, `create`, `list`, `get`, `export`, `materialize`, `replay`, `resolveTime`, `restore`,
+`exportDocx`, `exportArchive`, and `importArchive`. Additional fields are `expectedHead`,
+`versionId` (also the list cursor), `operationId`, `beforeVersionId`, `afterVersionId`,
+`metadata`, `requestId`, `sequence`, `cutoff`, `limit`, and `maxEntriesToScan`.
 Create receives DOCX bytes separately from its JSON request. Export/materialize/replay
-return base64 bytes in their JSON result, which the language wrapper decodes.
+return base64 bytes in their JSON result, which the language wrapper decodes. `exportDocx`
+permits an omitted version ID for latest. Archive calls use a 64 MiB file cap; import receives
+bytes separately and returns `import: { archive, view, alreadyPresent }`. Empty `documentId`
+on the unscoped import client accepts the embedded ID; a nonempty one must match before writes.
+`exportArchive` returns `archive` info plus `bytes`. Standalone archive handles reject writes
+with `ReadOnly` in the shared core boundary, not just the language wrappers.
+
+`operations` takes `expectedHead`/`maxEntriesToScan` and returns `operationUpdate` with
+recorded decisions, inputs and a captured view. `getOperation`/`exportOperationProposal`
+take `operationId`, returning `operation`/exact proposal `bytes`. No decision is re-adjudicated.
+`compare` takes `beforeVersionId`/`afterVersionId` and returns redlined `bytes` through the
+existing `DocxCompare` accepted-input revision policy, without writing document files.
+Scoped readers expose these as `readOperationsSince`/`getOperation`/`exportOperationProposal`/
+`compareVersions` (snake_case in Python).
+
+The byte-client archive profile caps container/blob/snapshot at 64 MiB each, total blob
+bytes at 256 MiB, metadata at 16 MiB, manifest at 4 MiB, graph-blob validation at 512 MiB,
+conservative expansion work at 2 GiB, 10,000 blobs and 100,000 edges. These independent
+limits may reject a file smaller than 64 MiB; native stream hosts can choose their own profile.
 
 Publication revision, content sequence, and epoch are **decimal strings** at this client
 boundary, so JavaScript never rounds a 64-bit position. Blob lengths, schema versions,
@@ -79,13 +101,32 @@ loader calls `installHistoryStorageImports(runtime.setModuleImports)` before ope
 `DocxHistoryClient` over `exports.DocxodusWasm.HistoryBridge`. Normal npm `initialize()` does
 this automatically. The existing worker RPC does not yet expose these host callbacks.
 
-Methods are `read`, `readChangesSince`, `createVersion`, `listVersions`, `getVersion`, `exportVersion`, `materialize`,
-`replay`, `resolveSequenceAtTime`, and `restoreVersion`. For comparisons, export both versions
-and call the existing `docxDiffCompareProducts` API. The package-boundary WASM bridge uses
+Methods include `read`, `readChangesSince`, `readOperationsSince`, `getOperation`, `exportOperationProposal`,
+`compareVersions`, `createVersion`, `listVersions`, `getVersion`, `exportVersion`, `materialize`,
+`replay`, `resolveSequenceAtTime`, `restoreVersion`, `exportHistoryArchive`, `importHistoryArchive`,
+and `document(id)`. `openDocxHistoryArchive(bytes)` returns a standalone readonly scoped reader.
+For custom comparison settings, export both versions into the existing `docxDiffCompareProducts` API.
+The package-boundary WASM bridge uses
 base64 for asynchronously read/exported bytes, incurring temporary allocation overhead;
 it is not a low-latency keystroke path.
 
 ## Python
+
+`open_history_archive(bytes)` returns a context-managed readonly document with
+`read`, `list_versions`, `export_docx` and time/replay methods. To edit:
+
+```python
+with open_history(private_app_directory) as history:
+    imported = history.import_history_archive(archive_bytes)
+    doc = history.document(imported.archive.document_id)
+    latest = doc.export_docx(imported.view.version.id)
+    # doc.create_version(..., request_id=...) / doc.restore_version(..., request_id=...)
+    portable = doc.export_history_archive()
+```
+
+`open_history_archive` needs no root/store. `history.document(id)` borrows its client's
+lifetime. Scoped checkpoint/restore methods require durable IDs; legacy client signatures
+remain unchanged. Compare two `export_docx(id)` results with `docx_diff_compare_products`.
 
 ```python
 from docx_scalpel import open_history, DocxVersionMetadata, convert_docx_to_html
