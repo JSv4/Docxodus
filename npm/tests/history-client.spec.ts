@@ -1,5 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { build } from 'esbuild';
+import { readFile, writeFile } from 'node:fs/promises';
+import { deflateRawSync } from 'node:zlib';
 
 let bundle: string;
 test.beforeAll(async () => {
@@ -179,4 +181,132 @@ test('durable request IDs recover lost acknowledgements and return original resu
   expect(result.oldRestore).toEqual(result.restored); expect(result.current).toEqual(result.later);
   expect(result.conflict).toBe('RequestConflict'); expect(result.count).toBe(3);
   expect(result.requestId).toBe('create-id'); expect(result.revisionType).toBe('string');
+});
+
+test('real history file opens readonly, drives controls, imports and continues without its original store', async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const input = await readFile('../TestFiles/HistoryArchive/agreement.docxhistory');
+  const expected = await readFile('../TestFiles/HistoryArchive/agreement-v1.docx');
+  const result = await page.evaluate(async ({ encoded, expected }) => {
+    const api = (window as any).historyApi;
+    const decode = (s: string) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+    const encode = (b: Uint8Array) => { let s = ''; for (const value of b) s += String.fromCharCode(value); return btoa(s); };
+    const bytes = decode(encoded);
+    const pending = api.openDocxHistoryArchive(bytes); bytes.fill(0);
+    const reader = await pending;
+    const page1 = await reader.listVersions(null, 1);
+    const rest = await reader.listVersions(page1.next, 25);
+    const first = rest.versions[rest.versions.length - 1];
+    const before = await reader.exportDocx(first.id);
+    const revision = rest.versions.find((v: any) => v.record.metadata.label === 'Counsel revision');
+    const redline = await reader.compareVersions(first.id, revision.id); // First comparison: exercises WASM cold-path warmup.
+    let readOnly = '';
+    try { await (reader as any).call('create'); } catch (error: any) { readOnly = error.code; }
+    const readonlyShape = typeof reader.createVersion === 'undefined' && typeof reader.restoreVersion === 'undefined';
+    const originalHead = reader.info.head;
+    reader.close(); let closed = '';
+    try { await reader.read(); } catch (error: any) { closed = error.code; }
+    const backing = api.createMemoryHistoryStorage(); let loseAck = true;
+    const store = { ...backing, async initializeHead(id: string, head: any) {
+      const value = await backing.initializeHead(id, head);
+      if (loseAck) { loseAck = false; throw new Error('Lost initialization acknowledgement'); }
+      return value;
+    } };
+    const history = api.openDocxHistory(store); let lost = false;
+    try { await history.importHistoryArchive(decode(encoded)); } catch { lost = true; }
+    const imported = await history.importHistoryArchive(decode(encoded));
+    const doc = history.document(imported.archive.documentId);
+    // page.evaluate need not execute in strict mode: assert refusal, not a thrown assignment.
+    const immutableId = !Reflect.set(doc, 'documentId', 'other') && doc.documentId === imported.archive.documentId;
+    const retry = await doc.createVersion(null, before, first.record.metadata, 'initial');
+    const saved = await doc.createVersion(imported.view.head, before,
+      { author: 'frontend', createdAt: '2026-09-01T12:00:00Z', label: 'Browser checkpoint' }, 'browser-checkpoint');
+    const restored = await doc.restoreVersion(saved.head, revision.id,
+      { author: 'frontend', createdAt: '2026-09-01T13:00:00Z' }, 'browser-restore');
+    let conflict = '';
+    try { await history.importHistoryArchive(decode(encoded)); } catch (error: any) { conflict = error.code; }
+    const portable = await doc.exportHistoryArchive(); history.close();
+    const standalone = await api.openDocxHistoryArchive(portable);
+    const current = await standalone.read(); const latest = await standalone.exportDocx(); standalone.close();
+    const parsed = api.openDocxSession(latest); parsed.close();
+    return { readOnly, readonlyShape, closed, originalHead, importedHead: imported.view.head,
+      alreadyPresent: imported.alreadyPresent, lost, immutableId, retryRevision: retry.head.revision, savedRevision: saved.head.revision,
+      restoredHead: restored.head, currentHead: current.head, conflict, count: rest.versions.length + 1,
+      exact: encode(before) === expected, redline: encode(redline), archive: encode(portable), latest: encode(latest) };
+  }, { encoded: input.toString('base64'), expected: expected.toString('base64') });
+  expect(result.readOnly).toBe('ReadOnly'); expect(result.readonlyShape).toBe(true); expect(result.closed).toBe('Closed');
+  expect(result.importedHead).toEqual(result.originalHead); expect(result.alreadyPresent).toBe(true); expect(result.lost).toBe(true);
+  expect(result.immutableId).toBe(true);
+  expect(result.retryRevision).toBe('1'); expect(result.savedRevision).toBe('5'); expect(result.currentHead).toEqual(result.restoredHead);
+  expect(result.conflict).toBe('ImportConflict'); expect(result.exact).toBe(true); expect(result.count).toBe(4);
+  await writeFile(testInfo.outputPath('browser-continued.docxhistory'), Buffer.from(result.archive, 'base64'));
+  await writeFile(testInfo.outputPath('browser-latest.docx'), Buffer.from(result.latest, 'base64'));
+  await writeFile(testInfo.outputPath('browser-arbitrary-comparison.docx'), Buffer.from(result.redline, 'base64'));
+});
+
+test('old storage adapters still work but cannot import; malformed archives fail explicitly', async ({ page }) => {
+  const encoded = (await readFile('../TestFiles/HistoryArchive/agreement.docxhistory')).toString('base64');
+  const result = await page.evaluate(async encoded => {
+    const api = (window as any).historyApi;
+    const bytes = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));
+    const backing = api.createMemoryHistoryStorage(); let puts = 0;
+    const history = api.openDocxHistory({ ...backing, initializeHead: undefined,
+      async putBlob(ref: any, bytes: Uint8Array) { puts++; await backing.putBlob(ref, bytes); } });
+    let unsupported = ''; try { await history.importHistoryArchive(bytes); } catch (error: any) { unsupported = error.code; }
+    const writesAtFailure = puts;
+    const legacy = await history.createVersion('legacy', null, api.createBlankDocx(), { author: 'legacy', createdAt: '2026-01-01T00:00:00Z' });
+    history.close(); let malformed = '';
+    try { await api.openDocxHistoryArchive(bytes.subarray(0, bytes.length - 1)); } catch (error: any) { malformed = error.code; }
+    return { unsupported, writesAtFailure, legacyRevision: legacy.head.revision, malformed };
+  }, encoded);
+  expect(result).toEqual({ unsupported: 'InitializationUnsupported', writesAtFailure: 0, legacyRevision: '1', malformed: 'InvalidManifest' });
+});
+
+test('real charter archive exposes conflict decisions and the exact retained proposal', async ({ page }) => {
+  test.setTimeout(120_000);
+  const encoded = (await readFile('../TestFiles/HistoryArchive/charter-collaboration.docxhistory')).toString('base64');
+  const proposal = (await readFile('../TestFiles/HistoryArchive/charter-collaboration-conflicting-proposal.docx')).toString('base64');
+  const result = await page.evaluate(async ({ encoded, proposal }) => {
+    const api = (window as any).historyApi;
+    const decode = (s: string) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+    const reader = await api.openDocxHistoryArchive(decode(encoded));
+    const update = await reader.readOperationsSince(null);
+    const conflict = update.operations.find((op: any) => op.record.status === 'conflict');
+    const fetched = await reader.getOperation(conflict.id);
+    const exported = await reader.exportOperationProposal(conflict.id); const expected = decode(proposal);
+    const duplicates = await reader.readOperationsSince(update.view.head);
+    reader.close();
+    return { count: update.operations.length, status: fetched.record.status, revisionType: typeof fetched.record.revision,
+      exact: exported.length === expected.length && exported.every((b: number, i: number) => b === expected[i]),
+      resolved: update.operations.some((op: any) => op.record.status === 'accepted'
+        && op.input.request.resolves?.digest.value === conflict.id.digest.value), duplicates: duplicates.operations.length };
+  }, { encoded, proposal });
+  expect(result).toEqual({ count: 3, status: 'conflict', revisionType: 'string', exact: true, resolved: true, duplicates: 0 });
+});
+
+test('small compressed upload with an oversized entry fails before browser inflation', async ({ page }) => {
+  // A valid one-entry ZIP whose 65 MiB payload compresses below 100 KiB. It intentionally
+  // has no history manifest: entry-size rejection must precede that later format check.
+  const data = Buffer.alloc(65 * 1024 * 1024);
+  const packed = deflateRawSync(data, { level: 9 }); const name = Buffer.from('blobs/' + 'a'.repeat(64));
+  const table = Uint32Array.from({ length: 256 }, (_, i) => {
+    for (let bit = 0; bit < 8; bit++) i = (i & 1) ? (0xedb88320 ^ (i >>> 1)) : (i >>> 1);
+    return i >>> 0;
+  });
+  let crc = 0xffffffff; for (const byte of data) crc = table[(crc ^ byte) & 255] ^ (crc >>> 8); crc = (crc ^ 0xffffffff) >>> 0;
+  const local = Buffer.alloc(30); local.writeUInt32LE(0x04034b50); local.writeUInt16LE(20, 4); local.writeUInt16LE(8, 8);
+  local.writeUInt16LE(33, 12); local.writeUInt32LE(crc, 14); local.writeUInt32LE(packed.length, 18);
+  local.writeUInt32LE(data.length, 22); local.writeUInt16LE(name.length, 26);
+  const central = Buffer.alloc(46); central.writeUInt32LE(0x02014b50); central.writeUInt16LE(20, 4); central.writeUInt16LE(20, 6);
+  central.writeUInt16LE(8, 10); central.writeUInt16LE(33, 14); central.writeUInt32LE(crc, 16);
+  central.writeUInt32LE(packed.length, 20); central.writeUInt32LE(data.length, 24); central.writeUInt16LE(name.length, 28);
+  const footer = Buffer.alloc(22); footer.writeUInt32LE(0x06054b50); footer.writeUInt16LE(1, 8); footer.writeUInt16LE(1, 10);
+  footer.writeUInt32LE(central.length + name.length, 12); footer.writeUInt32LE(local.length + name.length + packed.length, 16);
+  const archive = Buffer.concat([local, name, packed, central, name, footer]); expect(archive.length).toBeLessThan(100_000);
+  const result = await page.evaluate(async encoded => {
+    try { await (window as any).historyApi.openDocxHistoryArchive(Uint8Array.from(atob(encoded), c => c.charCodeAt(0))); }
+    catch (error: any) { return { code: error.code, message: error.message }; }
+    return null;
+  }, archive.toString('base64'));
+  expect(result?.code).toBe('ResourceLimit'); expect(result?.message).toContain('Archive entry');
 });

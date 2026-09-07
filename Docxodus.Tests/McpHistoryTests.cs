@@ -28,6 +28,67 @@ public sealed class McpHistoryTests : IDisposable
     }
 
     [Fact]
+    public void ImportRejectsUnknownMetadataBeforeCopyingItsValue()
+    {
+        var args = J("{\"action\":\"importArchive\",\"archiveB64\":\"AA==\",\"unknown\":" + Q(new string('x', 2 * 1024 * 1024)) + "}");
+        var error = Assert.Throws<McpToolException>(() => HistoryTool.Execute(_store, _session, args));
+        Assert.Contains("accepts only", error.Message);
+        Assert.Null(Result(Call("read")).View);
+    }
+
+    [Fact]
+    public async Task ScopedOperationReadsAndComparisonExposePreservedWorkWithoutFilesystemWrites()
+    {
+        var history = new DocxVersionHistory(new FileHistoryBlobStore(Path.Combine(_root, "history", "blobs")),
+            new FileHistoryHeadStore(Path.Combine(_root, "history", "heads")));
+        var original = await File.ReadAllBytesAsync(Path.Combine(DocxHistoryArchiveArtifactTests.Root, "agreement-v1.docx"));
+        var revised = await File.ReadAllBytesAsync(Path.Combine(DocxHistoryArchiveArtifactTests.Root, "agreement-v2.docx"));
+        var first = await history.CreateVersionAsync(_session.Location!, null, original, HistoryArchiveFixture.Metadata("Original"));
+        var winner = await history.SubmitOperationAsync(_session.Location!, new DocxOperationRequest { RequestId = "winner", Base = first.Head,
+            Kind = "package", Metadata = HistoryArchiveFixture.Metadata("Winner") }, revised);
+        var proposal = HistoryArchiveFixture.Edit(original, " Conflicting counsel draft");
+        var conflict = await history.SubmitOperationAsync(_session.Location!, new DocxOperationRequest { RequestId = "conflict", Base = first.Head,
+            Kind = "package", Metadata = HistoryArchiveFixture.Metadata("Conflict") }, proposal);
+        Assert.Equal("conflict", conflict.Operation.Record.Status);
+        var files = Directory.GetFiles(_root, "*", SearchOption.AllDirectories).OrderBy(p => p).ToArray();
+        Assert.Equal(2, Result(Call("operations")).OperationUpdate!.Operations.Count);
+        var args = "\"operationId\":" + HistoryClientJson.Write(conflict.Operation.Id);
+        Assert.Equal("conflict", Result(Call("getOperation", args)).Operation!.Record.Status);
+        Assert.Equal(proposal, Call("exportOperationProposal", args).GetProperty("bytes").GetBytesFromBase64());
+        var comparison = Call("compare", "\"beforeVersionId\":" + HistoryClientJson.Write(first.Version.Id)
+            + ",\"afterVersionId\":" + HistoryClientJson.Write(winner.View.Version.Id)).GetProperty("bytes").GetBytesFromBase64();
+        using var session = new DocxSession(comparison);
+        // The point of compare is a redline; a parseable-but-empty package would pass otherwise.
+        Assert.NotEmpty(session.ListRevisions());
+        Assert.Equal(files, Directory.GetFiles(_root, "*", SearchOption.AllDirectories).OrderBy(p => p));
+        Assert.Equal(_source, await File.ReadAllBytesAsync(_session.Location!));
+    }
+
+    [Fact]
+    public async Task ArchiveImportIsBoundToSessionIdentityAndNeverReplacesEditorOrSource()
+    {
+        var foreign = await File.ReadAllBytesAsync(Path.Combine(DocxHistoryArchiveArtifactTests.Root, "agreement.docxhistory"));
+        Assert.Equal("ForeignDocument", Result(Call("importArchive", "\"archiveB64\":" + Q(Convert.ToBase64String(foreign)), success: false)).ErrorCode);
+        Assert.Null(Result(Call("read")).View);
+        var sourceHistory = new DocxVersionHistory(new MemoryHistoryBlobStore(), new MemoryHistoryHeadStore());
+        var initial = await sourceHistory.CreateVersionAsync(_session.Location!, null, _source,
+            HistoryArchiveFixture.Metadata("Scoped"));
+        var latest = await sourceHistory.CreateVersionAsync(_session.Location!, initial.Head, _source,
+            HistoryArchiveFixture.Metadata("Label"));
+        using var buffer = new MemoryStream(); await sourceHistory.ExportHistoryArchiveAsync(_session.Location!, buffer);
+        ReplaceText("Unsaved draft must survive import"); var before = DocxSessionOps.Project(_session.Handle);
+        var args = "\"archiveB64\":" + Q(Convert.ToBase64String(buffer.ToArray()));
+        var imported = Result(Call("importArchive", args)).Import!;
+        Assert.Equal(latest.Head, imported.View.Head); Assert.False(imported.AlreadyPresent);
+        Assert.True(Result(Call("importArchive", args)).Import!.AlreadyPresent);
+        Assert.Equal(_source, Result(Call("exportDocx")).Bytes);
+        using var reopened = await DocxHistoryArchive.OpenAsync(Result(Call("exportArchive")).Bytes!);
+        Assert.Equal(latest.Head, reopened.View.Head);
+        Assert.Equal(before, DocxSessionOps.Project(_session.Handle));
+        Assert.Equal(_source, await File.ReadAllBytesAsync(_session.Location!));
+    }
+
+    [Fact]
     public void RestoreRequestIdsRetryOriginalResultButCreateCannotRecaptureRetryBytes()
     {
         Assert.Throws<McpToolException>(() => Call("create", Metadata + ",\"requestId\":\"unsafe-recapture\""));

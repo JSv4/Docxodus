@@ -36,7 +36,7 @@ delivery/verification subsystems, and pagination. The AOT tier then moved
 `dotnet.native.wasm`: the compiled methods live there, while the assemblies keep their size
 (the IL bodies of AOT-compiled methods are zeroed in place, which is why they cost nothing
 after compression). The guardrail that matters is the brotli wire total, which
-`scripts/build-wasm.sh` prints and holds under a 5120 KB budget.
+`scripts/build-wasm.sh` prints and holds under a 5376 KB budget.
 
 ## Trimming policy
 
@@ -279,11 +279,30 @@ is worth ~80 ms even on localhost (less IL to parse) and ~700 ms at 50 Mbps.
 
 ## Size guardrail
 
-`build-wasm.sh` computes the brotli wire total on every build and **fails above 5 MB**
-(measured 4.76 MB: ~3.6 MB of trimmed IL and runtime, ~1.2 MB of profile-guided AOT
-code). If it trips: look for a re-rooted assembly (`TrimmerRootAssembly`), a dependency
-bump growing the SDK, a new package reference, or a re-recorded AOT profile that got much
-wider. The npm CI job runs the same script, so regressions surface at PR time.
+`build-wasm.sh` computes the brotli wire total on every build and **fails above 5.25 MB**
+(measured 5.03 MB: ~3.6 MB of trimmed IL and runtime, ~1.2 MB of profile-guided AOT
+code, and the portable-history archive reader the browser bindings now reach). If it trips:
+look for a re-rooted assembly (`TrimmerRootAssembly`), a dependency bump growing the SDK, a
+new package reference, or a re-recorded AOT profile that got much wider. The npm CI job runs
+the same script, so regressions surface at PR time.
+
+### Why the budget moved from 5 MB to 5.25 MB
+
+The 5 MB line was set when the payload measured 4.76 MB, and two changes consumed the
+remaining margin in quick succession. The dense-text profile coverage above took main from
+4981 KB to 5105 KB, leaving 15 KB. Exposing the portable-history file controls to the
+browser then added 46 KB: before that change the WASM history surface was
+`read`/`updates`/`create`/`list`/`get`/`export`/`materialize`/`replay`/`resolveTime`/`restore`
+only, and `exportArchive`, `importArchive`, `exportDocx`, `compare`, `operations`,
+`getOperation` and `exportOperationProposal` pull the whole `.docxhistory` reader/writer —
+ZIP entry walking, manifest and graph validation, the change-set codec — into the bundle for
+the first time. That lands at 5151 KB.
+
+Re-recording the profile without the dense-text workload was measured as an alternative: it
+recovers 28 KB (5123 KB) — still over the old budget, and it costs the formatting-template
+and batched-identity coverage that workload exists to provide. Paying 31 KB of wire for a
+feature that ships in every other transport was the better trade. The new line keeps ~225 KB
+of headroom; spend it deliberately.
 
 ## Future size work (not implemented)
 

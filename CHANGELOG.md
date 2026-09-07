@@ -6,51 +6,6 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- Writable history-file import validates before copying and atomically preserves the original
-  head without overwriting local history; document-scoped APIs expose explicit checkpoint/restore.
-  `ImportHistoryArchiveAsync(stream, leaveOpen: false)` now disposes the stream it was given even
-  when the head store or the supplied limits are rejected before the archive reader takes over.
-- Portable `.docxhistory` files: stream export of one captured document, independently
-  reopenable read-only document APIs, strict ZIP/manifest validation, and real legal-document
-  archives with exact snapshot/proposal/comparison files under `TestFiles/HistoryArchive`.
-  Reading a blob out of an open archive whose backing bytes changed underneath it now reports
-  `PackageChangeError.PayloadMismatch`, matching what `OpenAsync` already guaranteed, instead of
-  surfacing the raw `InvalidDataException` from the ZIP decoder.
-- Portable-history foundation: bounded, document-scoped graph validation retains exact
-  snapshots, package effects, restore targets, retry receipts, and operation proposals
-  without enumerating shared storage. Includes real legal-document and hostile-graph tests.
-
-### Fixed
-
-- ~195 source files written after this repo forked from Microsoft's `OpenXmlPowerTools` carried
-  a copy-pasted `// Copyright (c) Microsoft. All rights reserved.` file header even though they
-  have no Microsoft-authored lineage — entire post-fork subsystems (`DocxSession`, `History/`,
-  `Verification/`, `Delivery/`, `Internal/`, `Ir/`, the editor, the MCP server, and the
-  npm/Python/WASM layers, among others) had picked up the header as boilerplate, presumably
-  copied file-to-file for StyleCop's `SA1633` rather than for attribution. Each file's fate was
-  decided by an exact-filename match against the real `OpenXmlPowerTools`/`OpenXmlPowerTools.Tests`
-  source tree (github.com/OfficeDev/Open-Xml-PowerTools): the ~40 files that are genuine
-  derivatives of an original file (`DocumentBuilder.cs`, `PtOpenXmlUtil.cs`, `WmlToHtmlConverter.cs`,
-  and the like, plus their like-named tests) keep the Microsoft notice, matching the repository
-  `LICENSE`, which has always credited both; everything else now reads
-  `// Copyright (c) John Scrudato IV. All rights reserved.` CLAUDE.md documents the rule and the
-  keep-list so it isn't reintroduced.
-
-- The editor's find bar no longer loses the keyboard the moment a query matches. It re-scanned on
-  every keystroke and then *selected* the first hit, and selecting inside a contenteditable block
-  focuses that block — so as soon as a partial query matched, the caret jumped into the document
-  and the rest of the query was typed into the text: searching for "fox" left an "ox" behind. The
-  jump-to-hit is kept, but expressed as a painted highlight instead of a selection: `showFindMatches`
-  registers the matches with the CSS Custom Highlight API (all hits washed, the current one
-  stronger) and scrolls the active one into view without moving focus, so typing goes on refining
-  the search. The caret is handed the match by `selectMatch` when the bar closes, which is when the
-  user is going back to the document anyway. Find-bar buttons now swallow `mousedown` like the
-  format buttons do, so clicking Next or Replace does not end the query either, and `replaceMatch`
-  / `replaceAll` take `focus: false` for the same reason. Browsers without the highlight registry
-  fall back to painting the active hit with the document selection — still without focusing it.
-
-### Added
-
 - **REDLINE THEATER (`docs/demo/redline.html`) — the agent protocol as the demo.** Three
   counsel negotiate a Master Services Agreement, and every edit that lands is dispatched
   from a real JSON-RPC 2.0 `tools/call` frame in the shape `docxodus-mcp` accepts over
@@ -91,6 +46,64 @@ All notable changes to this project will be documented in this file.
   `tools/mcp-server/ToolCatalog.cs` so that correspondence is checked rather than
   claimed, and `npm/tests/demo-redline.spec.ts` guards the run, the attribution, the
   proof and a latency budget. Demo content only — not shipped in the npm package.
+
+## [12.2.0] - 2026-09-07
+
+### Added
+
+- Portable-history client bindings: standalone readonly files and document-scoped controls in
+  npm/Python; optional exact-head initialization for browser storage; session-scoped MCP
+  import/export; [concise frontend API guide](docs/history-controls.md). Reaching the
+  `.docxhistory` reader/writer from the browser adds 46 KB to the WASM wire payload, so the
+  size guardrail in `scripts/build-wasm.sh` moves from 5 MB to 5.25 MB (measured 5154 KB);
+  see [wasm-packaging.md](docs/architecture/wasm-packaging.md) for the measurements and the
+  re-recorded-profile alternative that was rejected.
+- Writable history-file import validates before copying and atomically preserves the original
+  head without overwriting local history; document-scoped APIs expose explicit checkpoint/restore.
+  `ImportHistoryArchiveAsync(stream, leaveOpen: false)` now disposes the stream it was given even
+  when the head store or the supplied limits are rejected before the archive reader takes over.
+- Portable `.docxhistory` files: stream export of one captured document, independently
+  reopenable read-only document APIs, strict ZIP/manifest validation, and real legal-document
+  archives with exact snapshot/proposal/comparison files under `TestFiles/HistoryArchive`.
+  Reading a blob out of an open archive whose backing bytes changed underneath it now reports
+  `PackageChangeError.PayloadMismatch`, matching what `OpenAsync` already guaranteed, instead of
+  surfacing the raw `InvalidDataException` from the ZIP decoder.
+- Portable-history foundation: bounded, document-scoped graph validation retains exact
+  snapshots, package effects, restore targets, retry receipts, and operation proposals
+  without enumerating shared storage. Includes real legal-document and hostile-graph tests.
+
+### Fixed
+
+- ~195 source files written after this repo forked from Microsoft's `OpenXmlPowerTools` carried
+  a copy-pasted `// Copyright (c) Microsoft. All rights reserved.` file header even though they
+  have no Microsoft-authored lineage — entire post-fork subsystems (`DocxSession`, `History/`,
+  `Verification/`, `Delivery/`, `Internal/`, `Ir/`, the editor, the MCP server, and the
+  npm/Python/WASM layers, among others) had picked up the header as boilerplate, presumably
+  copied file-to-file for StyleCop's `SA1633` rather than for attribution. Each file's fate was
+  decided by an exact-filename match against the real `OpenXmlPowerTools`/`OpenXmlPowerTools.Tests`
+  source tree (github.com/OfficeDev/Open-Xml-PowerTools): the ~40 files that are genuine
+  derivatives of an original file (`DocumentBuilder.cs`, `PtOpenXmlUtil.cs`, `WmlToHtmlConverter.cs`,
+  and the like, plus their like-named tests) keep the Microsoft notice, matching the repository
+  `LICENSE`, which has always credited both; everything else now reads
+  `// Copyright (c) John Scrudato IV. All rights reserved.` `SourceFileCopyrightTests` asserts the
+  keep-list in both directions, so neither reintroducing the Microsoft header on new source nor
+  stripping it off inherited source can pass CI. StyleCop's `SA1636` — which compared every header
+  against a single configured company name, and so could only ever be right about one of this
+  repository's two copyright holders — is switched off in its favour, taking the build's warning
+  baseline from 187/804 down to 175/671.
+
+- The editor's find bar no longer loses the keyboard the moment a query matches. It re-scanned on
+  every keystroke and then *selected* the first hit, and selecting inside a contenteditable block
+  focuses that block — so as soon as a partial query matched, the caret jumped into the document
+  and the rest of the query was typed into the text: searching for "fox" left an "ox" behind. The
+  jump-to-hit is kept, but expressed as a painted highlight instead of a selection: `showFindMatches`
+  registers the matches with the CSS Custom Highlight API (all hits washed, the current one
+  stronger) and scrolls the active one into view without moving focus, so typing goes on refining
+  the search. The caret is handed the match by `selectMatch` when the bar closes, which is when the
+  user is going back to the document anyway. Find-bar buttons now swallow `mousedown` like the
+  format buttons do, so clicking Next or Replace does not end the query either, and `replaceMatch`
+  / `replaceAll` take `focus: false` for the same reason. Browsers without the highlight registry
+  fall back to painting the active hit with the document selection — still without focusing it.
 
 ## [12.1.0] - 2026-09-05
 

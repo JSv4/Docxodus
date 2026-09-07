@@ -43,6 +43,16 @@ public sealed partial class DocxVersionHistory
         ?? throw new DocxHistoryException(DocxHistoryError.InitializationUnsupported,
             "Writable archive import requires absent-only exact-head initialization.");
 
+    // Shared client boundary can bind import to an existing session capability. Validate the
+    // embedded identity before destination reads/writes; never remap content-addressed records.
+    internal ValueTask<DocxHistoryImportResult> ImportScopedArchiveAsync(string? documentId, byte[] bytes,
+        DocxHistoryArchiveLimits limits, CancellationToken cancellationToken)
+    {
+        var initializer = Initializer();
+        return ImportAsync(DocxHistoryArchive.OpenAsync(bytes, ImportLimits(limits), _packageOptions, cancellationToken),
+            initializer, cancellationToken, documentId);
+    }
+
     private DocxHistoryArchiveLimits ImportLimits(DocxHistoryArchiveLimits? limits)
     {
         limits ??= new(); limits.Validate();
@@ -54,12 +64,13 @@ public sealed partial class DocxVersionHistory
     }
 
     private async ValueTask<DocxHistoryImportResult> ImportAsync(ValueTask<DocxHistoryArchive> opening,
-        IHistoryHeadInitializer initializer, CancellationToken ct)
+        IHistoryHeadInitializer initializer, CancellationToken ct, string? expectedDocumentId = null)
     {
         DocxHistoryArchiveInfo info; DocxHistoryView view;
         using (var archive = await opening.ConfigureAwait(false))
         {
             info = archive.Info; view = archive.View;
+            if (expectedDocumentId is not null) SameDocument(expectedDocumentId, info.DocumentId);
             var existing = await _heads.ReadAsync(info.DocumentId, ct).ConfigureAwait(false);
             if (existing is not null && existing != info.Head) throw ImportConflict();
             // Repeat puts even on exact-head retry: missing bytes can be repaired; corrupt immutable

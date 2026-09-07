@@ -32,6 +32,30 @@ These tests use private temporary stores/files, restart readers and producer pro
 continue at the next revision, retry original receipts, restore, compare arbitrary
 versions, and reopen the resulting DOCX/history files. The committed inputs stay unchanged.
 
+## Browser → native file handoff
+
+From the repository root (with .NET/WASM, npm, Playwright Chromium and Python test dependencies installed):
+
+```bash
+(cd npm && npm run build && npx playwright test tests/history-client.spec.ts tests/history-live-viewer.spec.ts --project=chromium)
+dotnet build tools/python-host/pyhost.csproj -c Release
+DOCXODUS_HISTORY_BROWSER_ARTIFACT_DIR="$PWD/npm/test-results" \
+  PYTHONPATH=python/src python3 -m pytest python/tests/test_history_browser_artifacts.py -q -s
+```
+
+Playwright writes `browser-continued.docxhistory`, `browser-latest.docx`, and
+`browser-arbitrary-comparison.docx` under `npm/test-results/`. The native handoff test
+consumes those exact files, checks original IDs/snapshot bytes and redline OPC content,
+imports into a fresh filesystem store, restarts the host, retries both browser-authored and
+native receipts, saves/restores, and reopens its resulting `native-continued.docxhistory`
+and `native-latest.docx`. Readonly reexport is reopened as `native-standalone.docxhistory`.
+`handoff.json` records source/output hashes and captured heads. The test prints its temporary
+output root; CI retains both runtimes' files in the `playwright-report` artifact for 7 days.
+Missing outputs fail when the artifact directory is configured; ordinary Python-only runs
+skip this handoff test. None of these checks rewrites the committed corpus.
+
+## Intentional regeneration
+
 Explicitly regenerate these checked-in samples after an intentional fixture change:
 
 ```bash

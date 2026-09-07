@@ -32,6 +32,9 @@ from importlib.metadata import PackageNotFoundError, version as _pkg_version
 
 from ._transport import shutdown_host
 from .history import (
+    DocxHistoryArchive, DocxHistoryArchiveInfo, DocxHistoryDocument, DocxHistoryImportResult, DocxHistoryReader,
+    MAX_HISTORY_ARCHIVE_BYTES, open_history_archive,
+    DocxTextSplice, DocxOperationRequest, DocxOperationInput, DocxOperationRecord, DocxStoredOperation, DocxOperationUpdate,
     DocxHistoryLogEntry, DocxHistoryUpdate, PackageHistoryCommit,
     DocxHistoryClient, DocxHistoryError, DocxHistoryState, DocxHistoryView,
     DocxSnapshotReference, DocxStoredVersion, DocxVersionMetadata, DocxVersionPage,
@@ -270,6 +273,9 @@ __all__ = [
     "DocxHistoryClient", "DocxHistoryError", "DocxHistoryState", "DocxHistoryView",
     "DocxSnapshotReference", "DocxStoredVersion", "DocxVersionMetadata", "DocxVersionPage",
     "DocxVersionRecord", "HistoryBlobReference", "HistoryHead", "HistoryRequestIdentity", "HistoryRequestJournal", "open_history",
+    "DocxHistoryArchive", "DocxHistoryArchiveInfo", "DocxHistoryDocument", "DocxHistoryImportResult", "DocxHistoryReader",
+    "MAX_HISTORY_ARCHIVE_BYTES", "open_history_archive",
+    "DocxTextSplice", "DocxOperationRequest", "DocxOperationInput", "DocxOperationRecord", "DocxStoredOperation", "DocxOperationUpdate",
     "__version__",
     # entry points
     "DocxSession",
