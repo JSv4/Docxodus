@@ -50,3 +50,4 @@ tools/mcp-server/smoke/__pycache__/
 /.playwright-mcp/
 /observatory-960-live.png
 /python/uv.lock
+/.claude/scheduled_tasks.lock
