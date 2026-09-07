@@ -71,6 +71,8 @@ import { DocxSession, openDocxSession as openDocxSessionImpl } from "./session.j
 import { DocxHistoryArchive, DocxHistoryClient, installHistoryStorageImports } from './history.js';
 import type { HistoryStorage } from './history.js';
 export * from './history.js';
+export * from './history-checkpoints.js';
+export * from './history-indexeddb.js';
 
 /** Open history over host-owned storage after initialize(). No network layer is installed. */
 export function openDocxHistory(storage: HistoryStorage): DocxHistoryClient {
