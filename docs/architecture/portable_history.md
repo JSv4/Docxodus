@@ -89,3 +89,23 @@ Int64 decimal string; lengths are nonnegative Int32 numbers. Blob contents use t
 existing versioned codecs, copied verbatim. Outer ZIP compression/serialization is not
 an identity guarantee; raw blob bytes, snapshot bytes, version IDs, and the captured
 head are. Reopening does not need the original store or any sidecar files.
+
+## Writable import and document facade
+
+`DocxVersionHistory.Document(id)` binds the existing read surface plus identified
+checkpoint/restore methods. It owns no storage or editor and performs no implicit writes.
+`ImportHistoryArchiveAsync` first validates the isolated archive with the destination's
+snapshot/record/package limits. Unsupported head adapters fail before validation/writes;
+a different existing head fails before blob copying. Every blob is then put through the
+immutable store contract, including exact-head retries, so missing blobs are repaired
+and corrupt collisions cannot masquerade as successful import.
+
+The archive reader and entry leases are closed before publication; caller-owned input
+stays open, while owned input is closed. One `IHistoryHeadInitializer` call either
+inserts the captured positive revision into an absent slot or returns the existing head.
+It shares exclusion with ordinary CAS; FileHistoryHeadStore uses its existing exclusive
+lock and atomic rename, with replacement disabled for initialization. Ordinary CAS still
+increments by one. Different heads always conflict; exact equality is idempotent. No
+post-commit reads/cancellation can obscure this call's success. I/O can lose an acknowledgement:
+retry the same archive. If another writer has since advanced it, the retry reports conflict
+rather than rolling history back. Document IDs cannot be remapped because records bind them.

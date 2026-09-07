@@ -17,11 +17,15 @@ public sealed class DocxHistoryProcessRecoveryTests(ITestOutputHelper output)
     [InlineData("text", "after")]
     [InlineData("conflict", "before")]
     [InlineData("conflict", "after")]
+    [InlineData("archive", "before")]
+    [InlineData("archive", "after")]
     public async Task KilledProducerRecoversExactRequestInFreshProcess(string kind, string boundary)
     {
         var root = Directory.CreateTempSubdirectory("history-process-proof-").FullName;
         try
         {
+            if (kind == "archive") File.Copy(Path.Combine(DocxHistoryArchiveArtifactTests.Root, "agreement.docxhistory"),
+                Path.Combine(root, "agreement.docxhistory"));
             var seed = await Run("seed"); Assert.Equal(0, seed.Code);
             var crash = await Run("crash");
             Assert.NotEqual(0, crash.Code);

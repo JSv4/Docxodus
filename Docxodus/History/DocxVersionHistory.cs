@@ -7,7 +7,11 @@ using Docxodus.Verification;
 
 namespace Docxodus.History;
 
-public enum DocxHistoryError { StaleHead, ForeignDocument, InvalidHistory, HistoryUnavailable, TraversalLimit, RequestConflict, Contention }
+public enum DocxHistoryError
+{
+    StaleHead, ForeignDocument, InvalidHistory, HistoryUnavailable, TraversalLimit, RequestConflict, Contention,
+    ImportConflict, InitializationUnsupported,
+}
 
 /// <summary>A publication precondition or cross-record history invariant failed.</summary>
 public sealed class DocxHistoryException : Exception
@@ -35,6 +39,13 @@ public sealed partial class DocxVersionHistory
     private readonly int _maxSnapshotBytes;
     private readonly int _maxRecordBytes;
     private readonly PackageManifestOptions? _packageOptions;
+
+    /// <summary>Bind a stable host-owned identity; no reads or writes occur until a method is called.</summary>
+    public DocxHistoryDocument Document(string documentId)
+    {
+        HistoryHeadCodec.Key(documentId);
+        return new DocxHistoryDocument(this, documentId);
+    }
 
     public DocxVersionHistory(IHistoryBlobStore blobs, IHistoryHeadStore heads,
         int maxSnapshotBytes = HistoryBlobIO.DefaultMaxBlobBytes,

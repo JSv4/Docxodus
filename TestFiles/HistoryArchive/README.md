@@ -21,6 +21,17 @@ dotnet test Docxodus.Tests/Docxodus.Tests.csproj \
   --filter FullyQualifiedName~DocxHistoryArchiveArtifactTests
 ```
 
+Verify writable import, every blob-copy failure boundary, and real process-kill recovery:
+
+```bash
+dotnet test Docxodus.Tests/Docxodus.Tests.csproj \
+  --filter 'FullyQualifiedName~DocxHistoryImportTests|FullyQualifiedName~DocxHistoryProcessRecoveryTests'
+```
+
+These tests use private temporary stores/files, restart readers and producer processes,
+continue at the next revision, retry original receipts, restore, compare arbitrary
+versions, and reopen the resulting DOCX/history files. The committed inputs stay unchanged.
+
 Explicitly regenerate these checked-in samples after an intentional fixture change:
 
 ```bash
