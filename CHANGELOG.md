@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [12.2.0] - 2026-09-07
+
 ### Added
 
 - Portable-history client bindings: standalone readonly files and document-scoped controls in
