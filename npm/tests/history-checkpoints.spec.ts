@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { test, expect } from './history-controls-harness.js';
+import type { HistoryCheckpointRequest } from '../src/history-checkpoints.js';
 
 test('a lost save acknowledgement survives reload and recovers the original agreement, even after a later save', async ({ page }) => {
   const agreement = (await readFile('../TestFiles/HistoryArchive/agreement-v1.docx')).toString('base64');
@@ -136,4 +137,102 @@ test('independent database connections serialize head initialization, compare-an
   expect(result.remaining).toEqual(result.first);
   expect(result.mismatch).toBe('PayloadMismatch');
   expect(result.retained).toEqual([1, 2, 3]);
+});
+
+test('checkpoint guards refuse a foreign document, an empty retry and a re-entrant command', async ({ page }) => {
+  const result = await page.evaluate(async () => {
+    const api = window.historyApi;
+    // Only the contract HistoryCheckpoints relies on: insert-or-return-existing per document, and a
+    // remove that ignores an ID it does not hold. Durability is IndexedDB's job, tested separately.
+    const journal = (seed: HistoryCheckpointRequest | null = null) => {
+      let stored = seed;
+      return {
+        read: async () => stored,
+        put: async (request: HistoryCheckpointRequest) => (stored ??= request),
+        remove: async (requestId: string) => { if (stored?.id === requestId) stored = null; },
+      };
+    };
+    const client = api.openDocxHistory(api.createMemoryHistoryStorage());
+    const doc = client.document('agreement');
+    const metadata = { author: 'Taylor', createdAt: '2026-09-01T12:00:00Z' };
+    const code = (error: unknown) => (error as InstanceType<typeof api.DocxHistoryError>).code;
+
+    let foreignDocument = '';
+    try {
+      await api.HistoryCheckpoints.open(doc, journal({ id: crypto.randomUUID(), documentId: 'a-different-agreement',
+        kind: 'save', head: null, bytes: api.createBlankDocx(), metadata }));
+    } catch (error) { foreignDocument = code(error); }
+
+    const commands = await api.HistoryCheckpoints.open(doc, journal());
+    let emptyRetry = '';
+    try { await commands.retry(); } catch (error) { emptyRetry = code(error); }
+    const pendingAfterEmptyRetry = commands.hasPending;
+
+    // save() reaches its exclusion guard synchronously, so the second command sees the first running.
+    const running = commands.save(api.createBlankDocx(), metadata);
+    let reentrant = '';
+    try { await commands.save(api.createBlankDocx(), metadata); } catch (error) { reentrant = code(error); }
+    await running;
+    const afterRunning = await commands.refresh();
+    client.close();
+    return { foreignDocument, emptyRetry, pendingAfterEmptyRetry, reentrant, published: afterRunning?.head.revision };
+  });
+  expect(result.foreignDocument).toBe('InvalidRequest');
+  expect(result.emptyRetry).toBe('InvalidRequest');
+  expect(result.pendingAfterEmptyRetry).toBe(false);
+  expect(result.reentrant).toBe('Busy');
+  // The rejected re-entrant command neither published a second version nor blocked the first.
+  expect(result.published).toBe('1');
+});
+
+test('a competing tab pending checkpoint is adopted: the local draft is refused and the original publishes', async ({ page }) => {
+  const result = await page.evaluate(async () => {
+    const api = window.historyApi;
+    let stored: HistoryCheckpointRequest | null = null;
+    const journal = {
+      read: async () => stored,
+      put: async (request: HistoryCheckpointRequest) => (stored ??= request),
+      remove: async (requestId: string) => { if (stored?.id === requestId) stored = null; },
+    };
+    const client = api.openDocxHistory(api.createMemoryHistoryStorage());
+    const doc = client.document('agreement');
+    const metadata = { author: 'Taylor', createdAt: '2026-09-01T12:00:00Z' };
+
+    const distinct = (text: string) => {
+      const session = api.openDocxSession(api.createBlankDocx());
+      const paragraph = Object.keys(session.project().anchorIndex).find(id => id.startsWith('p:'))!;
+      const edit = session.replaceText(paragraph, text);
+      if (!edit.success) throw new Error(JSON.stringify(edit));
+      const bytes = session.save(); session.close(); return bytes;
+    };
+    const otherBytes = distinct('The other tab agreement');
+    const myBytes = distinct('My own agreement draft');
+
+    // This tab opens with an empty journal; the competing tab records its request afterwards.
+    const commands = await api.HistoryCheckpoints.open(doc, journal);
+    const otherRequest: HistoryCheckpointRequest = { id: crypto.randomUUID(), documentId: 'agreement',
+      kind: 'save', head: null, bytes: otherBytes, metadata: { ...metadata, label: 'Other tab draft' } };
+    await journal.put(otherRequest);
+
+    let refused = '';
+    try { await commands.save(myBytes, { ...metadata, label: 'My draft' }); }
+    catch (error) { refused = (error as InstanceType<typeof api.DocxHistoryError>).code; }
+    const adopted = commands.hasPending;
+
+    const recovered = await commands.retry();
+    const published = await doc.exportDocx(recovered.version.id);
+    const listed = await doc.listVersions();
+    client.close();
+    return { refused, adopted, remaining: stored, label: recovered.version.record.metadata.label,
+      labels: listed.versions.map(version => version.record.metadata.label),
+      published: Array.from(published), other: Array.from(otherBytes), mine: Array.from(myBytes) };
+  });
+  expect(result.refused).toBe('PendingRequest');
+  expect(result.adopted).toBe(true);
+  expect(result.label).toBe('Other tab draft');
+  // The local draft never reached storage: exactly one version exists, and it is the other tab's.
+  expect(result.labels).toEqual(['Other tab draft']);
+  expect(result.published).toEqual(result.other);
+  expect(result.published).not.toEqual(result.mine);
+  expect(result.remaining).toBeNull();
 });
