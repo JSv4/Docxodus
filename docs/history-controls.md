@@ -32,6 +32,9 @@ The optional `download` callback lets your app choose its own download dialog.
 `onCheckpoint(view, action)` reports an acknowledged save, restore or retry before refreshing
 the list. Hosts can use it to mark a captured draft as saved, provided no edits arrived while
 the save ran. A restore leaves the draft untouched; a retry can acknowledge an older request.
+**Restore selected** asks for confirmation, naming the selected version and explaining that
+the draft and later versions are preserved. Cancel leaves history and the retry journal
+unchanged. Confirmation applies to the panel; headless restore remains an explicit host call.
 
 `HistoryCheckpoints` also works without the panel. Supply your own durable
 `HistoryCheckpointJournal`, or use the IndexedDB store's per-document journal. Complete

@@ -1,6 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { test, expect } from './history-controls-harness.js';
 import type { HistoryControls } from '../src/history-controls.js';
+import type { DocxHistoryView, DocxStoredVersion } from '../src/history.js';
+import type { HistoryCheckpointRequest } from '../src/history-checkpoints.js';
 
 declare global {
   interface Window {
@@ -9,6 +11,7 @@ declare global {
     releaseHistory: () => void;
     disposeHistory: () => Promise<void>;
     historyAcknowledgements: Array<{ action: string; label: string | null | undefined; revision: string }>;
+    readRestoreState: () => Promise<{ view: DocxHistoryView | null; versions: DocxStoredVersion[]; pending: HistoryCheckpointRequest | null }>;
   }
 }
 
@@ -70,7 +73,7 @@ test('browse, page, preview, compare and share a real agreement without changing
   await expect(page.getByRole('region', { name: 'Document history' })).toHaveCount(0);
 });
 
-test('saving disables conflicting controls and a lost restore acknowledgement retries its original target', async ({ page }) => {
+test('canceling restore preserves history; a confirmed restore recovers its original target after a lost acknowledgement', async ({ page }) => {
   const archive = (await readFile('../TestFiles/HistoryArchive/agreement.docxhistory')).toString('base64');
   await page.evaluate(async encoded => {
     const api = window.historyApi;
@@ -85,6 +88,8 @@ test('saving disables conflicting controls and a lost restore acknowledgement re
     const imported = await history.importHistoryArchive(Uint8Array.from(atob(encoded), c => c.charCodeAt(0)));
     const doc = history.document(imported.archive.documentId);
     const checkpoints = await api.HistoryCheckpoints.open(doc, store.journal(doc.documentId));
+    window.readRestoreState = async () => ({ view: await doc.read(), versions: (await doc.listVersions()).versions,
+      pending: await store.journal(doc.documentId).read() });
     window.historyAcknowledgements = [];
     window.historyPanel = api.mountHistoryControls(document.querySelector<HTMLElement>('#controls')!, {
       reader: doc, checkpoints, capture: () => api.createBlankDocx(), preview: () => { throw new Error('Unexpected draft replacement'); },
@@ -115,6 +120,22 @@ test('saving disables conflicting controls and a lost restore acknowledgement re
   await expect(page.getByRole('status')).toContainText('Checkpoint saved');
   await page.getByLabel('Version', { exact: true }).selectOption('4');
   await page.getByLabel('Checkpoint name (optional)').fill('Return to original');
+  const beforeRestore = await page.evaluate(() => window.readRestoreState());
+  expect(beforeRestore.pending).toBeNull();
+  const selectedTitle = await page.getByLabel('Version', { exact: true }).locator('option:checked').textContent();
+  const canceledDialog = page.waitForEvent('dialog');
+  const cancelPress = page.getByRole('button', { name: 'Restore selected' }).press('Enter');
+  const dialog = await canceledDialog;
+  const message = dialog.message();
+  await dialog.dismiss(); await cancelPress;
+  expect(dialog.type()).toBe('confirm');
+  expect(message).toContain(`Restore ${selectedTitle} as a new checkpoint?`);
+  expect(message).toContain('Your current draft and all later versions will be kept.');
+  await expect(page.getByRole('status')).toContainText('Restore canceled');
+  expect(await page.evaluate(() => window.readRestoreState())).toEqual(beforeRestore);
+  await expect(page.getByLabel('Checkpoint name (optional)')).toHaveValue('Return to original');
+  await expect(page.getByRole('button', { name: 'Retry checkpoint' })).toBeHidden();
+  page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: 'Restore selected' }).click();
   await expect(page.getByRole('status')).toContainText('could not be confirmed');
   await expect(page.getByRole('button', { name: 'Save checkpoint', exact: true })).toBeDisabled();
@@ -122,6 +143,11 @@ test('saving disables conflicting controls and a lost restore acknowledgement re
   await page.getByLabel('Checkpoint name (optional)').fill('Changed after failure');
   await page.getByRole('button', { name: 'Retry checkpoint' }).click();
   await expect(page.getByRole('status')).toContainText('Checkpoint recovered');
+  const restored = await page.evaluate(() => window.readRestoreState());
+  expect(restored.pending).toBeNull();
+  expect(restored.versions.slice(1)).toEqual(beforeRestore.versions);
+  expect(restored.view!.version.record.parent).toEqual(beforeRestore.view!.version.id);
+  expect(restored.view!.version.record.restoredFrom).toEqual(beforeRestore.versions.at(-1)!.id);
   await page.evaluate(() => window.disposeHistory());
   const recovered = await page.evaluate(() => window.historyPreview!);
   expect(recovered.title).toBe('Return to original');
