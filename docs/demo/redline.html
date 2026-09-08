@@ -83,22 +83,21 @@
   </div>
 
   <script type="module">
+    import { loadDemoEngine } from "./engine.js";
+
     const params = new URLSearchParams(location.search);
-    // Theater shares the site-wide engine pin with its sibling pages; ?engine=
-    // retargets only the library (the Playwright spec points it at the local
-    // bundle).
-    const ENGINE = params.get("engine")
-      ?? "https://cdn.jsdelivr.net/npm/docxodus@12.2.0/dist/embed.bundle.js";
-    const engineUrl = new URL(ENGINE, location.href);
+    // Theater boots the package staged beside this page, like every other host;
+    // ?engine= retargets only the library, which is how the Playwright spec
+    // points it at a specific bundle.
     // The show is demo content, not library machinery: it lives beside this page
-    // (docs/demo/ deploys verbatim; pretest copies the same files into the local
-    // webroot), so it versions with the site, not the pin.
+    // (stage-web.mjs copies docs/demo verbatim into the webroot and the site),
+    // so it versions with the site rather than with the engine.
     const SHOW_URL = params.get("show") ?? "./redline-theater.js";
 
     async function powerOn() {
       try {
         const [engine, show] =
-          await Promise.all([import(engineUrl.href), import(SHOW_URL)]);
+          await Promise.all([loadDemoEngine(), import(SHOW_URL)]);
 
         const ribbon = await engine.createRibbonEditor("#app", null, {
           documentName: "msa-redline.docx",

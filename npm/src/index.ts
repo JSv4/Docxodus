@@ -366,6 +366,8 @@ export { mountRibbon } from "./ribbon.js";
 export type {
   RibbonEditor,
   RibbonOptions,
+  RibbonHistoryOptions,
+  RibbonHistoryBinding,
   RibbonChromeMode,
   RibbonState,
   RibbonLoader,
@@ -516,7 +518,7 @@ async function yieldToMain(): Promise<void> {
 function getDefaultWasmBasePath(): string {
   try {
     // import.meta.url gives us the URL of this module
-    // e.g., "https://cdn.jsdelivr.net/npm/docxodus@12.2.0/dist/index.js"
+    // e.g., "https://cdn.jsdelivr.net/npm/docxodus@12.3.0/dist/index.js"
     // or "file:///path/to/node_modules/docxodus/dist/index.js"
     const moduleUrl = import.meta.url;
 

@@ -93,23 +93,18 @@
 
   <script type="module">
     const params = new URLSearchParams(location.search);
-    // Golf shares the site-wide engine pin with its sibling pages; ?engine=
-    // retargets only the library (the Playwright spec points it at the local
-    // bundle).
-    const ENGINE = params.get("engine")
-      ?? "https://cdn.jsdelivr.net/npm/docxodus@12.2.0/dist/embed.bundle.js";
-    const engineUrl = new URL(ENGINE, location.href);
+    import { loadDemoEngine } from "./engine.js";
     // The game is demo content, not library machinery: it lives beside this
-    // page (docs/demo/ deploys verbatim; pretest copies the same file into
-    // the local webroot), so it versions with the site, not the pin.
+    // page. The build stages both into the local webroot and deployable site.
     const GAME_URL = params.get("game") ?? "./docx-golf.js";
 
     async function powerOn() {
       try {
         const [engine, { startGolf, mountGolfPanel }] =
-          await Promise.all([import(engineUrl.href), import(GAME_URL)]);
+          await Promise.all([loadDemoEngine(), import(GAME_URL)]);
 
         const ribbon = await engine.createRibbonEditor("#app", null, {
+          history: false,
           documentName: "docx-golf.docx",
           frame: "flush",
           headerFooter: false,

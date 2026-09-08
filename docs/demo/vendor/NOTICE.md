@@ -57,7 +57,7 @@ own header. It is the only GPL file in the Docxodus tree — which is why
 Every other file in `docs/demo/` — including `ascii-arcade.js`, which imports
 the cartridge — stays MIT, which is GPL-compatible: each file remains
 separately available under its own terms, and only the combination a visitor's
-browser assembles when the Doom cartridge is selected is GPL-2.0.
+browser assembles when DOOM starts is GPL-2.0.
 
 ## The game data — BSD 3-Clause
 

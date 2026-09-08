@@ -45,14 +45,15 @@
     bundle relatively. From a CDN the ONLY line that changes is the import:
 
       import { createViewer, createEditor, createRibbonEditor }
-        from "https://cdn.jsdelivr.net/npm/docxodus@12.2.0/dist/embed.bundle.js";
+        from "https://cdn.jsdelivr.net/npm/docxodus@12.3.0/dist/embed.bundle.js";
 
     WASM assets auto-resolve from the wasm/ directory next to the bundle —
     no other configuration needed. Pin an exact version in production so the
     immutable CDN cache works for you, not against you.
   -->
   <script type="module">
-    import { createViewer, createEditor, createRibbonEditor } from "./embed.bundle.js";
+    import { loadDemoEngine } from "./engine.js";
+    const { createViewer, createEditor, createRibbonEditor } = await loadDemoEngine();
 
     const status = (t) => (document.getElementById("status").textContent = t);
     let editor = null;

@@ -7,7 +7,7 @@
  * ```html
  * <div id="doc"></div>
  * <script type="module">
- *   import { createViewer } from "https://cdn.jsdelivr.net/npm/docxodus@12.2.0/dist/embed.bundle.js";
+ *   import { createViewer } from "https://cdn.jsdelivr.net/npm/docxodus@12.3.0/dist/embed.bundle.js";
  *   await createViewer("#doc", "./contract.docx");
  * </script>
  * ```
@@ -30,11 +30,14 @@ import {
   initialize,
   getWasmExports,
   convertDocxToHtml,
+  openDocxHistory,
+  openDocxHistoryArchive,
 } from "./index.js";
 import { DocxEditor } from "./editor.js";
 import type { DocxEditorExports, DocxEditorOptions } from "./editor.js";
 import { mountRibbon } from "./ribbon.js";
 import type { RibbonEditor, RibbonOptions } from "./ribbon.js";
+import type { RibbonHistoryOptions } from './ribbon-history.js';
 import type { ConversionOptions } from "./types.js";
 import { DocxHistoryError } from './history.js';
 import type { DocxHistoryClient, DocxHistoryUpdate, HistoryHead, HistoryPosition } from './history.js';
@@ -554,9 +557,11 @@ export async function createEditor(
   }
 }
 
-export interface CreateRibbonEditorOptions extends RibbonOptions {
+export interface CreateRibbonEditorOptions extends Omit<RibbonOptions, 'history'> {
   /** Explicit URL of the wasm assets directory; omit to auto-detect. */
   wasmBasePath?: string;
+  /** Show optional version history. Saving is explicit; no autosave or network synchronization. */
+  history?: boolean | RibbonHistoryOptions;
 }
 
 /** Best-effort file name from a URL source, so the title bar says something useful. */
@@ -595,7 +600,7 @@ export async function createRibbonEditor(
   options: CreateRibbonEditorOptions = {},
 ): Promise<RibbonEditor> {
   const el = resolveContainer(container);
-  const { wasmBasePath, ...ribbonOptions } = options;
+  const { wasmBasePath, history, ...ribbonOptions } = options;
   const mount = createScopedMount(el);
   // The CSS-scoping wrapper sits between the caller's element and the surface, so
   // it has to pass the container's height through — otherwise a full-height mount
@@ -608,6 +613,12 @@ export async function createRibbonEditor(
     // boundary (rounded card + shadow). Full-bleed hosts pass frame: "flush".
     frame: "card",
     ...ribbonOptions,
+    history: history ? {
+      ...(typeof history === 'object' ? history : {}),
+      openHistory: openDocxHistory,
+      openArchive: openDocxHistoryArchive,
+      preview: (container, bytes) => createViewer(container, bytes, { wasmBasePath, renderTrackedChanges: true }),
+    } : undefined,
     // Exports arrive after the runtime boots; the loader covers that gap.
     exports: undefined,
   });
@@ -630,6 +641,7 @@ export async function createRibbonEditor(
     ribbon.loader.stage(2);
     if (bytes == null) ribbon.openBlank(ribbonOptions.documentName);
     else ribbon.open(bytes, ribbonOptions.documentName ?? nameFromSource(source));
+    await ribbon.history?.resume();
 
     ribbon.loader.stage(3);
     ribbon.loader.done();

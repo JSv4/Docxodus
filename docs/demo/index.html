@@ -191,8 +191,7 @@
        editor workspace opts out (the page's own prose keeps autosizing). The
        property is non-inherited and Blink consults the autosizing cluster
        roots it picks itself, hence the universal selector. Newer engines emit
-       this inside the document render too; page-level covers the pinned
-       engine today. */
+       this inside the document render too; page-level also covers engine overrides. */
     #workspace, #workspace * { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 
     .feature-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; margin-top: 18px; overflow: hidden;
@@ -398,8 +397,8 @@
     </div>
   </main>
 
-  <footer>Engine delivered by <a href="https://www.jsdelivr.com/package/npm/docxodus">jsDelivr</a> from
-    <a href="https://www.npmjs.com/package/docxodus">docxodus@12.2.0</a>. Everything runs client-side.</footer>
+  <footer>Powered by <a href="https://www.npmjs.com/package/docxodus">Docxodus</a>,
+    built together with this demo. Everything runs client-side.</footer>
 
   <dialog id="embedDialog" aria-labelledby="embedTitle">
     <div class="embed-inner">
@@ -425,8 +424,7 @@
 
   <script type="module">
     const params = new URLSearchParams(location.search);
-    const ENGINE = params.get("engine")
-      ?? "https://cdn.jsdelivr.net/npm/docxodus@12.2.0/dist/embed.bundle.js";
+    import { loadDemoEngine } from "./engine.js";
     const DOC = params.get("doc")
       ?? "./docxodus-demo-guide.docx";
     // The arcade and its controls are demo content living beside this page, so
@@ -450,7 +448,7 @@
     const moduleSnippet = `<div id="docx-editor" style="height:80vh"></div>
 <script type="module">
   import { createRibbonEditor } from
-    "https://cdn.jsdelivr.net/npm/docxodus@12.2.0/dist/embed.bundle.js";
+    "https://cdn.jsdelivr.net/npm/docxodus@12.3.0/dist/embed.bundle.js";
 
   await createRibbonEditor("#docx-editor", "/documents/example.docx");
 <\/script>`;
@@ -505,9 +503,10 @@
       if (DEMO === "arcade") {
         const [{ createRibbonEditor, DocxSession, getWasmExports },
                { startArcade }, { mountArcadeDock }] =
-          await Promise.all([import(ENGINE), import(GAMES_URL), import(DOCK_URL)]);
+          await Promise.all([loadDemoEngine(), import(GAMES_URL), import(DOCK_URL)]);
 
         const ribbon = await createRibbonEditor("#workspace", null, {
+          history: false,
           ...surfaceOptions,
           documentName: "docx-arcade.docx",
           headerFooter: false,
@@ -523,7 +522,6 @@
         const controller = startArcade({
           editor,
           session,
-          cart: params.get("cart") ?? "doom",
           intro: params.get("intro") !== "0",
           ui: dock.ui,
           // Same overrides the cabinet takes — a same-origin IWAD and a mute
@@ -541,7 +539,7 @@
         // from the action. Once the arcade is live the card hugs the game
         // instead: the canvas paragraph's bottom edge plus room for the pad
         // and dock, so the thumbs land directly under the screen they steer.
-        // Re-measured on resize (rotation, browser-chrome collapse).
+        // Re-measured when the title/loading card becomes a DOOM frame, and on resize.
         const workspace = $("workspace");
         const hugCard = () => {
           if (!window.matchMedia("(max-width: 620px)").matches) {
@@ -551,13 +549,14 @@
           const canvas = controller.canvasElement();
           if (!canvas) return;
           const bottom = canvas.getBoundingClientRect().bottom
-            - workspace.getBoundingClientRect().top;
+            - workspace.getBoundingClientRect().top
+            + ribbon.element.querySelector('.dxr-scroll').scrollTop;
           // 240px ≈ the caption's first lines + the pad cluster + the dock.
           const hugged = Math.ceil(bottom + 240);
-          workspace.style.height =
-            `${Math.max(430, Math.min(hugged, Math.round(innerHeight * 0.8)))}px`;
+          workspace.style.height = `${Math.max(430, hugged)}px`;
         };
         requestAnimationFrame(hugCard);
+        new ResizeObserver(hugCard).observe(ribbon.surface);
         let hugTimer = 0;
         addEventListener("resize", () => {
           clearTimeout(hugTimer);
@@ -568,7 +567,7 @@
         window.__ribbon = ribbon;
         setStatus(`Live — the arcade booted in ${Math.round(performance.now() - started)} ms.`, "ready");
       } else {
-        const { createRibbonEditor } = await import(ENGINE);
+        const { createRibbonEditor } = await loadDemoEngine();
         // One call mounts the whole surface. The chrome and its loading overlay paint
         // immediately; the runtime streams behind them. This page contributes only the
         // dark frame around it and the status chip above it.

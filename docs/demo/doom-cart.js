@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════
-// Cartridge 4 — DOOM. The actual game, not an impression of it.
+// DOOM — the arcade’s only cartridge, with bitmap and ASCII rendering.
 //
 // LICENSE NOTE — THIS FILE IS GPL-2.0-or-later, NOT MIT.
 // Docxodus is MIT (see the root LICENSE) and every other file in this
@@ -8,21 +8,11 @@
 // which id released under the GNU General Public License v2. So this glue is
 // offered under GPL-2.0-or-later too. The engine itself is not in this
 // repository: it is a pinned jsDelivr URL loaded through a dynamic `import()`,
-// which is also why the 3 MB build never downloads for a visitor who plays the
-// other three cartridges. See vendor/NOTICE.md.
-//
-// WHAT THIS REPLACES
-// ------------------
-// Cartridge 4's slot used to end at a hand-written ASCII raycaster fed by Freedoom's
-// E1M1 geometry, rasterized to a character grid offline. That was a real Doom
-// *level* in a Word document. This is the real Doom *engine* in a Word
-// document: id's own BSP renderer, its own 320×200 framebuffer, its own
-// physics, monsters, doors, weapons, menus and status bar. Every lossless
-// frame becomes the media payload of one inline image in a Word paragraph.
+// and loads only when DOOM starts. See vendor/NOTICE.md.
 //
 // TWO DOCUMENT RENDERERS
 // ----------------------
-// Original mode stores a lossless native w:drawing. ASCII mode gives every
+// Bitmap mode stores a lossless native w:drawing. ASCII mode gives every
 // source pixel a printable character, with tone-calibrated glyphs and colored
 // Word runs. Both project the same framebuffer, without advancing the engine
 // when the player switches modes. Save/Undo/reopen see the displayed frame.
@@ -100,16 +90,16 @@ export const DOOM_KEY_MAP = {
 
 /** The arcade key codes this cartridge wants to be handed. ascii-arcade.js
  *  unions this into the set its capture-phase listener claims while playing,
- *  so Doom gets Enter/E/Q/M/digits without the other cartridges caring. */
+ *  including Enter/E/Q/M/digits for menus, doors, weapons and the map. */
 export const DOOM_KEY_CODES = [...Object.keys(DOOM_KEY_MAP)];
 
 /** What the on-screen pad offers a thumb — the same map as the table above,
  *  minus the aliases a keyboard has room for. Doom is the cartridge that
  *  needed this: a pad with movement and fire can walk E1M1 up to its first
  *  door and no further, because USE is a key and a phone had none. Its rarer
- *  keys — seven weapons, the automap, Doom's own menu and the Enter that
- *  works it — go in the pad's tray rather than under a thumb, since they are
- *  what you reach for between fights, not during one. */
+ *  keys — seven weapons, the automap, Doom's own menu and a separate Enter —
+ *  go in the pad's tray. FIRE also confirms menus, so starting a game never
+ *  requires discovering the tray. */
 export const DOOM_TOUCH = {
   up: { code: 'KeyW', glyph: '▲', label: 'Forward' },
   down: { code: 'KeyS', glyph: '▼', label: 'Back' },
@@ -117,7 +107,7 @@ export const DOOM_TOUCH = {
   right: { code: 'ArrowRight', glyph: '↻', label: 'Turn right' },
   strafeLeft: { code: 'KeyA', glyph: '◀', label: 'Strafe left' },
   strafeRight: { code: 'KeyD', glyph: '▶', label: 'Strafe right' },
-  fire: { code: 'Space', glyph: 'FIRE', label: 'Fire' },
+  fire: { code: 'Space', glyph: 'FIRE / OK', label: 'Fire / confirm menu selection' },
   use: { code: 'KeyE', glyph: 'USE', label: 'Open doors and switches' },
   run: { code: 'ShiftLeft', glyph: 'RUN', label: 'Run (stays on until tapped again)', toggle: true },
   extras: [
@@ -829,10 +819,15 @@ export function doomCart(options = {}) {
     if (status !== 'playing' || !handle) return;
 
     // Drain the arcade's key-transition log into Doom's queue. Doom reads one
-    // transition per DG_GetKey call and expects both edges, which is why the
-    // cartridge wants the log rather than the held/pressed sets the other two
-    // cartridges use.
+    // transition per DG_GetKey call and expects both press and release edges.
     for (const { code, down } of input.drain?.() ?? []) {
+      // Doom's menu accepts Enter, not its attack key. Pair Space/FIRE with
+      // Enter on both edges so even a tap released between rendered frames
+      // confirms once, while holding it still fires normally in a level.
+      // Enter goes FIRST: on the title screen either key opens the menu, so
+      // attack followed by Enter would also select New Game in the same tap.
+      // In gameplay Enter has no action; the attack binding stays unchanged.
+      if (code === 'Space') handle.keys.push([KEY.ENTER, down ? 1 : 0]);
       const key = DOOM_KEY_MAP[code];
       if (key !== undefined) handle.keys.push([key, down ? 1 : 0]);
     }
@@ -900,20 +895,20 @@ export function doomCart(options = {}) {
       'CONTROLS · MOVE W/S · STRAFE A/D',
       'TURN ←/→ · FIRE SPACE · USE E',
       'RUN SHIFT · MENU Q · MAP M · WEAPON 1–7',
-      'ORIGINAL / ASCII · PAUSE/EDIT ESC',
+      'BITMAP / ASCII · PAUSE/EDIT ESC',
     ],
     caption:
       'The **actual** game: id Software’s Doom engine — GPL-2.0, compiled to JavaScript by ' +
       '[doomgeneric](https://github.com/grubbyplaya/doomgenericjs) — running on ' +
       (wadUrl === DEFAULT_WAD ? 'Freedoom’s BSD-licensed game data. ' : 'your selected DOOM game data. ') +
-      'Choose **Original** ' +
+      'Choose **Bitmap** ' +
       'for a lossless inline image, or **ASCII** for **320×200 printable characters** in colored ' +
       'Word runs, including the original HUD. Switch modes on the same frame, even while paused. ' +
       'Move **W/S** · strafe ' +
       '**A/D** · turn **←/→** · **Space** ' +
-      'fires · **E** opens · **Q** is Doom’s own menu. **Esc** pauses — and then it is only a ' +
+      'fires / confirms menus · **E** opens · **Q** is Doom’s own menu. **Esc** pauses — and then it is only a ' +
       'document again: copy and paste the frame, Undo rewinds it, Save downloads it as .docx.',
-    hint: '<b>WASD</b> move · <b>←/→</b> turn · <b>Space</b> fire · <b>E</b> open · <b>Q</b> Doom’s menu · <b>Original / ASCII</b> switches the same frame, even while paused.',
+    hint: '<b>WASD</b> move · <b>←/→</b> turn · <b>Space</b> fire / confirm menu · <b>E</b> open · <b>Q</b> Doom’s menu · <b>Bitmap / ASCII</b> switches the same frame, even while paused.',
     reset() {
       // Doom's own state lives inside the WebAssembly heap and the engine is
       // a page singleton, so a cartridge reset cannot restart the game. Q
@@ -927,9 +922,7 @@ export function doomCart(options = {}) {
       if (value !== 'ascii' && value !== 'image') throw new RangeError('Unknown Doom rendering mode');
       rendering = value;
     },
-    /** The other two cartridges re-read their world from the paragraph on
-     *  every resume — type a wall into the map, resume, walk into it. Real
-     *  Doom cannot: the level is BSP geometry in the WebAssembly heap, not
+    /** Doom's level is BSP geometry in the WebAssembly heap, not
      *  text, and nothing typed alongside a framebuffer image means anything
      *  to it. So the round-trip here is honest about what it is — the frame
      *  stays editable, undoable and saveable like any paragraph, and the next

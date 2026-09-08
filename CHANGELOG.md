@@ -6,6 +6,79 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **REDLINE THEATER (`docs/demo/redline.html`) — the agent protocol as the demo.** Three
+  counsel negotiate a Master Services Agreement, and every edit that lands is dispatched
+  from a real JSON-RPC 2.0 `tools/call` frame in the shape `docxodus-mcp` accepts over
+  stdio, streamed on a wire console beside the document. Nothing renders a diff: the
+  session records in `render_inline` mode, so each call writes native `w:ins`/`w:del`
+  into the live package and the editor repaints only the block that changed — what you
+  watch is the file that downloads, attributed per counsel because the three reviewers
+  are three values of the session's revision author. The finale proves the result rather
+  than asserting it: `proveRedlineReversibility` plus a `docxDiffGetRevisions` pass
+  confirm accept-all reaches the negotiated final and reject-all restores the baseline
+  with zero content differences, with reject-path package divergences classified against
+  a closed set of parts that review comments legitimately explain. One scripted call is
+  *expected to be refused* — list membership has no reversible tracked-change encoding,
+  so the engine declines it rather than writing a mark reject-all could not undo. That
+  closed-set classification is also what found the note-insertion defect fixed in #625:
+  a footnote's definition survived reject-all, and because `/word/footnotes.xml` is not
+  a part a comment can explain, the demo reported the redline unreversible instead of
+  absorbing it into a pattern match. Act II footnotes the negotiated cap again now, so
+  the proof exercises that path on every run.
+  The page carries a second mode, **diff stress**, because "redline" means two things
+  here and only one was on screen: where the negotiation RECORDS its markup, the stress
+  meter RECOMPUTES the redline from scratch after every edit and times it, appending a
+  clause per frame so the input grows under the engine. Three selectable pipeline depths
+  measure ~52 ms (`docxDiffGetRevisions`), ~74 ms (`docxDiffCompareProducts` → package +
+  revisions) and ~141 ms (plus `convertDocxToHtml`) — that is 33× to 78× the cost of the
+  ~2 ms mutation path measured through the same endpoint, so a redline-per-edit loop runs
+  between roughly 7 and 19 frames per second: not an animation rate, but no longer far
+  from one. The panel
+  reports the ratio it just measured, not a number written into the page, which is how it
+  picked up three successive engine improvements — the read-amplification fix from the
+  DocxDiff stress work, the normalizer gating, and the read-identity change — without a
+  line of its own changing. `benchmarks/docxdiff-stress/FINDINGS.md` remains the authority on engine
+  performance; this mode is the watchable version of the same question.
+  A browser MCP endpoint (`docs/demo/mcp-wire.js`) reimplements the server's front half
+  (envelope parsing, (tool, action) routing, the `content[].text` + `isError` result
+  shape, business failures as tool results rather than protocol errors) over `DocxSession`
+  via WASM; `docs/demo/tools/redline-theater.test.mjs` parses the real
+  `tools/mcp-server/ToolCatalog.cs` so that correspondence is checked rather than
+  claimed, and `npm/tests/demo-redline.spec.ts` guards the run, the attribution, the
+  proof and a latency budget. Demo content only — not shipped in the npm package.
+
+## [12.4.0] - 2026-09-08
+
+### Added
+
+- Optional `createRibbonEditor(container, source, { history: true })` version-history drawer with named saves,
+  comparisons, separate previews, restore confirmation and portable history files. A stable
+  `workspaceId` reopens saved documents and pending saves. Saved documents remain reachable
+  after New/Open, and invalid uploads preserve the current editor and undo stack.
+- One npm build now stages both local editors and the deployable Pages site using the same
+  editor bundle and WASM runtime. The standalone history example is folded into the shared editor.
+
+### Changed
+
+- The arcade now offers only the current DOOM cartridge, with bitmap and ASCII rendering.
+  Removed the platformer, both legacy raycaster cartridges and their dedicated tooling/tests.
+- Pages builds the site from source, eliminating its dependency on a separately published
+  npm version. The normal editor pages enable optional history; live simulation hosts opt out.
+
+### Fixed
+
+- Editor paper stays aligned with zoomed document content, including phone layouts and
+  header/footer bands (PR #743).
+- Document replacement preserves the public ribbon surface and host listeners. Invalid
+  uploads preserve the existing document, session and undo history.
+- Retried history actions retain their original save/restore meaning. Restores reconfirm
+  replacement; a recovered save cannot mark a different tab's unsaved draft as saved.
+- The DOOM landing card reserves space below the game for phone controls.
+
+## [12.3.0] - 2026-09-07
+
+### Added
+
 - Durable browser checkpoint commands: `HistoryCheckpoints` persists a complete save/restore
   request through a host-supplied `HistoryCheckpointJournal` *before* publishing it, so a lost
   acknowledgement no longer leaves an app unsure whether a checkpoint exists. `retry()` replays
@@ -54,46 +127,21 @@ All notable changes to this project will be documented in this file.
   it. The rest of the surface already looked its controls up optionally; this was the last
   unconditional lookup.
 
-- **REDLINE THEATER (`docs/demo/redline.html`) — the agent protocol as the demo.** Three
-  counsel negotiate a Master Services Agreement, and every edit that lands is dispatched
-  from a real JSON-RPC 2.0 `tools/call` frame in the shape `docxodus-mcp` accepts over
-  stdio, streamed on a wire console beside the document. Nothing renders a diff: the
-  session records in `render_inline` mode, so each call writes native `w:ins`/`w:del`
-  into the live package and the editor repaints only the block that changed — what you
-  watch is the file that downloads, attributed per counsel because the three reviewers
-  are three values of the session's revision author. The finale proves the result rather
-  than asserting it: `proveRedlineReversibility` plus a `docxDiffGetRevisions` pass
-  confirm accept-all reaches the negotiated final and reject-all restores the baseline
-  with zero content differences, with reject-path package divergences classified against
-  a closed set of parts that review comments legitimately explain. One scripted call is
-  *expected to be refused* — list membership has no reversible tracked-change encoding,
-  so the engine declines it rather than writing a mark reject-all could not undo. That
-  closed-set classification is also what found the note-insertion defect fixed in #625:
-  a footnote's definition survived reject-all, and because `/word/footnotes.xml` is not
-  a part a comment can explain, the demo reported the redline unreversible instead of
-  absorbing it into a pattern match. Act II footnotes the negotiated cap again now, so
-  the proof exercises that path on every run.
-  The page carries a second mode, **diff stress**, because "redline" means two things
-  here and only one was on screen: where the negotiation RECORDS its markup, the stress
-  meter RECOMPUTES the redline from scratch after every edit and times it, appending a
-  clause per frame so the input grows under the engine. Three selectable pipeline depths
-  measure ~52 ms (`docxDiffGetRevisions`), ~74 ms (`docxDiffCompareProducts` → package +
-  revisions) and ~141 ms (plus `convertDocxToHtml`) — that is 33× to 78× the cost of the
-  ~2 ms mutation path measured through the same endpoint, so a redline-per-edit loop runs
-  between roughly 7 and 19 frames per second: not an animation rate, but no longer far
-  from one. The panel
-  reports the ratio it just measured, not a number written into the page, which is how it
-  picked up three successive engine improvements — the read-amplification fix from the
-  DocxDiff stress work, the normalizer gating, and the read-identity change — without a
-  line of its own changing. `benchmarks/docxdiff-stress/FINDINGS.md` remains the authority on engine
-  performance; this mode is the watchable version of the same question.
-  A browser MCP endpoint (`docs/demo/mcp-wire.js`) reimplements the server's front half
-  (envelope parsing, (tool, action) routing, the `content[].text` + `isError` result
-  shape, business failures as tool results rather than protocol errors) over `DocxSession`
-  via WASM; `docs/demo/tools/redline-theater.test.mjs` parses the real
-  `tools/mcp-server/ToolCatalog.cs` so that correspondence is checked rather than
-  claimed, and `npm/tests/demo-redline.spec.ts` guards the run, the attribution, the
-  proof and a latency budget. Demo content only — not shipped in the npm package.
+- The arcade's mobile fire button now confirms DOOM menus, allowing touch users to start
+  a game without a hardware keyboard.
+
+### Performance
+
+- Dense text paragraphs reuse formatting templates during incremental HTML rendering, retaining
+  every original character and line break. Together with the updated ASCII projection and WASM
+  AOT profile, this improves full-resolution DOOM ASCII throughput beyond 10 FPS in the measured
+  browser configuration; see [the measurements](docs/architecture/doom-ascii-performance.md).
+
+### Dependencies
+
+- Upgrade SkiaSharp and its Linux native assets together to 4.151.2.
+- Release `docx-scalpel` 0.4.1 from the same commit so its bundled native host receives the
+  rendering improvements and dependency update. The Python API is unchanged.
 
 ## [12.2.0] - 2026-09-07
 

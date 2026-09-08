@@ -1,4 +1,16 @@
 import { test, expect, Page } from '@playwright/test';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+
+// Match the capture script's optional offline mirror, including its pin check.
+test.beforeEach(async ({ page }) => {
+  if (!process.env.DOOM_ENGINE_PATH) return;
+  const bytes = readFileSync(process.env.DOOM_ENGINE_PATH);
+  expect(createHash('sha256').update(bytes).digest('hex')).toBe(
+    'efd7c34714e3753a84cf6873f2c2ae0e1a41bde1f10aaa2b0a95cb6935e8cce9');
+  await page.route('https://cdn.jsdelivr.net/gh/grubbyplaya/**', route =>
+    route.fulfill({ body: bytes, contentType: 'text/javascript' }));
+});
 
 // THE DOCX ARCADE on a phone — the mobile-Chrome regression that garbled the
 // GitHub Pages demo. On Android the canvas rows render WIDER than authored:
@@ -185,19 +197,6 @@ async function rowWidthSpreadInCells(page: Page): Promise<number> {
 }
 
 test.describe('Arcade on a phone-shaped viewport', () => {
-  test('game frame keeps 26 rows with text inflated past the column', async ({ page }) => {
-    // Every game row runs bezel-to-bezel (column 92): un-pinned, 175% text
-    // folds each row onto a second line (52 line boxes) — the field garble.
-    await page.goto(`/demo-arcade.html?${OVERRIDE}&boot=tap&intro=0&cart=quest`);
-    await page.locator('#boot').click();
-    await waitForBoot(page);
-    await page.waitForFunction(() => (window as any).__arcade.frames() >= 3, { timeout: 60000 });
-    await inflateDocumentText(page);
-    await page.waitForFunction(() => (window as any).__arcade.frames() >= 6, { timeout: 60000 });
-    await page.evaluate(() => (window as any).__arcade.pause());
-
-    expect(await canvasLineBoxes(page)).toBe(26);
-  });
 
   test('attract screen keeps 26 rows as the title card fills in', async ({ page }) => {
     // The reported repro surface: the intro looked fine at first, then grew
@@ -238,70 +237,6 @@ test.describe('Arcade on a phone-shaped viewport', () => {
     expect(await canvasLineBoxes(page)).toBe(26);
   });
 
-  test('every cartridge keeps its grid on the same platform', async ({ page }) => {
-    test.setTimeout(240000); // one boot, then four cartridges animated in turn
-    // The three text games draw a box-drawing bezel on every row and the
-    // raycasters shade their walls with ▒ █, so the tilt is not an
-    // attract-screen-only property. Doom now uses one native 320×200 image;
-    // its mobile contract is exact image geometry rather than text-row drift.
-    //
-    // The claim is ONE AUTHORED ROW IS ONE RENDERED LINE, so each cartridge is
-    // measured against the number of rows it actually drew rather than against
-    // a shared constant. The text cartridges draw 26; Doom is checked as the
-    // lossless inline document image it actually authors.
-    await emulateAndroidFontCoverage(page);
-    await page.goto(`/demo-arcade.html?${OVERRIDE}&boot=tap&intro=0&cart=quest`);
-    await page.locator('#boot').click();
-    await waitForBoot(page);
-
-    for (const cart of ['quest', 'dungeon', 'e1m1', 'doom']) {
-      await page.evaluate((name) => {
-        (window as any).__arcade.setCart(name);
-        (window as any).__arcade.resume();
-      }, cart);
-      const from = await page.evaluate(() => (window as any).__arcade.frames());
-      await page.waitForFunction(
-        (n) => (window as any).__arcade.frames() >= n, from + 20, { timeout: 60000 });
-      if (cart === 'doom') {
-        // Loading-card repaints are document frames too. Wait for a decoded
-        // game frame before pausing to measure the native image geometry.
-        await page.waitForFunction(() => {
-          const img = (window as any).__arcade.canvasElement()?.querySelector('img');
-          return img?.complete && img.naturalWidth === 320;
-        }, null, { timeout: 120000 });
-      }
-      await page.evaluate(() => (window as any).__arcade.pause());
-
-      if (cart === 'doom') {
-        const image = await page.evaluate(() => {
-          const element = (window as any).__arcade.canvasElement() as HTMLElement;
-          const img = element.querySelector('img') as HTMLImageElement | null;
-          return img && {
-            complete: img.complete,
-            natural: [img.naturalWidth, img.naturalHeight],
-            count: element.querySelectorAll('img').length,
-            rows: element.querySelectorAll('br').length,
-          };
-        });
-        expect.soft(image?.complete, 'doom image decoded').toBe(true);
-        expect.soft(image?.natural, 'doom native framebuffer').toEqual([320, 200]);
-        expect.soft(image?.count, 'doom authored images').toBe(1);
-        expect.soft(image?.rows, 'doom is not a fragile text grid').toBe(0);
-        continue;
-      }
-
-      // The rows the cartridge authored: one `w:br` between each pair, so the
-      // element carries one <br> per row boundary.
-      const rows = await page.evaluate(() =>
-        ((window as any).__arcade.canvasElement() as HTMLElement)
-          .querySelectorAll('br').length + 1);
-      expect.soft(rows, `${cart} authored rows`).toBeGreaterThan(20);
-      expect.soft(await rowWidthSpreadInCells(page), `${cart} row widths`).toBeLessThan(0.1);
-      expect.soft(await canvasLineBoxes(page), `${cart} line boxes`).toBe(rows);
-    }
-    expect(test.info().errors).toHaveLength(0);
-  });
-
   test('without the pinned font the same platform tilts the art — the pin is the fix', async ({ page }) => {
     // The control. If this ever stops failing to hold the grid, the emulation
     // above has stopped being adverse and the two specs before it prove nothing.
@@ -321,65 +256,6 @@ test.describe('Arcade on a phone-shaped viewport', () => {
     // holds independently, which is why the field report was a tilt and not
     // the earlier stacking garble.
     expect(await canvasLineBoxes(page)).toBe(26);
-  });
-
-  test('the cabinet hands a phone thumb controls, and a way to fire', async ({ page }) => {
-    // The controls the cabinet drew before this were one wrapped bar under the
-    // document: four 44px arrows on a row of their own beneath the cartridge
-    // chips, the transport row and the telemetry — a stack that ate the bottom
-    // of a phone screen, sat nowhere near a thumb, and offered no Space at all,
-    // so a shooter could be walked but never fought on a touch screen.
-    //
-    // Pinned to the raycaster, not to Doom. This is a test of the DOCK — the
-    // geometry of the pad and that a tap reaches the game's input — and the
-    // raycaster answers that crisply, because it exposes the player's heading
-    // and a tap can be shown to turn it. Doom's own state is a framebuffer, so
-    // the equivalent assertion there is a fuzzy pixel-motion probe that also
-    // wants a 10 MB IWAD in a phone-emulated browser; its input path already
-    // has precise coverage in demo-arcade-doom.spec.ts. The FIRE assertion
-    // below is cart-agnostic either way — it reads the arcade's own input.
-    await page.goto(`/demo-arcade.html?${OVERRIDE}&boot=tap&intro=0&cart=dungeon`);
-    await page.locator('#boot').click();
-    await waitForBoot(page);
-    await page.waitForFunction(() => (window as any).__arcade.frames() >= 3, { timeout: 60000 });
-
-    await expect(page.locator('.dxa-controls')).toHaveAttribute('data-compact', 'true');
-    await expect(page.locator('#pad .dxa-fire')).toBeVisible();
-    await expect(page.locator('#dockcarts')).toBeHidden();
-
-    // Thumb reach: bottom corners, clear of the game screen's middle, and hit
-    // targets no smaller than the 44px both platform guidelines ask for.
-    const geometry = await page.evaluate(() => {
-      const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
-      const dpad = box('.dxa-dpad');
-      const fire = box('.dxa-fire');
-      return {
-        bothLow: dpad.top > window.innerHeight / 2 && fire.top > window.innerHeight / 2,
-        opposedCorners: dpad.right < window.innerWidth / 2 && fire.left > window.innerWidth / 2,
-        onScreen: dpad.bottom <= window.innerHeight && fire.bottom <= window.innerHeight,
-        tapTargets: Math.min(dpad.width / 3, dpad.height / 3, fire.width, fire.height),
-      };
-    });
-    expect(geometry.bothLow).toBe(true);
-    expect(geometry.opposedCorners).toBe(true);
-    expect(geometry.onScreen).toBe(true);
-    expect(geometry.tapTargets).toBeGreaterThanOrEqual(40);
-
-    // Real taps, on the touch rig: turning is the raycaster's own input path.
-    const heading = await page.evaluate(() => (window as any).__arcade.game().player.dx as number);
-    await page.locator('.dxa-right').dispatchEvent('pointerdown');
-    await page.waitForFunction(
-      (dx0) => Math.abs((window as any).__arcade.game().player.dx - dx0) > 0.05,
-      heading,
-      { timeout: 30000 },
-    );
-    await page.locator('.dxa-right').dispatchEvent('pointerup');
-
-    // And the button a phone never had: Space, held, which is the trigger.
-    await page.locator('.dxa-fire').dispatchEvent('pointerdown');
-    expect(await page.evaluate(() => (window as any).__arcade.input.held('Space'))).toBe(true);
-    await page.locator('.dxa-fire').dispatchEvent('pointerup');
-    expect(await page.evaluate(() => (window as any).__arcade.input.held('Space'))).toBe(false);
   });
 
   test('every character on the canvas advances exactly one cell', async ({ page }) => {
@@ -442,8 +318,8 @@ test.describe('The pad takes its controls from the cartridge', () => {
       // Loaded through a computed specifier, as the CDN specs do: these modules
       // are served to the browser beside the page, not resolvable from here.
       const load = (name: string) => import(/* @vite-ignore */ `./${name}.js`);
-      const [{ mountArcadeDock }, { TOUCH }, { DOOM_TOUCH }] = await Promise.all([
-        load('arcade-dock'), load('ascii-arcade'), load('doom-cart'),
+      const [{ mountArcadeDock }, { DOOM_TOUCH }] = await Promise.all([
+        load('arcade-dock'), load('doom-cart'),
       ]);
       const host = document.createElement('div');
       host.style.cssText = 'position:relative;width:100%;height:420px';
@@ -451,7 +327,7 @@ test.describe('The pad takes its controls from the cartridge', () => {
       const dock = mountArcadeDock(host, { anchor: 'host', ids: false });
       dock.show();
       (window as any).__dock = dock;
-      (window as any).__profiles = { ...TOUCH, doom: DOOM_TOUCH };
+      (window as any).__profiles = { intro: {}, doom: DOOM_TOUCH };
       return dock.isCompact();
     });
   }
@@ -473,44 +349,80 @@ test.describe('The pad takes its controls from the cartridge', () => {
   const setProfile = (page: Page, cart: string) => page.evaluate(
     (name) => (window as any).__dock.setPad((window as any).__profiles[name]), cart);
 
-  test('each cartridge gets its own buttons, and only its own', async ({ page }) => {
-    expect(await mountBareDock(page), 'a phone rig is always the compact layout').toBe(true);
+  test('FIRE touch taps confirm Doom menus and holding it still fires in a level', async ({ page }) => {
+    test.setTimeout(240000);
+    await page.goto(`/demo-arcade.html?${OVERRIDE}&intro=0&cart=doom`);
+    await waitForBoot(page);
+    await page.waitForFunction(() => {
+      const state = (window as any).__arcade.game();
+      if (state.status === 'error') throw new Error(state.error);
+      return state.doomFrames >= 4;
+    }, null, { timeout: 180000 });
 
-    // The platformer: walk and jump. Offering it a strafe button would send a
-    // key its simulation never reads.
-    await setProfile(page, 'quest');
-    expect(await padMap(page)).toMatchObject({
-      up: 'KeyW', left: 'ArrowLeft', right: 'ArrowRight', fire: 'Space',
-      down: null, 'strafe-left': null, 'strafe-right': null, use: null, run: null,
-    });
-    await expect(page.locator('.dxa-keys')).toBeHidden();
+    const fire = page.locator('#pad .dxa-fire');
+    await expect(fire).toBeVisible();
+    await expect(page.locator('#padextras')).toBeHidden();
 
-    // A Doom-format level: strafe and a sprint latch as well.
-    await setProfile(page, 'raycaster');
-    expect(await padMap(page)).toMatchObject({
-      up: 'KeyW', down: 'KeyS', left: 'ArrowLeft', right: 'ArrowRight',
-      'strafe-left': 'KeyA', 'strafe-right': 'KeyD', fire: 'Space', run: 'ShiftLeft',
-      use: null,
-    });
-    await expect(page.locator('.dxa-run')).toHaveAttribute('data-mode', 'toggle');
+    // Actual Chromium touch events, including pointer capture and release.
+    // A synthetic pointerdown or an input.held() check cannot prove that a
+    // quick tap survives until Doom processes its menu input on the next frame.
+    for (let i = 0; i < 4; i++) {
+      await fire.tap(); // title → New Game → episode → skill → level
+      await page.waitForTimeout(700);
+    }
+    await page.waitForTimeout(1500); // level wipe and weapon raise
 
-    // Doom: everything above, plus the door key.
-    await setProfile(page, 'doom');
-    expect(await padMap(page)).toMatchObject({ use: 'KeyE', 'strafe-left': 'KeyA', run: 'ShiftLeft' });
+    const sample = (x0: number, y0: number, x1: number, y1: number) =>
+      page.evaluate(({ x0, y0, x1, y1 }) => {
+        const state = (window as any).__arcade.game();
+        const pixels: number[] = [];
+        for (let y = y0; y < y1; y += 2) {
+          for (let x = x0; x < x1; x += 2) pixels.push(...state.pixel(x, y));
+        }
+        return pixels;
+      }, { x0, y0, x1, y1 });
+    const motion = (a: number[], b: number[]) =>
+      a.reduce((sum, value, i) => sum + Math.abs(value - b[i]), 0) / a.length;
+    const view = await sample(0, 35, 320, 135);
+    const hud = await sample(0, 175, 320, 198);
+    await page.waitForTimeout(600);
+    expect(motion(view, await sample(0, 35, 320, 135)), 'an idle level holds still').toBeLessThan(1);
 
-    // …and back down again. A slot the cartridge does not want loses its code
-    // as well as its pixels: a hidden button must never be able to send a key.
-    await setProfile(page, 'quest');
-    const use = page.locator('.dxa-use');
-    await expect(use).toBeHidden();
-    expect(await use.getAttribute('data-code')).toBeNull();
+    // The view must actually turn while the HUD stays fixed. An opening menu
+    // or attract demo cannot satisfy both the idle and controlled-motion checks.
+    const cdp = await page.context().newCDPSession(page);
+    const hold = async (selector: string) => {
+      const box = await page.locator(selector).boundingBox();
+      expect(box).not.toBeNull();
+      await cdp.send('Input.dispatchTouchEvent', {
+        type: 'touchStart', touchPoints: [{ x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 }],
+      });
+    };
+    const release = () => cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await hold('#pad .dxa-right');
+    await page.waitForTimeout(900);
+    await release();
+    expect(motion(view, await sample(0, 35, 320, 135)), 'FIRE must get past the opening menus')
+      .toBeGreaterThan(6);
+    expect(motion(hud, await sample(0, 175, 320, 198))).toBeLessThan(1);
+
+    const ammo = await sample(2, 171, 42, 194);
+    await hold('#pad .dxa-fire');
+    await page.waitForTimeout(1400);
+    await release();
+    await page.waitForTimeout(700);
+    expect(motion(ammo, await sample(2, 171, 42, 194)), 'holding FIRE spends ammunition')
+      .toBeGreaterThan(1);
+    expect(await page.evaluate(() => (window as any).__arcade.input.held('Space'))).toBe(false);
+    expect(await page.evaluate(() => (window as any).__arcade.playing())).toBe(true);
+    await cdp.detach();
   });
 
   test('the rarer Doom keys ride in a tray instead of under a thumb', async ({ page }) => {
     await mountBareDock(page);
 
     // Nothing to open for a cartridge with no extra keys…
-    await setProfile(page, 'raycaster');
+    await setProfile(page, 'intro');
     await expect(page.locator('.dxa-keys')).toBeHidden();
     await expect(page.locator('.dxa-extras')).toBeHidden();
 
@@ -531,56 +443,10 @@ test.describe('The pad takes its controls from the cartridge', () => {
 
     // Switching to a cartridge without extras withdraws the toggle with them.
     await page.locator('.dxa-keys').click();
-    await setProfile(page, 'quest');
+    await setProfile(page, 'intro');
     await expect(page.locator('.dxa-keys')).toBeHidden();
     await expect(page.locator('.dxa-extras')).toBeHidden();
     expect(await page.locator('.dxa-extras button').count()).toBe(0);
-  });
-
-  test('strafe reaches the game, and RUN latches instead of asking for a third thumb', async ({ page }) => {
-    // The raycaster: the pad's two new movement controls, on the cartridge
-    // that has somewhere to use them. That the strafe CODE sidesteps rather
-    // than turns is proved against the simulation itself in
-    // docs/demo/tools/ascii-arcade.test.mjs; what is proved here is the touch
-    // path — the button exists on a phone, and its press lands in the input
-    // the cartridge reads, without turning the player on the way.
-    await page.goto(`/demo-arcade.html?${OVERRIDE}&boot=tap&intro=0&cart=dungeon`);
-    await page.locator('#boot').click();
-    await waitForBoot(page);
-    await page.waitForFunction(() => (window as any).__arcade.frames() >= 3, { timeout: 60000 });
-
-    await expect(page.locator('#pad .dxa-strafe-left')).toBeVisible();
-    const before = await page.evaluate(() => (window as any).__arcade.game().player);
-    await page.locator('.dxa-strafe-right').dispatchEvent('pointerdown');
-    expect(await page.evaluate(() => (window as any).__arcade.input.held('KeyD'))).toBe(true);
-    const from = await page.evaluate(() => (window as any).__arcade.frames());
-    await page.waitForFunction((n) => (window as any).__arcade.frames() >= n, from + 5,
-      { timeout: 60000 });
-    await page.locator('.dxa-strafe-right').dispatchEvent('pointerup');
-    const after = await page.evaluate(() => (window as any).__arcade.game().player);
-    expect(await page.evaluate(() => (window as any).__arcade.input.held('KeyD'))).toBe(false);
-    expect(Math.abs(after.dx - before.dx), 'strafing must not turn the player').toBeLessThan(0.01);
-    expect(Math.abs(after.dy - before.dy), 'strafing must not turn the player').toBeLessThan(0.01);
-
-    // RUN is Shift, which a thumb steering with the same hand cannot hold, so
-    // it stays down after the tap and comes up on the next one.
-    const run = page.locator('.dxa-run');
-    await run.dispatchEvent('pointerdown');
-    await run.dispatchEvent('pointerup');
-    await expect(run).toHaveAttribute('aria-pressed', 'true');
-    expect(await page.evaluate(() => (window as any).__arcade.input.held('ShiftLeft'))).toBe(true);
-    await run.dispatchEvent('pointerdown');
-    await run.dispatchEvent('pointerup');
-    await expect(run).toHaveAttribute('aria-pressed', 'false');
-    expect(await page.evaluate(() => (window as any).__arcade.input.held('ShiftLeft'))).toBe(false);
-
-    // A latch must not survive into the paused document, where the same key is
-    // an ordinary Shift again.
-    await run.dispatchEvent('pointerdown');
-    expect(await page.evaluate(() => (window as any).__arcade.input.held('ShiftLeft'))).toBe(true);
-    await page.evaluate(() => (window as any).__arcade.pause());
-    await expect(run).toHaveAttribute('aria-pressed', 'false');
-    expect(await page.evaluate(() => (window as any).__arcade.input.held('ShiftLeft'))).toBe(false);
   });
 
   test('Doom hands the phone its door key, and its weapons', async ({ page }) => {
@@ -609,11 +475,8 @@ test.describe('The pad takes its controls from the cartridge', () => {
     await shotgun.dispatchEvent('pointerup');
     expect(await page.evaluate(() => (window as any).__arcade.input.held('Digit3'))).toBe(false);
 
-    // Switch cartridge and the pad follows: no USE button for a game with no
-    // doors, and nothing left holding a key from the cartridge you left.
-    await page.evaluate(() => (window as any).__arcade.setCart('dungeon'));
-    await expect(page.locator('#pad .dxa-use')).toBeHidden();
-    await expect(page.locator('#padkeys')).toBeHidden();
+    // Pausing releases every held key before the editor takes the keyboard back.
+    await page.evaluate(() => (window as any).__arcade.pause());
     expect(await page.evaluate(() => (window as any).__arcade.input.held('KeyE'))).toBe(false);
   });
 });

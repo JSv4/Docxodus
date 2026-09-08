@@ -1,23 +1,5 @@
-// The demo pages load the library from jsDelivr at an exact version, and that
-// pin is the whole reason the arcade's DOOM cartridge broke in public while
-// every Playwright spec stayed green: the specs override `?engine=` to the
-// locally built bundle, so the pin is the ONE thing under test here that no
-// browser test can see. Up to and including 10.0.0 the single-block renderer
-// refreshed an image-bearing paragraph blank, so a site pinned there boots
-// Doom, plays it, writes real frames into the .docx — and shows nothing.
-//
-// So this test asks three offline questions of the checked-in files:
-//
-//   1. Do all the pages agree on one version? A half-moved pin is how you get
-//      a landing page on one engine and the arcade it frames on another.
-//   2. Is that version at or above IMAGE_ENGINE_MINIMUM — the oldest engine
-//      whose incremental render carries an inline image?
-//   3. Does npm/tests/social-demo.spec.ts's RELEASE_ENGINE — the guard that
-//      proves the deployed pages load the pin rather than a 404 — still name
-//      the same version the pages carry?
-//
-// The fourth question, whether that version actually exists on the CDN, needs
-// the network: it runs under DOCXODUS_CHECK_CDN=1 and is skipped otherwise.
+// Published CDN snippets stay pinned for consumers. The demo site itself must
+// load the package built alongside it through one shared module.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -42,7 +24,7 @@ const PINNED_FILES = [
   'npm/src/index.ts',
 ];
 
-// `docxodus@12.2.0`, `docxodus@12.2.0/dist/embed.bundle.js`, the bare npm URL —
+// `docxodus@12.3.0`, `docxodus@12.3.0/dist/embed.bundle.js`, the bare npm URL —
 // all of them, but never `docxodus@latest`, which the docs use deliberately in
 // one "unpinned" example.
 const PIN = /docxodus@(\d+\.\d+\.\d+)/g;
@@ -105,7 +87,7 @@ test("the release-pin spec guard names the pages' version", () => {
   assert.ok(declared, 'RELEASE_ENGINE is no longer a pinned docxodus@X.Y.Z literal');
   assert.equal(declared[1], pins()[0].version,
     'npm/tests/social-demo.spec.ts RELEASE_ENGINE drifted from the demo pages — '
-    + 'that spec is what proves the deployed pages load the pin rather than a 404.');
+    + 'that spec also checks the consumer-facing CDN snippet.');
 });
 
 // Isolated integration check: the pin has to be a version jsDelivr actually
@@ -121,4 +103,18 @@ test('the pinned bundle is published on the CDN', {
   const response = await fetch(url, { method: 'GET', headers: { range: 'bytes=0-0' } });
   assert.ok(response.ok, `${url} returned ${response.status}`);
   assert.match(response.headers.get('content-type') ?? '', /javascript/);
+});
+
+
+test('every hosted editor boots through the shared build loader', () => {
+  for (const name of ['index', 'app', 'player', 'arcade', 'observatory', 'golf']) {
+    const html = read(`docs/demo/${name}.html`);
+    assert.match(html, /import \{ loadDemoEngine \} from "\.\/engine\.js"/);
+    assert.doesNotMatch(html, /const ENGINE =/);
+  }
+  const loader = read('docs/demo/engine.js');
+  assert.match(loader, /params.get\('engine'\) \?\? '\.\/embed\.bundle\.js'/);
+  const workflow = read('.github/workflows/pages.yml');
+  assert.match(workflow, /run: npm run build/);
+  assert.match(workflow, /path: npm\/dist\/site/);
 });

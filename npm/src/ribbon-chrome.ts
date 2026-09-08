@@ -487,9 +487,9 @@ export const RIBBON_CSS = `
    Word draws a header that is being edited — a dashed rule with a small tag in the margin. */
 .dxr-surface .docx-hf-band {
   /* Docked outside the zoomed sheet, so it takes the page's on-screen width from the
-     custom property the viewport publishes rather than stretching to the whole surface. */
+     custom property the viewport publishes, including when the page exceeds the surface. */
   position: relative;
-  width: min(100%, var(--docx-sheet-width, 100%));
+  width: var(--docx-sheet-width, 100%);
   margin: 0 auto;
   padding: 34px 72px 12px;
   background: var(--dxr-sheet);
@@ -548,7 +548,9 @@ export const RIBBON_CSS = `
    vertical breathing room is ours. Centering is left to margin:auto so a page the viewport
    has zoomed to fit stays centered at its scaled width. */
 .dxr[data-chrome] .dxr-surface[data-view="continuous"] .docx-body-flow {
-  max-width: 100%;
+  /* CSS zoom scales the authored page width. A percentage cap would shrink only the
+     paper to the host while its fixed-width section and content keep magnifying. */
+  max-width: none;
   margin: 0 auto;
   padding: 56px 0;
   border-radius: 3px;
@@ -918,6 +920,7 @@ export const RIBBON_HTML = `
       <label class="dxr-btn" tabindex="0">Open<input data-dxr="file" type="file" accept=".docx" hidden /></label>
       <button type="button" data-dxr="save" disabled>Save</button>
     </div>
+    <button type="button" class="dxr-btn" data-dxr="history" title="Browse and save document versions" aria-haspopup="dialog">Version history</button>
     <div class="dxr-quick">
       <button type="button" class="dxr-icon" data-dxr="undo" title="Undo (Ctrl+Z)" aria-label="Undo">&#8630;</button>
       <button type="button" class="dxr-icon" data-dxr="redo" title="Redo (Ctrl+Shift+Z)" aria-label="Redo">&#8631;</button>

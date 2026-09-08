@@ -52,7 +52,7 @@ export interface DocumentViewportOptions {
 }
 
 export class DocumentViewport {
-  private readonly host: HTMLElement;
+  private host: HTMLElement;
   private readonly options: Required<DocumentViewportOptions>;
   private root: HTMLElement | null = null;
   /** Natural page size in points — the widest section's PAGE box, which is what must fit. */
@@ -66,6 +66,20 @@ export class DocumentViewport {
       fitToWidth: options.fitToWidth ?? true,
       scale: options.scale ?? 1,
     };
+  }
+
+  /** Retarget the mounted document to an equivalent host after its DOM is adopted. */
+  adoptHost(host: HTMLElement): void {
+    if (host === this.host) return;
+    this.observer?.disconnect();
+    this.observer = null;
+    this.host.style.removeProperty("--docx-sheet-width");
+    this.host = host;
+    this.refresh();
+    if (this.root && typeof ResizeObserver !== "undefined") {
+      this.observer = new ResizeObserver(() => this.refresh());
+      this.observer.observe(this.host);
+    }
   }
 
   /**

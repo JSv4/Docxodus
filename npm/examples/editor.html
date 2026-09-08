@@ -8,9 +8,8 @@
     /* This page is a HOST, not a design.
        The whole editor surface — ribbon chrome, anchor rail, table picker, loading
        overlay and its responsive behaviour — ships in `mountRibbon` (npm/src/ribbon.ts),
-       which is also what the GitHub Pages demo and the compact iframe player use. All
-       this page does is boot the .NET runtime from ./_framework and hand the exports
-       over, which is the one thing a CDN embed does differently.
+       which is also what the GitHub Pages demo and the compact iframe player use. The shared demo loader imports the same build used by GitHub Pages, including
+       optional version history.
 
        Everything below is page framing: fill the viewport so the surface manages its
        own scrolling (the ribbon stays put on a phone instead of scrolling away). */
@@ -23,66 +22,25 @@
 <body>
   <div id="app"></div>
 
-  <script>document.write('<script src="./editor.bundle.js?t=' + Date.now() + '"><\/script>');</script>
   <script type="module">
-    import { dotnet } from './_framework/dotnet.js';
-
-    const { mountRibbon } = window.DocxodusEditor;
-
-    // Bands on by default here: this page is where header/footer editing is exercised.
-    const ribbon = mountRibbon('#app', {
-      headerFooter: true,
-      documentName: 'no document',
-      loader: {
-        eyebrow: 'Local .NET runtime',
-        meta: 'DOCX → WASM → DOCX',
-        onRetry: () => location.reload(),
-      },
-    });
-
-    // `__selectTab` reaches a control on a non-active tab without depending on pointer
-    // geometry, so it is available from the first paint.
-    window.__selectTab = (name) => ribbon.selectTab(name);
-    window.__ribbon = ribbon;
-
+    import { loadDemoEngine } from './engine.js';
     try {
-      ribbon.loader.stage(0);
-      const { getAssemblyExports, getConfig } = await dotnet.withDiagnosticTracing(false).create();
-      const config = getConfig();
-      const wasm = await getAssemblyExports(config.mainAssemblyName);
-      const exports = {
-        DocxSessionBridge: wasm.DocxodusWasm.DocxSessionBridge,
-        DocumentConverter: wasm.DocxodusWasm.DocumentConverter,
-      };
-      ribbon.setExports(exports);
-
-      // Load the bundled sample when there is one, so there is something to edit immediately.
-      ribbon.loader.stage(1);
-      let sample = null;
-      try {
-        const response = await fetch('./sample.docx');
-        if (response.ok) sample = new Uint8Array(await response.arrayBuffer());
-      } catch {
-        /* no sample in this webroot — start empty */
-      }
-
-      ribbon.loader.stage(2);
-      if (sample) ribbon.open(sample, 'sample.docx');
-      else ribbon.setStatus('Ready — open a .docx');
-
-      ribbon.loader.stage(3);
-      ribbon.loader.done();
-
-      // Published only once the engine is usable: specs treat `__demo` as the
-      // "surface is live" signal and drive the ribbon the moment it appears.
+      const { createRibbonEditor, getWasmExports } = await loadDemoEngine();
+      const sample = await fetch('./sample.docx');
+      const ribbon = await createRibbonEditor('#app', sample.ok ? './sample.docx' : null, {
+        frame: 'flush', headerFooter: true,
+        documentName: sample.ok ? 'sample.docx' : 'Untitled.docx',
+      });
+      window.__ribbon = ribbon;
+      window.__selectTab = name => ribbon.selectTab(name);
       window.__demo = {
-        ribbon,
-        exports,
+        ribbon, exports: getWasmExports(),
         openDoc: (bytes, name) => ribbon.open(bytes, name),
         getEditor: () => ribbon.editor,
       };
     } catch (error) {
-      ribbon.loader.fail(error);
+      const message = document.createElement('p'); message.textContent = `The editor could not start. ${error}`;
+      document.getElementById('app').append(message);
     }
   </script>
 </body>
