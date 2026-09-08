@@ -35,8 +35,9 @@ with staging allowed. Direct-publishing permission is unnecessary for this flow.
    commands through `npx npm@11.19.1 stage ...`.
 
 4. Confirm both packages are publicly available at the intended version. Then
-   confirm the browser bundle is served by jsDelivr before updating demo pins;
-   follow [the demo publishing instructions](demo/README.md#publish).
+   confirm the browser bundle is served by jsDelivr before updating consumer-facing
+   CDN snippets. The demo site builds its own matching runtime;
+   see [the demo publishing instructions](demo/README.md#publish).
 
 ## Partial releases
 

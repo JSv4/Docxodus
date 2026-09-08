@@ -17,10 +17,10 @@
 
     X no longer documents its historical Player Cards, so social posts link to
     the ordinary landing page instead. Hosting remains static: the engine streams
-    from jsDelivr and the sample document comes from this same directory.
+    from the same build as the site, alongside the sample document.
 
     Query overrides (used by tests and local dev):
-      ?engine=<module URL of embed bundle>   default: jsDelivr docxodus@12.3.0
+      ?engine=<module URL of embed bundle>   default: local embed.bundle.js
       ?doc=<docx URL>                        default: local branded product guide
   -->
   <!-- Inter — the surface's UI typeface (falls back to system-ui offline). -->
@@ -39,7 +39,7 @@
        surface out; the property is non-inherited and Blink consults the
        autosizing cluster roots it picks itself, hence the universal selector.
        Newer engines emit this inside the document render too; page-level
-       covers the pinned engine today. */
+       also covers engine overrides. */
     html, body * { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
     body { position: relative; margin: 0; overflow: hidden; font-family: Inter, ui-sans-serif, system-ui,
       -apple-system, "Segoe UI", sans-serif; background: #0F172A; color: #F8FAFC; display: flex; flex-direction: column; }
@@ -132,8 +132,7 @@
 
   <script type="module">
     const params = new URLSearchParams(location.search);
-    const ENGINE = params.get("engine")
-      ?? "https://cdn.jsdelivr.net/npm/docxodus@12.3.0/dist/embed.bundle.js";
+    import { loadDemoEngine } from "./engine.js";
     const DOC = params.get("doc")
       ?? "./docxodus-demo-guide.docx";
 
@@ -162,7 +161,7 @@
       $("start").disabled = true;
       $("bootStatus").textContent = "Loading the .NET WebAssembly engine…";
       try {
-        const { createRibbonEditor } = await import(ENGINE);
+        const { createRibbonEditor } = await loadDemoEngine();
         clearInterval(ticker);
         // Hand off: the poster steps aside and the surface's own overlay narrates
         // the rest of the boot inside the frame.

@@ -12,22 +12,17 @@
 // in a wide page is narrow. That is the same rule `mountRibbon` applies to the
 // ribbon it draws directly above these controls.
 //
-//   wide    one bar under the document: cartridges, transport, pacing, embed,
+//   wide    one bar under the document: rendering mode, transport, pacing, embed,
 //           telemetry, hint. Unchanged from the cabinet's original dock.
 //   compact a slim HUD strip keeps the two controls you touch mid-game
-//           (play/pause and pacing); cartridges, restart, embed, telemetry and
+//           (play/pause and pacing); rendering mode, restart, embed, telemetry and
 //           the hint move behind a "⋯" sheet. A thumb D-pad and an action
 //           cluster float over the bottom corners of the game — where the
 //           thumbs already are, and clear of the centre of the screen they are
 //           steering. Nothing is dropped, only re-placed.
 //
-// WHAT THE PAD OFFERS IS THE CARTRIDGE'S CALL, not this module's. `setPad`
-// takes a touch profile — fixed slots, because the geometry is fixed — and a
-// cartridge fills in only the slots it has a key for: the platformer wants
-// three buttons, the raycasters want strafe and a run latch, and Doom wants
-// USE, its own menu, the automap and seven weapons as well. A phone that can
-// only walk and shoot cannot open a door, and E1M1's first door is thirty
-// seconds in, which is where this started.
+// The dock fills its fixed slots from DOOM’s touch profile. The title card
+// uses a single START button; gameplay adds movement, fire, use and the key tray.
 //
 // The pad is deliberately NOT a descendant of the editor root. The driver
 // pauses on any pointerdown inside the document — "the frame you clicked is
@@ -36,8 +31,7 @@
 // sibling instead.
 //
 // Compact layout moves the nodes themselves rather than duplicating them into
-// two hidden layouts: one `#playpause`, one `#pace`, one set of cartridge
-// buttons, whichever way the host is sized. The driver (`startArcade`) wires
+// two hidden layouts: one `#playpause`, one `#pace`, one rendering selector, whichever way the host is sized. The driver (`startArcade`) wires
 // its listeners to those nodes once and never learns that layout exists.
 
 const BREAKPOINT = 640;
@@ -45,11 +39,11 @@ const BREAKPOINT = 640;
 /** What the pad offers before any cartridge has spoken for it — the arcade's
  *  common denominator, and what a host that never calls `setPad` keeps. */
 const DEFAULT_PAD = {
-  up: { code: 'KeyW', glyph: '▲', label: 'Forward / jump' },
+  up: { code: 'KeyW', glyph: '▲', label: 'Forward' },
   down: { code: 'KeyS', glyph: '▼', label: 'Back' },
   left: { code: 'ArrowLeft', glyph: '◀', label: 'Left / turn left' },
   right: { code: 'ArrowRight', glyph: '▶', label: 'Right / turn right' },
-  fire: { code: 'Space', glyph: 'FIRE', label: 'Fire / jump / start' },
+  fire: { code: 'Space', glyph: 'FIRE', label: 'Fire / start' },
 };
 
 const CSS = `
@@ -155,8 +149,7 @@ const CSS = `
 /* Movement, as a 3 × 3 whose corners the cartridge fills in only if it has
    something to put there: turning rotates (↺ ↻) on the middle row, sidestep
    translates (◀ ▶) on the bottom corners beside it, so the two pairs never
-   read as the same control. The platformer has neither and uses the middle
-   row to walk. */
+   read as the same control. */
 .dxa-dpad {
   position: absolute; left: 12px; bottom: 0;
   display: grid; gap: 4px;
@@ -245,7 +238,6 @@ export function mountArcadeDock(host, { anchor = 'viewport', embed = null, ids =
 
   const id = (name) => (ids ? { id: name } : {});
 
-  const carts = el('div', { className: 'row dxa-carts', ...id('dockcarts') });
   const playpause = el('button', {
     className: 'dxa-playpause', ...id('playpause'), textContent: '⏸ Pause & edit',
   });
@@ -261,7 +253,7 @@ export function mountArcadeDock(host, { anchor = 'viewport', embed = null, ids =
   ]);
   const stats = el('span', { className: 'dxa-stats', ...id('dockstats'), textContent: 'warming up…' });
   const rendering = el('select', { ...id('rendering'), title: 'DOOM rendering mode', hidden: true }, [
-    el('option', { value: 'image', textContent: 'DOOM · Original' }),
+    el('option', { value: 'image', textContent: 'DOOM · Bitmap' }),
     el('option', { value: 'ascii', textContent: 'DOOM · ASCII' }),
   ]);
   rendering.setAttribute('aria-label', 'DOOM rendering mode');
@@ -293,10 +285,7 @@ export function mountArcadeDock(host, { anchor = 'viewport', embed = null, ids =
     right: padButton('dxa-right'),
     strafeLeft: padButton('dxa-strafe-left'),
     strafeRight: padButton('dxa-strafe-right'),
-    // Space is jump in the platformer, fire in the raycasters and in Doom, and
-    // the coin drop on the attract screen — the one button a phone was missing
-    // entirely, which is why Freedoom could be walked but not fought on a
-    // touch screen. USE is the one it was missing after that: doors.
+    // FIRE confirms DOOM menus and fires in a level; USE opens doors.
     fire: padButton('dxa-fire'),
     use: padButton('dxa-use'),
     run: padButton('dxa-run'),
@@ -385,12 +374,12 @@ export function mountArcadeDock(host, { anchor = 'viewport', embed = null, ids =
     if (next) {
       // Everything you are not touching mid-frame goes behind "⋯"; the strip
       // keeps transport and pacing, and gains the sheet toggle.
-      sheet.append(carts, rendering, ...(embedButton ? [restart, embedButton] : [restart]), stats, hint);
+      sheet.append(rendering, ...(embedButton ? [restart, embedButton] : [restart]), stats, hint);
       strip.append(playpause, pace, more);
     } else {
       setMenu(false);
       strip.append(playpause, restart, pace, rendering, ...(embedButton ? [embedButton] : []), stats);
-      dock.append(carts, strip, hint); // the cabinet's original three rows
+      dock.append(strip, hint); // the cabinet's original three rows
     }
   }
 
@@ -428,7 +417,7 @@ export function mountArcadeDock(host, { anchor = 'viewport', embed = null, ids =
     show: () => { dock.hidden = false; },
     isCompact: () => compact,
     setPad,
-    ui: { carts, playpause, restart, pace, rendering, stats, hint, pad, setPad },
+    ui: { playpause, restart, pace, rendering, stats, hint, pad, setPad },
     destroy: () => {
       observer.disconnect();
       coarse.removeEventListener('change', remeasure);

@@ -44,6 +44,8 @@ export class HistoryCheckpoints {
 
   get view(): DocxHistoryView | null { return structuredClone(this.current); }
   get hasPending(): boolean { return this.request !== null; }
+  /** Snapshot of the exact request a retry will recover, including its original operation kind. */
+  get pendingRequest(): HistoryCheckpointRequest | null { return structuredClone(this.request); }
   get needsRefresh(): boolean { return this.stale; }
 
   async refresh(): Promise<DocxHistoryView | null> {

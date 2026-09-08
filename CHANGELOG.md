@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [12.4.0] - 2026-09-08
+
+### Added
+
+- Optional `createRibbonEditor(container, source, { history: true })` version-history drawer with named saves,
+  comparisons, separate previews, restore confirmation and portable history files. A stable
+  `workspaceId` reopens saved documents and pending saves. Saved documents remain reachable
+  after New/Open, and invalid uploads preserve the current editor and undo stack.
+- One npm build now stages both local editors and the deployable Pages site using the same
+  editor bundle and WASM runtime. The standalone history example is folded into the shared editor.
+
+### Changed
+
+- The arcade now offers only the current DOOM cartridge, with bitmap and ASCII rendering.
+  Removed the platformer, both legacy raycaster cartridges and their dedicated tooling/tests.
+- Pages builds the site from source, eliminating its dependency on a separately published
+  npm version. The normal editor pages enable optional history; live simulation hosts opt out.
+
+### Fixed
+
+- Editor paper stays aligned with zoomed document content, including phone layouts and
+  header/footer bands (PR #743).
+- Document replacement preserves the public ribbon surface and host listeners. Invalid
+  uploads preserve the existing document, session and undo history.
+- Retried history actions retain their original save/restore meaning. Restores reconfirm
+  replacement; a recovered save cannot mark a different tab's unsaved draft as saved.
+- The DOOM landing card reserves space below the game for phone controls.
+
 ## [12.3.0] - 2026-09-07
 
 ### Added

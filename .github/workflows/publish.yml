@@ -383,6 +383,6 @@ jobs:
             '| Package | Stage ID |', '| --- | --- |', ...rows, '',
             'Review each package in npm\'s Staged Packages tab, or run `npm stage view <stage-id>`.', '',
             'Approve `docxodus` first, then `@docxodus/export`, with `npm stage approve <stage-id>` and your own 2FA.', '',
-            'Update demo pins only after approval and a successful CDN check. See `docs/npm-releases.md`.', '',
+            'Update consumer CDN snippets only after approval and a successful CDN check. See `docs/npm-releases.md`.', '',
           ].join('\n'));
           NODE

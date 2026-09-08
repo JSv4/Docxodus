@@ -920,6 +920,7 @@ export const RIBBON_HTML = `
       <label class="dxr-btn" tabindex="0">Open<input data-dxr="file" type="file" accept=".docx" hidden /></label>
       <button type="button" data-dxr="save" disabled>Save</button>
     </div>
+    <button type="button" class="dxr-btn" data-dxr="history" title="Browse and save document versions" aria-haspopup="dialog">Version history</button>
     <div class="dxr-quick">
       <button type="button" class="dxr-icon" data-dxr="undo" title="Undo (Ctrl+Z)" aria-label="Undo">&#8630;</button>
       <button type="button" class="dxr-icon" data-dxr="redo" title="Redo (Ctrl+Shift+Z)" aria-label="Redo">&#8631;</button>

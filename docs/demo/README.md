@@ -1,16 +1,28 @@
 # GitHub Pages demo
 
-Six static pages, no application server. All host the **same** editor
-surface — `createRibbonEditor` from the pinned `docxodus@12.3.0` embed bundle on
-jsDelivr — and differ only in how much of the page belongs to the editor:
+The static demo site and npm package come from **one build**. Every editor host
+loads `engine.js`, which imports the `embed.bundle.js` staged beside it by
+`npm run build`. Pages deploys `npm/dist/site`, including that same WASM runtime.
+There is no separate history app or CDN pin to update when the editor changes.
+
+The ordinary editors offer **Version history** in the title bar. It opens a drawer
+for named versions, previews, comparisons, restoration and portable downloads.
+Saving is explicit; it keeps versions on this device. `?history=0` hides the feature.
+The animated Observatory, DOOM and Golf hosts opt out because their controllers own
+a live session; the ordinary editors use the shared persistence lifecycle.
+
+From `npm/`, run `npm run build`, then `npm run demo:serve` and open
+`http://localhost:8088/editor.html`. To serve the deployable artifact itself:
+`python3 -m http.server 8089 --directory dist/site`, then `/demo/app.html`.
+The old `/demo/history.html` URL redirects to the full editor.
 
 | Page | What it is |
 |------|------------|
 | `index.html` | The landing page. Hero, capability cards, the embed dialog, and a live demo inside its frame. This is the URL to share; its Open Graph metadata is what social platforms read. **Below 620px the frame mounts THE DOCX ARCADE instead of the plain editor** — same shipped surface, a game running on one of its paragraphs. A phone visitor is not going to draft a contract on a 390px screen, but they will play the thing, and it demonstrates the engine harder: a document rewritten and re-rendered ten times a second, still saving as a real `.docx`. The choice is taken in a `<head>` script, before first paint, so the copy framing the frame never advertises the demo the page did not mount; `?demo=editor` / `?demo=arcade` pin either on any screen, and the page links to the other one both ways. The nav links are a horizontal scroll strip on a phone rather than `display: none` — they point at the other demo pages, which is what a phone visitor most wants. |
 | `app.html` | The editor full-bleed, nothing around it. The useful thing to open on a phone. |
 | `player.html` | The compact iframe target, sized for ~480 × 480. Boots on tap so a feed iframe never streams a .NET runtime unasked, and pins the surface's compact layout. |
-| `observatory.html` | The DOCX Observatory inside the live editor: procedural ASCII phenomena animated onto a Word paragraph in the editor's own session (`raw.replaceXml` + `editor.refresh()`). Pause — or click the water — and it is only a document: edit with the ribbon, Undo rewinds frame by frame, Save downloads the caught wave. The phenomena and frame loop are demo content, not library machinery: they live in `ascii-scenes.js` **in this directory** (also imported, via the test-webroot copy, by the two `npm/examples/ascii-animation*` pages), so `?engine=` pins the library alone and the scenes version with the site. Needs `DocxEditor.refresh()`, which 9.5.0 predates — it was pinned to `docxodus@9.6.0` ahead of that release and healed on its own when it published; it now shares the pin with its siblings. |
-| `arcade.html` | THE DOCX ARCADE — four playable games rendered through the editor’s ordinary document API. DOOM can show its native 320×200 image or project the same framebuffer into 64,000 colored printable ASCII cells in one Word paragraph. The dock’s **Original / ASCII** selector works while playing or paused. Copy/paste, undo/redo, and save/reopen preserve the displayed frame. The default game data is Freedoom; the original DOOM showcase below uses a locally hosted original shareware IWAD. |
+| `observatory.html` | The DOCX Observatory inside the live editor: procedural ASCII phenomena animated onto a Word paragraph in the editor's own session (`raw.replaceXml` + `editor.refresh()`). Pause — or click the water — and it is only a document: edit with the ribbon, Undo rewinds frame by frame, Save downloads the caught wave. The phenomena and frame loop are demo content, not library machinery: they live in `ascii-scenes.js` **in this directory** (also imported, via the test-webroot copy, by the two `npm/examples/ascii-animation*` pages), so `?engine=` pins the library alone and the scenes version with the site. The build stages its scenes and editor runtime together. |
+| `arcade.html` | THE DOCX ARCADE — DOOM rendered through the editor’s ordinary document API. DOOM can show its native 320×200 image or project the same framebuffer into 64,000 colored printable ASCII cells in one Word paragraph. The dock’s **Bitmap / ASCII** selector works while playing or paused. Copy/paste, undo/redo, and save/reopen preserve the displayed frame. The default game data is Freedoom; the original DOOM showcase below uses a locally hosted original shareware IWAD. |
 | `golf.html` | DOCX GOLF — course play on the editing surface itself, the inverse bet from the arcade: where the arcade painted frames INTO one paragraph through `raw.replaceXml` (the escape hatch), golf makes the real clubs the game. Six holes, each a start document loaded into the live ribbon editor and a target document built beside it; the referee is the comparison engine — a hole is CLEARED when `docxDiffGetRevisions` between your document and the target returns **zero revisions**, and the caddie panel phrases whatever revisions remain as the work left (`remove "Purchasr"`, `move "Governing Law"`, `reformat "Duties" (style)`). Holes escalate across the surface: a one-word fix, clause reordering, scoped defined-term conformance, heading styles (the Style dropdown is the club — the diff cares about `w:pStyle`, not just words), and a table hole (fix a cell, delete a duplicated row from the table toolbar), plus a footnote hole played with Insert → Footnote (the referee reads note parts too). On a phone the caddie collapses to its head strip behind a toggle, and a stuck player can concede with "Show me" — the caddie plays the content-addressed reference line and the scorecard marks the hole assisted. Strokes are counted from the document, not the toolbar: the driver fingerprints `session.save()` on a poll, so one committed burst of editing is one swing, and undo counts. Par/birdie/bogey scoring, a Target view, and a live redline view (`docxDiffCompare` → `convertDocxToHtml`) round out the caddie. The game lives in `docx-golf.js` in this directory (same `?engine=` split as its siblings); its pure logic is tested by `tools/docx-golf.test.mjs`, and `npm/tests/demo-golf.spec.ts` keeps the course honest the way the engine's own evals are kept honest — no hole starts solved, and every hole's content-addressed reference solution reaches zero revisions within par. Boots on tap when iframed. |
 
 ### Original DOOM, rendered as ASCII in the editor
@@ -49,7 +61,7 @@ The earlier [native-image walkthrough](../images/arcade-doom.gif) uses Freedoom 
 
 Select **DOOM · ASCII** in the dock, or start with `?cart=doom&render=ascii`.
 On a phone the renderer selector lives in the **⋯** controls sheet.
-**Original** selects the image renderer; the IWAD selects which game's artwork
+**Bitmap** selects the image renderer; the IWAD selects which game's artwork
 and levels are played. The original shareware capture uses
 `&wad=./vendor/doom1.wad.gz`; the default remains Freedoom.
 
@@ -95,11 +107,11 @@ abbreviated. Native tests compare incremental output with a full saved-document
 render, and browser tests verify same-frame toggles, save/reopen, copy/paste of
 an undo-scrubbed frame, gameplay input, and phone layout.
 
-**Release status:** the static pages pin `docxodus@12.3.0`, which includes the
-renderer improvements used by these captures. The default CDN-backed pages now
-use the released engine; the captures themselves were recorded with the locally
-built `?engine=./embed.bundle.js`. Throughput depends on the browser and device;
-see the measurements above.
+The demo site builds its engine alongside these pages, including the renderer
+improvements used by these captures. The captures were recorded with the locally
+built `?engine=./embed.bundle.js`, which is now the default engine. Consumer-facing
+CDN snippets remain pinned to a published package. Throughput depends on the
+browser and device; see the measurements above.
 
 To reproduce the original DOOM capture (from `npm/`):
 
@@ -133,25 +145,21 @@ is narrow.
 
 | | |
 |---|---|
-| **wide** | One bar under the document: cartridges, transport, pacing, embed, telemetry, hint. Unchanged from the cabinet's original dock. |
-| **compact** | A slim HUD strip keeps the two controls you touch mid-game (play/pause and pacing); cartridges, restart, embed, telemetry and the hint move behind a `⋯` sheet. A thumb D-pad and an action cluster float over the bottom corners of the game. Nothing is dropped, only re-placed. |
+| **wide** | One bar under the document: rendering mode, transport, pacing, embed, telemetry, hint. Unchanged from the cabinet's original dock. |
+| **compact** | A slim HUD strip keeps the two controls you touch mid-game (play/pause and pacing); rendering mode, restart, embed, telemetry and the hint move behind a `⋯` sheet. A thumb D-pad and an action cluster float over the bottom corners of the game. Nothing is dropped, only re-placed. |
 
-`FIRE` sends `Space` — jump in the platformer, the weapon in the raycasters and
-in Doom, and the coin drop on the attract screen. Doom labels it **FIRE / OK**:
+`FIRE` sends `Space` to DOOM and starts the game on the attract screen. Doom labels it **FIRE / OK**:
 it also confirms menu selections, so use **▲/▼** to choose and **FIRE / OK** to
 enter New Game, an episode, and a difficulty without opening the KEYS tray.
 The old touch row had no
 Space at all, so the shooters could be walked but never fought on a phone.
 
-**What the pad offers is the cartridge's call.** Each cartridge declares a touch
-profile beside the keyboard map it mirrors (`cart.touch`), and the dock fills
+DOOM declares a touch profile beside its keyboard map (`cart.touch`), and the dock fills
 its fixed slots from it through `setPad` — geometry here, control map there:
 
 | cartridge | pad |
 |---|---|
-| ¶ Pilcrow's Quest | walk `←/→`, `▲` and a round **JUMP** |
-| ▓ Dungeon · ☩ Freedoom E1M1 | forward/back, turn (`↺ ↻`), strafe (`◀ ▶`), **FIRE**, **RUN** |
-| ☩ DOOM | all of the above plus **USE**, and a **KEYS** tray: weapons 1–7, **MAP**, **MENU**, `⏎` |
+| ☩ DOOM | forward/back, turn, strafe, **FIRE**, **RUN**, **USE**, and a **KEYS** tray: weapons 1–7, **MAP**, **MENU**, `⏎` |
 | attract screen | one round **START** — nothing on a title card is steerable |
 
 Turning rotates and strafing translates, so the two pairs of side buttons never
@@ -163,13 +171,8 @@ which is what lets one set of buttons follow the cartridge. Presses are tracked
 per pointer, so firing with one thumb while turning with the other releases only
 the key that came up, and pausing releases everything the pad holds.
 
-This is the gap the pad's first version left: movement and fire are the whole
-control map of the platformer and about half of a Doom-format level's. On a
-touch screen Doom could be walked as far as E1M1's first door and no further —
-a door is a key press (`E`), and a phone had no key to press. The headless
-checks in `tools/ascii-arcade.test.mjs` hold every profile to the keyboard map
-beside it, including that a thumb can reach every function Doom gives a
-keyboard.
+The headless checks in `tools/ascii-arcade.test.mjs` verify that a thumb can reach
+every function DOOM gives a keyboard, including doors, weapons and menus.
 
 Doom's complete keyboard map also appears immediately above the framebuffer as
 four centered 18pt document paragraphs. Each line is deliberately short enough
@@ -193,9 +196,8 @@ nav strip and floating controls in `npm/tests/social-demo.spec.ts`.
 `fonts/docxodus-canvas-mono.woff2` (17 KB) is what keeps the Observatory's
 phenomena and the Arcade's game screen on their grid.
 
-The Observatory, opener, and first three cartridges draw into one Word paragraph
-as a 92 × 26 character grid authored for Courier New. Doom uses a native image
-and does not depend on glyph metrics. A text grid holds only while
+The Observatory and attract screen draw into one Word paragraph
+as a 92 × 26 character grid authored for Courier New. DOOM can use a native image or a printable ASCII projection. A text grid holds only while
 every cell advances the same width
 — and that is a property of the font the DEVICE resolves, which the document
 has no way to state. The art draws with box drawing (`─ │ ┌`), block elements
@@ -210,13 +212,9 @@ art is densest.
 | Android's font coverage reproduced, canvas unpinned | the same frame, pinned |
 |---|---|
 | ![tilted attract screen](../images/demo/arcade-canvas-tilt-before.png) | ![aligned attract screen](../images/demo/arcade-canvas-tilt-after.png) |
-| ![tilted dungeon](../images/demo/arcade-canvas-tilt-dungeon-before.png) | ![aligned dungeon](../images/demo/arcade-canvas-tilt-dungeon-after.png) |
 
-Measured on a Pixel 5 rig with that font situation reproduced, as the spread
-between the widest and narrowest row of the 92-cell grid: **12.1 cells** on the
-attract screen and up to **23.0** in the text cartridges, against **0.07 cells**
-worst case with the pin — across both viewports, the text cartridges and all
-four phenomena. The mobile Doom check instead pins its exact 320 × 200 image geometry.
+The phone tests reproduce Android’s fallback fonts and verify the title card’s
+row geometry. Separate DOOM checks cover its 320 × 200 bitmap and ASCII projection.
 
 So `createCanvasPin()` in `ascii-scenes.js` pins the canvas paragraph to a font
 we ship, rather than hoping the platform's fallback happens to match: a subset
@@ -231,7 +229,7 @@ Rebuild it with `tools/build-canvas-font.sh`, which pins the source font by
 SHA-256 and refuses any other — a font that is not single-advance would not
 provide the guarantee. It writes the `.woff2` and the `.json` manifest that
 `tools/canvas-font.test.mjs` reads: that test drives every scene, the whole
-attract-screen sweep and every cartridge, and fails if they can draw a
+attract-screen sweep and DOOM loading screens, and fails if they can draw a
 character the subset does not cover. `npm/tests/demo-arcade-mobile.spec.ts`
 proves the rest on a phone-shaped rig with Android's font coverage reproduced.
 
@@ -269,16 +267,16 @@ with a GPL engine at runtime, so that single file is offered under
 GPL-2.0-or-later and says so in its header. Everything else — `ascii-arcade.js`
 included, which imports it — stays MIT, which is GPL-compatible: each file
 remains separately available under its own terms, and only the combination a
-browser assembles when the Doom cartridge is selected is GPL-2.0.
+browser assembles when DOOM starts is GPL-2.0.
 
 The engine is behind a dynamic `import()` inside `doom-cart.js`, so a visitor
-who plays the platformer or the dungeon fetches neither. `?wad=` points the
+who stays on the attract screen fetches neither. `?wad=` points the
 cartridge at a **same-origin** IWAD you host yourself and are licensed to play
 (a retail `doom.wad` works), and `?sound=0` boots it mute.
 
 ### Native-image rendering
 
-In Original rendering mode, each engine frame is
+In bitmap rendering mode, each engine frame is
 encoded losslessly as PNG and passed to `DocxSession.replaceImage`; that replaces the package media
 payload referenced by the existing `w:drawing`. `DocxEditor.refresh()` then performs the same
 single-block OOXML→HTML conversion and DOM reconciliation used after any other session edit. The
@@ -359,38 +357,18 @@ it with `python tools/generate-demo-guide.py` from the repository root.
 
 ## Publish
 
-The release workflow [stages both npm packages for separate 2FA approval](../npm-releases.md).
-The pages load the library from jsDelivr at an exact version, so the pin can
-only move *after* the staged browser package is approved, published, and served by the CDN.
-Move every pin in one
-change — the pages, this README, `docs/npm-package.md`, `npm/README.md`,
-`npm/examples/embed.html`, and `RELEASE_ENGINE` in
-`npm/tests/social-demo.spec.ts` — and `tools/engine-pin.test.mjs` (run by
-`npm run test:demo-logic`, and so by every Playwright run) fails if one of them
-is left behind, if the version drops below the arcade's
-`IMAGE_ENGINE_MINIMUM`, or, under `DOCXODUS_CHECK_CDN=1`, if the CDN does not
-serve it yet. That guard exists because a stale pin is invisible to the browser
-specs: every one of them overrides `?engine=` to the locally built bundle.
+The Pages workflow runs the same `npm run build` used locally and uploads `npm/dist/site`.
+It watches editor, runtime and demo sources, so a UI change cannot leave Pages on an older
+package. The npm release approval workflow remains separate from site deployment.
 
-1. Approve the staged `docxodus@12.3.0` release with 2FA and confirm
-   `https://cdn.jsdelivr.net/npm/docxodus@12.3.0/dist/embed.bundle.js` returns JavaScript.
-2. In GitHub **Settings → Pages**, choose **GitHub Actions** as the publishing source.
-   The `Deploy static demo to GitHub Pages` workflow uploads `/docs` without
-   running Jekyll.
-3. Open `https://jsv4.github.io/Docxodus/demo/` and verify the status chip becomes `Live`.
-4. If the site is hosted anywhere else, update the absolute `og:url`, `og:image`,
-   and `twitter:image` values in `index.html` and `app.html` before sharing.
+In GitHub **Settings → Pages**, choose **GitHub Actions**. After deployment, open
+`https://jsv4.github.io/Docxodus/demo/` and verify the status chip becomes `Live`.
+For another host, update the absolute social metadata URLs before sharing.
 
-All the pages accept query overrides for local or preview testing:
-
-```text
-?engine=<module URL of embed.bundle.js>&doc=<CORS-readable DOCX URL>
-```
-
-`app.html` also takes `?blank=1` to start from a new empty document.
-`index.html` takes `?demo=arcade|editor` to pin which demo the frame mounts
-(otherwise a phone gets the arcade and a desktop the editor), plus the arcade's
-own `?cart=` and `?intro=0` when it is the one mounted.
+Every page accepts `?engine=<module URL>` for release comparisons. Ordinary editors also
+accept `?doc=<CORS-readable DOCX URL>` and `?history=0`; `app.html?blank=1` starts blank.
+`index.html?demo=arcade|editor` chooses the frame, and `?intro=0` skips DOOM’s title card.
+DOOM is the only arcade cartridge. `?render=ascii` selects ASCII; the default is bitmap.
 
 ## Social-platform expectations
 

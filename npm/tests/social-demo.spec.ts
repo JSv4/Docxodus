@@ -8,9 +8,9 @@ import { test, expect, type Page } from '@playwright/test';
  *  - demo-app.html   — the full-bleed editor
  *  - player.html     — the compact, boot-on-tap iframe target
  *
- * In production they pull the engine from jsDelivr and the sample document from
- * the same Pages directory; all three accept `?engine=` / `?doc=` overrides so
- * this spec can drive them fully locally. pretest copies them into the test
+ * The build stages the engine and sample document alongside the Pages hosts.
+ * All three also accept `?engine=` / `?doc=` overrides for release comparisons.
+ * pretest copies them into the test
  * webroot beside embed.bundle.js and the sample docx. The local layout also
  * exercises the embed bundle's wasm-webroot fallback (assets next to the
  * bundle, not under wasm/).
@@ -125,7 +125,7 @@ async function dragAcrossDemoBlocks(page: Page, firstNeedle: string, lastNeedle:
 test.describe('social demo pages', () => {
   test('player.html boots the shared surface on tap, in its compact layout', async ({ page }) => {
     await page.goto(`/player.html?${OVERRIDES}`);
-    expect(await page.locator('script[type="module"]').textContent()).toContain(RELEASE_ENGINE);
+    expect(await page.locator('script[type="module"]').textContent()).toContain('loadDemoEngine');
     // Poster state first — nothing heavy loads until the user taps.
     await expect(page.locator('#start')).toBeVisible();
     await expect(page.locator('#app')).toBeHidden();
@@ -170,7 +170,7 @@ test.describe('social demo pages', () => {
 
   test('index.html landing boots the editor and reports live status', async ({ page }) => {
     await page.goto(`/demo-index.html?${OVERRIDES}`);
-    expect(await page.locator('script[type="module"]').textContent()).toContain(RELEASE_ENGINE);
+    expect(await page.locator('script[type="module"]').textContent()).toContain('loadDemoEngine');
     // A desktop-width frame still gets the plain editor; the arcade swap is a
     // phone default, not a change of what this page is.
     expect(await page.evaluate(() => document.documentElement.dataset.demo)).toBe('editor');
@@ -253,7 +253,7 @@ test.describe('social demo pages', () => {
 
   test('app.html serves the same surface full-bleed, and adapts to a phone', async ({ page }) => {
     await page.goto(`/demo-app.html?${OVERRIDES}`);
-    expect(await page.locator('script[type="module"]').textContent()).toContain(RELEASE_ENGINE);
+    expect(await page.locator('script[type="module"]').textContent()).toContain('loadDemoEngine');
     await expect(page.locator('.dxr')).toHaveAttribute('data-state', 'ready', { timeout: 45000 });
     await expect(page.locator('.dxr')).toHaveAttribute('data-chrome', 'full');
     expect(await page.locator('#editor [data-anchor]').count()).toBeGreaterThan(0);
@@ -378,7 +378,7 @@ test.describe('The landing page on a phone', () => {
 
   test('the floating controls steer the game and keep the screen clear', async ({ page }) => {
     test.setTimeout(150000);
-    await page.goto(`/demo-index.html?${OVERRIDES}&intro=0&cart=quest`);
+    await page.goto(`/demo-index.html?${OVERRIDES}&intro=0&cart=doom`);
     await page.waitForFunction(
       () => (window as any).__arcade !== undefined || (window as any).__demoError !== undefined,
       { timeout: 90000 },
@@ -387,6 +387,7 @@ test.describe('The landing page on a phone', () => {
     await page.waitForFunction(() => (window as any).__arcade.frames() >= 3, { timeout: 60000 });
 
     await expect(page.locator('.dxa-controls')).toHaveAttribute('data-compact', 'true');
+    await page.waitForFunction(() => (window as any).__arcade.game().status === 'playing');
     await expect(page.locator('#pad .dxa-dpad')).toBeVisible();
     await expect(page.locator('#pad .dxa-fire')).toBeVisible();
 
@@ -394,10 +395,10 @@ test.describe('The landing page on a phone', () => {
     // still one tap away — nothing is dropped, only re-placed.
     await expect(page.locator('#playpause')).toBeVisible();
     await expect(page.locator('#pace')).toBeVisible();
-    await expect(page.locator('#dockcarts')).toBeHidden();
+    await expect(page.locator('#rendering')).toBeHidden();
     await page.locator('#dockmore').click();
-    await expect(page.locator('#dockcarts')).toBeVisible();
-    expect(await page.locator('#dockcarts button').count()).toBe(4);
+    await expect(page.locator('#rendering')).toBeVisible();
+    expect(await page.locator('#rendering option').allTextContents()).toEqual(['DOOM · Bitmap', 'DOOM · ASCII']);
     await expect(page.locator('#restart')).toBeVisible();
     // The pad sits a fixed distance above the dock, so an opened sheet grows
     // the dock up underneath it: the D-pad covered the cartridge buttons and
@@ -408,7 +409,7 @@ test.describe('The landing page on a phone', () => {
     // Playwright calls it hidden whether the pad is up or down.
     await expect(page.locator('.dxa-dpad')).toBeHidden();
     await page.locator('#dockmore').click();
-    await expect(page.locator('#dockcarts')).toBeHidden();
+    await expect(page.locator('#rendering')).toBeHidden();
     await expect(page.locator('.dxa-dpad')).toBeVisible();
 
     // Thumb reach, inside the card, and out of the middle of the game screen.
@@ -445,30 +446,27 @@ test.describe('The landing page on a phone', () => {
       const dpad = document.querySelector('.dxa-dpad')!.getBoundingClientRect();
       return {
         canvasShare: canvas.width / frame.width,
-        cardHeight: frame.height,
+        spaceBelowScreen: document.querySelector('#workspace')!.getBoundingClientRect().bottom - canvas.bottom,
         padGap: dpad.top - canvas.bottom,
       };
     });
     expect(presentation.canvasShare,
       'the margins are cropped — the bezel fills the card').toBeGreaterThan(0.9);
-    expect(presentation.cardHeight,
-      'the card hugs the game instead of stretching to 80dvh').toBeLessThan(720);
+    expect(presentation.spaceBelowScreen, 'the card reserves room for the DOOM controls').toBeGreaterThanOrEqual(240);
+    expect(presentation.spaceBelowScreen, 'the card hugs the game and controls').toBeLessThan(260);
     expect(presentation.padGap,
       'the D-pad sits just under the game screen, near the action').toBeLessThan(160);
     expect(presentation.padGap, 'and clear of the bezel itself').toBeGreaterThan(0);
 
-    // Holding ▶ runs the pilcrow right, through the same input the keyboard
-    // feeds — the control is wired to the simulation, not to a stub.
-    const before = await page.evaluate(() => (window as any).__arcade.game().player.x as number);
+    // The pad delivers the same held keys as the keyboard to the live DOOM driver.
     const right = (await page.locator('.dxa-right').boundingBox())!;
     await page.mouse.move(right.x + right.width / 2, right.y + right.height / 2);
     await page.mouse.down();
-    await page.waitForFunction(
-      (x0) => (window as any).__arcade.game().player.x > x0 + 2, before, { timeout: 30000 });
+    expect(await page.evaluate(() => (window as any).__arcade.input.held('ArrowRight'))).toBe(true);
     await page.mouse.up();
+    expect(await page.evaluate(() => (window as any).__arcade.input.held('ArrowRight'))).toBe(false);
 
-    // FIRE is Space — jump here, the weapon in the raycasters, and the coin
-    // drop on the attract screen. A phone had no way to send it at all before.
+    // FIRE sends Space to fire in a level or confirm the DOOM menu.
     const fire = (await page.locator('.dxa-fire').boundingBox())!;
     await page.mouse.move(fire.x + fire.width / 2, fire.y + fire.height / 2);
     await page.mouse.down();

@@ -62,15 +62,12 @@ async function installFrameGate(page: Page) {
 
 /** The HUD word that proves a given cartridge's frame is on screen. */
 export const CART_HUD: Record<string, string> = {
-  quest: 'PILCROW',
-  dungeon: 'DUNGEON',
-  e1m1: 'FREEDOOM',
   // Doom's HUD row says so while the engine and its IWAD are still
   // downloading, which is the frame these gated specs land on.
   doom: 'DOOM',
 };
 
-async function bootGatedCartridge(page: Page, cart: 'quest' | 'dungeon' | 'e1m1' | 'doom') {
+async function bootGatedCartridge(page: Page, cart: 'doom') {
   await page.goto(`/demo-arcade.html?${OVERRIDE}&boot=tap&cart=${cart}`);
   await installFrameGate(page);
   await page.locator('#boot').click();
@@ -115,7 +112,7 @@ async function replaceCanvasCharacter(page: Page, row: number, column: number, t
 }
 
 test.describe('THE DOCX ARCADE page', () => {
-  for (const cart of ['quest', 'dungeon', 'e1m1', 'doom'] as const) {
+  for (const cart of ['doom'] as const) {
     test(`${cart}: its very first frame reconciles incrementally`, async ({ page }) => {
       await bootGatedCartridge(page, cart);
       const state = await page.evaluate(() => {
@@ -205,212 +202,10 @@ test.describe('THE DOCX ARCADE page', () => {
     });
   }
 
-  test('boots the shipped surface, animates incrementally, and steers with the keyboard', async ({ page }) => {
-    // Pinned to the platformer: this test exercises PILCROW's-quest-specific
-    // mechanics (the ArrowRight side-scroll), not whichever cart ships as the
-    // page's default.
-    await page.goto(`/demo-arcade.html?${OVERRIDE}&cart=quest`);
-    await waitForBoot(page);
-
-    await page.waitForFunction(() => (window as any).__arcade.frames() >= 4, { timeout: 30000 });
-    const state = await page.evaluate(() => {
-      const a = (window as any).__arcade;
-      return {
-        anchor: a.canvasAnchor() as string,
-        text: a.canvasText() as string,
-        cart: a.cart() as string,
-        fallback: a.editor.lastReconcileFallback as string | null,
-        cartButtons: document.querySelectorAll('#dockcarts button').length,
-        playerX: a.game().player.x as number,
-      };
-    });
-    expect(state.anchor).toMatch(/^p:body:/);
-    expect(state.cart).toBe('quest');
-    expect(state.text).toContain('¶');            // the player is on screen
-    expect(state.text).toContain('PILCROW');      // HUD present
-    expect(state.text).toContain('│');            // bezel present
-    expect(state.fallback).toBeNull();            // per-frame path stayed incremental
-    expect(state.cartButtons).toBe(4);
-    // Computed visibility, not the `hidden` attribute: the overlay/dock carry
-    // explicit display values, which would silently defeat the attribute.
-    await expect(page.locator('#dock')).toBeVisible();
-    await expect(page.locator('#boot')).toBeHidden(); // auto-boot: no coin screen
-
-    // Hold ArrowRight: the capture-phase input must reach the simulation.
-    const before = state.playerX;
-    await page.keyboard.down('ArrowRight');
-    await page.waitForFunction(
-      (x0) => (window as any).__arcade.game().player.x > x0 + 3,
-      before,
-      { timeout: 15000 },
-    );
-    await page.keyboard.up('ArrowRight');
-    const after = await page.evaluate(() => (window as any).__arcade.game().player.x);
-    expect(after).toBeGreaterThan(before + 3);
-
-    // The ribbon chrome is the shipped surface, not page-local UI.
-    await expect(page.locator('[data-dxr-surface], .dxr').first()).toBeVisible();
-  });
-
-  test('pause → type terrain into the document → resume makes it real; save yields a real DOCX', async ({ page }) => {
-    // Pinned to the platformer: the row-6-is-open-sky / § coin-tile assertions
-    // below are quest-specific, not a property of whichever cart is default.
-    await page.goto(`/demo-arcade.html?${OVERRIDE}&cart=quest`);
-    await waitForBoot(page);
-    await page.waitForFunction(() => (window as any).__arcade.frames() >= 2, { timeout: 30000 });
-
-    // Pause, then type $$$$ into a sky row of the frozen frame exactly as a
-    // player would: caret into the contenteditable paragraph, insertText.
-    const typed = await page.evaluate(() => {
-      const a = (window as any).__arcade;
-      a.pause();
-      const el = a.canvasElement() as HTMLElement;
-      el.focus();
-      // Walk to display row 8 (level row 6 — open sky): rows are separated
-      // by <br>, so the row starts after the 8th <br>.
-      const walker = document.createTreeWalker(el, NodeFilter.SHOW_ALL);
-      let brs = 0;
-      let target: Text | null = null;
-      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-        if (n.nodeName === 'BR') brs++;
-        else if (brs === 8 && n.nodeType === Node.TEXT_NODE && (n.textContent ?? '').length > 3) {
-          target = n as Text;
-          break;
-        }
-      }
-      if (!target) return { ok: false as const, reason: 'row text node not found' };
-      const range = document.createRange();
-      range.setStart(target, 3); // past the │ bezel column
-      range.collapse(true);
-      const sel = window.getSelection()!;
-      sel.removeAllRanges();
-      sel.addRange(range);
-      const ok = document.execCommand('insertText', false, '$$$$');
-      return { ok, reason: 'execCommand' };
-    });
-    expect(typed.ok, typed.reason).toBe(true);
-
-    // Resume: blur commits the edit through markdown ReplaceText, then the
-    // driver re-parses the level from the session's XML.
-    await page.evaluate(() => (window as any).__arcade.resume());
-    const levelRow = await page.evaluate(() => (window as any).__arcade.game().levelRow(6) as string);
-    expect(levelRow).toContain('§§§§'); // typed $ aliases the § coin tile
-
-    // And the whole thing is still just a document: save + reopen + project.
-    const result = await page.evaluate(() => {
-      const a = (window as any).__arcade;
-      a.pause();
-      const bytes: Uint8Array = a.save();
-      const handle = a.bridge.OpenSession(bytes, '');
-      const markdown = JSON.parse(a.bridge.Project(handle)).markdown as string;
-      a.bridge.CloseSession(handle);
-      return { magic: Array.from(bytes.slice(0, 2)), markdown };
-    });
-    expect(result.magic).toEqual([0x50, 0x4b]);
-    expect(result.markdown).toContain('THE DOCX ARCADE');
-    expect(result.markdown).toContain('│');
-  });
-
-  test('power-on-tap embed path boots the dungeon cartridge and turns', async ({ page }) => {
-    // boot=tap is what an iframe embed gets: no runtime streams until the
-    // visitor inserts a coin.
-    await page.goto(`/demo-arcade.html?${OVERRIDE}&boot=tap&cart=dungeon`);
-    await expect(page.locator('#boot')).toBeVisible();
-    expect(await page.evaluate(() => (window as any).__arcade)).toBeUndefined();
-
-    await page.locator('#boot').click();
-    await waitForBoot(page);
-    await page.waitForFunction(() => (window as any).__arcade.frames() >= 3, { timeout: 30000 });
-
-    const state = await page.evaluate(() => {
-      const a = (window as any).__arcade;
-      return {
-        cart: a.cart() as string,
-        text: a.canvasText() as string,
-        player: a.game().player as { x: number; y: number; dx: number; dy: number },
-      };
-    });
-    expect(state.cart).toBe('dungeon');
-    expect(state.text).toContain('DUNGEON');
-    expect(state.text).toContain('MAP');
-    expect(state.text).toMatch(/[█▓▒░]/); // the raycast view is on screen
-
-    // W walks forward (spawn faces +x down the entry hall).
-    await page.keyboard.down('KeyW');
-    await page.waitForFunction(
-      (x0) => (window as any).__arcade.game().player.x > x0 + 1,
-      state.player.x,
-      { timeout: 15000 },
-    );
-    await page.keyboard.up('KeyW');
-
-    // Arrows turn: the direction vector must rotate.
-    await page.keyboard.down('ArrowLeft');
-    await page.waitForFunction(
-      (dy0) => Math.abs((window as any).__arcade.game().player.dy - dy0) > 0.3,
-      state.player.dy,
-      { timeout: 15000 },
-    );
-    await page.keyboard.up('ArrowLeft');
-  });
-
-  test('dungeon pause/resume preserves D.O.C.X walls and wounded enemy state', async ({ page }) => {
-    await page.goto(`/demo-arcade.html?${OVERRIDE}&cart=dungeon`);
-    await waitForBoot(page);
-    await page.waitForFunction(() => (window as any).__arcade.frames() >= 2, { timeout: 30000 });
-
-    // A completely unchanged document must not reinterpret the stock D pillar
-    // as a demon. Exercise the real pause → XML parse → resume path.
-    const unchanged = await page.evaluate(() => {
-      const a = (window as any).__arcade;
-      a.pause();
-      a.resume();
-      a.pause();
-      return {
-        row: a.game().mapRow(6) as string,
-        enemies: a.game().enemies.length as number,
-      };
-    });
-    expect(unchanged.row).toContain('D.O.C.X');
-    expect(unchanged.enemies).toBe(0);
-
-    // The map begins at display row 4 / column 67. Put an imp two cells in
-    // front of the east-facing spawn through the contenteditable document.
-    expect(await replaceCanvasCharacter(page, 4 + 8, 67 + 5, '&')).toBe(true);
-    await page.evaluate(() => (window as any).__arcade.resume());
-    await page.waitForFunction(() => (window as any).__arcade.game().enemies.length === 1);
-    await page.evaluate(() => {
-      const a = (window as any).__arcade;
-      a.input.set('Space', true);
-      const watcher = setInterval(() => {
-        if (a.game().enemies[0]?.hp !== 1) return;
-        a.input.set('Space', false);
-        a.pause();
-        clearInterval(watcher);
-      }, 1);
-    });
-    await page.waitForFunction(() => !(window as any).__arcade.playing());
-
-    const state = await page.evaluate(() => {
-      const a = (window as any).__arcade;
-      const before = a.game().enemies[0];
-      a.resume();
-      a.pause();
-      const after = a.game().enemies[0];
-      return { before, after };
-    });
-    expect(state.before.hp).toBe(1);
-    expect(state.before.awake).toBe(true);
-    expect(state.after.hp).toBe(1);
-    expect(state.after.awake).toBe(true);
-    expect(Math.abs(state.after.x - state.before.x)).toBeLessThan(0.1);
-    expect(Math.abs(state.after.y - state.before.y)).toBeLessThan(0.1);
-  });
-
   test('attract screen: OS LEGAL presents DOCXODUS, and Space drops the coin', async ({ page }) => {
     // No intro=0 here — the title card animates on the same canvas paragraph
     // the games use, so the whole per-frame path is already under test.
-    await page.goto('/demo-arcade.html?engine=./embed.bundle.js&cart=dungeon');
+    await page.goto('/demo-arcade.html?engine=./embed.bundle.js&cart=doom');
     await waitForBoot(page);
     // Wait past the sweep reveal until the blinking coin prompt is on screen.
     // The rendered DOM preserves space runs as NBSP+space pairs and carries
@@ -445,10 +240,10 @@ test.describe('THE DOCX ARCADE page', () => {
       { timeout: 15000 },
     );
     await page.waitForFunction(
-      () => ((window as any).__arcade.canvasText() as string).includes('DUNGEON'),
+      () => ((window as any).__arcade.canvasText() as string).includes('DOOM'),
       null,
       { timeout: 15000 },
     );
-    expect(await page.evaluate(() => (window as any).__arcade.cart())).toBe('dungeon');
+    expect(await page.evaluate(() => (window as any).__arcade.cart())).toBe('doom');
   });
 });

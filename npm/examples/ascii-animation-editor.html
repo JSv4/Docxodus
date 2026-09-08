@@ -64,18 +64,14 @@
       <b>Undo rewinds frame by frame</b>, and the ribbon's <b>Save</b> downloads the caught wave.</div>
   </div>
 
-  <script>document.write('<script src="./editor.bundle.js?t=' + Date.now() + '"><\/script>');</script>
-  <script>document.write('<script src="./session.bundle.js?t=' + Date.now() + '"><\/script>');</script>
   <script type="module">
-    import { dotnet } from './_framework/dotnet.js';
-    // ascii-scenes.js lives in docs/demo/ (the Pages deploy needs the physical
-    // copy); pretest copies it into this webroot beside the page.
+    import { loadDemoEngine } from './engine.js';
     import { startObservatory } from './ascii-scenes.js';
-
-    const { mountRibbon } = window.DocxodusEditor;
+    const { createRibbonEditor, DocxSession, getWasmExports } = await loadDemoEngine();
     const $ = (id) => document.getElementById(id);
 
-    const ribbon = mountRibbon('#app', {
+    const ribbon = await createRibbonEditor('#app', null, {
+      history: false,
       documentName: 'docx-observatory.docx',
       hint: 'The sea below is a Word paragraph. Pause the animation (or click the water) and edit it like any other document.',
       loader: {
@@ -87,20 +83,9 @@
     window.__selectTab = (name) => ribbon.selectTab(name);
 
     try {
-      ribbon.loader.stage(0);
-      const { getAssemblyExports, getConfig } = await dotnet.withDiagnosticTracing(false).create();
-      const wasm = await getAssemblyExports(getConfig().mainAssemblyName);
-      const exports = {
-        DocxSessionBridge: wasm.DocxodusWasm.DocxSessionBridge,
-        DocumentConverter: wasm.DocxodusWasm.DocumentConverter,
-      };
-      ribbon.setExports(exports);
-
-      // ─── A blank document, opened in the REAL editor, seeded through the
-      //     agentic surface, animated by the shared driver ────────────────
-      ribbon.loader.stage(1);
-      const editor = ribbon.openBlank('docx-observatory.docx');
-      const session = new window.DocxodusSession.DocxSession(editor.sessionHandle, exports.DocxSessionBridge);
+      const exports = getWasmExports();
+      const editor = ribbon.editor;
+      const session = new DocxSession(editor.sessionHandle, exports.DocxSessionBridge);
       const controller = startObservatory({
         editor,
         session,
