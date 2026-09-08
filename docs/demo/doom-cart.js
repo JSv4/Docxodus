@@ -107,9 +107,9 @@ export const DOOM_KEY_CODES = [...Object.keys(DOOM_KEY_MAP)];
  *  minus the aliases a keyboard has room for. Doom is the cartridge that
  *  needed this: a pad with movement and fire can walk E1M1 up to its first
  *  door and no further, because USE is a key and a phone had none. Its rarer
- *  keys — seven weapons, the automap, Doom's own menu and the Enter that
- *  works it — go in the pad's tray rather than under a thumb, since they are
- *  what you reach for between fights, not during one. */
+ *  keys — seven weapons, the automap, Doom's own menu and a separate Enter —
+ *  go in the pad's tray. FIRE also confirms menus, so starting a game never
+ *  requires discovering the tray. */
 export const DOOM_TOUCH = {
   up: { code: 'KeyW', glyph: '▲', label: 'Forward' },
   down: { code: 'KeyS', glyph: '▼', label: 'Back' },
@@ -117,7 +117,7 @@ export const DOOM_TOUCH = {
   right: { code: 'ArrowRight', glyph: '↻', label: 'Turn right' },
   strafeLeft: { code: 'KeyA', glyph: '◀', label: 'Strafe left' },
   strafeRight: { code: 'KeyD', glyph: '▶', label: 'Strafe right' },
-  fire: { code: 'Space', glyph: 'FIRE', label: 'Fire' },
+  fire: { code: 'Space', glyph: 'FIRE / OK', label: 'Fire / confirm menu selection' },
   use: { code: 'KeyE', glyph: 'USE', label: 'Open doors and switches' },
   run: { code: 'ShiftLeft', glyph: 'RUN', label: 'Run (stays on until tapped again)', toggle: true },
   extras: [
@@ -833,6 +833,13 @@ export function doomCart(options = {}) {
     // cartridge wants the log rather than the held/pressed sets the other two
     // cartridges use.
     for (const { code, down } of input.drain?.() ?? []) {
+      // Doom's menu accepts Enter, not its attack key. Pair Space/FIRE with
+      // Enter on both edges so even a tap released between rendered frames
+      // confirms once, while holding it still fires normally in a level.
+      // Enter goes FIRST: on the title screen either key opens the menu, so
+      // attack followed by Enter would also select New Game in the same tap.
+      // In gameplay Enter has no action; the attack binding stays unchanged.
+      if (code === 'Space') handle.keys.push([KEY.ENTER, down ? 1 : 0]);
       const key = DOOM_KEY_MAP[code];
       if (key !== undefined) handle.keys.push([key, down ? 1 : 0]);
     }
@@ -911,9 +918,9 @@ export function doomCart(options = {}) {
       'Word runs, including the original HUD. Switch modes on the same frame, even while paused. ' +
       'Move **W/S** · strafe ' +
       '**A/D** · turn **←/→** · **Space** ' +
-      'fires · **E** opens · **Q** is Doom’s own menu. **Esc** pauses — and then it is only a ' +
+      'fires / confirms menus · **E** opens · **Q** is Doom’s own menu. **Esc** pauses — and then it is only a ' +
       'document again: copy and paste the frame, Undo rewinds it, Save downloads it as .docx.',
-    hint: '<b>WASD</b> move · <b>←/→</b> turn · <b>Space</b> fire · <b>E</b> open · <b>Q</b> Doom’s menu · <b>Original / ASCII</b> switches the same frame, even while paused.',
+    hint: '<b>WASD</b> move · <b>←/→</b> turn · <b>Space</b> fire / confirm menu · <b>E</b> open · <b>Q</b> Doom’s menu · <b>Original / ASCII</b> switches the same frame, even while paused.',
     reset() {
       // Doom's own state lives inside the WebAssembly heap and the engine is
       // a page singleton, so a cartridge reset cannot restart the game. Q

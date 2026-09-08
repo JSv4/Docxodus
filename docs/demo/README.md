@@ -137,7 +137,10 @@ is narrow.
 | **compact** | A slim HUD strip keeps the two controls you touch mid-game (play/pause and pacing); cartridges, restart, embed, telemetry and the hint move behind a `⋯` sheet. A thumb D-pad and an action cluster float over the bottom corners of the game. Nothing is dropped, only re-placed. |
 
 `FIRE` sends `Space` — jump in the platformer, the weapon in the raycasters and
-in Doom, and the coin drop on the attract screen. The old touch row had no
+in Doom, and the coin drop on the attract screen. Doom labels it **FIRE / OK**:
+it also confirms menu selections, so use **▲/▼** to choose and **FIRE / OK** to
+enter New Game, an episode, and a difficulty without opening the KEYS tray.
+The old touch row had no
 Space at all, so the shooters could be walked but never fought on a phone.
 
 **What the pad offers is the cartridge's call.** Each cartridge declares a touch

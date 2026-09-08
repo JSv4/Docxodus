@@ -1,4 +1,16 @@
 import { test, expect, Page } from '@playwright/test';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+
+// Match the capture script's optional offline mirror, including its pin check.
+test.beforeEach(async ({ page }) => {
+  if (!process.env.DOOM_ENGINE_PATH) return;
+  const bytes = readFileSync(process.env.DOOM_ENGINE_PATH);
+  expect(createHash('sha256').update(bytes).digest('hex')).toBe(
+    'efd7c34714e3753a84cf6873f2c2ae0e1a41bde1f10aaa2b0a95cb6935e8cce9');
+  await page.route('https://cdn.jsdelivr.net/gh/grubbyplaya/**', route =>
+    route.fulfill({ body: bytes, contentType: 'text/javascript' }));
+});
 
 // THE DOCX ARCADE on a phone — the mobile-Chrome regression that garbled the
 // GitHub Pages demo. On Android the canvas rows render WIDER than authored:
@@ -504,6 +516,75 @@ test.describe('The pad takes its controls from the cartridge', () => {
     const use = page.locator('.dxa-use');
     await expect(use).toBeHidden();
     expect(await use.getAttribute('data-code')).toBeNull();
+  });
+
+  test('FIRE touch taps confirm Doom menus and holding it still fires in a level', async ({ page }) => {
+    test.setTimeout(240000);
+    await page.goto(`/demo-arcade.html?${OVERRIDE}&intro=0&cart=doom`);
+    await waitForBoot(page);
+    await page.waitForFunction(() => {
+      const state = (window as any).__arcade.game();
+      if (state.status === 'error') throw new Error(state.error);
+      return state.doomFrames >= 4;
+    }, null, { timeout: 180000 });
+
+    const fire = page.locator('#pad .dxa-fire');
+    await expect(fire).toBeVisible();
+    await expect(page.locator('#padextras')).toBeHidden();
+
+    // Actual Chromium touch events, including pointer capture and release.
+    // A synthetic pointerdown or an input.held() check cannot prove that a
+    // quick tap survives until Doom processes its menu input on the next frame.
+    for (let i = 0; i < 4; i++) {
+      await fire.tap(); // title → New Game → episode → skill → level
+      await page.waitForTimeout(700);
+    }
+    await page.waitForTimeout(1500); // level wipe and weapon raise
+
+    const sample = (x0: number, y0: number, x1: number, y1: number) =>
+      page.evaluate(({ x0, y0, x1, y1 }) => {
+        const state = (window as any).__arcade.game();
+        const pixels: number[] = [];
+        for (let y = y0; y < y1; y += 2) {
+          for (let x = x0; x < x1; x += 2) pixels.push(...state.pixel(x, y));
+        }
+        return pixels;
+      }, { x0, y0, x1, y1 });
+    const motion = (a: number[], b: number[]) =>
+      a.reduce((sum, value, i) => sum + Math.abs(value - b[i]), 0) / a.length;
+    const view = await sample(0, 35, 320, 135);
+    const hud = await sample(0, 175, 320, 198);
+    await page.waitForTimeout(600);
+    expect(motion(view, await sample(0, 35, 320, 135)), 'an idle level holds still').toBeLessThan(1);
+
+    // The view must actually turn while the HUD stays fixed. An opening menu
+    // or attract demo cannot satisfy both the idle and controlled-motion checks.
+    const cdp = await page.context().newCDPSession(page);
+    const hold = async (selector: string) => {
+      const box = await page.locator(selector).boundingBox();
+      expect(box).not.toBeNull();
+      await cdp.send('Input.dispatchTouchEvent', {
+        type: 'touchStart', touchPoints: [{ x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 }],
+      });
+    };
+    const release = () => cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await hold('#pad .dxa-right');
+    await page.waitForTimeout(900);
+    await release();
+    expect(motion(view, await sample(0, 35, 320, 135)), 'FIRE must get past the opening menus')
+      .toBeGreaterThan(6);
+    expect(motion(hud, await sample(0, 175, 320, 198))).toBeLessThan(1);
+
+    const ammo = await sample(2, 171, 42, 194);
+    await hold('#pad .dxa-fire');
+    await page.waitForTimeout(1400);
+    await release();
+    await page.waitForTimeout(700);
+    expect(motion(ammo, await sample(2, 171, 42, 194)), 'holding FIRE spends ammunition')
+      .toBeGreaterThan(1);
+    expect(await page.evaluate(() => (window as any).__arcade.input.held('Space'))).toBe(false);
+    expect(await page.evaluate(() => (window as any).__arcade.playing())).toBe(true);
+    await cdp.detach();
   });
 
   test('the rarer Doom keys ride in a tray instead of under a thumb', async ({ page }) => {
