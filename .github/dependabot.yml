@@ -15,6 +15,11 @@ updates:
       - "nuget"
     commit-message:
       prefix: "deps"
+    # Managed SkiaSharp and its native assets must use compatible Skia versions.
+    groups:
+      skiasharp:
+        patterns:
+          - "SkiaSharp*"
 
   # GitHub Actions
   - package-ecosystem: "github-actions"
