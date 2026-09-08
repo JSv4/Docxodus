@@ -77,6 +77,12 @@ export default defineConfig({
   ],
   webServer: [
     {
+      command: 'python3 -m http.server 8084 --directory dist/site',
+      url: 'http://localhost:8084/demo/app.html',
+      reuseExistingServer: !process.env.CI,
+      timeout: 30000,
+    },
+    {
       command: 'python3 -m http.server 8082 --directory dist/wasm',
       url: 'http://localhost:8082',
       reuseExistingServer: !process.env.CI,

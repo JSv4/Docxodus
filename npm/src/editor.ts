@@ -58,6 +58,7 @@ import type { RenderPlan, RenderUnit, UnitDiff } from "./editor-reconcile.js";
 /** The subset of WASM bridge exports the editor needs (as exposed on `window.Docxodus`). */
 export interface DocxEditorExports {
   DocxSessionBridge: {
+    GetVersion?: (handle: number) => string;
     OpenSession: (bytes: Uint8Array, settingsJson: string) => number;
     CloseSession: (handle: number) => void;
     CreateBlankDocx: () => Uint8Array;
@@ -1451,18 +1452,23 @@ export class DocxEditor {
       revisionAuthor: opts.revisionAuthor,
     }));
     const editor = new DocxEditor(container, exports, handle, opts);
-    editor.refreshAnchorMap();
-    if (opts.headerFooter) editor.createRegion();
-    // First paint goes through the session-attached editor render when the bundle has it, so
-    // the comment markup (and everything else in the profile) is exactly what a remount will
-    // produce; older bundles take the bytes path with the same profile.
-    const fullHtml = editor.renderFullHtml(bytes);
-    if (opts.paginated) editor.mountPaginated(fullHtml);
-    else editor.mountHtml(fullHtml);
-    editor.syncRegionToBody();
-    editor.setupBlockDrag();
-    if (opts.comments) editor.createGutter();
-    return editor;
+    try {
+      editor.refreshAnchorMap();
+      if (opts.headerFooter) editor.createRegion();
+      // First paint goes through the session-attached editor render when the bundle has it, so
+      // the comment markup (and everything else in the profile) is exactly what a remount will
+      // produce; older bundles take the bytes path with the same profile.
+      const fullHtml = editor.renderFullHtml(bytes);
+      if (opts.paginated) editor.mountPaginated(fullHtml);
+      else editor.mountHtml(fullHtml);
+      editor.syncRegionToBody();
+      editor.setupBlockDrag();
+      if (opts.comments) editor.createGutter();
+      return editor;
+    } catch (error) {
+      editor.close();
+      throw error;
+    }
   }
 
   /**
@@ -1482,6 +1488,13 @@ export class DocxEditor {
   save(): Uint8Array {
     this.assertOpen();
     return this.exports.DocxSessionBridge.Save(this.handle);
+  }
+
+  /** Monotonic committed document version, when supported by the loaded engine. */
+  get version(): number | null {
+    this.assertOpen();
+    const value = this.exports.DocxSessionBridge.GetVersion?.(this.handle);
+    return value ? (JSON.parse(value) as { version: number }).version : null;
   }
 
   /** Release the underlying WASM session. The editor is unusable afterward. */

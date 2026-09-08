@@ -43,22 +43,38 @@ exists. A stale draft stays open until the user refreshes history and decides wh
 IndexedDB data stays on this browser and can be removed by clearing site data; download a
 history file for a portable copy. No automatic checkpoint, network sync or retention is installed.
 
-The [runnable TypeScript example](../npm/examples/history.ts) pairs this panel with the ribbon
-editor and a separate preview. From `npm/`, with WASM already built:
+The ribbon editor includes this panel as an optional drawer:
 
-```sh
-npm run build:history-example
-python3 -m http.server 8088 --directory dist/wasm
+```ts
+import { createRibbonEditor } from 'docxodus/embed';
+const ribbon = await createRibbonEditor('#editor', '/contract.docx', {
+  history: { workspaceId: 'contract-workspace', author: 'Taylor' },
+});
 ```
 
-Open `http://localhost:8088/history.html`. Open a DOCX, edit and save a checkpoint, or open one
-of the [sample history files](../TestFiles/HistoryArchive/README.md). History files open read-only
-first; **Resume editing this history** imports the embedded document identity. A conflicting
-local history leaves the archive open read-only. **Back to my draft** returns to the existing
-editor history. **Use as draft** in a saved-version preview asks before replacing unsaved work.
-Malformed or unsupported files leave the current editor intact; archive size is checked before
-reading upload bytes. Pending saves recover across reloads, and the example reopens their
-captured draft. Ordinary unsaved edits are not autosaved.
+`history: true` offers explicit local saves without automatically reopening a workspace.
+Supply a stable `workspaceId` to resume its last saved document or pending save after reload.
+`storageName` selects the app's IndexedDB database. Omitting `history` (or setting it to
+`false`) creates no controls or storage. Opening a drawer initializes storage, but document
+bytes are only retained when the user saves a version or imports a history file.
+
+**Version history** opens a drawer with **Save version**, named versions, separate previews,
+comparison and restore. Restore asks before replacing the document and preserves saved
+versions. New/open/preview replacement asks before discarding unsaved changes. Saved documents
+remain reachable from the drawer, including documents sharing a filename. History files open
+read-only first; **Continue editing this document** imports their embedded identity.
+Conflicting imports and malformed uploads leave the open document and its undo stack intact.
+Ordinary DOCX downloads continue to exclude external version history.
+
+`mountRibbon` hosts can supply a `RibbonHistoryBinding` with initialized `openHistory`,
+`openArchive` and `preview` services; `createRibbonEditor` wires these services automatically.
+Use the same module's `installHistoryStorageImports` when booting WASM yourself.
+
+One `npm run build` produces the package, local examples in `dist/wasm`, and the deployable
+site in `dist/site`. Run `npm run demo:serve` from `npm/` and open
+`http://localhost:8088/editor.html`. The old `history.html` URL uses that same editor.
+There is no separate history-example bundle. The browser integration tests load the actual
+site artifact without intercepting its pages or JavaScript.
 
 When loading an already captured version, pass its view as the third argument to
 `HistoryCheckpoints.open(document, journal, view)`. This keeps the editor's expected head

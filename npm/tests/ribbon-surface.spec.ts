@@ -76,6 +76,7 @@ test.describe('ribbon surface', () => {
 
   test('a second surface on the same page takes prefixed ids and stays independent', async ({ page }) => {
     await openEditorHost(page);
+    await page.addScriptTag({ url: '/editor.bundle.js' });
 
     const result = await page.evaluate(() => {
       const { mountRibbon } = (window as any).DocxodusEditor;
@@ -299,6 +300,7 @@ test('a host that hides the file actions can still open a document', async ({ pa
   // ones that supply their own persistence — crashed on the first open() with
   // `Docxodus ribbon: template is missing "save"`.
   await openEditorHost(page);
+  await page.addScriptTag({ url: '/editor.bundle.js' });
   const hosted = await page.evaluate(() => {
     const { mountRibbon } = (window as any).DocxodusEditor;
     const demo = (window as any).__demo;

@@ -33,7 +33,7 @@ test('browse, page, preview, compare and share a real agreement without changing
     window.disposeHistory = async () => { await window.historyPanel.destroy(); reader.close(); };
   }, archive);
   const versions = page.getByLabel('Version', { exact: true });
-  await expect(page.getByRole('button', { name: 'Save checkpoint', exact: true })).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Save version', exact: true })).toBeHidden();
   await expect(versions.locator('option')).toHaveCount(2);
   await page.getByRole('button', { name: 'Load older versions' }).click();
   await expect(versions.locator('option')).toHaveCount(4);
@@ -45,6 +45,7 @@ test('browse, page, preview, compare and share a real agreement without changing
   expect(Buffer.from(preview.bytes)).toEqual(await readFile('../TestFiles/HistoryArchive/agreement-v1.docx'));
   expect(preview.markdown).toContain('Services');
   await versions.selectOption('2');
+  await page.locator('summary').filter({ hasText: 'Compare versions' }).click();
   await page.getByLabel('Compare from', { exact: true }).selectOption('3');
   await page.getByRole('button', { name: 'Compare versions' }).click();
   await expect.poll(() => page.evaluate(() => window.historyPreview?.revisions)).toBeGreaterThan(0);
@@ -57,7 +58,7 @@ test('browse, page, preview, compare and share a real agreement without changing
   await page.getByText('Download with history', { exact: true }).click();
   await expect(page.getByText(/Includes retained drafts and collaboration proposals/)).toBeVisible();
   const historyDownload = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Download .docxhistory', exact: true }).click();
+  await page.getByRole('button', { name: 'Download with version history', exact: true }).click();
   const portable = await historyDownload;
   expect(portable.suggestedFilename()).toBe('Agreement.docxhistory');
   await portable.saveAs(testInfo.outputPath('shared-agreement.docxhistory'));
@@ -70,7 +71,7 @@ test('browse, page, preview, compare and share a real agreement without changing
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath('history-phone.png'), fullPage: true });
   await page.evaluate(() => window.disposeHistory());
-  await expect(page.getByRole('region', { name: 'Document history' })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Version history' })).toHaveCount(0);
 });
 
 test('canceling restore preserves history; a confirmed restore recovers its original target after a lost acknowledgement', async ({ page }) => {
@@ -110,16 +111,16 @@ test('canceling restore preserves history; a confirmed restore recovers its orig
     const save = checkpoints.save.bind(checkpoints);
     checkpoints.save = async (...args) => { const view = await save(...args); loseAck = true; return view; };
   }, archive);
-  await page.getByLabel('Checkpoint name (optional)').fill('Working draft');
-  await page.getByRole('button', { name: 'Save checkpoint', exact: true }).click();
-  await expect(page.getByRole('region', { name: 'Document history' })).toHaveAttribute('aria-busy', 'true');
+  await page.getByLabel('Version name (optional)').fill('Working draft');
+  await page.getByRole('button', { name: 'Save version', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Version history' })).toHaveAttribute('aria-busy', 'true');
   await expect(page.getByRole('button', { name: 'Restore selected' })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Refresh history' })).toBeDisabled();
   await expect.poll(() => page.evaluate(() => typeof window.releaseHistory)).toBe('function');
   await page.evaluate(() => window.releaseHistory());
-  await expect(page.getByRole('status')).toContainText('Checkpoint saved');
+  await expect(page.getByRole('status')).toContainText('Version saved');
   await page.getByLabel('Version', { exact: true }).selectOption('4');
-  await page.getByLabel('Checkpoint name (optional)').fill('Return to original');
+  await page.getByLabel('Version name (optional)').fill('Return to original');
   const beforeRestore = await page.evaluate(() => window.readRestoreState());
   expect(beforeRestore.pending).toBeNull();
   const selectedTitle = await page.getByLabel('Version', { exact: true }).locator('option:checked').textContent();
@@ -129,20 +130,20 @@ test('canceling restore preserves history; a confirmed restore recovers its orig
   const message = dialog.message();
   await dialog.dismiss(); await cancelPress;
   expect(dialog.type()).toBe('confirm');
-  expect(message).toContain(`Restore ${selectedTitle} as a new checkpoint?`);
+  expect(message).toContain(`Restore ${selectedTitle} as a new saved version?`);
   expect(message).toContain('Your current draft and all later versions will be kept.');
   await expect(page.getByRole('status')).toContainText('Restore canceled');
   expect(await page.evaluate(() => window.readRestoreState())).toEqual(beforeRestore);
-  await expect(page.getByLabel('Checkpoint name (optional)')).toHaveValue('Return to original');
-  await expect(page.getByRole('button', { name: 'Retry checkpoint' })).toBeHidden();
+  await expect(page.getByLabel('Version name (optional)')).toHaveValue('Return to original');
+  await expect(page.getByRole('button', { name: 'Retry save' })).toBeHidden();
   page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: 'Restore selected' }).click();
   await expect(page.getByRole('status')).toContainText('could not be confirmed');
-  await expect(page.getByRole('button', { name: 'Save checkpoint', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Save version', exact: true })).toBeDisabled();
   await page.getByLabel('Version', { exact: true }).selectOption('0');
-  await page.getByLabel('Checkpoint name (optional)').fill('Changed after failure');
-  await page.getByRole('button', { name: 'Retry checkpoint' }).click();
-  await expect(page.getByRole('status')).toContainText('Checkpoint recovered');
+  await page.getByLabel('Version name (optional)').fill('Changed after failure');
+  await page.getByRole('button', { name: 'Retry save' }).click();
+  await expect(page.getByRole('status')).toContainText('Saved version recovered');
   const restored = await page.evaluate(() => window.readRestoreState());
   expect(restored.pending).toBeNull();
   expect(restored.versions.slice(1)).toEqual(beforeRestore.versions);
@@ -318,7 +319,7 @@ test('history control errors stay distinct and name the failure a host can act o
   expect(messages.damaged).toContain('damaged or incomplete');
   expect(messages.pendingFile).toBe(messages.pending);
   expect(messages.pendingStale).toBe(messages.stale);
-  expect(messages.pending).toContain('Retry checkpoint');
+  expect(messages.pending).toContain('Retry save');
   expect(messages.unrecognised).toContain('raw Timeout detail');
   expect(messages.plain).toContain('network unavailable');
   expect(messages.thrownValue).toContain('Please try again.');

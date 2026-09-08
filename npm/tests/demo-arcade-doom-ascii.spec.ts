@@ -1,7 +1,7 @@
 import { test, expect, Page } from '@playwright/test';
 
 test('ASCII uses identical rendered fonts when unused complex-script properties are omitted', async ({ page }) => {
-  await page.goto('/demo-arcade.html?engine=./embed.bundle.js&intro=0&sound=0&cart=platformer');
+  await page.goto('/demo-arcade.html?engine=./embed.bundle.js&intro=0&sound=0&cart=doom');
   await page.waitForFunction(() => (window as any).__arcade?.frames() > 0);
   await page.evaluate(() => (window as any).__arcade.pause());
   const result = await page.evaluate(async () => {

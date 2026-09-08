@@ -726,8 +726,10 @@ loading, comparison, checkpoint/restore and `.docxhistory` import/export over ho
 `mountHistoryControls` adds an accessible panel with separate previews, exact checkpoint retries
 and explicit history sharing. `openIndexedDbHistoryStore` provides optional browser persistence.
 These controls require `structuredClone` and `crypto.randomUUID`; the optional store also requires IndexedDB.
-The [TypeScript editor example](examples/history.ts) runs with `npm run build:history-example`
-and a local server serving `dist/wasm/history.html` after the WASM build.
+The [shared editor example](examples/editor.html) includes an optional **Version history** drawer.
+One `npm run build` produces the library, local editors and deployable site; run `npm run demo:serve`
+and open `http://localhost:8088/editor.html`. In an embed, pass `history: true` to
+`createRibbonEditor`, or `{ history: { workspaceId: "my-document" } }` to resume saved work across reloads.
 
 ## License
 

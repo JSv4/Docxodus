@@ -18,7 +18,7 @@
     page and the landing page cannot drift apart.
 
     Query overrides (used by tests and local dev):
-      ?engine=<module URL of embed bundle>   default: jsDelivr docxodus@12.3.0
+      ?engine=<module URL of embed bundle>   default: local embed.bundle.js
       ?doc=<docx URL>                        default: local branded product guide
       ?blank=1                               start from a new empty document
   -->
@@ -49,7 +49,7 @@
        surface out; the property is non-inherited and Blink consults the
        autosizing cluster roots it picks itself, hence the universal selector.
        Newer engines emit this inside the document render too; page-level
-       covers the pinned engine today. */
+       also covers engine overrides. */
     html, body * { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
     #app { height: 100%; }
 
@@ -84,13 +84,12 @@
 
   <script type="module">
     const params = new URLSearchParams(location.search);
-    const ENGINE = params.get("engine")
-      ?? "https://cdn.jsdelivr.net/npm/docxodus@12.3.0/dist/embed.bundle.js";
+    import { loadDemoEngine } from "./engine.js";
     const DOC = params.get("doc") ?? "./docxodus-demo-guide.docx";
     const BLANK = params.get("blank") === "1";
 
     try {
-      const { createRibbonEditor } = await import(ENGINE);
+      const { createRibbonEditor } = await loadDemoEngine();
 
       // createRibbonEditor paints the chrome and its loading overlay first, then
       // streams the runtime behind them — so it also owns the failure state from

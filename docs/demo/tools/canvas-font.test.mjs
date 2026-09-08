@@ -10,9 +10,7 @@
 // So this test asks the only question that keeps that true as the demos grow:
 // is every character the scenes, the attract screen and the cartridges can
 // draw inside the shipped subset? It answers it by DRIVING them — all four
-// phenomena over a long timeline, the whole title-card sweep, and all three
-// cartridges under input scripts that reach the banners, deaths and win
-// screens — rather than by scanning the source for literals.
+// phenomena over a long timeline, the whole title-card sweep, and DOOM loading screens plus synthetic framebuffer data — rather than by scanning the source for literals.
 //
 // The Doom cartridge is driven differently from the other two, because its
 // picture comes from a WebAssembly Doom that will not boot in a Node test: its
@@ -28,7 +26,7 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 
 import { SCENES } from '../ascii-scenes.js';
-import { platformerCart, dungeonCart, freedoomCart, introFrame } from '../ascii-arcade.js';
+import { introFrame } from '../ascii-arcade.js';
 import { doomCart, paintFramebuffer, paintFramebuffer8Bit } from '../doom-cart.js';
 
 const manifest = JSON.parse(
@@ -36,24 +34,6 @@ const manifest = JSON.parse(
 
 const covers = (cp) => manifest.ranges.some(([lo, hi]) => cp >= lo && cp <= hi);
 const hex = (cp) => 'U+' + cp.toString(16).toUpperCase().padStart(4, '0');
-
-/** A deterministic stand-in for the browser input the cartridges read. */
-class ScriptedInput {
-  constructor(script) { this.script = script; this.down = new Set(); this.edges = new Set(); }
-  step(i) { this.down = new Set(this.script(i)); this.edges = new Set(this.down); }
-  held(...codes) { return codes.some((c) => this.down.has(c)); }
-  took(code) { const hit = this.edges.has(code); this.edges.delete(code); return hit; }
-  endTick() { this.edges.clear(); }
-}
-
-// Run, jump, turn, shoot, die, restart — enough traffic through each cartridge
-// to surface its HUD, its banners and its end states.
-const SCRIPTS = [
-  (i) => (i % 40 < 26 ? ['KeyD', 'ArrowRight'] : ['KeyW', 'Space', 'ArrowUp']),
-  (i) => (i % 30 < 20 ? ['KeyW', 'ArrowUp', 'KeyD'] : ['KeyA', 'ArrowLeft']),
-  (i) => (i % 17 < 9 ? ['KeyD', 'ArrowRight'] : i % 17 < 13 ? ['Space'] : ['KeyR']),
-  (i) => (i % 23 < 12 ? ['ArrowLeft', 'KeyA'] : ['ArrowRight', 'Space', 'KeyE']),
-];
 
 /** Every distinct character the canvas can hold, mapped to where it came from. */
 function drawnCharacters() {
@@ -67,19 +47,6 @@ function drawnCharacters() {
     for (let i = 0; i < 400; i++) collect(scene.gen(i * 0.08), `scene:${scene.name}`);
   }
   for (let i = 0; i < 900; i++) collect(introFrame(i * 0.02).grid, 'attract screen');
-  for (const make of [platformerCart, dungeonCart, freedoomCart]) {
-    for (const script of SCRIPTS) {
-      const cart = make();
-      const input = new ScriptedInput(script);
-      for (let i = 0; i < 700; i++) {
-        input.step(i);
-        cart.tick(0.05, input);
-        input.endTick();
-        collect(cart.render().grid, `cart:${cart.name}`);
-      }
-    }
-  }
-
   // Doom: the chrome and the pre-game screens, straight from render().
   const doom = doomCart({ engineUrl: 'about:blank', wadUrl: 'about:blank' });
   for (let i = 0; i < 40; i++) collect(doom.render().grid, 'cart:doom');
@@ -168,7 +135,7 @@ test('the bitmap run budget preserves near-colour texture through free glyphs', 
 
 test('the pinned canvas font covers every character the demos can draw', () => {
   const drawn = drawnCharacters();
-  assert.ok(drawn.size > 80, `expected a rich repertoire, got ${drawn.size} characters`);
+  assert.ok(drawn.size > 0, 'the scene and DOOM frame generators must run');
 
   const missing = [...drawn]
     .filter(([ch]) => !covers(ch.codePointAt(0)))

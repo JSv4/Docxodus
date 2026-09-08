@@ -84,11 +84,13 @@ test.describe('ASCII animation inside the real editor surface', () => {
     await page.keyboard.type(' — CAUGHT MID-WAVE');
     await page.locator(`[data-anchor="${anchors.caption}"]`).click(); // commits the title
 
-    const result = await page.evaluate(() => {
+    const result = await page.evaluate(async () => {
+      const moduleUrl = './embed.bundle.js';
+      const { DocxSession } = await import(moduleUrl);
       const m = (window as any).__moneyshot;
       const bytes: Uint8Array = m.save();
       const handle = m.bridge.OpenSession(bytes, '');
-      const fresh = new (window as any).DocxodusSession.DocxSession(handle, m.bridge);
+      const fresh = new DocxSession(handle, m.bridge);
       const projection = fresh.project();
       fresh.close();
       return {

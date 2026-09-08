@@ -10,13 +10,14 @@ The repository already had two narrower forms of visual coverage:
 - `tabs-visual.spec.ts` compares five browser renderings with committed Playwright snapshots. The
   adjacent `__reference__` directory also contains LibreOffice-derived tab PDFs/PNGs and a manual
   root-cause analysis, but the test does not dynamically compare against them.
-- `demo-arcade-libreoffice.spec.ts` dynamically compares one exported frame from each arcade game
-  with LibreOffice at 96 DPI, checking canvas geometry and tolerant ink F1.
+- The historical arcade export test compared the retired text cartridges with LibreOffice at
+  96 DPI. Current DOOM coverage lives in the bitmap/ASCII browser specs and the ASCII clipboard
+  capture in `docs/demo/README.md`.
 
 This benchmark reuses the proven headless-LibreOffice approach but adds all-page rendering, a
 stratified document corpus, exact and perceptual metrics, bounded alignment, heatmaps, portable JSON,
 artifact hashes, page-count checks, revision-view normalization, and a scheduled/manual workflow. It
-does not replace the fast committed snapshots or the arcade export test.
+does not replace the fast committed snapshots or the current DOOM browser tests.
 
 ## Baseline contract
 

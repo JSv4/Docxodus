@@ -34,6 +34,9 @@ import type {
   FormatKey,
 } from "./editor.js";
 import { threadMembers } from "./editor-comments.js";
+import { RibbonHistory } from './ribbon-history.js';
+import type { RibbonHistoryBinding } from './ribbon-history.js';
+export type { RibbonHistoryBinding, RibbonHistoryOptions } from './ribbon-history.js';
 import type { BandWhich } from "./editor-headerfooter.js";
 import { TrackedChangeMode } from "./types.js";
 import type { ListFormat, NumberFormat } from "./types.js";
@@ -91,6 +94,8 @@ export interface RibbonLoaderOptions {
 }
 
 export interface RibbonOptions extends DocxEditorOptions {
+  /** Optional version-history services. createRibbonEditor accepts history: true to wire browser storage. */
+  history?: RibbonHistoryBinding;
   /** WASM exports. Omit to mount chrome first (showing the loader) and call `setExports` later. */
   exports?: DocxEditorExports;
   /** Layout density. Default "auto". */
@@ -151,6 +156,7 @@ export interface RibbonLoader {
 }
 
 export interface RibbonEditor {
+  readonly history: RibbonHistory | null;
   /** The mounted root element (carries `data-state` and `data-chrome`). */
   readonly element: HTMLElement;
   /** The element the document renders into. */
@@ -308,8 +314,9 @@ export function mountRibbon(
 
 class RibbonSurface implements RibbonEditor {
   readonly element: HTMLElement;
-  readonly surface: HTMLElement;
+  surface: HTMLElement;
   readonly loader: RibbonLoader;
+  readonly history: RibbonHistory | null;
 
   private readonly options: RibbonOptions;
   private readonly idPrefix: string;
@@ -407,6 +414,7 @@ class RibbonSurface implements RibbonEditor {
       this.resizeObserver = new ResizeObserver(() => this.applyChrome());
       this.resizeObserver.observe(root);
     }
+    this.history = options.history ? new RibbonHistory(this, options.history) : null;
   }
 
   // ── element lookup ──────────────────────────────────────────────────────────
@@ -436,6 +444,11 @@ class RibbonSurface implements RibbonEditor {
       this.element.querySelector("[data-dxr-files]")?.remove();
     }
     if (!this.loaderOptions) this.control("loader")?.remove();
+    if (!this.options.history) this.control('history')?.remove();
+    else {
+      const file = this.control<HTMLInputElement>('file');
+      if (file) { file.accept = '.docx,.docxhistory'; file.setAttribute('aria-label', 'Open a document or history file'); }
+    }
 
     this.require("docname").textContent = this.documentName;
     this.require<HTMLInputElement>("paginated").checked = this.options.paginated ?? false;
@@ -639,27 +652,18 @@ class RibbonSurface implements RibbonEditor {
 
   open(bytes: Uint8Array, name?: string): DocxEditor {
     if (!this.exports) throw new Error("Docxodus ribbon: WASM exports are not set yet");
-    if (this.live) {
-      try {
-        this.live.close();
-      } catch {
-        /* already closed */
-      }
-      this.live = null;
-    }
-    if (name) this.documentName = name;
-    this.require("docname").textContent = this.documentName;
-
+    this.history?.beforeOpen();
     const paginated = this.require<HTMLInputElement>("paginated").checked;
-    this.surface.dataset.view = paginated ? "paginated" : "continuous";
-    this.surface.replaceChildren();
-    this.closeFindBar();
+    // Render the candidate before retiring the current session. Invalid uploads keep its
+    // DOM, selection and undo stack intact. The viewport measures again after attachment.
+    const candidateSurface = this.surface.cloneNode(false) as HTMLElement;
+    candidateSurface.dataset.view = paginated ? "paginated" : "continuous";
 
     const started = performance.now();
     const tracked = this.require<HTMLInputElement>("trackchanges").checked
       ? TrackedChangeMode.RenderInline
       : (this.options.trackedChanges ?? TrackedChangeMode.Accept);
-    this.live = DocxEditor.open(this.surface, bytes, this.exports, {
+    const candidate = DocxEditor.open(candidateSurface, bytes, this.exports, {
       cssPrefix: this.options.cssPrefix,
       fabricateClasses: this.options.fabricateClasses,
       editable: this.options.editable,
@@ -667,10 +671,11 @@ class RibbonSurface implements RibbonEditor {
       columnWidth: this.options.columnWidth,
       fitToWidth: this.options.fitToWidth,
       onEdit: (info) => {
+        this.history?.edited();
         this.options.onEdit?.(info);
         this.scheduleStats();
       },
-      onMove: this.options.onMove,
+      onMove: info => { this.history?.edited(); this.options.onMove?.(info); },
       onStoryChange: (which) => this.onStoryChange(which),
       onCommentsChange: (info) => this.onCommentsChange(info),
       paginated,
@@ -681,6 +686,12 @@ class RibbonSurface implements RibbonEditor {
       comments: this.options.comments,
       commentAuthor: this.author,
     });
+    this.live?.close();
+    this.surface.replaceWith(candidateSurface); this.surface = candidateSurface; this.live = candidate;
+    if (name) this.documentName = name;
+    this.require('docname').textContent = this.documentName;
+    this.closeFindBar();
+    this.history?.documentOpened(this.documentName);
     const saveButton = this.control<HTMLButtonElement>("save");
     if (saveButton) saveButton.disabled = false;
     this.require("ribbon").setAttribute("aria-disabled", "false");
@@ -732,6 +743,7 @@ class RibbonSurface implements RibbonEditor {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    void this.history?.destroy();
     const doc = this.element.ownerDocument ?? document;
     doc.removeEventListener("selectionchange", this.onSelectionChange);
     doc.removeEventListener("mousedown", this.onDocumentMouseDown);
@@ -771,6 +783,7 @@ class RibbonSurface implements RibbonEditor {
       const el = this.control("railOp");
       if (el) el.textContent = `${label} ${ms >= 1000 ? `${(ms / 1000).toFixed(2)} s` : `${Math.round(ms)} ms`}`;
       this.options.onCommand?.(label, ms);
+      this.history?.edited();
       this.refreshRailCounts();
       this.refreshRailAnchor();
       this.scheduleStats();
@@ -1005,12 +1018,16 @@ class RibbonSurface implements RibbonEditor {
     file?.addEventListener("change", async () => {
       const chosen = file.files?.[0];
       if (!chosen) return;
+      file.value = '';
+      if (this.history) { await this.history.openFile(chosen); return; }
       this.setStatus(`Loading ${chosen.name}…`);
-      this.open(new Uint8Array(await chosen.arrayBuffer()), chosen.name);
+      try { this.open(new Uint8Array(await chosen.arrayBuffer()), chosen.name); }
+      catch (error) { this.setStatus(`Could not open this document. ${String(error)}`); }
       // Reset so re-picking the same file fires `change` again.
       file.value = "";
     });
     this.control("new")?.addEventListener("click", () => {
+      if (this.history) { void this.history.newDocument(); return; }
       if (this.exports) this.openBlank("untitled.docx");
     });
     this.control("save")?.addEventListener("click", () => this.download());
@@ -1022,6 +1039,7 @@ class RibbonSurface implements RibbonEditor {
       if (!chosen || !this.live) return;
       const started = performance.now();
       const ok = await this.live.insertImageFile(chosen, { altText: chosen.name });
+      if (ok) this.history?.edited();
       const ms = performance.now() - started;
       const el = this.control("railOp");
       if (el) el.textContent = `picture ${Math.round(ms)} ms`;

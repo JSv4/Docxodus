@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Optional `createRibbonEditor(container, source, { history: true })` version-history drawer with named saves,
+  comparisons, separate previews, restore confirmation and portable history files. A stable
+  `workspaceId` reopens saved documents and pending saves. Saved documents remain reachable
+  after New/Open, and invalid uploads preserve the current editor and undo stack.
+- One npm build now stages both local editors and the deployable Pages site using the same
+  editor bundle and WASM runtime. The standalone history example is folded into the shared editor.
+
+### Changed
+
+- The arcade now offers only the current DOOM cartridge, with bitmap and ASCII rendering.
+  Removed the platformer, both legacy raycaster cartridges and their dedicated tooling/tests.
+- Pages builds the site from source, eliminating its dependency on a separately published
+  npm version. The normal editor pages enable optional history; live simulation hosts opt out.
 ## [12.3.0] - 2026-09-07
 
 ### Added

@@ -20,7 +20,7 @@
        surface out; the property is non-inherited and Blink consults the
        autosizing cluster roots it picks itself, hence the universal selector.
        Newer engines emit this inside the document render too; page-level
-       covers the pinned engine today. */
+       also covers engine overrides. */
     html, body * { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
     #app { height: 100%; }
     #home {
@@ -83,21 +83,17 @@
 
   <script type="module">
     const params = new URLSearchParams(location.search);
-    // The observatory needs DocxEditor.refresh() (docxodus ≥ 9.6.0); this page was
-    // pinned there ahead of that release and now shares the pin with its siblings.
-    const ENGINE = params.get("engine")
-      ?? "https://cdn.jsdelivr.net/npm/docxodus@12.3.0/dist/embed.bundle.js";
-    const engineUrl = new URL(ENGINE, location.href);
+    import { loadDemoEngine } from "./engine.js";
     // The phenomena are demo content, not library machinery: they live beside this
-    // page (docs/demo/ deploys verbatim; pretest copies the same file into the local
-    // webroot), so ?engine= pins the library alone and the scenes version with the site.
+    // page. The build stages both into the local webroot and deployable site.
     const SCENES_URL = params.get("scenes") ?? "./ascii-scenes.js";
 
     try {
       const [{ createRibbonEditor, DocxSession, getWasmExports }, { startObservatory }] =
-        await Promise.all([import(engineUrl.href), import(SCENES_URL)]);
+        await Promise.all([loadDemoEngine(), import(SCENES_URL)]);
 
       const ribbon = await createRibbonEditor("#app", null, {
+        history: false,
         documentName: "docx-observatory.docx",
         headerFooter: false,
         hint: "The sea below is a Word paragraph. Pause the animation (or click the water) and edit it like any other document.",

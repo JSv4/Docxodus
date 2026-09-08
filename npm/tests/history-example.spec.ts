@@ -1,122 +1,173 @@
-import { test, expect } from '@playwright/test';
-import { readFile } from 'node:fs/promises';
-import { build } from 'esbuild';
+import { test, expect, type Page } from '@playwright/test';
 
-let script: string;
-let html: string;
-test.beforeAll(async () => {
-  script = (await build({ entryPoints: ['examples/history.ts'], bundle: true, format: 'esm', write: false })).outputFiles[0].text;
-  html = await readFile('examples/history.html', 'utf8');
-});
-test.beforeEach(async ({ context, page }) => {
-  await context.route('**/history.html', route => route.fulfill({ contentType: 'text/html', body: html }));
-  await context.route('**/history-example.js', route => route.fulfill({ contentType: 'text/javascript', body: script }));
-  page.on('dialog', dialog => void dialog.accept());
-  await page.goto('/history.html');
-  await expect(page.getByRole('button', { name: 'New document', exact: true })).toBeEnabled();
-});
+// Exercise the deployable site itself. No source bundling, request interception or engine override.
+const APP = 'http://localhost:8084/demo/app.html';
+const agreement = '../TestFiles/HistoryArchive/agreement-v1.docx';
+async function ready(page: Page) {
+  await expect(page.locator('.dxr')).toHaveAttribute('data-state', 'ready');
+  await expect(page.locator('[data-dxr="loader"]')).toBeHidden();
+}
+async function history(page: Page) {
+  await page.getByRole('button', { name: 'Version history', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Save version', exact: true })).toBeEnabled();
+}
+async function closeHistory(page: Page) { await page.getByRole('button', { name: 'Close version history' }).click(); }
+async function openAgreement(page: Page) {
+  await page.getByLabel('Open a document or history file').setInputFiles(agreement);
+  await expect(page.locator('[data-dxr="editor"]')).toContainText('Services');
+}
+async function save(page: Page, label: string) {
+  await page.getByLabel('Version name (optional)').fill(label);
+  await page.getByRole('button', { name: 'Save version', exact: true }).click();
+  await expect(page.locator('.dx-history [role="status"]')).toContainText('Version saved');
+}
 
-test('resume a portable agreement, save a checkpoint, reopen after reload, and keep conflicting imports read-only', async ({ page }, testInfo) => {
-  const file = page.getByLabel('Open a DOCX or history file');
+test.beforeEach(async ({ page }) => { await page.goto(APP); await ready(page); });
+
+test('the built editor saves versions, resumes after reload, compares, restores and downloads portable history', async ({ page }, testInfo) => {
+  await openAgreement(page); await history(page); await save(page, 'First draft');
   const versions = page.getByLabel('Version', { exact: true });
-  await file.setInputFiles('../TestFiles/HistoryArchive/agreement.docxhistory');
-  await expect(versions.locator('option')).toHaveCount(4);
-  await expect(page.getByRole('button', { name: 'Save checkpoint', exact: true })).toBeHidden();
-  await expect(page.locator('#editor')).not.toContainText('Services');
-  await versions.selectOption('3');
-  await page.getByRole('button', { name: 'Preview selected' }).click();
-  await expect(page.getByRole('dialog')).toBeVisible();
-  await expect(page.locator('#preview')).toContainText('Services');
-  await expect(page.getByRole('button', { name: 'Use as draft' })).toBeHidden();
-  await page.keyboard.press('Escape');
-  await page.getByRole('button', { name: 'Resume editing this history' }).click();
-  await expect(page.locator('#editor')).toContainText('Services');
-  await expect(page.getByRole('button', { name: 'Save checkpoint', exact: true })).toBeEnabled();
-  await page.getByLabel('Checkpoint name (optional)').fill('Browser review');
-  await page.getByRole('button', { name: 'Save checkpoint', exact: true }).click();
-  await expect(versions.locator('option')).toHaveCount(5);
-  await page.reload();
-  await expect(versions.locator('option')).toHaveCount(5);
-  await expect(versions).toHaveValue('0');
-  await expect(versions.locator('option').first()).toContainText('Browser review');
-  await expect(page.locator('#editor')).toContainText('Services');
+  await expect(versions.locator('option')).toHaveCount(1);
+  await closeHistory(page);
+  const block = page.locator('[data-dxr="editor"] [contenteditable="true"][data-anchor]').first();
+  await block.click(); await page.keyboard.press('End'); await block.pressSequentially(' — Terms reviewed');
+  await history(page); await save(page, 'Reviewed');
+  await expect(versions.locator('option')).toHaveCount(2);
+  await page.reload(); await ready(page);
+  await expect(page.locator('[data-dxr="editor"]')).toContainText('Terms reviewed');
+  await history(page); await expect(versions.locator('option')).toHaveCount(2);
+  await page.locator('summary').filter({ hasText: 'Compare versions' }).click();
+  await page.getByRole('button', { name: 'Compare versions', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'Version preview' })).toBeVisible();
+  await page.getByRole('button', { name: 'Back to version history' }).click();
+  await versions.selectOption('1');
+  page.once('dialog', dialog => void dialog.dismiss());
+  await page.getByRole('button', { name: 'Restore selected' }).click();
+  await expect(versions.locator('option')).toHaveCount(2);
+  page.once('dialog', dialog => void dialog.accept());
+  await page.getByRole('button', { name: 'Restore selected' }).click();
+  await expect(versions.locator('option')).toHaveCount(3);
+  await expect(page.locator('[data-dxr="editor"]')).not.toContainText('Terms reviewed');
   await page.getByText('Download with history', { exact: true }).click();
   const downloaded = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Download .docxhistory', exact: true }).click();
+  await page.getByRole('button', { name: 'Download with version history', exact: true }).click();
   await (await downloaded).saveAs(testInfo.outputPath('reviewed-agreement.docxhistory'));
-  await file.setInputFiles('../TestFiles/HistoryArchive/agreement.docxhistory');
-  await page.getByRole('button', { name: 'Resume editing this history' }).click();
-  await expect(page.locator('#message')).toContainText('different local history');
-  await expect(versions.locator('option')).toHaveCount(4);
-  await expect(page.getByRole('button', { name: 'Preview selected' })).toBeEnabled();
-  await expect(page.locator('#editor')).toContainText('Services');
-  await page.getByRole('button', { name: 'Back to my draft' }).click();
-  await expect(versions.locator('option')).toHaveCount(5);
-  await page.screenshot({ path: testInfo.outputPath('history-editor.png'), fullPage: true });
+  await page.getByRole('dialog', { name: 'Version history', exact: true }).evaluate(el => { el.scrollTop = 0; });
+  await page.screenshot({ path: testInfo.outputPath('version-history-desktop.png'), fullPage: true });
 });
 
-test('a stale save and malformed or oversized uploads preserve the open draft and its local history', async ({ context, page }) => {
-  const file = page.getByLabel('Open a DOCX or history file');
-  await file.setInputFiles('../TestFiles/HistoryArchive/agreement-v1.docx');
-  await expect(page.locator('#editor')).toContainText('Services');
-  await page.getByRole('button', { name: 'Save checkpoint', exact: true }).click();
-  await expect(page.getByLabel('Version', { exact: true }).locator('option')).toHaveCount(1);
-  const other = await context.newPage(); other.on('dialog', dialog => void dialog.accept());
-  await other.goto('/history.html');
-  await expect(other.getByLabel('Version', { exact: true }).locator('option')).toHaveCount(1);
-  await page.getByLabel('Checkpoint name (optional)').fill('Another editor saved');
-  await page.getByRole('button', { name: 'Save checkpoint', exact: true }).click();
-  await expect(page.getByLabel('Version', { exact: true }).locator('option')).toHaveCount(2);
-  const draft = other.locator('#editor [data-anchor][contenteditable="true"]').first();
-  await draft.click(); await other.keyboard.press('End');
-  await draft.pressSequentially(' — My unsaved agreement changes');
-  await other.getByRole('button', { name: 'Save checkpoint', exact: true }).click();
-  await expect(other.locator('#history [role="status"]')).toContainText('A newer checkpoint exists');
-  await expect(draft).toContainText('My unsaved agreement changes');
-  await expect(other.getByRole('button', { name: 'Save checkpoint', exact: true })).toBeDisabled();
+test('a history file opens separately; importing, conflicts and malformed uploads preserve the document', async ({ page }) => {
+  const file = page.getByLabel('Open a document or history file');
+  await file.setInputFiles('../TestFiles/HistoryArchive/agreement.docxhistory');
+  const versions = page.getByLabel('Version', { exact: true });
+  await expect(versions.locator('option')).toHaveCount(4);
+  await expect(page.getByRole('button', { name: 'Save version', exact: true })).toBeHidden();
+  await expect(page.locator('[data-dxr="editor"]')).not.toContainText('Services');
+  await page.getByRole('button', { name: 'Preview selected' }).click();
+  await expect(page.getByRole('dialog', { name: 'Version preview' })).toContainText('Services');
+  await expect(page.getByRole('button', { name: 'Use as draft' })).toBeHidden();
+  await page.getByRole('button', { name: 'Back to version history' }).click();
+  await page.getByRole('button', { name: 'Continue editing this document' }).click();
+  await expect(page.locator('[data-dxr="editor"]')).toContainText('Services');
+  await save(page, 'Browser review');
+  await expect(versions.locator('option')).toHaveCount(5);
+  await closeHistory(page);
+  await file.setInputFiles('../TestFiles/HistoryArchive/agreement.docxhistory');
+  await page.getByRole('button', { name: 'Continue editing this document' }).click();
+  await expect(page.locator('.dxr-history-status')).toContainText('different local history');
+  await page.getByRole('button', { name: 'Back to my document' }).click();
+  await expect(versions.locator('option')).toHaveCount(5);
+  await closeHistory(page);
+  const handle = await page.evaluate(() => (window as any).__ribbon.editor.sessionHandle);
   for (const name of ['broken.docxhistory', 'broken.docx']) {
-    await other.getByLabel('Open a DOCX or history file').setInputFiles({ name, mimeType: 'application/octet-stream', buffer: Buffer.from('This is not a document archive') });
-    await expect(other.locator('#message')).toContainText('Your document is unchanged');
-    await expect(draft).toContainText('My unsaved agreement changes');
+    await file.setInputFiles({ name, mimeType: 'application/octet-stream', buffer: Buffer.from('not a zip') });
+    await expect(page.locator('[data-dxr="status"]')).toContainText('unchanged');
+    expect(await page.evaluate(() => (window as any).__ribbon.editor.sessionHandle)).toBe(handle);
+    await expect(page.locator('[data-dxr="editor"]')).toContainText('Services');
   }
-  await other.evaluate(() => {
-    const file = new File([new Uint8Array(64 * 1024 * 1024 + 1)], 'too-large.docxhistory');
-    file.arrayBuffer = async () => { throw new Error('Oversized uploads must be rejected before reading bytes'); };
-    const transfer = new DataTransfer(); transfer.items.add(file);
-    const input = document.querySelector<HTMLInputElement>('#file')!; input.files = transfer.files;
-    input.dispatchEvent(new Event('change'));
-  });
-  await expect(other.locator('#message')).toContainText('browser processing limits');
-  await expect(draft).toContainText('My unsaved agreement changes');
-  await other.getByRole('button', { name: 'Refresh history' }).click();
-  await expect(other.getByLabel('Version', { exact: true }).locator('option')).toHaveCount(2);
-  await other.getByRole('button', { name: 'Save checkpoint', exact: true }).click();
-  await expect(other.getByLabel('Version', { exact: true }).locator('option')).toHaveCount(3);
-  await other.getByRole('button', { name: 'Open latest' }).click();
-  await expect(other.locator('#preview')).toContainText('My unsaved agreement changes');
-  await other.getByRole('button', { name: 'Close preview' }).click();
+});
+
+test('two tabs keep stale drafts; canceled replacement and saved-document switching retain versions', async ({ page, context }) => {
+  await openAgreement(page); await history(page); await save(page, 'Initial'); await closeHistory(page);
+  const other = await context.newPage(); await other.goto(APP); await ready(other);
+  await history(page); await save(page, 'Another tab'); await closeHistory(page);
+  const block = other.locator('[data-dxr="editor"] [contenteditable="true"][data-anchor]').first();
+  await block.click(); await other.keyboard.press('End'); await block.pressSequentially(' My unsaved draft');
+  await history(other);
+  await other.getByRole('button', { name: 'Save version', exact: true }).click();
+  await expect(other.locator('.dx-history [role="status"]')).toContainText('A newer saved version exists');
+  await expect(block).toContainText('My unsaved draft');
+  await expect(other.getByRole('button', { name: 'Save version', exact: true })).toBeDisabled();
+  await other.getByRole('button', { name: 'Refresh history', exact: true }).click(); await save(other, 'My draft');
+  await closeHistory(other);
+  await block.click(); await other.keyboard.press('End'); await block.pressSequentially(' keep this');
+  other.once('dialog', dialog => void dialog.dismiss());
+  await other.getByRole('button', { name: 'New', exact: true }).click();
+  await expect(block).toContainText('keep this');
+  await history(other); await save(other, 'Retained'); await closeHistory(other);
+  await other.getByRole('button', { name: 'New', exact: true }).click();
+  await history(other); await save(other, 'Second document');
+  const recent = other.getByLabel('Saved documents on this device');
+  await expect(recent.locator('option')).toHaveCount(3);
+  const currentId = await recent.inputValue();
+  await closeHistory(other);
+  const newBlock = other.locator('[data-dxr="editor"] [contenteditable="true"][data-anchor]').first();
+  await newBlock.fill('Keep my new draft');
+  await history(other);
+  other.once('dialog', dialog => void dialog.dismiss());
+  await recent.selectOption({ label: 'agreement-v1.docx' });
+  await expect(recent).toHaveValue(currentId);
+  await expect(newBlock).toContainText('Keep my new draft');
+  other.once('dialog', dialog => void dialog.accept());
+  await recent.selectOption({ label: 'agreement-v1.docx' });
+  await expect(other.getByLabel('Version', { exact: true }).locator('option')).toHaveCount(4);
+  await expect(other.locator('[data-dxr="editor"]')).toContainText('keep this');
   await other.close();
 });
 
-test('saved agreements need no discard warning, while newer edits remain protected', async ({ page }) => {
-  const confirmations: string[] = [];
-  page.on('dialog', dialog => { if (dialog.type() === 'confirm') confirmations.push(dialog.message()); });
-  await page.getByLabel('Open a DOCX or history file').setInputFiles('../TestFiles/HistoryArchive/agreement-v1.docx');
-  await expect(page.locator('#editor')).toContainText('Services');
-  await page.getByRole('button', { name: 'Save checkpoint', exact: true }).click();
-  await expect(page.locator('#history [role="status"]')).toContainText('Checkpoint saved');
-  await page.getByRole('button', { name: 'New document', exact: true }).click();
-  await expect(page.getByLabel('Version', { exact: true }).locator('option')).toHaveCount(0);
-  expect(confirmations).toEqual([]);
+test('history is optional, storage denial leaves editing available, and the drawer fits a phone', async ({ page }, testInfo) => {
+  await page.goto(APP + '?history=0'); await ready(page);
+  await expect(page.getByRole('button', { name: 'Version history', exact: true })).toHaveCount(0);
+  await page.goto(APP); await ready(page);
+  expect(await page.evaluate(async () => (await indexedDB.databases()).length)).toBe(0);
+  await page.setViewportSize({ width: 390, height: 844 }); await history(page);
+  const drawer = page.getByRole('dialog', { name: 'Version history', exact: true });
+  const box = await drawer.boundingBox();
+  expect(box!.x).toBeGreaterThanOrEqual(0); expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+  expect(await drawer.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('version-history-phone.png'), fullPage: true });
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('button', { name: 'Version history', exact: true })).toBeFocused();
+  await page.reload(); await ready(page);
+  await page.evaluate(() => { indexedDB.open = () => { throw new DOMException('Storage unavailable', 'SecurityError'); }; });
+  await page.getByRole('button', { name: 'Version history', exact: true }).click();
+  await expect(page.locator('.dxr-history-status')).toContainText('Storage unavailable');
+  await closeHistory(page);
+  await expect(page.locator('[data-dxr="editor"] [contenteditable="true"]').first()).toBeEditable();
+});
 
-  const draft = page.locator('#editor [data-anchor][contenteditable="true"]').first();
-  await draft.click(); await draft.pressSequentially('Terms to retain in a checkpoint');
-  await page.getByRole('button', { name: 'Save checkpoint', exact: true }).click();
-  await expect(page.locator('#history [role="status"]')).toContainText('Checkpoint saved');
-  await draft.click(); await page.keyboard.press('End');
-  await draft.pressSequentially(' and newer unsaved changes');
-  await page.getByRole('button', { name: 'New document', exact: true }).click();
-  await expect(page.getByLabel('Version', { exact: true }).locator('option')).toHaveCount(0);
-  expect(confirmations).toHaveLength(1);
-  expect(confirmations[0]).toContain('Replace your open draft?');
+for (const entry of [
+  { name: 'local editor', url: 'http://localhost:8082/editor.html', tap: false },
+  { name: 'landing editor', url: 'http://localhost:8084/demo/?demo=editor', tap: false },
+  { name: 'compact player', url: 'http://localhost:8084/demo/player.html', tap: true },
+]) test(`${entry.name} exposes the shared history drawer from the default build`, async ({ page }) => {
+  const engineRequests: string[] = [];
+  page.on('request', request => { if (request.url().includes('embed.bundle.js')) engineRequests.push(request.url()); });
+  await page.goto(entry.url);
+  if (entry.tap) await page.locator('#start').click();
+  await ready(page); await history(page);
+  await expect(page.getByLabel('Version name (optional)')).toBeVisible();
+  expect(engineRequests.length).toBeGreaterThan(0);
+  expect(engineRequests.every(url => new URL(url).origin === new URL(entry.url).origin)).toBe(true);
+});
+
+test('a document started blank also reopens its saved version after reload', async ({ page }) => {
+  await page.goto(APP + '?blank=1'); await ready(page);
+  const block = page.locator('[data-dxr="editor"] [contenteditable="true"][data-anchor]').first();
+  await block.fill('A fresh document worth keeping');
+  await history(page); await save(page, 'Started here');
+  await page.reload(); await ready(page);
+  await expect(page.locator('[data-dxr="editor"]')).toContainText('A fresh document worth keeping');
+  await history(page);
+  await expect(page.getByLabel('Version', { exact: true }).locator('option')).toHaveCount(1);
 });
