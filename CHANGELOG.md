@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [12.3.0] - 2026-09-07
+
 ### Added
 
 - Durable browser checkpoint commands: `HistoryCheckpoints` persists a complete save/restore
@@ -53,6 +55,22 @@ All notable changes to this project will be documented in this file.
   the hosts that supply their own persistence — could mount the ribbon and never open anything in
   it. The rest of the surface already looked its controls up optionally; this was the last
   unconditional lookup.
+
+- The arcade's mobile fire button now confirms DOOM menus, allowing touch users to start
+  a game without a hardware keyboard.
+
+### Performance
+
+- Dense text paragraphs reuse formatting templates during incremental HTML rendering, retaining
+  every original character and line break. Together with the updated ASCII projection and WASM
+  AOT profile, this improves full-resolution DOOM ASCII throughput beyond 10 FPS in the measured
+  browser configuration; see [the measurements](docs/architecture/doom-ascii-performance.md).
+
+### Dependencies
+
+- Upgrade SkiaSharp and its Linux native assets together to 4.151.2.
+- Release `docx-scalpel` 0.4.1 from the same commit so its bundled native host receives the
+  rendering improvements and dependency update. The Python API is unchanged.
 
 ## [12.2.0] - 2026-09-07
 
