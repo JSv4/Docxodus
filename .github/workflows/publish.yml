@@ -258,7 +258,7 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ./publish/docx2oc*
 
-  # Build and publish npm package
+  # Build and stage npm packages; a maintainer approves each with 2FA on npm.
   build-npm:
     needs: build-test-publish
     runs-on: ubuntu-latest
@@ -289,12 +289,10 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
-      # Pin npm to 11.x — NOT @latest. npm >= 11.5.1 is required for OIDC trusted
-      # publishing (see the publish step below), and 11.x supports both Node 20 and
-      # Node 22 (engines.node ^20.17.0 || >=22.9.0). Using @latest is what broke this
-      # job: it silently rolled onto npm 12, which dropped Node 20 support.
-      - name: Pin npm (required for trusted publishers)
-        run: npm install -g npm@11
+      # Staging requires npm >= 11.15.0 and Node >= 22.14.0. Pin the tested CLI
+      # so a release keeps the same staging command and JSON output contract.
+      - name: Pin npm for staged publishing
+        run: npm install -g npm@11.19.1
 
       # @docxodus/export refuses to launch Chromium without its process sandbox (#595), and
       # that sandbox needs unprivileged user namespaces, which Ubuntu 24.04 restricts through
@@ -349,13 +347,42 @@ jobs:
       - name: Release preflight (package boundaries)
         run: RELEASE_PREFLIGHT_SKIP_INSTALL=1 ./scripts/release-preflight.sh
 
-      - name: Publish browser/WASM package
+      # The packages have already been built and checked above. Skipping lifecycle
+      # scripts avoids rebuilding and keeps the stage receipt valid JSON.
+      - name: Stage browser/WASM package
         run: |
           cd npm
-          npm publish --access public
+          npm stage publish --access public --ignore-scripts --json > "$RUNNER_TEMP/docxodus-stage.json"
 
-      - name: Publish Node export companion
+      - name: Stage Node export companion
         run: |
           cd npm-export
           npm pkg delete devDependencies.docxodus
-          npm publish --access public
+          npm stage publish --access public --ignore-scripts --json > "$RUNNER_TEMP/docxodus-export-stage.json"
+
+      - name: Report npm packages awaiting 2FA approval
+        if: always()
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const rows = [];
+          for (const [name, file] of [
+            ['docxodus', 'docxodus-stage.json'],
+            ['@docxodus/export', 'docxodus-export-stage.json'],
+          ]) {
+            const receipt = path.join(process.env.RUNNER_TEMP, file);
+            if (!fs.existsSync(receipt)) continue;
+            const contents = fs.readFileSync(receipt, 'utf8').trim();
+            if (!contents) continue;
+            const staged = JSON.parse(contents)[name];
+            if (staged?.stageId) rows.push(`| ${name}@${staged.version} | \`${staged.stageId}\` |`);
+          }
+          if (rows.length) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, [
+            '## npm packages awaiting 2FA approval', '',
+            '| Package | Stage ID |', '| --- | --- |', ...rows, '',
+            'Review each package in npm\'s Staged Packages tab, or run `npm stage view <stage-id>`.', '',
+            'Approve `docxodus` first, then `@docxodus/export`, with `npm stage approve <stage-id>` and your own 2FA.', '',
+            'Update demo pins only after approval and a successful CDN check. See `docs/npm-releases.md`.', '',
+          ].join('\n'));
+          NODE

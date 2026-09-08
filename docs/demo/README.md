@@ -359,8 +359,10 @@ it with `python tools/generate-demo-guide.py` from the repository root.
 
 ## Publish
 
+The release workflow [stages both npm packages for separate 2FA approval](../npm-releases.md).
 The pages load the library from jsDelivr at an exact version, so the pin can
-only move *after* npm publishes and the CDN serves it. Move every pin in one
+only move *after* the staged browser package is approved, published, and served by the CDN.
+Move every pin in one
 change — the pages, this README, `docs/npm-package.md`, `npm/README.md`,
 `npm/examples/embed.html`, and `RELEASE_ENGINE` in
 `npm/tests/social-demo.spec.ts` — and `tools/engine-pin.test.mjs` (run by
@@ -370,7 +372,7 @@ is left behind, if the version drops below the arcade's
 serve it yet. That guard exists because a stale pin is invisible to the browser
 specs: every one of them overrides `?engine=` to the locally built bundle.
 
-1. Publish `docxodus@12.3.0` and confirm
+1. Approve the staged `docxodus@12.3.0` release with 2FA and confirm
    `https://cdn.jsdelivr.net/npm/docxodus@12.3.0/dist/embed.bundle.js` returns JavaScript.
 2. In GitHub **Settings → Pages**, choose **GitHub Actions** as the publishing source.
    The `Deploy static demo to GitHub Pages` workflow uploads `/docs` without
