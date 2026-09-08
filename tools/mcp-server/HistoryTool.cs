@@ -29,11 +29,19 @@ internal static class HistoryTool
     {
         var history = store.History ?? throw new McpToolException($"History is disabled; the host must configure {RootVariable}.");
         var documentId = session.Location ?? throw new McpToolException("History requires a session opened from a scoped document location.");
-        if (args.GetRawText().Length > HistoryClientJson.MaxRequestChars)
+        var importing = args.TryGetProperty("action", out var requestedAction) && requestedAction.ValueKind == JsonValueKind.String
+            && requestedAction.ValueEquals("importArchive");
+        if (!importing && args.GetRawText().Length > HistoryClientJson.MaxRequestChars)
             throw new McpToolException("History request metadata exceeds its limit.");
         var names = new HashSet<string>(StringComparer.Ordinal);
         foreach (var property in args.EnumerateObject())
+        {
             if (!names.Add(property.Name)) throw new McpToolException("Duplicate history argument: " + property.Name);
+            if (importing && property.Name is not ("sessionId" or "action" or "archiveB64"))
+                throw new McpToolException("History import accepts only sessionId, action and archiveB64.");
+        }
+        if (importing && args.GetRawText().Length > ((long)HistoryClientOps.MaxArchiveBytes + 2) / 3 * 4 + HistoryClientJson.MaxRequestChars)
+            throw new McpToolException("History import request exceeds its byte/metadata limits.");
         if (!args.TryGetProperty("action", out var actionValue) || actionValue.ValueKind != JsonValueKind.String)
             throw new McpToolException("History action is required and must be a string.");
         var action = actionValue.GetString()!;
@@ -47,6 +55,7 @@ internal static class HistoryTool
             foreach (var property in args.EnumerateObject())
             {
                 if (property.Name is "sessionId" or "action") continue;
+                if (importing && property.Name == "archiveB64") continue;
                 if (property.Name is "schemaVersion" or "documentId" or "operation")
                     throw new McpToolException("History identity and schema are assigned by the session capability, not caller arguments.");
                 property.WriteTo(writer);
@@ -79,6 +88,13 @@ internal static class HistoryTool
         // The existing session gate covers capture + publication. No session/source-file mutation
         // occurs, including restore: it appends history only and leaves open local work untouched.
         var captured = action == "create" ? DocxSessionOps.Save(session.Handle, persistAnchorIds: false) : null;
+        if (importing)
+        {
+            var encoded = args.GetProperty("archiveB64").GetString() ?? throw new McpToolException("Archive bytes are required.");
+            if ((long)encoded.Length > ((long)HistoryClientOps.MaxArchiveBytes + 2) / 3 * 4)
+                throw new McpToolException("Archive exceeds 64 MiB.");
+            captured = Convert.FromBase64String(encoded);
+        }
         return history.InvokeAsync(HistoryClientJson.Write(request), captured).GetAwaiter().GetResult();
     }
 }

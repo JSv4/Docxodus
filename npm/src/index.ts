@@ -68,15 +68,25 @@ import type {
 } from "./types.js";
 
 import { DocxSession, openDocxSession as openDocxSessionImpl } from "./session.js";
-import { DocxHistoryClient, installHistoryStorageImports } from './history.js';
+import { DocxHistoryArchive, DocxHistoryClient, installHistoryStorageImports } from './history.js';
 import type { HistoryStorage } from './history.js';
 export * from './history.js';
+export * from './history-checkpoints.js';
+export * from './history-indexeddb.js';
+export * from './history-controls.js';
 
 /** Open history over host-owned storage after initialize(). No network layer is installed. */
 export function openDocxHistory(storage: HistoryStorage): DocxHistoryClient {
   const bridge = ensureInitialized().HistoryBridge;
   if (!bridge) throw new Error('This WASM build does not include history bindings.');
   return new DocxHistoryClient(bridge, storage);
+}
+
+/** Open a self-contained readonly .docxhistory file after initialize(); no storage adapter needed. */
+export function openDocxHistoryArchive(bytes: Uint8Array): Promise<DocxHistoryArchive> {
+  const bridge = ensureInitialized().HistoryBridge;
+  if (!bridge) throw new Error('This WASM build does not include history bindings.');
+  return DocxHistoryArchive.open(bridge, bytes);
 }
 
 export { DocxSession } from "./session.js";
@@ -506,7 +516,7 @@ async function yieldToMain(): Promise<void> {
 function getDefaultWasmBasePath(): string {
   try {
     // import.meta.url gives us the URL of this module
-    // e.g., "https://cdn.jsdelivr.net/npm/docxodus@12.1.0/dist/index.js"
+    // e.g., "https://cdn.jsdelivr.net/npm/docxodus@12.2.0/dist/index.js"
     // or "file:///path/to/node_modules/docxodus/dist/index.js"
     const moduleUrl = import.meta.url;
 

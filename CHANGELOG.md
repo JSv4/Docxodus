@@ -6,6 +6,65 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Durable browser checkpoint commands: `HistoryCheckpoints` persists a complete save/restore
+  request through a host-supplied `HistoryCheckpointJournal` *before* publishing it, so a lost
+  acknowledgement no longer leaves an app unsure whether a checkpoint exists. `retry()` replays
+  the stored request and returns the original result — the exact view the first attempt would
+  have produced — even when another editor has since published a newer version. The journal is
+  insert-only per document: a second tab's `put` returns the request already there rather than
+  replacing it, which is what makes a competing draft fail loudly instead of overwriting a
+  publication whose outcome is still unknown. Only a genuine `StaleHead` (the compare-and-swap
+  provably did not apply) clears a pending request.
+- `mountHistoryControls(container, options)`: an accessible, responsive document-history panel an
+  app mounts beside its own editor. It pages through version metadata, previews or downloads a
+  selected DOCX, compares any two versions as tracked changes, finds a version by time, lists
+  recorded collaboration with its resolved conflicts, and — when given `checkpoints` and a
+  `capture` callback — saves, restores and retries checkpoints. The panel never owns, replaces or
+  closes the host's editor or reader: previews go to a host callback so browsing cannot discard a
+  draft, `destroy()` awaits the command still in flight, and controls that would conflict with a
+  running call are disabled while it runs. Read-only `.docxhistory` archives mount the same panel
+  by omitting `checkpoints`. `historyControlError(error, pending)` is exported separately so a host
+  can render the same plain-language explanations outside the panel.
+- `mountHistoryControls` gained `onCheckpoint(view, action)`, which reports an acknowledged save,
+  restore or retry before the version list reloads. A host uses it to decide whether its open draft
+  is now saved: because a retry can acknowledge a *request captured earlier* — possibly by another
+  tab — only a fresh save whose capture is still the current draft may clear an unsaved-work
+  warning. Recorded collaboration also pages instead of rendering every operation at once, and each
+  entry can expand into its decision detail. `HistoryCheckpoints.open` takes an optional third
+  argument, an already captured view, so an editor opened at an exact version keeps that head
+  paired with the bytes on screen instead of silently adopting the latest.
+- A runnable TypeScript editor example (`npm/examples/history.ts`, built with
+  `npm run build:history-example`) pairing the ribbon editor, IndexedDB checkpoints and the history
+  panel: portable `.docxhistory` files open read-only, importing their embedded identity resumes
+  editing, previews render separately from the draft, and a pending save reopens its captured draft
+  after a reload.
+- `openIndexedDbHistoryStore(name)`: optional browser-local `HistoryStorage` plus a per-document
+  `HistoryCheckpointJournal`, backed by IndexedDB. Head initialization and compare-and-swap share
+  one read/write transaction on the same object store, so independent connections — separate tabs
+  included — serialize against each other; stored bytes are SHA-256 verified against their
+  reference before they are written. Nothing installs it: no storage, autosave or retention policy
+  is created by using the history API, and clearing browser site data removes the store.
+
+### Fixed
+
+- `mountRibbon({ fileActions: false })` threw `Docxodus ribbon: template is missing "save"` on the
+  first `open()`. That option removes the quick group holding New/Open/Save, but opening a document
+  re-enabled the Save button unconditionally, so every host that hides the file actions — precisely
+  the hosts that supply their own persistence — could mount the ribbon and never open anything in
+  it. The rest of the surface already looked its controls up optionally; this was the last
+  unconditional lookup.
+
+## [12.2.0] - 2026-09-07
+
+### Added
+
+- Portable-history client bindings: standalone readonly files and document-scoped controls in
+  npm/Python; optional exact-head initialization for browser storage; session-scoped MCP
+  import/export; [concise frontend API guide](docs/history-controls.md). Reaching the
+  `.docxhistory` reader/writer from the browser adds 46 KB to the WASM wire payload, so the
+  size guardrail in `scripts/build-wasm.sh` moves from 5 MB to 5.25 MB (measured 5154 KB);
+  see [wasm-packaging.md](docs/architecture/wasm-packaging.md) for the measurements and the
+  re-recorded-profile alternative that was rejected.
 - Writable history-file import validates before copying and atomically preserves the original
   head without overwriting local history; document-scoped APIs expose explicit checkpoint/restore.
   `ImportHistoryArchiveAsync(stream, leaveOpen: false)` now disposes the stream it was given even
@@ -33,8 +92,12 @@ All notable changes to this project will be documented in this file.
   derivatives of an original file (`DocumentBuilder.cs`, `PtOpenXmlUtil.cs`, `WmlToHtmlConverter.cs`,
   and the like, plus their like-named tests) keep the Microsoft notice, matching the repository
   `LICENSE`, which has always credited both; everything else now reads
-  `// Copyright (c) John Scrudato IV. All rights reserved.` CLAUDE.md documents the rule and the
-  keep-list so it isn't reintroduced.
+  `// Copyright (c) John Scrudato IV. All rights reserved.` `SourceFileCopyrightTests` asserts the
+  keep-list in both directions, so neither reintroducing the Microsoft header on new source nor
+  stripping it off inherited source can pass CI. StyleCop's `SA1636` — which compared every header
+  against a single configured company name, and so could only ever be right about one of this
+  repository's two copyright holders — is switched off in its favour, taking the build's warning
+  baseline from 187/804 down to 175/671.
 
 - The editor's find bar no longer loses the keyboard the moment a query matches. It re-scanned on
   every keystroke and then *selected* the first hit, and selecting inside a contenteditable block

@@ -14,8 +14,7 @@ using var document = await DocxHistoryArchive.OpenAsync(input);
 var latest = await document.ExportDocxAsync();
 var page = await document.ListVersionsAsync(limit: 25); // newest first; page.Next continues
 var selected = await document.ExportDocxAsync(page.Versions[0].Id);
-var diff = await document.CompareVersionsAsync(beforeId, afterId, diffSettings);
-var redline = diff.ToRedline().DocumentByteArray;
+var redline = await document.CompareVersionsToDocxAsync(beforeId, afterId, diffSettings);
 ```
 
 For ordinary editing, bind a stable ID to host-owned stores. A new DOCX initializes
@@ -51,7 +50,9 @@ immutable blobs; host retention owns cleanup. Retry the same file after uncertai
 
 `DocumentId`, `View`, and `Info.Head` identify the pinned document/version. The reader
 also supports sequence/time lookup, replay, updates, and preserved operation proposals.
-Comparison uses existing DocxDiff settings, including its input-revision policy.
+`CompareVersionsToDocxAsync` uses the existing DocxCompare product revision policy,
+matching client `compareVersions`. The older `CompareVersionsAsync` returns a richer
+raw DocxDiff comparison with caller-controlled policy; that API remains unchanged.
 
 Await active calls before disposal. Stream input must be readable, seekable, and unchanged
 until disposal; it is left open by default (`leaveOpen: false` transfers ownership).

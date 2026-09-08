@@ -137,11 +137,12 @@ echo "Total WASM directory size:"
 du -sh "$WASM_DIST"
 
 # Wire-size budget gate. The brotli total is what a negotiation-capable host actually
-# sends to boot the runtime. Budget 5.0 MB (measured ~4.8 MB: ~3.6 MB of trimmed IL and
-# runtime plus ~1.2 MB of profile-guided AOT code) — if this trips, something re-rooted
-# an assembly, a dependency grew, or a re-recorded AOT profile got much wider; see
+# sends to boot the runtime. Budget 5.25 MB (measured ~5.03 MB: ~3.6 MB of trimmed IL and
+# runtime plus ~1.2 MB of profile-guided AOT code, and the portable-history archive reader
+# the browser bindings now reach) — if this trips, something re-rooted an assembly, a
+# dependency grew, or a re-recorded AOT profile got much wider; see
 # docs/architecture/wasm-packaging.md before raising it.
-WIRE_BUDGET_BYTES=$((5 * 1024 * 1024))
+WIRE_BUDGET_BYTES=$((5376 * 1024))
 WIRE_BYTES=$(cat "$WASM_DIST/_framework/.wire-size")
 rm -f "$WASM_DIST/_framework/.wire-size"
 echo ""

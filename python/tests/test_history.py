@@ -8,13 +8,81 @@ import pytest
 from docx_scalpel import (
     DocxHistoryError, DocxVersionMetadata, HistoryBlobReference, HistoryHead,
     VerificationDigest, convert_docx_to_html, docx_diff_compare_products,
-    generate_package_manifest, open_history, open_session, shutdown_host,
+    generate_package_manifest, open_history, open_history_archive, open_session, shutdown_host,
 )
 from docx_scalpel.errors import DocxodusTransportError
 
 
 def metadata(hour: int = 12) -> DocxVersionMetadata:
     return DocxVersionMetadata("python-actor", f"2026-01-01T{hour:02}:00:00Z", application_metadata={"matter": "123"})
+
+
+@pytest.mark.parametrize("name", ["agreement", "charter-collaboration"])
+def test_real_portable_files_drive_readonly_and_writable_controls_after_process_restart(tmp_path, test_files_dir, name):
+    root = test_files_dir / "HistoryArchive"
+    source = (root / f"{name}.docxhistory").read_bytes()
+    with open_history_archive(source) as reader:
+        info = reader.info
+        assert not hasattr(reader, "create_version") and not hasattr(reader, "restore_version")
+        page = reader.list_versions(limit=100)
+        first = page.versions[-1]
+        expected = (root / f"{name}-v1.docx").read_bytes()
+        assert reader.export_docx(first.id) == expected
+        if name == "charter-collaboration":
+            operations = reader.read_operations_since(None)
+            conflict = next(op for op in operations.operations if op.record.status == "conflict")
+            assert reader.get_operation(conflict.id) == conflict
+            assert reader.export_operation_proposal(conflict.id) == (root / f"{name}-conflicting-proposal.docx").read_bytes()
+            assert any(op.input.request.resolves == conflict.id and op.record.status == "accepted" for op in operations.operations)
+            assert reader.read_operations_since(operations.view.head).operations == ()
+        else:
+            redline = reader.compare_versions(first.id, page.versions[-2].id)
+            (tmp_path / "arbitrary-comparison.docx").write_bytes(redline)
+            with open_session(redline) as compared:
+                assert compared.project().markdown
+        with pytest.raises(DocxHistoryError) as readonly:
+            reader._client.create_version(info.document_id, None, expected, metadata())
+        assert readonly.value.code == "ReadOnly"  # Enforced beneath the wrapper too.
+    with pytest.raises(DocxHistoryError) as closed:
+        reader.read()
+    assert closed.value.code == "Closed"
+    with open_history(tmp_path / "store") as history:
+        imported = history.import_history_archive(source)
+        assert imported.archive == info and not imported.already_present
+        assert history.import_history_archive(source).already_present
+    shutdown_host()
+    with open_history(tmp_path / "store") as history:
+        doc = history.document(info.document_id)
+        with pytest.raises(AttributeError):
+            doc.document_id = "other"
+        assert doc.document_id == info.document_id
+        assert doc.read().head == info.head
+        if name == "agreement":
+            retry = doc.create_version(None, expected, first.record.metadata, request_id="initial")
+            assert retry.head.revision == 1
+        saved = doc.create_version(info.head, expected, metadata(), request_id="python-checkpoint")
+        assert saved.head.revision == info.head.revision + 1
+        restored = doc.restore_version(saved.head, page.versions[0].id, metadata(13), request_id="python-restore")
+        assert restored.head.revision == saved.head.revision + 1
+        with pytest.raises(DocxHistoryError) as conflict:
+            history.import_history_archive(source)
+        assert conflict.value.code == "ImportConflict"
+        portable = doc.export_history_archive()
+        (tmp_path / "continued.docxhistory").write_bytes(portable)
+        (tmp_path / "latest.docx").write_bytes(doc.export_docx())
+    shutdown_host()
+    with open_history_archive((tmp_path / "continued.docxhistory").read_bytes()) as reader:
+        assert reader.read().head == restored.head
+        assert reader.export_docx() == (tmp_path / "latest.docx").read_bytes()
+        with open_session(reader.export_docx()) as session:
+            assert session.project().markdown
+    assert (root / f"{name}.docxhistory").read_bytes() == source
+
+
+def test_malformed_portable_file_has_typed_error():
+    with pytest.raises(DocxHistoryError) as error:
+        open_history_archive(b"not a ZIP")
+    assert error.value.code == "InvalidManifest"
 
 
 def test_durable_request_ids_survive_process_restart_and_return_original_results(tmp_path, tour_plan_bytes):

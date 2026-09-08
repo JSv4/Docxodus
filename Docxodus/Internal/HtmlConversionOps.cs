@@ -15,7 +15,7 @@ namespace Docxodus.Internal;
 /// CommentRenderMode -1=disabled,0=Endnote,1=Inline,2=Margin;
 /// PaginationMode 0=None,1=Paginated; AnnotationLabelMode 0=Above,1=Inline,2=Tooltip,3=None.
 /// </summary>
-internal sealed class HtmlConversionOptions
+internal sealed record HtmlConversionOptions
 {
     public string PageTitle { get; init; } = "Document";
     public string CssClassPrefix { get; init; } = "docx-";
@@ -577,7 +577,32 @@ internal static class HtmlConversionOps
             blockSettings.StampPageNumberFields = true;
         }
 
-        var htmlElement = WmlToHtmlConverter.ConvertToHtml(renderDoc, blockSettings);
+        // Dense pictures repeat the same formatting while every character changes.
+        // Cache only the compact formatting conversion, keyed by ALL options and
+        // the complete shell body (including spacing context on either side).
+        // The shell's lifetime already follows styles, settings, fonts and comments.
+        // Restrict neighbors to plain text: an image relationship or a field can
+        // change its rendered value without changing the body's XML.
+        var cacheable = denseText.Count == 1 && targets.Count == 1 && !options.StampAnchors
+            && bodyContent.All(p => p.Name == W.p && p.Descendants().All(e =>
+                e.Name == W.pPr || e.Name == W.spacing || e.Name == W.shd || e.Name == W.r
+                || e.Name == W.rPr || e.Name == W.rFonts || e.Name == W.sz || e.Name == W.szCs
+                || e.Name == W.color || e.Name == W.b || e.Name == W.bCs || e.Name == W.t || e.Name == W.br));
+        var templateKey = cacheable
+            ? renderMain.GetXDocument().ToString(SaveOptions.DisableFormatting) : null;
+        XElement htmlElement;
+        if (templateKey is not null && session.DenseTextRenderTemplates.TryGetValue((options, templateKey), out var cached))
+            htmlElement = new XElement(cached);
+        else
+        {
+            htmlElement = WmlToHtmlConverter.ConvertToHtml(renderDoc, blockSettings);
+            if (templateKey is not null)
+            {
+                // Bound retained templates even when a host keeps changing formats.
+                if (session.DenseTextRenderTemplates.Count >= 8) session.DenseTextRenderTemplates.Clear();
+                session.DenseTextRenderTemplates[(options, templateKey)] = new XElement(htmlElement);
+            }
+        }
         foreach (var e in htmlElement.Descendants())
         {
             var u = (string?)e.Attribute("data-anchor");
