@@ -1,7 +1,7 @@
 # GitHub Pages demo
 
 Six static pages, no application server. All host the **same** editor
-surface — `createRibbonEditor` from the pinned `docxodus@12.2.0` embed bundle on
+surface — `createRibbonEditor` from the pinned `docxodus@12.3.0` embed bundle on
 jsDelivr — and differ only in how much of the page belongs to the editor:
 
 | Page | What it is |
@@ -95,11 +95,11 @@ abbreviated. Native tests compare incremental output with a full saved-document
 render, and browser tests verify same-frame toggles, save/reopen, copy/paste of
 an undo-scrubbed frame, gameplay input, and phone layout.
 
-**Release status:** the static pages still pin `docxodus@12.2.0`. These captures
-use the locally built `?engine=./embed.bundle.js`, which includes the new general
-renderer improvements and authored character spacing. Publish a library release
-and update the shared demo pin before expecting the same ASCII geometry and
-throughput from the default CDN-backed page.
+**Release status:** the static pages pin `docxodus@12.3.0`, which includes the
+renderer improvements used by these captures. The default CDN-backed pages now
+use the released engine; the captures themselves were recorded with the locally
+built `?engine=./embed.bundle.js`. Throughput depends on the browser and device;
+see the measurements above.
 
 To reproduce the original DOOM capture (from `npm/`):
 
@@ -370,8 +370,8 @@ is left behind, if the version drops below the arcade's
 serve it yet. That guard exists because a stale pin is invisible to the browser
 specs: every one of them overrides `?engine=` to the locally built bundle.
 
-1. Publish `docxodus@12.2.0` and confirm
-   `https://cdn.jsdelivr.net/npm/docxodus@12.2.0/dist/embed.bundle.js` returns JavaScript.
+1. Publish `docxodus@12.3.0` and confirm
+   `https://cdn.jsdelivr.net/npm/docxodus@12.3.0/dist/embed.bundle.js` returns JavaScript.
 2. In GitHub **Settings → Pages**, choose **GitHub Actions** as the publishing source.
    The `Deploy static demo to GitHub Pages` workflow uploads `/docs` without
    running Jekyll.
