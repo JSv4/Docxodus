@@ -107,11 +107,11 @@ abbreviated. Native tests compare incremental output with a full saved-document
 render, and browser tests verify same-frame toggles, save/reopen, copy/paste of
 an undo-scrubbed frame, gameplay input, and phone layout.
 
-**Release status:** the static pages pin `docxodus@12.3.0`, which includes the
-renderer improvements used by these captures. The default CDN-backed pages now
-use the released engine; the captures themselves were recorded with the locally
-built `?engine=./embed.bundle.js`. Throughput depends on the browser and device;
-see the measurements above.
+The demo site builds its engine alongside these pages, including the renderer
+improvements used by these captures. The captures were recorded with the locally
+built `?engine=./embed.bundle.js`, which is now the default engine. Consumer-facing
+CDN snippets remain pinned to a published package. Throughput depends on the
+browser and device; see the measurements above.
 
 To reproduce the original DOOM capture (from `npm/`):
 
