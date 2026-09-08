@@ -126,4 +126,87 @@ test.describe('Editor — page geometry on a wide window', () => {
     await setHeroFontSize(page, 66);
     expect(await overflowingBoxes(page)).toEqual([]);
   });
+
+  for (const bands of [false, true]) {
+    test(`zoom scales the paper with its contents (header/footer bands ${bands ? 'on' : 'off'})`, async ({ page }) => {
+      await openDemo(page);
+      if (bands) {
+        await page.locator('.dxr-tab[data-tab="layout"]').click();
+        await page.locator('[data-dxr="headerfooter"]').check();
+      }
+      await page.locator('.dxr-tab[data-tab="view"]').click();
+
+      const measure = () => page.evaluate(() => {
+        const surface = document.querySelector<HTMLElement>('[data-dxr-surface]')!;
+        const sheet = surface.querySelector<HTMLElement>('.docx-body-flow')!;
+        const section = sheet.querySelector<HTMLElement>('[data-section-index]')!;
+        const table = sheet.querySelector<HTMLElement>('table')!;
+        const scroll = surface.closest<HTMLElement>('.dxr-scroll')!;
+        const rect = (el: HTMLElement) => {
+          const { left, right, width } = el.getBoundingClientRect();
+          return { left, right, width };
+        };
+        return {
+          pageWidth: Number(section.dataset.pageWidth) * 96 / 72,
+          sheet: rect(sheet),
+          table: rect(table),
+          bands: Array.from(surface.querySelectorAll<HTMLElement>('.docx-hf-band'), rect),
+          scrollWidth: scroll.scrollWidth,
+          viewportWidth: scroll.clientWidth,
+          chromeWidth: surface.closest('.dxr')!.getBoundingClientRect().width,
+        };
+      });
+
+      const original = await measure();
+      // Require real page geometry and a substantial cover table: an empty document or
+      // a zoom control that does nothing must not satisfy this regression guard.
+      expect(original.pageWidth).toBeGreaterThan(700);
+      expect(original.table.width).toBeGreaterThan(500);
+      expect(original.bands).toHaveLength(bands ? 2 : 0);
+
+      for (const [control, scale] of [['zoom', 2], ['zoomlevel', 0.5], ['zoom', 1]] as const) {
+        await page.locator(`[data-dxr="${control}"]`).selectOption(String(scale));
+        await expect(page.locator('[data-dxr="zoom"]')).toHaveValue(String(scale));
+        await expect(page.locator('[data-dxr="zoomlevel"]')).toHaveValue(String(scale));
+        const current = await measure();
+        expect(Math.abs(current.sheet.width - original.pageWidth * scale)).toBeLessThan(1);
+        expect(Math.abs(current.table.width - original.table.width * scale)).toBeLessThan(1);
+        expect(current.table.left).toBeGreaterThanOrEqual(current.sheet.left);
+        expect(current.table.right).toBeLessThanOrEqual(current.sheet.right + 1);
+        expect(current.chromeWidth).toBe(original.chromeWidth);
+        expect(await overflowingBoxes(page)).toEqual([]);
+        for (const band of current.bands) {
+          expect(Math.abs(band.left - current.sheet.left)).toBeLessThan(1);
+          expect(Math.abs(band.right - current.sheet.right)).toBeLessThan(1);
+        }
+        if (scale === 2) {
+          expect(current.sheet.width).toBeGreaterThan(current.viewportWidth);
+          expect(current.scrollWidth).toBeGreaterThan(current.viewportWidth);
+          // The enlarged paper must be reachable by scrolling within the editor.
+          const reached = await page.evaluate(() => {
+            const scroll = document.querySelector<HTMLElement>('.dxr-scroll')!;
+            scroll.scrollLeft = scroll.scrollWidth;
+            const sheet = scroll.querySelector('.docx-body-flow')!.getBoundingClientRect();
+            const viewport = scroll.getBoundingClientRect();
+            const result = { offset: scroll.scrollLeft, right: sheet.right, limit: viewport.right };
+            scroll.scrollLeft = 0;
+            return result;
+          });
+          expect(reached.offset).toBeGreaterThan(0);
+          expect(reached.right).toBeLessThanOrEqual(reached.limit + 1);
+        }
+      }
+
+      // Remounting between views must preserve the same zoomed paper geometry.
+      await page.locator('[data-dxr="zoom"]').selectOption('2');
+      await page.locator('[data-dxr="viewpage"]').click();
+      const firstPage = await page.locator('.page-box').first().boundingBox();
+      expect(firstPage).not.toBeNull();
+      expect(Math.abs(firstPage!.width - original.pageWidth * 2)).toBeLessThan(1);
+      await page.locator('[data-dxr="viewweb"]').click();
+      expect(Math.abs((await measure()).sheet.width - original.pageWidth * 2)).toBeLessThan(1);
+      await page.locator('[data-dxr="zoomfit"]').click();
+      expect(Math.abs((await measure()).sheet.width - original.pageWidth)).toBeLessThan(1);
+    });
+  }
 });
