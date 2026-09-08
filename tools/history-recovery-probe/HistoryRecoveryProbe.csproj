@@ -7,6 +7,5 @@
     <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
-  <ItemGroup>
-    <PackageReference Include="SkiaSharp" Version="4.151.2" /><ProjectReference Include="../../Docxodus/Docxodus.csproj" /></ItemGroup>
+  <ItemGroup><ProjectReference Include="../../Docxodus/Docxodus.csproj" /></ItemGroup>
 </Project>
