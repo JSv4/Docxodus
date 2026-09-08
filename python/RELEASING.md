@@ -42,7 +42,7 @@ After the first successful publish, the "pending" publisher becomes a regular tr
 
 | Tag pattern | Workflow | Publishes |
 |---|---|---|
-| `v*` (e.g. `v1.2.3`) | `publish.yml` | NuGet (Docxodus + redline + docx2html + docx2oc) + npm (`docxodus`) + GitHub Release binaries |
+| `v*` (e.g. `v1.2.3`) | `publish.yml` | NuGet (Docxodus + redline + docx2html + docx2oc) + staged npm (`docxodus`, `@docxodus/export`; [separate 2FA approval](../docs/npm-releases.md)) + GitHub Release binaries |
 | `docx-scalpel-v*` (e.g. `docx-scalpel-v0.1.0a1`) | `python-publish.yml` | PyPI (`docx-scalpel`) |
 
 The two tag namespaces are independent. A docx-scalpel point-release doesn't drag Docxodus core through a version bump, and a Docxodus core release doesn't force unrelated PyPI churn. Each docx-scalpel wheel bundles a `docxodus-pyhost` built from the same commit the tag points to, so there's no runtime version-pinning between the two distributions.
