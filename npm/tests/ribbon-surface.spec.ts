@@ -44,6 +44,66 @@ test.describe('ribbon surface', () => {
     await expect(page.locator('#railOp')).toContainText(/^bold \d/);
   });
 
+  test('successful and failed opens preserve the host surface and its listeners', async ({ page }) => {
+    await openEditorHost(page);
+
+    const result = await page.evaluate(() => {
+      const ribbon = (window as any).__ribbon;
+      const surface = ribbon.surface as HTMLElement;
+      const original = ribbon.editor;
+      const originalHandle = original.sessionHandle;
+      const valid = original.save();
+      let hostClicks = 0;
+      surface.addEventListener('click', () => hostClicks++);
+
+      ribbon.open(valid, 'replacement.docx');
+      const successful = {
+        sameSurface: ribbon.surface === surface,
+        sameEditorRoot: ribbon.editor.root === surface,
+        changedSession: ribbon.editor.sessionHandle !== originalHandle,
+      };
+      ribbon.surface.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+      const replacement = ribbon.editor;
+      const replacementHandle = replacement.sessionHandle;
+      const block = ribbon.surface.querySelector('[data-anchor][contenteditable="true"]') as HTMLElement;
+      const beforeEdit = block.textContent;
+      block.focus();
+      block.textContent = 'Undo survives a rejected open';
+      block.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
+      block.blur();
+      let failure = '';
+      try { ribbon.open(new Uint8Array([1, 2, 3]), 'broken.docx'); }
+      catch (error) { failure = String(error); }
+      ribbon.surface.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      ribbon.editor.undo();
+
+      return {
+        successful,
+        hostClicks,
+        failure,
+        failedSameSurface: ribbon.surface === surface,
+        failedSameEditor: ribbon.editor === replacement,
+        failedSameSession: ribbon.editor.sessionHandle === replacementHandle,
+        draftStillSaves: ribbon.editor.save().length > 3,
+        undoPreserved: ribbon.surface.querySelector('[data-anchor][contenteditable="true"]')?.textContent === beforeEdit,
+      };
+    });
+
+    expect(result.successful).toEqual({
+      sameSurface: true,
+      sameEditorRoot: true,
+      changedSession: true,
+    });
+    expect(result.hostClicks).toBe(2);
+    expect(result.failure).not.toBe('');
+    expect(result.failedSameSurface).toBe(true);
+    expect(result.failedSameEditor).toBe(true);
+    expect(result.failedSameSession).toBe(true);
+    expect(result.draftStillSaves).toBe(true);
+    expect(result.undoPreserved).toBe(true);
+  });
+
   test('density is measured from the container, not the viewport', async ({ page }) => {
     await openEditorHost(page);
     await expect(page.locator('.dxr')).toHaveAttribute('data-chrome', 'full');

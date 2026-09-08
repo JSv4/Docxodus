@@ -314,7 +314,7 @@ export function mountRibbon(
 
 class RibbonSurface implements RibbonEditor {
   readonly element: HTMLElement;
-  surface: HTMLElement;
+  readonly surface: HTMLElement;
   readonly loader: RibbonLoader;
   readonly history: RibbonHistory | null;
 
@@ -687,7 +687,9 @@ class RibbonSurface implements RibbonEditor {
       commentAuthor: this.author,
     });
     this.live?.close();
-    this.surface.replaceWith(candidateSurface); this.surface = candidateSurface; this.live = candidate;
+    candidate.adoptContainer(this.surface);
+    this.surface.dataset.view = paginated ? "paginated" : "continuous";
+    this.live = candidate;
     if (name) this.documentName = name;
     this.require('docname').textContent = this.documentName;
     this.closeFindBar();

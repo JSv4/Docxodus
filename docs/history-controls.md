@@ -66,6 +66,11 @@ read-only first; **Continue editing this document** imports their embedded ident
 Conflicting imports and malformed uploads leave the open document and its undo stack intact.
 Ordinary DOCX downloads continue to exclude external version history.
 
+`HistoryCheckpoints.pendingRequest` returns a cloned snapshot of an uncertain save or restore.
+On retry, `onCheckpoint` receives that original request as its third argument while retaining
+the `retry` action. Restore retries ask again before replacing newer edits; recovery of another
+tab's save leaves the current draft marked unsaved when its bytes differ.
+
 `mountRibbon` hosts can supply a `RibbonHistoryBinding` with initialized `openHistory`,
 `openArchive` and `preview` services; `createRibbonEditor` wires these services automatically.
 Use the same module's `installHistoryStorageImports` when booting WASM yourself.

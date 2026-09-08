@@ -1135,7 +1135,7 @@ function completeArgs(
 
 export class DocxEditor {
   private readonly exports: DocxEditorExports;
-  private readonly container: HTMLElement;
+  private container: HTMLElement;
   private readonly handle: number;
   private readonly options: Required<
     Omit<DocxEditorOptions, "onEdit" | "onMove" | "onStoryChange" | "onCommentsChange">
@@ -1532,6 +1532,25 @@ export class DocxEditor {
   /** The editor's current DOM (for inspection/tests). */
   get root(): HTMLElement {
     return this.container;
+  }
+
+  /**
+   * Move a fully rendered candidate into the host's stable public surface.
+   * Internal editor chrome that binds directly to the container is recreated there;
+   * document blocks and their listeners move with the DOM nodes.
+   */
+  adoptContainer(container: HTMLElement): void {
+    this.assertOpen();
+    if (container === this.container) return;
+    this.teardownBlockDrag();
+    this.gutter?.dispose();
+    this.gutter = null;
+    const previous = this.container;
+    container.replaceChildren(...Array.from(previous.childNodes));
+    this.container = container;
+    this.viewport.adoptHost(container);
+    this.setupBlockDrag();
+    if (this.options.comments) this.createGutter();
   }
 
   /**

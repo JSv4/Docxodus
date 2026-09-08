@@ -1,10 +1,10 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page, type Dialog } from '@playwright/test';
 
 // Exercise the deployable site itself. No source bundling, request interception or engine override.
 const APP = 'http://localhost:8084/demo/app.html';
 const agreement = '../TestFiles/HistoryArchive/agreement-v1.docx';
 async function ready(page: Page) {
-  await expect(page.locator('.dxr')).toHaveAttribute('data-state', 'ready');
+  await expect(page.locator('.dxr')).toHaveAttribute('data-state', 'ready', { timeout: 45000 });
   await expect(page.locator('[data-dxr="loader"]')).toBeHidden();
 }
 async function history(page: Page) {
@@ -20,6 +20,28 @@ async function save(page: Page, label: string) {
   await page.getByLabel('Version name (optional)').fill(label);
   await page.getByRole('button', { name: 'Save version', exact: true }).click();
   await expect(page.locator('.dx-history [role="status"]')).toContainText('Version saved');
+}
+
+// Publish successfully, but leave the durable request behind as if the IDB acknowledgement was lost.
+async function loseNextJournalAcknowledgement(page: Page) {
+  await page.evaluate(() => {
+    const journal = (window as any).__ribbon.history.draft.checkpoints.journal;
+    const remove = journal.remove.bind(journal);
+    journal.remove = async (_id: string) => {
+      journal.remove = remove;
+      throw new Error('Lost journal acknowledgement');
+    };
+  });
+}
+async function reopenPending(page: Page) {
+  const accept = (dialog: Dialog) => { void dialog.accept(); };
+  page.on('dialog', accept);
+  try { await page.reload(); await ready(page); }
+  finally { page.off('dialog', accept); }
+}
+async function pendingHistory(page: Page) {
+  await page.getByRole('button', { name: 'Version history', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Retry save', exact: true })).toBeEnabled();
 }
 
 test.beforeEach(async ({ page }) => { await page.goto(APP); await ready(page); });
@@ -170,4 +192,74 @@ test('a document started blank also reopens its saved version after reload', asy
   await expect(page.locator('[data-dxr="editor"]')).toContainText('A fresh document worth keeping');
   await history(page);
   await expect(page.getByLabel('Version', { exact: true }).locator('option')).toHaveCount(1);
+});
+
+for (const reload of [false, true]) {
+  test(`a recovered save clears unsaved warnings${reload ? ' after reload' : ''}`, async ({ page }) => {
+    await openAgreement(page); await history(page);
+    await loseNextJournalAcknowledgement(page);
+    await page.getByRole('button', { name: 'Save version', exact: true }).click();
+    await expect(page.locator('.dx-history [role="status"]')).toContainText('could not be confirmed');
+    await closeHistory(page);
+    if (reload) await reopenPending(page);
+    await pendingHistory(page);
+    await page.getByRole('button', { name: 'Retry save', exact: true }).click();
+    await expect(page.locator('.dx-history [role="status"]')).toContainText('Saved version recovered');
+    await closeHistory(page);
+    // An unexpected unsaved-change prompt would cancel New and leave the agreement open.
+    await page.getByRole('button', { name: 'New', exact: true }).click();
+    await expect(page.locator('[data-dxr="docname"]')).toHaveText('Untitled.docx');
+  });
+
+  test(`a recovered restore confirms newer edits and installs its original target${reload ? ' after reload' : ''}`, async ({ page }) => {
+    await openAgreement(page); await history(page); await save(page, 'Original'); await closeHistory(page);
+    const block = page.locator('[data-dxr="editor"] [contenteditable="true"][data-anchor]').first();
+    await block.click(); await page.keyboard.press('End'); await block.pressSequentially(' Terms reviewed');
+    await history(page); await save(page, 'Reviewed');
+    await page.getByLabel('Version', { exact: true }).selectOption('1');
+    await loseNextJournalAcknowledgement(page);
+    page.once('dialog', dialog => void dialog.accept());
+    await page.getByRole('button', { name: 'Restore selected' }).click();
+    await expect(page.locator('.dx-history [role="status"]')).toContainText('could not be confirmed');
+    await expect(page.locator('[data-dxr="editor"]')).toContainText('Terms reviewed');
+    await closeHistory(page);
+    if (reload) await reopenPending(page);
+    await block.click(); await page.keyboard.press('End'); await block.pressSequentially(' After failure');
+    await pendingHistory(page);
+    // Changing the selection cannot change the durable restore target.
+    await page.getByLabel('Version', { exact: true }).selectOption('0');
+    page.once('dialog', dialog => { expect(dialog.message()).toContain('unsaved changes'); void dialog.dismiss(); });
+    await page.getByRole('button', { name: 'Retry save', exact: true }).click();
+    await expect(page.locator('.dx-history [role="status"]')).toContainText('Restore retry canceled');
+    await expect(page.locator('[data-dxr="editor"]')).toContainText('After failure');
+    await expect(page.getByRole('button', { name: 'Retry save', exact: true })).toBeEnabled();
+    page.once('dialog', dialog => void dialog.accept());
+    await page.getByRole('button', { name: 'Retry save', exact: true }).click();
+    await expect(page.locator('.dx-history [role="status"]')).toContainText('Version restored');
+    await expect(page.getByLabel('Version', { exact: true }).locator('option')).toHaveCount(3);
+    await expect(page.locator('[data-dxr="editor"]')).not.toContainText(/Terms reviewed|After failure/);
+  });
+}
+
+test('recovering another tab’s pending save never marks this tab’s different draft as saved', async ({ page, context }) => {
+  await openAgreement(page); await history(page); await save(page, 'Initial'); await closeHistory(page);
+  const other = await context.newPage(); await other.goto(APP); await ready(other);
+  const block = (p: Page) => p.locator('[data-dxr="editor"] [contenteditable="true"][data-anchor]').first();
+  await block(page).fill('Saved in the first tab');
+  await history(page); await loseNextJournalAcknowledgement(page);
+  await page.getByRole('button', { name: 'Save version', exact: true }).click();
+  await expect(page.locator('.dx-history [role="status"]')).toContainText('could not be confirmed');
+  await block(other).fill('Unsaved in the second tab');
+  await history(other);
+  await other.getByRole('button', { name: 'Save version', exact: true }).click();
+  await expect(other.locator('.dx-history [role="status"]')).toContainText('could not be confirmed');
+  await other.getByRole('button', { name: 'Retry save', exact: true }).click();
+  await expect(other.locator('.dx-history [role="status"]')).toContainText('Saved version recovered');
+  await closeHistory(other);
+  const warned = other.waitForEvent('dialog');
+  const create = other.getByRole('button', { name: 'New', exact: true }).click();
+  const dialog = await warned; expect(dialog.message()).toContain('unsaved changes');
+  await dialog.dismiss(); await create;
+  await expect(block(other)).toContainText('Unsaved in the second tab');
+  await other.close();
 });

@@ -1,6 +1,6 @@
 import { DocxHistoryError } from './history.js';
 import type { DocxHistoryReader, DocxHistoryView, DocxStoredOperation, DocxStoredVersion, HistoryBlobReference } from './history.js';
-import type { HistoryCheckpoints } from './history-checkpoints.js';
+import type { HistoryCheckpoints, HistoryCheckpointRequest } from './history-checkpoints.js';
 
 export interface HistoryControlsOptions {
   reader: DocxHistoryReader;
@@ -14,8 +14,8 @@ export interface HistoryControlsOptions {
   preview: (bytes: Uint8Array, title: string) => void | Promise<void>;
   /** Defaults to a browser download. */
   download?: (bytes: Uint8Array, filename: string) => void | Promise<void>;
-  /** Called after an acknowledged checkpoint, before the list refreshes. Retries may return an older view. */
-  onCheckpoint?: (view: DocxHistoryView, action: 'save' | 'restore' | 'retry') => void | Promise<void>;
+  /** Called after acknowledgement. A retry includes its original request and may return an older view. */
+  onCheckpoint?: (view: DocxHistoryView, action: 'save' | 'restore' | 'retry', retriedRequest?: HistoryCheckpointRequest) => void | Promise<void>;
   /** Hosts that replace the draft on restore provide a matching confirmation and acknowledgement. */
   confirmRestore?: (title: string) => boolean | Promise<boolean>;
   restoreUpdatesDraft?: boolean;
@@ -122,9 +122,19 @@ class HistoryPanel implements HistoryControls {
     if (options.checkpoints) restoreNote.dataset.historyExisting = '';
     restoreNote.textContent = options.restoreUpdatesDraft ? 'Restore returns your document to this version and keeps every saved version.' : 'Restore creates a new saved version. Preview latest to view it; your draft stays open.'; this.fieldset.append(restoreNote);
     this.button('retry', 'Retry save', async () => {
+      const request = options.checkpoints!.pendingRequest;
+      if (request?.kind === 'restore' && options.confirmRestore) {
+        const target = await options.reader.getVersion(request.target);
+        if (!await options.confirmRestore(versionTitle(target))) {
+          this.status.textContent = 'Restore retry canceled. Your draft is unchanged; the saved action still needs recovery.';
+          return;
+        }
+      }
       const view = await options.checkpoints!.retry();
-      await options.onCheckpoint?.(view, 'retry'); await this.load(false);
-      this.status.textContent = 'Saved version recovered. Your draft remains open. Refresh history to check for newer versions.';
+      await options.onCheckpoint?.(view, 'retry', request ?? undefined); await this.load(false);
+      this.status.textContent = request?.kind === 'restore' && options.restoreUpdatesDraft
+        ? 'Version restored. All saved versions are kept. Refresh history to check for newer versions.'
+        : 'Saved version recovered. Your draft remains open. Refresh history to check for newer versions.';
     });
     const sharing = this.disclosure('Download with history');
     const sharingNote = doc.createElement('p');

@@ -54,6 +54,7 @@ export class RibbonHistory {
   private savedVersion: number | null = null;
   private observedVersion: number | null = null;
   private capturedVersion: number | null = null;
+  private capturedBytes?: Uint8Array;
   private readonly panelObserver: MutationObserver;
 
   constructor(private readonly ribbon: RibbonEditor, private readonly options: RibbonHistoryBinding) {
@@ -221,12 +222,13 @@ export class RibbonHistory {
     await this.ensureStorage();
     const document = this.client!.document(identity.id);
     const checkpoints = await HistoryCheckpoints.open(document, this.store!.journal(identity.id));
-    const pending = await this.store!.journal(identity.id).read();
+    const pending = checkpoints.pendingRequest;
     const view = checkpoints.view;
     if (!view && pending?.kind !== 'save') throw new Error('This saved document is no longer on this device.');
     const bytes = pending?.kind === 'save' ? pending.bytes : await document.exportDocx(view!.version.id);
     this.install(bytes, identity); this.draft = { ...identity, checkpoints };
     this.dirty = pending?.kind === 'save';
+    if (pending?.kind === 'save') this.captureState(pending.bytes);
     await this.closeArchive(); this.remember();
   }
 
@@ -250,16 +252,19 @@ export class RibbonHistory {
       capture: writable ? () => {
         const bytes = this.ribbon.save(); if (!bytes) throw new Error('Open a document first.');
         // Remember the identity before publication, so uncertain saves can recover after reload.
-        this.remember(); this.captured = this.generation; this.capturedVersion = this.ribbon.editor?.version ?? null; return bytes;
+        this.remember(); this.captureState(bytes); return bytes;
       } : undefined,
       confirmRestore: writable ? title => this.confirm(`Restore ${title}?${this.hasUnsavedChanges ? '\n\nYour unsaved changes will be replaced.' : ''}\n\nAll saved versions will be kept.`) : undefined,
-      onCheckpoint: async (view, action) => {
+      onCheckpoint: async (view, action, request) => {
         if (this.destroyed) return;
-        if (action === 'save' && this.captured === this.generation && this.capturedVersion === (this.ribbon.editor?.version ?? null)) {
+        const savedCapture = action === 'save' || (action === 'retry' && request?.kind === 'save'
+          && this.capturedBytes && sameBytes(this.capturedBytes, request.bytes));
+        if (savedCapture && this.captured === this.generation && this.capturedVersion === (this.ribbon.editor?.version ?? null)) {
           this.dirty = false; this.savedVersion = this.capturedVersion;
         }
-        this.captured = -1;
-        if (action === 'restore' && writable) this.install(await current.checkpoints.document.exportDocx(view.version.id), this.identity);
+        this.captured = -1; this.capturedBytes = undefined;
+        if ((action === 'restore' || (action === 'retry' && request?.kind === 'restore')) && writable)
+          this.install(await current.checkpoints.document.exportDocx(view.version.id), this.identity);
         this.remember(); this.updateRecent();
       },
       restoreUpdatesDraft: true,
@@ -342,12 +347,18 @@ export class RibbonHistory {
   }
 
   private confirm(message: string): boolean { return this.dialog.ownerDocument.defaultView?.confirm(message) ?? false; }
+  private captureState(bytes: Uint8Array): void {
+    this.captured = this.generation; this.capturedVersion = this.ribbon.editor?.version ?? null; this.capturedBytes = bytes.slice();
+  }
   private confirmReplace(): boolean { return !this.hasUnsavedChanges || this.confirm('Replace your open document? Save a version or download it first to keep your unsaved changes.'); }
   private explain(error: unknown): string { return historyControlError(error, this.draft?.checkpoints.hasPending); }
   private command(action: () => Promise<void>): void { void this.run(action).catch(() => {}); }
 
   private syncBusy(): void {
     const busy = this.busy;
+    // Closing the drawer while publication runs must not enable edits that a restore would replace.
+    this.ribbon.surface.inert = busy;
+    const chrome = this.ribbon.element.querySelector<HTMLElement>('.dxr-chrome'); if (chrome) chrome.inert = busy;
     this.recent.disabled = this.resumeButton.disabled = this.back.disabled = busy;
     const file = this.ribbon.control<HTMLInputElement>('file'); if (file) file.disabled = busy;
     const create = this.ribbon.control<HTMLButtonElement>('new'); if (create) create.disabled = busy;
@@ -381,6 +392,10 @@ function download(bytes: Uint8Array, name: string, doc: Document): void {
   const url = URL.createObjectURL(new Blob([bytes.slice()], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }));
   const link = doc.createElement('a'); link.href = url; link.download = name; link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 const HISTORY_DRAWER_CSS = `
