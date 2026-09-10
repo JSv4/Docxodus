@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { checkCoreEntry } from './check-core-entry.mjs';
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -88,6 +89,7 @@ try {
   );
 
   console.log(`npm package boundary: ${paths.length} runtime/license files; no demo or test machinery`);
+  await checkCoreEntry(packageRoot, paths, cache);
 } finally {
   rmSync(cache, { recursive: true, force: true });
 }
