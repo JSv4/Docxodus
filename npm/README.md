@@ -275,6 +275,29 @@ function DocumentComparer() {
 }
 ```
 
+## Node.js (ES modules)
+
+Import the engine from `docxodus/core` for server-side conversion, comparison, annotations,
+and document sessions. It loads without a bundler or a custom Node loader:
+
+```js
+import { readFile, writeFile } from 'node:fs/promises';
+import { initialize, convertDocxToHtml, compareDocuments } from 'docxodus/core';
+
+await initialize(); // Finds the WASM runtime included in the installed package.
+const original = await readFile('original.docx');
+const revised = await readFile('revised.docx');
+await writeFile('original.html', await convertDocxToHtml(original));
+await writeFile('redline.docx', await compareDocuments(original, revised));
+```
+
+`docxodus/core` exposes the engine functions, types, enums, annotation helpers, and history
+APIs from `docxodus`, excluding `DocxEditor`, `CommentGutter`, `mountRibbon`, and their editor
+types. The existing `docxodus` entry includes those browser editor APIs and requires a browser
+bundler; use `docxodus/core` in plain Node ESM. Both entries share the same engine state.
+Browser helpers retained in `core`, such as pagination, the document viewport, IndexedDB
+storage, and history controls, still require their browser APIs when called.
+
 ## API Reference
 
 ### Package verification

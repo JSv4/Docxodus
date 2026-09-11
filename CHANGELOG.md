@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Added `docxodus/core`, an engine-only npm entry point for plain Node ESM. It exposes
+  conversion, comparison, annotation, history, and session APIs without importing the
+  browser editor's bundler-only drag-and-drop dependencies. The existing `docxodus`
+  entry retains its browser API and shares the same engine state (#745).
+
 ### Added
 
 - **REDLINE THEATER (`docs/demo/redline.html`) — the agent protocol as the demo.** Three

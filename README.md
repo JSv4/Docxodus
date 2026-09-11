@@ -201,11 +201,14 @@ npm install docxodus
 ```
 
 ```ts
-import { initialize, compareDocuments } from 'docxodus';
+import { initialize, compareDocuments } from 'docxodus/core';
 
 await initialize();
 const redline = await compareDocuments(v1, v2);
 ```
+
+Use `docxodus/core` for the engine in Node or browser code. Browser editor APIs such as
+`DocxEditor` and `mountRibbon` are available from `docxodus`.
 
 </td></tr>
 <tr><th align="left">Python</th><th align="left">CLI</th></tr>

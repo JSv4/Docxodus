@@ -97,7 +97,7 @@ usually ripple through all of it.
 | Stdio host | `tools/python-host/` | NDJSON-over-stdin host (`docxodus-pyhost`) that the `docx-scalpel` pip package subprocesses. |
 | Agent server | `tools/mcp-server/` | JSON-RPC 2.0 / MCP stdio server (`docxodus-mcp`): lifecycle, grouped-intent, and sessionless tools. See `docs/architecture/docx_agent_server.md`. |
 | Python client | `python/` | `docx-scalpel` on PyPI. |
-| npm/TypeScript | `npm/` | Browser package: `src/index.ts` (API), `src/editor.ts` (block editor), `src/ribbon.ts` (shipped UI surface), `src/embed.ts` (CDN entries), `src/react.ts`, worker proxy. |
+| npm/TypeScript | `npm/` | Browser package: `src/core.ts` (engine API), `src/index.ts` (browser barrel), `src/editor.ts` (block editor), `src/ribbon.ts` (shipped UI surface), `src/embed.ts` (CDN entries), `src/react.ts`, worker proxy. |
 | Export package | `npm-export/` | `@docxodus/export` — deterministic standalone HTML + PDF through a pinned Chromium. Has its own `dist/`, tests, and `docxodus doctor` preflight. See `standalone_paginated_export.md`. |
 | Workflow evals | `eval/` + `Docxodus.Tests/Eval/` | Deterministic document-workflow scenarios scored on task completion, target precision, and collateral change. Corpus and contract in `eval/README.md`. |
 | Pages demo | `docs/demo/` | Static pages hosting the **shipped** surface via `createRibbonEditor`. They contain no editor UI of their own — change `npm/src/ribbon.ts`, not these files. |
@@ -124,7 +124,7 @@ and two clients.
 
 Concretely, a new session op touches: `DocxSession.cs` → `DocxSessionOps.cs` →
 `DocxSessionJson.cs` → `wasm/DocxodusWasm/DocxSessionBridge.cs` → `npm/src/types.ts` +
-`npm/src/index.ts` → `tools/python-host/Dispatcher.cs` → `python/src/docx_scalpel/{types,session}.py`
+`npm/src/core.ts` → `tools/python-host/Dispatcher.cs` → `python/src/docx_scalpel/{types,session}.py`
 → `tools/mcp-server/{ToolCatalog,Dispatcher}.cs`.
 
 **The generated-PDF benchmark is a ripple site for PageMap shape.**
