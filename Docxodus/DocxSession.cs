@@ -1544,6 +1544,80 @@ public sealed record RevisionListEntry
     public RevisionDiagnostic? Diagnostic { get; init; }
 }
 
+/// <summary>The explicit repairs the revision registry can perform on markup it refuses to
+/// resolve (issues #754–#758). Ordinary listing, accept and reject never repair.</summary>
+public enum RevisionRepairKind
+{
+    /// <summary>Give every carrier of the entry a fresh document-unique <c>w:id</c>; markers that
+    /// shared one old id keep sharing the new one. For missing, non-numeric, and duplicated ids.</summary>
+    AssignIdentity,
+
+    /// <summary>Move an orphan numbering marker into its paragraph's own <c>w:numPr</c>.</summary>
+    ReattachNumberingChange,
+
+    /// <summary>Move an orphan cell marker into the <c>w:tcPr</c> of its enclosing cell.</summary>
+    ReattachCellMarker,
+
+    /// <summary>Treat orphan deleted text as live text (<c>w:delText</c> → <c>w:t</c>).</summary>
+    RestoreOrphanText,
+
+    /// <summary>Wrap the run holding orphan deleted text in a <c>w:del</c> with caller-supplied
+    /// author and date, making it an ordinary deletion.</summary>
+    WrapOrphanTextAsDeletion,
+}
+
+/// <summary>One repair the registry offers for one listed entry, and whether it can perform it.</summary>
+public sealed record RevisionRepairProposal
+{
+    required public string RevisionId { get; init; }
+    required public RevisionRepairKind Kind { get; init; }
+    required public string PartUri { get; init; }
+    /// <summary>The defect being repaired, as the revision listing reports it.</summary>
+    required public RevisionDiagnostic Diagnostic { get; init; }
+    /// <summary>Every native carrier the repair touches, as QName@element-path keys.</summary>
+    required public IReadOnlyList<string> Carriers { get; init; }
+    required public bool Repairable { get; init; }
+    /// <summary>What the repair does, or why the package's evidence does not permit it.</summary>
+    required public string Reason { get; init; }
+    /// <summary>The request must supply <c>Author</c> and <c>Date</c>.</summary>
+    public bool RequiresAuthorship { get; init; }
+}
+
+/// <summary>One repair to perform: the listed entry, the offered kind, and the review metadata
+/// a kind that fabricates none on its own must be given.</summary>
+public sealed record RevisionRepairRequest
+{
+    required public string RevisionId { get; init; }
+    required public RevisionRepairKind Kind { get; init; }
+    public string? Author { get; init; }
+    public string? Date { get; init; }
+}
+
+/// <summary>One carrier's identity before and after a repair. <see cref="NewId"/> is empty when the
+/// repair moved the carrier without renumbering it.</summary>
+public sealed record RevisionCarrierIdentity(string Carrier, string? OldId, string NewId);
+
+public sealed record RevisionRepairOutcome
+{
+    required public string RevisionId { get; init; }
+    required public RevisionRepairKind Kind { get; init; }
+    required public string PartUri { get; init; }
+    required public IReadOnlyList<RevisionCarrierIdentity> Identities { get; init; }
+}
+
+/// <summary>Result of <see cref="DocxSession.RepairRevisions"/>: atomic, one undo step. The public
+/// ids of repaired entries change (they derive from carrier identity), so re-list afterwards.</summary>
+public sealed record RevisionRepairResult
+{
+    public bool Success { get; init; }
+    public EditError? Error { get; init; }
+    public IReadOnlyList<RevisionRepairOutcome> Repairs { get; init; } = Array.Empty<RevisionRepairOutcome>();
+    public IReadOnlyList<Anchor> Modified { get; init; } = Array.Empty<Anchor>();
+
+    internal static RevisionRepairResult Fail(EditErrorCode code, string message) =>
+        new() { Success = false, Error = new EditError(code, message) };
+}
+
 /// <summary>Summary returned by <see cref="DocxSession.CompactRuns"/>.</summary>
 public sealed record CompactResult
 {
@@ -1970,6 +2044,10 @@ public enum EditErrorCode
 
     /// <summary>The native identity/topology maps to more than one possible operation.</summary>
     RevisionAmbiguous,
+
+    /// <summary>A requested revision repair is not one the registry offers for that entry, is
+    /// not repairable from the package's evidence, or lacks the authorship it requires.</summary>
+    RevisionRepairRejected,
 
     /// <summary>The requested mutation has no reversible native tracked-change encoding.</summary>
     TrackedOperationUnsupported,
@@ -3188,6 +3266,104 @@ public sealed partial class DocxSession : IDisposable
             LastInternalError = ex;
             RollbackFailedOp();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// The explicit repairs the registry offers for entries it refuses to resolve (issues
+    /// #754–#758): which carriers are defective, whether a unique repair exists, and what it
+    /// would do. Read-only; ordinary listing, accept and reject never repair.
+    /// </summary>
+    public IReadOnlyList<RevisionRepairProposal> ListRevisionRepairs()
+    {
+        ThrowIfDisposed();
+        _ = AnchorIndex();
+        return BuildRevisionRegistry().Entries
+            .SelectMany(Internal.RevisionRepairOps.Propose)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Perform requested repairs atomically as one undo step. Each request names a listed entry
+    /// and a kind <see cref="ListRevisionRepairs"/> offered as repairable; anything else, or a
+    /// wrap-as-deletion without author and date, refuses the whole call with
+    /// <see cref="EditErrorCode.RevisionRepairRejected"/> and no mutation. Afterwards the repaired
+    /// carriers must no longer carry their diagnostic, or the call rolls back.
+    /// </summary>
+    public RevisionRepairResult RepairRevisions(IReadOnlyList<RevisionRepairRequest> repairs)
+    {
+        if (_disposed) return RevisionRepairResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (repairs is null || repairs.Count == 0)
+            return RevisionRepairResult.Fail(EditErrorCode.RevisionRepairRejected, "no repairs requested");
+
+        _ = AnchorIndex();
+        var registry = BuildRevisionRegistry();
+        var planned = new List<(Internal.RevisionOps.RevisionGroup Group, RevisionRepairRequest Request)>();
+        foreach (var request in repairs)
+        {
+            var group = registry.Find(request.RevisionId);
+            if (group is null)
+                return RevisionRepairResult.Fail(EditErrorCode.RevisionNotFound,
+                    $"revision not found: {request.RevisionId}");
+            if (planned.Any(p => ReferenceEquals(p.Group, group)))
+                return RevisionRepairResult.Fail(EditErrorCode.RevisionRepairRejected,
+                    $"revision {request.RevisionId} is named more than once");
+            var proposal = Internal.RevisionRepairOps.Propose(group)
+                .FirstOrDefault(candidate => candidate.Kind == request.Kind);
+            if (proposal is null)
+                return RevisionRepairResult.Fail(EditErrorCode.RevisionRepairRejected,
+                    $"revision {request.RevisionId} ({group.Diagnostic?.Code ?? "supported"}) offers no {request.Kind} repair");
+            if (!proposal.Repairable)
+                return RevisionRepairResult.Fail(EditErrorCode.RevisionRepairRejected,
+                    $"revision {request.RevisionId} cannot be repaired by {request.Kind}: {proposal.Reason}");
+            if (proposal.RequiresAuthorship)
+            {
+                if (string.IsNullOrWhiteSpace(request.Author))
+                    return RevisionRepairResult.Fail(EditErrorCode.RevisionRepairRejected,
+                        $"{request.Kind} requires an author; the registry never fabricates review metadata");
+                if (request.Date is null || !Internal.RevisionOps.IsValidRevisionDate(request.Date))
+                    return RevisionRepairResult.Fail(EditErrorCode.RevisionRepairRejected,
+                        $"{request.Kind} requires a canonical XML Schema date-time; got '{request.Date}'");
+            }
+            planned.Add((group, request));
+        }
+
+        var modified = planned.SelectMany(p => RevisionGroupAnchors(p.Group, p.Group.PartUri))
+            .GroupBy(a => a.Id, StringComparer.Ordinal).Select(g => g.First()).ToList();
+        var touchedParts = planned.Select(p => ResolvePart(p.Group.PartUri))
+            .Where(part => part is not null).Distinct().ToList();
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            var outcomes = new List<RevisionRepairOutcome>();
+            foreach (var (group, request) in planned)
+                outcomes.Add(Internal.RevisionRepairOps.Apply(group, request, NextRevisionId));
+            foreach (var part in touchedParts)
+                if (part is NumberingDefinitionsPart) part!.PutXDocument();
+
+            // The repair must have removed the defect it addressed; a carrier still listed under
+            // the same diagnostic means the package was not what the proposal assumed.
+            var after = BuildRevisionRegistry();
+            foreach (var (group, request) in planned)
+            {
+                var carriers = group.Units.Select(u => u.Element).Concat(group.RangeMarkers).ToHashSet();
+                var lingering = after.Entries.FirstOrDefault(entry =>
+                    entry.Diagnostic?.Code == group.Diagnostic?.Code
+                    && entry.Units.Select(u => u.Element).Concat(entry.RangeMarkers).Any(carriers.Contains));
+                if (lingering is not null)
+                    throw new InvalidOperationException(
+                        $"repair {request.Kind} of {request.RevisionId} left {lingering.Diagnostic!.Code} in place");
+            }
+
+            InvalidateProjectionCache();
+            return new RevisionRepairResult { Success = true, Repairs = outcomes, Modified = modified };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            RollbackFailedOp();
+            return RevisionRepairResult.Fail(EditErrorCode.InternalError, ex.Message);
         }
     }
 
