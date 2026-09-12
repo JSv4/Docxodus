@@ -422,23 +422,31 @@ body/header/footer/note part; internal targets are relationship-free `w:anchor` 
 wrap/reference vocabulary, limits, units, and lack of network/file I/O. `list` accepts
 `scope: body|headers|footers|footnotes|endnotes|comments|all` and returns one occurrence per DrawingML
 `a:blip` or VML `v:imagedata`, including owner part, anchor/span, relationship topology, detected
-binary format and dimensions, rendered size, metadata, floating layout, and an explicit
-`canMutate`/`unsupportedReason` decision.
+binary format and dimensions, rendered size, metadata, floating layout, an explicit
+`canMutate`/`unsupportedReason` summary, and an `operations` matrix answering
+`replace`/`embed_linked`/`set_dimensions`/`set_metadata`/`set_floating_layout`/`remove` one by
+one for the session's current tracked-change mode (issue #762).
 
 `insert` takes a paragraph `anchorId`, `characterOffset`, `imageBase64`, and optional placement,
-size, metadata, and floating-layout options. `replace`, `set_dimensions`, `set_metadata`,
-`set_floating_layout`, and `remove` consume the `imageId` returned by insert/list. This JSON tool
-accepts bytes only as base64: it never interprets a URL or local path, and malformed base64 is a
-typed `invalid_image_data` result. Rendered width/height are points; floating offsets and wrap
-distances are exact EMUs. Omitted insert size uses intrinsic pixels at 96 DPI (0.75 point/pixel).
+size, metadata, and floating-layout options. `replace`, `embed_linked`, `set_dimensions`,
+`set_metadata`, `set_floating_layout`, and `remove` consume the `imageId` returned by insert/list.
+This JSON tool accepts bytes only as base64: it never interprets a URL or local path, and
+malformed base64 is a typed `invalid_image_data` result. Rendered width/height are points;
+floating offsets and wrap distances are exact EMUs. Omitted insert size uses intrinsic pixels at
+96 DPI (0.75 point/pixel).
 
-The writable subset is deliberately strict: embedded canonical DrawingML pictures, inline or
-floating with `none`/`square` wrap. PNG, JPEG, GIF, BMP, and TIFF are writable. External linked
-images, legacy VML, WebP, multi-picture/non-canonical DrawingML, unsupported wrap geometry, and
-malformed or content-type-mismatched media stay enumerable but read-only. The Open XML SDK
-version used here has no Word `ImagePartType` for WebP, so advertising WebP insertion would be a
-false capability claim. Image mutations are also rejected under `render_inline` tracked mode
-because OOXML cannot represent them faithfully as this API's tracked revisions. The full core and
+Coverage follows the markup, and `capabilities.markups` publishes the same matrix per family:
+embedded canonical DrawingML pictures take every operation; a linked picture takes
+`embed_linked` (the caller's fetched bytes become an embedded media part) instead of `replace`;
+an SVG or artistic-effect picture refuses `replace` but sizes, describes and removes; legacy VML
+replaces, sizes, describes and removes but refuses `set_floating_layout`; a canonical
+`mc:AlternateContent` picture changes every branch at once; multi-picture drawings stay
+inspection-only. PNG, JPEG, GIF, BMP, TIFF and WebP are writable, and floating wrap covers
+`none`/`square`/`tight`/`through`/`top_and_bottom` (tight/through take an optional
+`wrapPolygon`). Under `render_inline` every image mutation is recorded natively: an insert is a
+tracked insertion, and any change to an existing picture is a tracked deletion of its run plus a
+tracked insertion of the changed copy, so accepting yields the intended picture and rejecting
+restores the original bytes, relationship, metadata and geometry. The full core and
 cross-language contract is in `docs/architecture/native_images.md`.
 
 ### `docxodus_content_controls` — native Word content controls (issue #452)
@@ -727,8 +735,8 @@ monotonic document version; `format: "check_preconditions"` evaluates guards
 without mutating. Preview evaluates these guards and predicts versions entirely on the shadow, so a
 dry-run does not make an otherwise-current live plan stale.
 
-Image `insert`/`replace`/`set_dimensions`/`set_metadata`/`set_floating_layout`/`remove` actions
-are batchable; image `capabilities` and `list` are rejected as read-only steps.
+Image `insert`/`replace`/`embed_linked`/`set_dimensions`/`set_metadata`/`set_floating_layout`/`remove`
+actions are batchable; image `capabilities` and `list` are rejected as read-only steps.
 
 ### `docxodus_deliver` — verified delivery bundle (issue #465)
 

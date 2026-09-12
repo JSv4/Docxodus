@@ -517,23 +517,23 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_images",
-            "Inspect and mutate native Word images. Binary payloads cross this JSON boundary only as base64; the server never fetches URLs or reads image paths. PNG, JPEG, GIF, BMP, and TIFF are writable; WebP, legacy VML, external links, and unsupported DrawingML remain inspection-only. Rendered dimensions are points; floating offsets/distances are exact EMUs at a documented 96-DPI default.",
+            "Inspect and mutate native Word images. Binary payloads cross this JSON boundary only as base64; the server never fetches URLs or reads image paths. PNG, JPEG, GIF, BMP, TIFF, and WebP are writable. Every listed occurrence carries an operations matrix saying which of replace/embed_linked/set_dimensions/set_metadata/set_floating_layout/remove it accepts and why not otherwise: embedded pictures take everything, linked pictures take embed_linked (caller-supplied bytes) instead of replace, SVG/artistic-effect pictures refuse replace, legacy VML refuses set_floating_layout, and multi-picture drawings are inspection-only. Under render_inline every mutation is recorded as a tracked deletion plus a tracked insertion of the changed picture. Rendered dimensions are points; floating offsets/distances are exact EMUs at a documented 96-DPI default.",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string", "description": "Required except for capabilities." },
-                "action": { "type": "string", "enum": ["capabilities", "list", "insert", "replace", "set_dimensions", "set_metadata", "set_floating_layout", "remove"] },
+                "action": { "type": "string", "enum": ["capabilities", "list", "insert", "replace", "embed_linked", "set_dimensions", "set_metadata", "set_floating_layout", "remove"] },
                 "scope": { "type": "string", "enum": ["body", "headers", "footers", "footnotes", "endnotes", "comments", "all"] },
                 "anchorId": { "type": "string", "description": "insert: paragraph anchor." },
                 "characterOffset": { "type": "integer", "minimum": 0 },
                 "imageId": { "type": "string", "description": "replace/set/remove: id from list or insert." },
-                "imageBase64": { "type": "string", "description": "insert/replace only; raw image bytes encoded as base64." },
+                "imageBase64": { "type": "string", "description": "insert/replace/embed_linked only; raw image bytes encoded as base64. embed_linked converts an external linked picture into an embedded one using these bytes." },
                 "options": { "type": "object", "description": "insert options: placement inline|floating, widthPoints, heightPoints, preserveAspect, altText, title, and optional floatingLayout." },
                 "dimensions": { "type": "object", "description": "set_dimensions: widthPoints and/or heightPoints plus preserveAspect (default true)." },
                 "altText": { "type": ["string", "null"], "description": "set_metadata full value; null removes it." },
                 "title": { "type": ["string", "null"], "description": "set_metadata full value; null removes it." },
-                "layout": { "type": "object", "description": "set_floating_layout: none/square wrap; typed references/alignments; exact EMU positions/distances and flags." }
+                "layout": { "type": "object", "description": "set_floating_layout: none/square/tight/through/top_and_bottom wrap (tight/through take an optional wrapPolygon {points:[{x,y}],edited} in 21600-unit picture space, defaulting to the picture rectangle); typed references/alignments; exact EMU positions/distances and flags." }
               },
               "required": ["action"]
             }

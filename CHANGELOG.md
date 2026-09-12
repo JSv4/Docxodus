@@ -6,6 +6,26 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Native image coverage matrix and tracked image edits (issue #762). Every listed picture now
+  carries `operations` — one `{operation, canMutate, reason}` answer for `replace`,
+  `embed_linked`, `set_dimensions`, `set_metadata`, `set_floating_layout` and `remove` in the
+  session's current mode — and `GetImageCapabilities()` publishes the same matrix per markup
+  family (`markups`) plus `trackedOperations`. Coverage grew along it: WebP is insertable and
+  replaceable as a real `image/webp` media part; floating wrap covers `tight`, `through` and
+  `top_and_bottom` with a typed `wrapPolygon` (the picture rectangle when omitted); linked
+  pictures take the explicit `EmbedLinkedImage` / `embedLinkedImage` / `embed_linked_image` /
+  MCP `embed_linked` conversion (caller-supplied bytes become an embedded part, the external
+  relationship is swept) and accept sizing, metadata, layout and removal; legacy VML pictures
+  replace, resize (CSS style width/height), describe and remove; SVG/artistic-effect pictures
+  size, describe and remove while still refusing a fallback-only replace; a canonical
+  `mc:AlternateContent` picture changes every branch together. Under `render_inline` image
+  mutations are recorded natively — an insert is a tracked insertion, any change to an existing
+  picture is a tracked deletion of its run plus a tracked insertion of the re-identified copy,
+  and a picture inside the author's own insertion is edited in place — so accepting yields the
+  intended picture and rejecting restores bytes, relationship, metadata and geometry. Refusals
+  keep explicit reasons: multi-picture drawings, tracked deletions, another author's insertion,
+  field-generated pictures, and unmodeled layout tokens (which now block only
+  `set_floating_layout`).
 - The full deliverable-verification request reaches every transport. One wire shape — policy and
   inspection-limit `options` (defaults read from the .NET model), `expectedSemanticChanges` (the
   canonical semantic-changes object), `expectedPackageChanges`, and `companionArtifacts` with

@@ -25,6 +25,36 @@ public enum ImageVerticalReference { Page, Margin, Paragraph, Line, Unknown }
 public enum ImageHorizontalAlignment { Left, Center, Right, Inside, Outside, Unknown }
 public enum ImageVerticalAlignment { Top, Center, Bottom, Inside, Outside, Unknown }
 
+/// <summary>One vertex of a tight/through wrap outline in DrawingML's 21600-unit wrap space,
+/// where (0,0) is the picture's top-left corner and (21600,21600) its bottom-right.</summary>
+public readonly record struct ImageWrapPoint(long X, long Y);
+
+/// <summary>The outline body text follows under tight and through wrap: a start vertex followed by
+/// at least two line segments. Word derives it from picture transparency; the session has no
+/// decoder, so it writes <see cref="Rectangle"/> unless the caller supplies vertices.
+/// <see cref="Edited"/> mirrors <c>wp:wrapPolygon/@edited</c>, which tells Word whether to keep the
+/// outline as written or recompute it from the picture.</summary>
+public sealed record ImageWrapPolygon(IReadOnlyList<ImageWrapPoint> Points, bool Edited = false)
+{
+    /// <summary>The picture rectangle — what Word itself writes for an opaque picture.</summary>
+    public static ImageWrapPolygon Rectangle { get; } = new(new[]
+    {
+        new ImageWrapPoint(0, 0), new ImageWrapPoint(0, 21600), new ImageWrapPoint(21600, 21600),
+        new ImageWrapPoint(21600, 0), new ImageWrapPoint(0, 0),
+    });
+
+    public bool Equals(ImageWrapPolygon? other) =>
+        other is not null && Edited == other.Edited && Points.SequenceEqual(other.Points);
+
+    public override int GetHashCode()
+    {
+        var hash = default(HashCode);
+        hash.Add(Edited);
+        foreach (var point in Points) hash.Add(point);
+        return hash.ToHashCode();
+    }
+}
+
 /// <summary>Supported floating DrawingML layout. Offsets and wrap distances are exact EMUs;
 /// position axes use either an offset or an alignment, never both.</summary>
 public sealed record FloatingImageLayout
@@ -37,6 +67,9 @@ public sealed record FloatingImageLayout
     public ImageVerticalAlignment? VerticalAlignment { get; init; }
     public ImageWrapMode WrapMode { get; init; } = ImageWrapMode.Square;
     public ImageWrapSide WrapSide { get; init; } = ImageWrapSide.BothSides;
+    /// <summary>Tight/through wrap outline. Null on write means <see cref="ImageWrapPolygon.Rectangle"/>;
+    /// a layout read from a tight/through anchor always carries the outline the document holds.</summary>
+    public ImageWrapPolygon? WrapPolygon { get; init; }
     public long DistanceTopEmu { get; init; }
     public long DistanceBottomEmu { get; init; }
     public long DistanceLeftEmu { get; init; }
@@ -76,6 +109,11 @@ public sealed record ImageFormatCapability(
     ImageBinaryFormat Format, string ContentType, bool CanInspect,
     bool CanInsert, bool CanReplace, string? Limitation);
 
+/// <summary>Which operations one markup family accepts, independent of any particular occurrence.
+/// The live answer for a given picture is <see cref="ImageOccurrence.Operations"/>.</summary>
+public sealed record ImageMarkupCapability(
+    string Markup, IReadOnlyList<string> Operations, string? Limitation);
+
 /// <summary>Versioned runtime facts for the native image surface. These are operational
 /// capabilities, not decoder/network/file-I/O claims.</summary>
 public sealed record ImageCapabilities(
@@ -85,11 +123,39 @@ public sealed record ImageCapabilities(
     IReadOnlyList<ImageVerticalReference> VerticalReferences,
     long MaxInputBytes, double MaxRenderedPoints, double DefaultDpi,
     bool UsesHeaderParsingOnly, bool AcceptsBinaryBytes,
-    bool SupportsNetworkFetch, bool SupportsFileIo);
+    bool SupportsNetworkFetch, bool SupportsFileIo,
+    IReadOnlyList<ImageMarkupCapability> Markups, IReadOnlyList<string> TrackedOperations);
+
+/// <summary>Whether one image operation can run against one occurrence in the session's current
+/// tracked-change mode, with the reason when it cannot.</summary>
+public sealed record ImageOperationSupport(string Operation, bool CanMutate, string? Reason);
+
+/// <summary>The per-occurrence operation matrix. <see cref="ImageOccurrence.CanMutate"/> is the
+/// conjunction of the standard set — replace, set_dimensions, set_metadata, remove, and
+/// set_floating_layout for a floating picture; <see cref="EmbedLinked"/> is the explicit conversion
+/// a linked picture takes instead of replace.</summary>
+public sealed record ImageOperationMatrix(
+    ImageOperationSupport Replace, ImageOperationSupport EmbedLinked,
+    ImageOperationSupport SetDimensions, ImageOperationSupport SetMetadata,
+    ImageOperationSupport SetFloatingLayout, ImageOperationSupport Remove)
+{
+    public IEnumerable<ImageOperationSupport> All
+    {
+        get
+        {
+            yield return Replace;
+            yield return EmbedLinked;
+            yield return SetDimensions;
+            yield return SetMetadata;
+            yield return SetFloatingLayout;
+            yield return Remove;
+        }
+    }
+}
 
 /// <summary>One native Word image occurrence. Rendered dimensions are points; floating offsets
-/// and distances are exact EMUs. Legacy VML and unsupported DrawingML remain enumerable but
-/// <see cref="CanMutate"/> is false.</summary>
+/// and distances are exact EMUs. <see cref="CanMutate"/> summarizes the standard operations;
+/// <see cref="Operations"/> answers for each one, including the explicit embed_linked path.</summary>
 public sealed record ImageOccurrence(
     string Id, ImageMarkupKind MarkupKind, ImagePlacement? Placement,
     bool CanMutate, string? UnsupportedReason,
@@ -102,7 +168,8 @@ public sealed record ImageOccurrence(
     int? IntrinsicWidthPixels, int? IntrinsicHeightPixels,
     double? RenderedWidthPoints, double? RenderedHeightPoints,
     string? AltText, string? Title,
-    FloatingImageLayout? FloatingLayout, bool FloatingLayoutSupported);
+    FloatingImageLayout? FloatingLayout, bool FloatingLayoutSupported,
+    ImageOperationMatrix Operations);
 
 public sealed partial class DocxSession
 {
@@ -116,10 +183,62 @@ public sealed partial class DocxSession
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
     private static readonly XNamespace ImageV = "urn:schemas-microsoft-com:vml";
     private static readonly XNamespace ImageO = "urn:schemas-microsoft-com:office:office";
+    private static readonly XName VmlImageData = ImageV + "imagedata";
+    private static readonly XName VmlShape = ImageV + "shape";
 
+    private enum ImageOperation { Replace, EmbedLinked, SetDimensions, SetMetadata, SetFloatingLayout, Remove }
+
+    /// <summary>The markup shapes the matrix distinguishes. Overlays (linked media, a blip
+    /// extension, placement, unmodeled layout tokens, revision containers) refine the answer per
+    /// operation; the family decides which writers can address the occurrence at all.</summary>
+    private enum ImageFamily { Picture, LegacyVml, AlternateContent, AlternateFallback, MultiPicture, Malformed }
+
+    private readonly record struct ImageFacts(
+        ImageFamily Family, string? FamilyReason, bool IsLinked, bool BlipExtension,
+        ImagePlacement? Placement, bool FloatingSupported, string? LayoutReason,
+        bool HasRenderedSize, string? ContainerReason, bool SharedReference);
+
+    /// <summary><paramref name="Outer"/> is the unit a remove or a tracked swap operates on: the
+    /// <c>w:drawing</c>, the <c>w:pict</c>, or — for a canonical picture with a VML fallback — the
+    /// whole <c>mc:AlternateContent</c>, so every branch changes together.</summary>
     private sealed record ImageCandidate(
         OwnedPartRelationships.Owner Owner, XElement Outer, XElement? Container,
         XElement? Blip, ImageOccurrence Info);
+
+    private const string BlipExtensionReason =
+        "picture carries a blip extension (such as an SVG asvg:svgBlip) whose payload cannot be "
+        + "changed together with the raster fallback";
+    private const string LinkedReplaceReason =
+        "external linked images are read-only; embed_linked converts the picture to an embedded one";
+
+    private static readonly IReadOnlyList<ImageMarkupCapability> ImageMarkups = new[]
+    {
+        new ImageMarkupCapability("embedded_picture",
+            new[] { "replace", "set_dimensions", "set_metadata", "set_floating_layout", "remove" }, null),
+        new ImageMarkupCapability("linked_picture",
+            new[] { "embed_linked", "set_dimensions", "set_metadata", "set_floating_layout", "remove" },
+            "external media is never converted in place: replace is refused, and embed_linked takes "
+            + "caller-supplied bytes to make the picture embedded"),
+        new ImageMarkupCapability("extended_picture",
+            new[] { "set_dimensions", "set_metadata", "set_floating_layout", "remove" },
+            "a blip extension carrying its own media (SVG art, an artistic-effect original) cannot "
+            + "be replaced together with the raster fallback"),
+        new ImageMarkupCapability("legacy_vml",
+            new[] { "replace", "set_dimensions", "set_metadata", "remove" },
+            "VML positioning is not modeled, so set_floating_layout is refused"),
+        new ImageMarkupCapability("alternate_content",
+            new[] { "replace", "set_dimensions", "set_metadata", "remove" },
+            "operations change every branch of the mc:AlternateContent at once and require the "
+            + "branches to share one embedded media relationship; the VML fallback occurrence is "
+            + "inspection-only and set_floating_layout is refused"),
+        new ImageMarkupCapability("multi_picture", Array.Empty<string>(),
+            "drawings holding several pictures, groups, or no identifiable blip are inspection-only"),
+    };
+
+    private static readonly IReadOnlyList<string> TrackedImageOperations = new[]
+    {
+        "insert", "replace", "embed_linked", "set_dimensions", "set_metadata", "set_floating_layout", "remove",
+    };
 
     public static ImageCapabilities GetImageCapabilities()
     {
@@ -129,7 +248,7 @@ public sealed partial class DocxSession
         const string runtime = "dotnet";
 #endif
         return new ImageCapabilities(
-            1,
+            2,
             runtime,
             new[]
             {
@@ -138,20 +257,23 @@ public sealed partial class DocxSession
                 new ImageFormatCapability(ImageBinaryFormat.Gif, "image/gif", true, true, true, null),
                 new ImageFormatCapability(ImageBinaryFormat.Bmp, "image/bmp", true, true, true, null),
                 new ImageFormatCapability(ImageBinaryFormat.Tiff, "image/tiff", true, true, true, null),
-                new ImageFormatCapability(ImageBinaryFormat.Webp, "image/webp", true, false, false,
-                    "Open XML SDK 3.5.1 exposes no Word ImagePartType for WebP; existing parts are read-only"),
+                new ImageFormatCapability(ImageBinaryFormat.Webp, "image/webp", true, true, true,
+                    "written as an image/webp media part; consumers without WebP support show a placeholder"),
                 new ImageFormatCapability(ImageBinaryFormat.Unknown, "application/octet-stream", false, false, false,
                     "unrecognized bytes are rejected"),
             },
-            new[] { "list", "insert", "replace", "set_dimensions", "set_metadata", "set_floating_layout", "remove" },
-            new[] { ImageWrapMode.None, ImageWrapMode.Square },
+            new[] { "list", "insert", "replace", "embed_linked", "set_dimensions", "set_metadata",
+                "set_floating_layout", "remove" },
+            new[] { ImageWrapMode.None, ImageWrapMode.Square, ImageWrapMode.Tight,
+                ImageWrapMode.Through, ImageWrapMode.TopAndBottom },
             new[] { ImageHorizontalReference.Page, ImageHorizontalReference.Margin,
                 ImageHorizontalReference.Column, ImageHorizontalReference.Character },
             new[] { ImageVerticalReference.Page, ImageVerticalReference.Margin,
                 ImageVerticalReference.Paragraph, ImageVerticalReference.Line },
             MaxImageInputBytes, MaxImageRenderedPoints, ImageDefaultDpi,
             UsesHeaderParsingOnly: true, AcceptsBinaryBytes: true,
-            SupportsNetworkFetch: false, SupportsFileIo: false);
+            SupportsNetworkFetch: false, SupportsFileIo: false,
+            ImageMarkups, TrackedImageOperations);
     }
 
     public IReadOnlyList<ImageOccurrence> ListImages(ProjectionScopes scopes = ProjectionScopes.All)
@@ -165,7 +287,6 @@ public sealed partial class DocxSession
     {
         if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
         options ??= new ImageInsertOptions();
-        if (ValidateImageMutationMode(anchorId) is { } modeError) return modeError;
         var binary = ValidateImageBytes(imageBytes, anchorId);
         if (binary.Error is not null) return binary.Error;
         if (ValidateInsertOptions(options, binary.Width, binary.Height, anchorId,
@@ -198,8 +319,13 @@ public sealed partial class DocxSession
             var run = new XElement(W.r,
                 new XElement(W.rPr, new XElement(W.noProof)),
                 drawing);
-            InsertInlineElementAtOffset(paragraph, characterOffset, run);
-            UnidHelper.AssignToSelfAndDescendants(run);
+            // Under render_inline the picture is a tracked insertion: rejecting the revision removes
+            // the run, and the orphan sweep drops the media part only that run referenced.
+            var inserted = _trackedChanges == TrackedChangeMode.RenderInline
+                ? CreateRevisionEnvelope(W.ins, NewRevisionStamp(), run)
+                : run;
+            InsertInlineElementAtOffset(paragraph, characterOffset, inserted);
+            UnidHelper.AssignToSelfAndDescendants(inserted);
             InvalidateProjectionCache();
             var imageId = ImagePublicId(owner.Value, drawing);
             return new EditResult { Success = true, ImageId = imageId,
@@ -216,154 +342,155 @@ public sealed partial class DocxSession
     public EditResult ReplaceImage(string imageId, byte[] imageBytes)
     {
         if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
-        if (ValidateImageMutationMode() is { } modeError) return modeError;
         var binary = ValidateImageBytes(imageBytes, null);
         if (binary.Error is not null) return binary.Error;
-        if (ResolveMutableImage(imageId, out var candidate) is { } imageError) return imageError;
+        if (ResolveMutableImage(imageId, ImageOperation.Replace, out var candidate) is { } imageError) return imageError;
         var currentPart = OwnedPartRelationships.ResolveImagePart(
             candidate.Owner.Part, candidate.Info.RelationshipId);
         if (currentPart is not null && currentPart.ContentType == binary.ContentType
             && OwnedPartRelationships.ReadPartBytes(currentPart).SequenceEqual(imageBytes))
             return ImageMutationSuccess(candidate, imageId);
-        _history.RecordPreOp(TakeSnapshot());
-        try
+        return MutateImage(candidate, imageId, ImageOperation.Replace, outer =>
         {
             var relationship = OwnedPartRelationships.FindOrAddImagePart(
                 _doc!, candidate.Owner.Part, imageBytes, binary.ContentType!, binary.Format);
-            candidate.Blip!.SetAttributeValue(ImageR + "embed", relationship.RelationshipId);
-            OwnedPartRelationships.SweepOrphanedImages(candidate.Owner.Part);
-            InvalidateProjectionCache();
-            return ImageMutationSuccess(candidate, imageId);
-        }
-        catch (Exception ex)
+            foreach (var reference in EmbeddedImageReferences(outer))
+                if (reference.Value == candidate.Info.RelationshipId) reference.Value = relationship.RelationshipId;
+        });
+    }
+
+    /// <summary>The explicit conversion a linked picture needs before its media can be edited in
+    /// place: the caller fetches the external image (the session never does) and hands over the
+    /// bytes, which become an owner-local media part that the picture now embeds. The external
+    /// relationship disappears with its last reference.</summary>
+    public EditResult EmbedLinkedImage(string imageId, byte[] imageBytes)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        var binary = ValidateImageBytes(imageBytes, null);
+        if (binary.Error is not null) return binary.Error;
+        if (ResolveMutableImage(imageId, ImageOperation.EmbedLinked, out var candidate) is { } imageError) return imageError;
+        return MutateImage(candidate, imageId, ImageOperation.EmbedLinked, outer =>
         {
-            LastInternalError = ex;
-            RollbackFailedOp();
-            return EditResult.Fail(EditErrorCode.InternalError, ex.Message);
-        }
+            var relationship = OwnedPartRelationships.FindOrAddImagePart(
+                _doc!, candidate.Owner.Part, imageBytes, binary.ContentType!, binary.Format);
+            foreach (var blip in outer.DescendantsAndSelf(A.blip))
+            {
+                blip.SetAttributeValue(ImageR + "embed", relationship.RelationshipId);
+                blip.Attribute(ImageR + "link")?.Remove();
+            }
+            foreach (var imageData in outer.DescendantsAndSelf(VmlImageData))
+            {
+                imageData.SetAttributeValue(ImageR + "id", relationship.RelationshipId);
+                imageData.Attribute(ImageR + "href")?.Remove();
+            }
+        });
     }
 
     public EditResult SetImageDimensions(string imageId, double? widthPoints,
         double? heightPoints, bool preserveAspect = true)
     {
         if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
-        if (ValidateImageMutationMode() is { } modeError) return modeError;
-        if (ResolveMutableImage(imageId, out var candidate) is { } imageError) return imageError;
+        if (ResolveMutableImage(imageId, ImageOperation.SetDimensions, out var candidate) is { } imageError) return imageError;
         if (ResolveRenderedDimensions(widthPoints, heightPoints, preserveAspect,
             candidate.Info.RenderedWidthPoints, candidate.Info.RenderedHeightPoints,
             out var widthEmu, out var heightEmu) is { } dimensionError) return dimensionError;
-        var extent = candidate.Container!.Element(WP.extent)!;
-        var transformExtent = candidate.Container.Descendants(A.xfrm).First().Element(A.ext)!;
-        if ((string?)extent.Attribute("cx") == widthEmu.ToString(CultureInfo.InvariantCulture)
-            && (string?)extent.Attribute("cy") == heightEmu.ToString(CultureInfo.InvariantCulture)
-            && (string?)transformExtent.Attribute("cx") == widthEmu.ToString(CultureInfo.InvariantCulture)
-            && (string?)transformExtent.Attribute("cy") == heightEmu.ToString(CultureInfo.InvariantCulture))
+        if (HasExtents(candidate.Outer, widthEmu, heightEmu))
             return ImageMutationSuccess(candidate, imageId);
-
-        _history.RecordPreOp(TakeSnapshot());
-        try
-        {
-            SetDrawingExtents(candidate.Container!, widthEmu, heightEmu);
-            InvalidateProjectionCache();
-            return ImageMutationSuccess(candidate, imageId);
-        }
-        catch (Exception ex)
-        {
-            LastInternalError = ex;
-            RollbackFailedOp();
-            return EditResult.Fail(EditErrorCode.InternalError, ex.Message);
-        }
+        return MutateImage(candidate, imageId, ImageOperation.SetDimensions,
+            outer => SetImageExtents(outer, widthEmu, heightEmu));
     }
 
     public EditResult SetImageMetadata(string imageId, string? altText, string? title)
     {
         if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
-        if (ValidateImageMutationMode() is { } modeError) return modeError;
-        if (ResolveMutableImage(imageId, out var candidate) is { } imageError) return imageError;
+        if (ResolveMutableImage(imageId, ImageOperation.SetMetadata, out var candidate) is { } imageError) return imageError;
         if (!ValidXmlAttributeText(altText) || !ValidXmlAttributeText(title))
             return EditResult.Fail(EditErrorCode.InvalidImageData,
                 "image metadata contains characters XML attributes cannot represent");
-        var currentDocPr = candidate.Container!.Element(WP.docPr)!;
-        var currentCNvPr = candidate.Container.Descendants(Pic.cNvPr).FirstOrDefault();
-        if ((string?)currentDocPr.Attribute("descr") == altText
-            && (string?)currentDocPr.Attribute("title") == title
-            && (currentCNvPr is null || ((string?)currentCNvPr.Attribute("descr") == altText
-                && (string?)currentCNvPr.Attribute("title") == title)))
+        if (MetadataTargets(candidate.Outer).All(target =>
+                (string?)target.Element.Attribute(target.Name) == (target.IsTitle ? title : altText)))
             return ImageMutationSuccess(candidate, imageId);
-
-        _history.RecordPreOp(TakeSnapshot());
-        try
+        return MutateImage(candidate, imageId, ImageOperation.SetMetadata, outer =>
         {
-            var docPr = candidate.Container!.Element(WP.docPr)!;
-            docPr.SetAttributeValue("descr", altText);
-            docPr.SetAttributeValue("title", title);
-            var cNvPr = candidate.Container.Descendants(Pic.cNvPr).FirstOrDefault();
-            if (cNvPr is not null)
-            {
-                cNvPr.SetAttributeValue("descr", altText);
-                cNvPr.SetAttributeValue("title", title);
-            }
-            InvalidateProjectionCache();
-            return ImageMutationSuccess(candidate, imageId);
-        }
-        catch (Exception ex)
-        {
-            LastInternalError = ex;
-            RollbackFailedOp();
-            return EditResult.Fail(EditErrorCode.InternalError, ex.Message);
-        }
+            foreach (var target in MetadataTargets(outer))
+                target.Element.SetAttributeValue(target.Name, target.IsTitle ? title : altText);
+        });
     }
 
     public EditResult SetImageFloatingLayout(string imageId, FloatingImageLayout layout)
     {
         if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
-        if (ValidateImageMutationMode() is { } modeError) return modeError;
         if (layout is null) return EditResult.Fail(EditErrorCode.InvalidImageLayout,
             "floating layout is required");
         if (ValidateFloatingLayout(layout) is { } layoutError) return layoutError;
-        if (ResolveMutableImage(imageId, out var candidate) is { } imageError) return imageError;
-        if (candidate.Info.Placement != ImagePlacement.Floating)
-            return EditResult.Fail(EditErrorCode.InvalidImageLayout,
-                "floating layout can only be set on a floating image");
-        if (!candidate.Info.FloatingLayoutSupported)
-            return EditResult.Fail(EditErrorCode.UnsupportedImageMarkup,
-                candidate.Info.UnsupportedReason ?? "floating layout is read-only");
-        if (candidate.Info.FloatingLayout == layout)
+        if (ResolveMutableImage(imageId, ImageOperation.SetFloatingLayout, out var candidate) is { } imageError)
+            return candidate is { Info.Placement: ImagePlacement.Inline }
+                ? EditResult.Fail(EditErrorCode.InvalidImageLayout,
+                    "floating layout can only be set on a floating image")
+                : imageError;
+        var normalized = NormalizeWrapPolygon(layout);
+        if (candidate.Info.FloatingLayout == normalized)
             return ImageMutationSuccess(candidate, imageId);
-
-        _history.RecordPreOp(TakeSnapshot());
-        try
-        {
-            ApplyFloatingLayout(candidate.Container!, layout);
-            InvalidateProjectionCache();
-            return ImageMutationSuccess(candidate, imageId);
-        }
-        catch (Exception ex)
-        {
-            LastInternalError = ex;
-            RollbackFailedOp();
-            return EditResult.Fail(EditErrorCode.InternalError, ex.Message);
-        }
+        return MutateImage(candidate, imageId, ImageOperation.SetFloatingLayout,
+            outer => ApplyFloatingLayout(outer.DescendantsAndSelf(WP.anchor).First(), normalized));
     }
 
     public EditResult RemoveImage(string imageId)
     {
         if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
-        if (ValidateImageMutationMode() is { } modeError) return modeError;
-        if (ResolveMutableImage(imageId, out var candidate) is { } imageError) return imageError;
+        if (ResolveMutableImage(imageId, ImageOperation.Remove, out var candidate) is { } imageError) return imageError;
+        return MutateImage(candidate, imageId, ImageOperation.Remove, null);
+    }
+
+    /// <summary>Every occurrence mutation funnels through here. Under render_inline a change to an
+    /// existing picture is recorded the one way WordprocessingML can express it: the original run
+    /// becomes a tracked deletion and a re-identified copy carrying the change becomes a tracked
+    /// insertion (remove records the deletion alone). Accepting yields the new state and the orphan
+    /// sweep drops media only the deleted run referenced; rejecting restores bytes, relationships,
+    /// metadata and geometry because the original run was never edited. A picture already inside the
+    /// session author's own insertion is edited in place, so replace-then-refit stays one revision.</summary>
+    private EditResult MutateImage(ImageCandidate candidate, string imageId,
+        ImageOperation operation, Action<XElement>? write)
+    {
         var paragraph = candidate.Outer.Ancestors(W.p).First();
         var anchor = AnchorForElement(paragraph);
-
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            var run = candidate.Outer.Ancestors(W.r).FirstOrDefault();
-            candidate.Outer.Remove();
-            if (run is not null && !run.Elements().Any(element => element.Name != W.rPr)) run.Remove();
+            var outer = candidate.Outer;
+            if (_trackedChanges == TrackedChangeMode.RenderInline && !InsideOwnInsertion(outer, paragraph))
+            {
+                var run = IsolateImageRun(outer);
+                var stamp = NewRevisionStamp();
+                var deleted = CreateRevisionEnvelope(W.del, stamp);
+                if (operation == ImageOperation.Remove)
+                {
+                    run.ReplaceWith(deleted);
+                    deleted.Add(run);
+                }
+                else
+                {
+                    var copy = new XElement(run);
+                    var inserted = CreateRevisionEnvelope(W.ins, stamp);
+                    run.ReplaceWith(deleted, inserted);
+                    deleted.Add(run);
+                    inserted.Add(copy);
+                    outer = ReidentifyImageRun(copy, outer.Name);
+                    write!(outer);
+                }
+            }
+            else if (operation == ImageOperation.Remove) RemoveImageElement(outer);
+            else write!(outer);
             OwnedPartRelationships.SweepOrphanedImages(candidate.Owner.Part);
             InvalidateProjectionCache();
-            return new EditResult { Success = true, ImageId = imageId,
-                Modified = anchor is null ? Array.Empty<Anchor>() : new[] { anchor.Value } };
+            return new EditResult
+            {
+                Success = true,
+                ImageId = operation == ImageOperation.Remove
+                    ? imageId
+                    : ImagePublicId(candidate.Owner, ImageIdentityElement(outer)),
+                Modified = anchor is null ? Array.Empty<Anchor>() : new[] { anchor.Value },
+            };
         }
         catch (Exception ex)
         {
@@ -372,6 +499,183 @@ public sealed partial class DocxSession
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message);
         }
     }
+
+    private static XElement ImageIdentityElement(XElement outer) =>
+        outer.Name == MC.AlternateContent ? outer.Descendants(W.drawing).First() : outer;
+
+    private static bool InsideOwnInsertion(XElement outer, XElement paragraph) =>
+        outer.Ancestors().TakeWhile(element => !ReferenceEquals(element, paragraph))
+            .Any(element => element.Name == W.ins);
+
+    /// <summary>Move any run content that is not the picture into sibling runs carrying the same
+    /// properties, so the revision envelopes wrap the picture alone.</summary>
+    private static XElement IsolateImageRun(XElement outer)
+    {
+        var run = outer.Parent!;
+        var others = run.Elements()
+            .Where(element => element.Name != W.rPr && !ReferenceEquals(element, outer)).ToList();
+        if (others.Count == 0) return run;
+        var properties = run.Element(W.rPr);
+        foreach (var (content, before) in new[]
+        {
+            (others.Where(element => element.IsBefore(outer)).ToList(), true),
+            (others.Where(element => element.IsAfter(outer)).ToList(), false),
+        })
+        {
+            if (content.Count == 0) continue;
+            var sibling = new XElement(W.r);
+            if (properties is not null) sibling.Add(new XElement(properties));
+            foreach (var node in content)
+            {
+                node.Remove();
+                sibling.Add(node);
+            }
+            if (before) run.AddBeforeSelf(sibling);
+            else run.AddAfterSelf(sibling);
+            UnidHelper.AssignToSelfAndDescendants(sibling);
+        }
+        return run;
+    }
+
+    /// <summary>A copied run must be a new occurrence: fresh Unids (the deleted original keeps its
+    /// id) and fresh drawing property ids (Word wants them unique per document).</summary>
+    private XElement ReidentifyImageRun(XElement copy, XName outerName)
+    {
+        foreach (var element in copy.DescendantsAndSelf())
+            element.Attribute(PtOpenXml.Unid)?.Remove();
+        UnidHelper.AssignToSelfAndDescendants(copy);
+        foreach (var docPr in copy.Descendants(WP.docPr).ToList())
+        {
+            var id = NextDocumentPropertyId();
+            docPr.SetAttributeValue("id", id);
+            var picture = docPr.Parent?.Descendants(Pic.cNvPr).FirstOrDefault();
+            picture?.SetAttributeValue("id", id);
+        }
+        return copy.Elements().First(element => element.Name == outerName);
+    }
+
+    private static void RemoveImageElement(XElement outer)
+    {
+        var run = outer.Parent!;
+        outer.Remove();
+        if (run.Elements().Any(element => element.Name != W.rPr)) return;
+        var wrapper = run.Parent;
+        run.Remove();
+        if (wrapper is not null && wrapper.Name == W.ins && !wrapper.HasElements) wrapper.Remove();
+    }
+
+    // ─── Writers shared by every family ──────────────────────────────
+
+    /// <summary>The attributes that embed media into a picture: <c>a:blip/@r:embed</c> and
+    /// <c>v:imagedata/@r:id</c>. Deliberately not name-blind — <c>a:hlinkClick/@r:id</c> on a
+    /// clickable picture must never be re-pointed at an image part.</summary>
+    private static IEnumerable<XAttribute> EmbeddedImageReferences(XElement outer) =>
+        outer.DescendantsAndSelf().SelectMany(element =>
+            element.Name == A.blip ? element.Attributes(ImageR + "embed")
+            : element.Name == VmlImageData ? element.Attributes(ImageR + "id")
+            : Enumerable.Empty<XAttribute>());
+
+    /// <summary>Where alt text and title live per markup: DrawingML keeps both on
+    /// <c>wp:docPr</c> and <c>pic:cNvPr</c>; VML keeps alt on the shape and the title on its image data.</summary>
+    private readonly record struct MetadataTarget(XElement Element, XName Name, bool IsTitle);
+
+    private static IEnumerable<MetadataTarget> MetadataTargets(XElement outer)
+    {
+        foreach (var element in outer.DescendantsAndSelf())
+        {
+            if (element.Name == WP.docPr || element.Name == Pic.cNvPr)
+            {
+                yield return new MetadataTarget(element, "descr", false);
+                yield return new MetadataTarget(element, "title", true);
+            }
+            else if (element.Name == VmlShape) yield return new MetadataTarget(element, "alt", false);
+            else if (element.Name == VmlImageData) yield return new MetadataTarget(element, ImageO + "title", true);
+        }
+    }
+
+    private static bool HasExtents(XElement outer, long widthEmu, long heightEmu)
+    {
+        var width = widthEmu.ToString(CultureInfo.InvariantCulture);
+        var height = heightEmu.ToString(CultureInfo.InvariantCulture);
+        foreach (var container in DrawingContainers(outer))
+        {
+            var extent = container.Element(WP.extent);
+            var transform = container.Descendants(A.xfrm).FirstOrDefault()?.Element(A.ext);
+            if ((string?)extent?.Attribute("cx") != width || (string?)extent?.Attribute("cy") != height
+                || (string?)transform?.Attribute("cx") != width || (string?)transform?.Attribute("cy") != height)
+                return false;
+        }
+        foreach (var shape in outer.DescendantsAndSelf(VmlShape))
+        {
+            var (shapeWidth, shapeHeight) = ReadVmlStylePoints(shape);
+            if (shapeWidth is null || shapeHeight is null
+                || PointsToEmu(shapeWidth.Value) != widthEmu || PointsToEmu(shapeHeight.Value) != heightEmu)
+                return false;
+        }
+        return true;
+    }
+
+    private static void SetImageExtents(XElement outer, long widthEmu, long heightEmu)
+    {
+        foreach (var container in DrawingContainers(outer)) SetDrawingExtents(container, widthEmu, heightEmu);
+        foreach (var shape in outer.DescendantsAndSelf(VmlShape)) SetVmlStyleSize(shape, widthEmu, heightEmu);
+    }
+
+    private static IEnumerable<XElement> DrawingContainers(XElement outer) =>
+        outer.DescendantsAndSelf(W.drawing).SelectMany(drawing => drawing.Elements()
+            .Where(element => element.Name == WP.inline || element.Name == WP.anchor));
+
+    private static long PointsToEmu(double points) =>
+        (long)Math.Round(points * EmusPerPoint, MidpointRounding.AwayFromZero);
+
+    /// <summary>VML sizes live in the shape's CSS <c>style</c> attribute. Only the width/height
+    /// entries are rewritten; every other entry keeps its text and position.</summary>
+    private static void SetVmlStyleSize(XElement shape, long widthEmu, long heightEmu)
+    {
+        var entries = ((string?)shape.Attribute("style") ?? string.Empty)
+            .Split(';', StringSplitOptions.RemoveEmptyEntries)
+            .Select(entry => entry.Trim()).Where(entry => entry.Length > 0).ToList();
+        void Put(string key, long emu)
+        {
+            var value = $"{key}:{(emu / (double)EmusPerPoint).ToString("0.###", CultureInfo.InvariantCulture)}pt";
+            int index = entries.FindIndex(entry =>
+                entry.StartsWith(key + ":", StringComparison.OrdinalIgnoreCase));
+            if (index >= 0) entries[index] = value;
+            else entries.Add(value);
+        }
+        Put("width", widthEmu);
+        Put("height", heightEmu);
+        shape.SetAttributeValue("style", string.Join(";", entries));
+    }
+
+    private static (double? Width, double? Height) ReadVmlStylePoints(XElement? shape)
+    {
+        double? width = null, height = null;
+        foreach (var entry in ((string?)shape?.Attribute("style") ?? string.Empty).Split(';'))
+        {
+            var separator = entry.IndexOf(':');
+            if (separator < 0) continue;
+            var key = entry[..separator].Trim();
+            if (key.Equals("width", StringComparison.OrdinalIgnoreCase)) width = ParseCssPoints(entry[(separator + 1)..]);
+            else if (key.Equals("height", StringComparison.OrdinalIgnoreCase)) height = ParseCssPoints(entry[(separator + 1)..]);
+        }
+        return width is > 0 && height is > 0 ? (width, height) : (null, null);
+    }
+
+    private static double? ParseCssPoints(string value)
+    {
+        value = value.Trim();
+        foreach (var (unit, factor) in new[] { ("pt", 1.0), ("in", 72.0), ("cm", 72.0 / 2.54),
+            ("mm", 72.0 / 25.4), ("px", 0.75), ("pc", 12.0) })
+        {
+            if (!value.EndsWith(unit, StringComparison.OrdinalIgnoreCase)) continue;
+            return double.TryParse(value[..^unit.Length], NumberStyles.Float, CultureInfo.InvariantCulture,
+                out var number) && double.IsFinite(number) ? number * factor : null;
+        }
+        return null;
+    }
+
+    // ─── Discovery ───────────────────────────────────────────────────
 
     private IReadOnlyList<ImageCandidate> EnumerateImageCandidates(ProjectionScopes scopes)
     {
@@ -396,6 +700,9 @@ public sealed partial class DocxSession
         var paragraph = drawing.Ancestors(W.p).FirstOrDefault();
         var anchor = paragraph is null ? null : AnchorForElement(paragraph);
         if (paragraph is null || anchor is null) yield break;
+        var alternate = AlternateContentHost(drawing, paragraph);
+        var canonicalAlternate = alternate is not null && IsCanonicalAlternateContent(alternate, drawing);
+        var outer = canonicalAlternate ? alternate! : drawing;
         var containers = drawing.Elements().Where(element =>
             element.Name == WP.inline || element.Name == WP.anchor).ToList();
         var container = containers.Count == 1 ? containers[0] : null;
@@ -415,7 +722,7 @@ public sealed partial class DocxSession
         {
             floatingSupported = TryReadFloatingLayout(container, out floatingLayout, out layoutUnsupported);
         }
-        var boundaryReason = ExistingImageBoundaryReason(drawing, paragraph);
+        var containerReason = ImageContainerReason(outer, paragraph);
         bool hasMutableStructure = container?.Element(WP.docPr) is not null
             && container.Element(WP.extent) is not null
             && container.Descendants(A.xfrm).FirstOrDefault()?.Element(A.ext) is not null;
@@ -448,13 +755,10 @@ public sealed partial class DocxSession
             // A blip extension that names its OWN image relationship is a SECOND payload behind the
             // same a:blip: an SVG keeps the vector art in a:extLst/asvg:svgBlip while a:blip/@r:embed
             // holds only the raster fallback, and Word's artistic effects keep the untouched original
-            // in a14:imgProps/a14:imgLayer, which carries its own r:embed.
-            // Descendants(A.blip) counts one blip either way, so without this
-            // check the occurrence would claim canMutate and ReplaceImage would swap only the
-            // fallback: an SVG-aware renderer keeps showing the OLD picture while the API reports
-            // success, and RemoveImage's sweep can strip the fallback part while the second payload
-            // survives. Refuse instead — replacing both payloads atomically is a feature, not a
-            // review fix.
+            // in a14:imgProps/a14:imgLayer, which carries its own r:embed. Replacing only the
+            // fallback would leave an SVG-aware renderer showing the OLD picture while the API
+            // reported success, so replace and embed_linked are refused for such pictures; sizing,
+            // metadata, layout and removal touch both payloads together and stay available.
             //
             // The test is STRUCTURAL rather than a name list, mirroring what the relationship sweep
             // does: carrying a relationship attribute is the property that makes an extension a
@@ -467,21 +771,26 @@ public sealed partial class DocxSession
                     .Descendants()
                     .Any(element => element.Attributes()
                         .Any(attribute => attribute.Name.Namespace == ImageR));
-            string? unsupported = picturePayload ? null
-                : blip is null
+            ImageFamily family;
+            string? familyReason = null;
+            if (!picturePayload)
+            {
+                family = blip is null ? ImageFamily.Malformed : ImageFamily.MultiPicture;
+                familyReason = blip is null
                     ? "drawing contains no identifiable image blip"
                     : "drawing contains a non-canonical or multi-picture payload";
-            if (picturePayload && !hasMutableStructure)
-                unsupported = "drawing lacks required picture properties or extents";
-            if (picturePayload && blipExtension)
-                unsupported = "picture carries a blip extension (such as an SVG asvg:svgBlip) whose "
-                    + "payload cannot be changed together with the raster fallback";
-            if (layoutUnsupported is not null) unsupported = layoutUnsupported;
-            if (!string.IsNullOrEmpty(linkId)) unsupported = "external linked images are read-only";
-            if (boundaryReason is not null) unsupported = boundaryReason;
-            bool canMutate = picturePayload && hasMutableStructure && blip is not null
-                && !blipExtension
-                && string.IsNullOrEmpty(linkId) && floatingSupported && boundaryReason is null;
+            }
+            else if (!hasMutableStructure)
+            {
+                family = ImageFamily.Malformed;
+                familyReason = "drawing lacks required picture properties or extents";
+            }
+            else family = canonicalAlternate ? ImageFamily.AlternateContent : ImageFamily.Picture;
+            var facts = new ImageFacts(family, familyReason, !string.IsNullOrEmpty(linkId), blipExtension,
+                placement, floatingSupported, layoutUnsupported, renderedWidth is not null, containerReason,
+                canonicalAlternate && SharesOneEmbeddedReference(alternate!, embedId));
+            var operations = BuildImageOperations(facts);
+            var (canMutate, unsupported) = SummarizeOperations(operations, placement);
             var info = new ImageOccurrence(
                 ImagePublicId(owner, drawing, occurrences.Length == 1 ? null : index),
                 picturePayload ? ImageMarkupKind.ModernDrawing : ImageMarkupKind.UnsupportedDrawing,
@@ -492,19 +801,21 @@ public sealed partial class DocxSession
                 imagePart is null ? null : Path.GetFileName(imagePart.Uri.OriginalString),
                 imagePart?.ContentType, media.Format, media.ContentTypeMatchesBytes,
                 media.Width, media.Height, renderedWidth, renderedHeight, alt, title,
-                floatingLayout, floatingSupported);
-            yield return new ImageCandidate(owner, drawing, container, blip, info);
+                floatingLayout, floatingSupported, operations);
+            yield return new ImageCandidate(owner, outer, container, blip, info);
         }
     }
 
     private IEnumerable<ImageCandidate> BuildLegacyCandidates(
         OwnedPartRelationships.Owner owner, XElement pict)
     {
-        var imageDataOccurrences = pict.Descendants(ImageV + "imagedata").ToList();
+        var imageDataOccurrences = pict.Descendants(VmlImageData).ToList();
         if (imageDataOccurrences.Count == 0) yield break;
         var paragraph = pict.Ancestors(W.p).FirstOrDefault();
         var anchor = paragraph is null ? null : AnchorForElement(paragraph);
         if (paragraph is null || anchor is null) yield break;
+        var alternate = AlternateContentHost(pict, paragraph);
+        var containerReason = ImageContainerReason(pict, paragraph);
         for (int index = 0; index < imageDataOccurrences.Count; index++)
         {
             var imageData = imageDataOccurrences[index];
@@ -513,11 +824,28 @@ public sealed partial class DocxSession
             var external = string.IsNullOrEmpty(relationshipId) ? null
                 : owner.Part.ExternalRelationships.FirstOrDefault(relationship => relationship.Id == relationshipId);
             var media = ReadMediaInfo(imagePart);
-            var shape = imageData.Ancestors(ImageV + "shape").FirstOrDefault();
+            var shape = imageData.Ancestors(VmlShape).FirstOrDefault();
+            var (renderedWidth, renderedHeight) = ReadVmlStylePoints(shape);
+            ImageFamily family;
+            string? familyReason = null;
+            if (alternate is not null)
+            {
+                family = ImageFamily.AlternateFallback;
+                familyReason = "VML fallback of an AlternateContent picture; operate on the modern occurrence";
+            }
+            else if (imageDataOccurrences.Count != 1 || shape is null || string.IsNullOrEmpty(relationshipId))
+            {
+                family = ImageFamily.Malformed;
+                familyReason = "legacy VML picture is not a single v:shape/v:imagedata pair with an r:id relationship";
+            }
+            else family = ImageFamily.LegacyVml;
+            var facts = new ImageFacts(family, familyReason, external is not null, false, null, false, null,
+                renderedWidth is not null, containerReason, false);
+            var operations = BuildImageOperations(facts);
+            var (canMutate, unsupported) = SummarizeOperations(operations, null);
             var info = new ImageOccurrence(
                 ImagePublicId(owner, pict, imageDataOccurrences.Count == 1 ? null : index),
-                ImageMarkupKind.LegacyVml, null, false,
-                "legacy VML image markup is enumerable but read-only",
+                ImageMarkupKind.LegacyVml, null, canMutate, unsupported,
                 owner.PartUri, owner.Scope, anchor.Value.Id, new CharSpan(ImageOffset(paragraph, pict), 0),
                 relationshipId, imagePart?.Uri.ToString(), external is null ? null : relationshipId,
                 external?.Uri.ToString(), imagePart is not null, external is not null,
@@ -525,10 +853,121 @@ public sealed partial class DocxSession
                     || media.ContentTypeMatchesBytes == false) && external is null,
                 imagePart is null ? null : Path.GetFileName(imagePart.Uri.OriginalString),
                 imagePart?.ContentType, media.Format, media.ContentTypeMatchesBytes,
-                media.Width, media.Height, null, null, (string?)shape?.Attribute("alt"),
-                (string?)imageData.Attribute(ImageO + "title"), null, false);
+                media.Width, media.Height, renderedWidth, renderedHeight, (string?)shape?.Attribute("alt"),
+                (string?)imageData.Attribute(ImageO + "title"), null, false, operations);
             yield return new ImageCandidate(owner, pict, null, null, info);
         }
+    }
+
+    private static XElement? AlternateContentHost(XElement image, XElement paragraph) =>
+        image.Ancestors().TakeWhile(element => !ReferenceEquals(element, paragraph))
+            .FirstOrDefault(element => element.Name == MC.AlternateContent);
+
+    /// <summary>The one AlternateContent shape the writers can keep coherent: a run holding exactly
+    /// one choice whose sole content is this drawing, plus at most one fallback holding a single VML
+    /// picture. Anything richer (several choices, a text box wrapping the picture) stays read-only.</summary>
+    private static bool IsCanonicalAlternateContent(XElement alternate, XElement drawing)
+    {
+        if (alternate.Parent?.Name != W.r) return false;
+        var choice = alternate.Element(MC.Choice);
+        var fallback = alternate.Element(MC.Fallback);
+        if (choice is null || alternate.Elements().Count() != (fallback is null ? 1 : 2)) return false;
+        if (choice.Elements().Count() != 1 || !ReferenceEquals(choice.Elements().First(), drawing)) return false;
+        if (fallback is null) return true;
+        var pict = fallback.Elements().SingleOrDefault();
+        return pict is not null && pict.Name == W.pict && pict.Descendants(VmlImageData).Count() == 1;
+    }
+
+    private static bool SharesOneEmbeddedReference(XElement alternate, string? embedId)
+    {
+        if (string.IsNullOrEmpty(embedId)) return false;
+        var payloads = alternate.Descendants()
+            .Where(element => element.Name == A.blip || element.Name == VmlImageData).ToList();
+        return payloads.Count > 0 && payloads.All(payload =>
+            payload.Attribute(ImageR + "link") is null && payload.Attribute(ImageR + "href") is null
+            && (string?)payload.Attribute(payload.Name == A.blip ? ImageR + "embed" : ImageR + "id") == embedId);
+    }
+
+    /// <summary>Why the run holding this picture cannot be edited at all, or null. Hyperlinks,
+    /// smart tags and content-control wrappers hold runs and revision envelopes alike, so a picture
+    /// inside them is addressable; deleted, moved and field-generated content is not, and another
+    /// author's insertion is not under render_inline, where editing it would rewrite their revision.</summary>
+    private string? ImageContainerReason(XElement outer, XElement paragraph)
+    {
+        if (outer.Parent?.Name != W.r) return "image is not inside a run";
+        foreach (var ancestor in outer.Parent.Ancestors().TakeWhile(element => !ReferenceEquals(element, paragraph)))
+        {
+            if (ancestor.Name == W.del || ancestor.Name == W.moveFrom) return "image is inside a tracked deletion";
+            if (ancestor.Name == W.moveTo) return "image is inside a tracked move";
+            if (ancestor.Name == W.ins && _trackedChanges == TrackedChangeMode.RenderInline
+                && !string.Equals((string?)ancestor.Attribute(W.author), _revisionAuthor ?? "docxodus", StringComparison.Ordinal))
+                return "image is inside another author's tracked insertion";
+            if (ancestor.Name == W.fldSimple) return "image is the result of a simple field";
+            if (ancestor.Name == MC.AlternateContent)
+                return "image is inside markup-compatibility AlternateContent whose branches cannot be changed together";
+        }
+        if (paragraph.Descendants().Any(element => element.Name == W.fldChar || element.Name == W.instrText))
+            return "image is in a paragraph containing a complex field";
+        return null;
+    }
+
+    private static ImageOperationMatrix BuildImageOperations(ImageFacts facts)
+    {
+        ImageOperationSupport Support(ImageOperation operation, string name)
+        {
+            var blocker = ImageOperationBlocker(facts, operation);
+            return new ImageOperationSupport(name, blocker is null, blocker);
+        }
+        return new ImageOperationMatrix(
+            Support(ImageOperation.Replace, "replace"),
+            Support(ImageOperation.EmbedLinked, "embed_linked"),
+            Support(ImageOperation.SetDimensions, "set_dimensions"),
+            Support(ImageOperation.SetMetadata, "set_metadata"),
+            Support(ImageOperation.SetFloatingLayout, "set_floating_layout"),
+            Support(ImageOperation.Remove, "remove"));
+    }
+
+    private static string? ImageOperationBlocker(ImageFacts facts, ImageOperation operation)
+    {
+        if (facts.FamilyReason is not null) return facts.FamilyReason;
+        if (facts.ContainerReason is not null) return facts.ContainerReason;
+        switch (operation)
+        {
+            case ImageOperation.Replace:
+                if (facts.BlipExtension) return BlipExtensionReason;
+                if (facts.IsLinked) return LinkedReplaceReason;
+                if (facts.Family == ImageFamily.AlternateContent && !facts.SharedReference)
+                    return "AlternateContent branches do not share one embedded media relationship";
+                return null;
+            case ImageOperation.EmbedLinked:
+                if (!facts.IsLinked) return "picture is already embedded";
+                if (facts.BlipExtension) return BlipExtensionReason;
+                if (facts.Family == ImageFamily.AlternateContent) return "AlternateContent branches cannot be embedded together";
+                return null;
+            case ImageOperation.SetDimensions:
+                if (facts.HasRenderedSize) return null;
+                return facts.Family == ImageFamily.LegacyVml
+                    ? "legacy VML shape has no parsable width/height style"
+                    : "picture extent is missing or malformed";
+            case ImageOperation.SetFloatingLayout:
+                if (facts.Family == ImageFamily.LegacyVml) return "legacy VML positioning is not modeled";
+                if (facts.Family == ImageFamily.AlternateContent) return "AlternateContent branches carry independent geometry";
+                if (facts.Placement != ImagePlacement.Floating) return "inline picture has no floating layout";
+                return facts.FloatingSupported ? null : facts.LayoutReason ?? "floating layout is read-only";
+            default:
+                return null;
+        }
+    }
+
+    private static (bool CanMutate, string? Reason) SummarizeOperations(
+        ImageOperationMatrix operations, ImagePlacement? placement)
+    {
+        var standard = new List<ImageOperationSupport>
+            { operations.Replace, operations.SetDimensions, operations.SetMetadata };
+        if (placement == ImagePlacement.Floating) standard.Add(operations.SetFloatingLayout);
+        standard.Add(operations.Remove);
+        var blocker = standard.FirstOrDefault(support => !support.CanMutate);
+        return (blocker is null, blocker?.Reason);
     }
 
     private sealed record MediaInfo(ImageBinaryFormat Format, int? Width, int? Height,
@@ -591,27 +1030,27 @@ public sealed partial class DocxSession
         $"img:{owner.Scope}:{UnidHelper.ReadOrDeriveUnid(outer)}"
         + (subOccurrence is null ? string.Empty : $":sub{subOccurrence.Value}");
 
-    private EditResult? ResolveMutableImage(string imageId, out ImageCandidate candidate)
+    private EditResult? ResolveMutableImage(string imageId, ImageOperation operation, out ImageCandidate candidate)
     {
         candidate = EnumerateImageCandidates(ProjectionScopes.All)
             .FirstOrDefault(item => string.Equals(item.Info.Id, imageId, StringComparison.Ordinal))!;
         if (candidate is null)
             return EditResult.Fail(EditErrorCode.ImageNotFound, $"image not found: {imageId}");
-        if (candidate.Info.IsLinked)
-            return EditResult.Fail(EditErrorCode.LinkedImageReadOnly,
-                "external linked images are read-only");
-        if (!candidate.Info.CanMutate)
-            return EditResult.Fail(EditErrorCode.UnsupportedImageMarkup,
-                candidate.Info.UnsupportedReason ?? "image markup is read-only");
-        return null;
-    }
-
-    private EditResult? ValidateImageMutationMode(string? anchorId = null)
-    {
-        if (_trackedChanges == TrackedChangeMode.RenderInline)
-            return EditResult.Fail(EditErrorCode.TrackedOperationUnsupported,
-                "image mutations cannot be represented faithfully as tracked revisions", anchorId);
-        return null;
+        var support = operation switch
+        {
+            ImageOperation.Replace => candidate.Info.Operations.Replace,
+            ImageOperation.EmbedLinked => candidate.Info.Operations.EmbedLinked,
+            ImageOperation.SetDimensions => candidate.Info.Operations.SetDimensions,
+            ImageOperation.SetMetadata => candidate.Info.Operations.SetMetadata,
+            ImageOperation.SetFloatingLayout => candidate.Info.Operations.SetFloatingLayout,
+            _ => candidate.Info.Operations.Remove,
+        };
+        if (support.CanMutate) return null;
+        return EditResult.Fail(
+            operation == ImageOperation.Replace && candidate.Info.IsLinked
+                ? EditErrorCode.LinkedImageReadOnly
+                : EditErrorCode.UnsupportedImageMarkup,
+            support.Reason ?? "image markup is read-only");
     }
 
     private sealed record ValidatedImageData(
@@ -628,14 +1067,10 @@ public sealed partial class DocxSession
                     $"image exceeds the {MaxImageInputBytes}-byte runtime limit", anchorId));
         var token = ImageHeaderParser.DetectFormat(bytes);
         var format = FormatFromMagicToken(token);
-        if (format == ImageBinaryFormat.Webp)
-            return new(format, "image/webp", 0, 0,
-                EditResult.Fail(EditErrorCode.UnsupportedImageFormat,
-                    "WebP mutation is unsupported because Open XML SDK 3.5.1 exposes no Word ImagePartType for it", anchorId));
         if (format == ImageBinaryFormat.Unknown)
             return new(format, null, 0, 0,
                 EditResult.Fail(EditErrorCode.UnsupportedImageFormat,
-                    "image bytes are not PNG, JPEG, GIF, BMP, or TIFF", anchorId));
+                    "image bytes are not PNG, JPEG, GIF, BMP, TIFF, or WebP", anchorId));
         var dimensions = ImageHeaderParser.GetDimensions(bytes);
         if (dimensions is null)
             return new(format, null, 0, 0,
@@ -648,6 +1083,7 @@ public sealed partial class DocxSession
             ImageBinaryFormat.Gif => "image/gif",
             ImageBinaryFormat.Bmp => "image/bmp",
             ImageBinaryFormat.Tiff => "image/tiff",
+            ImageBinaryFormat.Webp => "image/webp",
             _ => null,
         };
         return new(format, contentType, dimensions.Value.Width, dimensions.Value.Height, null);
@@ -673,6 +1109,7 @@ public sealed partial class DocxSession
         {
             layout = options.FloatingLayout ?? new FloatingImageLayout();
             if (ValidateFloatingLayout(layout, anchorId) is { } layoutError) return layoutError;
+            layout = NormalizeWrapPolygon(layout);
         }
         double defaultWidth = intrinsicWidth * 72.0 / ImageDefaultDpi;
         double defaultHeight = intrinsicHeight * 72.0 / ImageDefaultDpi;
@@ -775,9 +1212,15 @@ public sealed partial class DocxSession
             || layout.RawFlagTokens is not null)
             return EditResult.Fail(EditErrorCode.InvalidImageLayout,
                 "report-only raw floating layout tokens cannot be written", anchorId);
-        if (layout.WrapMode is not (ImageWrapMode.None or ImageWrapMode.Square))
+        if (layout.WrapMode is ImageWrapMode.Tight or ImageWrapMode.Through)
+        {
+            if (layout.WrapPolygon is { } polygon && polygon.Points.Count < 3)
+                return EditResult.Fail(EditErrorCode.InvalidImageLayout,
+                    "a wrap polygon needs a start vertex and at least two line segments", anchorId);
+        }
+        else if (layout.WrapPolygon is not null)
             return EditResult.Fail(EditErrorCode.InvalidImageLayout,
-                "only none and square floating wrap modes are mutable", anchorId);
+                "wrapPolygon applies only to tight and through wrap", anchorId);
         if ((layout.HorizontalOffsetEmu is null) == (layout.HorizontalAlignment is null)
             || (layout.VerticalOffsetEmu is null) == (layout.VerticalAlignment is null))
             return EditResult.Fail(EditErrorCode.InvalidImageLayout,
@@ -796,11 +1239,15 @@ public sealed partial class DocxSession
         return null;
     }
 
+    /// <summary>A validated tight/through layout without vertices means the picture rectangle;
+    /// resolving that here keeps the no-op comparison and the writer looking at the same value.</summary>
+    private static FloatingImageLayout NormalizeWrapPolygon(FloatingImageLayout layout) =>
+        layout.WrapMode is ImageWrapMode.Tight or ImageWrapMode.Through && layout.WrapPolygon is null
+            ? layout with { WrapPolygon = ImageWrapPolygon.Rectangle }
+            : layout;
+
     private static string? ValidateImageInsertionBoundary(XElement paragraph, int offset)
     {
-        if (paragraph.Descendants().Any(element => element.Name == W.ins || element.Name == W.del
-            || element.Name == W.moveFrom || element.Name == W.moveTo))
-            return "images cannot be inserted into tracked-revision markup";
         if (paragraph.Descendants().Any(element => element.Name == W.fldChar || element.Name == W.instrText))
             return "images cannot be inserted into a paragraph containing a complex field";
         int consumed = 0;
@@ -811,21 +1258,6 @@ public sealed partial class DocxSession
                 return "image insertion boundary is inside an unsupported inline container";
             consumed += length;
         }
-        return null;
-    }
-
-    private static string? ExistingImageBoundaryReason(XElement image, XElement paragraph)
-    {
-        if (image.Ancestors().TakeWhile(element => element != paragraph).Any(element =>
-            element.Name == W.ins || element.Name == W.del || element.Name == W.moveFrom
-            || element.Name == W.moveTo || element.Name == W.hyperlink || element.Name == W.sdt
-            || element.Name == W.fldSimple || element.Name == W.smartTag))
-            return "image is inside an unsupported inline/revision container";
-        if (image.Ancestors().TakeWhile(element => element != paragraph)
-            .Any(element => element.Name == MC.AlternateContent))
-            return "image is inside markup-compatibility AlternateContent and cannot be changed without synchronizing its fallback";
-        if (paragraph.Descendants().Any(element => element.Name == W.fldChar || element.Name == W.instrText))
-            return "image is in a paragraph containing a complex field";
         return null;
     }
 
@@ -948,13 +1380,15 @@ public sealed partial class DocxSession
             ?? throw new InvalidDataException("floating image has no vertical position");
         positionH.ReplaceWith(BuildHorizontalPosition(layout));
         positionV.ReplaceWith(BuildVerticalPosition(layout));
-        var wrap = anchor.Elements().FirstOrDefault(element => element.Name == WP.wrapNone
-            || element.Name == WP.wrapSquare || element.Name == WP.wrapTight
-            || element.Name == WP.wrapThrough || element.Name == WP.wrapTopAndBottom)
+        var wrap = anchor.Elements().FirstOrDefault(element => IsWrapElement(element.Name))
             ?? throw new InvalidDataException("floating image has no wrap element");
         wrap.ReplaceWith(BuildWrap(layout));
         ApplyFloatingAttributes(anchor, layout);
     }
+
+    private static bool IsWrapElement(XName name) =>
+        name == WP.wrapNone || name == WP.wrapSquare || name == WP.wrapTight
+        || name == WP.wrapThrough || name == WP.wrapTopAndBottom;
 
     private static void ApplyFloatingAttributes(XElement anchor, FloatingImageLayout layout)
     {
@@ -990,10 +1424,49 @@ public sealed partial class DocxSession
         return position;
     }
 
-    private static XElement BuildWrap(FloatingImageLayout layout) =>
-        layout.WrapMode == ImageWrapMode.None
-            ? new XElement(WP.wrapNone)
-            : new XElement(WP.wrapSquare, new XAttribute("wrapText", WrapSideToken(layout.WrapSide)));
+    private static XElement BuildWrap(FloatingImageLayout layout) => layout.WrapMode switch
+    {
+        ImageWrapMode.None => new XElement(WP.wrapNone),
+        ImageWrapMode.Square => new XElement(WP.wrapSquare,
+            new XAttribute("wrapText", WrapSideToken(layout.WrapSide))),
+        ImageWrapMode.TopAndBottom => new XElement(WP.wrapTopAndBottom),
+        _ => new XElement(layout.WrapMode == ImageWrapMode.Tight ? WP.wrapTight : WP.wrapThrough,
+            new XAttribute("wrapText", WrapSideToken(layout.WrapSide)),
+            BuildWrapPolygon(layout.WrapPolygon ?? ImageWrapPolygon.Rectangle)),
+    };
+
+    private static XElement BuildWrapPolygon(ImageWrapPolygon polygon)
+    {
+        var element = new XElement(WP.wrapPolygon, new XAttribute("edited", BoolToken(polygon.Edited)));
+        for (int i = 0; i < polygon.Points.Count; i++)
+            element.Add(new XElement(i == 0 ? WP.start : WP.lineTo,
+                new XAttribute("x", polygon.Points[i].X), new XAttribute("y", polygon.Points[i].Y)));
+        return element;
+    }
+
+    private static bool TryReadWrapPolygon(XElement wrap, out ImageWrapPolygon? polygon)
+    {
+        polygon = null;
+        if (!HasOnlyAttributes(wrap, "wrapText") || wrap.Nodes().Any(node => node is not XElement)) return false;
+        var outline = wrap.Elements().SingleOrDefault();
+        if (outline is null || outline.Name != WP.wrapPolygon || !HasOnlyAttributes(outline, "edited")
+            || !TryBoolAttribute(outline, "edited", false, out var edited)
+            || outline.Nodes().Any(node => node is not XElement)) return false;
+        var vertices = outline.Elements().ToList();
+        if (vertices.Count < 3 || vertices[0].Name != WP.start
+            || vertices.Skip(1).Any(vertex => vertex.Name != WP.lineTo)) return false;
+        var points = new List<ImageWrapPoint>(vertices.Count);
+        foreach (var vertex in vertices)
+        {
+            if (!HasOnlyAttributes(vertex, "x", "y") || vertex.Nodes().Any()
+                || !long.TryParse((string?)vertex.Attribute("x"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var x)
+                || !long.TryParse((string?)vertex.Attribute("y"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var y))
+                return false;
+            points.Add(new ImageWrapPoint(x, y));
+        }
+        polygon = new ImageWrapPolygon(points, edited);
+        return true;
+    }
 
     private static bool TryReadFloatingLayout(XElement anchor,
         out FloatingImageLayout? layout, out string? unsupportedReason)
@@ -1032,9 +1505,7 @@ public sealed partial class DocxSession
         }
         var positionH = anchor.Element(WP.positionH);
         var positionV = anchor.Element(WP.positionV);
-        var wrapElements = anchor.Elements().Where(element => element.Name == WP.wrapNone
-            || element.Name == WP.wrapSquare || element.Name == WP.wrapTight
-            || element.Name == WP.wrapThrough || element.Name == WP.wrapTopAndBottom).ToList();
+        var wrapElements = anchor.Elements().Where(element => IsWrapElement(element.Name)).ToList();
         if (positionH is null || positionV is null || wrapElements.Count != 1)
         {
             unsupportedReason = "floating image lacks one canonical position/wrap layout";
@@ -1079,6 +1550,7 @@ public sealed partial class DocxSession
         var wrap = wrapElements[0];
         ImageWrapMode wrapMode;
         ImageWrapSide wrapSide = ImageWrapSide.BothSides;
+        ImageWrapPolygon? wrapPolygon = null;
         string? rawWrapMode = null;
         string? rawWrapSide = null;
         if (wrap.Name == WP.wrapNone)
@@ -1096,8 +1568,7 @@ public sealed partial class DocxSession
             wrapMode = wrap.Name == WP.wrapSquare ? ImageWrapMode.Square
                 : wrap.Name == WP.wrapTight ? ImageWrapMode.Tight
                 : wrap.Name == WP.wrapThrough ? ImageWrapMode.Through
-                : wrap.Name == WP.wrapTopAndBottom ? ImageWrapMode.TopAndBottom
-                : ImageWrapMode.Unknown;
+                : ImageWrapMode.TopAndBottom;
             var wrapSideToken = (string?)wrap.Attribute("wrapText") ?? "bothSides";
             if (!TryParseWrapSide(wrapSideToken, out wrapSide))
             {
@@ -1106,17 +1577,23 @@ public sealed partial class DocxSession
                 mutable = false;
                 unsupportedReason ??= "floating image uses an unsupported wrap side";
             }
-            if (wrapMode is not ImageWrapMode.Square)
+            // Each wrap form is modeled exactly: square carries only its side, top-and-bottom
+            // nothing, and tight/through their side plus a plain start/lineTo outline. Distances or
+            // effect extents on the wrap element itself are unmodeled and keep the layout read-only.
+            string? shapeReason = wrapMode switch
+            {
+                ImageWrapMode.Square => HasOnlyAttributes(wrap, "wrapText") && !wrap.Nodes().Any()
+                    ? null : "floating wrap contains unmodeled attributes or children",
+                ImageWrapMode.TopAndBottom => HasOnlyAttributes(wrap) && !wrap.Nodes().Any()
+                    ? null : "floating wrap contains unmodeled attributes or children",
+                _ => TryReadWrapPolygon(wrap, out wrapPolygon)
+                    ? null : "floating wrap outline is not a plain start/lineTo polygon",
+            };
+            if (shapeReason is not null)
             {
                 rawWrapMode = wrap.ToString(SaveOptions.DisableFormatting);
                 mutable = false;
-                unsupportedReason ??= $"floating wrap form {wrap.Name.LocalName} is read-only";
-            }
-            else if (!HasOnlyAttributes(wrap, "wrapText") || wrap.Nodes().Any())
-            {
-                rawWrapMode = wrap.ToString(SaveOptions.DisableFormatting);
-                mutable = false;
-                unsupportedReason ??= "floating wrap contains unmodeled attributes or children";
+                unsupportedReason ??= shapeReason;
             }
         }
         if (!TryLongAttribute(anchor, "distT", 0, out var distT))
@@ -1151,6 +1628,7 @@ public sealed partial class DocxSession
             VerticalAlignment = verticalAlignment,
             WrapMode = wrapMode,
             WrapSide = wrapSide,
+            WrapPolygon = wrapPolygon,
             DistanceTopEmu = distT,
             DistanceBottomEmu = distB,
             DistanceLeftEmu = distL,

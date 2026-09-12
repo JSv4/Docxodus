@@ -239,6 +239,8 @@ internal static class Dispatcher
             Str(args, "imageBase64"), JsonObjectOrEmpty(args, "options")),
         "replace_image" => DocxSessionOps.ReplaceImage(
             Handle(args), Str(args, "imageId"), Str(args, "imageBase64")),
+        "embed_linked_image" => DocxSessionOps.EmbedLinkedImage(
+            Handle(args), Str(args, "imageId"), Str(args, "imageBase64")),
         "set_image_dimensions" => DocxSessionOps.SetImageDimensions(
             Handle(args), Str(args, "imageId"), JsonObjectOrEmpty(args, "dimensions")),
         "set_image_metadata" => DocxSessionOps.SetImageMetadata(
