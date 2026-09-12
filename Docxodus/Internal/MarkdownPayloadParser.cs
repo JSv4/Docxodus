@@ -24,7 +24,12 @@ internal enum ParserBlockKind
 internal sealed record ParsedBlock(
     ParserBlockKind Kind,
     int ListLevel,
-    IReadOnlyList<XElement> RunElements);
+    IReadOnlyList<XElement> RunElements)
+{
+    /// <summary>The number an ordered item's marker declares (<c>3.</c> → 3); 1 for every
+    /// other block. Only the first item of a list decides where the list starts.</summary>
+    public int ListStart { get; init; } = 1;
+}
 
 internal sealed record ParseError(EditErrorCode Code, string Message);
 
@@ -193,10 +198,19 @@ internal static class MarkdownPayloadParser
                 markerEnd += 2;
             }
             var itemText = raw.Substring(markerEnd).TrimEnd();
+            // CommonMark caps an ordered marker at nine digits; a longer run of digits is
+            // not a list marker, and a marker of zero starts the list at zero like Word can.
+            var digits = bullet ? "" : raw.Substring(indent, markerEnd - 2 - indent);
+            int start = bullet || digits.Length > 9
+                ? 1
+                : int.Parse(digits, System.Globalization.CultureInfo.InvariantCulture);
             return new ParsedBlock(
                 bullet ? ParserBlockKind.BulletItem : ParserBlockKind.OrderedItem,
                 level,
-                ParseInline(itemText));
+                ParseInline(itemText))
+            {
+                ListStart = start,
+            };
         }
 
         return new ParsedBlock(ParserBlockKind.Paragraph, 0, ParseInline(raw));

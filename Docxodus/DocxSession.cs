@@ -3150,11 +3150,18 @@ public sealed partial class DocxSession : IDisposable
             group.Diagnostic?.Message ?? "revision cannot be resolved safely");
     }
 
+    /// <summary>Numbering instances a revision brought in: a <c>w:numPr/w:ins</c> mark, or the
+    /// numbering of a wholly inserted paragraph, which leaves with the paragraph on reject.</summary>
     private static IReadOnlyList<int> NumberingIdsIntroducedBy(
         Internal.RevisionOps.RevisionGroup group) =>
-        group.Units.Where(unit =>
-                unit.Kind == Internal.RevisionOps.UnitKind.NumberingPropertiesInsert)
-            .Select(unit => (string?)unit.Element.Parent?.Element(W.numId)?.Attribute(W.val))
+        group.Units.Select(unit =>
+                unit.Kind == Internal.RevisionOps.UnitKind.NumberingPropertiesInsert
+                    ? unit.Element.Parent?.Element(W.numId)
+                    : unit.Kind == Internal.RevisionOps.UnitKind.ParaMark
+                        && unit.Element.Name == W.ins
+                        ? unit.Paragraph?.Element(W.pPr)?.Element(W.numPr)?.Element(W.numId)
+                        : null)
+            .Select(numId => (string?)numId?.Attribute(W.val))
             .Where(value => int.TryParse(value, out _))
             .Select(value => int.Parse(
                 value!, System.Globalization.CultureInfo.InvariantCulture))
@@ -7112,11 +7119,21 @@ public sealed partial class DocxSession : IDisposable
         var declaredStyle = parsed.Blocks.Count == 1
             ? DeclaredBlockStyleId(parsed.Blocks[0].Kind)
             : null;
+        // A list marker on a paragraph that is not yet a list item promotes it, exactly as
+        // ApplyListFormat would; on an existing list item the marker is the projection's own
+        // spelling echoed back and the numbering is left alone.
+        var declaredList = parsed.Blocks[0].Kind
+                is Internal.ParserBlockKind.BulletItem or Internal.ParserBlockKind.OrderedItem
+            && ((int?)element.Element(W.pPr)?.Element(W.numPr)?.Element(W.numId)?.Attribute(W.val) ?? 0) == 0
+            && ResolveStyleNumbering(element).numId is null
+            ? parsed.Blocks[0]
+            : null;
         XElement? oldPPr = null;
-        if (declaredStyle is not null)
+        if (declaredStyle is not null || declaredList is not null)
         {
             if (RefuseNestedTrackedParagraphPropertyChange(element, anchorId) is { } pending) return pending;
-            if (_trackedChanges == TrackedChangeMode.RenderInline
+            if (declaredStyle is not null
+                && _trackedChanges == TrackedChangeMode.RenderInline
                 && !Internal.StyleFactory.HasParagraphStyle(_doc!, declaredStyle))
                 return TrackedStructureUnsupported(
                     $"ReplaceText payload requiring synthesis of style '{declaredStyle}'", anchorId);
@@ -7133,8 +7150,9 @@ public sealed partial class DocxSession : IDisposable
         {
             if (!Internal.StyleFactory.EnsureParagraphStyle(_doc!, declaredStyle))
                 return EditResult.Fail(EditErrorCode.UnknownStyle, $"style id not found: {declaredStyle}", anchorId);
-            oldPPr = new XElement(element.Element(W.pPr) ?? new XElement(W.pPr));
         }
+        if (declaredStyle is not null || declaredList is not null)
+            oldPPr = new XElement(element.Element(W.pPr) ?? new XElement(W.pPr));
 
         _history.RecordPreOp(preOp);
         try
@@ -7161,6 +7179,15 @@ public sealed partial class DocxSession : IDisposable
                     TrackPropertyMutation(pPr, oldPPr!, W.pPrChange,
                         _revisionAuthor ?? "docxodus", NextTrackedFormatRevisionDate(), W.rPr, W.sectPr);
             }
+            if (declaredList is not null)
+            {
+                AssignPayloadListNumbering(element, declaredList, new PayloadListState(parsed.Blocks)
+                {
+                    PrecedingNeighbor = element.ElementsBeforeSelf().LastOrDefault(),
+                    FollowingNeighbor = element.ElementsAfterSelf().FirstOrDefault(),
+                });
+                TrackListPropertyMutation(element, oldPPr!, insertedNumPr: true);
+            }
             PromoteHyperlinkRelationships(element);
             if (hyperlinkOwner is { } owner)
             {
@@ -7171,8 +7198,9 @@ public sealed partial class DocxSession : IDisposable
 
             if (target.Anchor.Scope == "cmt") CommentsVersion++;
             InvalidateProjectionCache();
-            // A declared style can flip the anchor kind (p → h); report the fresh identity.
-            var updated = declaredStyle is not null
+            // A declared style or list can flip the anchor kind (p → h, p → li); report the
+            // fresh identity.
+            var updated = declaredStyle is not null || declaredList is not null
                 ? AnchorForUnid(target.Unid, target.PartUri) ?? target.Anchor
                 : target.Anchor;
             return new EditResult
@@ -7193,8 +7221,8 @@ public sealed partial class DocxSession : IDisposable
     /// <summary>
     /// The paragraph style a parsed markdown block explicitly declares — the same mapping
     /// <see cref="BuildParagraphFromParsedBlock"/> writes for InsertParagraph. Null for plain
-    /// paragraphs and for list items (v1 list payloads deliberately carry no numbering; see
-    /// the note in <see cref="BuildParagraphFromParsedBlock"/>).
+    /// paragraphs and for list items, whose declaration is numbering rather than a style
+    /// (see <see cref="AssignPayloadListNumbering"/>).
     /// </summary>
     private static string? DeclaredBlockStyleId(Internal.ParserBlockKind kind) => kind switch
     {
@@ -8160,16 +8188,19 @@ public sealed partial class DocxSession : IDisposable
         {
             var created = new List<Anchor>();
             var newElements = new List<XElement>();
+            var lists = new PayloadListState(parsed.Blocks)
+            {
+                PrecedingNeighbor = pos == Position.After
+                    ? element
+                    : element.ElementsBeforeSelf().LastOrDefault(),
+                FollowingNeighbor = pos == Position.After
+                    ? element.ElementsAfterSelf().FirstOrDefault()
+                    : element,
+            };
             foreach (var block in parsed.Blocks)
             {
                 var p = BuildParagraphFromParsedBlock(block);
-                // List items: try to inherit numbering from a sibling list item so the
-                // payload actually projects as a bullet/numbered item. If no sibling
-                // has numbering, the paragraph stays bare and the projector classifies
-                // it as a plain "p" — which is what we report below.
-                if (block.Kind is Internal.ParserBlockKind.BulletItem
-                                or Internal.ParserBlockKind.OrderedItem)
-                    TryInheritNumPrFromSibling(p, element);
+                AssignPayloadListNumbering(p, block, lists);
                 UnidHelper.AssignToSelfAndDescendants(p);
                 newElements.Add(p);
                 var unid = (string)p.Attribute(PtOpenXml.Unid)!;
@@ -8722,9 +8753,11 @@ public sealed partial class DocxSession : IDisposable
         {
             foreach (var p in cell!.Elements(W.p).ToList()) p.Remove();
 
+            var lists = new PayloadListState(parsed.Blocks);
             foreach (var block in parsed.Blocks)
             {
                 var p = BuildParagraphFromParsedBlock(block);
+                AssignPayloadListNumbering(p, block, lists);
                 UnidHelper.AssignToSelfAndDescendants(p);
                 cell.Add(p);
                 PromoteHyperlinkRelationships(p);
@@ -14854,9 +14887,10 @@ public sealed partial class DocxSession : IDisposable
             case Internal.ParserBlockKind.Code:
                 pPr.Add(new XElement(W.pStyle, new XAttribute(W.val, "Code")));
                 break;
-            // List items: numPr inheritance not auto-injected in v1 — caller can use
-            // SetListLevel afterwards if needed. The bare paragraph will project as a
-            // normal paragraph until numbering is added.
+            // List items declare numbering, not a style. The builder has no view of the
+            // payload's other blocks or the insertion point's neighbours, both of which decide
+            // which w:num the item joins, so the caller assigns it through
+            // AssignPayloadListNumbering.
         }
 
         if (pPr.HasElements) p.Add(pPr);
@@ -14931,34 +14965,95 @@ public sealed partial class DocxSession : IDisposable
     }
 
     /// <summary>
-    /// Copy <c>w:numPr</c> from a nearby sibling list item into the new paragraph so
-    /// a bullet/ordered-item payload actually renders as part of an existing list.
-    /// Walks previous siblings first (closest match first), then next siblings.
-    /// No-op when no sibling carries numbering — caller then reports kind="p" via
-    /// <see cref="ClassifyParagraphKind"/>.
+    /// What one markdown payload's list blocks have decided so far. Consecutive ordered items
+    /// form one list and share one <c>w:num</c> instance that starts where the first marker
+    /// says; a non-list block or a top-level bullet ends that list, so a later ordered list
+    /// restarts on its own instance, as Word does for separate lists. Bullets have no sequence
+    /// to keep apart and share the document's Docxodus bullet definition. The payload's first
+    /// list continues an adjacent, format-compatible list item instead of starting its own —
+    /// the block before the insertion point, or, when the whole payload is one list, the block
+    /// after it.
     /// </summary>
-    private static void TryInheritNumPrFromSibling(XElement newParagraph, XElement anchorElement)
+    private sealed class PayloadListState
     {
-        XElement? donorNumPr = null;
-        XElement? donorPStyle = null;
-        foreach (var sib in anchorElement.ElementsBeforeSelf().Reverse()
-                                .Concat(new[] { anchorElement })
-                                .Concat(anchorElement.ElementsAfterSelf()))
+        public PayloadListState(IReadOnlyList<Internal.ParsedBlock> blocks)
         {
-            if (sib.Name != W.p) continue;
-            var nump = sib.Element(W.pPr)?.Element(W.numPr);
-            if (nump is null) continue;
-            donorNumPr = nump;
-            donorPStyle = sib.Element(W.pPr)?.Element(W.pStyle);
-            break;
+            var topLevelKinds = blocks
+                .Where(block => block.ListLevel == 0)
+                .Select(block => block.Kind)
+                .Distinct()
+                .ToList();
+            SingleList = blocks.All(block => block.Kind
+                    is Internal.ParserBlockKind.BulletItem or Internal.ParserBlockKind.OrderedItem)
+                && topLevelKinds.Count == 1;
         }
-        if (donorNumPr is null) return;
 
-        var pPr = newParagraph.Element(W.pPr);
-        if (pPr is null) { pPr = new XElement(W.pPr); newParagraph.AddFirst(pPr); }
-        if (pPr.Element(W.numPr) is null) pPr.Add(new XElement(donorNumPr));
-        if (donorPStyle is not null && pPr.Element(W.pStyle) is null)
-            pPr.AddFirst(new XElement(donorPStyle));
+        public XElement? PrecedingNeighbor { get; init; }
+        public XElement? FollowingNeighbor { get; init; }
+        public bool SingleList { get; }
+        public bool FirstListPending { get; set; } = true;
+        public int? OrderedNumId { get; set; }
+    }
+
+    /// <summary>
+    /// Give a paragraph built from a markdown list block the native numbering it declares,
+    /// through the same owner <see cref="ApplyListFormat"/> uses. Non-list blocks end the
+    /// current ordered list and get nothing. Nesting maps the indent level to <c>w:ilvl</c>;
+    /// a document's own list that is continued has any missing level synthesized.
+    /// </summary>
+    private void AssignPayloadListNumbering(
+        XElement paragraph, Internal.ParsedBlock block, PayloadListState state)
+    {
+        bool ordered = block.Kind == Internal.ParserBlockKind.OrderedItem;
+        if (!ordered && block.Kind != Internal.ParserBlockKind.BulletItem)
+        {
+            state.OrderedNumId = null;
+            return;
+        }
+
+        int ilvl = Math.Clamp(block.ListLevel, 0, 8);
+        if (!ordered && ilvl == 0) state.OrderedNumId = null;
+
+        int? numId = null;
+        if (state.FirstListPending && ilvl == 0)
+        {
+            state.FirstListPending = false;
+            numId = CompatibleNeighborNumbering(state.PrecedingNeighbor, ordered)
+                ?? (state.SingleList
+                    ? CompatibleNeighborNumbering(state.FollowingNeighbor, ordered)
+                    : null);
+            if (numId is { } continued && ordered) state.OrderedNumId = continued;
+        }
+
+        if (numId is null && ordered)
+        {
+            state.OrderedNumId ??= Internal.NumberingFactory.CreateNumberingInstance(
+                _doc!, ListFormat.Decimal, block.ListStart);
+            numId = state.OrderedNumId;
+        }
+        numId ??= Internal.NumberingFactory.EnsureNumbering(_doc!, ListFormat.Bullet);
+        if (ilvl > 0) Internal.NumberingFactory.EnsureLevelDefined(_doc!, numId.Value, ilvl);
+
+        var pPr = paragraph.Element(W.pPr);
+        if (pPr is null) { pPr = new XElement(W.pPr); paragraph.AddFirst(pPr); }
+        pPr.Element(W.numPr)?.Remove();
+        SetPPrChildInOrder(pPr, new XElement(W.numPr,
+            new XElement(W.ilvl, new XAttribute(W.val, ilvl)),
+            new XElement(W.numId, new XAttribute(W.val, numId.Value))));
+    }
+
+    /// <summary>The numbering instance of <paramref name="neighbor"/> when it is a list item
+    /// whose level renders in the same family as the block (bullet vs numbered); else null.</summary>
+    private int? CompatibleNeighborNumbering(XElement? neighbor, bool ordered)
+    {
+        if (neighbor is null || neighbor.Name != W.p) return null;
+        var numPr = neighbor.Element(W.pPr)?.Element(W.numPr);
+        var numId = (int?)numPr?.Element(W.numId)?.Attribute(W.val);
+        if (numId is null or 0) return null;
+        int ilvl = (int?)numPr!.Element(W.ilvl)?.Attribute(W.val) ?? 0;
+        var format = Internal.NumberingFactory.ResolveNumberFormat(_doc!, numId.Value, ilvl);
+        if (format is null) return null;
+        return (format == NumberFormat.Bullet) == !ordered ? numId : null;
     }
 
     // Top-level inline children of <w:p> that participate in text flow.
