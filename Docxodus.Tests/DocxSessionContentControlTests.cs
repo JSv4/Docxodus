@@ -145,10 +145,16 @@ public sealed class DocxSessionContentControlTests
         Assert.Equal(0, session.UndoCount);
 
         session.SetTrackedChanges(TrackedChangeMode.RenderInline);
-        Assert.Equal(EditErrorCode.TrackedOperationUnsupported, Fill("101").Error!.Code);
         var paragraph = ParagraphAnchors(session).First(anchor =>
             session.Project().AnchorIndex[anchor].TextPreview.Contains("inner", StringComparison.Ordinal));
         Assert.True(session.ReplaceTextAtSpan(paragraph, 7, 5, "INNER").Success);
+        // Issue #763: a tracked text fill records the old content as a deletion and the new
+        // content as an insertion instead of being refused.
+        var trackedFill = Fill("101");
+        Assert.True(trackedFill.Success, trackedFill.Error?.Message);
+        var types = session.ListRevisions().Select(revision => revision.Type).ToList();
+        Assert.Contains("delete", types);
+        Assert.Contains("insert", types);
     }
 
     [Fact]
@@ -673,10 +679,13 @@ public sealed class DocxSessionContentControlTests
         {
             tracked.SetTrackedChanges(TrackedChangeMode.RenderInline);
             var item = tracked.ListContentControls().Single(control => control.NativeId == "209");
-            Assert.Equal(EditErrorCode.TrackedOperationUnsupported,
-                tracked.RemoveRepeatingSectionItem(item.AnchorId).Error!.Code);
-            Assert.Equal(0, tracked.UndoCount);
+            // Issue #763: the removal is recorded as a tracked structural deletion, so the item's
+            // picture and its relationship stay in the package until the deletion is accepted.
+            var removed = tracked.RemoveRepeatingSectionItem(item.AnchorId);
+            Assert.True(removed.Success, removed.Error?.Message);
+            Assert.Equal(1, tracked.UndoCount);
             Assert.Single(tracked.ListImages());
+            Assert.Contains(tracked.ListRevisions(), revision => revision.Type == "delete");
         }
 
         using (var session = new DocxSession(relationshipFixture))
@@ -1269,31 +1278,61 @@ public sealed class DocxSessionContentControlTests
                 StringComparer.Ordinal);
 
         session.SetTrackedChanges(TrackedChangeMode.RenderInline);
-        var tracked = session.ListContentControls();
-        Assert.All(tracked, control =>
-        {
-            Assert.False(control.CanMutate);
-            Assert.False(control.CanDetachTargetBinding);
-            Assert.Contains("tracked revisions", control.UnsupportedReason!, StringComparison.Ordinal);
-        });
+        var tracked = session.ListContentControls()
+            .Where(control => control.NativeId is not null)
+            .GroupBy(control => control.NativeId!, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+        // Issue #763: content edits have a native tracked form and stay writable; state that
+        // lives in properties Word does not track is refused with the property named.
+        foreach (var writable in new[] { "101", "113", "108" })
+            Assert.True(tracked[writable].CanMutate, tracked[writable].UnsupportedReason);
+        // The only item of a section is never removable, tracked or not; that gate is not tracking's.
+        Assert.Contains("at least one item", tracked["109"].UnsupportedReason!, StringComparison.Ordinal);
+        Assert.Contains("w14:checked", tracked["102"].UnsupportedReason!, StringComparison.Ordinal);
+        Assert.Contains("w:date", tracked["103"].UnsupportedReason!, StringComparison.Ordinal);
+        Assert.Contains("w:lastValue", tracked["104"].UnsupportedReason!, StringComparison.Ordinal);
+        Assert.Contains("w:lastValue", tracked["105"].UnsupportedReason!, StringComparison.Ordinal);
+        Assert.All(new[] { "102", "103", "104", "105" }, id => Assert.False(tracked[id].CanMutate));
 
-        var attempts = new Func<EditResult>[]
+        var refused = new Func<EditResult>[]
         {
-            () => session.FillContentControlText(identifiers["101"], "x"),
-            () => session.FillContentControlRichText(identifiers["100"], "x"),
             () => session.SetContentControlChecked(identifiers["102"], true),
             () => session.SetContentControlDate(identifiers["103"], DateTimeOffset.UnixEpoch),
             () => session.SelectContentControlItem(identifiers["104"], "a"),
             () => session.SelectContentControlItem(identifiers["105"], "a"),
-            () => session.FillContentControlPicture(identifiers["113"], Png(4, 5)),
-            () => session.AddRepeatingSectionItem(identifiers["108"]),
-            () => session.RemoveRepeatingSectionItem(identifiers["109"]),
         };
-        foreach (var attempt in attempts)
+        foreach (var attempt in refused)
             Assert.Equal(EditErrorCode.TrackedOperationUnsupported, attempt().Error!.Code);
+        // A nested target is still gated by the nested-controls policy, not by tracking.
+        Assert.Equal(EditErrorCode.ContentControlNestedFillUnsupported,
+            session.FillContentControlRichText(identifiers["100"], "x").Error!.Code);
         Assert.Equal(0, session.UndoCount);
 
-        // Leaving tracked mode restores exactly the pre-tracked registry verdicts.
+        var recorded = new Func<EditResult>[]
+        {
+            () => session.FillContentControlText(identifiers["101"], "x"),
+            () => session.FillContentControlPicture(identifiers["113"], Png(4, 5)),
+            () => session.AddRepeatingSectionItem(identifiers["108"]),
+        };
+        foreach (var attempt in recorded)
+        {
+            var result = attempt();
+            Assert.True(result.Success, result.Error?.Message);
+        }
+        // The registry reads through the revision markup it just wrote: the filled control is
+        // still inline, the section still block, and with a second item the first is removable.
+        var afterwards = session.ListContentControls().ToDictionary(control => control.AnchorId);
+        Assert.Equal(ContentControlPlacement.Inline, afterwards[identifiers["101"]].Placement);
+        Assert.Equal(ContentControlPlacement.Block, afterwards[identifiers["108"]].Placement);
+        Assert.True(afterwards[identifiers["108"]].CanMutate, afterwards[identifiers["108"]].UnsupportedReason);
+        Assert.True(afterwards[identifiers["109"]].CanMutate, afterwards[identifiers["109"]].UnsupportedReason);
+        var removedItem = session.RemoveRepeatingSectionItem(identifiers["109"]);
+        Assert.True(removedItem.Success, removedItem.Error?.Message);
+        Assert.Equal(recorded.Length + 1, session.UndoCount);
+        Assert.Contains(session.ListRevisions(), revision => revision.Type == "insert");
+        Assert.Contains(session.ListRevisions(), revision => revision.Type == "delete");
+
+        // Leaving tracked mode restores the pre-tracked registry verdicts.
         session.SetTrackedChanges(TrackedChangeMode.Accept);
         Assert.Contains(session.ListContentControls(), control => control.CanMutate);
     }

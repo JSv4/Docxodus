@@ -458,14 +458,24 @@ failures. It accounts for malformed or duplicate native ids, malformed ancestors
 families and placements, nested targets, repeating-section topology, picture topology, bookmark
 ranges the fill would orphan or that an internal hyperlink still targets, locks (own or
 inherited), data bindings (own or inherited), **and the session's tracked-change mode** — under
-`render_inline` every control reports `canMutate: false` with the tracked reason, because a
-whole-control fill has no faithful tracked representation.
+`render_inline` a checkbox, date or list control reports `canMutate: false` with the tracked
+reason (its state lives in `w:sdtPr`, which no revision covers), while text, rich-text and
+picture fills and repeating-item add/remove record native tracked changes (issue #763). Each
+entry also carries `nestedControlAnchorIds` and an `operations` array — one
+`{ operation, nestedControls?, canMutate, reason? }` per operation of the family, and per
+nested policy when the target contains nested controls — evaluated by the very gate the
+operation applies, so an agent can pick the option that will apply instead of guessing.
 
 `fill_text`, `fill_rich_text`, `set_checked`, `set_date`, and `select_item` replace the target's
 complete `w:sdtContent` payload while preserving the wrapper and its `w:sdtPr` metadata (the
 placeholder definition survives; only `w:showingPlcHdr` is cleared). They are refused for
-row/cell placements, for targets containing nested controls, and when the replacement would
-orphan a bookmark range or dangle an internal hyperlink. `fill_picture` retargets the blip
+row/cell placements and when the replacement would orphan a bookmark range or dangle an
+internal hyperlink. A target containing nested controls refuses by default; `fill_text` and
+`fill_rich_text` take `nestedControls: preserve` (keep every nested control in place and
+replace only the content outside them, optionally filling named nested text controls through
+`childFills: { anchorId: text }` in the same call) or `nestedControls: replace` (discard the
+whole payload, nested controls included — each is reported removed, and a locked or
+data-bound nested control refuses). `fill_picture` retargets the blip
 relationship of the single canonical embedded image a picture control owns — it does not rebuild
 the payload. `add_repeating_item`/`remove_repeating_item` clone or drop one direct
 `w15:repeatingSectionItem`; the clone gets fresh `w:sdtPr/w:id`, `wp:docPr` and `w14:paraId`

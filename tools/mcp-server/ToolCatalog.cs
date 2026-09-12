@@ -539,7 +539,7 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_content_controls",
-            "Inspect and fill native Word content controls (structured-document tags) while preserving their wrappers and metadata. Bound controls fail closed unless bindingPolicy is detach_target, which removes only the selected control's own binding. Text, checkbox, date, and list whole-content replacements are refused for row/cell placements; nested targets and render_inline tracked-change mode fail closed for every whole-control fill.",
+            "Inspect and fill native Word content controls (structured-document tags) while preserving their wrappers and metadata. Bound controls fail closed unless bindingPolicy is detach_target, which removes only the selected control's own binding. Text, checkbox, date, and list whole-content replacements are refused for row/cell placements. A target containing nested controls needs nestedControls=preserve (keep them, optionally childFills them) or replace (drop them; locked or bound children refuse). Under render_inline, text/rich-text/picture fills and repeating-item add/remove record native tracked changes; checkbox, date and list state has no tracked representation. list reports per-operation canMutate/reason under operations.",
             """
             {
               "type": "object",
@@ -558,7 +558,9 @@ internal static class ToolCatalog
                 "sectionAnchorId": { "type": "string", "description": "add_repeating_item section control." },
                 "afterItemAnchorId": { "type": "string", "description": "Optional direct item after which the clone is inserted." },
                 "itemAnchorId": { "type": "string", "description": "remove_repeating_item direct item." },
-                "bindingPolicy": { "type": "string", "enum": ["preserve", "detach_target"], "description": "Default preserve. detach_target removes only the selected target's own native w:dataBinding or w15:dataBinding element; a bound ancestor still fails closed." }
+                "bindingPolicy": { "type": "string", "enum": ["preserve", "detach_target"], "description": "Default preserve. detach_target removes only the selected target's own native w:dataBinding or w15:dataBinding element; a bound ancestor still fails closed." },
+                "nestedControls": { "type": "string", "enum": ["refuse", "preserve", "replace"], "description": "fill_text/fill_rich_text on a target containing nested controls. Default refuse. preserve keeps every nested control in place and replaces only the content outside them; replace discards the whole payload, nested controls included (each is reported removed; a locked or data-bound nested control refuses)." },
+                "childFills": { "type": "object", "additionalProperties": { "type": "string" }, "description": "With nestedControls=preserve: plain-text fills for nested text/rich-text controls of the target, keyed by their sdt anchor, applied in the same operation. A key that is not a nested textual control, or a child that fails its own gates, fails the whole call without mutating." }
               },
               "required": ["sessionId", "action"]
             }
