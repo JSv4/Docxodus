@@ -18,6 +18,7 @@ import type {
   DocumentAnnotation,
   DocumentRange,
   DeliverableVerificationResult,
+  DeliverableVerificationRequest,
   DocxodusWasmExports,
   DocxSessionProjection,
   DocxSessionSettings,
@@ -88,6 +89,7 @@ import type {
   TemplatePlaceholder,
   TextMatch,
 } from "./types.js";
+import { serializeVerificationRequest } from "./verification-request.js";
 import type { PageMap } from "./pagination.js";
 import { ContextBoundary, DiffFormat, PlaceholderKinds, ProjectionDepth, ProjectionScopes, TrackedChangeMode } from "./types.js";
 
@@ -1982,7 +1984,15 @@ export class DocxSession {
    * With initial projection capture enabled (the default), exact opening bytes are the
    * baseline used for dispositions and semantic/package deltas.
    */
-  verifyDeliverable(): DeliverableVerificationResult {
+  verifyDeliverable(request?: DeliverableVerificationRequest): DeliverableVerificationResult {
+    if (request !== undefined) {
+      // The full request (issue #747): policy/limit options, expected deltas, companions.
+      if (!this.wasm.VerifyDeliverableWithRequest) {
+        throw new Error("This WASM bundle predates full verification requests; rebuild docxodus.");
+      }
+      return JSON.parse(this.wasm.VerifyDeliverableWithRequest(
+        this.handle, serializeVerificationRequest(request))) as DeliverableVerificationResult;
+    }
     return JSON.parse(
       this.wasm.VerifyDeliverable(this.handle),
     ) as DeliverableVerificationResult;

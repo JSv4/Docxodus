@@ -25,6 +25,7 @@ import type {
   WorkerConvertResponse,
   WorkerGeneratePackageManifestResponse,
   WorkerVerifyDeliverableResponse,
+  DeliverableVerificationRequest,
   WorkerProveRedlineReversibilityResponse,
   WorkerProjectReviewProfileResponse,
   WorkerCompareResponse,
@@ -58,6 +59,7 @@ import type {
   PackageManifestInspectionLimits,
   WorkerErrorCode,
 } from "./types.js";
+import { serializeVerificationRequest } from "./verification-request.js";
 
 /**
  * Rejection carrying the worker's machine-readable cause. Callers classify failures with
@@ -134,7 +136,7 @@ export interface WorkerDocxSession {
   getPackageManifest(): Promise<PackageManifest>;
 
   /** Run the default deliverable gate over the session's clean-save checkpoint. */
-  verifyDeliverable(): Promise<DeliverableVerificationResult>;
+  verifyDeliverable(request?: DeliverableVerificationRequest): Promise<DeliverableVerificationResult>;
 
   /** Compare the current logical checkpoint with the exact opening package. */
   getSemanticChanges(): Promise<SemanticChangeSet>;
@@ -219,7 +221,8 @@ export interface WorkerDocxodus {
   /** Run the default bounded deliverable gate, optionally against an exact baseline. */
   verifyDeliverable(
     document: File | Uint8Array,
-    baseline?: File | Uint8Array
+    baseline?: File | Uint8Array,
+    request?: DeliverableVerificationRequest,
   ): Promise<DeliverableVerificationResult>;
 
   /**
@@ -515,7 +518,8 @@ export async function createWorkerDocxodus(
 
     async verifyDeliverable(
       document: File | Uint8Array,
-      baseline?: File | Uint8Array
+      baseline?: File | Uint8Array,
+      request?: DeliverableVerificationRequest,
     ): Promise<DeliverableVerificationResult> {
       const bytes = await toBytes(document);
       const baselineBytes = baseline === undefined ? undefined : await toBytes(baseline);
@@ -527,6 +531,7 @@ export async function createWorkerDocxodus(
           type: "verifyDeliverable",
           documentBytes: bytes,
           baselineBytes,
+          requestJson: request === undefined ? undefined : serializeVerificationRequest(request),
         },
         transfer
       );
@@ -785,11 +790,14 @@ export async function createWorkerDocxodus(
           return res.semanticChanges;
         },
 
-        async verifyDeliverable(): Promise<DeliverableVerificationResult> {
+        async verifyDeliverable(
+          request?: DeliverableVerificationRequest,
+        ): Promise<DeliverableVerificationResult> {
           const res = await sendRequest<WorkerSessionVerifyDeliverableResponse>({
             id: generateId(),
             type: "sessionVerifyDeliverable",
             handle,
+            requestJson: request === undefined ? undefined : serializeVerificationRequest(request),
           });
           if (!res.success || !res.verification) {
             throw new Error(res.error ?? "sessionVerifyDeliverable failed");

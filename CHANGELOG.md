@@ -22,6 +22,16 @@ All notable changes to this project will be documented in this file.
   insertion just added. `ContentControlInfo` gains `NestedControlAnchorIds` and `Operations`, a
   per-operation (and per nested policy) `canMutate`/`reason` matrix evaluated by the one gate
   every operation applies. Exposed on npm, `docx-scalpel` and MCP (`nestedControls`, `childFills`).
+- The full deliverable-verification request reaches every transport. One wire shape — policy and
+  inspection-limit `options` (defaults read from the .NET model), `expectedSemanticChanges` (the
+  canonical semantic-changes object), `expectedPackageChanges`, and `companionArtifacts` with
+  base64 bytes, digests and render diagnostics — is parsed by the core with unknown properties
+  rejected and every count/byte limit enforced before an artifact is decoded. npm:
+  `verifyDeliverable(document, baseline?, request?)` and `session.verifyDeliverable(request?)`
+  (worker proxy included); Python: `verify_deliverable(..., request=)` and
+  `session.verify_deliverable(request)` with typed request dataclasses; MCP:
+  `docxodus_get_content(format: "verification", verification: {...})` where a companion may be
+  named by `path` inside the document scope. The existing simple calls are unchanged. (#747)
 - Host-captured delivery evidence and receipt-bearing deliveries on every client surface
   (issue #748). A session opened with `CaptureDeliveryEvidence` (`captureDeliveryEvidence` /
   `capture_delivery_evidence`) records, as its edits execute, the exact package before and after

@@ -476,26 +476,43 @@ internal static class Dispatcher
         if (args.ValueKind != JsonValueKind.Object)
             throw new FormatException("verify_deliverable args must be an object");
 
+        // The full request (issue #747) rides alongside the bytes as one object with the
+        // shared wire shape; absent, the default policy applies.
+        string? requestJson = null;
+        if (args.TryGetProperty("request", out var request) && request.ValueKind != JsonValueKind.Null)
+        {
+            if (request.ValueKind != JsonValueKind.Object)
+                throw new FormatException("args property \"request\" must be an object");
+            requestJson = request.GetRawText();
+        }
+
         if (args.TryGetProperty("docxB64", out var encoded))
         {
             if (encoded.ValueKind != JsonValueKind.String)
                 throw new FormatException("args property \"docxB64\" must be a string");
 
             var packageBytes = Convert.FromBase64String(Str(args, "docxB64"));
-            if (!args.TryGetProperty("baselineB64", out var baseline))
-                return VerificationOps.VerifyDeliverable(packageBytes);
-            if (baseline.ValueKind != JsonValueKind.String)
-                throw new FormatException("args property \"baselineB64\" must be a string");
+            byte[]? baselineBytes = null;
+            if (args.TryGetProperty("baselineB64", out var baseline))
+            {
+                if (baseline.ValueKind != JsonValueKind.String)
+                    throw new FormatException("args property \"baselineB64\" must be a string");
+                baselineBytes = Convert.FromBase64String(Str(args, "baselineB64"));
+            }
 
-            return VerificationOps.VerifyDeliverable(
-                Convert.FromBase64String(Str(args, "baselineB64")),
-                packageBytes);
+            if (requestJson is not null)
+                return VerificationOps.VerifyDeliverable(packageBytes, baselineBytes, requestJson);
+            return baselineBytes is null
+                ? VerificationOps.VerifyDeliverable(packageBytes)
+                : VerificationOps.VerifyDeliverable(baselineBytes, packageBytes);
         }
 
         if (args.TryGetProperty("baselineB64", out _))
             throw new FormatException("args property \"baselineB64\" requires string \"docxB64\"");
 
-        return DocxSessionOps.VerifyDeliverable(Handle(args));
+        return requestJson is null
+            ? DocxSessionOps.VerifyDeliverable(Handle(args))
+            : DocxSessionOps.VerifyDeliverable(Handle(args), requestJson);
     }
 
     private static string Ping()

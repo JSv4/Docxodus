@@ -83,6 +83,7 @@ internal static class ToolCatalog
                   },
                   "required": ["documentVersion", "rendererFingerprint"]
                 },
+                "verification": { "type": "object", "description": "verification only: the full bounded request. options (mode standard|strict|reportOnly, failOnUnexpectedChanges, requireNoPlaceholders, detectBracketedAlternativeClauses, editorialMarkers, placeholderTokens, and the inspection limits maxFindings/maxDetector*/maxCompanionArtifact*/maxRenderDiagnostics/maxExpectedChanges/maxReportedDeltaChanges/packageManifest.*), expectedSemanticChanges (the canonical semantic-changes object, as returned by format semantic_changes), expectedPackageChanges (kind, location, before/afterDigest, before/afterValue), companionArtifacts (artifactId, role html|pdf|pageMap|pageImage|renderReport|other, mediaType, availability, path inside the document scope OR bytesB64, pageCount, rendererFingerprint, sourcePackageDigest, pageMapDigest, renderDiagnostics). Omitted: the default policy. Unknown properties are rejected; limits apply before any artifact is decoded." },
                 "preconditions": { "type": "object", "description": "check_preconditions: expectedVersion and/or anchorId plus expectedContentHash, expectedText/expectedTextRange, expectedKind, expectedScope, or expectedMatchCount." }
               },
               "required": ["sessionId", "format"]
