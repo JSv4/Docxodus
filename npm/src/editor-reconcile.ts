@@ -21,6 +21,11 @@ export interface RenderUnit {
   id: string;
   kind: string;
   sig?: string;
+  /** Index of the section wrapper (`[data-section-index]`) a body unit renders into. */
+  section?: number;
+  /** Ordinal of the border box the renderer groups adjacent bordered paragraphs into; units
+   *  sharing a group render inside one wrapper, so a windowed mount never splits one. */
+  group?: number;
 }
 
 /** The diff token for a unit: unid plus the container content signature. The DOM

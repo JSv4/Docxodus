@@ -28,6 +28,11 @@ internal sealed record EditorRenderOptions
     public double Scale { get; init; } = 1.0;
     public bool RenderTrackedChanges { get; init; }
     public bool Comments { get; init; }
+    /// <summary>Stamp <c>data-source-anchor-id</c> on block renders, as the full render always
+    /// does. Off by default for the incremental swap path (which has no use for it and whose
+    /// session index the preceding mutation just invalidated); a windowed initial mount turns it
+    /// on so its blocks are attribute-for-attribute the full render's.</summary>
+    public bool StampAnchors { get; init; }
 }
 
 internal static class DocxSessionJson
@@ -508,6 +513,7 @@ internal static class DocxSessionJson
             Scale = TryGetDoubleNullable(root, "scale") ?? options.Scale,
             RenderTrackedChanges = TryGetBoolNullable(root, "renderTrackedChanges") ?? options.RenderTrackedChanges,
             Comments = TryGetBoolNullable(root, "comments") ?? options.Comments,
+            StampAnchors = TryGetBoolNullable(root, "stampAnchors") ?? options.StampAnchors,
         };
     }
 
@@ -2260,6 +2266,8 @@ internal static class DocxSessionJson
                   .Append(",\"kind\":").Append(JsonString(units[i].Kind));
                 if (units[i].Sig is { } sig)
                     sb.Append(",\"sig\":").Append(JsonString(sig));
+                sb.Append(",\"section\":").Append(units[i].Section)
+                  .Append(",\"group\":").Append(units[i].Group);
                 sb.Append('}');
             }
             sb.Append(']');

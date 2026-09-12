@@ -144,7 +144,11 @@ Findings / refinements vs the original design:
   are directly DocxSession-addressable with no mapping step.
 - **Confirmed degradations (acceptable PoC limits, see §8):** a list item rendered in
   isolation loses numbering *continuation*; an inline image loses its (uncopied) image
-  part. The oracle test targets text paragraphs/headings and skips image blocks.
+  part. The oracle test targets text paragraphs/headings and skips image blocks. *Both
+  since closed:* the block render copies the image part in and declares the live
+  document's list counters on the cloned paragraph (`pt:LevelNumbers`), re-declares its
+  hyperlink relationships and re-opens any field spanning it, so a block rendered alone is
+  the full render's block (`HCO086`–`HCO088`, `HtmlConversionWindowedMountTests`).
 - **Latency:** not yet profiled on a large doc. `RenderBlockHtml` currently re-opens the
   bytes and re-assigns Unids over the whole document per call — fine on small docs, but
   Plan 2 should offer a **session-attached** render (reuse the live `DocxSession` doc) to

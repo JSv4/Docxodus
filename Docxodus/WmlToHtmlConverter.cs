@@ -940,6 +940,28 @@ namespace Docxodus
             }
         }
 
+        /// <summary>
+        /// The canonical <c>kind:scope:unid</c> identity of every anchorable element of
+        /// <paramref name="wordDoc"/> as it stands now, resolved for an element of any later
+        /// rewrite of the same trees by the part it lives in and the Unid it carries.
+        /// </summary>
+        private static Func<XElement, string?> CanonicalSourceIdentity(WordprocessingDocument wordDoc)
+        {
+            var canonicalIndex = WmlToMarkdownConverter.BuildAnchorIndexOnly(wordDoc,
+                new WmlToMarkdownConverterSettings { Scopes = ProjectionScopes.All });
+            var byLocation = new Dictionary<(string PartUri, string Unid), string>();
+            foreach (var target in canonicalIndex.Values)
+                byLocation[(target.PartUri, target.Unid)] = target.Anchor.Id;
+            return element =>
+            {
+                var unid = (string?)element.Attribute(PtOpenXml.Unid);
+                var partUri = element.Document?.Root?.Annotation<OpenXmlPart>()?.Uri.ToString();
+                return unid != null && partUri != null && byLocation.TryGetValue((partUri, unid), out var id)
+                    ? id
+                    : null;
+            };
+        }
+
         public static XElement ConvertToHtml(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings htmlConverterSettings)
         {
             // Some older Word producers store a DrawingML textbox's body in a related XML part
@@ -947,6 +969,15 @@ namespace Docxodus
             // body into its owning content part before the normal simplification and formatting
             // pipeline, so it receives the same revision/style processing as inline textboxes.
             InlineExternalTextBoxBodies(wordDoc);
+
+            // Canonical source identity (data-source-anchor-id) is the SOURCE document's: index it
+            // before revision acceptance, markup simplification and formatting assembly rewrite
+            // the trees. Formatting assembly strips w:numPr, so an index built afterwards called
+            // every list item a plain paragraph ("p:" where the session's own anchor, and the
+            // block renders that stamp it verbatim, say "li:"). The rewrites keep each element's
+            // Unid, so identity is looked up by part and Unid rather than re-derived.
+            if (htmlConverterSettings.StampCanonicalSourceAnchors)
+                htmlConverterSettings.SourceAnchorIdentityProvider = CanonicalSourceIdentity(wordDoc);
 
             // Only accept revisions if NOT rendering tracked changes AND document has tracked changes
             // This optimization saves ~9% of conversion time for documents without revisions
@@ -1051,33 +1082,6 @@ namespace Docxodus
                 footnoteTracker.EndnoteNumberFormat = GetNoteNumberFormat(wordDoc, W.endnotePr, "lowerRoman");
             }
             rootElement.AddAnnotation(footnoteTracker);
-
-            if (htmlConverterSettings.StampCanonicalSourceAnchors)
-            {
-                // Build from the FINAL source trees. The next operation is the HTML transform, so
-                // these reference keys cannot be invalidated by another preprocessing rewrite.
-                var canonicalIndex = WmlToMarkdownConverter.BuildAnchorIndexOnly(wordDoc,
-                    new WmlToMarkdownConverterSettings { Scopes = ProjectionScopes.All });
-                var canonicalByElement = new Dictionary<XElement, string>();
-                var canonicalByLocation = new Dictionary<(string PartUri, string Kind, string Unid), string>();
-                foreach (var target in canonicalIndex.Values)
-                {
-                    var source = target.Resolve(wordDoc);
-                    if (source != null) canonicalByElement[source] = target.Anchor.Id;
-                    canonicalByLocation[(target.PartUri, target.Anchor.Kind, target.Unid)] = target.Anchor.Id;
-                }
-                htmlConverterSettings.SourceAnchorIdentityProvider = element =>
-                {
-                    if (canonicalByElement.TryGetValue(element, out var id)) return id;
-                    var kind = WmlToMarkdownConverter.KindFor(element);
-                    var unid = (string?)element.Attribute(PtOpenXml.Unid);
-                    var partUri = element.Document?.Root?.Annotation<OpenXmlPart>()?.Uri.ToString();
-                    return kind != null && unid != null && partUri != null
-                        && canonicalByLocation.TryGetValue((partUri, kind, unid), out id)
-                            ? id
-                            : null;
-                };
-            }
 
             // The root w:document element always transforms to a real h:html element.
             XElement xhtml = (XElement)ConvertToHtmlTransform(wordDoc, htmlConverterSettings,
@@ -3774,9 +3778,15 @@ namespace Docxodus
                 ? FormatNoteNumber(num, tracker.FootnoteNumberFormat)
                 : footnoteId; // Fallback to XML ID if not found
 
-            // Put <sup> inside anchor like LibreOffice does for clean inline rendering
+            // Put <sup> inside anchor like LibreOffice does for clean inline rendering. Page view
+            // never emits a #fn-N target (its registry is keyed by data-footnote-id and the
+            // paginator lays the notes out per page), so the marker carries no href there: a
+            // whole-document render would strip it as unresolvable, and a block render, which
+            // cannot ask that question (RendersDocumentFragment), has to agree with it.
             var anchor = new XElement(Xhtml.a,
-                new XAttribute("href", $"#fn-{footnoteId}"),
+                settings.RenderPagination == PaginationMode.Paginated
+                    ? null
+                    : new XAttribute("href", $"#fn-{footnoteId}"),
                 new XAttribute("id", $"fn-ref-{footnoteId}"),
                 new XAttribute("class", "footnote-ref"),
                 new XAttribute("data-footnote-id", footnoteId), // For pagination engine to track footnotes per page
@@ -9032,26 +9042,51 @@ namespace Docxodus
             });
         }
 
+        /// <summary>
+        /// The key adjacent body blocks are grouped by before they render: blocks with the same
+        /// key share one border <c>&lt;div&gt;</c>. Only an actually-visible border groups
+        /// paragraphs into a border div. A pBdr whose sides are all "nil"/"none" (e.g. the empty
+        /// pBdr Google Docs stamps on every paragraph) is no border at all — wrapping such a
+        /// paragraph in a div would relocate its left indent onto the div and force the
+        /// paragraph's own margin-left to 0, so a single-block re-render (the editor's
+        /// incremental path) silently loses indentation. Tables are never grouped; an unbordered
+        /// paragraph's key is the empty string. The render plan carries this grouping so a
+        /// windowed mount never cuts a window through a border box; it keys on the paragraph's
+        /// style-resolved properties, because by the time this runs the formatting assembler has
+        /// folded the style chain into <c>w:pPr</c> and a border a style contributes groups too.
+        /// </summary>
+        internal static string BorderGroupKey(XElement e) => BorderGroupKey(e, e.Element(W.pPr));
+
+        /// <summary>The key for <paramref name="e"/> read through <paramref name="pPr"/> in place
+        /// of its own properties.</summary>
+        internal static string BorderGroupKey(XElement e, XElement? pPr)
+        {
+            var pBdr = pPr?.Element(W.pBdr);
+            if (pBdr != null && HasVisibleBorder(pBdr))
+            {
+                var indStr = string.Empty;
+                var ind = pPr!.Element(W.ind);
+                if (ind != null)
+                    indStr = WithoutUnids(ind);
+                return WithoutUnids(pBdr) + indStr;
+            }
+            return e.Name == W.tbl ? "table" : string.Empty;
+        }
+
+        /// <summary>The element's markup with the projector's per-element Unid bookkeeping
+        /// removed. Two paragraphs with the same borders must key alike whether or not a session
+        /// has stamped their property elements — otherwise a document rendered from a session
+        /// never groups its boxed paragraphs while the same bytes rendered cold do.</summary>
+        private static string WithoutUnids(XElement element)
+        {
+            var copy = new XElement(element);
+            copy.DescendantsAndSelf().Attributes(PtOpenXml.Unid).Remove();
+            return copy.ToString(SaveOptions.DisableFormatting);
+        }
+
         private static object CreateBorderDivs(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, IEnumerable<XElement> elements)
         {
-            return elements.GroupAdjacent(e =>
-                {
-                    var pBdr = e.Elements(W.pPr).Elements(W.pBdr).FirstOrDefault();
-                    // Only an actually-visible border groups paragraphs into a border <div>. A pBdr
-                    // whose sides are all "nil"/"none" (e.g. the empty pBdr Google Docs stamps on every
-                    // paragraph) is no border at all — wrapping such a paragraph in a div would relocate
-                    // its left indent onto the div and force the paragraph's own margin-left to 0, so a
-                    // single-block re-render (the editor's incremental path) silently loses indentation.
-                    if (pBdr != null && HasVisibleBorder(pBdr))
-                    {
-                        var indStr = string.Empty;
-                        var ind = e.Elements(W.pPr).Elements(W.ind).FirstOrDefault();
-                        if (ind != null)
-                            indStr = ind.ToString(SaveOptions.DisableFormatting);
-                        return pBdr.ToString(SaveOptions.DisableFormatting) + indStr;
-                    }
-                    return e.Name == W.tbl ? "table" : string.Empty;
-                })
+            return elements.GroupAdjacent(BorderGroupKey)
                 .Select(g =>
                 {
                     if (g.Key == string.Empty)

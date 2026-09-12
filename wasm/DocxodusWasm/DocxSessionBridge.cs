@@ -309,6 +309,24 @@ public static partial class DocxSessionBridge
         }
     }
 
+    /// <summary>The document's chrome (stylesheet, section wrappers, header/footer registry,
+    /// footnote/endnote sections) without its body units — the start of a windowed mount.</summary>
+    [JSExport]
+    public static string RenderEditorChromeHtml(int h, string optionsJson)
+    {
+        try { return DocxSessionOps.RenderEditorChromeHtml(h, optionsJson); }
+        catch (Exception ex) { return DocumentConverter.SerializeError(ex.Message, ex.GetType().Name); }
+    }
+
+    /// <summary>A contiguous window of body units as the full render lays them out — the
+    /// windowed mount's fill step.</summary>
+    [JSExport]
+    public static string RenderEditorRangeHtml(int h, string anchorIdsJson, string optionsJson)
+    {
+        try { return DocxSessionOps.RenderEditorRangeHtml(h, anchorIdsJson, optionsJson); }
+        catch (Exception ex) { return DocumentConverter.SerializeError(ex.Message, ex.GetType().Name); }
+    }
+
     /// <summary>Batch block editor render — <see cref="RenderBlocksHtml"/> plus comment markup;
     /// returns the same JSON object (anchor id → HTML or null; <c>{"error": …}</c> on failure).</summary>
     [JSExport]
