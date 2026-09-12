@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Revision registry: a revision mark in a position the OOXML schema never allows — `w:ins`,
+  `w:del` or a move mark under a run's `w:rPr`, or a `w:del`/move mark under `w:numPr` — is now
+  listed as `Malformed` with diagnostic `invalid_revision_carrier` instead of
+  `Unsupported`/`unsupported_revision_family`. The message names the legal spelling (a revised
+  run is wrapped by the mark; removed numbering is archived in `w:pPrChange`). Resolution still
+  fails closed; the error code becomes `RevisionMalformed` rather than `RevisionUnsupported`.
+  (#751, #752)
+
 ### Fixed
 
 - Added `docxodus/core`, an engine-only npm entry point for plain Node ESM. It exposes

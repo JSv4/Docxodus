@@ -1325,14 +1325,53 @@ internal static class RevisionOps
                 NativeId = (string?)marker.Attribute(W.id),
             };
             var group = NewGroup(unit, partIndex);
-            group.ResolutionStatus = RevisionResolutionStatus.Unsupported;
-            group.Diagnostic = new RevisionDiagnostic(
-                "unsupported_revision_family",
-                $"{marker.Name} is recognized tracked-change markup but cannot be selectively resolved.");
+            (group.ResolutionStatus, group.Diagnostic) = ClassifyUnclaimedMarker(marker);
             groups.Add(group);
             represented.Add(marker);
         }
     }
+
+    /// <summary>
+    /// A recognized marker the selective resolver did not claim is either a live family this
+    /// resolver has no semantics for (<see cref="RevisionResolutionStatus.Unsupported"/>) or
+    /// markup the schema never allows in that position
+    /// (<see cref="RevisionResolutionStatus.Malformed"/>). The distinction matters to a
+    /// caller: an unsupported family is a resolver gap, an illegal carrier is a producer bug
+    /// whose legal spelling the diagnostic names. Both fail closed.
+    /// </summary>
+    private static (RevisionResolutionStatus Status, RevisionDiagnostic Diagnostic)
+        ClassifyUnclaimedMarker(XElement marker)
+    {
+        var parent = marker.Parent?.Name;
+        var name = PrefixedName(marker.Name);
+        if (RevWrapperNames.Contains(marker.Name))
+        {
+            // CT_RPr — a run's, style's, or control's property set — carries no revision
+            // marks; only CT_ParaRPr, the w:rPr under w:pPr, does. A revised run is wrapped
+            // by the mark, never annotated by it.
+            if (parent == W.rPr && marker.Parent!.Parent?.Name != W.pPr)
+                return (RevisionResolutionStatus.Malformed, new RevisionDiagnostic(
+                    "invalid_revision_carrier",
+                    $"{name} is not a legal child of a run's w:rPr; a revised run is wrapped by {name} outside the w:r."));
+
+            // CT_NumPr admits w:ins and w:numberingChange only. Removed numbering is
+            // archived by w:pPrChange, so a deletion or move mark here has no defined meaning.
+            if (parent == W.numPr && marker.Name != W.ins)
+                return (RevisionResolutionStatus.Malformed, new RevisionDiagnostic(
+                    "invalid_revision_carrier",
+                    $"{name} is not a legal child of w:numPr; removed numbering is archived in w:pPrChange."));
+        }
+
+        return (RevisionResolutionStatus.Unsupported, new RevisionDiagnostic(
+            "unsupported_revision_family",
+            $"{name} is recognized tracked-change markup but cannot be selectively resolved."));
+    }
+
+    private static string PrefixedName(XName name) =>
+        name.Namespace == W.w ? "w:" + name.LocalName
+        : name.Namespace == M.m ? "m:" + name.LocalName
+        : name.Namespace == W14.w14 ? "w14:" + name.LocalName
+        : name.ToString();
 
     /// <summary>True for every live tracked-change carrier the native revision registry
     /// inventories, including malformed/orphan payload markers. Structural clone operations
