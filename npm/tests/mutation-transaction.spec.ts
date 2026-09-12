@@ -23,9 +23,10 @@ test.describe('DocxSession mutation transactions (#761)', () => {
     const outcome = await page.evaluate((bytes: number[]) => {
       const session = (window as any).Docxodus.openTypedSession(new Uint8Array(bytes));
       try {
-        const projection = session.project();
-        const anchor = (Object.entries(projection.anchorIndex) as [string, any][])
-          .find(([, value]) => value.scope === 'body' && value.kind === 'p')![0];
+        // The first block the projection lists at body level. Paragraphs inside tables are
+        // body-scoped anchors too, but the projection summarises a table as one block, so text
+        // inserted next to a cell paragraph never appears in the top-level markdown read back.
+        const anchor = /\{#((?:p|h):body:[0-9a-f]+)\}/.exec(session.project().markdown as string)![1];
         let executions = 0;
         const batch = () => session.executeBatch([
           { tool: 'docx_create', action: 'insert_paragraph',
@@ -58,9 +59,10 @@ test.describe('DocxSession mutation transactions (#761)', () => {
     const outcome = await page.evaluate((bytes: number[]) => {
       const session = (window as any).Docxodus.openTypedSession(new Uint8Array(bytes));
       try {
-        const projection = session.project();
-        const anchor = (Object.entries(projection.anchorIndex) as [string, any][])
-          .find(([, value]) => value.scope === 'body' && value.kind === 'p')![0];
+        // The first block the projection lists at body level. Paragraphs inside tables are
+        // body-scoped anchors too, but the projection summarises a table as one block, so text
+        // inserted next to a cell paragraph never appears in the top-level markdown read back.
+        const anchor = /\{#((?:p|h):body:[0-9a-f]+)\}/.exec(session.project().markdown as string)![1];
         session.executeBatch([
           { tool: 'docx_create', action: 'insert_paragraph',
             mutation: () => session.insertParagraph(anchor, 'after', 'first') },
