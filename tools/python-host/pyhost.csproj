@@ -22,4 +22,8 @@
   <ItemGroup>
     <ProjectReference Include="../../Docxodus/Docxodus.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Docxodus.Tests" />
+  </ItemGroup>
 </Project>

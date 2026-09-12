@@ -1164,6 +1164,12 @@ public static partial class DocxSessionBridge
     public static string VerifyDeliverable(int h) =>
         DocxSessionOps.VerifyDeliverable(h);
 
+    /// <summary>Session verification under the full wire request (issue #747): policy/limit
+    /// options, expected semantic and package changes, companion artifacts.</summary>
+    [JSExport]
+    public static string VerifyDeliverableWithRequest(int h, string requestJson) =>
+        DocxSessionOps.VerifyDeliverable(h, requestJson);
+
     /// <summary>
     /// Bridge for <see cref="DocxSession.FindByAnnotation"/>. Returns a JSON array of
     /// <see cref="AnchorTarget"/> records (each <c>{id, kind, scope, unid, partUri}</c>);
