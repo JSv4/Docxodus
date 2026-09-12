@@ -769,9 +769,10 @@ public sealed class DeliverableVerifierHardeningTests
             + "<w:p><w:ins w:id=\"7\" w:author=\"First\"><w:r><w:t>One</w:t></w:r></w:ins></w:p>"
             + "<w:p><w:ins w:id=\"7\" w:author=\"Second\"><w:r><w:t>Two</w:t>"
             + "</w:r></w:ins></w:p>"
-            + "<w:p><w:customXmlMoveFromRangeStart w:id=\"9\" w:author=\"Third\"/>"
-            + "<w:r><w:t>Unsupported</w:t></w:r>"
-            + "<w:customXmlMoveFromRangeEnd w:id=\"9\"/></w:p>").DocumentByteArray;
+            // Deleted text with no owning deletion wrapper: recognized markup the resolver
+            // has no semantics for (a lone customXml move range, once used here, is now
+            // reported as malformed topology instead).
+            + "<w:p><w:r><w:delText>Unsupported</w:delText></w:r></w:p>").DocumentByteArray;
 
         var result = DeliverableVerifier.VerifyDeliverable(package);
 
