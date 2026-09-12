@@ -32,6 +32,14 @@ All notable changes to this project will be documented in this file.
   paragraph (as a tracked `w:numPr` insertion in tracked mode) and leaves an existing list
   item's numbering alone. Rejecting a tracked insertion of list paragraphs prunes the numbering
   definitions it brought in. (#759)
+- Tracked `DeleteRange`/`DeleteSection` now represent a block `w:customXml` wrapper the way
+  they represent a block `w:sdt`: a paired custom-XML deletion envelope around the wrapper
+  (its `w:customXmlPr` kept in schema position) plus recursively tracked payload blocks, so
+  accept removes wrapper and payload and reject restores both through the revision registry.
+  Nested and mixed `w:sdt`/`w:customXml` wrappers each get their own envelope. Only run-level
+  `w:customXml` inside a paragraph is still refused before mutation
+  (`IncompatibleElementType`), because the paragraph deleter marks direct-child runs only.
+  `RevisionProcessor.AcceptRevisions` collapses a deleted `w:customXml` envelope too. (#764)
 
 ### Changed
 
@@ -45,6 +53,14 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Tracked `DeleteRange`/`DeleteSection` stamped each paragraph, row and wrapper marker with
+  its own clock reading, so an operation straddling a second boundary produced payload marks
+  the registry could not fold into their wrapper's envelope; resolving the pieces separately
+  could then strand an empty paragraph inside a deleted wrapper. One operation now takes one
+  stamp, as Word does.
+- A revision's affected anchors could include an all-empty anchor when a `Unid` belonged to
+  an element with no addressable kind (a `w:customXml` wrapper): the fallback lookup returned
+  a default-valued struct instead of nothing.
 - A paragraph mark carrying both an insertion and a later deletion by another author (Word's
   inserted-then-deleted pilcrow, `RP047`) listed only the first mark and left the second as an
   unsupported entry that blocked bulk resolution. Both marks are now independent revisions, and
