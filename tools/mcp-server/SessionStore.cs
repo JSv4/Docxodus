@@ -98,6 +98,8 @@ internal sealed class SessionStore
                     Location = location,
                     MutationTransactions = mutationTransactions,
                 };
+                // One journal per live session, whichever transport drives it.
+                SessionRegistry.AttachTransactions(handle, mutationTransactions);
                 _sessions[session.Id] = session;
                 return session;
             }

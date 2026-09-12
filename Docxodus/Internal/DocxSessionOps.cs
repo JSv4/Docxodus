@@ -92,6 +92,71 @@ internal static class DocxSessionOps
             SessionRegistry.Get(handle).ExecuteBatch(steps, mode));
 
     /// <summary>
+    /// <see cref="ExecuteBatch"/> under a caller-chosen transaction id (issue #761): the session's
+    /// journal replays the retained terminal response for an identical retry, refuses a reused id
+    /// with a different request, and otherwise executes once and retains the result.
+    /// <paramref name="request"/> is the transport's whole request object; its root session
+    /// identity and transaction id are excluded from the fingerprint. Transports that execute
+    /// steps server-side (the stdio host) call this; the MCP server drives the same journal
+    /// through its own dispatch, and the browser client through
+    /// <see cref="BeginMutationTransaction"/>.
+    /// </summary>
+    public static string ExecuteBatchTransactional(
+        int handle,
+        string transactionId,
+        System.Text.Json.JsonElement request,
+        MutationBatchMode mode,
+        System.Func<System.Collections.Generic.IEnumerable<MutationBatchStep>> steps)
+    {
+        if (MutationTransactions.ValidateTransactionId(transactionId) is { } invalid)
+            throw new System.ArgumentException(invalid);
+        return SessionRegistry.Transactions(handle).Run(
+            transactionId,
+            MutationTransactions.Fingerprint(request),
+            mode,
+            () => SessionRegistry.Get(handle).Version,
+            () => ExecuteBatch(handle, mode, steps()),
+            ex => ex is System.ArgumentException or System.FormatException
+                    or System.Text.Json.JsonException or System.OverflowException
+                ? (EditErrorCode.InvalidBatchStep, "validation")
+                : (EditErrorCode.InternalError, "dispatch"));
+    }
+
+    /// <summary>
+    /// The browser client's entry to the same journal. <paramref name="requestJson"/> is the
+    /// caller's description of the batch (an object; a root <c>mode</c> of <c>best_effort</c>
+    /// selects that policy for any refusal envelope). Returns
+    /// <c>{"kind","transaction","response"}</c>: a non-null response is terminal and needs no
+    /// execution; a <c>reserved</c> kind means the client runs its batch and then calls
+    /// <see cref="CompleteMutationTransaction"/> with its serialized result (identity attached)
+    /// or <see cref="AbandonMutationTransaction"/>.
+    /// </summary>
+    public static string BeginMutationTransaction(int handle, string transactionId, string requestJson)
+    {
+        if (MutationTransactions.ValidateTransactionId(transactionId) is { } invalid)
+            throw new System.ArgumentException(invalid);
+        using var document = System.Text.Json.JsonDocument.Parse(requestJson);
+        var request = document.RootElement;
+        var mode = request.ValueKind == System.Text.Json.JsonValueKind.Object
+            && request.TryGetProperty("mode", out var modeValue)
+            && modeValue.ValueKind == System.Text.Json.JsonValueKind.String
+            && modeValue.GetString() == "best_effort"
+            ? MutationBatchMode.BestEffort
+            : MutationBatchMode.Atomic;
+        return SessionRegistry.Transactions(handle).BeginForClient(
+            transactionId,
+            MutationTransactions.Fingerprint(request),
+            mode,
+            () => SessionRegistry.Get(handle).Version);
+    }
+
+    public static void CompleteMutationTransaction(int handle, string transactionId, string serializedResponse) =>
+        SessionRegistry.Transactions(handle).CompleteReservation(transactionId, serializedResponse);
+
+    public static void AbandonMutationTransaction(int handle, string transactionId) =>
+        SessionRegistry.Transactions(handle).AbandonReservation(transactionId);
+
+    /// <summary>
     /// Execute a serialized/handle-addressed batch against a complete isolated clone. The step
     /// factory receives only the temporary shadow handle, which makes accidentally targeting the
     /// live handle impossible at this central transport seam. The shadow is disposed on every

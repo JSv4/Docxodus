@@ -848,6 +848,23 @@ public static partial class DocxSessionBridge
     public static string AcceptRevision(int h, string revisionId) =>
         DocxSessionOps.AcceptRevision(h, revisionId);
 
+    /// <summary>Mutation-transaction journal (issue #761): resolve a caller-chosen transaction id
+    /// against the session's retained results before the client runs its batch. Returns
+    /// <c>{"kind","transaction","response"}</c>; see <c>DocxSessionOps.BeginMutationTransaction</c>.</summary>
+    [JSExport]
+    public static string BeginMutationTransaction(int h, string transactionId, string requestJson) =>
+        DocxSessionOps.BeginMutationTransaction(h, transactionId, requestJson);
+
+    /// <summary>Retain the client's serialized terminal batch result for a reserved transaction.</summary>
+    [JSExport]
+    public static void CompleteMutationTransaction(int h, string transactionId, string serializedResponse) =>
+        DocxSessionOps.CompleteMutationTransaction(h, transactionId, serializedResponse);
+
+    /// <summary>Retire a reserved transaction that will never record a terminal result.</summary>
+    [JSExport]
+    public static void AbandonMutationTransaction(int h, string transactionId) =>
+        DocxSessionOps.AbandonMutationTransaction(h, transactionId);
+
     /// <summary>Reject ONE revision by id — the inverse of AcceptRevision.</summary>
     [JSExport]
     public static string RejectRevision(int h, string revisionId) =>

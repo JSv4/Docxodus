@@ -54,7 +54,9 @@ with open("filled.docx", "wb") as f:
 Use `execute_batch` when a plan spans several edits that must either all land or
 all disappear. Atomic is the default; success is one version/undo unit and failure
 returns the indexed operation error after restoring the complete package and
-history state:
+history state. Pass `transaction_id="..."` so a retry after a lost response returns
+the original result instead of applying again (`result.transaction` carries the
+identity; reusing an id for a different batch fails with `transaction_conflict`):
 
 ```python
 from docx_scalpel import MutationBatchStep

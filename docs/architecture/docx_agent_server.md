@@ -353,8 +353,8 @@ any other paragraph. No MCP-only editing logic is involved; all three routes are
 ### `docxodus_list` — list membership
 
 `apply_format` (promotes/demotes a paragraph to a real, auto-numbered `w:numPr` list via
-`ApplyListFormat` — this is the one that actually creates Word-native numbering, unlike a bare
-markdown `"- item"` payload, see Known gaps), `apply_format_range` (the same conversion across a
+`ApplyListFormat`; a markdown `"- item"` / `"1. item"` payload written through the create or
+edit tools reaches the same numbering owner directly, see `docx_mutation_api.md`), `apply_format_range` (the same conversion across a
 contiguous sibling run via `ApplyListFormatRange(firstAnchorId, lastAnchorId, format)` — one call
 instead of one per item, and the members are *guaranteed* to share one `w:num` instance so the
 sequence stays intact), `set_level`, `remove`, `get_membership`. `listFormat` accepts the full
@@ -693,10 +693,11 @@ Three lifecycle facts a client must design around:
   late retry executes as a *fresh mutation* (`MCP449_DispatcherSerializesEvictedResultAndConflictAndReusesOnlyAfterTombstone`
   pins exactly this: version 2 → 4). Idempotency here is a bounded-window guarantee, not a
   permanent one.
-- **The guarantee is MCP-only.** `execute_batch` via WASM/npm and via the stdio host /
-  `docx-scalpel` carries no transaction identity and no replay; a retry on those transports
-  re-applies. This asymmetry is within issue #449's scope, but callers must not generalize the
-  guarantee across transports.
+- **The same journal serves every transport (issue #761).** `execute_batch` through the stdio
+  host / `docx-scalpel` (`transaction_id=`) and `session.executeBatch(steps, mode,
+  { transactionId, request })` through WASM/npm run the identical contract on the session's
+  one journal — see `docx_mutation_api.md`, "Transaction ids". Ids are scoped to the transport
+  that minted them because each transport's request language differs.
 
 The batch itself and each step's `args` may carry `preconditions`, using the same
 camel-case guard object as the core API (`expectedVersion`, `anchorId`,
@@ -835,12 +836,6 @@ never claiming a capability it doesn't have:
   `w:rPr` or a paragraph's `w:numPr`, a `w:sdt` envelope whose range topology is not Word's
   two-pair shape, an unattached `w:numberingChange`, and malformed cell markers — full table in
   `docx_mutation_api.md`.
-- **New lists inserted via a bare markdown payload don't get real Word numbering.** A `"- item"`
-  block parses to a `kind: "li"` anchor with no `w:numPr` (documented in
-  `docx_mutation_api.md`). This server's `docxodus_list`/`docxodus_create` route around it by
-  composing `InsertParagraph` (plain text) + `ApplyListFormat` (which *does* write real
-  `w:numPr` via `NumberingFactory.EnsureNumbering`) — two calls, not a gap in what's reachable,
-  just not a single one-shot "insert a numbered list" primitive.
 - **Generated-id previews are semantically, not necessarily byte-for-byte, replay-equivalent.**
   Create/comment/note/image paths can allocate fresh anchors or OOXML ids, and tracked revisions
   can stamp the execution clock. Preview and apply still take the identical dispatch path and

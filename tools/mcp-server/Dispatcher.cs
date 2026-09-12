@@ -1151,9 +1151,15 @@ internal static class Dispatcher
 
         // Canonicalization also performs the duplicate-key rejection. It deliberately precedes
         // preview policy validation so an ambiguous request can never acquire a transaction id.
-        var requestFingerprint = MutationTransactions.Fingerprint(args);
-        var identity = new MutationTransactionIdentity(
-            MutationTransactions.SchemaVersion, transactionId, requestFingerprint);
+        string requestFingerprint;
+        try
+        {
+            requestFingerprint = MutationTransactions.Fingerprint(args);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new McpToolException(ex.Message);
+        }
         if (RequestsPreview(args))
         {
             return MutationTransactions.SerializeFailure(
@@ -1165,88 +1171,18 @@ internal static class Dispatcher
                 "transaction");
         }
 
-        var decision = liveSession.MutationTransactions.Begin(transactionId, requestFingerprint);
-        switch (decision.Kind)
-        {
-            case MutationTransactionDecisionKind.Replay:
-                return decision.SerializedResponse!;
-            case MutationTransactionDecisionKind.Conflict:
-            {
-                var original = decision.ExistingIdentity?.RequestFingerprint ?? "unknown";
-                var conflict = MutationTransactions.SerializeFailure(
-                    RequestedCoreMode(args),
-                    preview: false,
-                    SafeVersion(liveSession),
-                    EditErrorCode.TransactionConflict,
-                    $"transactionId is already bound to a different request fingerprint ({original})",
-                    "transaction");
-                return MutationTransactions.AttachIdentity(conflict, identity);
-            }
-            case MutationTransactionDecisionKind.ResultEvicted:
-            {
-                var expired = MutationTransactions.SerializeFailure(
-                    RequestedCoreMode(args),
-                    preview: false,
-                    SafeVersion(liveSession),
-                    EditErrorCode.TransactionResultEvicted,
-                    "the transaction is known, but its exact response has expired from bounded retention",
-                    "transaction");
-                return MutationTransactions.AttachIdentity(expired, identity);
-            }
-            case MutationTransactionDecisionKind.Incomplete:
-            {
-                var incomplete = MutationTransactions.SerializeFailure(
-                    RequestedCoreMode(args),
-                    preview: false,
-                    SafeVersion(liveSession),
-                    EditErrorCode.TransactionIncomplete,
-                    "this transactionId is bound to this exact request but never recorded a "
-                    + "terminal response, so whether the mutation applied is unknown; inspect the "
-                    + "document and retry under a new transactionId",
-                    "transaction");
-                return MutationTransactions.AttachIdentity(incomplete, identity);
-            }
-            case MutationTransactionDecisionKind.Reserved:
-                break;
-            default:
-                throw new InvalidOperationException("unknown mutation transaction decision");
-        }
-
-        var reservation = decision.Record!;
-        var completed = false;
-        try
-        {
-            string terminalResponse;
-            try
-            {
-                terminalResponse = MutationTransactions.AttachIdentity(
-                    ExecuteMutationRequest(liveSession, args, transactional: true), identity);
-            }
-            catch (Exception ex)
-            {
-                var callerError = ex is McpToolException
-                    or FormatException or JsonException or OverflowException;
-                terminalResponse = MutationTransactions.AttachIdentity(
-                    MutationTransactions.SerializeFailure(
-                        RequestedCoreMode(args),
-                        preview: false,
-                        SafeVersion(liveSession),
-                        callerError ? EditErrorCode.InvalidBatchStep : EditErrorCode.InternalError,
-                        ex.Message,
-                        callerError ? "validation" : "dispatch"),
-                    identity);
-            }
-            liveSession.MutationTransactions.Complete(reservation, terminalResponse);
-            completed = true;
-            return terminalResponse;
-        }
-        finally
-        {
-            // If serializing the failure or retaining the response itself threw, the reservation
-            // would otherwise be stranded in the journal forever. Retire it to an outcome-unknown
-            // tombstone so the identity stays bound, stays truthful, and stays evictable.
-            if (!completed) liveSession.MutationTransactions.Abandon(reservation);
-        }
+        // The journal owns the whole flow (issue #761): replay, conflict, eviction and
+        // incomplete refusals, execution under a fresh reservation, retention, and retirement
+        // of a reservation that never reached a terminal response.
+        return liveSession.MutationTransactions.Run(
+            transactionId,
+            requestFingerprint,
+            RequestedCoreMode(args),
+            () => DocxSessionOps.GetVersion(liveSession.Handle),
+            () => ExecuteMutationRequest(liveSession, args, transactional: true),
+            ex => ex is McpToolException or FormatException or JsonException or OverflowException
+                ? (EditErrorCode.InvalidBatchStep, "validation")
+                : (EditErrorCode.InternalError, "dispatch"));
     }
 
     private static string ExecuteMutationRequest(
@@ -1343,13 +1279,8 @@ internal static class Dispatcher
         if (value.ValueKind != JsonValueKind.String)
             throw new McpToolException("transactionId must be a string");
         var id = value.GetString()!;
-        if (MutationTransactions.IsBlankTransactionId(id))
-            throw new McpToolException("transactionId must not be empty or whitespace");
-        var scalarLength = 0;
-        foreach (var _ in id.EnumerateRunes()) scalarLength++;
-        if (scalarLength > MutationTransactions.MaxTransactionIdLength)
-            throw new McpToolException(
-                $"transactionId must not exceed {MutationTransactions.MaxTransactionIdLength} Unicode scalar values");
+        if (MutationTransactions.ValidateTransactionId(id) is { } invalid)
+            throw new McpToolException(invalid);
         return id;
     }
 

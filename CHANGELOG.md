@@ -18,6 +18,15 @@ All notable changes to this project will be documented in this file.
   (`revision_repair_rejected`). Listing, accept and reject still never repair. Wired through
   WASM/npm, the stdio host and docx-scalpel, and MCP `docxodus_track_changes` (`repairs`,
   `repair`). (#754, #755, #756, #757, #758)
+- Mutation-batch retry deduplication on every transport. The transaction journal the MCP server
+  introduced in #449 (replay of the retained terminal response for an identical retry,
+  `transaction_conflict` on id reuse, bounded retention with tombstones) now lives in the core as
+  one journal per live session: `docx-scalpel`'s `execute_batch(..., transaction_id=...)` runs it
+  server-side, and npm's `session.executeBatch(steps, mode, { transactionId, request })` drives
+  it over three new bridge calls (`BeginMutationTransaction`, `CompleteMutationTransaction`,
+  `AbandonMutationTransaction`) since the browser composes its batch in JavaScript. Results carry
+  `transaction: { schemaVersion, transactionId, requestFingerprint }`. MCP behavior is unchanged.
+  (#761)
 
 - Revision registry: a mark under `m:ctrlPr` — Word's carrier for the insertion or deletion of
   a whole math object (fraction, radical, delimiter, …) — is now a native revision. The mark
@@ -36,6 +45,15 @@ All notable changes to this project will be documented in this file.
   `duplicate_range_id`, `malformed_range_topology`, `orphan_custom_xml_move_range`, each
   carrying the marker id. The `unsupported_custom_xml_move_range` diagnostic is gone. (#749,
   #753)
+- Markdown list payloads create native Word numbering. A `- item` or `3. item` block written
+  through `InsertParagraph`, `ReplaceText` or `ReplaceCellContent` gets a real `w:numPr` from
+  the numbering owner `ApplyListFormat` uses: consecutive ordered items share one `w:num` that
+  starts at the first marker's number, separate lists in one payload restart independently,
+  bullets share the document's bullet definition, indent maps to `w:ilvl`, and a payload's
+  first list continues an adjacent list item of the same family. `ReplaceText` promotes a plain
+  paragraph (as a tracked `w:numPr` insertion in tracked mode) and leaves an existing list
+  item's numbering alone. Rejecting a tracked insertion of list paragraphs prunes the numbering
+  definitions it brought in. (#759)
 - Tracked `DeleteRange`/`DeleteSection` now represent a block `w:customXml` wrapper the way
   they represent a block `w:sdt`: a paired custom-XML deletion envelope around the wrapper
   (its `w:customXmlPr` kept in schema position) plus recursively tracked payload blocks, so

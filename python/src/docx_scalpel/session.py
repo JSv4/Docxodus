@@ -792,12 +792,21 @@ class DocxSession:
         self,
         steps: Iterable[MutationBatchStep],
         mode: MutationBatchMode = MutationBatchMode.ATOMIC,
+        *,
+        transaction_id: str | None = None,
     ) -> MutationBatchResult:
-        """Execute mutations atomically by default, or explicitly retain partial successes."""
-        result = self._call(
-            "execute_batch",
-            {"mode": mode.value, "steps": [step.to_wire() for step in steps]},
-        )
+        """Execute mutations atomically by default, or explicitly retain partial successes.
+
+        ``transaction_id`` (a non-blank string of at most 256 Unicode scalar values) makes
+        the batch safe to retry after a lost response: the session's journal replays the
+        original result for an identical retry without executing again, refuses the id for a
+        different batch with ``transaction_conflict``, and reports the identity on
+        ``result.transaction``. The id is scoped to this open session and this transport.
+        """
+        args: dict[str, Any] = {"mode": mode.value, "steps": [step.to_wire() for step in steps]}
+        if transaction_id is not None:
+            args["transactionId"] = transaction_id
+        result = self._call("execute_batch", args)
         if not isinstance(result, Mapping):
             raise TypeError(f"execute_batch: expected object, got {result!r}")
         return MutationBatchResult._from_wire(result)

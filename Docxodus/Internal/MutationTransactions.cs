@@ -1,14 +1,16 @@
-#nullable enable
+// Copyright (c) John Scrudato IV. All rights reserved.
+// Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 using System.Buffers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
-using Docxodus;
-using Docxodus.Internal;
 
-namespace Docxodus.McpServer;
+namespace Docxodus.Internal;
 
 /// <summary>The stable, versioned identity attached to a transaction-aware batch result.</summary>
 internal sealed record MutationTransactionIdentity(
@@ -59,11 +61,15 @@ internal sealed record MutationTransactionDecision(
     string? SerializedResponse = null);
 
 /// <summary>
-/// Bounded, per-session transaction-id registry. Full responses and response-less tombstones use
-/// independent FIFO limits. A tombstone keeps an evicted id bound to its original fingerprint for
-/// a further window, preventing a recently forgotten retry from becoming a fresh mutation.
-/// Retained responses are additionally bounded by a byte budget, because a batch result is
-/// unbounded in size while a count is not a memory bound.
+/// Bounded, per-session transaction-id registry — the one owner of mutation-batch retry
+/// deduplication for every transport (issues #449, #761). Full responses and response-less
+/// tombstones use independent FIFO limits. A tombstone keeps an evicted id bound to its original
+/// fingerprint for a further window, preventing a recently forgotten retry from becoming a fresh
+/// mutation. Retained responses are additionally bounded by a byte budget, because a batch result
+/// is unbounded in size while a count is not a memory bound. Server-side transports (the MCP
+/// server, the stdio host) run <see cref="Run"/>; the browser client, whose batch is composed in
+/// JavaScript, drives the same journal through <see cref="BeginForClient"/>,
+/// <see cref="CompleteReservation"/> and <see cref="AbandonReservation"/>.
 /// </summary>
 internal sealed class MutationTransactions
 {
@@ -393,14 +399,14 @@ internal sealed class MutationTransactions
     }
 
     /// <summary>
-    /// SHA-256 over a deterministic JSON rendering. Root session/transaction identity is excluded;
+    /// SHA-256 over a deterministic JSON rendering. Root session/handle/transaction identity is excluded;
     /// objects are sorted, arrays and scalar spelling are retained, and numeric tokens are copied
     /// verbatim. Parsing already normalizes insignificant whitespace and equivalent string escapes.
     /// </summary>
     public static string Fingerprint(JsonElement request)
     {
         if (request.ValueKind != JsonValueKind.Object)
-            throw new McpToolException("docxodus_mutations arguments must be an object");
+            throw new ArgumentException("docxodus_mutations arguments must be an object");
 
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions
@@ -429,7 +435,7 @@ internal sealed class MutationTransactions
                 foreach (var property in properties)
                 {
                     if (!names.Add(property.Name))
-                        throw new McpToolException(
+                        throw new ArgumentException(
                             $"duplicate JSON property {JsonSerializer.Serialize(property.Name)} at {path}");
                 }
                 Array.Sort(properties, static (left, right) =>
@@ -439,7 +445,9 @@ internal sealed class MutationTransactions
                 var synthesizeAtomicMode = isRoot && !names.Contains("mode");
                 foreach (var property in properties)
                 {
-                    if (isRoot && property.Name is "sessionId" or "transactionId") continue;
+                    // Root session identity (an MCP session id or a registry handle) and the
+                    // transaction id itself address the request; they are not the request.
+                    if (isRoot && property.Name is "sessionId" or "handle" or "transactionId") continue;
                     if (synthesizeAtomicMode
                         && StringComparer.Ordinal.Compare("mode", property.Name) < 0)
                     {
@@ -483,7 +491,7 @@ internal sealed class MutationTransactions
                 writer.WriteNullValue();
                 break;
             default:
-                throw new McpToolException($"unsupported JSON value at {path}");
+                throw new ArgumentException($"unsupported JSON value at {path}");
         }
     }
 
@@ -499,13 +507,7 @@ internal sealed class MutationTransactions
 
         var suffix = serializedBatchResult[(end + 1)..];
         return serializedBatchResult[..end]
-            + ",\"transaction\":{\"schemaVersion\":"
-            + identity.SchemaVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)
-            + ",\"transactionId\":"
-            + JsonRpcIo.JsonString(identity.TransactionId)
-            + ",\"requestFingerprint\":"
-            + JsonRpcIo.JsonString(identity.RequestFingerprint)
-            + "}}"
+            + ",\"transaction\":" + IdentityJson(identity) + "}"
             + suffix;
     }
 
@@ -548,4 +550,187 @@ internal sealed class MutationTransactions
 
     private static string NewRecordId() =>
         "mtx_" + Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+
+    // ─── Shared transaction flow ─────────────────────────────────────────
+
+    /// <summary>Null when <paramref name="transactionId"/> is acceptable, else the exact refusal
+    /// every transport reports for it.</summary>
+    public static string? ValidateTransactionId(string transactionId)
+    {
+        ArgumentNullException.ThrowIfNull(transactionId);
+        if (IsBlankTransactionId(transactionId))
+            return "transactionId must not be empty or whitespace";
+        var scalarLength = 0;
+        foreach (var _ in transactionId.EnumerateRunes()) scalarLength++;
+        if (scalarLength > MaxTransactionIdLength)
+            return "transactionId must not exceed "
+                + MaxTransactionIdLength.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + " Unicode scalar values";
+        return null;
+    }
+
+    /// <summary>
+    /// The one transaction flow every server-side transport runs: resolve the identity, and on a
+    /// fresh reservation execute, attach the identity to the terminal response, and retain it. A
+    /// reservation that never reaches a terminal response is retired to an outcome-unknown
+    /// tombstone. <paramref name="classify"/> maps an exception thrown by <paramref name="execute"/>
+    /// to the error code and action a caller error versus a dispatch fault should report; that
+    /// failure is a terminal response and is retained like any other.
+    /// </summary>
+    public string Run(
+        string transactionId,
+        string requestFingerprint,
+        MutationBatchMode mode,
+        Func<long> version,
+        Func<string> execute,
+        Func<Exception, (EditErrorCode Code, string Action)> classify)
+    {
+        ArgumentNullException.ThrowIfNull(execute);
+        ArgumentNullException.ThrowIfNull(classify);
+        var identity = new MutationTransactionIdentity(SchemaVersion, transactionId, requestFingerprint);
+        var decision = Begin(transactionId, requestFingerprint);
+        if (Resolved(decision, identity, mode, version) is { } resolved) return resolved;
+
+        var reservation = decision.Record!;
+        var completed = false;
+        try
+        {
+            string terminalResponse;
+            try
+            {
+                terminalResponse = AttachIdentity(execute(), identity);
+            }
+            catch (Exception ex)
+            {
+                var (code, action) = classify(ex);
+                terminalResponse = AttachIdentity(
+                    SerializeFailure(mode, preview: false, SafeVersion(version), code, ex.Message, action),
+                    identity);
+            }
+            Complete(reservation, terminalResponse);
+            completed = true;
+            return terminalResponse;
+        }
+        finally
+        {
+            // If serializing the failure or retaining the response itself threw, the reservation
+            // would otherwise be stranded in the journal forever. Retire it to an outcome-unknown
+            // tombstone so the identity stays bound, stays truthful, and stays evictable.
+            if (!completed) Abandon(reservation);
+        }
+    }
+
+    /// <summary>
+    /// The browser client's half of <see cref="Run"/>: resolve the identity and report either a
+    /// terminal response that needs no execution or a fresh reservation the client must
+    /// <see cref="CompleteReservation"/> (with the identity attached to its own serialized result)
+    /// or <see cref="AbandonReservation"/>. Returns
+    /// <c>{"kind","transaction":{…},"response":…|null}</c>.
+    /// </summary>
+    public string BeginForClient(
+        string transactionId,
+        string requestFingerprint,
+        MutationBatchMode mode,
+        Func<long> version)
+    {
+        var identity = new MutationTransactionIdentity(SchemaVersion, transactionId, requestFingerprint);
+        var decision = Begin(transactionId, requestFingerprint);
+        var response = Resolved(decision, identity, mode, version);
+        var kind = decision.Kind switch
+        {
+            MutationTransactionDecisionKind.Reserved => "reserved",
+            MutationTransactionDecisionKind.Replay => "replay",
+            MutationTransactionDecisionKind.Conflict => "conflict",
+            MutationTransactionDecisionKind.ResultEvicted => "result_evicted",
+            MutationTransactionDecisionKind.Incomplete => "incomplete",
+            _ => throw new InvalidOperationException("unknown mutation transaction decision"),
+        };
+        return "{\"kind\":\"" + kind + "\",\"transaction\":" + IdentityJson(identity)
+            + ",\"response\":" + (response is null ? "null" : DocxSessionJson.JsonString(response)) + "}";
+    }
+
+    /// <summary>Retain the client's serialized terminal response for the active reservation bound to
+    /// <paramref name="transactionId"/>.</summary>
+    public void CompleteReservation(string transactionId, string serializedResponse)
+    {
+        var reservation = ActiveReservation(transactionId)
+            ?? throw new InvalidOperationException("mutation transaction reservation is no longer active");
+        Complete(reservation, serializedResponse);
+    }
+
+    /// <summary>Retire the active reservation bound to <paramref name="transactionId"/>, if any.</summary>
+    public void AbandonReservation(string transactionId)
+    {
+        if (ActiveReservation(transactionId) is { } reservation) Abandon(reservation);
+    }
+
+    private MutationTransactionRecord? ActiveReservation(string transactionId)
+    {
+        lock (_records)
+            return _records.TryGetValue(transactionId, out var record) && record.SerializedResponse is null
+                ? record
+                : null;
+    }
+
+    /// <summary>The serialized terminal response for a decision that needs no execution — a replay,
+    /// or the conflict/evicted/incomplete refusals with the identity attached — else null for a
+    /// fresh reservation.</summary>
+    private static string? Resolved(
+        MutationTransactionDecision decision,
+        MutationTransactionIdentity identity,
+        MutationBatchMode mode,
+        Func<long> version)
+    {
+        switch (decision.Kind)
+        {
+            case MutationTransactionDecisionKind.Reserved:
+                return null;
+            case MutationTransactionDecisionKind.Replay:
+                return decision.SerializedResponse!;
+            case MutationTransactionDecisionKind.Conflict:
+            {
+                var original = decision.ExistingIdentity?.RequestFingerprint ?? "unknown";
+                return AttachIdentity(SerializeFailure(
+                    mode,
+                    preview: false,
+                    SafeVersion(version),
+                    EditErrorCode.TransactionConflict,
+                    $"transactionId is already bound to a different request fingerprint ({original})",
+                    "transaction"), identity);
+            }
+            case MutationTransactionDecisionKind.ResultEvicted:
+                return AttachIdentity(SerializeFailure(
+                    mode,
+                    preview: false,
+                    SafeVersion(version),
+                    EditErrorCode.TransactionResultEvicted,
+                    "the transaction is known, but its exact response has expired from bounded retention",
+                    "transaction"), identity);
+            case MutationTransactionDecisionKind.Incomplete:
+                return AttachIdentity(SerializeFailure(
+                    mode,
+                    preview: false,
+                    SafeVersion(version),
+                    EditErrorCode.TransactionIncomplete,
+                    "this transactionId is bound to this exact request but never recorded a "
+                    + "terminal response, so whether the mutation applied is unknown; inspect the "
+                    + "document and retry under a new transactionId",
+                    "transaction"), identity);
+            default:
+                throw new InvalidOperationException("unknown mutation transaction decision");
+        }
+    }
+
+    private static long SafeVersion(Func<long> version)
+    {
+        try { return version(); }
+        catch { return 0; }
+    }
+
+    private static string IdentityJson(MutationTransactionIdentity identity) =>
+        "{\"schemaVersion\":"
+        + identity.SchemaVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)
+        + ",\"transactionId\":" + DocxSessionJson.JsonString(identity.TransactionId)
+        + ",\"requestFingerprint\":" + DocxSessionJson.JsonString(identity.RequestFingerprint)
+        + "}";
 }
