@@ -36,8 +36,13 @@ public static partial class DocxSessionBridge
     /// undo/redo history; callers must close it. Abandonment cannot affect the live handle.
     /// </summary>
     [JSExport]
-    public static int OpenPreviewSession(int liveHandle) =>
-        SessionRegistry.CloneSessionForPreview(liveHandle);
+    public static int OpenPreviewSession(int liveHandle)
+    {
+        // The first preview of a module instance must not be the one that walks the cold
+        // clone-and-snapshot path — see PreviewEngine for why that can stop finishing.
+        PreviewEngine.EnsureWarm();
+        return SessionRegistry.CloneSessionForPreview(liveHandle);
+    }
 
     [JSExport]
     public static void CloseSession(int handle)

@@ -119,6 +119,12 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Browser mutation previews no longer stall on a module instance's first preview. The first
+  `previewBatch` after opening a document could hang in the browser (never natively): the
+  shadow session's first transaction serializes a package snapshot on an interpreted cold path
+  with the live package and the clone already on the heap, the same conservative-GC collapse
+  fixed for comparisons in #697. `OpenPreviewSession` now warms that path once on a
+  one-paragraph seed session (`PreviewEngine.EnsureWarm`), mirroring the comparison invariant.
 - Tracked `DeleteRange`/`DeleteSection` stamped each paragraph, row and wrapper marker with
   its own clock reading, so an operation straddling a second boundary produced payload marks
   the registry could not fold into their wrapper's envelope; resolving the pieces separately
