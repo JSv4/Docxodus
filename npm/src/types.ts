@@ -2413,8 +2413,33 @@ export type ContentControlType = "plain_text" | "rich_text" | "checkbox" | "date
 export type ContentControlPlacement = "inline" | "block" | "row" | "cell" | "unknown";
 export type ContentControlBindingPolicy = "preserve" | "detach_target";
 
+/** How a whole-control fill treats nested controls inside its target (issue #763). */
+export type ContentControlNestedPolicy = "refuse" | "preserve" | "replace";
+
 export interface ContentControlFillOptions {
   bindingPolicy?: ContentControlBindingPolicy;
+  /**
+   * Default `refuse`. `preserve` keeps every nested control in place and replaces only the
+   * content outside them; `replace` discards the whole payload, nested controls included
+   * (each is reported removed; a locked or data-bound nested control refuses).
+   */
+  nestedControls?: ContentControlNestedPolicy;
+  /**
+   * With `preserve`: plain-text fills for nested text/rich-text controls of the target, keyed
+   * by their `sdt` anchor, applied in the same operation. A key that is not a nested textual
+   * control, or a child that fails its own gates, fails the whole call without mutating.
+   */
+  childFills?: Record<string, string>;
+}
+
+/** Whether one operation would succeed on a control right now, by the gates the operation applies. */
+export interface ContentControlOperationSupport {
+  operation: "fill_text" | "fill_rich_text" | "set_checked" | "set_date" | "select_item"
+    | "fill_picture" | "add_repeating_item" | "remove_repeating_item";
+  /** The nested policy this entry describes, when the target contains nested controls. */
+  nestedControls?: ContentControlNestedPolicy;
+  canMutate: boolean;
+  reason?: string;
 }
 
 export interface ContentControlBindingInfo {
@@ -2445,6 +2470,13 @@ export interface ContentControlInfo {
   unsupportedReason?: string;
   text: string;
   itemValues: string[];
+  /** Anchors of the controls nested anywhere inside this control's payload, in story order. */
+  nestedControlAnchorIds: string[];
+  /**
+   * Per-operation support for this control's family, including nested-policy variants of a
+   * fill when the target contains nested controls and the session's tracked-change mode.
+   */
+  operations: ContentControlOperationSupport[];
 }
 
 export interface DocumentRange {

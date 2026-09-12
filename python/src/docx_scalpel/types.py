@@ -2608,6 +2608,14 @@ class ContentControlPlacement(str, Enum):
     UNKNOWN = "unknown"
 
 
+class ContentControlNestedPolicy(str, Enum):
+    """How a whole-control fill treats nested controls inside its target (issue #763)."""
+
+    REFUSE = "refuse"
+    PRESERVE = "preserve"
+    REPLACE = "replace"
+
+
 class ContentControlBindingPolicy(str, Enum):
     PRESERVE = "preserve"
     DETACH_TARGET = "detach_target"
@@ -2616,9 +2624,44 @@ class ContentControlBindingPolicy(str, Enum):
 @dataclass(frozen=True, slots=True)
 class ContentControlFillOptions:
     binding_policy: ContentControlBindingPolicy = ContentControlBindingPolicy.PRESERVE
+    #: How a text/rich-text fill treats nested controls inside the target: ``REFUSE``
+    #: (default), ``PRESERVE`` (keep them; ``child_fills`` may fill named textual
+    #: children in the same operation) or ``REPLACE`` (drop them; a locked or data-bound
+    #: nested control refuses).
+    nested_controls: ContentControlNestedPolicy = ContentControlNestedPolicy.REFUSE
+    #: With ``PRESERVE``: plain-text fills for nested text/rich-text controls, keyed by
+    #: their ``sdt`` anchor. A key that is not a nested textual control, or a child that
+    #: fails its own gates, fails the whole call without mutating.
+    child_fills: Mapping[str, str] | None = None
 
     def to_wire(self) -> dict[str, Any]:
-        return {"bindingPolicy": self.binding_policy.value}
+        out: dict[str, Any] = {
+            "bindingPolicy": self.binding_policy.value,
+            "nestedControls": self.nested_controls.value,
+        }
+        if self.child_fills is not None:
+            out["childFills"] = dict(self.child_fills)
+        return out
+
+
+@dataclass(frozen=True, slots=True)
+class ContentControlOperationSupport:
+    """Whether one operation would succeed on a control right now, by the gates it applies."""
+
+    operation: str
+    can_mutate: bool
+    nested_controls: ContentControlNestedPolicy | None = None
+    reason: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "ContentControlOperationSupport":
+        nested = d.get("nestedControls")
+        return cls(
+            operation=str(d.get("operation", "")),
+            can_mutate=bool(d.get("canMutate", False)),
+            nested_controls=None if nested is None else ContentControlNestedPolicy(str(nested)),
+            reason=d.get("reason"),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -2655,6 +2698,11 @@ class ContentControlInfo:
     unsupported_reason: str | None
     text: str
     item_values: tuple[str, ...]
+    #: Anchors of the controls nested anywhere inside this control's payload.
+    nested_control_anchor_ids: tuple[str, ...] = ()
+    #: Per-operation support, including nested-policy variants of a fill when the target
+    #: contains nested controls and the session's tracked-change mode.
+    operations: tuple[ContentControlOperationSupport, ...] = ()
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "ContentControlInfo":
@@ -2674,6 +2722,10 @@ class ContentControlInfo:
             can_detach_target_binding=bool(d.get("canDetachTargetBinding", False)),
             unsupported_reason=d.get("unsupportedReason"), text=d.get("text", ""),
             item_values=tuple(d.get("itemValues", ())),
+            nested_control_anchor_ids=tuple(d.get("nestedControlAnchorIds", ())),
+            operations=tuple(
+                ContentControlOperationSupport._from_wire(entry) for entry in d.get("operations", ())
+            ),
         )
 
 

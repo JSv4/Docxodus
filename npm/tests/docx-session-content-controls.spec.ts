@@ -201,11 +201,13 @@ test.describe('DocxSession content controls (WASM bridge)', () => {
         const tracked = JSON.parse(bridge.ListContentControls(handle, 0x3f));
         const plain = tracked.find((c: any) => c.type === 'plain_text').anchorId as string;
         const attempted = JSON.parse(bridge.FillContentControlText(handle, plain, 'x', '{}'));
+        const revisionTypes = JSON.parse(bridge.ListRevisions(handle)).map((r: any) => r.type);
         return {
           beforeMutable: before.map((c: any) => c.canMutate),
           trackedMutable: tracked.map((c: any) => c.canMutate),
           trackedReasons: tracked.map((c: any) => c.unsupportedReason ?? ''),
-          attemptedCode: attempted.error?.code,
+          attemptedSuccess: attempted.success,
+          revisionTypes,
         };
       } finally {
         bridge.CloseSession(handle);
@@ -214,8 +216,13 @@ test.describe('DocxSession content controls (WASM bridge)', () => {
 
     expect(result.beforeMutable).toEqual([true, true, true, true, true]);
     // Discovery must agree with what a fill actually does — an agent plans off this registry.
-    expect(result.trackedMutable).toEqual([false, false, false, false, false]);
-    expect(result.trackedReasons.every((r: string) => r.includes('tracked revisions'))).toBe(true);
-    expect(result.attemptedCode).toBe('tracked_operation_unsupported');
+    // Issue #763: content edits (rich text, plain text, picture) have a native tracked form;
+    // checkbox and list state live in properties no revision covers.
+    expect(result.trackedMutable).toEqual([true, true, true, false, false]);
+    expect(result.trackedReasons[3]).toContain('w14:checked');
+    expect(result.trackedReasons[4]).toContain('w:lastValue');
+    expect(result.attemptedSuccess).toBe(true);
+    expect(result.revisionTypes).toContain('insert');
+    expect(result.revisionTypes).toContain('delete');
   });
 });

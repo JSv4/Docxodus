@@ -14,6 +14,22 @@ All notable changes to this project will be documented in this file.
   identical typed objects. A read-only viewer that renders through the worker no longer needs a
   second .NET runtime on the main thread to annotate; the main thread's `exportToOpenContract`
   and `createExternalAnnotationSet` also shed a duplicated converter in the process.
+- Content controls: explicit nested fills and native tracked mutations (issue #763).
+  `ContentControlFillOptions.NestedControls` decides what a text or rich-text fill does with the
+  controls nested in its target — `refuse` (default, as before), `preserve` (keep every nested
+  control in place and replace only the content outside them, with `ChildFills` filling named
+  nested text controls in the same operation) or `replace` (discard the payload, nested controls
+  included, each reported removed; a locked or data-bound nested control refuses). Under
+  `render_inline`, text/rich-text fills record run-level deletions and insertions inside the
+  wrapper, a picture fill a deleted and an inserted run, and repeating-item add/remove the paired
+  custom-XML range envelopes, so accept yields the intended payload and reject the original;
+  checkbox, date and list state has no tracked representation and refuses with a reason naming
+  the property. A control keeps reading as inline or block through its own revision markup, so
+  it can be listed and filled again: refilling un-inserts the author's own earlier payload the
+  way Word does, and a repeating section clones its last clone-safe item rather than the tracked
+  insertion just added. `ContentControlInfo` gains `NestedControlAnchorIds` and `Operations`, a
+  per-operation (and per nested policy) `canMutate`/`reason` matrix evaluated by the one gate
+  every operation applies. Exposed on npm, `docx-scalpel` and MCP (`nestedControls`, `childFills`).
 - Native image coverage matrix and tracked image edits (issue #762). Every listed picture now
   carries `operations` — one `{operation, canMutate, reason}` answer for `replace`,
   `embed_linked`, `set_dimensions`, `set_metadata`, `set_floating_layout` and `remove` in the
