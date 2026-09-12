@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [12.5.0] - 2026-09-12
+
 ### Added
 
 - `DocxEditor.openAsync()` mounts a document without holding the main thread for the whole
@@ -216,6 +218,11 @@ All notable changes to this project will be documented in this file.
   deleted fraction removed it and rejecting an inserted one left an empty husk;
   `AcceptRevisions` removed only fractions. Both passes now treat the control mark of every
   math object.
+
+## [12.4.1] - 2026-09-10
+
+### Added
+
 - Added `docxodus/core`, an engine-only npm entry point for plain Node ESM. It exposes
   conversion, comparison, annotation, history, and session APIs without importing the
   browser editor's bundler-only drag-and-drop dependencies. The existing `docxodus`
