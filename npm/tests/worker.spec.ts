@@ -23,6 +23,93 @@ function readTestFile(relativePath: string): Uint8Array {
 }
 
 test.describe("Docxodus Web Worker Tests", () => {
+  test.describe("External annotations off the main thread (#775)", () => {
+    test("the annotation family runs in the worker with no main-thread runtime", async ({ page }) => {
+      const documentBytes = readTestFile("HC001-5DayTourPlanTemplate.docx");
+      const result = await page.evaluate(async (bytesArray: number[]) => {
+        const bytes = new Uint8Array(bytesArray);
+        const copy = () => new Uint8Array(bytes);
+        // The engine binds a set to the lowercase SHA-256 of the package bytes: an oracle the
+        // browser can compute without any engine at all.
+        const expectedHash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)))
+          .map(value => value.toString(16).padStart(2, "0")).join("");
+        await (window as any).createDocxodusWorker();
+        const worker = (window as any).DocxodusWorker;
+
+        // Everything below runs with the worker alone — this harness never loads the
+        // main-thread runtime — so the worker creates, validates, projects and exports.
+        const set = await worker.createExternalAnnotationSet(copy(), "doc-775");
+        // Any run of two or more non-space, non-digit characters — the fixture's text is Chinese.
+        const word = (/[^\s\d]{2,}/.exec(set.content) ?? [""])[0];
+        set.textLabels["term"] = {
+          id: "term", color: "#ffd700", description: "", icon: "", text: "Term", labelType: "text",
+        };
+        const start = set.content.indexOf(word);
+        set.labelledText.push({
+          id: "a-775",
+          annotationLabel: "term",
+          rawText: word,
+          page: 0,
+          annotationJson: { id: "a-775", start, end: start + word.length, text: word },
+          annotationType: "TEXT_SPAN",
+          structural: false,
+        });
+        const validation = await worker.validateExternalAnnotations(copy(), set);
+        const plainHtml = await worker.convertDocxToHtml(copy());
+        const projected = await worker.projectAnnotationsOntoHtml(plainHtml, set);
+        const combined = await worker.convertDocxToHtmlWithExternalAnnotations(copy(), set);
+        const exported = await worker.exportToOpenContract(copy());
+        return {
+          mainThreadRuntime: typeof (window as any).Docxodus !== "undefined",
+          documentId: set.documentId,
+          hashMatchesBytes: set.documentHash === expectedHash,
+          // The wire reader normalized the engine's PascalCase into the typed camelCase shape.
+          typedShape: typeof set.createdAt === "string" && Array.isArray(set.labelledText)
+            && typeof set.textLabels === "object" && set.content.length > 0,
+          validation,
+          word,
+          contentSample: set.content.slice(0, 160),
+          projectedChanged: projected !== plainHtml,
+          projectedHasAnnotation: projected.includes("ext-annot-") && projected.includes("a-775"),
+          combinedHasAnnotation: combined.includes("ext-annot-") && combined.includes("a-775"),
+          // The export and the set are the same document read through the same reader.
+          exportMatchesSet: exported.content === set.content
+            && exported.pageCount === set.pageCount
+            && exported.pawlsFileContent.length === set.pawlsFileContent.length
+            && exported.pawlsFileContent.length > 0
+            && typeof exported.pawlsFileContent[0].page.width === "number",
+        };
+      }, Array.from(documentBytes));
+
+      expect(result.mainThreadRuntime).toBe(false);
+      expect(result.documentId).toBe("doc-775");
+      expect(result.hashMatchesBytes).toBe(true);
+      expect(result.typedShape).toBe(true);
+      expect(result.word.length, `content: ${result.contentSample}`).toBeGreaterThanOrEqual(2);
+      expect(result.validation.isValid).toBe(true);
+      expect(result.validation.hashMismatch).toBe(false);
+      expect(result.validation.issues).toEqual([]);
+      expect(result.projectedChanged).toBe(true);
+      expect(result.projectedHasAnnotation).toBe(true);
+      expect(result.combinedHasAnnotation).toBe(true);
+      expect(result.exportMatchesSet).toBe(true);
+    });
+
+    test("a stale annotation set is reported by the worker, not thrown", async ({ page }) => {
+      const documentBytes = readTestFile("HC001-5DayTourPlanTemplate.docx");
+      const otherBytes = readTestFile("HC006-Test-01.docx");
+      const result = await page.evaluate(async ({ bytesArray, otherArray }: { bytesArray: number[]; otherArray: number[] }) => {
+        await (window as any).createDocxodusWorker();
+        const worker = (window as any).DocxodusWorker;
+        const set = await worker.createExternalAnnotationSet(new Uint8Array(bytesArray), "doc-775");
+        const validation = await worker.validateExternalAnnotations(new Uint8Array(otherArray), set);
+        return { hashMismatch: validation.hashMismatch, isValid: validation.isValid };
+      }, { bytesArray: Array.from(documentBytes), otherArray: Array.from(otherBytes) });
+      expect(result.hashMismatch).toBe(true);
+      expect(result.isValid).toBe(false);
+    });
+  });
+
   test.beforeEach(async ({ page }) => {
     // Navigate to worker test harness
     await page.goto("/worker-test-harness.html");
