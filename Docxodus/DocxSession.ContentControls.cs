@@ -39,9 +39,59 @@ public enum ContentControlBindingPolicy
     DetachTarget = 1,
 }
 
+/// <summary>How a whole-control fill treats the nested controls inside its target (issue #763).</summary>
+public enum ContentControlNestedPolicy
+{
+    /// <summary>Refuse the fill when the target contains nested controls (default).</summary>
+    Refuse = 0,
+
+    /// <summary>Keep every nested control in place; the payload replaces only the content
+    /// outside them. <see cref="ContentControlFillOptions.ChildFills"/> may fill named
+    /// textual children in the same operation.</summary>
+    Preserve = 1,
+
+    /// <summary>Replace the whole payload, nested controls included. Each removed control
+    /// is reported in <c>Removed</c>; a locked or data-bound nested control refuses.</summary>
+    Replace = 2,
+}
+
 public sealed record ContentControlFillOptions
 {
     public ContentControlBindingPolicy BindingPolicy { get; init; } = ContentControlBindingPolicy.Preserve;
+
+    public ContentControlNestedPolicy NestedControls { get; init; } = ContentControlNestedPolicy.Refuse;
+
+    /// <summary>
+    /// With <see cref="ContentControlNestedPolicy.Preserve"/>: plain-text fills for nested
+    /// text or rich-text controls of the target, keyed by their <c>sdt</c> anchor. Every key
+    /// must be a nested textual control of the target and must pass its own gates; otherwise
+    /// the whole operation fails without mutating.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? ChildFills { get; init; }
+}
+
+/// <summary>
+/// Whether one operation would succeed on a control right now, evaluated by the same gates
+/// the operation applies. <see cref="NestedControls"/> names the nested policy the entry
+/// describes when the target contains nested controls; null otherwise.
+/// </summary>
+public sealed record ContentControlOperationSupport(
+    string Operation,
+    string? NestedControls,
+    bool CanMutate,
+    string? Reason);
+
+/// <summary>The content-control operations, one per public mutation method.</summary>
+internal enum ContentControlOperation
+{
+    FillText,
+    FillRichText,
+    SetChecked,
+    SetDate,
+    SelectItem,
+    FillPicture,
+    AddRepeatingItem,
+    RemoveRepeatingItem,
 }
 
 public sealed record ContentControlBindingInfo(
@@ -71,6 +121,17 @@ public sealed record ContentControlInfo
     public string? UnsupportedReason { get; init; }
     public string Text { get; init; } = string.Empty;
     public IReadOnlyList<string> ItemValues { get; init; } = Array.Empty<string>();
+
+    /// <summary>Anchors of the controls nested anywhere inside this control's payload, in story order.</summary>
+    public IReadOnlyList<string> NestedControlAnchorIds { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Per-operation support for this control's family, including the nested-policy variants
+    /// of a fill when the target contains nested controls and the session's tracked-change
+    /// mode. <see cref="CanMutate"/> is the entry for the family's default operation and options.
+    /// </summary>
+    public IReadOnlyList<ContentControlOperationSupport> Operations { get; init; } =
+        Array.Empty<ContentControlOperationSupport>();
 }
 
 public sealed partial class DocxSession
@@ -143,12 +204,10 @@ public sealed partial class DocxSession
     public EditResult SetContentControlChecked(string anchorId, bool isChecked,
         ContentControlFillOptions? options = null)
     {
-        if (ResolveContentControlForMutation(anchorId, ContentControlType.Checkbox, options,
+        if (ResolveContentControlForMutation(anchorId, ContentControlOperation.SetChecked, options,
             out var candidate, out var error) is false) return error!;
-        if (ContainsNestedContentControl(candidate!.Element))
-            return NestedFillError(anchorId);
 
-        var checkbox = candidate.Element.Element(W.sdtPr)?.Element(ContentControlW14 + "checkbox");
+        var checkbox = candidate!.Element.Element(W.sdtPr)?.Element(ContentControlW14 + "checkbox");
         if (checkbox is null)
             return EditResult.Fail(EditErrorCode.ContentControlMalformed,
                 "checkbox content control has no w14:checkbox properties", anchorId);
@@ -161,8 +220,6 @@ public sealed partial class DocxSession
         var glyph = TryParseHexScalar((string?)stateElement?.Attribute(ContentControlW14 + "val"),
             out var scalar) ? char.ConvertFromUtf32(scalar) : char.ConvertFromUtf32(fallback);
         var stateFont = (string?)stateElement?.Attribute(ContentControlW14 + "font");
-        if (ValidateWholeContentReplacement(candidate, replacement: null, anchorId) is { } replacementError)
-            return replacementError;
 
         return MutateContentControl(candidate, options, () =>
         {
@@ -179,17 +236,13 @@ public sealed partial class DocxSession
     public EditResult SetContentControlDate(string anchorId, DateTimeOffset value,
         string? displayText = null, ContentControlFillOptions? options = null)
     {
-        if (ResolveContentControlForMutation(anchorId, ContentControlType.Date, options,
+        if (ResolveContentControlForMutation(anchorId, ContentControlOperation.SetDate, options,
             out var candidate, out var error) is false) return error!;
-        if (ContainsNestedContentControl(candidate!.Element))
-            return NestedFillError(anchorId);
-        var date = candidate.Element.Element(W.sdtPr)?.Element(W.date);
+        var date = candidate!.Element.Element(W.sdtPr)?.Element(W.date);
         if (date is null)
             return EditResult.Fail(EditErrorCode.ContentControlMalformed,
                 "date content control has no w:date properties", anchorId);
         var shown = displayText ?? value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-        if (ValidateWholeContentReplacement(candidate, replacement: null, anchorId) is { } replacementError)
-            return replacementError;
         return MutateContentControl(candidate, options, () =>
         {
             date.SetAttributeValue(W.fullDate, value.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'",
@@ -201,12 +254,9 @@ public sealed partial class DocxSession
     public EditResult SelectContentControlItem(string anchorId, string value,
         ContentControlFillOptions? options = null)
     {
-        if (ResolveContentControlForMutation(anchorId,
-            new[] { ContentControlType.DropDownList, ContentControlType.ComboBox }, options,
+        if (ResolveContentControlForMutation(anchorId, ContentControlOperation.SelectItem, options,
             out var candidate, out var error) is false) return error!;
-        if (ContainsNestedContentControl(candidate!.Element))
-            return NestedFillError(anchorId);
-        var props = candidate.Element.Element(W.sdtPr)!;
+        var props = candidate!.Element.Element(W.sdtPr)!;
         var list = props.Element(W.dropDownList) ?? props.Element(W.comboBox)!;
         var isComboBox = list.Name == W.comboBox;
         var matches = list.Elements(W.listItem).Where(item =>
@@ -224,8 +274,6 @@ public sealed partial class DocxSession
         var display = matches.Count == 1
             ? (string?)matches[0].Attribute(W.displayText) ?? selectedValue
             : value;
-        if (ValidateWholeContentReplacement(candidate, replacement: null, anchorId) is { } replacementError)
-            return replacementError;
         return MutateContentControl(candidate, options, () =>
         {
             list.SetAttributeValue(W.lastValue, selectedValue);
@@ -236,10 +284,8 @@ public sealed partial class DocxSession
     public EditResult FillContentControlPicture(string anchorId, byte[] imageBytes,
         ContentControlFillOptions? options = null)
     {
-        if (ResolveContentControlForMutation(anchorId, ContentControlType.Picture, options,
+        if (ResolveContentControlForMutation(anchorId, ContentControlOperation.FillPicture, options,
             out var candidate, out var error) is false) return error!;
-        if (ContainsNestedContentControl(candidate!.Element))
-            return NestedFillError(anchorId);
         var binary = ValidateImageBytes(imageBytes, anchorId);
         if (binary.Error is not null) return binary.Error;
         var target = ResolvePictureContentControlTarget(candidate!.Element,
@@ -248,37 +294,54 @@ public sealed partial class DocxSession
             return EditResult.Fail(errorCode, target.Diagnostic!, anchorId);
         var image = target.Image!;
         var blip = image.Blip!;
+        var tracked = _trackedChanges == TrackedChangeMode.RenderInline;
 
         return MutateContentControl(candidate!, options, () =>
         {
             var relationship = OwnedPartRelationships.FindOrAddImagePart(_doc!, candidate!.Owner.Part,
                 imageBytes, binary.ContentType!, binary.Format);
-            blip.SetAttributeValue(ImageR + "embed", relationship.RelationshipId);
+            if (tracked)
+            {
+                // Word's own shape for a tracked picture swap: the old run (drawing included)
+                // becomes a deletion and a fresh run carrying the new blip an insertion, so
+                // accept keeps only the new image and reject only the original — both media
+                // parts and their relationships stay referenced until the revision resolves.
+                var run = image.Outer.Parent!;
+                var replacement = new XElement(run);
+                foreach (var element in replacement.DescendantsAndSelf())
+                    element.Attribute(PtOpenXml.Unid)?.Remove();
+                replacement.Descendants(A.blip).Single()
+                    .SetAttributeValue(ImageR + "embed", relationship.RelationshipId);
+                AssignFreshDocumentPropertyIds(replacement);
+                var stamp = NewRevisionStamp();
+                var deletion = CreateRevisionEnvelope(W.del, stamp);
+                run.ReplaceWith(deletion);
+                deletion.Add(run);
+                deletion.AddAfterSelf(CreateRevisionEnvelope(W.ins, stamp, replacement));
+            }
+            else
+            {
+                blip.SetAttributeValue(ImageR + "embed", relationship.RelationshipId);
+                OwnedPartRelationships.SweepOrphanedImages(candidate.Owner.Part);
+            }
             candidate.Element.Element(W.sdtPr)?.Element(W.showingPlcHdr)?.Remove();
-            OwnedPartRelationships.SweepOrphanedImages(candidate.Owner.Part);
         });
     }
 
     /// <summary>Clone one direct repeating-section item. The new item is inserted after
-    /// <paramref name="afterItemAnchorId"/>, or after the final item when omitted.</summary>
+    /// <paramref name="afterItemAnchorId"/>, or after the final item when omitted. Under
+    /// <c>render_inline</c> the clone is a tracked content-control insertion: two paired
+    /// custom-XML insertion ranges cross its tags and its paragraphs are inserted content.</summary>
     public EditResult AddRepeatingSectionItem(string sectionAnchorId,
         string? afterItemAnchorId = null, ContentControlFillOptions? options = null)
     {
-        if (ResolveContentControlForMutation(sectionAnchorId, ContentControlType.RepeatingSection,
+        if (ResolveContentControlForMutation(sectionAnchorId, ContentControlOperation.AddRepeatingItem,
             options, out var section, out var error) is false) return error!;
-        var content = section!.Element.Element(W.sdtContent);
-        if (content is null)
-            return EditResult.Fail(EditErrorCode.ContentControlMalformed,
-                "repeating section has no w:sdtContent", sectionAnchorId);
+        var content = section!.Element.Element(W.sdtContent)!;
         var items = content.Elements(W.sdt).Where(IsRepeatingSectionItem).ToList();
-        if (items.Count == 0 || content.Elements().Any(element => element.Name != W.sdt
-                || !IsRepeatingSectionItem(element)))
-            return EditResult.Fail(EditErrorCode.RepeatingSectionConstraint,
-                "repeating section must contain only one or more direct repeating-section-item controls",
-                sectionAnchorId);
 
         XElement template;
-        if (afterItemAnchorId is null) template = items[^1];
+        if (afterItemAnchorId is null) template = DefaultRepeatingTemplate(items);
         else
         {
             var after = BuildContentControlRegistry(ProjectionScopes.All).FirstOrDefault(value =>
@@ -293,6 +356,8 @@ public sealed partial class DocxSession
             return EditResult.Fail(EditErrorCode.RepeatingSectionConstraint,
                 $"repeating item contains clone-sensitive markup ({unsafeCarrier})",
                 sectionAnchorId);
+        if (TrackedRepeatingInsertBlocker(template) is { } trackedReason)
+            return EditResult.Fail(EditErrorCode.TrackedOperationUnsupported, trackedReason, sectionAnchorId);
 
         _history.RecordPreOp(TakeSnapshot());
         try
@@ -306,6 +371,8 @@ public sealed partial class DocxSession
             AssignFreshDocumentPropertyIds(clone);
             AssignFreshParagraphIds(clone);
             template.AddAfterSelf(clone);
+            if (_trackedChanges == TrackedChangeMode.RenderInline)
+                MarkStructuredBlockAsTrackedInserted(clone, NewRevisionStamp());
             ContentControlIdentity.AssignStableUnids(section.Owner.Part.GetXDocument().Root!);
             InvalidateProjectionCache();
             var createdUnid = (string)clone.Attribute(PtOpenXml.Unid)!;
@@ -322,36 +389,33 @@ public sealed partial class DocxSession
         }
     }
 
+    /// <summary>Remove one direct repeating-section item. Under <c>render_inline</c> the item is
+    /// a tracked content-control deletion (the shape <c>DeleteRange</c> uses), so it stays live
+    /// until the revision resolves and is reported in <c>Modified</c> rather than <c>Removed</c>.</summary>
     public EditResult RemoveRepeatingSectionItem(string itemAnchorId)
     {
-        if (ResolveContentControlForMutation(itemAnchorId, ContentControlType.RepeatingSectionItem,
-            options: null, out var item, out var error, removingWrapper: true) is false) return error!;
-        var outer = item!.Element.Parent?.Parent;
-        if (outer is null || outer.Name != W.sdt || !IsRepeatingSection(outer)
-            || item.Element.Parent?.Name != W.sdtContent)
-            return EditResult.Fail(EditErrorCode.RepeatingSectionConstraint,
-                "repeating-section item is not a direct child of a repeating section", itemAnchorId);
-        var siblings = item.Element.Parent.Elements(W.sdt).Where(IsRepeatingSectionItem).ToList();
-        if (siblings.Count <= 1)
-            return EditResult.Fail(EditErrorCode.RepeatingSectionConstraint,
-                "a repeating section must retain at least one item", itemAnchorId);
+        if (ResolveContentControlForMutation(itemAnchorId, ContentControlOperation.RemoveRepeatingItem,
+            options: null, out var item, out var error) is false) return error!;
+        var outer = item!.Element.Parent!.Parent!;
         var parentCandidate = BuildContentControlRegistry(ProjectionScopes.All).First(value =>
             ReferenceEquals(value.Element, outer));
-        if (ValidateEffectiveLocks(parentCandidate, removingWrapper: false) is { } parentLock)
-            return parentLock;
-        if (ValidateBindingPolicy(parentCandidate, options: null) is { } bindingError)
-            return bindingError;
-        if (ValidateBookmarkRemoval(new[] { item.Element }, itemAnchorId) is { } bookmarkError)
-            return bookmarkError;
+        var tracked = _trackedChanges == TrackedChangeMode.RenderInline;
 
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            var removed = AnchorFromCandidate(item);
+            var itemAnchor = AnchorFromCandidate(item);
+            if (tracked)
+            {
+                MarkStructuredBlockAsTrackedDeleted(item.Element, NewRevisionStamp());
+                InvalidateProjectionCache();
+                return new EditResult { Success = true,
+                    Modified = new[] { itemAnchor, AnchorFromCandidate(parentCandidate) } };
+            }
             item.Element.Remove();
             SweepOrphanedStoryRelationships(item.Owner.Part);
             InvalidateProjectionCache();
-            return new EditResult { Success = true, Removed = new[] { removed },
+            return new EditResult { Success = true, Removed = new[] { itemAnchor },
                 Modified = new[] { AnchorFromCandidate(parentCandidate) } };
         }
         catch (Exception ex)
@@ -365,65 +429,298 @@ public sealed partial class DocxSession
     private EditResult FillTextualContentControl(string anchorId, string payload, bool rich,
         ContentControlFillOptions? options)
     {
-        var expected = rich ? ContentControlType.RichText : ContentControlType.PlainText;
-        if (ResolveContentControlForMutation(anchorId, expected, options,
+        options ??= new ContentControlFillOptions();
+        var operation = rich ? ContentControlOperation.FillRichText : ContentControlOperation.FillText;
+        if (ResolveContentControlForMutation(anchorId, operation, options,
             out var candidate, out var error) is false) return error!;
-        if (ContainsNestedContentControl(candidate!.Element)) return NestedFillError(anchorId);
+        var content = candidate!.Element.Element(W.sdtContent)!;
+        var placement = candidate.Info.Placement;
+        var nested = NestedContentControls(candidate.Element);
+        var policy = nested.Count == 0 ? ContentControlNestedPolicy.Refuse : options.NestedControls;
+        var preserveNested = policy == ContentControlNestedPolicy.Preserve;
+        var replaced = ReplacedPayloadNodes(content, preserveNested);
 
+        IReadOnlyList<XElement> payloadNodes;
         if (!rich)
         {
-            if (ValidateWholeContentReplacement(candidate, replacement: null, anchorId) is { } replacementError)
-                return replacementError;
-            return MutateContentControl(candidate, options,
-                () => ReplaceControlWithPlainText(candidate.Element, payload));
+            payloadNodes = new[] { PlainTextPayloadNode(placement, replaced, payload) };
+        }
+        else
+        {
+            var parsed = MarkdownPayloadParser.Parse(payload);
+            if (!parsed.Success)
+                return EditResult.Fail(parsed.Error!.Code, parsed.Error.Message, anchorId);
+            if (parsed.Blocks.Count == 0)
+                parsed = ParseResult.Ok(new[]
+                {
+                    new ParsedBlock(ParserBlockKind.Paragraph, 0,
+                        new[] { new XElement(W.r) }),
+                });
+            if (placement == ContentControlPlacement.Inline && parsed.Blocks.Count != 1)
+                return EditResult.Fail(EditErrorCode.ContentControlPlacementUnsupported,
+                    "an inline rich-text control accepts exactly one markdown block", anchorId);
+            var runs = parsed.Blocks.SelectMany(block => block.RunElements).ToList();
+            if (ValidatePendingHyperlinks(runs, anchorId, content) is { } hyperlinkError)
+                return hyperlinkError;
+            payloadNodes = placement == ContentControlPlacement.Inline
+                ? parsed.Blocks[0].RunElements.Select(element => new XElement(element)).ToList()
+                : parsed.Blocks.Select(BuildParagraphFromParsedBlock).ToList();
         }
 
-        var parsed = MarkdownPayloadParser.Parse(payload);
-        if (!parsed.Success)
-            return EditResult.Fail(parsed.Error!.Code, parsed.Error.Message, anchorId);
-        if (parsed.Blocks.Count == 0)
-            parsed = ParseResult.Ok(new[]
-            {
-                new ParsedBlock(ParserBlockKind.Paragraph, 0,
-                    new[] { new XElement(W.r) }),
-            });
-        if (candidate.Info.Placement == ContentControlPlacement.Inline && parsed.Blocks.Count != 1)
-            return EditResult.Fail(EditErrorCode.ContentControlPlacementUnsupported,
-                "an inline rich-text control accepts exactly one markdown block", anchorId);
-        if (candidate.Info.Placement is not (ContentControlPlacement.Inline or ContentControlPlacement.Block))
-            return EditResult.Fail(EditErrorCode.ContentControlPlacementUnsupported,
-                "rich-text fill supports only inline and block content controls", anchorId);
-        var replacement = parsed.Blocks.SelectMany(block => block.RunElements).ToList();
-        if (ValidateWholeContentReplacement(candidate, replacement, anchorId) is { } richReplacementError)
-            return richReplacementError;
+        // Child fills were validated by the gate; resolve their targets before the snapshot.
+        var registry = BuildContentControlRegistry(ProjectionScopes.All);
+        var childFills = (options.ChildFills ?? new Dictionary<string, string>())
+            .Select(pair => (Child: registry.First(value =>
+                string.Equals(value.Info.AnchorId, pair.Key, StringComparison.Ordinal)), Text: pair.Value))
+            .ToList();
+        var nestedAnchors = nested
+            .Select(control => registry.FirstOrDefault(value => ReferenceEquals(value.Element, control)))
+            .Where(value => value is not null)
+            .Select(value => AnchorFromCandidate(value!))
+            .ToList();
+        var tracked = _trackedChanges == TrackedChangeMode.RenderInline;
 
         return MutateContentControl(candidate, options, () =>
         {
-            var content = candidate.Element.Element(W.sdtContent)!;
-            if (candidate.Info.Placement == ContentControlPlacement.Inline)
+            ReplacePayload(content, placement, preserveNested, payloadNodes, tracked);
+            candidate.Element.Element(W.sdtPr)?.Element(W.showingPlcHdr)?.Remove();
+            foreach (var (child, text) in childFills)
             {
-                var block = parsed.Blocks[0];
-                content.ReplaceNodes(block.RunElements.Select(element => new XElement(element)));
+                var childContent = child.Element.Element(W.sdtContent)!;
+                var childReplaced = ReplacedPayloadNodes(childContent, preserveNested: false);
+                ReplacePayload(childContent, child.Info.Placement, preserveNested: false,
+                    new[] { PlainTextPayloadNode(child.Info.Placement, childReplaced, text) }, tracked);
+                child.Element.Element(W.sdtPr)?.Element(W.showingPlcHdr)?.Remove();
+            }
+        },
+        removed: policy == ContentControlNestedPolicy.Replace && !tracked ? nestedAnchors : null,
+        alsoModified: policy == ContentControlNestedPolicy.Replace && tracked
+            ? nestedAnchors
+            : childFills.Select(pair => AnchorFromCandidate(pair.Child)).ToList());
+    }
+
+    /// <summary>The plain-text payload the fill writes: one run (inline) or one paragraph (block),
+    /// carrying the first replaced run's properties — and, for a block, the first replaced
+    /// paragraph's properties — so a fill keeps the control's existing formatting.</summary>
+    private static XElement PlainTextPayloadNode(ContentControlPlacement placement,
+        IReadOnlyList<XElement> replaced, string text)
+    {
+        var oldRunProperties = replaced.SelectMany(node => node.DescendantsAndSelf(W.r))
+            .Select(run => run.Element(W.rPr)).FirstOrDefault(value => value is not null);
+        var run = new XElement(W.r,
+            oldRunProperties is null ? null : new XElement(oldRunProperties),
+            new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), text));
+        if (placement == ContentControlPlacement.Inline) return run;
+        var oldParagraphProperties = replaced.Where(node => node.Name == W.p)
+            .Select(paragraph => paragraph.Element(W.pPr)).FirstOrDefault(value => value is not null);
+        return new XElement(W.p,
+            oldParagraphProperties is null ? null : new XElement(oldParagraphProperties), run);
+    }
+
+    /// <summary>
+    /// Replace the target's own content with <paramref name="payload"/>. Every direct payload
+    /// child is replaced, except — when <paramref name="preserveNested"/> — a nested control,
+    /// a table that holds one, and the part of a paragraph that is one: such a paragraph loses
+    /// only its own inline content and stays as the nested control's container. The first
+    /// paragraph with replaced content hosts the payload's first block (keeping its paragraph
+    /// properties); further blocks follow it as new paragraphs; with no host the payload goes
+    /// at the end. Under <c>render_inline</c> nothing is discarded: replaced runs become
+    /// <c>w:del</c>, replaced paragraphs/tables/nested wrappers take their ordinary deletion
+    /// markup, and the payload is inserted content — the host paragraph carrying both the
+    /// deletion and the first inserted block, Word's own shape for retyping a control — so
+    /// accept yields exactly the payload and reject exactly the original.
+    /// </summary>
+    private void ReplacePayload(XElement content, ContentControlPlacement placement,
+        bool preserveNested, IReadOnlyList<XElement> payload, bool tracked)
+    {
+        var stamp = tracked ? NewRevisionStamp() : default;
+        if (placement == ContentControlPlacement.Inline)
+        {
+            var replaced = content.Elements()
+                .Where(node => !IsPreservedPayloadNode(node, preserveNested) && !IsRangeMarker(node))
+                .ToList();
+            ReplaceInlineNodes(content, replaced, payload, tracked, stamp);
+            return;
+        }
+
+        XElement? host = null;
+        var remaining = payload.ToList();
+        foreach (var child in content.Elements().ToList())
+        {
+            if (IsPreservedPayloadNode(child, preserveNested) || IsRangeMarker(child)) continue;
+            if (child.Name == W.p)
+            {
+                var hostsNested = preserveNested && child.Descendants(W.sdt).Any();
+                var inline = child.Elements()
+                    .Where(node => node.Name != W.pPr && !IsRangeMarker(node)
+                        && !(hostsNested && (node.Name == W.sdt || node.Descendants(W.sdt).Any())))
+                    .ToList();
+                if (host is null && remaining.Count > 0)
+                {
+                    host = child;
+                    var first = remaining[0];
+                    remaining.RemoveAt(0);
+                    ReplaceInlineNodes(child, inline, first.Elements()
+                        .Where(node => node.Name != W.pPr).Select(node => new XElement(node)).ToList(),
+                        tracked, stamp);
+                    continue;
+                }
+                if (!hostsNested)
+                {
+                    if (tracked) MarkParagraphAsTrackedDeleted(child, stamp);
+                    else child.Remove();
+                }
+                else
+                {
+                    ReplaceInlineNodes(child, inline, Array.Empty<XElement>(), tracked, stamp);
+                }
+                continue;
+            }
+            if (tracked) MarkTrackedStructuredContentChild(child, stamp);
+            else child.Remove();
+        }
+
+        if (remaining.Count == 0) return;
+        if (tracked)
+            foreach (var paragraph in remaining)
+                MarkParagraphContentAndMark(paragraph, W.ins, stamp.Author, stamp.Date);
+        if (host is not null) host.AddAfterSelf(remaining);
+        else content.Add(remaining);
+    }
+
+    /// <summary>Replace <paramref name="replaced"/> (inline children of <paramref name="container"/>)
+    /// with <paramref name="payload"/> at the first replaced position, or at the end when nothing
+    /// is replaced; tracked, the replaced runs become one <c>w:del</c> and the payload one
+    /// <c>w:ins</c> right after it.</summary>
+    private void ReplaceInlineNodes(XElement container, IReadOnlyList<XElement> replaced,
+        IReadOnlyList<XElement> payload, bool tracked, RevisionStamp stamp)
+    {
+        if (!tracked)
+        {
+            if (payload.Count > 0)
+            {
+                if (replaced.Count > 0) replaced[0].AddBeforeSelf(payload);
+                else container.Add(payload);
+            }
+            foreach (var node in replaced) node.Remove();
+            return;
+        }
+
+        // Un-inserting the author's own earlier payload detaches those nodes, so the slot the
+        // insertion goes into is remembered as the node before the replaced range, not as one
+        // of the replaced nodes themselves.
+        var slot = replaced.Count > 0 ? replaced[0].PreviousNode : null;
+        XElement? deletion = null;
+        XElement? lastKept = null;
+        foreach (var node in replaced)
+        {
+            if (node.Name == W.r)
+            {
+                if (deletion is null)
+                {
+                    deletion = CreateRevisionEnvelope(W.del, stamp);
+                    node.AddBeforeSelf(deletion);
+                }
+                node.Remove();
+                ConvertTextToDeletedText(node);
+                deletion.Add(node);
             }
             else
             {
-                var blocks = parsed.Blocks.Select(BuildParagraphFromParsedBlock).ToList();
-                content.ReplaceNodes(blocks);
+                WrapDescendantRunsInDel(node, stamp);
+                if (node.Parent is not null) lastKept = node;
             }
-            candidate.Element.Element(W.sdtPr)?.Element(W.showingPlcHdr)?.Remove();
-        });
+        }
+        if (payload.Count == 0) return;
+        var insertion = CreateRevisionEnvelope(W.ins, stamp, payload);
+        if (deletion is not null) deletion.AddAfterSelf(insertion);
+        else if (lastKept is not null) lastKept.AddAfterSelf(insertion);
+        else if (slot is not null) slot.AddAfterSelf(insertion);
+        else if (replaced.Count > 0) container.AddFirst(insertion);
+        else container.Add(insertion);
     }
 
-    private bool ResolveContentControlForMutation(string anchorId, ContentControlType expected,
-        ContentControlFillOptions? options, out ContentControlCandidate? candidate,
-        out EditResult? error, bool removingWrapper = false) =>
-        ResolveContentControlForMutation(anchorId, new[] { expected }, options,
-            out candidate, out error, removingWrapper);
+    private static bool IsPreservedPayloadNode(XElement node, bool preserveNested) =>
+        preserveNested && (node.Name == W.sdt || (node.Name != W.p && node.Descendants(W.sdt).Any()));
+
+    private static bool IsRangeMarker(XElement node) =>
+        node.Name == W.bookmarkStart || node.Name == W.bookmarkEnd
+        || node.Name == W.commentRangeStart || node.Name == W.commentRangeEnd;
+
+    /// <summary>The nodes a fill discards (or, tracked, deletes): every direct payload child
+    /// that is not preserved, and the own inline content of a paragraph that hosts a preserved
+    /// nested control.</summary>
+    private static IReadOnlyList<XElement> ReplacedPayloadNodes(XElement content, bool preserveNested)
+    {
+        var replaced = new List<XElement>();
+        foreach (var child in content.Elements())
+        {
+            if (IsPreservedPayloadNode(child, preserveNested) || IsRangeMarker(child)) continue;
+            if (child.Name == W.p && preserveNested && child.Descendants(W.sdt).Any())
+            {
+                replaced.AddRange(child.Elements().Where(node => node.Name != W.pPr
+                    && !IsRangeMarker(node) && node.Name != W.sdt && !node.Descendants(W.sdt).Any()));
+                continue;
+            }
+            replaced.Add(child);
+        }
+        return replaced;
+    }
+
+    /// <summary>Delete every run under <paramref name="container"/> the way Word does, in place,
+    /// keeping hyperlink and field containers: an ordinary run becomes <c>w:del</c>; a run already
+    /// deleted or moved away stays as it is; a run inside the session author's own insertion is
+    /// simply un-inserted (retyping your own tracked text leaves no trace of the first attempt);
+    /// a run inside another author's insertion is deleted inside that insertion.</summary>
+    private void WrapDescendantRunsInDel(XElement container, RevisionStamp stamp)
+    {
+        foreach (var run in container.Descendants(W.r).ToList())
+        {
+            if (run.Ancestors().Any(ancestor => ancestor.Name == W.del || ancestor.Name == W.moveFrom))
+                continue;
+            var insertion = run.Ancestors().FirstOrDefault(ancestor =>
+                ancestor.Name == W.ins || ancestor.Name == W.moveTo);
+            if (insertion is not null
+                && string.Equals((string?)insertion.Attribute(W.author), stamp.Author, StringComparison.Ordinal))
+            {
+                run.Remove();
+                if (!insertion.HasElements) insertion.Remove();
+                continue;
+            }
+            var envelope = CreateRevisionEnvelope(W.del, stamp);
+            run.ReplaceWith(envelope);
+            envelope.Add(run);
+            ConvertTextToDeletedText(run);
+        }
+    }
+
+    /// <summary>
+    /// The insertion mirror of <c>MarkStructuredBlockAsTrackedDeleted</c>: two paired custom-XML
+    /// insertion ranges cross the wrapper's tags and every payload paragraph (and nested block
+    /// wrapper) is inserted content, so reject removes the wrapper and payload together and
+    /// accept keeps them with the markers stripped.
+    /// </summary>
+    private void MarkStructuredBlockAsTrackedInserted(XElement wrapper, RevisionStamp stamp)
+    {
+        var content = wrapper.Element(W.sdtContent)
+            ?? throw new InvalidOperationException("block w:sdt has no w:sdtContent");
+        foreach (var child in content.Elements().ToList())
+        {
+            if (child.Name == W.p) MarkParagraphContentAndMark(child, W.ins, stamp.Author, stamp.Date);
+            else if (child.Name == W.sdt) MarkStructuredBlockAsTrackedInserted(child, stamp);
+            else throw new InvalidOperationException(
+                $"tracked insertion of a repeating item cannot represent {child.Name.LocalName}");
+        }
+        var boundaries = Internal.StructuredRevisionOps.AddCrossBoundaryMarkers(
+            content, W.customXmlInsRangeStart, W.customXmlInsRangeEnd,
+            name => CreateRevisionEnvelope(name, stamp));
+        wrapper.AddBeforeSelf(boundaries.Before);
+        wrapper.AddAfterSelf(boundaries.After);
+    }
 
     private bool ResolveContentControlForMutation(string anchorId,
-        IReadOnlyCollection<ContentControlType> expected, ContentControlFillOptions? options,
-        out ContentControlCandidate? candidate, out EditResult? error,
-        bool removingWrapper = false)
+        ContentControlOperation operation, ContentControlFillOptions? options,
+        out ContentControlCandidate? candidate, out EditResult? error)
     {
         candidate = null;
         error = null;
@@ -432,12 +729,8 @@ public sealed partial class DocxSession
             error = EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
             return false;
         }
-        if (TrackedContentControlBlocker() is { } trackedReason)
-        {
-            error = EditResult.Fail(EditErrorCode.TrackedOperationUnsupported, trackedReason, anchorId);
-            return false;
-        }
-        candidate = BuildContentControlRegistry(ProjectionScopes.All).FirstOrDefault(value =>
+        var registry = BuildContentControlRegistry(ProjectionScopes.All);
+        candidate = registry.FirstOrDefault(value =>
             string.Equals(value.Info.AnchorId, anchorId, StringComparison.Ordinal));
         if (candidate is null)
         {
@@ -445,64 +738,266 @@ public sealed partial class DocxSession
                 $"content control not found: {anchorId}", anchorId);
             return false;
         }
-        if (candidate.MalformedReason is not null || candidate.MalformedAncestorReason is not null
-            || !candidate.Identity.HasMutableIdentity)
-        {
-            error = EditResult.Fail(EditErrorCode.ContentControlMalformed,
-                candidate.MalformedReason ?? candidate.MalformedAncestorReason
-                    ?? candidate.Info.UnsupportedReason
-                    ?? "content control has no unique valid native w:id", anchorId);
-            return false;
-        }
-        if (candidate.Info.Type == ContentControlType.Unsupported)
-        {
-            error = EditResult.Fail(EditErrorCode.ContentControlUnsupported,
-                candidate.Info.UnsupportedReason ?? "unsupported content-control family", anchorId);
-            return false;
-        }
-        if (!expected.Contains(candidate.Info.Type))
-        {
-            error = EditResult.Fail(EditErrorCode.ContentControlWrongType,
-                $"operation requires {string.Join(" or ", expected)} but target is {candidate.Info.Type}", anchorId);
-            return false;
-        }
-        if (candidate.Info.Placement == ContentControlPlacement.Unknown)
-        {
-            error = EditResult.Fail(EditErrorCode.ContentControlPlacementUnsupported,
-                candidate.Info.UnsupportedReason ?? "unsupported content-control placement", anchorId);
-            return false;
-        }
-        if (!IsMutationPlacementSupported(candidate.Info.Type, candidate.Info.Placement))
-        {
-            error = EditResult.Fail(EditErrorCode.ContentControlPlacementUnsupported,
-                candidate.Info.UnsupportedReason
-                    ?? $"{candidate.Info.Type} mutation supports only inline and block content controls",
-                anchorId);
-            return false;
-        }
-        if (ValidateEffectiveLocks(candidate, removingWrapper) is { } lockError)
-        {
-            error = lockError;
-            return false;
-        }
-        if (ValidateBindingPolicy(candidate, options) is { } bindingError)
-        {
-            error = bindingError;
-            return false;
-        }
-        return true;
+        IReadOnlyList<ImageCandidate>? imageCandidates = null;
+        error = GateContentControlOperation(candidate, operation,
+            options ?? new ContentControlFillOptions(), registry, ref imageCandidates);
+        return error is null;
     }
 
     /// <summary>
-    /// The session-mode gate every content-control mutation shares: a whole-control fill and a
-    /// repeating-item add/remove both rewrite a payload wholesale, which has no faithful tracked
-    /// representation. Discovery and mutation both read it, so the registry cannot advertise
-    /// <c>canMutate</c> for an operation that is guaranteed to be refused.
+    /// The one gate for every content-control operation, applied in the order a mutation would
+    /// report it. Discovery evaluates it per operation (and per nested policy) to build
+    /// <see cref="ContentControlInfo.Operations"/>, and every mutation evaluates it once before
+    /// taking an undo snapshot, so the registry can never advertise a mutation the session is
+    /// guaranteed to refuse.
     /// </summary>
-    private string? TrackedContentControlBlocker() =>
-        _trackedChanges == TrackedChangeMode.RenderInline
-            ? "content-control mutations cannot be represented faithfully as tracked revisions; use surgical text operations inside the control or switch modes"
+    private EditResult? GateContentControlOperation(
+        ContentControlCandidate candidate,
+        ContentControlOperation operation,
+        ContentControlFillOptions options,
+        IReadOnlyList<ContentControlCandidate> registry,
+        ref IReadOnlyList<ImageCandidate>? imageCandidates)
+    {
+        var anchorId = candidate.Info.AnchorId;
+        var type = candidate.Info.Type;
+        if (candidate.MalformedReason is not null || candidate.MalformedAncestorReason is not null
+            || !candidate.Identity.HasMutableIdentity)
+            return EditResult.Fail(EditErrorCode.ContentControlMalformed,
+                candidate.MalformedReason ?? candidate.MalformedAncestorReason
+                    ?? (candidate.Identity.HasMutableIdentity ? null : candidate.Info.UnsupportedReason)
+                    ?? "content control has no unique valid native w:id", anchorId);
+        if (type == ContentControlType.Unsupported)
+            return EditResult.Fail(EditErrorCode.ContentControlUnsupported,
+                "unsupported content-control family", anchorId);
+        var expected = ExpectedTypes(operation);
+        if (!expected.Contains(type))
+            return EditResult.Fail(EditErrorCode.ContentControlWrongType,
+                $"operation requires {string.Join(" or ", expected)} but target is {type}", anchorId);
+        if (candidate.Info.Placement == ContentControlPlacement.Unknown)
+            return EditResult.Fail(EditErrorCode.ContentControlPlacementUnsupported,
+                "unsupported or malformed OOXML placement", anchorId);
+        if (!IsMutationPlacementSupported(type, candidate.Info.Placement))
+            return EditResult.Fail(EditErrorCode.ContentControlPlacementUnsupported,
+                $"{type} mutation supports only inline and block content controls", anchorId);
+        if (ValidateEffectiveLocks(candidate,
+                removingWrapper: operation == ContentControlOperation.RemoveRepeatingItem) is { } lockError)
+            return lockError;
+        if (ValidateBindingPolicy(candidate, options) is { } bindingError)
+            return bindingError;
+        if (NestedControlsGate(candidate, operation, options, registry) is { } nestedError)
+            return nestedError;
+        if (TrackedOperationBlocker(candidate.Element, type, operation, options, ref imageCandidates)
+            is { } trackedReason)
+            return EditResult.Fail(EditErrorCode.TrackedOperationUnsupported, trackedReason, anchorId);
+        if (operation is ContentControlOperation.AddRepeatingItem or ContentControlOperation.RemoveRepeatingItem
+            && RepeatingMutationConstraint(candidate.Element, type) is { } repeatingReason)
+            return EditResult.Fail(EditErrorCode.RepeatingSectionConstraint, repeatingReason, anchorId);
+        if (operation == ContentControlOperation.FillPicture)
+        {
+            imageCandidates ??= EnumerateImageCandidates(ProjectionScopes.All);
+            var target = ResolvePictureContentControlTarget(candidate.Element, imageCandidates);
+            if (target.ErrorCode is { } code)
+                return EditResult.Fail(code, target.Diagnostic!, anchorId);
+        }
+        if (_trackedChanges != TrackedChangeMode.RenderInline
+            && BookmarkRemovalRoots(candidate, operation, options) is { } roots
+            && ValidateBookmarkRemoval(roots, anchorId) is { } bookmarkError)
+            return bookmarkError;
+        return null;
+    }
+
+    /// <summary>
+    /// Nested-control semantics of a whole-control fill (issue #763). Only text and rich-text
+    /// fills can preserve or replace nested controls; every other family's payload is atomic.
+    /// Replacing refuses when a nested control is locked or data-bound, so no protected control
+    /// is ever discarded by implication. Preserving may fill named textual children, each of
+    /// which must pass its own gates; a key that is not a nested control of the target fails.
+    /// </summary>
+    private EditResult? NestedControlsGate(ContentControlCandidate candidate,
+        ContentControlOperation operation, ContentControlFillOptions options,
+        IReadOnlyList<ContentControlCandidate> registry)
+    {
+        var anchorId = candidate.Info.AnchorId;
+        var childFills = options.ChildFills ?? new Dictionary<string, string>();
+        if (childFills.Count > 0 && options.NestedControls != ContentControlNestedPolicy.Preserve)
+            return EditResult.Fail(EditErrorCode.ContentControlNestedFillUnsupported,
+                "childFills requires nestedControls=preserve", anchorId);
+        if (!IsFillOperation(operation)) return null;
+        var nested = NestedContentControls(candidate.Element);
+        if (nested.Count == 0)
+            return childFills.Count == 0
+                ? null
+                : EditResult.Fail(EditErrorCode.ContentControlNotFound,
+                    "childFills names controls, but the target contains no nested controls", anchorId);
+        if (!IsTextualFill(operation) || options.NestedControls == ContentControlNestedPolicy.Refuse)
+            return NestedFillError(anchorId, IsTextualFill(operation));
+        var byElement = registry.ToDictionary(value => value.Element, value => value);
+        if (options.NestedControls == ContentControlNestedPolicy.Replace)
+        {
+            foreach (var control in nested)
+            {
+                var nestedAnchor = byElement.TryGetValue(control, out var nestedCandidate)
+                    ? nestedCandidate.Info.AnchorId : "nested control";
+                var props = control.Element(W.sdtPr);
+                if ((string?)props?.Element(ContentControlW + "lock")?.Attribute(W.val)
+                        is "sdtLocked" or "contentLocked" or "sdtContentLocked")
+                    return EditResult.Fail(EditErrorCode.ContentControlLocked,
+                        $"nested control {nestedAnchor} is locked; replacing the payload would remove it", anchorId);
+                if (FindDataBinding(props) is not null)
+                    return EditResult.Fail(EditErrorCode.ContentControlBound,
+                        $"nested control {nestedAnchor} is data-bound; replacing the payload would remove it", anchorId);
+            }
+            return null;
+        }
+        foreach (var childAnchor in childFills.Keys)
+        {
+            var child = registry.FirstOrDefault(value =>
+                string.Equals(value.Info.AnchorId, childAnchor, StringComparison.Ordinal));
+            if (child is null || !child.Element.Ancestors().Any(ancestor => ReferenceEquals(ancestor, candidate.Element)))
+                return EditResult.Fail(EditErrorCode.ContentControlNotFound,
+                    $"childFills target {childAnchor} is not a control nested in {anchorId}", childAnchor);
+            if (child.Info.Type is not (ContentControlType.PlainText or ContentControlType.RichText))
+                return EditResult.Fail(EditErrorCode.ContentControlWrongType,
+                    $"childFills target {childAnchor} is {child.Info.Type}; only text and rich-text children can be filled", childAnchor);
+            IReadOnlyList<ImageCandidate>? images = null;
+            if (GateContentControlOperation(child, ContentControlOperation.FillText,
+                    new ContentControlFillOptions(), registry, ref images) is { } childError)
+                return childError;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The operations that have a faithful native tracked representation under
+    /// <c>render_inline</c>, and why the others do not. Text and rich-text fills are run-level
+    /// deletions and insertions inside the wrapper; a picture fill is a deleted run and an
+    /// inserted run; repeating items use the paired custom-XML range envelopes; a checkbox
+    /// state, date value or list selection lives in <c>w:sdtPr</c>, which no revision covers.
+    /// </summary>
+    private string? TrackedOperationBlocker(XElement element, ContentControlType type,
+        ContentControlOperation operation, ContentControlFillOptions options,
+        ref IReadOnlyList<ImageCandidate>? imageCandidates)
+    {
+        if (_trackedChanges != TrackedChangeMode.RenderInline) return null;
+        switch (operation)
+        {
+            case ContentControlOperation.FillText:
+            case ContentControlOperation.FillRichText:
+                if (options.NestedControls != ContentControlNestedPolicy.Replace) return null;
+                var content = element.Element(W.sdtContent);
+                return NestedContentControls(element).Any(nested =>
+                        !ReferenceEquals(nested.Parent, content)
+                        || DetectContentControlPlacement(nested) != ContentControlPlacement.Block)
+                    ? "a tracked fill cannot remove a nested control that is not a block-level child of the target; keep it with nestedControls=preserve or switch modes"
+                    : null;
+            case ContentControlOperation.SetChecked:
+                return "a checkbox state (w14:checked) has no tracked representation; switch modes to change it";
+            case ContentControlOperation.SetDate:
+                return "a date value (w:date) has no tracked representation; switch modes to change it";
+            case ContentControlOperation.SelectItem:
+                return "a list selection (w:lastValue) has no tracked representation; switch modes to change it";
+            case ContentControlOperation.FillPicture:
+                imageCandidates ??= EnumerateImageCandidates(ProjectionScopes.All);
+                var target = ResolvePictureContentControlTarget(element, imageCandidates);
+                return target.Image is not null && target.Image.Outer.Parent?.Name != W.r
+                    ? "a tracked picture fill needs the picture in a plain run"
+                    : null;
+            case ContentControlOperation.AddRepeatingItem:
+                var items = element.Element(W.sdtContent)?.Elements(W.sdt).Where(IsRepeatingSectionItem).ToList();
+                return items is { Count: > 0 } ? TrackedRepeatingInsertBlocker(DefaultRepeatingTemplate(items)) : null;
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>The item a default add clones: the last one that can be cloned safely. An item
+    /// that is itself a tracked insertion carries revision ids and range markers no clone may
+    /// repeat, so the pristine item before it stays the template until the revision resolves.</summary>
+    private static XElement DefaultRepeatingTemplate(IReadOnlyList<XElement> items) =>
+        items.LastOrDefault(item => FindUnsafeRepeatingCloneCarrier(item) is null) ?? items[^1];
+
+    private static string? TrackedRepeatingInsertBlocker(XElement template) =>
+        template.Descendants(W.tbl).Any()
+            || template.Descendants(W.p).Any(paragraph => paragraph.Descendants(W.sdt).Any())
+            ? "tracked insertion of a repeating item containing a table or an inline nested control is unsupported; switch modes to add it"
             : null;
+
+    /// <summary>The payload nodes an untracked operation discards, for the bookmark gate; null
+    /// when the operation discards nothing.</summary>
+    private static IReadOnlyList<XElement>? BookmarkRemovalRoots(ContentControlCandidate candidate,
+        ContentControlOperation operation, ContentControlFillOptions options)
+    {
+        if (operation == ContentControlOperation.RemoveRepeatingItem)
+            return new[] { candidate.Element };
+        if (!IsFillOperation(operation) || operation == ContentControlOperation.FillPicture)
+            return null;
+        var content = candidate.Element.Element(W.sdtContent);
+        if (content is null) return null;
+        return options.NestedControls == ContentControlNestedPolicy.Preserve
+            && NestedContentControls(candidate.Element).Count > 0
+            ? ReplacedPayloadNodes(content, preserveNested: true)
+            : new[] { content };
+    }
+
+    private static IReadOnlyList<XElement> NestedContentControls(XElement control) =>
+        control.Element(W.sdtContent)?.Descendants(W.sdt).ToList() ?? new List<XElement>();
+
+    private static bool IsTextualFill(ContentControlOperation operation) =>
+        operation is ContentControlOperation.FillText or ContentControlOperation.FillRichText;
+
+    private static bool IsFillOperation(ContentControlOperation operation) =>
+        operation is ContentControlOperation.FillText or ContentControlOperation.FillRichText
+            or ContentControlOperation.SetChecked or ContentControlOperation.SetDate
+            or ContentControlOperation.SelectItem or ContentControlOperation.FillPicture;
+
+    private static IReadOnlyList<ContentControlType> ExpectedTypes(ContentControlOperation operation) =>
+        operation switch
+        {
+            ContentControlOperation.FillText => new[] { ContentControlType.PlainText, ContentControlType.RichText },
+            ContentControlOperation.FillRichText => new[] { ContentControlType.RichText },
+            ContentControlOperation.SetChecked => new[] { ContentControlType.Checkbox },
+            ContentControlOperation.SetDate => new[] { ContentControlType.Date },
+            ContentControlOperation.SelectItem => new[] { ContentControlType.DropDownList, ContentControlType.ComboBox },
+            ContentControlOperation.FillPicture => new[] { ContentControlType.Picture },
+            ContentControlOperation.AddRepeatingItem => new[] { ContentControlType.RepeatingSection },
+            ContentControlOperation.RemoveRepeatingItem => new[] { ContentControlType.RepeatingSectionItem },
+            _ => Array.Empty<ContentControlType>(),
+        };
+
+    private static IReadOnlyList<ContentControlOperation> OperationsForFamily(ContentControlType type) =>
+        type switch
+        {
+            ContentControlType.PlainText => new[] { ContentControlOperation.FillText },
+            ContentControlType.RichText => new[] { ContentControlOperation.FillText, ContentControlOperation.FillRichText },
+            ContentControlType.Checkbox => new[] { ContentControlOperation.SetChecked },
+            ContentControlType.Date => new[] { ContentControlOperation.SetDate },
+            ContentControlType.DropDownList or ContentControlType.ComboBox => new[] { ContentControlOperation.SelectItem },
+            ContentControlType.Picture => new[] { ContentControlOperation.FillPicture },
+            ContentControlType.RepeatingSection => new[] { ContentControlOperation.AddRepeatingItem },
+            ContentControlType.RepeatingSectionItem => new[] { ContentControlOperation.RemoveRepeatingItem },
+            _ => Array.Empty<ContentControlOperation>(),
+        };
+
+    internal static string OperationName(ContentControlOperation operation) => operation switch
+    {
+        ContentControlOperation.FillText => "fill_text",
+        ContentControlOperation.FillRichText => "fill_rich_text",
+        ContentControlOperation.SetChecked => "set_checked",
+        ContentControlOperation.SetDate => "set_date",
+        ContentControlOperation.SelectItem => "select_item",
+        ContentControlOperation.FillPicture => "fill_picture",
+        ContentControlOperation.AddRepeatingItem => "add_repeating_item",
+        ContentControlOperation.RemoveRepeatingItem => "remove_repeating_item",
+        _ => throw new ArgumentOutOfRangeException(nameof(operation)),
+    };
+
+    internal static string NestedPolicyName(ContentControlNestedPolicy policy) => policy switch
+    {
+        ContentControlNestedPolicy.Refuse => "refuse",
+        ContentControlNestedPolicy.Preserve => "preserve",
+        ContentControlNestedPolicy.Replace => "replace",
+        _ => throw new ArgumentOutOfRangeException(nameof(policy)),
+    };
 
     /// <summary>
     /// The bookmark consequences of an operation that discards the target's complete payload —
@@ -561,7 +1056,8 @@ public sealed partial class DocxSession
     }
 
     private EditResult MutateContentControl(ContentControlCandidate candidate,
-        ContentControlFillOptions? options, Action mutation)
+        ContentControlFillOptions? options, Action mutation,
+        IReadOnlyList<Anchor>? removed = null, IReadOnlyList<Anchor>? alsoModified = null)
     {
         _history.RecordPreOp(TakeSnapshot());
         try
@@ -573,8 +1069,11 @@ public sealed partial class DocxSession
             UnidHelper.AssignToSelfAndDescendants(candidate.Element);
             ContentControlIdentity.AssignStableUnids(candidate.Owner.Part.GetXDocument().Root!);
             InvalidateProjectionCache();
+            var modified = new List<Anchor> { AnchorFromCandidate(candidate) };
+            if (alsoModified is not null) modified.AddRange(alsoModified);
             return new EditResult { Success = true,
-                Modified = new[] { AnchorFromCandidate(candidate) } };
+                Removed = removed ?? Array.Empty<Anchor>(),
+                Modified = modified };
         }
         catch (Exception ex)
         {
@@ -665,16 +1164,17 @@ public sealed partial class DocxSession
     private static bool ContainsNestedContentControl(XElement control) =>
         control.Element(W.sdtContent)?.Descendants(W.sdt).Any() == true;
 
-    private static EditResult NestedFillError(string anchorId) =>
+    private static EditResult NestedFillError(string anchorId, bool textual) =>
         EditResult.Fail(EditErrorCode.ContentControlNestedFillUnsupported,
-            "whole-control fill is refused when the target contains nested controls; address the child control directly",
+            textual
+                ? "whole-control fill is refused when the target contains nested controls; pass nestedControls=preserve or replace, or address the child control directly"
+                : "whole-control fill is refused when the target contains nested controls; address the child control directly",
             anchorId);
 
     private IReadOnlyList<ContentControlCandidate> BuildContentControlRegistry(ProjectionScopes scopes)
     {
         var result = new List<ContentControlCandidate>();
         IReadOnlyList<ImageCandidate>? imageCandidates = null;
-        var trackedBlocker = TrackedContentControlBlocker();
         var owners = OwnedPartRelationships.StoryParts(_doc!);
         var roots = owners.Select(owner => owner.Part.GetXDocument().Root)
             .Where(root => root is not null).Cast<XElement>().ToList();
@@ -706,7 +1206,11 @@ public sealed partial class DocxSession
                 // ResolveContentControlForMutation applies them, so the first reason an agent
                 // reads here is the reason the mutation would actually return.
                 string? unsupported = null;
-                if (trackedBlocker is not null) unsupported = trackedBlocker;
+                var defaultOperation = OperationsForFamily(type).FirstOrDefault();
+                if (OperationsForFamily(type).Count > 0
+                    && TrackedOperationBlocker(element, type, defaultOperation, new ContentControlFillOptions(),
+                        ref imageCandidates) is { } trackedReason)
+                    unsupported = trackedReason;
                 else if (malformed is not null) unsupported = malformed;
                 else if (malformedAncestor is not null)
                     unsupported = $"ancestor content control is malformed: {malformedAncestor}";
@@ -783,6 +1287,54 @@ public sealed partial class DocxSession
                 result.Add(new ContentControlCandidate(owner, element, byElement[element], info,
                     malformed, malformedAncestor));
             }
+        }
+
+        // Per-operation support is the same gate every mutation applies, evaluated for each
+        // operation of the family — and, when the target contains nested controls, for each
+        // nested policy — so an agent planning off the registry sees exactly what will apply.
+        var byElementAll = result.ToDictionary(candidate => candidate.Element, candidate => candidate);
+        for (int i = 0; i < result.Count; i++)
+        {
+            var candidate = result[i];
+            var nestedAnchors = NestedContentControls(candidate.Element)
+                .Select(control => byElementAll.TryGetValue(control, out var nested) ? nested.Info.AnchorId : null)
+                .Where(anchor => anchor is not null)
+                .Select(anchor => anchor!)
+                .ToList();
+            var operations = new List<ContentControlOperationSupport>();
+            foreach (var operation in OperationsForFamily(candidate.Info.Type))
+            {
+                if (IsTextualFill(operation) && nestedAnchors.Count > 0)
+                {
+                    foreach (var policy in new[]
+                             {
+                                 ContentControlNestedPolicy.Refuse,
+                                 ContentControlNestedPolicy.Preserve,
+                                 ContentControlNestedPolicy.Replace,
+                             })
+                    {
+                        var error = GateContentControlOperation(candidate, operation,
+                            new ContentControlFillOptions { NestedControls = policy }, result, ref imageCandidates);
+                        operations.Add(new ContentControlOperationSupport(
+                            OperationName(operation), NestedPolicyName(policy), error is null, error?.Error?.Message));
+                    }
+                }
+                else
+                {
+                    var error = GateContentControlOperation(candidate, operation,
+                        new ContentControlFillOptions(), result, ref imageCandidates);
+                    operations.Add(new ContentControlOperationSupport(
+                        OperationName(operation), null, error is null, error?.Error?.Message));
+                }
+            }
+            result[i] = candidate with
+            {
+                Info = candidate.Info with
+                {
+                    NestedControlAnchorIds = nestedAnchors,
+                    Operations = operations,
+                },
+            };
         }
         return result;
     }
@@ -865,10 +1417,10 @@ public sealed partial class DocxSession
             var content = control.Element(W.sdtContent);
             var items = content?.Elements(W.sdt).Where(IsRepeatingSectionItem).ToList()
                 ?? new List<XElement>();
-            if (items.Count == 0 || content!.Elements().Any(element => element.Name != W.sdt
-                    || !IsRepeatingSectionItem(element)))
+            if (items.Count == 0 || content!.Elements().Any(element => !IsRevisionRangeMarker(element)
+                    && (element.Name != W.sdt || !IsRepeatingSectionItem(element))))
                 return "repeating section must contain only one or more direct repeating-section-item controls";
-            if (FindUnsafeRepeatingCloneCarrier(items[^1]) is { } unsafeCarrier)
+            if (FindUnsafeRepeatingCloneCarrier(DefaultRepeatingTemplate(items)) is { } unsafeCarrier)
                 return $"default repeating-item template contains clone-sensitive markup ({unsafeCarrier})";
             return null;
         }
@@ -886,17 +1438,18 @@ public sealed partial class DocxSession
     {
         var content = control.Element(W.sdtContent);
         if (content is null) return ContentControlPlacement.Unknown;
-        var children = content.Elements().ToList();
+        // Revision carriers are transparent to placement: a custom-XML revision range marker says
+        // nothing about the grammar around it, and an inline w:ins/w:del stands for the runs it
+        // wraps — exactly what a tracked fill or a tracked repeating-item edit leaves behind, so
+        // a control must keep reading as inline or block through its own revisions.
+        var children = content.Elements().Where(element => !IsRevisionRangeMarker(element)).ToList();
         if (children.Count == 0)
             return DetectContentControlPlacementFromContext(control);
         // A nested SDT is valid in every placement grammar, so an sdt-only payload is
         // intrinsically ambiguous from children alone. Its parent context is authoritative.
         if (children.All(element => element.Name == W.sdt))
             return DetectContentControlPlacementFromContext(control);
-        bool allInline = children.All(element => element.Name == W.r || element.Name == W.hyperlink
-            || element.Name == W.fldSimple || element.Name == W.sdt || element.Name == W.smartTag
-            || element.Name == W.bookmarkStart || element.Name == W.bookmarkEnd
-            || element.Name == W.commentRangeStart || element.Name == W.commentRangeEnd);
+        bool allInline = children.All(IsInlineSdtContent);
         if (allInline && control.Ancestors(W.p).Any()) return ContentControlPlacement.Inline;
         if (children.All(element => element.Name == W.tr || element.Name == W.sdt))
             return ContentControlPlacement.Row;
@@ -907,6 +1460,21 @@ public sealed partial class DocxSession
             return ContentControlPlacement.Block;
         return ContentControlPlacement.Unknown;
     }
+
+    private static bool IsInlineSdtContent(XElement element) =>
+        element.Name == W.r || element.Name == W.hyperlink
+        || element.Name == W.fldSimple || element.Name == W.sdt || element.Name == W.smartTag
+        || element.Name == W.bookmarkStart || element.Name == W.bookmarkEnd
+        || element.Name == W.commentRangeStart || element.Name == W.commentRangeEnd
+        || ((element.Name == W.ins || element.Name == W.del
+                || element.Name == W.moveFrom || element.Name == W.moveTo)
+            && element.Elements().All(IsInlineSdtContent));
+
+    private static bool IsRevisionRangeMarker(XElement element) =>
+        element.Name == W.customXmlInsRangeStart || element.Name == W.customXmlInsRangeEnd
+        || element.Name == W.customXmlDelRangeStart || element.Name == W.customXmlDelRangeEnd
+        || element.Name == W.customXmlMoveFromRangeStart || element.Name == W.customXmlMoveFromRangeEnd
+        || element.Name == W.customXmlMoveToRangeStart || element.Name == W.customXmlMoveToRangeEnd;
 
     /// <summary>An empty or nested-SDT-only sdtContent has no unambiguous child grammar from
     /// which to infer its typed SDT context. Use the nearest OOXML content-model boundary

@@ -78,6 +78,8 @@ import type {
   MarkdownProjection,
   MutationTransaction,
   MutationTransactionIdentity,
+  ContentControlNestedPolicy,
+  ContentControlOperationSupport,
   MutationPreviewRetention,
   DeliveryEvidenceStatus,
   DeliveryReceiptPrivacyProfile,
