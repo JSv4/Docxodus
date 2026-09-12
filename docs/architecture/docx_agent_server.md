@@ -693,10 +693,11 @@ Three lifecycle facts a client must design around:
   late retry executes as a *fresh mutation* (`MCP449_DispatcherSerializesEvictedResultAndConflictAndReusesOnlyAfterTombstone`
   pins exactly this: version 2 → 4). Idempotency here is a bounded-window guarantee, not a
   permanent one.
-- **The guarantee is MCP-only.** `execute_batch` via WASM/npm and via the stdio host /
-  `docx-scalpel` carries no transaction identity and no replay; a retry on those transports
-  re-applies. This asymmetry is within issue #449's scope, but callers must not generalize the
-  guarantee across transports.
+- **The same journal serves every transport (issue #761).** `execute_batch` through the stdio
+  host / `docx-scalpel` (`transaction_id=`) and `session.executeBatch(steps, mode,
+  { transactionId, request })` through WASM/npm run the identical contract on the session's
+  one journal — see `docx_mutation_api.md`, "Transaction ids". Ids are scoped to the transport
+  that minted them because each transport's request language differs.
 
 The batch itself and each step's `args` may carry `preconditions`, using the same
 camel-case guard object as the core API (`expectedVersion`, `anchorId`,

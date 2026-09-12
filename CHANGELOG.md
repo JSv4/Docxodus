@@ -6,6 +6,16 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Mutation-batch retry deduplication on every transport. The transaction journal the MCP server
+  introduced in #449 (replay of the retained terminal response for an identical retry,
+  `transaction_conflict` on id reuse, bounded retention with tombstones) now lives in the core as
+  one journal per live session: `docx-scalpel`'s `execute_batch(..., transaction_id=...)` runs it
+  server-side, and npm's `session.executeBatch(steps, mode, { transactionId, request })` drives
+  it over three new bridge calls (`BeginMutationTransaction`, `CompleteMutationTransaction`,
+  `AbandonMutationTransaction`) since the browser composes its batch in JavaScript. Results carry
+  `transaction: { schemaVersion, transactionId, requestFingerprint }`. MCP behavior is unchanged.
+  (#761)
+
 - Revision registry: a mark under `m:ctrlPr` — Word's carrier for the insertion or deletion of
   a whole math object (fraction, radical, delimiter, …) — is now a native revision. The mark
   and the object's revised runs list as one `contentInsert`/`contentDelete` entry whose text
