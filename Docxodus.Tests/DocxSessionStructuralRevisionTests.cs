@@ -189,7 +189,7 @@ public class DocxSessionStructuralRevisionTests
     [Theory]
     [InlineData("missing_id", RevisionResolutionStatus.Malformed, EditErrorCode.RevisionMalformed)]
     [InlineData("duplicate_id", RevisionResolutionStatus.Ambiguous, EditErrorCode.RevisionAmbiguous)]
-    [InlineData("unsupported_move", RevisionResolutionStatus.Unsupported, EditErrorCode.RevisionUnsupported)]
+    [InlineData("orphan_move_range", RevisionResolutionStatus.Malformed, EditErrorCode.RevisionMalformed)]
     public void DS45505_InvalidTopology_IsListedAndFailsClosed(
         string shape, RevisionResolutionStatus status, EditErrorCode errorCode)
     {
@@ -213,14 +213,14 @@ public class DocxSessionStructuralRevisionTests
     [Fact]
     public void DS45506_BulkResolution_BlockedEntryIsAtomic()
     {
-        var input = BuildInvalidRevisionDocument("unsupported_move");
+        var input = BuildInvalidRevisionDocument("orphan_move_range");
         using var session = new DocxSession(input);
         var before = MainRoot(session.Save());
 
         var result = session.AcceptAllRevisions();
 
         Assert.False(result.Success);
-        Assert.Equal(EditErrorCode.RevisionUnsupported, result.Error!.Code);
+        Assert.Equal(EditErrorCode.RevisionMalformed, result.Error!.Code);
         Assert.True(XNode.DeepEquals(before, MainRoot(session.Save())));
         Assert.False(session.Undo());
     }
@@ -741,6 +741,150 @@ public class DocxSessionStructuralRevisionTests
         var remaining = Assert.Single(session.ListRevisions());
         Assert.Equal(blocked.Id, remaining.Id);
         Assert.Equal(RevisionResolutionStatus.Unsupported, remaining.ResolutionStatus);
+    }
+
+    // Word's envelope tolerates displaced bookmark/comment/proofing markers between its ranges
+    // and the wrapper (RP018 carries a w:displacedByCustomXml bookmark there), and the same
+    // two-range topology revises a w:customXml wrapper. Each variant resolves exactly like the
+    // canonical session-authored envelope.
+    [Theory]
+    [InlineData("canonical", true)]
+    [InlineData("canonical", false)]
+    [InlineData("displaced_markers", true)]
+    [InlineData("displaced_markers", false)]
+    [InlineData("custom_xml_wrapper", true)]
+    [InlineData("custom_xml_wrapper", false)]
+    public void DS45537_StructuredEnvelopeVariants_ResolveLikeTheCanonicalEnvelope(
+        string variant, bool accept)
+    {
+        var input = BuildEnvelopeVariant(variant);
+        using var session = new DocxSession(input);
+        // The tracked range holds two revisions: the "delete start" paragraph and the envelope.
+        var listed = session.ListRevisions();
+        Assert.Equal(2, listed.Count);
+        var revision = Assert.Single(listed, r => r.Family == RevisionFamily.ContentControlDelete);
+        Assert.Equal(RevisionResolutionStatus.Supported, revision.ResolutionStatus);
+        Assert.Contains("controlled paragraph", revision.Text, StringComparison.Ordinal);
+
+        var result = accept ? session.AcceptAllRevisions() : session.RejectAllRevisions();
+
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Empty(session.ListRevisions());
+        var body = MainRoot(session.Save()).Element(W.body)!;
+        Assert.Empty(body.Descendants().Where(e =>
+            e.Name.LocalName.Contains("Range", StringComparison.Ordinal) && e.Name.Namespace == W.w
+            && e.Name.LocalName.StartsWith("customXml", StringComparison.Ordinal)));
+        Assert.Empty(body.Descendants(W.del));
+        var wrapperName = variant == "custom_xml_wrapper" ? W.customXml : W.sdt;
+        if (accept)
+        {
+            Assert.Empty(body.Descendants(wrapperName));
+            Assert.Equal(new[] { "before", "after" },
+                body.Descendants(W.p).Select(p => p.Value).ToArray());
+        }
+        else
+        {
+            var wrapper = Assert.Single(body.Descendants(wrapperName));
+            Assert.Equal("controlled paragraph", wrapper.Value);
+            if (variant == "custom_xml_wrapper")
+                Assert.NotNull(wrapper.Element(W.customXmlPr));
+            Assert.Equal(new[] { "before", "delete start", "controlled paragraph", "after" },
+                body.Descendants(W.p).Select(p => p.Value).ToArray());
+        }
+        if (variant == "displaced_markers")
+            Assert.Equal(2, body.Descendants().Count(e =>
+                e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd));
+
+        Assert.True(session.Undo());
+        Assert.Equal(2, session.ListRevisions().Count);
+        Assert.True(session.Redo());
+        Assert.Empty(session.ListRevisions());
+    }
+
+    // Word's moved content control (RP018): the customXmlMoveFrom/MoveTo envelopes resolve with
+    // the named move, so accept keeps the destination wrapper and reject the source wrapper.
+    // The processor oracle differs from the session only by the Word-internal _GoBack bookmark
+    // the session strips on save, so both sides are compared without it. (The reversibility
+    // sweep separately pins story-text equality with Word's own accepted/rejected documents.)
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void DS45539_MovedContentControl_ResolvesWithItsNamedMove(bool accept)
+    {
+        var input = File.ReadAllBytes(Fixture("RP/RP018-MoveFrom-MoveTo-CC.docx"));
+        static XElement WithoutGoBack(XElement root)
+        {
+            root.Descendants()
+                .Where(e => (e.Name == W.bookmarkStart && (string?)e.Attribute(W.name) == "_GoBack")
+                    || (e.Name == W.bookmarkEnd && (string?)e.Attribute(W.id) == "7"))
+                .Remove();
+            return root;
+        }
+        var oracle = WithoutGoBack(MainRoot((accept
+            ? RevisionProcessor.AcceptRevisions(new WmlDocument("oracle.docx", input))
+            : RevisionProcessor.RejectRevisions(new WmlDocument("oracle.docx", input)))
+            .DocumentByteArray));
+
+        using var session = new DocxSession(input);
+        var move = Assert.Single(session.ListRevisions(), r => r.Family == RevisionFamily.Move);
+        Assert.Equal(RevisionResolutionStatus.Supported, move.ResolutionStatus);
+        Assert.Contains("sdt", move.AffectedAnchors.Select(a => a.Kind));
+        Assert.Equal(2, session.ListRevisions().Count); // the move and one trailing insertion
+
+        var result = accept ? session.AcceptRevision(move.Id) : session.RejectRevision(move.Id);
+        Assert.True(result.Success, result.Error?.Message);
+        var body = MainRoot(session.Save()).Element(W.body)!;
+        var wrapper = Assert.Single(body.Elements(W.sdt));
+        Assert.Equal("When you click Online Video.", wrapper.Value);
+        Assert.Equal(accept ? 3 : 1, wrapper.ElementsBeforeSelf(W.p).Count());
+        Assert.Empty(body.Descendants().Where(e =>
+            e.Name.LocalName.StartsWith("customXmlMove", StringComparison.Ordinal)
+            || e.Name == W.moveFrom || e.Name == W.moveTo
+            || e.Name.LocalName.StartsWith("move", StringComparison.Ordinal)));
+
+        var bulk = accept ? session.AcceptAllRevisions() : session.RejectAllRevisions();
+        Assert.True(bulk.Success, bulk.Error?.Message);
+        Assert.Empty(session.ListRevisions());
+        var actual = WithoutGoBack(MainRoot(session.Save()));
+        Assert.True(XNode.DeepEquals(oracle, actual), FirstDifference(oracle, actual));
+    }
+
+    // Invalid range topology stays listed with a diagnostic that names the exact defect and
+    // the marker id, and every resolution path refuses without touching the document.
+    [Theory]
+    [InlineData("missing_outer_end", "malformed_range_topology,unpaired_range_marker", EditErrorCode.RevisionMalformed)]
+    [InlineData("duplicate_inner_end", "duplicate_range_id,malformed_range_topology", EditErrorCode.RevisionAmbiguous)]
+    [InlineData("range_not_crossing_wrapper", "malformed_range_topology,malformed_range_topology", EditErrorCode.RevisionMalformed)]
+    [InlineData("move_envelope_without_move", "orphan_custom_xml_move_range,orphan_custom_xml_move_range", EditErrorCode.RevisionMalformed)]
+    public void DS45538_InvalidEnvelopeTopology_NamesTheDefectAndFailsClosed(
+        string variant, string expectedCodes, EditErrorCode firstError)
+    {
+        var input = BuildEnvelopeVariant(variant);
+        using var session = new DocxSession(input);
+        var before = MainRoot(session.Save());
+        // The payload deletions inside the wrapper stay independent, supported entries once
+        // the envelope no longer absorbs them; the envelope's own markers are what fail.
+        var envelopes = session.ListRevisions()
+            .Where(r => r.ResolutionStatus != RevisionResolutionStatus.Supported)
+            .ToList();
+        Assert.Equal(expectedCodes.Split(',').OrderBy(c => c, StringComparer.Ordinal),
+            envelopes.Select(r => r.Diagnostic!.Code).OrderBy(c => c, StringComparer.Ordinal));
+        Assert.All(envelopes, r => Assert.Contains("w:id=", r.Diagnostic!.Message, StringComparison.Ordinal));
+
+        var first = envelopes[0];
+        foreach (var result in new[]
+        {
+            session.AcceptRevision(first.Id),
+            session.RejectRevision(first.Id),
+            session.AcceptAllRevisions(),
+            session.RejectAllRevisions(),
+        })
+        {
+            Assert.False(result.Success);
+            Assert.Equal(firstError, result.Error!.Code);
+        }
+        Assert.True(XNode.DeepEquals(before, MainRoot(session.Save())));
+        Assert.False(session.Undo());
     }
 
     [Fact]
@@ -1398,6 +1542,72 @@ public class DocxSessionStructuralRevisionTests
                 sectPr);
         });
 
+    /// <summary>Starts from the session's own tracked deletion of a block content control (the
+    /// canonical two-range envelope) and mutates its markup into the named variant.</summary>
+    private static byte[] BuildEnvelopeVariant(string variant)
+    {
+        byte[] canonical;
+        using (var tracked = new DocxSession(BuildSdtDeleteBaseline(), new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Envelope Reviewer",
+        }))
+        {
+            Assert.True(tracked.DeleteRange(AnchorByText(tracked, "delete start"),
+                AnchorByText(tracked, "after")).Success);
+            canonical = tracked.Save();
+        }
+        if (variant == "canonical") return canonical;
+
+        return MutateMain(canonical, root =>
+        {
+            var sdt = root.Descendants(W.sdt).Single();
+            var content = sdt.Element(W.sdtContent)!;
+            var outerStart = sdt.ElementsBeforeSelf().Last();
+            var innerEnd = content.Elements().First();
+            var innerStart = content.Elements().Last();
+            var outerEnd = sdt.ElementsAfterSelf().First();
+            Assert.Equal(W.customXmlDelRangeStart, outerStart.Name);
+            Assert.Equal(W.customXmlDelRangeEnd, outerEnd.Name);
+            switch (variant)
+            {
+                case "displaced_markers":
+                    // A user bookmark: Word-internal names such as _GoBack are stripped on save.
+                    sdt.AddBeforeSelf(new XElement(W.bookmarkStart,
+                        new XAttribute(W.id, "90"), new XAttribute(W.name, "clause"),
+                        new XAttribute(W.displacedByCustomXml, "next")));
+                    sdt.AddAfterSelf(new XElement(W.bookmarkEnd, new XAttribute(W.id, "90")));
+                    innerEnd.AddBeforeSelf(new XElement(W.proofErr,
+                        new XAttribute(W.type, "gramStart")));
+                    break;
+                case "custom_xml_wrapper":
+                    sdt.ReplaceWith(new XElement(W.customXml,
+                        new XAttribute(W.uri, "urn:docxodus:test"),
+                        new XAttribute(W.element, "clause"),
+                        new XElement(W.customXmlPr),
+                        content.Nodes()));
+                    break;
+                case "missing_outer_end":
+                    outerEnd.Remove();
+                    break;
+                case "duplicate_inner_end":
+                    innerEnd.AddAfterSelf(new XElement(innerEnd));
+                    break;
+                case "range_not_crossing_wrapper":
+                    innerEnd.Remove();
+                    sdt.AddAfterSelf(innerEnd);
+                    break;
+                case "move_envelope_without_move":
+                    foreach (var marker in new[] { outerStart, innerEnd, innerStart, outerEnd })
+                        marker.Name = W.w + marker.Name.LocalName.Replace(
+                            "customXmlDel", "customXmlMoveFrom", StringComparison.Ordinal);
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(variant));
+            }
+        });
+    }
+
     private static byte[] BuildSeparatedInsertions() =>
         MutateMain(DocxSessionTests.BuildDS001_SimpleTwoParagraphs(), root =>
         {
@@ -1600,7 +1810,7 @@ public class DocxSessionStructuralRevisionTests
                 return;
             }
 
-            if (shape == "unsupported_move")
+            if (shape == "orphan_move_range")
             {
                 paragraphs[0].AddFirst(new XElement(W.customXmlMoveFromRangeStart,
                     new XAttribute(W.id, "888"),

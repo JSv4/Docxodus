@@ -25,6 +25,23 @@ All notable changes to this project will be documented in this file.
   when the object still shows text not revised the same way, `unsupported_math_control_payload`
   for the nested `CT_MathCtrlIns` property-change form, and `orphan_math_control_revision` for a
   mark outside any object's property set. (#750)
+- Revision registry: structured-wrapper envelopes now cover `w:customXml` wrappers as well as
+  `w:sdt`, tolerate the bookmark, comment, proofing and permission markers Word displaces
+  between a range and its wrapper (`w:displacedByCustomXml`), and attach a moved wrapper's
+  `customXmlMoveFrom`/`customXmlMoveTo` envelope to its named move so both sides resolve with
+  the move — Word's RP018 moved content control now round-trips through the selective and
+  bulk resolvers. Invalid topology is named exactly: `unpaired_range_marker`,
+  `duplicate_range_id`, `malformed_range_topology`, `orphan_custom_xml_move_range`, each
+  carrying the marker id. The `unsupported_custom_xml_move_range` diagnostic is gone. (#749,
+  #753)
+- Tracked `DeleteRange`/`DeleteSection` now represent a block `w:customXml` wrapper the way
+  they represent a block `w:sdt`: a paired custom-XML deletion envelope around the wrapper
+  (its `w:customXmlPr` kept in schema position) plus recursively tracked payload blocks, so
+  accept removes wrapper and payload and reject restores both through the revision registry.
+  Nested and mixed `w:sdt`/`w:customXml` wrappers each get their own envelope. Only run-level
+  `w:customXml` inside a paragraph is still refused before mutation
+  (`IncompatibleElementType`), because the paragraph deleter marks direct-child runs only.
+  `RevisionProcessor.AcceptRevisions` collapses a deleted `w:customXml` envelope too. (#764)
 
 ### Changed
 
@@ -38,6 +55,14 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Tracked `DeleteRange`/`DeleteSection` stamped each paragraph, row and wrapper marker with
+  its own clock reading, so an operation straddling a second boundary produced payload marks
+  the registry could not fold into their wrapper's envelope; resolving the pieces separately
+  could then strand an empty paragraph inside a deleted wrapper. One operation now takes one
+  stamp, as Word does.
+- A revision's affected anchors could include an all-empty anchor when a `Unid` belonged to
+  an element with no addressable kind (a `w:customXml` wrapper): the fallback lookup returned
+  a default-valued struct instead of nothing.
 - A paragraph mark carrying both an insertion and a later deletion by another author (Word's
   inserted-then-deleted pilcrow, `RP047`) listed only the first mark and left the second as an
   unsupported entry that blocked bulk resolution. Both marks are now independent revisions, and

@@ -532,11 +532,16 @@ under it appear in `Modified`, without duplicates. A remaining structural
 fall-through that must be hard-removed appears in `Removed`; it is never silently
 omitted from both lists.
 
-`w:customXml` wrappers are deliberately unsupported in tracked bulk deletion.
-If any selected block contains one, the operation fails before taking an undo
-snapshot or changing the document with `IncompatibleElementType` and a message
-identifying `w:customXml`. This is the explicit unsupported branch of the
-custom-XML deletion contract; accepted-mode bulk deletion remains unchanged.
+Block `w:customXml` wrappers (issue #764) take the same envelope as block
+content controls: the wrapper is its own content container, so the two deletion
+ranges cross its opening and closing tags with `w:customXmlPr` left in schema
+position ahead of the inner range marker, and every payload block is tracked
+recursively. Nested and mixed `w:sdt`/`w:customXml` wrappers each receive their
+own envelope. The one shape still refused before mutation — with
+`IncompatibleElementType`, no undo snapshot, and an unchanged document — is
+run-level `w:customXml` inside a selected paragraph: the paragraph deleter marks
+direct-child runs only and would leave that wrapper's text undeleted.
+Accepted-mode bulk deletion is unchanged.
 
 ### `DeleteSection` — heading-bounded bulk removal
 
@@ -549,9 +554,9 @@ If the target heading has no sibling-heading boundary after it, the section
 extends to the end of the parent.
 
 Built on `DeleteRange` semantics via the shared `DeleteSiblingRangeCore` helper:
-same undo, same `EditResult` accounting, the same native `w:sdt` envelope and
-recursive payload markup, the same pre-mutation `w:customXml` refusal, and the
-same reported structural fall-through.
+same undo, same `EditResult` accounting, the same native `w:sdt`/`w:customXml`
+envelope and recursive payload markup, the same pre-mutation refusal of run-level
+`w:customXml`, and the same reported structural fall-through.
 
 ## Native hyperlinks and bookmarks
 
@@ -1482,7 +1487,7 @@ individual and bulk resolution:
 
 | Method | Description |
 |--------|-------------|
-| `ListRevisions()` | Read-only entries in document order across body, headers, footers, footnotes, and endnotes. Each carries an opaque stable `Id` (`rev2-…`), coarse `Type`, exact `Family`, native `ConstituentIds`, owning `PartUri`/canonical `Scope`, primary `AnchorId`, every `AffectedAnchor`, and a `ResolutionStatus` plus optional diagnostic. Authors/dates come from the live markup. Atomic entries include content and paragraph/row/property changes, named moves, cell insert/delete/merge operations, content-control envelopes, numbering-property revisions, and math control-character marks (an `m:ctrlPr` mark and the revised runs of its object — the fraction, radical, delimiter… whose existence the mark tracks — resolve as one entry; a paragraph mark carrying both an insertion and a later deletion lists each as its own revision). Unsupported, malformed, and ambiguous markup stays visible and fails closed. Legacy `revNNN` ids are accepted only as unambiguous inputs and are never emitted. |
+| `ListRevisions()` | Read-only entries in document order across body, headers, footers, footnotes, and endnotes. Each carries an opaque stable `Id` (`rev2-…`), coarse `Type`, exact `Family`, native `ConstituentIds`, owning `PartUri`/canonical `Scope`, primary `AnchorId`, every `AffectedAnchor`, and a `ResolutionStatus` plus optional diagnostic. Authors/dates come from the live markup. Atomic entries include content and paragraph/row/property changes, named moves, cell insert/delete/merge operations, structured-wrapper envelopes (`w:sdt` and `w:customXml` insertion and deletion; a moved wrapper's envelope resolves with its named move, so RP018 round-trips), numbering-property revisions, and math control-character marks (an `m:ctrlPr` mark and the revised runs of its object — the fraction, radical, delimiter… whose existence the mark tracks — resolve as one entry; a paragraph mark carrying both an insertion and a later deletion lists each as its own revision). Unsupported, malformed, and ambiguous markup stays visible and fails closed. Legacy `revNNN` ids are accepted only as unambiguous inputs and are never emitted. |
 | `AcceptRevision(id)` | Resolve ONE revision, keeping the change: unwrap `w:ins`/`w:moveTo`, carry out `w:del`/`w:moveFrom` (paragraph-mark deletions coalesce into the following paragraph, row deletions drop the row — the last row drops the table), drop the `*PrChange` element keeping current properties. An ordinary undoable mutation returning the `EditResult` envelope (`Modified` = touched blocks, `Removed` = blocks the resolution deleted). |
 | `RejectRevision(id)` | The inverse: remove insertions, restore deletions (`w:delText` → `w:t`, marks stripped), keep a move at its source, restore a format change's stored old properties (preserving the children the `CT_*Base` inner schema excludes — mark revisions on a paragraph-mark `rPr`, header/footer references on `sectPr`, `rPr`/`sectPr` on `pPr`). |
 | `AcceptAllRevisions()` / `RejectAllRevisions()` | Resolve the complete live registry through the same selective resolver as one atomic undo step. The registry is rebuilt after every entry so resolving a property shell can expose older archived revisions safely. Any unsupported, malformed, or ambiguous entry rolls back the whole operation. |
@@ -1510,11 +1515,12 @@ Concretely, these shapes were resolvable before and are refused now:
 | A revision element with no `w:id` | `Malformed` | `missing_revision_id` |
 | A revision element with a non-numeric `w:id` | `Malformed` | `invalid_revision_id` |
 | One `w:id` shared by two distinct live groups in one part | `Ambiguous` | `duplicate_revision_id` |
-| `w:customXmlMoveFromRange*`/`w:customXmlMoveToRange*` ranges | `Unsupported` | `unsupported_custom_xml_move_range` |
+| A structured-wrapper range marker (`w:customXml{Ins,Del,MoveFrom,MoveTo}Range*`) whose id has no counterpart, or more than one | `Malformed` / `Ambiguous` | `unpaired_range_marker`, `duplicate_range_id` |
+| A paired range that does not cross a `w:sdt`/`w:customXml` tag as one half of Word's two-range envelope | `Malformed` | `malformed_range_topology` |
+| A move envelope around a wrapper whose content carries no `w:moveFrom`/`w:moveTo` mark | `Malformed` | `orphan_custom_xml_move_range` |
 | An `m:ctrlPr` mark whose object still shows text not revised the same way (resolving it would drop or resurrect that text), or one carrying the nested `CT_MathCtrlIns` property change | `Unsupported` | `unrevised_math_control_payload`, `unsupported_math_control_payload` |
 | An `m:ctrlPr` mark outside any math object's property set | `Malformed` | `orphan_math_control_revision` |
 | A revision mark under a run's `w:rPr`, or a `w:del`/move mark under `w:numPr` — positions the schema never allows (`CT_RPr` carries no marks; `CT_NumPr` admits only `w:ins` and `w:numberingChange`, removed numbering being archived in `w:pPrChange`) | `Malformed` | `invalid_revision_carrier` |
-| A content-control (`w:sdt`) envelope whose range topology is not Word's two-pair shape | `Malformed` / `Ambiguous` | `malformed_range_topology`, `duplicate_range_id` |
 | `w:numberingChange` not attached to `w:numPr` or a LISTNUM field | `Malformed` | `orphan_numbering_revision` |
 | A cell marker that is not a direct `w:tcPr` property, or `w:cellMerge` without `w:vMerge` | `Malformed` | `orphan_cell_revision`, `invalid_cell_merge_state` |
 
