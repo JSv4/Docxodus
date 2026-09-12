@@ -10,7 +10,7 @@ namespace Docxodus.Internal;
 
 /// <summary>
 /// Builds the paired cross-boundary range topology Word uses to track the existence of
-/// structured OOXML wrappers such as <c>w:sdt</c>.
+/// structured OOXML wrappers such as <c>w:sdt</c> and <c>w:customXml</c>.
 /// </summary>
 internal static class StructuredRevisionOps
 {
@@ -39,7 +39,13 @@ internal static class StructuredRevisionOps
         var beforeId = RequiredRangeId(before);
         var openingEnd = new XElement(endName, new XAttribute(W.id, beforeId));
 
-        contentContainer.AddFirst(openingEnd);
+        // A w:customXml wrapper is its own content container and keeps its properties as
+        // its first child; the schema orders them ahead of any range markup.
+        if (contentContainer.Elements().FirstOrDefault() is { } first
+            && first.Name == W.customXmlPr)
+            first.AddAfterSelf(openingEnd);
+        else
+            contentContainer.AddFirst(openingEnd);
 
         var closingStart = createRangeStart(startName);
         var afterId = RequiredRangeId(closingStart);
