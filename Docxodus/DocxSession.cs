@@ -3391,9 +3391,12 @@ public sealed partial class DocxSession : IDisposable
             if (target.PartUri == partUri)
                 preferredByUnid.TryAdd(target.Unid, target.Anchor);
         }
+        // Anchor is a struct: GetValueOrDefault would hand back an all-empty anchor for a
+        // Unid no addressable element owns (a w:customXml wrapper, say), and the null test
+        // below would then admit it.
         Anchor? FindAnchor(string unid) => preferredByUnid.TryGetValue(unid, out var preferred)
             ? preferred
-            : fallbackByUnid.GetValueOrDefault(unid);
+            : fallbackByUnid.TryGetValue(unid, out var fallback) ? fallback : null;
         bool TryAdd(Anchor anchor)
         {
             if (!seen.Add(anchor.Id)) return true;
@@ -6626,6 +6629,20 @@ public sealed partial class DocxSession : IDisposable
     /// <summary>Create native revision markup and keep Word's document-level recording flag in
     /// sync. The flag does not make existing revisions render; it tells Word to track subsequent
     /// interactive edits after the generated document is opened.</summary>
+    /// <summary>The author/date pair one tracked operation stamps on every mark it writes.
+    /// Word stamps one action with one time; the registry relies on that when it folds a
+    /// wrapper's payload marks into the wrapper's own envelope entry, so a stamp is taken
+    /// once per operation and threaded through, never re-read from the clock per element.</summary>
+    private readonly record struct RevisionStamp(string Author, string Date);
+
+    private RevisionStamp NewRevisionStamp() => new(
+        _revisionAuthor ?? "docxodus",
+        DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"));
+
+    private XElement CreateRevisionEnvelope(
+        XName name, RevisionStamp stamp, params object[] content) =>
+        CreateRevisionEnvelope(name, stamp.Author, stamp.Date, content);
+
     private XElement CreateRevisionEnvelope(
         XName name, string author, string date, params object[] content)
     {
@@ -7247,7 +7264,7 @@ public sealed partial class DocxSession : IDisposable
             if (_trackedChanges == TrackedChangeMode.RenderInline
                 && target.Anchor.Kind is "p" or "h" or "li")
             {
-                WrapRunsInDel(element);
+                WrapRunsInDel(element, NewRevisionStamp());
                 InvalidateProjectionCache();
                 return new EditResult
                 {
@@ -7333,15 +7350,16 @@ public sealed partial class DocxSession : IDisposable
     /// <c>w:pPr/w:rPr/w:del</c>; each table row gets a <c>w:trPr/w:del</c> marker with
     /// its cell paragraphs wrapped recursively. Anchors stay live (<see cref="EditResult.Modified"/>
     /// instead of <see cref="EditResult.Removed"/>) so callers can re-address the same
-    /// blocks before changes are accepted. Block-level <c>w:sdt</c> content controls use
-    /// paired <c>w:customXmlDelRangeStart</c>/<c>End</c> ranges for their envelopes plus
-    /// recursively tracked payload blocks (issue #473). Locked and data-bound controls use
-    /// the same shape: their metadata remains untouched until the revision is resolved.
-    /// Ranges containing <c>w:customXml</c> are rejected with
-    /// <see cref="EditErrorCode.IncompatibleElementType"/> before mutation because this API
-    /// does not yet implement reversible deletion of that wrapper. Any other structural
-    /// fall-through is reported in <see cref="EditResult.Removed"/> rather than silently
-    /// disappearing.
+    /// blocks before changes are accepted. Block-level <c>w:sdt</c> content controls and
+    /// <c>w:customXml</c> wrappers use paired <c>w:customXmlDelRangeStart</c>/<c>End</c>
+    /// ranges for their envelopes plus recursively tracked payload blocks (issues #473,
+    /// #764). Locked and data-bound controls use the same shape: their metadata — and a
+    /// custom-XML wrapper's <c>w:customXmlPr</c> — remains untouched until the revision is
+    /// resolved. A paragraph containing run-level <c>w:customXml</c> is rejected with
+    /// <see cref="EditErrorCode.IncompatibleElementType"/> before mutation because the
+    /// paragraph deleter marks only direct-child runs and would leave that wrapper's text
+    /// undeleted. Any other structural fall-through is reported in
+    /// <see cref="EditResult.Removed"/> rather than silently disappearing.
     /// </remarks>
     public EditResult DeleteRange(string fromAnchorId, string toAnchorIdExclusive)
     {
@@ -7390,8 +7408,9 @@ public sealed partial class DocxSession : IDisposable
     /// "Level" is the same notion <see cref="WmlToMarkdownConverter"/> uses for the projection:
     /// <c>Heading1</c> = 1, <c>Heading2</c> = 2, etc.; <c>Title</c> = 1, <c>Subtitle</c> = 2.
     /// Tracked-change mode inherits <see cref="DeleteRange"/>'s behavior via the shared
-    /// <c>DeleteSiblingRangeCore</c> helper, including native <c>w:sdt</c> envelope
-    /// deletion, anchor accounting, and the pre-mutation <c>w:customXml</c> refusal.
+    /// <c>DeleteSiblingRangeCore</c> helper, including native <c>w:sdt</c>/<c>w:customXml</c>
+    /// envelope deletion, anchor accounting, and the pre-mutation refusal of run-level
+    /// <c>w:customXml</c>.
     /// </remarks>
     public EditResult DeleteSection(string headingAnchorId)
     {
@@ -7452,12 +7471,12 @@ public sealed partial class DocxSession : IDisposable
                 anchorForPatchScope.Anchor.Id);
 
         if (_trackedChanges == TrackedChangeMode.RenderInline &&
-            toRemove.Any(element =>
-                element.Name == W.customXml || element.Descendants(W.customXml).Any()))
+            toRemove.Any(element => element.DescendantsAndSelf(W.customXml)
+                .Any(wrapper => wrapper.Ancestors(W.p).Any())))
         {
             return EditResult.Fail(
                 EditErrorCode.IncompatibleElementType,
-                "Tracked DeleteRange/DeleteSection does not support w:customXml wrappers; no changes were made.",
+                "Tracked DeleteRange/DeleteSection does not support run-level w:customXml inside a paragraph; no changes were made.",
                 anchorForPatchScope.Anchor.Id);
         }
 
@@ -7488,22 +7507,23 @@ public sealed partial class DocxSession : IDisposable
                 var trackedRemoved = new List<Anchor>();
                 var modifiedIds = new HashSet<string>(StringComparer.Ordinal);
                 var trackedRemovedIds = new HashSet<string>(StringComparer.Ordinal);
+                var stamp = NewRevisionStamp();
                 foreach (var el in toRemove)
                 {
                     if (el.Name == W.p)
                     {
                         CollectAnchors(el, includeDescendants: false, index, modified, modifiedIds);
-                        MarkParagraphAsTrackedDeleted(el);
+                        MarkParagraphAsTrackedDeleted(el, stamp);
                     }
                     else if (el.Name == W.tbl)
                     {
                         CollectAnchors(el, includeDescendants: false, index, modified, modifiedIds);
-                        MarkTableAsTrackedDeleted(el);
+                        MarkTableAsTrackedDeleted(el, stamp);
                     }
-                    else if (el.Name == W.sdt)
+                    else if (el.Name == W.sdt || el.Name == W.customXml)
                     {
                         CollectAnchors(el, includeDescendants: true, index, modified, modifiedIds);
-                        MarkStructuredBlockAsTrackedDeleted(el);
+                        MarkStructuredBlockAsTrackedDeleted(el, stamp);
                     }
                     else
                     {
@@ -14332,10 +14352,8 @@ public sealed partial class DocxSession : IDisposable
         foreach (var m in postNoteRefs) paragraph.Add(m);
     }
 
-    private void WrapRunsInDel(XElement element)
+    private void WrapRunsInDel(XElement element, RevisionStamp stamp)
     {
-        var author = _revisionAuthor ?? "docxodus";
-        var date = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
         foreach (var run in element.Elements(W.r).ToList())
         {
             run.Remove();
@@ -14343,7 +14361,7 @@ public sealed partial class DocxSession : IDisposable
                 t.ReplaceWith(new XElement(W.delText,
                     new XAttribute(XNamespace.Xml + "space", "preserve"),
                     (string)t));
-            var del = CreateRevisionEnvelope(W.del, author, date, run);
+            var del = CreateRevisionEnvelope(W.del, stamp, run);
             element.Add(del);
         }
     }
@@ -14356,9 +14374,9 @@ public sealed partial class DocxSession : IDisposable
     /// so accepting the change actually removes the paragraph (instead of leaving an
     /// empty paragraph behind, which is what <see cref="WrapRunsInDel"/> alone produces).
     /// </summary>
-    private void MarkParagraphAsTrackedDeleted(XElement paragraph)
+    private void MarkParagraphAsTrackedDeleted(XElement paragraph, RevisionStamp stamp)
     {
-        WrapRunsInDel(paragraph);
+        WrapRunsInDel(paragraph, stamp);
 
         var pPr = paragraph.Element(W.pPr);
         if (pPr is null)
@@ -14369,10 +14387,8 @@ public sealed partial class DocxSession : IDisposable
         var rPr = GetOrCreatePPrChild(pPr, W.rPr);
         if (rPr.Element(W.del) is null)
         {
-            var author = _revisionAuthor ?? "docxodus";
-            var date = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
             WordprocessingMLUtil.InsertRPrChildInOrder(
-                rPr, CreateRevisionEnvelope(W.del, author, date));
+                rPr, CreateRevisionEnvelope(W.del, stamp));
         }
     }
 
@@ -14382,11 +14398,8 @@ public sealed partial class DocxSession : IDisposable
     /// and every paragraph inside every cell is treated like
     /// <see cref="MarkParagraphAsTrackedDeleted"/>. Nested tables recurse.
     /// </summary>
-    private void MarkTableAsTrackedDeleted(XElement table)
+    private void MarkTableAsTrackedDeleted(XElement table, RevisionStamp stamp)
     {
-        var author = _revisionAuthor ?? "docxodus";
-        var date = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
-
         foreach (var row in table.Elements(W.tr))
         {
             var trPr = row.Element(W.trPr);
@@ -14397,71 +14410,74 @@ public sealed partial class DocxSession : IDisposable
             }
             if (trPr.Element(W.del) is null)
             {
-                trPr.Add(CreateRevisionEnvelope(W.del, author, date));
+                trPr.Add(CreateRevisionEnvelope(W.del, stamp));
             }
 
             foreach (var cell in row.Elements(W.tc))
             {
                 foreach (var child in cell.Elements().ToList())
-                    MarkTrackedStructuredContentChild(child);
+                    MarkTrackedStructuredContentChild(child, stamp);
             }
         }
     }
 
     /// <summary>
-    /// Tracks deletion of a block <c>w:sdt</c> wrapper without
+    /// Tracks deletion of a block <c>w:sdt</c> or <c>w:customXml</c> wrapper without
     /// discarding its ownership metadata. Two paired custom-XML deletion ranges cross
     /// the opening and closing tags, while every payload block receives its ordinary
     /// paragraph/table deletion markup. Accept therefore removes both wrapper and
-    /// payload; reject restores the original wrapper and content.
+    /// payload; reject restores the original wrapper and content. A content control's
+    /// payload lives in <c>w:sdtContent</c>; a custom-XML wrapper is its own container,
+    /// with <c>w:customXmlPr</c> as properties rather than payload.
     /// </summary>
-    private void MarkStructuredBlockAsTrackedDeleted(XElement wrapper)
+    private void MarkStructuredBlockAsTrackedDeleted(XElement wrapper, RevisionStamp stamp)
     {
-        if (wrapper.Name != W.sdt)
-            throw new InvalidOperationException($"unsupported structured wrapper: {wrapper.Name}");
+        var contentContainer = wrapper.Name == W.sdt
+            ? wrapper.Element(W.sdtContent)
+                ?? throw new InvalidOperationException("block w:sdt has no w:sdtContent")
+            : wrapper.Name == W.customXml
+                ? wrapper
+                : throw new InvalidOperationException(
+                    $"unsupported structured wrapper: {wrapper.Name}");
 
-        var contentContainer = wrapper.Element(W.sdtContent)
-            ?? throw new InvalidOperationException("block w:sdt has no w:sdtContent");
+        foreach (var child in contentContainer.Elements()
+            .Where(child => child.Name != W.customXmlPr).ToList())
+            MarkTrackedStructuredContentChild(child, stamp);
 
-        foreach (var child in contentContainer.Elements().ToList())
-            MarkTrackedStructuredContentChild(child);
-
-        var author = _revisionAuthor ?? "docxodus";
-        var date = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
         var boundaries = Internal.StructuredRevisionOps.AddCrossBoundaryMarkers(
             contentContainer,
             W.customXmlDelRangeStart,
             W.customXmlDelRangeEnd,
-            name => CreateRevisionEnvelope(name, author, date));
+            name => CreateRevisionEnvelope(name, stamp));
         wrapper.AddBeforeSelf(boundaries.Before);
         wrapper.AddAfterSelf(boundaries.After);
     }
 
     /// <summary>
-    /// Recursively marks one block payload node. Nested SDT wrappers receive their own
+    /// Recursively marks one block payload node. Nested SDT and custom-XML wrappers receive their own
     /// reversible envelope; other transparent containers are preserved while their
     /// block-bearing descendants are marked.
     /// </summary>
-    private void MarkTrackedStructuredContentChild(XElement child)
+    private void MarkTrackedStructuredContentChild(XElement child, RevisionStamp stamp)
     {
         if (child.Name == W.p)
         {
-            MarkParagraphAsTrackedDeleted(child);
+            MarkParagraphAsTrackedDeleted(child, stamp);
             return;
         }
         if (child.Name == W.tbl)
         {
-            MarkTableAsTrackedDeleted(child);
+            MarkTableAsTrackedDeleted(child, stamp);
             return;
         }
-        if (child.Name == W.sdt)
+        if (child.Name == W.sdt || child.Name == W.customXml)
         {
-            MarkStructuredBlockAsTrackedDeleted(child);
+            MarkStructuredBlockAsTrackedDeleted(child, stamp);
             return;
         }
 
         foreach (var nested in child.Elements().ToList())
-            MarkTrackedStructuredContentChild(nested);
+            MarkTrackedStructuredContentChild(nested, stamp);
     }
 
     private void PromoteHyperlinkRelationships(XElement paragraph)
