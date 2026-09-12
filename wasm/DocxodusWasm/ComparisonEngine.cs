@@ -94,7 +94,7 @@ internal static class ComparisonEngine
     /// Build a minimal but valid DOCX package (one paragraph) in memory.
     /// Includes the parts comparison expects (styles, settings).
     /// </summary>
-    private static byte[] BuildSeedDocx(string text)
+    internal static byte[] BuildSeedDocx(string text)
     {
         using var ms = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
