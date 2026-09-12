@@ -2892,6 +2892,14 @@ namespace Docxodus
                         .Nodes()
                         .Select(n => AcceptDeletedAndMovedFromContentControlsTransform(
                             n, contentControlElementsToCollapse, moveFromElementsToDelete));
+                // A w:customXml wrapper is its own content container; its w:customXmlPr is
+                // properties, not payload, and goes with the wrapper.
+                if (element.Name == W.customXml && contentControlElementsToCollapse.Contains(element))
+                    return element
+                        .Nodes()
+                        .Where(n => n is not XElement child || child.Name != W.customXmlPr)
+                        .Select(n => AcceptDeletedAndMovedFromContentControlsTransform(
+                            n, contentControlElementsToCollapse, moveFromElementsToDelete));
                 if (moveFromElementsToDelete.Contains(element))
                     return null;
                 return new XElement(element.Name,
@@ -2959,7 +2967,7 @@ namespace Docxodus
                     }
                     continue;
                 }
-                if (tag.Element.Name == W.sdt)
+                if (tag.Element.Name == W.sdt || tag.Element.Name == W.customXml)
                 {
                     if (tag.TagType == TagTypeEnum.Element)
                     {
