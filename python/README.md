@@ -124,6 +124,33 @@ version, package content, tracked-changes mode or revision author moved since th
 and with `PREVIEW_NOT_FOUND` once the preview expired, was evicted (8 previews, 64 MiB,
 15 minutes per session) or was already committed.
 
+### Delivery receipts from captured evidence
+
+A session opened with `DocxSessionSettings(capture_delivery_evidence=True)` records the
+evidence a delivery change receipt needs as its edits execute — the exact package before and
+after every mutation, every direct operation's request (the host describes each one), each
+`execute_batch` step, transaction ids, and undo/redo lineage — and `build_delivery_receipt`
+mints a receipt `verify_delivery_receipt` accepts:
+
+```python
+from docx_scalpel import DeliveryReceiptPrivacyProfile, DocxSessionSettings, verify_delivery_receipt
+
+with open_session(docx_bytes, DocxSessionSettings(capture_delivery_evidence=True)) as session:
+    session.replace_text(first_p.id, "Final wording")
+    session.execute_batch(steps, transaction_id="plan-42")
+    bundle = session.build_delivery_receipt(privacy_profile=DeliveryReceiptPrivacyProfile.HASH_AND_SUMMARY)
+
+receipt = bundle.artifact("change-receipt")
+artifacts = {a.artifact_id: a.bytes for a in bundle.artifacts
+             if a.bytes is not None and a.artifact_id != "change-receipt"}
+assert verify_delivery_receipt(receipt.bytes.decode(), artifacts).is_valid
+```
+
+Deliver the bundle's `final-docx` artifact: it is the bytes the receipt attests.
+`get_delivery_evidence_status()` names the first reason a receipt cannot be minted (capture
+off, retention of 256 states / 512 MiB exceeded); the bundle is then `incomplete` and the
+receipt artifact carries the reason instead of claiming a history.
+
 A step's `operation` is any mutating session operation, including the structural
 table ops (`insert_table`, `insert_table_row`, `merge_cells`, …); read-only
 operations, `undo`/`redo`, and session configuration are rejected as

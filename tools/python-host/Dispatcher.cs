@@ -2,6 +2,8 @@
 
 using System;
 using System.Globalization;
+using System.IO;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Docxodus;
@@ -38,7 +40,52 @@ internal static class Dispatcher
             if (!parsed.RootElement.GetProperty("success").GetBoolean()) return check;
         }
 
+        // A direct mutation is described to the session's delivery evidence recorder before it
+        // runs (issue #748), so its version step is attributed to this request rather than
+        // recorded as an unlabeled mutation. Batches describe themselves through their steps;
+        // undo/redo are lineage the core records itself.
+        if (IsBatchableMutation(op))
+            return WithDeliveryEvidence(op, args, () => DispatchCore(op, args));
         return DispatchCore(op, args);
+    }
+
+    private static string WithDeliveryEvidence(string op, JsonElement args, Func<string> run)
+    {
+        var handle = Handle(args);
+        var described = "[{\"tool\":\"docx_scalpel\",\"action\":" + JsonString(op)
+            + ",\"args\":" + WithoutHandle(args) + "}]";
+        if (!DocxSessionOps.BeginDeliveryEvidence(handle, described, MutationBatchMode.Atomic, null))
+            return run();
+        string response;
+        try
+        {
+            response = run();
+        }
+        catch
+        {
+            DocxSessionOps.AbandonDeliveryEvidence(handle);
+            throw;
+        }
+        DocxSessionOps.CompleteDeliveryEvidenceDirect(handle, response);
+        return response;
+    }
+
+    /// <summary>The request arguments as the receipt records them: the transport's handle is not part of the request.</summary>
+    private static string WithoutHandle(JsonElement args)
+    {
+        if (args.ValueKind != JsonValueKind.Object) return "{}";
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            foreach (var property in args.EnumerateObject())
+            {
+                if (property.NameEquals("handle")) continue;
+                property.WriteTo(writer);
+            }
+            writer.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.ToArray());
     }
 
     private static string DispatchCore(string op, JsonElement args) => op switch
@@ -91,6 +138,11 @@ internal static class Dispatcher
         "execute_batch" => ExecuteBatch(args),
         "preview_batch" => ExecuteBatch(args, preview: true),
         "commit_preview" => CommitPreview(args),
+        "get_delivery_evidence_status" => DocxSessionOps.GetDeliveryEvidenceStatus(Handle(args)),
+        "build_delivery_receipt" => DocxSessionOps.BuildDeliveryReceipt(
+            Handle(args),
+            args.TryGetProperty("options", out var receiptOptions) && receiptOptions.ValueKind == JsonValueKind.Object
+                ? receiptOptions.GetRawText() : null),
 
         "replace_text" => DocxSessionOps.ReplaceText(Handle(args), Str(args, "anchorId"), Str(args, "markdown")),
         "delete_block" => DocxSessionOps.DeleteBlock(Handle(args), Str(args, "anchorId")),
@@ -931,8 +983,9 @@ internal static class Dispatcher
                 parsed.Add(DocxSessionOps.SerializedBatchStep(
                     "docx_scalpel",
                     operation,
-                    () => Dispatch(operation, stepArgs),
-                    preflight is null ? null : () => preflight));
+                    () => DispatchCore(operation, stepArgs),
+                    preflight is null ? null : () => preflight,
+                    argumentsJson: a.ValueKind == JsonValueKind.Object ? a.GetRawText() : "{}"));
             }
             return parsed;
         }

@@ -434,9 +434,75 @@ structured invalid verdict rather than an exception:
 the Python transport test, and the browser Playwright spec all verify the same receipt and
 artifact bytes, so a canonical-format drift is caught on every side of the wire at once.
 
-Receipt **building** deliberately stays on the typed .NET surface: composing a receipt
-requires manifests, transaction contributions, artifacts, and semantic evidence that only
-the host process holds, and the delivery bundle operation (#465 — `docxodus_deliver`, the
-`docxodus-deliver` CLI, and `DeliveryBundleService`) is the caller-facing shape that drives
-the builder. The receipt JSON it emits is portable; remote consumers verify, they do not
-compose.
+Receipt **building** stays with the host process, which is the only party that holds the
+evidence: manifests, transaction contributions, artifacts, and semantic evidence. The delivery
+bundle operation (#465 — `docxodus_deliver`, the `docxodus-deliver` CLI, and
+`DeliveryBundleService`) is the caller-facing shape that drives the builder, and since #748
+the host can capture that evidence itself, so every client surface can request a delivery
+whose change receipt is available. The receipt JSON is portable; remote consumers verify, they
+do not compose.
+
+## Host-captured evidence (issue #748)
+
+A session opened with `CaptureDeliveryEvidence` (`captureDeliveryEvidence` on the wire;
+requires `CaptureInitialProjection`, whose retained opening package is the receipt's source
+document) records the evidence as edits execute, in `Internal.DeliveryEvidenceRecorder`:
+
+- **Unit.** One session version step is one receipt transaction — the receipt's lineage
+  validator requires exactly that. Before every recorded mutation, before undo/redo, and at
+  export, the recorder reconciles with the live package: a version step it has not yet seen is
+  captured then, with its exact after-package. States are serialized like a clean save
+  (projector bookkeeping stripped) from a package clone, so recording never touches the caches
+  an in-flight operation holds. Consecutive transactions share a state, and the delivered
+  document of a delivery built from the recorder is the last recorded state — the same bytes,
+  by construction.
+- **Descriptions.** An atomic batch is one entry carrying every step's `tool`/`action`/`args`
+  (`MutationBatchStep.ArgumentsJson`; the MCP and stdio hosts attach each step's arguments,
+  the browser client attaches a step's optional `args`) and the transaction identity the retry
+  journal bound the request to, so a receipt entry and a replayed response name the same
+  transaction, and an identical retry — replayed, never re-executed — adds nothing. A
+  best-effort batch advances the version once per successful step, so it is recorded as one
+  entry per step, the identity attached to the first, with a receipt warning. Direct tool
+  calls on the MCP and stdio hosts are described by the dispatcher (a one-step atomic entry; a
+  failed call is a same-state `failed` entry). A typed or browser direct call, a caller's own
+  transaction scope, or a step that advanced the version more than once is still captured
+  exactly but recorded as `docx_session/unlabeled_mutation` — exact packages, unknown request
+  — and counted in the status.
+- **Lineage.** `Undo`/`Redo` are lineage events on the transaction the history cursor moved
+  over; the restored package must be that entry's recorded before/after state. `Save` is not
+  a transaction. A committed retained preview (#760) is a described `commit_preview` entry.
+- **Bounds and honesty.** Retention holds every distinct state: 256 states or 512 MiB per
+  session, whichever first. Beyond that, or when a step cannot be attested (an undo that
+  reached an unrecorded state, a batch whose reported versions disagree with the observed
+  ones, a contribution the receipt contract rejects), the recorder releases its history and
+  keeps the first reason. `GetDeliveryEvidenceStatus` reports it, `ExportDeliveryEvidence`
+  returns no context, and a delivery reports the receipt artifact **unavailable** with that
+  reason instead of minting a receipt that claims a history. Disposal clears everything.
+- **Ordering.** `DeliveryReceiptContext` now takes an ordered history
+  (`DeliveryReceiptHistoryEvent`: a transaction's evidence or a lineage event); the bundle
+  service replays it in that order, which is what lets an undo between two transactions
+  validate. The transactions-then-lineage constructor is unchanged and equivalent to that
+  ordering.
+
+`DocxSession.BuildDeliveryReceipt(options)` is the receipt-only delivery: the bundle service
+with `final-docx`, `semantic-source-to-delivered` and `change-receipt` requested, revisions
+preserved as they are (the receipt attests the session's own edits), `ReturnIncompleteBundle`
+so an unavailable receipt is reported rather than thrown. Every surface publishes the same
+bundle wire shape (`Internal.DeliveryOps.SerializeBundle`: status, manifest, canonical manifest
+bytes, each artifact's base64 bytes or unavailable reason) plus an `evidence` block with the
+recorder status:
+
+| Surface | Entry points |
+|---------|--------------|
+| .NET | `DocxSessionSettings.CaptureDeliveryEvidence`; `GetDeliveryEvidenceStatus()`, `ExportDeliveryEvidence(options)` (feed your own `DeliveryBundleBuildRequest`), `BuildDeliveryReceipt(options)` |
+| WASM bridge | `GetDeliveryEvidenceStatus`, `BuildDeliveryReceipt`, `BeginDeliveryEvidence`/`CompleteDeliveryEvidence`/`AbandonDeliveryEvidence` (the browser client describes its callback batches) |
+| npm/TypeScript | `captureDeliveryEvidence` setting; `session.getDeliveryEvidenceStatus()`, `session.buildDeliveryReceipt({ privacyProfile, failOnUnexpectedChanges })` → `DeliveryBundleResult`; `executeBatch` steps take `args` |
+| stdio Python host | `DocxSessionSettings(capture_delivery_evidence=True)`; `get_delivery_evidence_status()`, `build_delivery_receipt(privacy_profile=, fail_on_unexpected_changes=)` → `DeliveryBundleResult`; every direct mutation op is described by the host |
+| MCP server | `docxodus_open` `captureDeliveryEvidence`; `docxodus_deliver` with a `changeReceipt` artifact and optional `changeReceipt: { privacyProfile, failOnUnexpectedChanges }`; every direct mutating tool call is described by the dispatcher |
+
+For `docxodus_deliver` the baseline must be the package the session opened and
+`baselineDocumentVersion`/`finalDocumentVersion` must be the versions the captured history
+starts and ends at; otherwise the receipt is unavailable with a reason that says so. Deliver the
+bundle's final artifact: it is the bytes the receipt attests (a later save of a document Word
+wrote can re-serialize package-level relationship files differently while every part payload
+is the same).

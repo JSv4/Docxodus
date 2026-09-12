@@ -176,6 +176,34 @@ content, tracked-changes mode or revision author moved since the preview, and wi
 `preview_not_found` once the preview expired, was evicted (8 previews, 64 MiB, 15 minutes per
 session) or was already committed.
 
+### Delivery receipts from captured evidence
+
+A session opened with `captureDeliveryEvidence: true` records the evidence a delivery change
+receipt needs as its edits execute — the exact package before and after every mutation, each
+`executeBatch` step's `tool`/`action`/`args`, transaction ids, and undo/redo lineage — and
+`buildDeliveryReceipt` mints a receipt the portable verifier accepts:
+
+```ts
+const session = openDocxSession(bytes, { captureDeliveryEvidence: true });
+session.executeBatch([
+  { tool: 'docx_edit', action: 'replace_text', args: { anchorId: firstAnchor, markdown: 'Final wording' },
+    mutation: () => session.replaceText(firstAnchor, 'Final wording') },
+], 'atomic', { transactionId: 'plan-42', request: { replace: firstAnchor } });
+
+const bundle = session.buildDeliveryReceipt({ privacyProfile: 'hashAndSummary' });
+const receipt = bundle.artifacts.find(a => a.artifactId === 'change-receipt')!;
+const artifacts = Object.fromEntries(bundle.artifacts
+  .filter(a => a.bytes && a.artifactId !== 'change-receipt')
+  .map(a => [a.artifactId, a.bytes!]));
+await verifyDeliveryReceipt(new TextDecoder().decode(receipt.bytes!), artifacts); // isValid
+```
+
+Deliver the bundle's `final-docx` artifact: it is the bytes the receipt attests. A direct call
+outside `executeBatch` is still captured exactly but recorded as an unlabeled mutation;
+`getDeliveryEvidenceStatus()` counts those and names the first reason a receipt cannot be
+minted (capture off, retention of 256 states / 512 MiB exceeded), in which case the bundle is
+`incomplete` and the receipt artifact carries the reason instead of claiming a history.
+
 ![Markdown projection beside the rendered document](https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/images/projection.png)
 
 Native links and bookmarks use the same stable anchors and exact character spans:
