@@ -39,7 +39,8 @@ internal static class ToolCatalog
                 "undoDepth": { "type": "integer", "description": "Maximum undo steps retained. Default 20. Each step is a full document snapshot, so this is a step count, not a memory bound — see undoMemoryBudgetBytes." },
                 "undoMemoryBudgetBytes": { "type": "integer", "description": "Approximate ceiling on memory held by undo/redo snapshots. Default 134217728 (128 MiB). Oldest history is discarded when exceeded, so on a large document undo may not reach the full undoDepth. Set 0 to bound by depth alone." },
                 "persistAnchorIds": { "type": "boolean", "description": "Default false. When true, docxodus_save keeps the anchor-id bookkeeping in the written file, so a session opened over it later resolves the anchor ids this session hands out. Costs file size (hundreds of KB on a large document) — turn it on only when a workflow needs a close+reopen without losing its anchors (no longer needed just to switch trackedChanges mode — docxodus_track_changes set_mode does that in place). docxodus_save can also override this per call." },
-                "captureInitialProjection": { "type": "boolean", "description": "Default true. Retains the opening package and projection as the session's comparison baseline, which is what docxodus_get_content format 'semantic_changes' and the markdown diff compare against — at the memory cost of one package copy per open session. Set false on a long-lived server that never asks for those, and they refuse with an error instead." }
+                "captureInitialProjection": { "type": "boolean", "description": "Default true. Retains the opening package and projection as the session's comparison baseline, which is what docxodus_get_content format 'semantic_changes' and the markdown diff compare against — at the memory cost of one package copy per open session. Set false on a long-lived server that never asks for those, and they refuse with an error instead." },
+                "captureDeliveryEvidence": { "type": "boolean", "description": "Default false. Record the evidence a delivery change receipt needs as edits execute: the exact package before and after every mutation, each tool call's request, transaction ids, and undo/redo lineage. docxodus_deliver can then mint an available changeReceipt artifact. Costs one clean package serialization per mutation plus retention of every intermediate package (bounded: 256 states / 512 MiB; beyond that the receipt is reported unavailable). Requires captureInitialProjection." }
               },
               "required": ["path"]
             }
@@ -654,7 +655,7 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_deliver",
-            "Build one verified delivery bundle from a named baseline and the current session. Returns canonical manifest bytes and every available artifact as base64, bounded to 64 MiB before base64 expansion. Production rendering uses the process-owned DOCXODUS_NODE_PATH and DOCXODUS_EXPORT_HOST_PATH configuration; authoritative change-receipt evidence remains available through the programmatic transaction API.",
+            "Build one verified delivery bundle from a named baseline and the current session. Returns canonical manifest bytes and every available artifact as base64, bounded to 64 MiB before base64 expansion. Production rendering uses the process-owned DOCXODUS_NODE_PATH and DOCXODUS_EXPORT_HOST_PATH configuration. A changeReceipt artifact is minted from the evidence a session opened with captureDeliveryEvidence recorded as its edits executed; the response's evidence block says why when it is unavailable.",
             """
             {
               "type": "object",
@@ -691,7 +692,16 @@ internal static class ToolCatalog
                   }
                 },
                 "failOnDeliverableValidationFailure": { "type": "boolean", "default": true },
-                "returnIncompleteBundle": { "type": "boolean", "default": false }
+                "returnIncompleteBundle": { "type": "boolean", "default": false },
+                "changeReceipt": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "description": "Receipt policy when a changeReceipt artifact is requested. The receipt attests the session's own edits from the package it opened (the baseline must be that package) with revisions preserved as they are.",
+                  "properties": {
+                    "privacyProfile": { "type": "string", "enum": ["hashOnly", "hashAndSummary", "fullEvidence"], "default": "hashAndSummary" },
+                    "failOnUnexpectedChanges": { "type": "boolean", "default": false }
+                  }
+                }
               },
               "required": ["sessionId", "baselinePath", "baselineDocumentVersion", "finalDocumentName", "finalDocumentVersion", "revisionPolicy", "artifacts"]
             }

@@ -72,6 +72,9 @@ import type {
   MutationTransaction,
   MutationTransactionIdentity,
   MutationPreviewRetention,
+  DeliveryBundleResult,
+  DeliveryEvidenceStatus,
+  DeliveryReceiptBuildOptions,
   MutationBatchStepResult,
   MutationPreconditions,
   CrossReferenceOptions,
@@ -157,6 +160,8 @@ const BATCH_REPLAY_CAVEATS = {
   createdAnchors: "Created anchors and related OOXML ids may be generated independently on replay; preview/apply equivalence is semantic and packageHash or anchor ids may differ.",
 } as const;
 const BATCH_REPLAY_CAVEAT_TEXTS: ReadonlySet<string> = new Set(Object.values(BATCH_REPLAY_CAVEATS));
+
+type DeliveryBundleArtifactWire = Omit<DeliveryBundleResult["artifacts"][number], "bytes"> & { bytes?: string };
 
 /** Mirrors the .NET retained-preview count bound, so this client-side receipt map cannot outgrow it. */
 const RETAINED_PREVIEW_RECEIPTS = 8;
@@ -252,8 +257,89 @@ export class DocxSession {
     if (mode !== "atomic" && mode !== "best_effort") {
       throw new RangeError(`unknown mutation batch mode: ${String(mode)}`);
     }
-    if (transaction === undefined) return this.runBatch(steps, mode);
-    return this.runTransactional(transaction, mode, () => this.runBatch(steps, mode));
+    if (transaction === undefined) return this.recorded(steps, mode, undefined, () => this.runBatch(steps, mode));
+    return this.runTransactional(transaction, mode,
+      identity => this.recorded(steps, mode, identity, () => this.runBatch(steps, mode)));
+  }
+
+  /**
+   * What the session's host-owned delivery evidence recorder holds (issue #748). `enabled` is
+   * false, with the reason, unless the session was opened with `captureDeliveryEvidence`.
+   */
+  getDeliveryEvidenceStatus(): DeliveryEvidenceStatus {
+    if (!this.wasm.GetDeliveryEvidenceStatus) {
+      throw new Error("This WASM bundle predates delivery evidence; rebuild docxodus.");
+    }
+    return JSON.parse(this.wasm.GetDeliveryEvidenceStatus(this.handle)) as DeliveryEvidenceStatus;
+  }
+
+  /**
+   * Build the receipt-bearing delivery of this session through the shared bundle service: the
+   * clean current package (`final-docx`), the source-to-delivered semantic delta, and the change
+   * receipt (`change-receipt`) minted from the captured evidence — verifiable with
+   * `verifyDeliveryReceipt` against the returned artifact bytes. A history that cannot be
+   * attested yields an `incomplete` bundle whose receipt artifact carries the reason, and
+   * `evidence.unavailableReason` says why.
+   */
+  buildDeliveryReceipt(options?: DeliveryReceiptBuildOptions): DeliveryBundleResult {
+    if (!this.wasm.BuildDeliveryReceipt) {
+      throw new Error("This WASM bundle predates delivery evidence; rebuild docxodus.");
+    }
+    const wire = JSON.parse(this.wasm.BuildDeliveryReceipt(this.handle, JSON.stringify(options ?? {}))) as {
+      status: DeliveryBundleResult["status"];
+      verified: boolean;
+      manifest: Record<string, unknown>;
+      manifestBytes: string;
+      artifacts: readonly (Omit<DeliveryBundleArtifactWire, "bytes"> & { bytes?: string })[];
+      evidence?: DeliveryEvidenceStatus;
+    };
+    const decode = (base64: string): Uint8Array => Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+    return {
+      status: wire.status,
+      verified: wire.verified,
+      manifest: wire.manifest,
+      manifestBytes: decode(wire.manifestBytes),
+      artifacts: wire.artifacts.map(artifact => {
+        const { bytes, ...rest } = artifact;
+        return bytes === undefined ? rest : { ...rest, bytes: decode(bytes) };
+      }),
+      ...(wire.evidence ? { evidence: wire.evidence } : {}),
+    };
+  }
+
+  /**
+   * Describe a batch to the session's delivery evidence recorder before running it, and hand
+   * it the step results afterwards, so the version steps the batch produced are recorded under
+   * this description rather than as unlabeled mutations. A bundle without the recorder, or a
+   * session not capturing evidence, simply runs the batch.
+   */
+  private recorded(
+    steps: readonly MutationBatchStep[],
+    mode: MutationBatchMode,
+    identity: MutationTransactionIdentity | undefined,
+    run: () => MutationBatchResult,
+  ): MutationBatchResult {
+    if (!this.wasm.BeginDeliveryEvidence || !this.wasm.CompleteDeliveryEvidence
+      || !this.wasm.AbandonDeliveryEvidence) {
+      return run();
+    }
+    const described = this.wasm.BeginDeliveryEvidence(
+      this.handle,
+      JSON.stringify(steps.map(step => step.args === undefined
+        ? { tool: step.tool, action: step.action }
+        : { tool: step.tool, action: step.action, args: step.args })),
+      mode,
+      identity ? JSON.stringify({ transactionId: identity.transactionId, requestFingerprint: identity.requestFingerprint }) : "",
+    );
+    if (!described) return run();
+    let result: MutationBatchResult | undefined;
+    try {
+      result = run();
+      return result;
+    } finally {
+      if (result) this.wasm.CompleteDeliveryEvidence(this.handle, JSON.stringify(result.steps));
+      else this.wasm.AbandonDeliveryEvidence(this.handle);
+    }
   }
 
   /**
@@ -293,13 +379,13 @@ export class DocxSession {
       };
     };
     if (transaction === undefined) return commit();
-    return this.runTransactional(transaction, "atomic", commit);
+    return this.runTransactional(transaction, "atomic", () => commit());
   }
 
   private runTransactional(
     transaction: MutationTransaction,
     mode: MutationBatchMode,
-    body: () => MutationBatchResult,
+    body: (identity: MutationTransactionIdentity) => MutationBatchResult,
   ): MutationBatchResult {
     // The batch is composed here from callbacks, so the session's journal (shared with every
     // other transport) is driven in three steps: resolve the id, run, retain the result.
@@ -326,7 +412,7 @@ export class DocxSession {
     let completed = false;
     try {
       const result: MutationBatchResult = {
-        ...body(),
+        ...body(decision.transaction),
         transaction: decision.transaction,
       };
       this.wasm.CompleteMutationTransaction(

@@ -610,8 +610,17 @@ public sealed class DeliveryBundleService
                 semanticPlan.Request.ArtifactId,
                 RelativePath(semanticPlan)));
 
-            foreach (var evidence in context.TransactionSnapshot)
+            // History replays in the order it happened: the receipt's lineage validator walks
+            // one sequence of transactions and undo/redo events, so an undo between two
+            // transactions has to be added between them.
+            foreach (var historyEvent in context.HistorySnapshot)
             {
+                if (historyEvent.Lineage is { } lineageEvent)
+                {
+                    builder.AddLineageEvent(lineageEvent);
+                    continue;
+                }
+                var evidence = historyEvent.Transaction!;
                 ValidateTransactionSnapshots(evidence, options.PackageManifestOptions);
                 var entryId = builder.AddTransaction(evidence.Contribution);
                 if (!Equals(evidence.Contribution.BeforeDocument.RawPackageBytesDigest,
@@ -648,8 +657,6 @@ public sealed class DeliveryBundleService
                 }
             }
 
-            foreach (var lineage in context.LineageSnapshot)
-                builder.AddLineageEvent(lineage);
             foreach (var rule in context.AttributionRuleSnapshot)
                 builder.AddAttributionRule(rule);
             foreach (var warning in context.WarningSnapshot)

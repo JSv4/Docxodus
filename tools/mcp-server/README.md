@@ -108,7 +108,7 @@ action-specific arguments.
 | `docxodus_mutations` | grouped-intent | Apply or safely preview a batch atomically by default, with opt-in best-effort, transaction-id retry deduplication (shared with every transport), and guarded commit of a retained preview exactly as previewed. |
 | `docxodus_table` | grouped-intent | Create and read tables; resolve canonical cell anchors ↔ grid coordinates; edit rows, columns, cell content, and style. |
 | `docxodus_compare` | sessionless | Diff or N-way consolidate stored document versions into one author-attributed native redline, written back into the document scope. |
-| `docxodus_deliver` | sessionless | Build a verified delivery bundle from a named baseline and the current session; return its manifest and available artifact bytes. |
+| `docxodus_deliver` | sessionless | Build a verified delivery bundle from a named baseline and the current session; return its manifest and available artifact bytes, including a change receipt minted from the evidence a session opened with `captureDeliveryEvidence` recorded as its edits executed. |
 | `docxodus_verify_receipt` | sessionless | Verify a portable delivery change receipt against the document it claims to describe. |
 
 `McpToolInventoryDocumentationTests` asserts this table and `ToolCatalog.Tools` name exactly the
