@@ -870,7 +870,7 @@ internal static class DocxSessionJson
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
         RequireObject(root, "content-control fill options");
-        RequireOnlyProperties(root, "bindingPolicy");
+        RequireOnlyProperties(root, "bindingPolicy", "nestedControls", "childFills");
         var policy = StrictString(root, "bindingPolicy", "preserve") switch
         {
             "preserve" => ContentControlBindingPolicy.Preserve,
@@ -878,7 +878,33 @@ internal static class DocxSessionJson
             var token => throw new System.ArgumentException(
                 $"unknown bindingPolicy '{token}'; expected preserve or detach_target"),
         };
-        return new ContentControlFillOptions { BindingPolicy = policy };
+        var nested = StrictString(root, "nestedControls", "refuse") switch
+        {
+            "refuse" => ContentControlNestedPolicy.Refuse,
+            "preserve" => ContentControlNestedPolicy.Preserve,
+            "replace" => ContentControlNestedPolicy.Replace,
+            var token => throw new System.ArgumentException(
+                $"unknown nestedControls '{token}'; expected refuse, preserve or replace"),
+        };
+        Dictionary<string, string>? childFills = null;
+        if (root.TryGetProperty("childFills", out var fills) && fills.ValueKind != JsonValueKind.Null)
+        {
+            if (fills.ValueKind != JsonValueKind.Object)
+                throw new System.ArgumentException("childFills must be an object of {anchorId: text}");
+            childFills = new Dictionary<string, string>(System.StringComparer.Ordinal);
+            foreach (var property in fills.EnumerateObject())
+            {
+                if (property.Value.ValueKind != JsonValueKind.String)
+                    throw new System.ArgumentException($"childFills['{property.Name}'] must be a string");
+                childFills[property.Name] = property.Value.GetString()!;
+            }
+        }
+        return new ContentControlFillOptions
+        {
+            BindingPolicy = policy,
+            NestedControls = nested,
+            ChildFills = childFills,
+        };
     }
 
     private static void RequireObject(JsonElement root, string description)
@@ -1408,7 +1434,20 @@ internal static class DocxSessionJson
             sb.Append(",\"text\":").Append(JsonString(control.Text))
               .Append(",\"itemValues\":");
             AppendStringArray(sb, control.ItemValues);
-            sb.Append('}');
+            sb.Append(",\"nestedControlAnchorIds\":");
+            AppendStringArray(sb, control.NestedControlAnchorIds);
+            sb.Append(",\"operations\":[");
+            for (int j = 0; j < control.Operations.Count; j++)
+            {
+                if (j > 0) sb.Append(',');
+                var operation = control.Operations[j];
+                sb.Append("{\"operation\":").Append(JsonString(operation.Operation));
+                AppendString(sb, "nestedControls", operation.NestedControls);
+                sb.Append(",\"canMutate\":").Append(operation.CanMutate ? "true" : "false");
+                AppendString(sb, "reason", operation.Reason);
+                sb.Append('}');
+            }
+            sb.Append("]}");
         }
         return sb.Append(']').ToString();
     }

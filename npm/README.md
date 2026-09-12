@@ -595,9 +595,20 @@ const redlined = await docxodus.compareDocuments(original, modified, options);
 const revisions = await docxodus.getRevisions(docxFile);
 const metadata = await docxodus.getDocumentMetadata(docxFile);
 
+// The external annotation family runs there too, so a read-only viewer that renders
+// through the worker can annotate without booting a second runtime on the main thread.
+const set = await docxodus.createExternalAnnotationSet(docxFile, 'doc-1');
+const annotated = await docxodus.projectAnnotationsOntoHtml(html, set);
+const validation = await docxodus.validateExternalAnnotations(docxFile, set);
+const exported = await docxodus.exportToOpenContract(docxFile);
+
 // Terminate when done
 docxodus.terminate();
 ```
+
+`projectAnnotationsOntoHtml` parses its input as XML: hand it the converter's output (or
+another well-formed serialization), not a live DOM's `innerHTML`, which leaves `<br>` and
+`<img>` unclosed. `DocxEditor.open()` stays main-thread only — it writes into a live container.
 
 #### First-call warmup
 

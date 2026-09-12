@@ -2415,8 +2415,33 @@ export type ContentControlType = "plain_text" | "rich_text" | "checkbox" | "date
 export type ContentControlPlacement = "inline" | "block" | "row" | "cell" | "unknown";
 export type ContentControlBindingPolicy = "preserve" | "detach_target";
 
+/** How a whole-control fill treats nested controls inside its target (issue #763). */
+export type ContentControlNestedPolicy = "refuse" | "preserve" | "replace";
+
 export interface ContentControlFillOptions {
   bindingPolicy?: ContentControlBindingPolicy;
+  /**
+   * Default `refuse`. `preserve` keeps every nested control in place and replaces only the
+   * content outside them; `replace` discards the whole payload, nested controls included
+   * (each is reported removed; a locked or data-bound nested control refuses).
+   */
+  nestedControls?: ContentControlNestedPolicy;
+  /**
+   * With `preserve`: plain-text fills for nested text/rich-text controls of the target, keyed
+   * by their `sdt` anchor, applied in the same operation. A key that is not a nested textual
+   * control, or a child that fails its own gates, fails the whole call without mutating.
+   */
+  childFills?: Record<string, string>;
+}
+
+/** Whether one operation would succeed on a control right now, by the gates the operation applies. */
+export interface ContentControlOperationSupport {
+  operation: "fill_text" | "fill_rich_text" | "set_checked" | "set_date" | "select_item"
+    | "fill_picture" | "add_repeating_item" | "remove_repeating_item";
+  /** The nested policy this entry describes, when the target contains nested controls. */
+  nestedControls?: ContentControlNestedPolicy;
+  canMutate: boolean;
+  reason?: string;
 }
 
 export interface ContentControlBindingInfo {
@@ -2447,6 +2472,13 @@ export interface ContentControlInfo {
   unsupportedReason?: string;
   text: string;
   itemValues: string[];
+  /** Anchors of the controls nested anywhere inside this control's payload, in story order. */
+  nestedControlAnchorIds: string[];
+  /**
+   * Per-operation support for this control's family, including nested-policy variants of a
+   * fill when the target contains nested controls and the session's tracked-change mode.
+   */
+  operations: ContentControlOperationSupport[];
 }
 
 export interface DocumentRange {
@@ -4370,6 +4402,11 @@ export type WorkerRequestType =
   | "compareDocuments"
   | "compareDocumentsToHtml"
   | "getSemanticChanges"
+  | "createExternalAnnotationSet"
+  | "validateExternalAnnotations"
+  | "projectAnnotationsOntoHtml"
+  | "convertDocxToHtmlWithExternalAnnotations"
+  | "exportToOpenContract"
   | "getRevisions"
   | "getDocumentMetadata"
   | "getVersion"
@@ -4490,6 +4527,43 @@ export interface WorkerGetSemanticChangesRequest extends WorkerRequestBase {
   leftBytes: Uint8Array;
   rightBytes: Uint8Array;
   settings?: DocxDiffSettings;
+}
+
+/** Create an empty external annotation set bound to a document's hash (issue #775). */
+export interface WorkerCreateExternalAnnotationSetRequest extends WorkerRequestBase {
+  type: "createExternalAnnotationSet";
+  documentBytes: Uint8Array;
+  documentId: string;
+}
+
+/** Validate an external annotation set against a document. */
+export interface WorkerValidateExternalAnnotationsRequest extends WorkerRequestBase {
+  type: "validateExternalAnnotations";
+  documentBytes: Uint8Array;
+  annotationSet: ExternalAnnotationSet;
+}
+
+/** Project an annotation set onto already-rendered (XML-well-formed) HTML. */
+export interface WorkerProjectAnnotationsOntoHtmlRequest extends WorkerRequestBase {
+  type: "projectAnnotationsOntoHtml";
+  html: string;
+  annotationSet: ExternalAnnotationSet;
+  projectionOptions?: ExternalAnnotationProjectionSettings;
+}
+
+/** Convert a document and project an annotation set onto it in one round trip. */
+export interface WorkerConvertWithExternalAnnotationsRequest extends WorkerRequestBase {
+  type: "convertDocxToHtmlWithExternalAnnotations";
+  documentBytes: Uint8Array;
+  annotationSet: ExternalAnnotationSet;
+  conversionOptions?: ConversionOptions;
+  projectionOptions?: ExternalAnnotationProjectionSettings;
+}
+
+/** Export a document to the OpenContracts format. */
+export interface WorkerExportToOpenContractRequest extends WorkerRequestBase {
+  type: "exportToOpenContract";
+  documentBytes: Uint8Array;
 }
 
 /**
@@ -4621,6 +4695,11 @@ export type WorkerRequest =
   | WorkerCompareRequest
   | WorkerCompareToHtmlRequest
   | WorkerGetSemanticChangesRequest
+  | WorkerCreateExternalAnnotationSetRequest
+  | WorkerValidateExternalAnnotationsRequest
+  | WorkerProjectAnnotationsOntoHtmlRequest
+  | WorkerConvertWithExternalAnnotationsRequest
+  | WorkerExportToOpenContractRequest
   | WorkerGetRevisionsRequest
   | WorkerGetDocumentMetadataRequest
   | WorkerGetVersionRequest
@@ -4717,6 +4796,31 @@ export interface WorkerGetSemanticChangesResponse extends WorkerResponseBase {
   semanticChanges?: SemanticChangeSet;
 }
 
+export interface WorkerCreateExternalAnnotationSetResponse extends WorkerResponseBase {
+  type: "createExternalAnnotationSet";
+  annotationSet?: ExternalAnnotationSet;
+}
+
+export interface WorkerValidateExternalAnnotationsResponse extends WorkerResponseBase {
+  type: "validateExternalAnnotations";
+  validation?: ExternalAnnotationValidationResult;
+}
+
+export interface WorkerProjectAnnotationsOntoHtmlResponse extends WorkerResponseBase {
+  type: "projectAnnotationsOntoHtml";
+  html?: string;
+}
+
+export interface WorkerConvertWithExternalAnnotationsResponse extends WorkerResponseBase {
+  type: "convertDocxToHtmlWithExternalAnnotations";
+  html?: string;
+}
+
+export interface WorkerExportToOpenContractResponse extends WorkerResponseBase {
+  type: "exportToOpenContract";
+  export?: OpenContractDocExport;
+}
+
 /**
  * Response from getRevisions request.
  */
@@ -4811,6 +4915,11 @@ export type WorkerResponse =
   | WorkerCompareResponse
   | WorkerCompareToHtmlResponse
   | WorkerGetSemanticChangesResponse
+  | WorkerCreateExternalAnnotationSetResponse
+  | WorkerValidateExternalAnnotationsResponse
+  | WorkerProjectAnnotationsOntoHtmlResponse
+  | WorkerConvertWithExternalAnnotationsResponse
+  | WorkerExportToOpenContractResponse
   | WorkerGetRevisionsResponse
   | WorkerGetDocumentMetadataResponse
   | WorkerGetVersionResponse

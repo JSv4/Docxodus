@@ -864,8 +864,13 @@ internal static class Dispatcher
 
     private static string BuildContentControlOptionsJson(JsonElement args)
     {
-        var policy = OptionalStringValue(args, "bindingPolicy");
-        return policy is null ? "{}" : JsonSerializer.Serialize(new { bindingPolicy = policy });
+        var options = new Dictionary<string, object>(StringComparer.Ordinal);
+        if (OptionalStringValue(args, "bindingPolicy") is { } policy) options["bindingPolicy"] = policy;
+        if (OptionalStringValue(args, "nestedControls") is { } nested) options["nestedControls"] = nested;
+        if (args.ValueKind == JsonValueKind.Object && args.TryGetProperty("childFills", out var fills)
+            && fills.ValueKind == JsonValueKind.Object)
+            options["childFills"] = fills;
+        return options.Count == 0 ? "{}" : JsonSerializer.Serialize(options);
     }
 
     private static bool RequiredBool(JsonElement args, string name)
@@ -1874,10 +1879,14 @@ internal static class Dispatcher
             case ("docxodus_content_controls", "fill_text"):
                 RequireStrings(args, "anchorId", "text");
                 ValidateOptionalEnum(args, "bindingPolicy", "preserve", "detach_target");
+                ValidateOptionalEnum(args, "nestedControls", "refuse", "preserve", "replace");
+                ValidateOptionalChildFills(args);
                 break;
             case ("docxodus_content_controls", "fill_rich_text"):
                 RequireStrings(args, "anchorId", "markdown");
                 ValidateOptionalEnum(args, "bindingPolicy", "preserve", "detach_target");
+                ValidateOptionalEnum(args, "nestedControls", "refuse", "preserve", "replace");
+                ValidateOptionalChildFills(args);
                 break;
             case ("docxodus_content_controls", "set_checked"):
                 RequireStrings(args, "anchorId");
@@ -2015,6 +2024,16 @@ internal static class Dispatcher
     {
         _ = Str(args, name);
         ValidateOptionalEnum(args, name, values);
+    }
+
+    private static void ValidateOptionalChildFills(JsonElement args)
+    {
+        if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty("childFills", out var fills)) return;
+        if (fills.ValueKind != JsonValueKind.Object)
+            throw new McpToolException("childFills must be an object of {anchorId: text}");
+        foreach (var property in fills.EnumerateObject())
+            if (property.Value.ValueKind != JsonValueKind.String)
+                throw new McpToolException($"childFills[\"{property.Name}\"] must be a string");
     }
 
     private static void ValidateOptionalEnum(JsonElement args, string name, params string[] values)
