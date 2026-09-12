@@ -232,6 +232,9 @@ internal static class Dispatcher
         "remove_bookmark" => DocxSessionOps.RemoveBookmark(Handle(args), Str(args, "name")),
 
         "list_revisions" => DocxSessionOps.ListRevisions(Handle(args)),
+        "list_revision_repairs" => DocxSessionOps.ListRevisionRepairs(Handle(args)),
+        "repair_revisions" => DocxSessionOps.RepairRevisions(Handle(args),
+            args.TryGetProperty("repairs", out var repairs) ? repairs.GetRawText() : "[]"),
         "accept_revision" => DocxSessionOps.AcceptRevision(Handle(args), Str(args, "revisionId")),
         "reject_revision" => DocxSessionOps.RejectRevision(Handle(args), Str(args, "revisionId")),
         "accept_all_revisions" => DocxSessionOps.AcceptAllRevisions(Handle(args)),
@@ -1032,7 +1035,7 @@ internal static class Dispatcher
         or "insert_footnote" or "insert_endnote" or "insert_cross_reference"
         or "add_comment" or "add_comment_reply" or "update_comment"
         or "set_comment_resolved" or "remove_comment"
-        or "accept_revision" or "reject_revision"
+        or "accept_revision" or "reject_revision" or "repair_revisions"
         or "accept_all_revisions" or "reject_all_revisions"
         or "apply_format" or "apply_format_by_substring" or "set_paragraph_style"
         or "set_paragraph_format" or "set_list_level" or "remove_list_membership"
