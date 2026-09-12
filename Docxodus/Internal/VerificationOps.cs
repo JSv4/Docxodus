@@ -43,6 +43,30 @@ internal static class VerificationOps
         DeliverableVerifier.VerifyDeliverable(baselineBytes, packageBytes).ToCanonicalJson();
 
     /// <summary>
+    /// Run the complete bounded verification request (issue #747): exact package bytes plus the
+    /// wire request <see cref="DeliverableVerificationRequestJson"/> parses — policy and limit
+    /// options, expected semantic and package changes, companion artifacts. A null or empty
+    /// request is the default policy, so the simple calls above remain this call's defaults.
+    /// </summary>
+    public static string VerifyDeliverable(
+        byte[] packageBytes,
+        byte[]? baselineBytes,
+        string? requestJson)
+    {
+        var parsed = DeliverableVerificationRequestJson.Parse(requestJson);
+        return DeliverableVerifier.VerifyDeliverable(
+            new DeliverableVerificationRequest
+            {
+                DeliverableBytes = packageBytes,
+                BaselineBytes = baselineBytes,
+                ExpectedSemanticChanges = parsed.ExpectedSemanticChanges,
+                ExpectedPackageChanges = parsed.ExpectedPackageChanges,
+                CompanionArtifacts = parsed.CompanionArtifacts,
+            },
+            parsed.Options).ToCanonicalJson();
+    }
+
+    /// <summary>
     /// Prove that a redline's generated revisions accept to the intended final and reject to the
     /// baseline without consuming pre-existing review state.
     /// </summary>

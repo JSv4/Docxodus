@@ -24,6 +24,7 @@
     <ProjectReference Include="..\Docxodus\Docxodus.csproj" />
     <ProjectReference Include="..\tools\history-recovery-probe\HistoryRecoveryProbe.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\tools\mcp-server\mcpserver.csproj" />
+    <ProjectReference Include="..\tools\python-host\pyhost.csproj" />
     <ProjectReference Include="..\tools\delivery\delivery.csproj" />
   </ItemGroup>
 

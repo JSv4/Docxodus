@@ -179,6 +179,20 @@ system if tamper evidence or non-repudiation is required.
   markup is valid. Static field/relationship checks report broken structure, not refreshed layout.
 - Open XML conformance and Word's repair behavior are related but not identical. Both the SDK
   validator evidence and Docxodus closure findings remain visible.
-- WASM/npm and Python expose the default stateless operation (with an optional baseline) and the
-  default session operation; MCP exposes the default current-document report. Version 1 does not
-  expose the full companion-artifact, expected-delta, and policy-options request model outside .NET.
+- Every transport exposes the full request (issue #747) through one wire shape parsed by
+  `Docxodus/Internal/DeliverableVerificationRequestJson.cs`: `options` (policy and inspection
+  limits, defaults read from `DeliverableVerificationOptions` itself), `expectedSemanticChanges`
+  (the canonical semantic-changes object), `expectedPackageChanges`, and `companionArtifacts`
+  (base64 bytes, diagnostics, digests). Unknown properties are rejected; artifact counts, encoded
+  byte lengths, diagnostic counts and expected-change counts are checked before anything is
+  decoded or copied. npm: `verifyDeliverable(document, baseline?, request?)` and
+  `session.verifyDeliverable(request?)`, also through the worker proxy; Python:
+  `verify_deliverable(data, baseline, request=...)` and `session.verify_deliverable(request)`
+  with `DeliverableVerificationRequest`/`DeliverableVerificationOptions`/
+  `DeliverableCompanionArtifact`; MCP: `docxodus_get_content(format: "verification",
+  verification: {...})`, where a companion artifact may name a `path` inside the configured
+  document scope instead of `bytesB64`. The simple calls remain the defaults of this one.
+  Source `expectedSemanticChanges` from the same byte-level comparison the verifier runs
+  (`SemanticDiff.Compare` / `docx_diff_get_semantic_changes` / `docxDiffGetSemanticChanges` over
+  the baseline and deliverable bytes): a live session's opening-to-current listing carries
+  session-minted anchors that the byte-level delta does not, so it never matches.

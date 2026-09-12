@@ -104,6 +104,42 @@ internal static class DeliverySemanticChangeSetAdapter
             DeliveryReceiptCanonicalJson.Digest(canonicalBytes));
     }
 
+    /// <summary>
+    /// Parse a canonical semantic-changes object into a typed set, checking structure, vocabulary
+    /// and the item budget but not byte-exact canonical form — the shape a client hands back as
+    /// an <em>expectation</em> (issue #747) may have been re-serialized by that client.
+    /// </summary>
+    public static SemanticChangeSet Parse(JsonElement root, DeliveryReceiptLimits limits)
+    {
+        ArgumentNullException.ThrowIfNull(limits);
+        var budget = new DeliveryReceiptResourceBudget(
+            limits, limits.MaxSemanticEvidenceBytes, "semantic_resource_limit");
+        budget.AddSerializedBytes(64, "semantic root");
+        ExactObject(root, budget, "schema", "schemaVersion", "changeCount", "changes");
+        var schema = RequiredString(root, "schema", budget);
+        if (!string.Equals(schema, SemanticChangeSet.CurrentSchema, StringComparison.Ordinal)
+            || !root.GetProperty("schemaVersion").TryGetInt32(out var schemaVersion)
+            || schemaVersion != SemanticChangeSet.CurrentSchemaVersion
+            || !root.GetProperty("changeCount").TryGetInt32(out var declaredCount)
+            || declaredCount < 0)
+        {
+            throw Invalid("Semantic change-set root identity is invalid.");
+        }
+
+        var changesElement = root.GetProperty("changes");
+        if (changesElement.ValueKind != JsonValueKind.Array)
+            throw Invalid("Semantic change-set changes must be an array.");
+        var changes = new List<SemanticChange>();
+        foreach (var change in changesElement.EnumerateArray())
+        {
+            budget.AddItems(1, "semantic changes");
+            changes.Add(ParseChange(change, budget));
+        }
+        if (changes.Count != declaredCount)
+            throw Invalid("Semantic change-set count does not match its changes array.");
+        return new SemanticChangeSet(changes);
+    }
+
     private static SemanticChange ParseChange(
         JsonElement element,
         DeliveryReceiptResourceBudget budget)
