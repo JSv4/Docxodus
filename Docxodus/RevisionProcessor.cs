@@ -1063,6 +1063,20 @@ namespace Docxodus
                 }
 
                 ////////////////////////////////////////////////////////////////////////////////////
+                // Deleted / inserted math control character. The mark sits in the owning object's
+                // property set (m:f/m:fPr/m:ctrlPr, m:rad/m:radPr/m:ctrlPr, …) and the object's
+                // existence follows it. Reject inverts the mark so the accept pass removes an
+                // inserted object and keeps a deleted one; without this rule the accept pass saw
+                // the original mark and did the opposite.
+                if ((element.Name == W.del || element.Name == W.ins) &&
+                    parent?.Name == M.ctrlPr)
+                {
+                    return new XElement(element.Name == W.del ? W.ins : W.del,
+                        element.Attributes(),
+                        element.Nodes().Select(n => ReverseRevisionsTransform(n, rri)));
+                }
+
+                ////////////////////////////////////////////////////////////////////////////////////
                 // moveFrom / moveTo
 #if false
     <w:p>
@@ -1986,11 +2000,14 @@ namespace Docxodus
                     element.Name == W.cellIns)
                     return null;
 
-                // Accept revisions for deleted math control character.
-                // Match m:f/m:fPr/m:ctrlPr/w:del, remove m:f.
+                // Accept revisions for a deleted math control character: the mark sits in the
+                // owning object's property set (m:f/m:fPr/m:ctrlPr/w:del, m:rad/m:radPr/…) and
+                // the object's existence follows its control character, so remove the object.
 
-                if (element.Name == M.f &&
-                    element.Elements(M.fPr).Elements(M.ctrlPr).Elements(W.del).Any())
+                if (element.Name.Namespace == M.m &&
+                    element.Elements().Any(properties =>
+                        properties.Name.LocalName.EndsWith("Pr", StringComparison.Ordinal) &&
+                        properties.Elements(M.ctrlPr).Elements(W.del).Any()))
                     return null;
 
                 // Accept revisions for deleted rows in tables.

@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Revision registry: a mark under `m:ctrlPr` — Word's carrier for the insertion or deletion of
+  a whole math object (fraction, radical, delimiter, …) — is now a native revision. The mark
+  and the object's revised runs list as one `contentInsert`/`contentDelete` entry whose text
+  is the equation text; accept/reject keep the object (markup stripped) or remove it whole.
+  Shapes with no safe semantics stay listed and fail closed: `unrevised_math_control_payload`
+  when the object still shows text not revised the same way, `unsupported_math_control_payload`
+  for the nested `CT_MathCtrlIns` property-change form, and `orphan_math_control_revision` for a
+  mark outside any object's property set. (#750)
+
 ### Changed
 
 - Revision registry: a revision mark in a position the OOXML schema never allows — `w:ins`,
@@ -16,6 +27,14 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- A paragraph mark carrying both an insertion and a later deletion by another author (Word's
+  inserted-then-deleted pilcrow, `RP047`) listed only the first mark and left the second as an
+  unsupported entry that blocked bulk resolution. Both marks are now independent revisions, and
+  the fixture resolves to the processor oracle in both directions.
+- `RevisionProcessor.RejectRevisions` never inverted a mark under `m:ctrlPr`, so rejecting a
+  deleted fraction removed it and rejecting an inserted one left an empty husk;
+  `AcceptRevisions` removed only fractions. Both passes now treat the control mark of every
+  math object.
 - Added `docxodus/core`, an engine-only npm entry point for plain Node ESM. It exposes
   conversion, comparison, annotation, history, and session APIs without importing the
   browser editor's bundler-only drag-and-drop dependencies. The existing `docxodus`

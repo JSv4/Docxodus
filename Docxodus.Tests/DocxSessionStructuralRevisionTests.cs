@@ -60,6 +60,8 @@ public class DocxSessionStructuralRevisionTests
     [InlineData("RP/RP021-Inserted-Numbering-Properties.docx", false)]
     [InlineData("RP/RP026-NumberingChange.docx", true)]
     [InlineData("RP/RP026-NumberingChange.docx", false)]
+    [InlineData("RP/RP047-Inserted-and-Deleted-Paragraph-Mark.docx", true)]
+    [InlineData("RP/RP047-Inserted-and-Deleted-Paragraph-Mark.docx", false)]
     public void DS45502_IndividualAndBulkResolution_MatchProcessorOracle(string relative, bool accept)
     {
         var input = File.ReadAllBytes(Fixture(relative));
@@ -542,8 +544,6 @@ public class DocxSessionStructuralRevisionTests
     }
 
     [Theory]
-    [InlineData("math_ctrlpr", RevisionResolutionStatus.Unsupported,
-        "unsupported_revision_family", EditErrorCode.RevisionUnsupported)]
     [InlineData("numbering_delete", RevisionResolutionStatus.Malformed,
         "invalid_revision_carrier", EditErrorCode.RevisionMalformed)]
     [InlineData("run_properties_delete", RevisionResolutionStatus.Malformed,
@@ -595,6 +595,152 @@ public class DocxSessionStructuralRevisionTests
         var diagnostic = Assert.Single(session.ListRevisions()).Diagnostic!;
         Assert.Equal("invalid_revision_carrier", diagnostic.Code);
         Assert.Contains(legalSpelling, diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    // A mark under m:ctrlPr revises the control character of the owning math object, which is
+    // how Word tracks the object's own insertion or deletion. The mark and the object's revised
+    // runs are one revision; resolving it either keeps the object (markup stripped) or removes
+    // it whole. Both outputs are what the same document looks like without the revision.
+    [Theory]
+    [InlineData("fraction_deleted", true, "fraction_absent")]
+    [InlineData("fraction_deleted", false, "fraction_present")]
+    [InlineData("fraction_inserted", true, "fraction_present")]
+    [InlineData("fraction_inserted", false, "fraction_absent")]
+    [InlineData("nested_deleted", true, "fraction_absent")]
+    [InlineData("nested_deleted", false, "nested_present")]
+    public void DS45533_MathControlRevision_ResolvesTheOwningObjectAndRoundTrips(
+        string shape, bool accept, string expectedShape)
+    {
+        var input = BuildMathControlDocument(shape);
+        var expected = MainRoot(BuildMathControlDocument(expectedShape));
+        using var session = new DocxSession(input);
+        var revision = Assert.Single(session.ListRevisions());
+        Assert.Equal(shape.EndsWith("inserted", StringComparison.Ordinal)
+            ? RevisionFamily.ContentInsert
+            : RevisionFamily.ContentDelete, revision.Family);
+        Assert.Equal(RevisionResolutionStatus.Supported, revision.ResolutionStatus);
+        Assert.Equal(shape == "nested_deleted" ? "3x2" : "12", revision.Text);
+
+        var result = accept
+            ? session.AcceptRevision(revision.Id)
+            : session.RejectRevision(revision.Id);
+
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Empty(session.ListRevisions());
+        var resolved = session.Save();
+        Assert.True(XNode.DeepEquals(expected, MainRoot(resolved)),
+            FirstDifference(expected, MainRoot(resolved)));
+        Assert.DoesNotContain(ValidationErrors(resolved), error =>
+            error.Contains("2006/math", StringComparison.Ordinal)
+            || error.Contains(":del'", StringComparison.Ordinal)
+            || error.Contains(":ins'", StringComparison.Ordinal));
+
+        Assert.True(session.Undo());
+        Assert.Equal(revision.Id, Assert.Single(session.ListRevisions()).Id);
+        Assert.True(session.Redo());
+        Assert.Empty(session.ListRevisions());
+        using (var reopened = new DocxSession(session.Save()))
+        {
+            Assert.Empty(reopened.ListRevisions());
+            Assert.True(XNode.DeepEquals(expected, MainRoot(reopened.Save())));
+        }
+
+        using var bulk = new DocxSession(input);
+        var bulkResult = accept ? bulk.AcceptAllRevisions() : bulk.RejectAllRevisions();
+        Assert.True(bulkResult.Success, bulkResult.Error?.Message);
+        Assert.True(XNode.DeepEquals(expected, MainRoot(bulk.Save())));
+    }
+
+    // RevisionProcessor is the inherited whole-document oracle. Its control-mark handling
+    // was fraction-only and its reject pass never inverted the mark (so rejecting a deleted
+    // fraction removed it); both are fixed alongside the registry so parity holds for every
+    // object type in both directions.
+    [Theory]
+    [InlineData("fraction_deleted", true)]
+    [InlineData("fraction_deleted", false)]
+    [InlineData("fraction_inserted", true)]
+    [InlineData("fraction_inserted", false)]
+    [InlineData("nested_deleted", true)]
+    [InlineData("nested_deleted", false)]
+    public void DS45534_MathControlRevision_MatchesProcessorOracle(
+        string shape, bool accept)
+    {
+        var input = BuildMathControlDocument(shape);
+        var oracle = MainRoot((accept
+            ? RevisionProcessor.AcceptRevisions(new WmlDocument("oracle.docx", input))
+            : RevisionProcessor.RejectRevisions(new WmlDocument("oracle.docx", input)))
+            .DocumentByteArray);
+
+        using var session = new DocxSession(input);
+        var result = accept ? session.AcceptAllRevisions() : session.RejectAllRevisions();
+
+        Assert.True(result.Success, result.Error?.Message);
+        var actual = MainRoot(session.Save());
+        Assert.True(XNode.DeepEquals(oracle, actual), FirstDifference(oracle, actual));
+    }
+
+    // Shapes with no safe semantics stay listed and fail closed: a mark whose object still
+    // shows unrevised text (removing the object would drop it), the nested CT_MathCtrlIns
+    // property-change form, and a m:ctrlPr outside any object's property set.
+    [Theory]
+    [InlineData("partial", RevisionFamily.ContentDelete, RevisionResolutionStatus.Unsupported,
+        "unrevised_math_control_payload", EditErrorCode.RevisionUnsupported)]
+    [InlineData("nested_property_change", RevisionFamily.ContentInsert,
+        RevisionResolutionStatus.Unsupported, "unsupported_math_control_payload",
+        EditErrorCode.RevisionUnsupported)]
+    [InlineData("orphan", RevisionFamily.ContentDelete, RevisionResolutionStatus.Malformed,
+        "orphan_math_control_revision", EditErrorCode.RevisionMalformed)]
+    public void DS45535_MathControlRevision_UnsafeShapesAreListedAndFailClosed(
+        string shape, RevisionFamily family, RevisionResolutionStatus status, string code,
+        EditErrorCode error)
+    {
+        var input = BuildMathControlDocument(shape);
+        using var session = new DocxSession(input);
+        var before = MainRoot(session.Save());
+        var revision = Assert.Single(session.ListRevisions());
+        Assert.Equal(family, revision.Family);
+        Assert.Equal(status, revision.ResolutionStatus);
+        Assert.Equal(code, revision.Diagnostic!.Code);
+
+        foreach (var result in new[]
+        {
+            session.AcceptRevision(revision.Id),
+            session.RejectRevision(revision.Id),
+            session.AcceptAllRevisions(),
+            session.RejectAllRevisions(),
+        })
+        {
+            Assert.False(result.Success);
+            Assert.Equal(error, result.Error!.Code);
+        }
+        Assert.True(XNode.DeepEquals(before, MainRoot(session.Save())));
+        Assert.False(session.Undo());
+    }
+
+    [Fact]
+    public void DS45536_MathControlRevision_UnsafeEntryBlocksBulkButNotUnrelatedResolution()
+    {
+        var input = MutateMain(BuildMathControlDocument("partial"), root =>
+            root.Descendants(W.p).Skip(1).First().Elements(W.r).First().ReplaceWith(
+                RevisionWrapper(W.ins, "40", "Text Reviewer", "2026-01-01T00:00:00Z", "later")));
+        using var session = new DocxSession(input);
+        var before = MainRoot(session.Save());
+        var revisions = session.ListRevisions();
+        Assert.Equal(2, revisions.Count);
+        var blocked = Assert.Single(revisions, r => r.ResolutionStatus != RevisionResolutionStatus.Supported);
+        var text = Assert.Single(revisions, r => r.ResolutionStatus == RevisionResolutionStatus.Supported);
+        Assert.Equal("unrevised_math_control_payload", blocked.Diagnostic!.Code);
+
+        var bulk = session.AcceptAllRevisions();
+        Assert.False(bulk.Success);
+        Assert.Equal(EditErrorCode.RevisionUnsupported, bulk.Error!.Code);
+        Assert.True(XNode.DeepEquals(before, MainRoot(session.Save())));
+        Assert.False(session.Undo());
+
+        Assert.True(session.AcceptRevision(text.Id).Success);
+        var remaining = Assert.Single(session.ListRevisions());
+        Assert.Equal(blocked.Id, remaining.Id);
+        Assert.Equal(RevisionResolutionStatus.Unsupported, remaining.ResolutionStatus);
     }
 
     [Fact]
@@ -1272,13 +1418,6 @@ public class DocxSessionStructuralRevisionTests
                 new XAttribute(W.date, "2026-01-01T00:00:00Z"));
             switch (shape)
             {
-                case "math_ctrlpr":
-                    paragraph.ReplaceNodes(new XElement(M.oMath,
-                        new XElement(M.f,
-                            new XElement(M.fPr, new XElement(M.ctrlPr, marker)),
-                            new XElement(M.num, new XElement(W.r, new XElement(W.t, "1"))),
-                            new XElement(M.den, new XElement(W.r, new XElement(W.t, "2"))))));
-                    break;
                 case "numbering_delete":
                     paragraph.AddFirst(new XElement(W.pPr,
                         new XElement(W.numPr,
@@ -1296,6 +1435,63 @@ public class DocxSessionStructuralRevisionTests
                 default:
                     throw new ArgumentOutOfRangeException(nameof(shape));
             }
+        });
+
+    /// <summary>Math control-character shapes. Runs follow Word's own serialization
+    /// (RP013/RP014): the mark sits inside <c>m:r</c> and wraps the run's <c>w:rPr</c> and
+    /// <c>m:t</c>. The unrevised shapes double as the expected outputs of resolution.</summary>
+    private static byte[] BuildMathControlDocument(string shape) =>
+        MutateMain(DocxSessionTests.BuildDS001_SimpleTwoParagraphs(), root =>
+        {
+            const string author = "Math Reviewer";
+            const string date = "2026-01-01T00:00:00Z";
+            XElement Mark(XName name, string id, params object[] content) => new(name,
+                new XAttribute(W.id, id), new XAttribute(W.author, author),
+                new XAttribute(W.date, date), content);
+            XElement Run(string text, XName? mark = null, string id = "") => mark is null
+                ? new XElement(M.r, new XElement(W.rPr), new XElement(M.t, text))
+                : new XElement(M.r, Mark(mark, id, new XElement(W.rPr), new XElement(M.t, text)));
+            XElement Control(XName? mark, string id) => new(M.ctrlPr,
+                mark is null ? new XElement(W.rPr) : Mark(mark, id, new XElement(W.rPr)));
+            XElement Fraction(XName? mark, XElement numerator, XElement denominator) => new(M.f,
+                new XElement(M.fPr, Control(mark, "10")),
+                new XElement(M.num, numerator),
+                new XElement(M.den, denominator));
+            XElement Radical(XName? mark, XElement degree, XElement radicand) => new(M.rad,
+                new XElement(M.radPr, Control(mark, "13")),
+                new XElement(M.deg, degree),
+                new XElement(M.e, radicand));
+
+            XElement[] objects = shape switch
+            {
+                "fraction_deleted" => new[]
+                    { Fraction(W.del, Run("1", W.del, "11"), Run("2", W.del, "12")) },
+                "fraction_inserted" => new[]
+                    { Fraction(W.ins, Run("1", W.ins, "11"), Run("2", W.ins, "12")) },
+                "fraction_present" => new[] { Fraction(null, Run("1"), Run("2")) },
+                "fraction_absent" => Array.Empty<XElement>(),
+                "nested_deleted" => new[]
+                {
+                    Fraction(W.del,
+                        Radical(W.del, Run("3", W.del, "14"), Run("x", W.del, "15")),
+                        Run("2", W.del, "12")),
+                },
+                "nested_present" => new[]
+                    { Fraction(null, Radical(null, Run("3"), Run("x")), Run("2")) },
+                "partial" => new[] { Fraction(W.del, Run("1"), Run("2", W.del, "12")) },
+                "nested_property_change" => new[]
+                {
+                    new XElement(M.f,
+                        new XElement(M.fPr, new XElement(M.ctrlPr,
+                            Mark(W.ins, "10", Mark(W.del, "16", new XElement(W.rPr))))),
+                        new XElement(M.num, Run("1", W.ins, "11")),
+                        new XElement(M.den, Run("2", W.ins, "12"))),
+                },
+                "orphan" => new[] { Control(W.del, "10") },
+                _ => throw new ArgumentOutOfRangeException(nameof(shape)),
+            };
+            root.Descendants(W.p).First().ReplaceNodes(
+                new XElement(M.oMath, Run("A="), objects, Run("+B")));
         });
 
     private static XElement Paragraph(string text) =>
