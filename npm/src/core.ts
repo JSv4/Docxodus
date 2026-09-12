@@ -64,6 +64,8 @@ import type {
   MarkdownProjectionSettings,
   MarkdownAnchorTarget,
   MarkdownProjection,
+  MutationTransaction,
+  MutationTransactionIdentity,
   // DocxSession mutation API
   DocxSessionSettings,
 } from "./types.js";

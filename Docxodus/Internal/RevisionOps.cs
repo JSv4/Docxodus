@@ -22,9 +22,12 @@ namespace Docxodus.Internal;
 ///
 /// Scope: run-content ins/del (any story), paragraph-mark ins/del, table-row
 /// ins/del (<c>w:trPr</c> markers absorb their row's content markup), table-cell
-/// insertion/deletion/vertical-merge operations, content-control envelope ranges,
+/// insertion/deletion/vertical-merge operations, structured-wrapper envelope ranges
+/// (<c>w:sdt</c>/<c>w:customXml</c> insertion, deletion, and — inside a named move — both
+/// sides of a move),
 /// numbering-property insertion/numbering cache changes, named move pairs (both
-/// sides resolve together), and the format-change family
+/// sides resolve together), math control-character marks (<c>m:ctrlPr</c> revisions,
+/// which track the existence of the owning math object), and the format-change family
 /// (<c>rPrChange</c>/<c>pPrChange</c>/<c>sectPrChange</c>/<c>tblPrChange</c>/
 /// <c>trPrChange</c>/<c>tcPrChange</c>/<c>tblGridChange</c>/<c>tblPrExChange</c>).
 /// Unsupported or malformed native markup is enumerated explicitly and fails closed.
@@ -50,6 +53,7 @@ internal static class RevisionOps
         NumberingPropertiesInsert,
         NumberingChange,
         StructuredRange,
+        MathControlMark,
         Unsupported,
     }
 
@@ -149,14 +153,14 @@ internal static class RevisionOps
         return max;
     }
 
+    /// <summary>The range-marker family Word uses to track the existence of a structured
+    /// wrapper (<c>w:sdt</c>, <c>w:customXml</c>): two ranges, one crossing the opening tag
+    /// and one crossing the closing tag. The move flavours sit inside a named move range whose
+    /// content marks identify the move.</summary>
     private static readonly HashSet<XName> StructuredRangeNames = new()
     {
         W.customXmlDelRangeStart, W.customXmlDelRangeEnd,
         W.customXmlInsRangeStart, W.customXmlInsRangeEnd,
-    };
-
-    private static readonly HashSet<XName> UnsupportedRangeNames = new()
-    {
         W.customXmlMoveFromRangeStart, W.customXmlMoveFromRangeEnd,
         W.customXmlMoveToRangeStart, W.customXmlMoveToRangeEnd,
     };
@@ -284,6 +288,48 @@ internal static class RevisionOps
                     "invalid_revision_id",
                     "A live revision marker has a nonnumeric w:id and cannot be addressed safely.");
                 continue;
+            }
+
+            var mathMarks = group.Units.Where(u => u.Kind == UnitKind.MathControlMark).ToList();
+            if (mathMarks.Count > 0)
+            {
+                if (mathMarks.Any(unit => unit.StructuredWrapper is null))
+                {
+                    group.ResolutionStatus = RevisionResolutionStatus.Malformed;
+                    group.Diagnostic = new RevisionDiagnostic(
+                        "orphan_math_control_revision",
+                        "A math control-character mark is not carried by the m:ctrlPr of a math object's property set.");
+                    continue;
+                }
+
+                if (mathMarks.Any(unit => unit.Element.Elements().Any(child => child.Name != W.rPr)))
+                {
+                    group.ResolutionStatus = RevisionResolutionStatus.Unsupported;
+                    group.Diagnostic = new RevisionDiagnostic(
+                        "unsupported_math_control_payload",
+                        "A math control-character mark carries nested revision markup (a property change on the inserted control character) that cannot be selectively resolved.");
+                    continue;
+                }
+
+                // The object's existence follows its control character, so resolving the mark
+                // removes the whole object in one direction. Every piece of equation text inside
+                // must therefore be revised the same way; otherwise that direction would drop
+                // text the document still shows (or resurrect text it does not).
+                var wrapperName = group.Type == TypeInsert ? W.ins : W.del;
+                bool unrevisedText = mathMarks.Select(unit => unit.StructuredWrapper!)
+                    .Any(owner => owner.Descendants()
+                        .Where(text => text.Name == M.t || text.Name == W.t)
+                        .Any(text => !text.Ancestors()
+                            .TakeWhile(ancestor => !ReferenceEquals(ancestor, owner))
+                            .Any(ancestor => ancestor.Name == wrapperName)));
+                if (unrevisedText)
+                {
+                    group.ResolutionStatus = RevisionResolutionStatus.Unsupported;
+                    group.Diagnostic = new RevisionDiagnostic(
+                        "unrevised_math_control_payload",
+                        "A revised math control character owns equation text that is not revised the same way; resolving it would drop or resurrect that text.");
+                    continue;
+                }
             }
 
             if (group.Family == RevisionFamily.Move)
@@ -693,7 +739,7 @@ internal static class RevisionOps
             // Content-control envelope ranges are paired and validated in a dedicated
             // pass. Treating their starts as ordinary adjacent units loses the two-pair
             // topology that identifies the wrapper whose existence is revised.
-            if (StructuredRangeNames.Contains(n) || UnsupportedRangeNames.Contains(n))
+            if (StructuredRangeNames.Contains(n))
                 continue;
             if (n == W.moveFromRangeStart || n == W.moveToRangeStart)
             {
@@ -776,6 +822,14 @@ internal static class RevisionOps
                 });
                 continue;
             }
+            if ((n == W.ins || n == W.del) && child.Parent?.Name == M.ctrlPr)
+            {
+                // The mark's payload is the control character's own w:rPr (or, in the
+                // nested CT_MathCtrlIns form, a property change on it) — never document
+                // content — so it is not walked. ValidateGroups fails the nested form closed.
+                sink.Add(MakeMathControlUnit(child, paragraph, markedRow, markedRowType));
+                continue;
+            }
             if ((n == W.ins || n == W.del || n == W.moveFrom || n == W.moveTo) && IsContentWrapper(child))
             {
                 sink.Add(MakeUnit(child, UnitKind.Content, paragraph, markedRow, markedRowType, ctx));
@@ -850,13 +904,14 @@ internal static class RevisionOps
 
         WalkChildren(p.Elements().Where(e => e.Name != W.pPr), ctx, p, markedRow, markedRowType, sink);
 
-        // The paragraph-mark revision is emitted LAST: the pilcrow sits at the end of the
+        // The paragraph-mark revisions are emitted LAST: the pilcrow sits at the end of the
         // paragraph, which is what lets a fully inserted/deleted paragraph — runs plus
-        // mark plus the next paragraph's runs — group into one revision.
-        var mark = pPr?.Element(W.rPr)?.Elements()
-            .FirstOrDefault(e => RevWrapperNames.Contains(e.Name));
-        if (mark is not null)
-            sink.Add(MakeUnit(mark, UnitKind.ParaMark, p, markedRow, markedRowType, ctx));
+        // mark plus the next paragraph's runs — group into one revision. CT_ParaRPr admits
+        // one mark of each kind, and Word does stack them: a pilcrow inserted by one author
+        // and later deleted by another carries both, each its own revision.
+        if (pPr?.Element(W.rPr) is { } markRPr)
+            foreach (var mark in markRPr.Elements().Where(e => RevWrapperNames.Contains(e.Name)))
+                sink.Add(MakeUnit(mark, UnitKind.ParaMark, p, markedRow, markedRowType, ctx));
     }
 
     private static void WalkRow(XElement tr, WalkCtx ctx, List<RevisionUnit> sink)
@@ -892,12 +947,61 @@ internal static class RevisionOps
 
     /// <summary>A revision wrapper is CONTENT when its parent isn't a property container —
     /// <c>w:rPr</c> holds paragraph-mark revisions, <c>w:trPr</c> row marks,
-    /// <c>w:numPr</c>/<c>m:ctrlPr</c> revision flavors this v1 does not enumerate.</summary>
+    /// <c>w:numPr</c> numbering-property insertions, <c>m:ctrlPr</c> math control-character
+    /// marks; each is inventoried by its own branch.</summary>
     private static bool IsContentWrapper(XElement el)
     {
         var pn = el.Parent?.Name;
         return pn != W.rPr && pn != W.trPr && pn != W.numPr && pn != M.ctrlPr;
     }
+
+    /// <summary>
+    /// A mark under <c>m:ctrlPr</c> revises the control character of the math object whose
+    /// property set holds it — the fraction bar, radical sign, delimiters — which is how Word
+    /// tracks the insertion or deletion of the object itself (the runs inside carry their own
+    /// marks). The unit carries that object as its wrapper; a <c>m:ctrlPr</c> that is not the
+    /// property set of a math object yields none and is reported as orphaned.
+    /// </summary>
+    private static RevisionUnit MakeMathControlUnit(
+        XElement mark, XElement? paragraph, XElement? markedRow, string? markedRowType)
+    {
+        string type = mark.Name == W.ins ? TypeInsert : TypeDelete;
+        return new RevisionUnit
+        {
+            Element = mark,
+            Kind = UnitKind.MathControlMark,
+            Type = type,
+            Family = type == TypeInsert
+                ? RevisionFamily.ContentInsert
+                : RevisionFamily.ContentDelete,
+            Author = AuthorOf(mark),
+            Date = (string?)mark.Attribute(W.date),
+            Paragraph = paragraph,
+            MarkedRow = markedRowType == type ? markedRow : null,
+            Table = mark.Ancestors(W.tbl).FirstOrDefault(),
+            StructuredWrapper = MathObjectOf(mark),
+            Wid = WidOf(mark),
+            NativeId = (string?)mark.Attribute(W.id),
+        };
+    }
+
+    /// <summary>The math object owning a <c>m:ctrlPr</c> mark: <c>m:ctrlPr</c> sits in the
+    /// object's <c>m:*Pr</c> property set, never anywhere else in a conformant document.</summary>
+    private static XElement? MathObjectOf(XElement mark)
+    {
+        var properties = mark.Parent?.Parent;
+        var owner = properties?.Parent;
+        return properties is not null && owner is not null
+            && properties.Name.Namespace == M.m
+            && properties.Name.LocalName.EndsWith("Pr", StringComparison.Ordinal)
+            && owner.Name.Namespace == M.m
+            && owner.Name != M.oMath && owner.Name != M.oMathPara
+            ? owner
+            : null;
+    }
+
+    private static bool IsInlineContentUnit(RevisionUnit unit) =>
+        unit.Kind is UnitKind.Content or UnitKind.MathControlMark;
 
     private static RevisionUnit MakeUnit(XElement el, UnitKind kind, XElement? paragraph,
         XElement? markedRow, string? markedRowType, WalkCtx ctx)
@@ -1057,7 +1161,7 @@ internal static class RevisionOps
                 continue;
             }
 
-            if ((u.Kind == UnitKind.Content || u.Kind == UnitKind.ParaMark) && u.MarkedRow is not null
+            if ((IsInlineContentUnit(u) || u.Kind == UnitKind.ParaMark) && u.MarkedRow is not null
                 && rowGroupByTr.TryGetValue(u.MarkedRow, out var hostRow) && hostRow.Type == u.Type
                 && hostRow.Author == u.Author && hostRow.Date == u.Date
                 && hostRow.DateUtc == DateUtcOf(u.Element))
@@ -1135,9 +1239,14 @@ internal static class RevisionOps
     }
 
     /// <summary>
-    /// Recognize the exact two-range topology Word uses to revise an SDT envelope.
-    /// Any unpaired, duplicated, or topologically misplaced marker remains visible as
-    /// a malformed/ambiguous registry entry instead of being silently ignored.
+    /// Recognize the two-range topology Word uses to revise the existence of a structured
+    /// wrapper: range A crosses the opening tag (starts before the wrapper, ends as the first
+    /// thing inside its content), range B crosses the closing tag (starts as the last thing
+    /// inside, ends after the wrapper). Insert/delete envelopes become their own entry; a move
+    /// envelope joins the named move whose content marks live inside the wrapper, so source
+    /// and destination wrappers resolve with the move. Anything else — an unpaired, duplicated,
+    /// or misplaced marker — stays visible as a malformed/ambiguous entry that names the
+    /// exact defect instead of being silently ignored.
     /// </summary>
     private static void AddStructuredRangeGroups(
         XElement root, int partIndex, List<RevisionGroup> groups)
@@ -1145,33 +1254,44 @@ internal static class RevisionOps
         var allMarkers = root.Descendants()
             .Where(e => StructuredRangeNames.Contains(e.Name))
             .ToList();
+        // A range id used by more than one start or more than one end cannot pair reliably;
+        // it must not be claimed by an envelope either, or the surplus marker would masquerade
+        // as an unpaired one.
+        var duplicateIds = allMarkers
+            .GroupBy(m => (Family: RangeFamily(m.Name), Id: (string?)m.Attribute(W.id),
+                Start: IsRangeStart(m)))
+            .Where(g => g.Count() > 1)
+            .Select(g => (g.Key.Family, g.Key.Id))
+            .ToHashSet();
         var used = new HashSet<XElement>();
+        var unownedMoveEnvelopes = new HashSet<XElement>();
 
-        foreach (var sdt in root.Descendants(W.sdt))
+        foreach (var wrapper in root.Descendants()
+            .Where(e => e.Name == W.sdt || e.Name == W.customXml))
         {
-            var content = sdt.Element(W.sdtContent);
+            var content = WrapperContentContainer(wrapper);
             if (content is null) continue;
 
-            var before = sdt.ElementsBeforeSelf().LastOrDefault();
-            var after = sdt.ElementsAfterSelf().FirstOrDefault();
-            var firstInside = content.Elements().FirstOrDefault();
-            var lastInside = content.Elements().LastOrDefault();
+            var before = EnvelopeNeighbor(wrapper.ElementsBeforeSelf().Reverse());
+            var after = EnvelopeNeighbor(wrapper.ElementsAfterSelf());
+            var firstInside = EnvelopeNeighbor(content.Elements());
+            var lastInside = EnvelopeNeighbor(content.Elements().Reverse());
             if (before is null || after is null || firstInside is null || lastInside is null)
                 continue;
+            if (!IsRangeStart(before) || !StructuredRangeNames.Contains(before.Name)) continue;
 
-            bool isInsert = before.Name == W.customXmlInsRangeStart;
-            bool isDelete = before.Name == W.customXmlDelRangeStart;
-            if (!isInsert && !isDelete) continue;
-
-            var startName = isInsert ? W.customXmlInsRangeStart : W.customXmlDelRangeStart;
-            var endName = isInsert ? W.customXmlInsRangeEnd : W.customXmlDelRangeEnd;
+            var startName = before.Name;
+            var endName = RangeEndName(startName);
+            var family = RangeFamily(startName);
             var firstId = (string?)before.Attribute(W.id);
             var secondId = (string?)lastInside.Attribute(W.id);
             if (firstInside.Name != endName || lastInside.Name != startName || after.Name != endName
                 || string.IsNullOrEmpty(firstId) || string.IsNullOrEmpty(secondId)
                 || string.Equals(firstId, secondId, StringComparison.Ordinal)
                 || (string?)firstInside.Attribute(W.id) != firstId
-                || (string?)after.Attribute(W.id) != secondId)
+                || (string?)after.Attribute(W.id) != secondId
+                || duplicateIds.Contains((family, firstId))
+                || duplicateIds.Contains((family, secondId)))
             {
                 continue;
             }
@@ -1185,43 +1305,66 @@ internal static class RevisionOps
                 || DateUtcOf(lastInside) != dateUtc)
                 continue;
 
-            var family = isInsert
-                ? RevisionFamily.ContentControlInsert
-                : RevisionFamily.ContentControlDelete;
+            var markers = new[] { before, firstInside, lastInside, after };
             var unit = new RevisionUnit
             {
                 Element = before,
                 Kind = UnitKind.StructuredRange,
-                Type = isInsert ? TypeInsert : TypeDelete,
+                Type = family == RevisionFamily.ContentControlInsert ? TypeInsert
+                    : family == RevisionFamily.ContentControlDelete ? TypeDelete
+                    : TypeMove,
                 Family = family,
                 Author = author,
                 Date = date,
-                Paragraph = sdt.AncestorsAndSelf(W.p).FirstOrDefault(),
-                MarkedCell = sdt.Ancestors(W.tc).FirstOrDefault(),
-                MarkedRow = sdt.Ancestors(W.tr).FirstOrDefault(),
-                Table = sdt.Ancestors(W.tbl).FirstOrDefault(),
-                StructuredWrapper = sdt,
+                Paragraph = wrapper.AncestorsAndSelf(W.p).FirstOrDefault(),
+                MarkedCell = wrapper.Ancestors(W.tc).FirstOrDefault(),
+                MarkedRow = wrapper.Ancestors(W.tr).FirstOrDefault(),
+                Table = wrapper.Ancestors(W.tbl).FirstOrDefault(),
+                StructuredWrapper = wrapper,
                 Wid = WidOf(before),
                 NativeId = firstId,
             };
+
+            if (family == RevisionFamily.Move)
+            {
+                // The wrapper belongs to whichever named move revises its content on this side.
+                var side = startName == W.customXmlMoveFromRangeStart ? W.moveFrom : W.moveTo;
+                var owner = groups.FirstOrDefault(g => g.PartIndex == partIndex
+                    && g.Family == RevisionFamily.Move
+                    && g.Units.Any(u => u.Element.Name == side
+                        && u.Element.Ancestors().Contains(wrapper)));
+                if (owner is null)
+                {
+                    unownedMoveEnvelopes.UnionWith(markers);
+                    continue;
+                }
+                owner.Units.Add(unit);
+                owner.RangeMarkers.AddRange(markers);
+                used.UnionWith(markers);
+                continue;
+            }
+
             var group = NewGroup(unit, partIndex);
-            group.RangeMarkers.AddRange(new[] { before, firstInside, lastInside, after });
+            group.RangeMarkers.AddRange(markers);
             groups.Add(group);
-            used.UnionWith(group.RangeMarkers);
+            used.UnionWith(markers);
         }
 
         foreach (var markerGroup in allMarkers.Where(m => !used.Contains(m))
             .GroupBy(m => (Family: RangeFamily(m.Name), Id: (string?)m.Attribute(W.id))))
         {
             var markers = markerGroup.ToList();
-            var starts = markers.Where(m => m.Name.LocalName.EndsWith("RangeStart", StringComparison.Ordinal)).ToList();
+            var starts = markers.Where(IsRangeStart).ToList();
+            var ends = markers.Where(m => !IsRangeStart(m)).ToList();
             var family = markerGroup.Key.Family;
             var exemplar = starts.FirstOrDefault() ?? markers[0];
             var unit = new RevisionUnit
             {
                 Element = exemplar,
                 Kind = UnitKind.StructuredRange,
-                Type = family == RevisionFamily.ContentControlInsert ? TypeInsert : TypeDelete,
+                Type = family == RevisionFamily.ContentControlInsert ? TypeInsert
+                    : family == RevisionFamily.ContentControlDelete ? TypeDelete
+                    : TypeMove,
                 Family = family,
                 Author = AuthorOf(exemplar),
                 Date = (string?)exemplar.Attribute(W.date),
@@ -1234,16 +1377,40 @@ internal static class RevisionOps
             };
             var group = NewGroup(unit, partIndex);
             group.RangeMarkers.AddRange(markers);
-            bool duplicate = markers.Count(m => m.Name.LocalName.EndsWith("RangeStart", StringComparison.Ordinal)) > 1
-                || markers.Count(m => m.Name.LocalName.EndsWith("RangeEnd", StringComparison.Ordinal)) > 1;
-            group.ResolutionStatus = duplicate
-                ? RevisionResolutionStatus.Ambiguous
-                : RevisionResolutionStatus.Malformed;
-            group.Diagnostic = new RevisionDiagnostic(
-                duplicate ? "duplicate_range_id" : "malformed_range_topology",
-                duplicate
-                    ? "Content-control revision range id is duplicated in its owning part."
-                    : "Content-control revision ranges do not form Word's exact two-pair SDT envelope topology.");
+            var label = PrefixedName(exemplar.Name)
+                .Replace("RangeStart", "Range", StringComparison.Ordinal)
+                .Replace("RangeEnd", "Range", StringComparison.Ordinal)
+                + " w:id=" + (markerGroup.Key.Id ?? "(none)");
+            if (starts.Count > 1 || ends.Count > 1)
+            {
+                group.ResolutionStatus = RevisionResolutionStatus.Ambiguous;
+                group.Diagnostic = new RevisionDiagnostic(
+                    "duplicate_range_id",
+                    $"{label} has {starts.Count} start and {ends.Count} end markers in its owning part; a range id must pair exactly one of each.");
+            }
+            else if (starts.Count == 0 || ends.Count == 0)
+            {
+                group.ResolutionStatus = RevisionResolutionStatus.Malformed;
+                group.Diagnostic = new RevisionDiagnostic(
+                    "unpaired_range_marker",
+                    starts.Count == 0
+                        ? $"{label} has a RangeEnd but no RangeStart in its owning part."
+                        : $"{label} has a RangeStart but no RangeEnd in its owning part.");
+            }
+            else if (markers.All(unownedMoveEnvelopes.Contains))
+            {
+                group.ResolutionStatus = RevisionResolutionStatus.Malformed;
+                group.Diagnostic = new RevisionDiagnostic(
+                    "orphan_custom_xml_move_range",
+                    $"{label} envelopes a wrapper whose content carries no {(family == RevisionFamily.Move && exemplar.Name == W.customXmlMoveFromRangeStart ? "w:moveFrom" : "w:moveTo")} mark, so no named move owns it.");
+            }
+            else
+            {
+                group.ResolutionStatus = RevisionResolutionStatus.Malformed;
+                group.Diagnostic = new RevisionDiagnostic(
+                    "malformed_range_topology",
+                    $"{label} is paired but is not one half of a complete two-range envelope around a w:sdt or w:customXml wrapper; the other half is missing, duplicated, or misplaced.");
+            }
             groups.Add(group);
         }
     }
@@ -1251,39 +1418,40 @@ internal static class RevisionOps
     private static RevisionFamily RangeFamily(XName name) =>
         name == W.customXmlInsRangeStart || name == W.customXmlInsRangeEnd
             ? RevisionFamily.ContentControlInsert
-            : RevisionFamily.ContentControlDelete;
+        : name == W.customXmlDelRangeStart || name == W.customXmlDelRangeEnd
+            ? RevisionFamily.ContentControlDelete
+        : RevisionFamily.Move;
+
+    private static bool IsRangeStart(XElement marker) =>
+        marker.Name.LocalName.EndsWith("RangeStart", StringComparison.Ordinal);
+
+    private static XName RangeEndName(XName startName) =>
+        startName.Namespace + startName.LocalName.Replace(
+            "RangeStart", "RangeEnd", StringComparison.Ordinal);
+
+    /// <summary>The element whose children are the wrapper's payload: <c>w:sdtContent</c> for
+    /// a content control, the element itself for a <c>w:customXml</c> block or run (its
+    /// <c>w:customXmlPr</c> child is properties, not payload).</summary>
+    private static XElement? WrapperContentContainer(XElement wrapper) =>
+        wrapper.Name == W.sdt ? wrapper.Element(W.sdtContent)
+        : wrapper.Name == W.customXml ? wrapper
+        : null;
+
+    private static bool IsWrapperProperties(XElement element) => element.Name == W.customXmlPr;
+
+    /// <summary>Elements that may sit between an envelope marker and the wrapper it revises
+    /// without breaking the envelope: bookmark and comment boundaries (Word stamps the ones it
+    /// pushed aside with <c>w:displacedByCustomXml</c>), proofing marks, permission boundaries,
+    /// and the named move range markers Word places just inside a moved wrapper's envelope.</summary>
+    private static bool IsEnvelopeTransparent(XElement element) =>
+        (IgnorableBetween.Contains(element.Name) && element.Name != W.pPr)
+        || element.Name == W.permStart || element.Name == W.permEnd;
+
+    private static XElement? EnvelopeNeighbor(IEnumerable<XElement> candidates) =>
+        candidates.FirstOrDefault(e => !IsEnvelopeTransparent(e) && !IsWrapperProperties(e));
 
     private static void AddUnsupportedGroups(XElement root, int partIndex, List<RevisionGroup> groups)
     {
-        foreach (var markerGroup in root.Descendants()
-            .Where(e => UnsupportedRangeNames.Contains(e.Name))
-            .GroupBy(e => ((string?)e.Attribute(W.id), e.Name.LocalName.Contains("MoveFrom", StringComparison.Ordinal))))
-        {
-            var markers = markerGroup.ToList();
-            var exemplar = markers.FirstOrDefault(m => m.Name.LocalName.EndsWith("RangeStart", StringComparison.Ordinal))
-                ?? markers[0];
-            var unit = new RevisionUnit
-            {
-                Element = exemplar,
-                Kind = UnitKind.Unsupported,
-                Type = TypeMove,
-                Family = RevisionFamily.Unsupported,
-                Author = AuthorOf(exemplar),
-                Date = (string?)exemplar.Attribute(W.date),
-                Paragraph = exemplar.Ancestors(W.p).FirstOrDefault(),
-                Table = exemplar.Ancestors(W.tbl).FirstOrDefault(),
-                Wid = WidOf(exemplar),
-                NativeId = (string?)exemplar.Attribute(W.id),
-            };
-            var group = NewGroup(unit, partIndex);
-            group.RangeMarkers.AddRange(markers);
-            group.ResolutionStatus = RevisionResolutionStatus.Unsupported;
-            group.Diagnostic = new RevisionDiagnostic(
-                "unsupported_custom_xml_move_range",
-                "customXml move-range revisions are listed but cannot be selectively resolved.");
-            groups.Add(group);
-        }
-
         // Inventory every other recognized revision marker that the selective resolver did
         // not claim. This is deliberately a final pass: silently omitting a live family makes
         // accept-all report success while leaving tracked markup behind. Archived markers in
@@ -1299,7 +1467,10 @@ internal static class RevisionOps
             // they sit beneath a deletion wrapper already claimed by the registry.
             // Orphan instances still need an explicit fail-closed entry.
             .Where(marker => !IsClaimedDeletionPayload(marker, represented))
-            .Where(marker => !marker.Ancestors().Any(ancestor => PropsChangeNames.Contains(ancestor.Name))))
+            .Where(marker => !marker.Ancestors().Any(ancestor => PropsChangeNames.Contains(ancestor.Name)))
+            // Markup nested under a claimed mark the walker deliberately did not enter (the
+            // CT_MathCtrlIns payload) belongs to that entry, whose diagnostic already names it.
+            .Where(marker => !marker.Ancestors().Any(represented.Contains)))
         {
             var type = marker.Name == W.ins ? TypeInsert
                 : marker.Name == W.del || marker.Name == W.delText
@@ -1325,14 +1496,53 @@ internal static class RevisionOps
                 NativeId = (string?)marker.Attribute(W.id),
             };
             var group = NewGroup(unit, partIndex);
-            group.ResolutionStatus = RevisionResolutionStatus.Unsupported;
-            group.Diagnostic = new RevisionDiagnostic(
-                "unsupported_revision_family",
-                $"{marker.Name} is recognized tracked-change markup but cannot be selectively resolved.");
+            (group.ResolutionStatus, group.Diagnostic) = ClassifyUnclaimedMarker(marker);
             groups.Add(group);
             represented.Add(marker);
         }
     }
+
+    /// <summary>
+    /// A recognized marker the selective resolver did not claim is either a live family this
+    /// resolver has no semantics for (<see cref="RevisionResolutionStatus.Unsupported"/>) or
+    /// markup the schema never allows in that position
+    /// (<see cref="RevisionResolutionStatus.Malformed"/>). The distinction matters to a
+    /// caller: an unsupported family is a resolver gap, an illegal carrier is a producer bug
+    /// whose legal spelling the diagnostic names. Both fail closed.
+    /// </summary>
+    private static (RevisionResolutionStatus Status, RevisionDiagnostic Diagnostic)
+        ClassifyUnclaimedMarker(XElement marker)
+    {
+        var parent = marker.Parent?.Name;
+        var name = PrefixedName(marker.Name);
+        if (RevWrapperNames.Contains(marker.Name))
+        {
+            // CT_RPr — a run's, style's, or control's property set — carries no revision
+            // marks; only CT_ParaRPr, the w:rPr under w:pPr, does. A revised run is wrapped
+            // by the mark, never annotated by it.
+            if (parent == W.rPr && marker.Parent!.Parent?.Name != W.pPr)
+                return (RevisionResolutionStatus.Malformed, new RevisionDiagnostic(
+                    "invalid_revision_carrier",
+                    $"{name} is not a legal child of a run's w:rPr; a revised run is wrapped by {name} outside the w:r."));
+
+            // CT_NumPr admits w:ins and w:numberingChange only. Removed numbering is
+            // archived by w:pPrChange, so a deletion or move mark here has no defined meaning.
+            if (parent == W.numPr && marker.Name != W.ins)
+                return (RevisionResolutionStatus.Malformed, new RevisionDiagnostic(
+                    "invalid_revision_carrier",
+                    $"{name} is not a legal child of w:numPr; removed numbering is archived in w:pPrChange."));
+        }
+
+        return (RevisionResolutionStatus.Unsupported, new RevisionDiagnostic(
+            "unsupported_revision_family",
+            $"{name} is recognized tracked-change markup but cannot be selectively resolved."));
+    }
+
+    private static string PrefixedName(XName name) =>
+        name.Namespace == W.w ? "w:" + name.LocalName
+        : name.Namespace == M.m ? "m:" + name.LocalName
+        : name.Namespace == W14.w14 ? "w14:" + name.LocalName
+        : name.ToString();
 
     /// <summary>True for every live tracked-change carrier the native revision registry
     /// inventories, including malformed/orphan payload markers. Structural clone operations
@@ -1343,7 +1553,6 @@ internal static class RevisionOps
         return RevWrapperNames.Contains(name)
             || MoveRangeNames.Contains(name)
             || StructuredRangeNames.Contains(name)
-            || UnsupportedRangeNames.Contains(name)
             || UnsupportedConflictNames.Contains(name)
             || PropsChangeNames.Contains(name)
             || name == W.cellIns || name == W.cellDel || name == W.cellMerge
@@ -1577,7 +1786,7 @@ internal static class RevisionOps
 
     private static bool Contiguous(RevisionUnit prev, RevisionUnit cur)
     {
-        if (prev.Kind == UnitKind.Content && cur.Kind == UnitKind.Content)
+        if (IsInlineContentUnit(prev) && IsInlineContentUnit(cur))
         {
             if (prev.Paragraph is null || cur.Paragraph is null)
                 return prev.Element.Parent == cur.Element.Parent
@@ -1589,13 +1798,13 @@ internal static class RevisionOps
             if (a == b) return true; // both nested inside the same container (e.g. one hyperlink)
             return OnlyIgnorableBetween(a, b);
         }
-        if (prev.Kind == UnitKind.Content && cur.Kind == UnitKind.ParaMark)
+        if (IsInlineContentUnit(prev) && cur.Kind == UnitKind.ParaMark)
         {
             if (prev.Paragraph != cur.Paragraph || cur.Paragraph is null) return false;
             var a = TopLevelWithin(cur.Paragraph, prev.Element);
             return a is not null && a.ElementsAfterSelf().All(IsIgnorableBetween);
         }
-        if (prev.Kind == UnitKind.ParaMark && cur.Kind == UnitKind.Content)
+        if (prev.Kind == UnitKind.ParaMark && IsInlineContentUnit(cur))
         {
             if (prev.Paragraph is null || cur.Paragraph is null) return false;
             if (!IsNextParagraph(prev.Paragraph, cur.Paragraph)) return false;
@@ -1749,11 +1958,27 @@ internal static class RevisionOps
         // A move pair carries the same text on both sides; render the source side only.
         bool moveFromOnly = g.Type == TypeMove
             && g.Units.Any(u => u.Element.Name == W.moveFrom);
+        // A math object's text is rendered once, by its outermost revised control mark; the
+        // run and nested-object units inside it are its payload, not further text.
+        var mathOwners = g.Units.Where(u => u.Kind == UnitKind.MathControlMark)
+            .Select(u => u.StructuredWrapper).Where(owner => owner is not null)
+            .Select(owner => owner!).ToHashSet();
         foreach (var u in g.Units)
         {
             if (moveFromOnly && u.Element.Name != W.moveFrom) continue;
+            if (u.Element.Ancestors().Any(ancestor => mathOwners.Contains(ancestor)
+                    && !ReferenceEquals(ancestor, u.StructuredWrapper)))
+                continue;
             switch (u.Kind)
             {
+                case UnitKind.MathControlMark:
+                    if (u.StructuredWrapper is { } mathObject)
+                        complete &= AppendVisibleText(
+                            mathObject,
+                            u.Element.Name == W.del ? W.delText : W.t,
+                            sb,
+                            maximum);
+                    break;
                 case UnitKind.Content:
                     if (!AppendVisibleText(
                             u.Element,
@@ -1804,7 +2029,8 @@ internal static class RevisionOps
         {
             var n = child.Name;
             if (n == W.pPr || n == W.rPr || n == W.trPr || n == W.tcPr || n == W.tblPr) continue;
-            if (n == textName)
+            // Math text is never renamed for deletion, so it reads the same in either state.
+            if (n == textName || n == M.t)
             {
                 var value = child.Value;
                 if (sb.Length > maximumCharacters - value.Length) return false;
@@ -1861,10 +2087,21 @@ internal static class RevisionOps
             else RejectProps(u.Element, g.PartUri, protectedEmptyContainerKeys);
         }
 
-        foreach (var u in g.Units.Where(u => u.Kind == UnitKind.Content))
+        foreach (var u in g.Units.Where(IsInlineContentUnit))
         {
             if (Detached(u.Element)) continue;
             if (u.Paragraph is not null) touchedParagraphs.Add(u.Paragraph);
+            if (u.Kind == UnitKind.MathControlMark)
+            {
+                // The object's existence follows its control character. Its inner runs are
+                // units of this same group and detach with it; ValidateGroups proved none of
+                // their text would have survived on its own.
+                if (ContentSurvives(u.Element.Name, accept))
+                    UnwrapWrapper(u.Element, restoreDeleted: false);
+                else
+                    u.StructuredWrapper!.Remove();
+                continue;
+            }
             if (ContentSurvives(u.Element.Name, accept))
                 // A surviving w:del OR w:moveFrom un-deletes its payload: the comparison
                 // engine serializes move-source text as w:delText (delete-grade), so a
@@ -2159,26 +2396,29 @@ internal static class RevisionOps
     private static void ResolveStructuredWrapper(
         RevisionGroup group, bool accept, List<XElement> removedElements)
     {
-        if (group.Family != RevisionFamily.ContentControlInsert
-            && group.Family != RevisionFamily.ContentControlDelete)
-            return;
+        foreach (var unit in group.Units.Where(u => u.Kind == UnitKind.StructuredRange))
+        {
+            var wrapper = unit.StructuredWrapper;
+            if (wrapper is null || Detached(wrapper)) continue;
 
-        var wrapper = group.Units.FirstOrDefault(u => u.Kind == UnitKind.StructuredRange)
-            ?.StructuredWrapper;
-        if (wrapper is null || Detached(wrapper)) return;
+            // An envelope tracks the wrapper's existence with the same matrix as content: an
+            // inserted wrapper or a move destination survives accept, a deleted wrapper or a
+            // move source survives reject.
+            bool insertLike = unit.Element.Name == W.customXmlInsRangeStart
+                || unit.Element.Name == W.customXmlMoveToRangeStart;
+            if (insertLike ? accept : !accept) continue;
 
-        bool wrapperSurvives = group.Family == RevisionFamily.ContentControlInsert
-            ? accept
-            : !accept;
-        if (wrapperSurvives) return;
-
-        var content = wrapper.Element(W.sdtContent);
-        // Preserve every payload node, including independently owned nested range revisions.
-        // The caller removes only this group's four exact marker objects after unwrapping.
-        var nodes = content?.Nodes().ToList() ?? new List<XNode>();
-        foreach (var node in nodes) node.Remove();
-        wrapper.ReplaceWith(nodes);
-        removedElements.Add(wrapper);
+            // Preserve every payload node, including independently owned nested range
+            // revisions; only the wrapper and its own properties go. The caller removes this
+            // group's exact marker objects after unwrapping.
+            var container = WrapperContentContainer(wrapper);
+            var nodes = container?.Nodes()
+                .Where(node => node is not XElement element || !IsWrapperProperties(element))
+                .ToList() ?? new List<XNode>();
+            foreach (var node in nodes) node.Remove();
+            wrapper.ReplaceWith(nodes);
+            removedElements.Add(wrapper);
+        }
     }
 
     /// <summary>

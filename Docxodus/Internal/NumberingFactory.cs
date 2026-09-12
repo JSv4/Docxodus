@@ -60,29 +60,7 @@ internal static class NumberingFactory
     /// </summary>
     public static int EnsureNumbering(WordprocessingDocument doc, ListFormat fmt)
     {
-        var main = doc.MainDocumentPart ?? throw new InvalidOperationException("no MainDocumentPart");
-        var part = main.NumberingDefinitionsPart;
-        if (part is null)
-        {
-            part = main.AddNewPart<NumberingDefinitionsPart>();
-            part.PutXDocument(new XDocument(
-                new XElement(W + "numbering", new XAttribute(XNamespace.Xmlns + "w", W.NamespaceName))));
-        }
-
-        var root = part.GetXDocument().Root!;
-        string nsid = NsidFor(fmt);
-
-        // Find our previously-synthesized abstractNum (by marker nsid), or build one.
-        var abstractNum = root.Elements(W + "abstractNum")
-            .FirstOrDefault(a => (string?)a.Element(W + "nsid")?.Attribute(W + "val") == nsid);
-        if (abstractNum is null)
-        {
-            int absId = NextId(root, "abstractNum", "abstractNumId");
-            abstractNum = BuildAbstractNum(fmt, absId, nsid);
-            WordprocessingMLUtil.InsertNumberingChildInOrder(root, abstractNum);
-        }
-
-        var abstractId = (string)abstractNum.Attribute(W + "abstractNumId")!;
+        var (part, root, abstractId) = EnsureAbstractNum(doc, fmt);
 
         // Reuse an existing w:num pointing at our abstractNum, or create one.
         var num = root.Elements(W + "num")
@@ -100,6 +78,56 @@ internal static class NumberingFactory
         // projected parts (body/headers/...), not the numbering part we just mutated.
         part.PutXDocument();
         return (int)num.Attribute(W + "numId")!;
+    }
+
+    /// <summary>
+    /// Create a NEW <c>w:num</c> instance of <paramref name="fmt"/>'s definition that starts at
+    /// <paramref name="start"/> on level 0 — one list, sequenced on its own, the way Word gives
+    /// each list its own instance. Unlike <see cref="EnsureNumbering"/> it mints no shared
+    /// instance, so an instance that stops being referenced can be pruned together with the
+    /// definition it was the only user of. Returns the new numId.
+    /// </summary>
+    public static int CreateNumberingInstance(WordprocessingDocument doc, ListFormat fmt, int start)
+    {
+        var (part, root, abstractId) = EnsureAbstractNum(doc, fmt);
+        int numId = NextId(root, "num", "numId");
+        var num = new XElement(W + "num",
+            new XAttribute(W + "numId", numId),
+            new XElement(W + "abstractNumId", new XAttribute(W + "val", abstractId)),
+            new XElement(W + "lvlOverride",
+                new XAttribute(W + "ilvl", 0),
+                new XElement(W + "startOverride", new XAttribute(W + "val", start))));
+        WordprocessingMLUtil.InsertNumberingChildInOrder(root, num);
+        part.PutXDocument();
+        return numId;
+    }
+
+    /// <summary>Find our previously-synthesized abstractNum for <paramref name="fmt"/> (by
+    /// marker nsid) or build one, creating the numbering part when the document has none.</summary>
+    private static (NumberingDefinitionsPart Part, XElement Root, string AbstractId) EnsureAbstractNum(
+        WordprocessingDocument doc, ListFormat fmt)
+    {
+        var main = doc.MainDocumentPart ?? throw new InvalidOperationException("no MainDocumentPart");
+        var part = main.NumberingDefinitionsPart;
+        if (part is null)
+        {
+            part = main.AddNewPart<NumberingDefinitionsPart>();
+            part.PutXDocument(new XDocument(
+                new XElement(W + "numbering", new XAttribute(XNamespace.Xmlns + "w", W.NamespaceName))));
+        }
+
+        var root = part.GetXDocument().Root!;
+        string nsid = NsidFor(fmt);
+        var abstractNum = root.Elements(W + "abstractNum")
+            .FirstOrDefault(a => (string?)a.Element(W + "nsid")?.Attribute(W + "val") == nsid);
+        if (abstractNum is null)
+        {
+            int absId = NextId(root, "abstractNum", "abstractNumId");
+            abstractNum = BuildAbstractNum(fmt, absId, nsid);
+            WordprocessingMLUtil.InsertNumberingChildInOrder(root, abstractNum);
+        }
+
+        return (part, root, (string)abstractNum.Attribute(W + "abstractNumId")!);
     }
 
     /// <summary>
@@ -226,6 +254,31 @@ internal static class NumberingFactory
             new XElement(W + "lvlText", new XAttribute(W + "val", NumberedLvlText(paren, lvl))),
             new XElement(W + "lvlJc", new XAttribute(W + "val", "left")),
             pPr);
+    }
+
+    /// <summary>
+    /// The number format level <paramref name="ilvl"/> of <paramref name="numId"/> renders
+    /// with — an instance-level <c>w:lvlOverride/w:lvl</c> first, then the abstract
+    /// definition's level. Null when the instance, definition, or level cannot be found, which
+    /// includes definitions that only link a numbering style.
+    /// </summary>
+    internal static NumberFormat? ResolveNumberFormat(WordprocessingDocument doc, int numId, int ilvl)
+    {
+        var root = doc.MainDocumentPart?.NumberingDefinitionsPart?.GetXDocument().Root;
+        var num = root?.Elements(W + "num")
+            .FirstOrDefault(n => (string?)n.Attribute(W + "numId") == numId.ToString());
+        if (root is null || num is null) return null;
+        var level = ilvl.ToString();
+        var overrideLevel = num.Elements(W + "lvlOverride")
+            .FirstOrDefault(o => (string?)o.Attribute(W + "ilvl") == level)
+            ?.Element(W + "lvl");
+        var abstractId = (string?)num.Element(W + "abstractNumId")?.Attribute(W + "val");
+        var abstractLevel = root.Elements(W + "abstractNum")
+            .FirstOrDefault(a => (string?)a.Attribute(W + "abstractNumId") == abstractId)
+            ?.Elements(W + "lvl")
+            .FirstOrDefault(l => (string?)l.Attribute(W + "ilvl") == level);
+        var token = (string?)(overrideLevel ?? abstractLevel)?.Element(W + "numFmt")?.Attribute(W + "val");
+        return token is null ? null : NumberFormats.ParseOoxml(token);
     }
 
     /// <summary>

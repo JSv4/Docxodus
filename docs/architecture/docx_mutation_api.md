@@ -120,6 +120,46 @@ The same semantics reach `DocxSessionOps`/JSON, WASM and npm
 (`session.executeBatch`), stdio and Python (`session.execute_batch`), and MCP
 (`docxodus_mutations`).
 
+### Transaction ids: retry deduplication on every transport (issues #449, #761)
+
+An applying batch may carry a caller-chosen **transaction id** — a non-blank string of at most
+256 Unicode scalar values — so that a retry after a lost response does not apply the edit
+twice. One journal per live session owns the contract, whichever transport drives it:
+`Docxodus/Internal/MutationTransactions.cs`, held by `SessionRegistry` per handle (the MCP
+server installs its own configured instance there on open).
+
+- **Replay.** The first terminal response under an id — success, partial result, structured
+  failure, precondition failure, or a safely caught exception — is retained. An identical retry
+  returns that exact serialized `MutationBatchResult` before evaluating current preconditions
+  or running a step, so generated anchors, timestamps, versions, outcome, deltas and
+  `packageHash` are those of the original call. The result carries one extra top-level
+  `transaction: { schemaVersion: 1, transactionId, requestFingerprint }`.
+- **Identity.** The request fingerprint is SHA-256 over a canonical JSON rendering of the
+  transport's request object: root `sessionId`/`handle`/`transactionId` excluded, object keys
+  sorted, array order and string/number spelling kept, a missing root `mode` canonicalized as
+  `"atomic"`, duplicate keys rejected. Reusing an id for a different fingerprint returns
+  `transaction_conflict`; a known id whose response left bounded retention returns
+  `transaction_result_evicted`; an id bound to this request that never recorded a terminal
+  response returns `transaction_incomplete` (outcome unknown — inspect the document, retry
+  under a fresh id). Because each transport's request language differs (MCP `steps[].tool`,
+  the stdio host's `steps[].operation`, the browser's caller-supplied descriptor), an id is
+  scoped to the transport that minted it.
+- **Where it lives.** Stdio/Python: `execute_batch(steps, mode, transaction_id=...)`, the
+  host runs `DocxSessionOps.ExecuteBatchTransactional`. npm/WASM: the batch is composed in
+  JavaScript, so `session.executeBatch(steps, mode, { transactionId, request })` drives the
+  journal over the bridge — `BeginMutationTransaction` resolves the id (and returns the
+  terminal response for a replay or refusal), the client runs its steps, then
+  `CompleteMutationTransaction` retains the serialized result or `AbandonMutationTransaction`
+  retires the reservation if the batch could not produce one. `request` is the caller's own
+  serializable description of the batch and is what the fingerprint covers; pass the same
+  descriptor on a retry. MCP: `docxodus_mutations` with `transactionId`, unchanged.
+- **Lifecycle.** Preview batches reject transaction ids (`invalid_transaction`). Replay after
+  undo or redo returns the historical response without reapplying, undoing, redoing, or moving
+  a history cursor. Save keeps the journal; close clears it; reopening the same bytes starts a
+  new identity namespace. Retention is bounded per session by 128 full responses and 32 MiB of
+  retained text, then 1,024 response-less tombstones — after which a stale retry executes as a
+  fresh mutation. A structured validation failure is a terminal response and burns its id.
+
 ### Isolated previews
 
 `PreviewBatch(steps, mode, options)` runs the identical step delegates against a complete
@@ -258,7 +298,7 @@ We didn't pick CommonMark or GFM as the input language because the projector's s
 Two round-trip quirks worth knowing when you write tests against the markdown output:
 
 - **The projector escapes markdown punctuation in text content.** `-`, `*`, `_`, `` ` ``, `~`, `\`, and other characters that could be parsed as markdown are backslash-escaped (e.g., `RAWSIBLING-INSERTED` projects as `RAWSIBLING\-INSERTED`). Don't write literal `Contains(...)` assertions over hyphenated tokens; either strip backslashes from the projection or use tokens without markdown-significant characters.
-- **`InsertParagraph` with a bulleted markdown payload does not inherit list numbering.** A payload like `- item one` parses as a `BulletItem` block and the created anchor has kind `li`, but the inserted paragraph has no `w:numPr`, so Word renders it as a plain paragraph (and `SetListLevel` will return `AnchorWrongKind` because there is no numbering to adjust). To get a real bulleted item in v1, use `Raw.InsertXml` with a fragment derived from `Raw.GetXml(existingListItemAnchor)` so the `w:numPr` and numbering id come along for free. A first-class numbering-inheritance path is on the v2 list (see Known limits).
+- **List payloads create native numbering (issue #759).** A `- item` or `3. item` block written through `InsertParagraph`, `ReplaceText` or `ReplaceCellContent` gets a real `w:numPr` from the same owner `ApplyListFormat` uses, so the created anchor's kind `li` matches what Word shows. The rules: consecutive ordered items form one list on one `w:num` instance whose `w:startOverride` is the first marker's number, so `3. a` / `4. b` renders 3 and 4; a non-list block or a top-level bullet ends that list, and a later ordered list restarts on its own instance; bullets share the document's Docxodus bullet definition; indent maps to `w:ilvl`; and the payload's first list continues an adjacent list item of the same family (bullet or numbered) — the block before the insertion point, or, when the whole payload is one list, the block after it — synthesizing any level the continued definition lacks. On a paragraph that is already a list item, `ReplaceText` treats the marker as the projection's own spelling echoed back and leaves the numbering alone (use `ApplyListFormat` to change format); on a plain paragraph it promotes, and in tracked mode records the promotion as a `w:numPr/w:ins` mark. Footnote, endnote and comment payloads still carry no numbering. A backslash-escaped marker (`\- text`) stays literal.
 
 ## Anchor lifecycle
 
@@ -532,11 +572,16 @@ under it appear in `Modified`, without duplicates. A remaining structural
 fall-through that must be hard-removed appears in `Removed`; it is never silently
 omitted from both lists.
 
-`w:customXml` wrappers are deliberately unsupported in tracked bulk deletion.
-If any selected block contains one, the operation fails before taking an undo
-snapshot or changing the document with `IncompatibleElementType` and a message
-identifying `w:customXml`. This is the explicit unsupported branch of the
-custom-XML deletion contract; accepted-mode bulk deletion remains unchanged.
+Block `w:customXml` wrappers (issue #764) take the same envelope as block
+content controls: the wrapper is its own content container, so the two deletion
+ranges cross its opening and closing tags with `w:customXmlPr` left in schema
+position ahead of the inner range marker, and every payload block is tracked
+recursively. Nested and mixed `w:sdt`/`w:customXml` wrappers each receive their
+own envelope. The one shape still refused before mutation — with
+`IncompatibleElementType`, no undo snapshot, and an unchanged document — is
+run-level `w:customXml` inside a selected paragraph: the paragraph deleter marks
+direct-child runs only and would leave that wrapper's text undeleted.
+Accepted-mode bulk deletion is unchanged.
 
 ### `DeleteSection` — heading-bounded bulk removal
 
@@ -549,9 +594,9 @@ If the target heading has no sibling-heading boundary after it, the section
 extends to the end of the parent.
 
 Built on `DeleteRange` semantics via the shared `DeleteSiblingRangeCore` helper:
-same undo, same `EditResult` accounting, the same native `w:sdt` envelope and
-recursive payload markup, the same pre-mutation `w:customXml` refusal, and the
-same reported structural fall-through.
+same undo, same `EditResult` accounting, the same native `w:sdt`/`w:customXml`
+envelope and recursive payload markup, the same pre-mutation refusal of run-level
+`w:customXml`, and the same reported structural fall-through.
 
 ## Native hyperlinks and bookmarks
 
@@ -1482,7 +1527,7 @@ individual and bulk resolution:
 
 | Method | Description |
 |--------|-------------|
-| `ListRevisions()` | Read-only entries in document order across body, headers, footers, footnotes, and endnotes. Each carries an opaque stable `Id` (`rev2-…`), coarse `Type`, exact `Family`, native `ConstituentIds`, owning `PartUri`/canonical `Scope`, primary `AnchorId`, every `AffectedAnchor`, and a `ResolutionStatus` plus optional diagnostic. Authors/dates come from the live markup. Atomic entries include content and paragraph/row/property changes, named moves, cell insert/delete/merge operations, content-control envelopes, and numbering-property revisions. Unsupported, malformed, and ambiguous markup stays visible and fails closed. Legacy `revNNN` ids are accepted only as unambiguous inputs and are never emitted. |
+| `ListRevisions()` | Read-only entries in document order across body, headers, footers, footnotes, and endnotes. Each carries an opaque stable `Id` (`rev2-…`), coarse `Type`, exact `Family`, native `ConstituentIds`, owning `PartUri`/canonical `Scope`, primary `AnchorId`, every `AffectedAnchor`, and a `ResolutionStatus` plus optional diagnostic. Authors/dates come from the live markup. Atomic entries include content and paragraph/row/property changes, named moves, cell insert/delete/merge operations, structured-wrapper envelopes (`w:sdt` and `w:customXml` insertion and deletion; a moved wrapper's envelope resolves with its named move, so RP018 round-trips), numbering-property revisions, and math control-character marks (an `m:ctrlPr` mark and the revised runs of its object — the fraction, radical, delimiter… whose existence the mark tracks — resolve as one entry; a paragraph mark carrying both an insertion and a later deletion lists each as its own revision). Unsupported, malformed, and ambiguous markup stays visible and fails closed. Legacy `revNNN` ids are accepted only as unambiguous inputs and are never emitted. |
 | `AcceptRevision(id)` | Resolve ONE revision, keeping the change: unwrap `w:ins`/`w:moveTo`, carry out `w:del`/`w:moveFrom` (paragraph-mark deletions coalesce into the following paragraph, row deletions drop the row — the last row drops the table), drop the `*PrChange` element keeping current properties. An ordinary undoable mutation returning the `EditResult` envelope (`Modified` = touched blocks, `Removed` = blocks the resolution deleted). |
 | `RejectRevision(id)` | The inverse: remove insertions, restore deletions (`w:delText` → `w:t`, marks stripped), keep a move at its source, restore a format change's stored old properties (preserving the children the `CT_*Base` inner schema excludes — mark revisions on a paragraph-mark `rPr`, header/footer references on `sectPr`, `rPr`/`sectPr` on `pPr`). |
 | `AcceptAllRevisions()` / `RejectAllRevisions()` | Resolve the complete live registry through the same selective resolver as one atomic undo step. The registry is rebuilt after every entry so resolving a property shell can expose older archived revisions safely. Any unsupported, malformed, or ambiguous entry rolls back the whole operation. |
@@ -1510,10 +1555,12 @@ Concretely, these shapes were resolvable before and are refused now:
 | A revision element with no `w:id` | `Malformed` | `missing_revision_id` |
 | A revision element with a non-numeric `w:id` | `Malformed` | `invalid_revision_id` |
 | One `w:id` shared by two distinct live groups in one part | `Ambiguous` | `duplicate_revision_id` |
-| `w:customXmlMoveFromRange*`/`w:customXmlMoveToRange*` ranges | `Unsupported` | `unsupported_custom_xml_move_range` |
-| `w:ins`/`w:del` inside an `m:ctrlPr` (math control properties) | `Unsupported` | `unsupported_revision_family` |
-| `w:del` on a run's `w:rPr` or on a paragraph's `w:numPr` | `Unsupported` | `unsupported_revision_family` |
-| A content-control (`w:sdt`) envelope whose range topology is not Word's two-pair shape | `Unsupported` | `unsupported_revision_family` |
+| A structured-wrapper range marker (`w:customXml{Ins,Del,MoveFrom,MoveTo}Range*`) whose id has no counterpart, or more than one | `Malformed` / `Ambiguous` | `unpaired_range_marker`, `duplicate_range_id` |
+| A paired range that does not cross a `w:sdt`/`w:customXml` tag as one half of Word's two-range envelope | `Malformed` | `malformed_range_topology` |
+| A move envelope around a wrapper whose content carries no `w:moveFrom`/`w:moveTo` mark | `Malformed` | `orphan_custom_xml_move_range` |
+| An `m:ctrlPr` mark whose object still shows text not revised the same way (resolving it would drop or resurrect that text), or one carrying the nested `CT_MathCtrlIns` property change | `Unsupported` | `unrevised_math_control_payload`, `unsupported_math_control_payload` |
+| An `m:ctrlPr` mark outside any math object's property set | `Malformed` | `orphan_math_control_revision` |
+| A revision mark under a run's `w:rPr`, or a `w:del`/move mark under `w:numPr` — positions the schema never allows (`CT_RPr` carries no marks; `CT_NumPr` admits only `w:ins` and `w:numberingChange`, removed numbering being archived in `w:pPrChange`) | `Malformed` | `invalid_revision_carrier` |
 | `w:numberingChange` not attached to `w:numPr` or a LISTNUM field | `Malformed` | `orphan_numbering_revision` |
 | A cell marker that is not a direct `w:tcPr` property, or `w:cellMerge` without `w:vMerge` | `Malformed` | `orphan_cell_revision`, `invalid_cell_merge_state` |
 

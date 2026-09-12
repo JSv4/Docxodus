@@ -4,8 +4,81 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Mutation-batch retry deduplication on every transport. The transaction journal the MCP server
+  introduced in #449 (replay of the retained terminal response for an identical retry,
+  `transaction_conflict` on id reuse, bounded retention with tombstones) now lives in the core as
+  one journal per live session: `docx-scalpel`'s `execute_batch(..., transaction_id=...)` runs it
+  server-side, and npm's `session.executeBatch(steps, mode, { transactionId, request })` drives
+  it over three new bridge calls (`BeginMutationTransaction`, `CompleteMutationTransaction`,
+  `AbandonMutationTransaction`) since the browser composes its batch in JavaScript. Results carry
+  `transaction: { schemaVersion, transactionId, requestFingerprint }`. MCP behavior is unchanged.
+  (#761)
+
+- Revision registry: a mark under `m:ctrlPr` — Word's carrier for the insertion or deletion of
+  a whole math object (fraction, radical, delimiter, …) — is now a native revision. The mark
+  and the object's revised runs list as one `contentInsert`/`contentDelete` entry whose text
+  is the equation text; accept/reject keep the object (markup stripped) or remove it whole.
+  Shapes with no safe semantics stay listed and fail closed: `unrevised_math_control_payload`
+  when the object still shows text not revised the same way, `unsupported_math_control_payload`
+  for the nested `CT_MathCtrlIns` property-change form, and `orphan_math_control_revision` for a
+  mark outside any object's property set. (#750)
+- Revision registry: structured-wrapper envelopes now cover `w:customXml` wrappers as well as
+  `w:sdt`, tolerate the bookmark, comment, proofing and permission markers Word displaces
+  between a range and its wrapper (`w:displacedByCustomXml`), and attach a moved wrapper's
+  `customXmlMoveFrom`/`customXmlMoveTo` envelope to its named move so both sides resolve with
+  the move — Word's RP018 moved content control now round-trips through the selective and
+  bulk resolvers. Invalid topology is named exactly: `unpaired_range_marker`,
+  `duplicate_range_id`, `malformed_range_topology`, `orphan_custom_xml_move_range`, each
+  carrying the marker id. The `unsupported_custom_xml_move_range` diagnostic is gone. (#749,
+  #753)
+- Markdown list payloads create native Word numbering. A `- item` or `3. item` block written
+  through `InsertParagraph`, `ReplaceText` or `ReplaceCellContent` gets a real `w:numPr` from
+  the numbering owner `ApplyListFormat` uses: consecutive ordered items share one `w:num` that
+  starts at the first marker's number, separate lists in one payload restart independently,
+  bullets share the document's bullet definition, indent maps to `w:ilvl`, and a payload's
+  first list continues an adjacent list item of the same family. `ReplaceText` promotes a plain
+  paragraph (as a tracked `w:numPr` insertion in tracked mode) and leaves an existing list
+  item's numbering alone. Rejecting a tracked insertion of list paragraphs prunes the numbering
+  definitions it brought in. (#759)
+- Tracked `DeleteRange`/`DeleteSection` now represent a block `w:customXml` wrapper the way
+  they represent a block `w:sdt`: a paired custom-XML deletion envelope around the wrapper
+  (its `w:customXmlPr` kept in schema position) plus recursively tracked payload blocks, so
+  accept removes wrapper and payload and reject restores both through the revision registry.
+  Nested and mixed `w:sdt`/`w:customXml` wrappers each get their own envelope. Only run-level
+  `w:customXml` inside a paragraph is still refused before mutation
+  (`IncompatibleElementType`), because the paragraph deleter marks direct-child runs only.
+  `RevisionProcessor.AcceptRevisions` collapses a deleted `w:customXml` envelope too. (#764)
+
+### Changed
+
+- Revision registry: a revision mark in a position the OOXML schema never allows — `w:ins`,
+  `w:del` or a move mark under a run's `w:rPr`, or a `w:del`/move mark under `w:numPr` — is now
+  listed as `Malformed` with diagnostic `invalid_revision_carrier` instead of
+  `Unsupported`/`unsupported_revision_family`. The message names the legal spelling (a revised
+  run is wrapped by the mark; removed numbering is archived in `w:pPrChange`). Resolution still
+  fails closed; the error code becomes `RevisionMalformed` rather than `RevisionUnsupported`.
+  (#751, #752)
+
 ### Fixed
 
+- Tracked `DeleteRange`/`DeleteSection` stamped each paragraph, row and wrapper marker with
+  its own clock reading, so an operation straddling a second boundary produced payload marks
+  the registry could not fold into their wrapper's envelope; resolving the pieces separately
+  could then strand an empty paragraph inside a deleted wrapper. One operation now takes one
+  stamp, as Word does.
+- A revision's affected anchors could include an all-empty anchor when a `Unid` belonged to
+  an element with no addressable kind (a `w:customXml` wrapper): the fallback lookup returned
+  a default-valued struct instead of nothing.
+- A paragraph mark carrying both an insertion and a later deletion by another author (Word's
+  inserted-then-deleted pilcrow, `RP047`) listed only the first mark and left the second as an
+  unsupported entry that blocked bulk resolution. Both marks are now independent revisions, and
+  the fixture resolves to the processor oracle in both directions.
+- `RevisionProcessor.RejectRevisions` never inverted a mark under `m:ctrlPr`, so rejecting a
+  deleted fraction removed it and rejecting an inserted one left an empty husk;
+  `AcceptRevisions` removed only fractions. Both passes now treat the control mark of every
+  math object.
 - Added `docxodus/core`, an engine-only npm entry point for plain Node ESM. It exposes
   conversion, comparison, annotation, history, and session APIs without importing the
   browser editor's bundler-only drag-and-drop dependencies. The existing `docxodus`
