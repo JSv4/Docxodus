@@ -6,6 +6,14 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- The external annotation family is available on the Web Worker proxy (issue #775).
+  `createWorkerDocxodus()` now exposes `createExternalAnnotationSet`, `validateExternalAnnotations`,
+  `projectAnnotationsOntoHtml`, `convertDocxToHtmlWithExternalAnnotations` and
+  `exportToOpenContract`, each the same engine call the main-thread entry point makes, read
+  through one shared wire module (`external-annotation-wire.ts`) so the worker returns the
+  identical typed objects. A read-only viewer that renders through the worker no longer needs a
+  second .NET runtime on the main thread to annotate; the main thread's `exportToOpenContract`
+  and `createExternalAnnotationSet` also shed a duplicated converter in the process.
 - Native image coverage matrix and tracked image edits (issue #762). Every listed picture now
   carries `operations` — one `{operation, canMutate, reason}` answer for `replace`,
   `embed_linked`, `set_dimensions`, `set_metadata`, `set_floating_layout` and `remove` in the
