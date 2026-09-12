@@ -353,8 +353,8 @@ any other paragraph. No MCP-only editing logic is involved; all three routes are
 ### `docxodus_list` — list membership
 
 `apply_format` (promotes/demotes a paragraph to a real, auto-numbered `w:numPr` list via
-`ApplyListFormat` — this is the one that actually creates Word-native numbering, unlike a bare
-markdown `"- item"` payload, see Known gaps), `apply_format_range` (the same conversion across a
+`ApplyListFormat`; a markdown `"- item"` / `"1. item"` payload written through the create or
+edit tools reaches the same numbering owner directly, see `docx_mutation_api.md`), `apply_format_range` (the same conversion across a
 contiguous sibling run via `ApplyListFormatRange(firstAnchorId, lastAnchorId, format)` — one call
 instead of one per item, and the members are *guaranteed* to share one `w:num` instance so the
 sequence stays intact), `set_level`, `remove`, `get_membership`. `listFormat` accepts the full
@@ -831,12 +831,6 @@ never claiming a capability it doesn't have:
   `w:rPr` or a paragraph's `w:numPr`, a `w:sdt` envelope whose range topology is not Word's
   two-pair shape, an unattached `w:numberingChange`, and malformed cell markers — full table in
   `docx_mutation_api.md`.
-- **New lists inserted via a bare markdown payload don't get real Word numbering.** A `"- item"`
-  block parses to a `kind: "li"` anchor with no `w:numPr` (documented in
-  `docx_mutation_api.md`). This server's `docxodus_list`/`docxodus_create` route around it by
-  composing `InsertParagraph` (plain text) + `ApplyListFormat` (which *does* write real
-  `w:numPr` via `NumberingFactory.EnsureNumbering`) — two calls, not a gap in what's reachable,
-  just not a single one-shot "insert a numbered list" primitive.
 - **Generated-id previews are semantically, not necessarily byte-for-byte, replay-equivalent.**
   Create/comment/note/image paths can allocate fresh anchors or OOXML ids, and tracked revisions
   can stamp the execution clock. Preview and apply still take the identical dispatch path and

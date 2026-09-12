@@ -23,6 +23,15 @@ All notable changes to this project will be documented in this file.
   `duplicate_range_id`, `malformed_range_topology`, `orphan_custom_xml_move_range`, each
   carrying the marker id. The `unsupported_custom_xml_move_range` diagnostic is gone. (#749,
   #753)
+- Markdown list payloads create native Word numbering. A `- item` or `3. item` block written
+  through `InsertParagraph`, `ReplaceText` or `ReplaceCellContent` gets a real `w:numPr` from
+  the numbering owner `ApplyListFormat` uses: consecutive ordered items share one `w:num` that
+  starts at the first marker's number, separate lists in one payload restart independently,
+  bullets share the document's bullet definition, indent maps to `w:ilvl`, and a payload's
+  first list continues an adjacent list item of the same family. `ReplaceText` promotes a plain
+  paragraph (as a tracked `w:numPr` insertion in tracked mode) and leaves an existing list
+  item's numbering alone. Rejecting a tracked insertion of list paragraphs prunes the numbering
+  definitions it brought in. (#759)
 - Tracked `DeleteRange`/`DeleteSection` now represent a block `w:customXml` wrapper the way
   they represent a block `w:sdt`: a paired custom-XML deletion envelope around the wrapper
   (its `w:customXmlPr` kept in schema position) plus recursively tracked payload blocks, so
