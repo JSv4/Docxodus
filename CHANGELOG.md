@@ -14,6 +14,15 @@ All notable changes to this project will be documented in this file.
   when the object still shows text not revised the same way, `unsupported_math_control_payload`
   for the nested `CT_MathCtrlIns` property-change form, and `orphan_math_control_revision` for a
   mark outside any object's property set. (#750)
+- Revision registry: structured-wrapper envelopes now cover `w:customXml` wrappers as well as
+  `w:sdt`, tolerate the bookmark, comment, proofing and permission markers Word displaces
+  between a range and its wrapper (`w:displacedByCustomXml`), and attach a moved wrapper's
+  `customXmlMoveFrom`/`customXmlMoveTo` envelope to its named move so both sides resolve with
+  the move — Word's RP018 moved content control now round-trips through the selective and
+  bulk resolvers. Invalid topology is named exactly: `unpaired_range_marker`,
+  `duplicate_range_id`, `malformed_range_topology`, `orphan_custom_xml_move_range`, each
+  carrying the marker id. The `unsupported_custom_xml_move_range` diagnostic is gone. (#749,
+  #753)
 
 ### Changed
 

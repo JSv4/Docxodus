@@ -74,6 +74,7 @@ public class RedlineReversibilityFixtureSweepTests
     [InlineData("RP015-MoveFrom-MoveTo", false, false)]
     [InlineData("RP016-Deleted-CC", false, false)]
     [InlineData("RP017-Inserted-CC", true, true)]
+    [InlineData("RP018-MoveFrom-MoveTo-CC", false, false)]
     [InlineData("RP019-Deleted-Field-Code", false, false)]
     [InlineData("RP020-Inserted-Field-Code", true, false)]
     [InlineData("RP021-Inserted-Numbering-Properties", true, false)]
@@ -145,31 +146,9 @@ public class RedlineReversibilityFixtureSweepTests
         AssertNonEquivalenceIsEvidenced(proof.RejectToBaseline);
     }
 
-    // Word-authored triples whose revision families the resolver does not support: the
-    // proof must refuse to run either path rather than guess, and must name the reason.
-    [Theory]
-    [InlineData("RP018-MoveFrom-MoveTo-CC", "unsupported_custom_xml_move_range")]
-    public void RRS002_WordAuthoredRedline_UnsupportedFamilyFailsClosedWithDiagnostic(
-        string stem,
-        string expectedDiagnosticCode)
-    {
-        var (redline, acceptedOracle, rejectedOracle) = RpTriple(stem);
-
-        var run = RedlineReversibilityVerifier.Prove(rejectedOracle, acceptedOracle, redline);
-
-        Assert.False(run.Proof.Success);
-        Assert.Null(run.Proof.AcceptToFinal);
-        Assert.Null(run.Proof.RejectToBaseline);
-        Assert.Null(run.AcceptedPackageBytes);
-        Assert.Null(run.RejectedPackageBytes);
-        Assert.Contains(run.Proof.Findings, finding =>
-            finding.Code == "generated_revision_not_resolvable");
-        Assert.Contains(run.Proof.RevisionClassifications, classification =>
-            classification.Redline?.Diagnostic?.Code == expectedDiagnosticCode);
-    }
-
-    // Keeps RRS001 + RRS002 honest: every complete triple in TestFiles/RP must be pinned in
-    // exactly one of them, so adding a fixture without sweeping it fails here.
+    // Keeps RRS001 honest: every complete triple in TestFiles/RP must be pinned there, so
+    // adding a fixture without sweeping it fails here. (A second theory once held the triples
+    // whose families the resolver refused; every Word-authored family is resolvable now.)
     [Fact]
     public void RRS003_EveryCompleteFixtureTripleIsPinned()
     {
@@ -187,7 +166,6 @@ public class RedlineReversibilityFixtureSweepTests
             .ToArray();
 
         var pinned = PinnedStems(nameof(RRS001_WordAuthoredRedline_AcceptAndRejectRecoverTheOracleDocuments))
-            .Concat(PinnedStems(nameof(RRS002_WordAuthoredRedline_UnsupportedFamilyFailsClosedWithDiagnostic)))
             .OrderBy(stem => stem, StringComparer.Ordinal)
             .ToArray();
 
