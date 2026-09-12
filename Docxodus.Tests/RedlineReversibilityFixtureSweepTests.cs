@@ -102,6 +102,7 @@ public class RedlineReversibilityFixtureSweepTests
     [InlineData("RP044-MERGEFORMAT-Field-Code", false, false)]
     [InlineData("RP045-One-and-Half-Deleted-Lines-at-End", false, false)]
     [InlineData("RP046-Consecutive-Deleted-Ranges", false, false)]
+    [InlineData("RP047-Inserted-and-Deleted-Paragraph-Mark", false, false)]
     [InlineData("RP048-Deleted-Inserted-Para-Mark", false, false)]
     [InlineData("RP049-Deleted-Para-Before-Table", false, false)]
     [InlineData("RP050-Deleted-Footnote", false, false)]
@@ -148,7 +149,6 @@ public class RedlineReversibilityFixtureSweepTests
     // proof must refuse to run either path rather than guess, and must name the reason.
     [Theory]
     [InlineData("RP018-MoveFrom-MoveTo-CC", "unsupported_custom_xml_move_range")]
-    [InlineData("RP047-Inserted-and-Deleted-Paragraph-Mark", "unsupported_revision_family")]
     public void RRS002_WordAuthoredRedline_UnsupportedFamilyFailsClosedWithDiagnostic(
         string stem,
         string expectedDiagnosticCode)

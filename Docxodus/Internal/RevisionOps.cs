@@ -24,7 +24,8 @@ namespace Docxodus.Internal;
 /// ins/del (<c>w:trPr</c> markers absorb their row's content markup), table-cell
 /// insertion/deletion/vertical-merge operations, content-control envelope ranges,
 /// numbering-property insertion/numbering cache changes, named move pairs (both
-/// sides resolve together), and the format-change family
+/// sides resolve together), math control-character marks (<c>m:ctrlPr</c> revisions,
+/// which track the existence of the owning math object), and the format-change family
 /// (<c>rPrChange</c>/<c>pPrChange</c>/<c>sectPrChange</c>/<c>tblPrChange</c>/
 /// <c>trPrChange</c>/<c>tcPrChange</c>/<c>tblGridChange</c>/<c>tblPrExChange</c>).
 /// Unsupported or malformed native markup is enumerated explicitly and fails closed.
@@ -50,6 +51,7 @@ internal static class RevisionOps
         NumberingPropertiesInsert,
         NumberingChange,
         StructuredRange,
+        MathControlMark,
         Unsupported,
     }
 
@@ -284,6 +286,48 @@ internal static class RevisionOps
                     "invalid_revision_id",
                     "A live revision marker has a nonnumeric w:id and cannot be addressed safely.");
                 continue;
+            }
+
+            var mathMarks = group.Units.Where(u => u.Kind == UnitKind.MathControlMark).ToList();
+            if (mathMarks.Count > 0)
+            {
+                if (mathMarks.Any(unit => unit.StructuredWrapper is null))
+                {
+                    group.ResolutionStatus = RevisionResolutionStatus.Malformed;
+                    group.Diagnostic = new RevisionDiagnostic(
+                        "orphan_math_control_revision",
+                        "A math control-character mark is not carried by the m:ctrlPr of a math object's property set.");
+                    continue;
+                }
+
+                if (mathMarks.Any(unit => unit.Element.Elements().Any(child => child.Name != W.rPr)))
+                {
+                    group.ResolutionStatus = RevisionResolutionStatus.Unsupported;
+                    group.Diagnostic = new RevisionDiagnostic(
+                        "unsupported_math_control_payload",
+                        "A math control-character mark carries nested revision markup (a property change on the inserted control character) that cannot be selectively resolved.");
+                    continue;
+                }
+
+                // The object's existence follows its control character, so resolving the mark
+                // removes the whole object in one direction. Every piece of equation text inside
+                // must therefore be revised the same way; otherwise that direction would drop
+                // text the document still shows (or resurrect text it does not).
+                var wrapperName = group.Type == TypeInsert ? W.ins : W.del;
+                bool unrevisedText = mathMarks.Select(unit => unit.StructuredWrapper!)
+                    .Any(owner => owner.Descendants()
+                        .Where(text => text.Name == M.t || text.Name == W.t)
+                        .Any(text => !text.Ancestors()
+                            .TakeWhile(ancestor => !ReferenceEquals(ancestor, owner))
+                            .Any(ancestor => ancestor.Name == wrapperName)));
+                if (unrevisedText)
+                {
+                    group.ResolutionStatus = RevisionResolutionStatus.Unsupported;
+                    group.Diagnostic = new RevisionDiagnostic(
+                        "unrevised_math_control_payload",
+                        "A revised math control character owns equation text that is not revised the same way; resolving it would drop or resurrect that text.");
+                    continue;
+                }
             }
 
             if (group.Family == RevisionFamily.Move)
@@ -776,6 +820,14 @@ internal static class RevisionOps
                 });
                 continue;
             }
+            if ((n == W.ins || n == W.del) && child.Parent?.Name == M.ctrlPr)
+            {
+                // The mark's payload is the control character's own w:rPr (or, in the
+                // nested CT_MathCtrlIns form, a property change on it) — never document
+                // content — so it is not walked. ValidateGroups fails the nested form closed.
+                sink.Add(MakeMathControlUnit(child, paragraph, markedRow, markedRowType));
+                continue;
+            }
             if ((n == W.ins || n == W.del || n == W.moveFrom || n == W.moveTo) && IsContentWrapper(child))
             {
                 sink.Add(MakeUnit(child, UnitKind.Content, paragraph, markedRow, markedRowType, ctx));
@@ -850,13 +902,14 @@ internal static class RevisionOps
 
         WalkChildren(p.Elements().Where(e => e.Name != W.pPr), ctx, p, markedRow, markedRowType, sink);
 
-        // The paragraph-mark revision is emitted LAST: the pilcrow sits at the end of the
+        // The paragraph-mark revisions are emitted LAST: the pilcrow sits at the end of the
         // paragraph, which is what lets a fully inserted/deleted paragraph — runs plus
-        // mark plus the next paragraph's runs — group into one revision.
-        var mark = pPr?.Element(W.rPr)?.Elements()
-            .FirstOrDefault(e => RevWrapperNames.Contains(e.Name));
-        if (mark is not null)
-            sink.Add(MakeUnit(mark, UnitKind.ParaMark, p, markedRow, markedRowType, ctx));
+        // mark plus the next paragraph's runs — group into one revision. CT_ParaRPr admits
+        // one mark of each kind, and Word does stack them: a pilcrow inserted by one author
+        // and later deleted by another carries both, each its own revision.
+        if (pPr?.Element(W.rPr) is { } markRPr)
+            foreach (var mark in markRPr.Elements().Where(e => RevWrapperNames.Contains(e.Name)))
+                sink.Add(MakeUnit(mark, UnitKind.ParaMark, p, markedRow, markedRowType, ctx));
     }
 
     private static void WalkRow(XElement tr, WalkCtx ctx, List<RevisionUnit> sink)
@@ -892,12 +945,61 @@ internal static class RevisionOps
 
     /// <summary>A revision wrapper is CONTENT when its parent isn't a property container —
     /// <c>w:rPr</c> holds paragraph-mark revisions, <c>w:trPr</c> row marks,
-    /// <c>w:numPr</c>/<c>m:ctrlPr</c> revision flavors this v1 does not enumerate.</summary>
+    /// <c>w:numPr</c> numbering-property insertions, <c>m:ctrlPr</c> math control-character
+    /// marks; each is inventoried by its own branch.</summary>
     private static bool IsContentWrapper(XElement el)
     {
         var pn = el.Parent?.Name;
         return pn != W.rPr && pn != W.trPr && pn != W.numPr && pn != M.ctrlPr;
     }
+
+    /// <summary>
+    /// A mark under <c>m:ctrlPr</c> revises the control character of the math object whose
+    /// property set holds it — the fraction bar, radical sign, delimiters — which is how Word
+    /// tracks the insertion or deletion of the object itself (the runs inside carry their own
+    /// marks). The unit carries that object as its wrapper; a <c>m:ctrlPr</c> that is not the
+    /// property set of a math object yields none and is reported as orphaned.
+    /// </summary>
+    private static RevisionUnit MakeMathControlUnit(
+        XElement mark, XElement? paragraph, XElement? markedRow, string? markedRowType)
+    {
+        string type = mark.Name == W.ins ? TypeInsert : TypeDelete;
+        return new RevisionUnit
+        {
+            Element = mark,
+            Kind = UnitKind.MathControlMark,
+            Type = type,
+            Family = type == TypeInsert
+                ? RevisionFamily.ContentInsert
+                : RevisionFamily.ContentDelete,
+            Author = AuthorOf(mark),
+            Date = (string?)mark.Attribute(W.date),
+            Paragraph = paragraph,
+            MarkedRow = markedRowType == type ? markedRow : null,
+            Table = mark.Ancestors(W.tbl).FirstOrDefault(),
+            StructuredWrapper = MathObjectOf(mark),
+            Wid = WidOf(mark),
+            NativeId = (string?)mark.Attribute(W.id),
+        };
+    }
+
+    /// <summary>The math object owning a <c>m:ctrlPr</c> mark: <c>m:ctrlPr</c> sits in the
+    /// object's <c>m:*Pr</c> property set, never anywhere else in a conformant document.</summary>
+    private static XElement? MathObjectOf(XElement mark)
+    {
+        var properties = mark.Parent?.Parent;
+        var owner = properties?.Parent;
+        return properties is not null && owner is not null
+            && properties.Name.Namespace == M.m
+            && properties.Name.LocalName.EndsWith("Pr", StringComparison.Ordinal)
+            && owner.Name.Namespace == M.m
+            && owner.Name != M.oMath && owner.Name != M.oMathPara
+            ? owner
+            : null;
+    }
+
+    private static bool IsInlineContentUnit(RevisionUnit unit) =>
+        unit.Kind is UnitKind.Content or UnitKind.MathControlMark;
 
     private static RevisionUnit MakeUnit(XElement el, UnitKind kind, XElement? paragraph,
         XElement? markedRow, string? markedRowType, WalkCtx ctx)
@@ -1057,7 +1159,7 @@ internal static class RevisionOps
                 continue;
             }
 
-            if ((u.Kind == UnitKind.Content || u.Kind == UnitKind.ParaMark) && u.MarkedRow is not null
+            if ((IsInlineContentUnit(u) || u.Kind == UnitKind.ParaMark) && u.MarkedRow is not null
                 && rowGroupByTr.TryGetValue(u.MarkedRow, out var hostRow) && hostRow.Type == u.Type
                 && hostRow.Author == u.Author && hostRow.Date == u.Date
                 && hostRow.DateUtc == DateUtcOf(u.Element))
@@ -1299,7 +1401,10 @@ internal static class RevisionOps
             // they sit beneath a deletion wrapper already claimed by the registry.
             // Orphan instances still need an explicit fail-closed entry.
             .Where(marker => !IsClaimedDeletionPayload(marker, represented))
-            .Where(marker => !marker.Ancestors().Any(ancestor => PropsChangeNames.Contains(ancestor.Name))))
+            .Where(marker => !marker.Ancestors().Any(ancestor => PropsChangeNames.Contains(ancestor.Name)))
+            // Markup nested under a claimed mark the walker deliberately did not enter (the
+            // CT_MathCtrlIns payload) belongs to that entry, whose diagnostic already names it.
+            .Where(marker => !marker.Ancestors().Any(represented.Contains)))
         {
             var type = marker.Name == W.ins ? TypeInsert
                 : marker.Name == W.del || marker.Name == W.delText
@@ -1616,7 +1721,7 @@ internal static class RevisionOps
 
     private static bool Contiguous(RevisionUnit prev, RevisionUnit cur)
     {
-        if (prev.Kind == UnitKind.Content && cur.Kind == UnitKind.Content)
+        if (IsInlineContentUnit(prev) && IsInlineContentUnit(cur))
         {
             if (prev.Paragraph is null || cur.Paragraph is null)
                 return prev.Element.Parent == cur.Element.Parent
@@ -1628,13 +1733,13 @@ internal static class RevisionOps
             if (a == b) return true; // both nested inside the same container (e.g. one hyperlink)
             return OnlyIgnorableBetween(a, b);
         }
-        if (prev.Kind == UnitKind.Content && cur.Kind == UnitKind.ParaMark)
+        if (IsInlineContentUnit(prev) && cur.Kind == UnitKind.ParaMark)
         {
             if (prev.Paragraph != cur.Paragraph || cur.Paragraph is null) return false;
             var a = TopLevelWithin(cur.Paragraph, prev.Element);
             return a is not null && a.ElementsAfterSelf().All(IsIgnorableBetween);
         }
-        if (prev.Kind == UnitKind.ParaMark && cur.Kind == UnitKind.Content)
+        if (prev.Kind == UnitKind.ParaMark && IsInlineContentUnit(cur))
         {
             if (prev.Paragraph is null || cur.Paragraph is null) return false;
             if (!IsNextParagraph(prev.Paragraph, cur.Paragraph)) return false;
@@ -1788,11 +1893,27 @@ internal static class RevisionOps
         // A move pair carries the same text on both sides; render the source side only.
         bool moveFromOnly = g.Type == TypeMove
             && g.Units.Any(u => u.Element.Name == W.moveFrom);
+        // A math object's text is rendered once, by its outermost revised control mark; the
+        // run and nested-object units inside it are its payload, not further text.
+        var mathOwners = g.Units.Where(u => u.Kind == UnitKind.MathControlMark)
+            .Select(u => u.StructuredWrapper).Where(owner => owner is not null)
+            .Select(owner => owner!).ToHashSet();
         foreach (var u in g.Units)
         {
             if (moveFromOnly && u.Element.Name != W.moveFrom) continue;
+            if (u.Element.Ancestors().Any(ancestor => mathOwners.Contains(ancestor)
+                    && !ReferenceEquals(ancestor, u.StructuredWrapper)))
+                continue;
             switch (u.Kind)
             {
+                case UnitKind.MathControlMark:
+                    if (u.StructuredWrapper is { } mathObject)
+                        complete &= AppendVisibleText(
+                            mathObject,
+                            u.Element.Name == W.del ? W.delText : W.t,
+                            sb,
+                            maximum);
+                    break;
                 case UnitKind.Content:
                     if (!AppendVisibleText(
                             u.Element,
@@ -1843,7 +1964,8 @@ internal static class RevisionOps
         {
             var n = child.Name;
             if (n == W.pPr || n == W.rPr || n == W.trPr || n == W.tcPr || n == W.tblPr) continue;
-            if (n == textName)
+            // Math text is never renamed for deletion, so it reads the same in either state.
+            if (n == textName || n == M.t)
             {
                 var value = child.Value;
                 if (sb.Length > maximumCharacters - value.Length) return false;
@@ -1900,10 +2022,21 @@ internal static class RevisionOps
             else RejectProps(u.Element, g.PartUri, protectedEmptyContainerKeys);
         }
 
-        foreach (var u in g.Units.Where(u => u.Kind == UnitKind.Content))
+        foreach (var u in g.Units.Where(IsInlineContentUnit))
         {
             if (Detached(u.Element)) continue;
             if (u.Paragraph is not null) touchedParagraphs.Add(u.Paragraph);
+            if (u.Kind == UnitKind.MathControlMark)
+            {
+                // The object's existence follows its control character. Its inner runs are
+                // units of this same group and detach with it; ValidateGroups proved none of
+                // their text would have survived on its own.
+                if (ContentSurvives(u.Element.Name, accept))
+                    UnwrapWrapper(u.Element, restoreDeleted: false);
+                else
+                    u.StructuredWrapper!.Remove();
+                continue;
+            }
             if (ContentSurvives(u.Element.Name, accept))
                 // A surviving w:del OR w:moveFrom un-deletes its payload: the comparison
                 // engine serializes move-source text as w:delText (delete-grade), so a
