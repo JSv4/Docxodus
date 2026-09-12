@@ -6,6 +6,19 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Guarded commit of a retained preview (issue #760). `PreviewBatch` takes a `Retain` option:
+  a successful preview then keeps its exact result package on the live session and reports
+  `retention { previewId, baseVersion, basePackageHash, expiresAt }`. `CommitPreview(previewId)`
+  restores that package as one undo step, so the previewed anchor ids, comment/note ids,
+  revision timestamps and `packageHash` are exactly what the document gets — the gap the
+  generated-value receipt warnings described. The commit is guarded: `preview_stale` (no edit)
+  once the session's version, package content, tracked-changes mode or revision author moved,
+  `preview_not_found` once the preview expired, was evicted (8 previews / 64 MiB / 15 minutes per
+  session), or was already committed. Commit composes with the transaction journal for safe
+  retries. Surfaces: npm `previewBatch(steps, mode, { retain: true })` +
+  `commitPreview(previewId, transaction?)`, `docx-scalpel` `preview_batch(..., retain=True)` +
+  `commit_preview(preview_id, transaction_id=...)`, MCP `docxodus_mutations` `retainPreview` +
+  `commitPreviewId`, and the `RetainPreview`/`CommitPreview` bridge exports.
 - Mutation-batch retry deduplication on every transport. The transaction journal the MCP server
   introduced in #449 (replay of the retained terminal response for an identical retry,
   `transaction_conflict` on id reuse, bounded retention with tombstones) now lives in the core as

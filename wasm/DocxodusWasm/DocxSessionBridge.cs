@@ -854,6 +854,18 @@ public static partial class DocxSessionBridge
     public static void AbandonMutationTransaction(int h, string transactionId) =>
         DocxSessionOps.AbandonMutationTransaction(h, transactionId);
 
+    /// <summary>Retain a preview shadow's final package for a guarded commit on its live session
+    /// (issue #760). Returns <c>{"retention":{…}|null,"warnings":[…]}</c>.</summary>
+    [JSExport]
+    public static string RetainPreview(int shadowHandle) =>
+        DocxSessionOps.RetainPreview(shadowHandle);
+
+    /// <summary>Guarded commit of a retained preview: the previewed package becomes the live
+    /// document, or a <c>preview_not_found</c>/<c>preview_stale</c> failure changes nothing.</summary>
+    [JSExport]
+    public static string CommitPreview(int h, string previewId) =>
+        DocxSessionOps.CommitPreview(h, previewId);
+
     /// <summary>Reject ONE revision by id — the inverse of AcceptRevision.</summary>
     [JSExport]
     public static string RejectRevision(int h, string revisionId) =>

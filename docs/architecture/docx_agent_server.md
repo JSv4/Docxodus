@@ -628,6 +628,19 @@ modulo those generated ids/timestamps. Such receipts carry warnings; clients mus
 id or `packageHash` equality unless the operation supplies stable ids/timestamps or is otherwise
 known deterministic.
 
+**Guarded commit of a retained preview (issue #760).** A preview run with `retainPreview: true`
+keeps its exact result package on the session and reports
+`retention: { previewId, baseVersion, basePackageHash, expiresAt }`. A later
+`docxodus_mutations` call with `commitPreviewId` (and no `steps`) makes that package the live
+document as one undo step — the previewed anchor ids, comment/note ids, revision timestamps and
+`packageHash` are exactly what the document then contains, and the returned receipt is the
+previewed one with `preview: false` and the generated-value caveats removed. The commit refuses
+with `preview_stale`, editing nothing, if the session's version, package content, tracked-changes
+mode or revision author moved since the preview, and with `preview_not_found` once the preview
+expired, was evicted (8 previews / 64 MiB / 15 minutes per session), was already committed, or
+the session was reopened. `retainPreview` is preview-only and a commit takes no steps; both
+misuses are argument errors. A commit may carry a `transactionId` like any applying batch.
+
 Applying batches may carry a caller-chosen root `transactionId` (a non-blank string up to 256
 Unicode scalar values). Its first terminal success, partial result, structured failure,
 precondition failure, or safely-caught exception is recorded for the lifetime of that open session.
@@ -838,7 +851,9 @@ never claiming a capability it doesn't have:
   predict the same structure/content/relationship effects, but a later apply may return different
   generated anchor ids and a different `packageHash`. The receipt warns whenever a successful step
   reports created anchors or another known execution-generated field. Deterministic mutation-only
-  batches retain exact receipt/hash equivalence.
+  batches retain exact receipt/hash equivalence, and a preview retained with `retainPreview` and
+  applied through `commitPreviewId` is exact for every batch, because the previewed bytes are
+  restored rather than re-executed.
 
 ## Testing
 

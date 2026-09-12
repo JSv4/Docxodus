@@ -815,6 +815,7 @@ class DocxSession:
         *,
         html_mode: MutationPreviewHtmlMode | str = MutationPreviewHtmlMode.NONE,
         html_anchor_id: str | None = None,
+        retain: bool = False,
     ) -> MutationBatchResult:
         """Predict a batch on a complete clone without touching this live session.
 
@@ -822,6 +823,11 @@ class DocxSession:
         partial-success semantics. Optional ``scoped``/``full`` HTML is rendered only
         from the predicted shadow package. ``html_mode`` accepts a
         :class:`MutationPreviewHtmlMode` or its wire string.
+
+        ``retain=True`` keeps a successful preview's exact result package so
+        :meth:`commit_preview` can later apply it as previewed; the receipt then carries
+        ``result.retention``. Retention is bounded (count, bytes and time) and cleared
+        when the session closes.
         """
         try:
             html = MutationPreviewHtmlMode(html_mode)
@@ -834,10 +840,35 @@ class DocxSession:
                 "steps": [step.to_wire() for step in steps],
                 "htmlMode": html.value,
                 "htmlAnchorId": html_anchor_id,
+                "retain": retain,
             },
         )
         if not isinstance(result, Mapping):
             raise TypeError(f"preview_batch: expected object, got {result!r}")
+        return MutationBatchResult._from_wire(result)
+
+    def commit_preview(
+        self,
+        preview_id: str,
+        *,
+        transaction_id: str | None = None,
+    ) -> MutationBatchResult:
+        """Make a preview retained by :meth:`preview_batch` the live document, as previewed.
+
+        The previewed package is restored byte-for-byte as one undo step, so the generated
+        anchor ids, timestamps and ``package_hash`` are exactly those the preview reported.
+        The commit is guarded: it refuses with ``preview_stale`` (editing nothing) when the
+        session's version, package content, tracked-changes mode or revision author moved
+        since the preview, and with ``preview_not_found`` once the preview expired, was
+        evicted, or was already committed. ``transaction_id`` makes a retry after a lost
+        response safe, exactly as for :meth:`execute_batch`.
+        """
+        args: dict[str, Any] = {"previewId": preview_id}
+        if transaction_id is not None:
+            args["transactionId"] = transaction_id
+        result = self._call("commit_preview", args)
+        if not isinstance(result, Mapping):
+            raise TypeError(f"commit_preview: expected object, got {result!r}")
         return MutationBatchResult._from_wire(result)
 
     def check_preconditions(self, preconditions: MutationPreconditions) -> EditResult:

@@ -620,7 +620,7 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_mutations",
-            "Apply or safely preview a batch of mutating edit/format/create/table/list/comment/link/image/content-control/track-changes actions. Atomic mode commits as one unit. An optional transactionId makes applying retries idempotent within this open session; preview is isolated and cannot carry a transactionId.",
+            "Apply or safely preview a batch of mutating edit/format/create/table/list/comment/link/image/content-control/track-changes actions. Atomic mode commits as one unit. An optional transactionId makes applying retries idempotent within this open session; preview is isolated and cannot carry a transactionId. A preview run with retainPreview can later be applied exactly as previewed (same generated ids, timestamps and packageHash) with commitPreviewId, which refuses if the session moved on.",
             $$"""
             {
               "type": "object",
@@ -633,6 +633,8 @@ internal static class ToolCatalog
                 "previewPolicy": { "type": "string", "enum": ["atomic", "best_effort"], "default": "atomic", "description": "Policy used by legacy mode=preview. Ignored when mode itself is atomic/best_effort." },
                 "previewHtml": { "type": "string", "enum": ["none", "scoped", "full"], "default": "none", "description": "Optionally render shadow-only HTML from the predicted package." },
                 "previewAnchorId": { "type": "string", "description": "Required when previewHtml=scoped; the live anchor is resolved only inside the cloned package." },
+                "retainPreview": { "type": "boolean", "default": false, "description": "Preview only: keep the successful preview's exact result package for commitPreviewId. The receipt then carries retention { previewId, baseVersion, basePackageHash, expiresAt }. Retention is bounded (8 previews, 64 MiB, 15 minutes) and cleared when the session closes." },
+                "commitPreviewId": { "type": "string", "description": "Instead of steps: make the retained preview with this id the live document exactly as previewed, as one undo step. Refuses with preview_stale (no edit) if the version, package content, tracked-changes mode or revision author changed since the preview, and with preview_not_found once it expired, was evicted, or was already committed. May carry a transactionId." },
                 "steps": {
                   "type": "array",
                   "items": {
@@ -645,7 +647,7 @@ internal static class ToolCatalog
                   }
                 }
               },
-              "required": ["sessionId", "steps"]
+              "required": ["sessionId"]
             }
             """),
         new ToolDefinition(

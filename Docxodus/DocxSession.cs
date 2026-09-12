@@ -1681,7 +1681,27 @@ public sealed record MutationBatchPreviewOptions
 {
     public MutationPreviewHtmlMode HtmlMode { get; init; }
     public string? HtmlAnchorId { get; init; }
+
+    /// <summary>
+    /// Keep a successful preview's exact result package so <see cref="DocxSession.CommitPreview"/>
+    /// can later make it the live document with the previewed generated ids, timestamps and
+    /// package hash (issue #760). The receipt then carries <see cref="MutationBatchResult.Retention"/>.
+    /// Off by default: retention holds a whole package per preview.
+    /// </summary>
+    public bool Retain { get; init; }
 }
+
+/// <summary>
+/// Identity of a preview retained for a guarded commit (issue #760). The commit is bound to the
+/// live state the preview was predicted from: <see cref="BaseVersion"/> and
+/// <see cref="BasePackageHash"/> must still describe the session, and the entry is gone after
+/// <see cref="ExpiresAt"/>, after eviction, after the session closes, or once it is committed.
+/// </summary>
+public sealed record MutationPreviewRetention(
+    string PreviewId,
+    long BaseVersion,
+    string BasePackageHash,
+    DateTimeOffset ExpiresAt);
 
 /// <summary>Structured result of an atomic or explicit best-effort mutation batch.</summary>
 public sealed record MutationBatchResult
@@ -1716,6 +1736,12 @@ public sealed record MutationBatchResult
         MutationBatchChangeSet<DocumentAnnotation>.Empty;
     public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
     public string? Html { get; init; }
+
+    /// <summary>
+    /// Present on a preview retained for commit (<see cref="MutationBatchPreviewOptions.Retain"/>)
+    /// and on the result of committing it; null for every other batch.
+    /// </summary>
+    public MutationPreviewRetention? Retention { get; init; }
 }
 
 /// <summary>
@@ -1928,6 +1954,14 @@ public enum EditErrorCode
     /// <summary>A known transaction never recorded a terminal response, so its outcome is unknown.</summary>
     TransactionIncomplete,
 
+    /// <summary>No retained preview has this id: it was never retained, expired, was evicted,
+    /// or was already committed.</summary>
+    PreviewNotFound,
+
+    /// <summary>The retained preview was predicted from a live state the session no longer has
+    /// (version, package content, tracked-changes mode or revision author changed).</summary>
+    PreviewStale,
+
     /// <summary>The revision family is visible but has no safe selective resolver.</summary>
     RevisionUnsupported,
 
@@ -2137,6 +2171,26 @@ public sealed partial class DocxSession : IDisposable
     // document state — never captured in undo snapshots.
     private TrackedChangeMode _trackedChanges;
     private string? _revisionAuthor;
+
+    /// <summary>
+    /// Previews retained for a guarded commit (issue #760). Settable so tests can bound and clock
+    /// the store; production sessions use the defaults.
+    /// </summary>
+    internal Internal.RetainedPreviews RetainedPreviews { get; set; } = new();
+
+    /// <summary>
+    /// Set only on a preview shadow: the live session it was cloned from and the live state at
+    /// cloning, which a retained preview is bound to. The base bytes are the clone's own source
+    /// package, kept so the base hash is computed only when retention is requested.
+    /// </summary>
+    private ShadowOrigin? _shadowOrigin;
+
+    private sealed record ShadowOrigin(
+        DocxSession Owner,
+        long BaseVersion,
+        byte[] BaseBytes,
+        TrackedChangeMode TrackedChanges,
+        string? RevisionAuthor);
 
     private sealed record TransactionState(
         long Id,
@@ -3989,6 +4043,33 @@ public sealed partial class DocxSession : IDisposable
         return materialized;
     }
 
+    /// <summary>
+    /// Receipt warnings that say a fresh execution may regenerate ids or timestamps. Attached by
+    /// <see cref="CompleteBatchResult"/>; removed by <see cref="CommitPreview"/>, which does not
+    /// execute afresh but restores the previewed bytes.
+    /// </summary>
+    private static class BatchReplayCaveats
+    {
+        public const string RevisionDates =
+            "Tracked-revision date attributes may use the execution clock; compare revision " +
+            "ids, authors, types, text, and anchors across separate executions.";
+
+        public const string CommentDates =
+            "Comment date attributes may be generated from the execution clock; supply dates " +
+            "explicitly when byte-identical replay is required.";
+
+        public const string AnnotationMetadata =
+            "Auto-generated annotation ids or creation timestamps are execution metadata; " +
+            "supply id and created explicitly when byte-identical replay is required.";
+
+        public const string CreatedAnchors =
+            "Created anchors and related OOXML ids may be generated independently on replay; " +
+            "preview/apply equivalence is semantic and packageHash or anchor ids may differ.";
+
+        public static bool Contains(string warning) =>
+            warning is RevisionDates or CommentDates or AnnotationMetadata or CreatedAnchors;
+    }
+
     private sealed record BatchSemanticObservation(
         IReadOnlyList<RevisionListEntry>? Revisions,
         IReadOnlyList<CommentListEntry>? Comments,
@@ -4045,31 +4126,15 @@ public sealed partial class DocxSession : IDisposable
                 StringComparison.Ordinal),
             "annotation", warnings);
         if (revisionChanges.Added.Concat(revisionChanges.Modified).Any(revision => revision.Date is not null))
-        {
-            warnings.Add(
-                "Tracked-revision date attributes may use the execution clock; compare revision " +
-                "ids, authors, types, text, and anchors across separate executions.");
-        }
+            warnings.Add(BatchReplayCaveats.RevisionDates);
         if (commentChanges.Added.Concat(commentChanges.Modified).Any(comment => comment.Date is not null))
-        {
-            warnings.Add(
-                "Comment date attributes may be generated from the execution clock; supply dates " +
-                "explicitly when byte-identical replay is required.");
-        }
+            warnings.Add(BatchReplayCaveats.CommentDates);
         if (annotationChanges.Added.Any(annotation => annotation.Created.HasValue))
-        {
-            warnings.Add(
-                "Auto-generated annotation ids or creation timestamps are execution metadata; " +
-                "supply id and created explicitly when byte-identical replay is required.");
-        }
+            warnings.Add(BatchReplayCaveats.AnnotationMetadata);
         try
         {
             if (result.Steps.SelectMany(step => step.Results).Any(edit => edit.Created.Count > 0))
-            {
-                warnings.Add(
-                    "Created anchors and related OOXML ids may be generated independently on replay; " +
-                    "preview/apply equivalence is semantic and packageHash or anchor ids may differ.");
-            }
+                warnings.Add(BatchReplayCaveats.CreatedAnchors);
         }
         catch (Exception ex)
         {
@@ -4202,6 +4267,8 @@ public sealed partial class DocxSession : IDisposable
                 _initialCheckpointBytes = _initialCheckpointBytes,
                 _trackedChanges = _trackedChanges,
                 _revisionAuthor = _revisionAuthor,
+                _shadowOrigin = new ShadowOrigin(
+                    this, _version, snapshot.PackageBytes!, _trackedChanges, _revisionAuthor),
             };
             return shadow;
         }
@@ -4293,11 +4360,170 @@ public sealed partial class DocxSession : IDisposable
             warnings.Add($"Preview HTML could not be generated: {ex.Message}");
         }
 
+        MutationPreviewRetention? retention = null;
+        if (options?.Retain == true)
+        {
+            if (!result.Success)
+                warnings.Add("The preview did not succeed, so it was not retained for commit.");
+            else
+                retention = RetainPreview(result, warnings);
+        }
+
         return result with
         {
             Preview = true,
             Warnings = warnings,
             Html = html,
+            Retention = retention,
+        };
+    }
+
+    /// <summary>
+    /// Keep this shadow's final package for a guarded commit on the live session it was cloned
+    /// from (issue #760). Runs on the shadow; the store lives on the owner. <paramref name="result"/>
+    /// is the receipt to return on commit, or null when the transport composes its own receipt
+    /// (the browser client). Returns null, with a warning, when the store refuses the package.
+    /// </summary>
+    internal MutationPreviewRetention? RetainPreview(
+        MutationBatchResult? result,
+        System.Collections.Generic.List<string> warnings)
+    {
+        ThrowIfDisposed();
+        var origin = _shadowOrigin
+            ?? throw new InvalidOperationException("only a preview shadow can retain its result for commit");
+        var store = origin.Owner.RetainedPreviews;
+        var snapshot = TakePackageSnapshot();
+        var retention = new MutationPreviewRetention(
+            Internal.RetainedPreviews.NewPreviewId(),
+            origin.BaseVersion,
+            HashPackageBytes(origin.BaseBytes),
+            store.ExpiryFromNow());
+        var retained = new Internal.RetainedPreview(
+            retention,
+            snapshot,
+            HashPackageBytes(snapshot.PackageBytes!),
+            origin.TrackedChanges,
+            origin.RevisionAuthor,
+            result);
+        if (store.Add(retained)) return retention;
+        warnings.Add(
+            $"The preview package ({retained.ApproximateBytes} bytes) exceeds the retained-preview " +
+            $"byte budget ({store.ByteBudget} bytes), so it was not retained for commit.");
+        return null;
+    }
+
+    /// <summary>
+    /// Make a retained preview the live document, exactly as previewed (issue #760). The commit
+    /// is guarded: it refuses, changing nothing, unless the session is still at the preview's base
+    /// version with the same package content, tracked-changes mode and revision author. On
+    /// success the previewed package — generated ids, timestamps and all — replaces the live one
+    /// as one undoable history step, the version becomes the previewed <c>ResultVersion</c>, and
+    /// the previewed receipt is returned with <see cref="MutationBatchResult.Preview"/> false.
+    /// A committed preview is consumed; retry deduplication belongs to the transaction journal.
+    /// </summary>
+    public MutationBatchResult CommitPreview(string previewId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(previewId);
+        lock (_mutationGate)
+        {
+            if (_disposed)
+                return CommitPreviewFailure(EditErrorCode.SessionDisposed, "session disposed", null);
+            if (!RetainedPreviews.TryGet(previewId, out var retained))
+            {
+                return CommitPreviewFailure(
+                    EditErrorCode.PreviewNotFound,
+                    $"no retained preview {previewId}: it was never retained, has expired, was evicted, " +
+                    "or was already committed",
+                    null);
+            }
+
+            var retention = retained.Retention;
+            if (_version != retention.BaseVersion)
+            {
+                return CommitPreviewFailure(
+                    EditErrorCode.PreviewStale,
+                    $"preview {previewId} was predicted from version {retention.BaseVersion} but the " +
+                    $"session is at version {_version}",
+                    retention);
+            }
+            if (_trackedChanges != retained.TrackedChanges
+                || !string.Equals(_revisionAuthor, retained.RevisionAuthor, StringComparison.Ordinal))
+            {
+                return CommitPreviewFailure(
+                    EditErrorCode.PreviewStale,
+                    $"the tracked-changes mode or revision author changed since preview {previewId}",
+                    retention);
+            }
+            string liveHash;
+            try
+            {
+                liveHash = GetPackageContentHash();
+            }
+            catch (Exception ex)
+            {
+                LastInternalError = ex;
+                return CommitPreviewFailure(EditErrorCode.InternalError, ex.Message, retention);
+            }
+            if (!string.Equals(liveHash, retention.BasePackageHash, StringComparison.Ordinal))
+            {
+                return CommitPreviewFailure(
+                    EditErrorCode.PreviewStale,
+                    $"the package content changed since preview {previewId} " +
+                    $"(predicted from {retention.BasePackageHash}, now {liveHash})",
+                    retention);
+            }
+
+            RetainedPreviews.Remove(previewId);
+            _history.RecordPreOp(TakePackageSnapshot());
+            try
+            {
+                // The retained snapshot IS the shadow's final state: its package bytes, the
+                // predicted version, and the revision generators the batch advanced.
+                RestoreSnapshot(retained.Snapshot);
+            }
+            catch (Exception ex)
+            {
+                LastInternalError = ex;
+                RollbackFailedOp();
+                return CommitPreviewFailure(EditErrorCode.InternalError, ex.Message, retention);
+            }
+
+            var result = retained.Result
+                ?? new MutationBatchResult { Mode = MutationBatchMode.Atomic, Success = true };
+            return result with
+            {
+                Preview = false,
+                BaseVersion = retention.BaseVersion,
+                ResultVersion = _version,
+                PackageHash = retained.PackageHash,
+                // The generated-value caveats describe a fresh execution; this commit restored
+                // the previewed bytes, so every previewed id, timestamp and hash is now exact.
+                Warnings = result.Warnings.Where(warning => !BatchReplayCaveats.Contains(warning)).ToArray(),
+                Html = null,
+                Retention = retention,
+            };
+        }
+    }
+
+    private MutationBatchResult CommitPreviewFailure(
+        EditErrorCode code,
+        string message,
+        MutationPreviewRetention? retention)
+    {
+        var step = new MutationBatchStepResult(
+            0, "docx_session", "commit_preview",
+            new[] { new EditResult { Success = false, Error = new EditError(code, message) } },
+            false);
+        return new MutationBatchResult
+        {
+            Mode = MutationBatchMode.Atomic,
+            Success = false,
+            RolledBack = false,
+            BaseVersion = _version,
+            ResultVersion = _version,
+            Steps = new[] { step },
+            Failure = BatchFailure(step, rolledBack: false),
+            Retention = retention,
         };
     }
 
@@ -13486,6 +13712,7 @@ public sealed partial class DocxSession : IDisposable
             _transactions.Clear();
             _transactionPendingMutations = 0;
             _transactionMutationEpoch = 0;
+            RetainedPreviews.Clear();
         }
         finally
         {
@@ -13759,9 +13986,11 @@ public sealed partial class DocxSession : IDisposable
     /// entry payloads excludes ZIP timestamps/compression while retaining every part byte and
     /// relationship payload, including media and opaque custom XML.
     /// </summary>
-    internal string GetPackageContentHash()
+    internal string GetPackageContentHash() => HashPackageBytes(SerializePackageCheckpoint());
+
+    /// <summary>The <see cref="GetPackageContentHash"/> digest of an already serialized checkpoint.</summary>
+    internal static string HashPackageBytes(byte[] packageBytes)
     {
-        var packageBytes = SerializePackageCheckpoint();
         try
         {
             using var stream = new MemoryStream(packageBytes, writable: false);

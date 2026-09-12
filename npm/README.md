@@ -157,6 +157,25 @@ the batch would produce, matching what the Python and MCP clients render for the
 `packageHash` is `null` when it could not be computed, so never assert replay equality
 without checking for it.
 
+A preview predicts generated values (new anchor ids, comment ids, revision timestamps), but a
+later `executeBatch` runs afresh and may generate them differently. `retain: true` keeps the
+successful preview's exact result package, and `commitPreview` makes it the live document as
+previewed — one undo step, same ids, same `packageHash`:
+
+```ts
+const preview = session.previewBatch(steps, 'atomic', { html: 'full', retain: true });
+showToReviewer(preview.html, preview.revisionChanges);
+const commit = session.commitPreview(preview.retention!.previewId, {
+  transactionId: 'plan-42-commit', request: { commit: preview.retention!.previewId },
+});
+commit.packageHash === preview.packageHash; // true
+```
+
+The commit refuses with `preview_stale`, editing nothing, if the session's version, package
+content, tracked-changes mode or revision author moved since the preview, and with
+`preview_not_found` once the preview expired, was evicted (8 previews, 64 MiB, 15 minutes per
+session) or was already committed.
+
 ![Markdown projection beside the rendered document](https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/images/projection.png)
 
 Native links and bookmarks use the same stable anchors and exact character spans:

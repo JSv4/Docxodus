@@ -105,7 +105,7 @@ action-specific arguments.
 | `docxodus_images` | grouped-intent | Native Word images: list, insert, replace, resize, set metadata or floating layout, remove. Payloads cross the JSON boundary as base64 only — the server never fetches a URL or reads an image path. |
 | `docxodus_content_controls` | grouped-intent | List and fill native Word content controls (`w:sdt`) — text, rich text, checkbox, date, list item, picture, repeating items — preserving each control's wrapper and metadata. |
 | `docxodus_track_changes` | grouped-intent | List tracked changes; accept or reject one by id or all; switch the session's recording mode; prove redline reversibility. |
-| `docxodus_mutations` | grouped-intent | Apply or safely preview a batch atomically by default, with opt-in best-effort and transaction-id retry deduplication (shared with every transport). |
+| `docxodus_mutations` | grouped-intent | Apply or safely preview a batch atomically by default, with opt-in best-effort, transaction-id retry deduplication (shared with every transport), and guarded commit of a retained preview exactly as previewed. |
 | `docxodus_table` | grouped-intent | Create and read tables; resolve canonical cell anchors ↔ grid coordinates; edit rows, columns, cell content, and style. |
 | `docxodus_compare` | sessionless | Diff or N-way consolidate stored document versions into one author-attributed native redline, written back into the document scope. |
 | `docxodus_deliver` | sessionless | Build a verified delivery bundle from a named baseline and the current session; return its manifest and available artifact bytes. |
@@ -205,12 +205,17 @@ them):
   `docs/architecture/docx_agent_server.md` for the list of refusing shapes.
 - **New lists inserted via markdown don't get real numbering** unless promoted afterward
   with `docxodus_list`'s `apply_format` action (which does write real `w:numPr`).
-- **Generated-id previews are semantic rather than necessarily byte-identical.** Preview runs
+- **Generated-id previews are semantic rather than necessarily byte-identical — unless retained.** Preview runs
   the same batch path on a complete isolated package clone and never touches live bytes,
   version, caches, configuration, or undo/redo history. Create/comment/note/image operations
   may allocate different anchors or OOXML ids when later applied, and tracked changes may stamp
   a different execution time, so receipts warn when exact anchor or package-hash equality is
-  unsafe. Deterministic mutation-only batches retain exact result/hash equivalence.
+  unsafe. Deterministic mutation-only batches retain exact result/hash equivalence, and a
+  preview retained with `retainPreview: true` then applied with `commitPreviewId` is exact for
+  any batch: the previewed bytes are restored, not re-executed, so its anchor ids, timestamps
+  and `packageHash` are what the document gets. The commit refuses (`preview_stale`) once the
+  session moved on, and `preview_not_found` once the preview expired, was evicted (8 previews /
+  64 MiB / 15 minutes per session) or was already committed.
 - **Optimistic guards are common to every mutation tool.** Pass `preconditions` with
   `expectedVersion` and/or an anchor hash/exact text/range/kind/scope; replacement may
   also require `expectedMatchCount`. `docxodus_get_content` formats `version` and

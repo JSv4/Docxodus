@@ -90,6 +90,7 @@ internal static class Dispatcher
         "check_preconditions" => DocxSessionOps.CheckPreconditions(Handle(args), ParsePreconditions(args)),
         "execute_batch" => ExecuteBatch(args),
         "preview_batch" => ExecuteBatch(args, preview: true),
+        "commit_preview" => CommitPreview(args),
 
         "replace_text" => DocxSessionOps.ReplaceText(Handle(args), Str(args, "anchorId"), Str(args, "markdown")),
         "delete_block" => DocxSessionOps.DeleteBlock(Handle(args), Str(args, "anchorId")),
@@ -907,15 +908,7 @@ internal static class Dispatcher
         };
         if (!args.TryGetProperty("steps", out var steps) || steps.ValueKind != JsonValueKind.Array)
             throw new ArgumentException("execute_batch requires an array 'steps'");
-        var transactionId = args.TryGetProperty("transactionId", out var transaction)
-            && transaction.ValueKind != JsonValueKind.Null
-            ? transaction.ValueKind == JsonValueKind.String
-                ? transaction.GetString()
-                : throw new ArgumentException("transactionId must be a string")
-            : null;
-        if (transactionId is not null
-            && MutationTransactions.ValidateTransactionId(transactionId) is { } invalidTransactionId)
-            throw new ArgumentException(invalidTransactionId);
+        var transactionId = TransactionId(args);
 
         IEnumerable<MutationBatchStep> ParseSteps(int targetHandle)
         {
@@ -982,7 +975,34 @@ internal static class Dispatcher
                 HtmlMode = htmlMode,
                 HtmlAnchorId = args.TryGetProperty("htmlAnchorId", out var anchor)
                     && anchor.ValueKind == JsonValueKind.String ? anchor.GetString() : null,
+                Retain = args.TryGetProperty("retain", out var retain) && retain.ValueKind == JsonValueKind.True,
             });
+    }
+
+    /// <summary>Guarded commit of a preview retained by <c>preview_batch</c> with <c>retain</c>
+    /// (issue #760); an optional <c>transactionId</c> makes the commit safe to retry.</summary>
+    private static string CommitPreview(JsonElement args)
+    {
+        var handle = Handle(args);
+        var previewId = Str(args, "previewId");
+        var transactionId = TransactionId(args);
+        return transactionId is null
+            ? DocxSessionOps.CommitPreview(handle, previewId)
+            : DocxSessionOps.CommitPreviewTransactional(handle, transactionId, args, previewId);
+    }
+
+    private static string? TransactionId(JsonElement args)
+    {
+        var transactionId = args.TryGetProperty("transactionId", out var transaction)
+            && transaction.ValueKind != JsonValueKind.Null
+            ? transaction.ValueKind == JsonValueKind.String
+                ? transaction.GetString()
+                : throw new ArgumentException("transactionId must be a string")
+            : null;
+        if (transactionId is not null
+            && MutationTransactions.ValidateTransactionId(transactionId) is { } invalidTransactionId)
+            throw new ArgumentException(invalidTransactionId);
+        return transactionId;
     }
 
     private static JsonElement WithHandle(JsonElement args, int handle)

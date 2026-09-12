@@ -106,7 +106,28 @@ internal static class DocxSessionOps
         string transactionId,
         System.Text.Json.JsonElement request,
         MutationBatchMode mode,
-        System.Func<System.Collections.Generic.IEnumerable<MutationBatchStep>> steps)
+        System.Func<System.Collections.Generic.IEnumerable<MutationBatchStep>> steps) =>
+        RunTransactional(handle, transactionId, request, mode, () => ExecuteBatch(handle, mode, steps()));
+
+    /// <summary>
+    /// <see cref="CommitPreview"/> under a caller-chosen transaction id: the same journal
+    /// semantics as <see cref="ExecuteBatchTransactional"/>, so a commit whose response was lost
+    /// can be retried without committing twice.
+    /// </summary>
+    public static string CommitPreviewTransactional(
+        int handle,
+        string transactionId,
+        System.Text.Json.JsonElement request,
+        string previewId) =>
+        RunTransactional(
+            handle, transactionId, request, MutationBatchMode.Atomic, () => CommitPreview(handle, previewId));
+
+    private static string RunTransactional(
+        int handle,
+        string transactionId,
+        System.Text.Json.JsonElement request,
+        MutationBatchMode mode,
+        System.Func<string> execute)
     {
         if (MutationTransactions.ValidateTransactionId(transactionId) is { } invalid)
             throw new System.ArgumentException(invalid);
@@ -115,7 +136,7 @@ internal static class DocxSessionOps
             MutationTransactions.Fingerprint(request),
             mode,
             () => SessionRegistry.Get(handle).Version,
-            () => ExecuteBatch(handle, mode, steps()),
+            execute,
             ex => ex is System.ArgumentException or System.FormatException
                     or System.Text.Json.JsonException or System.OverflowException
                 ? (EditErrorCode.InvalidBatchStep, "validation")
@@ -187,6 +208,30 @@ internal static class DocxSessionOps
 
     public static string GetPackageContentHash(int handle) =>
         SessionRegistry.Get(handle).GetPackageContentHash();
+
+    /// <summary>
+    /// Retain a preview shadow's final package for a guarded commit on its live session (issue
+    /// #760). The browser client, which composes its own receipt, calls this on the shadow handle
+    /// after a successful batch. Returns <c>{"retention":{…}|null,"warnings":[…]}</c>.
+    /// </summary>
+    public static string RetainPreview(int shadowHandle)
+    {
+        var warnings = new System.Collections.Generic.List<string>();
+        var retention = SessionRegistry.Get(shadowHandle).RetainPreview(null, warnings);
+        var sb = new System.Text.StringBuilder("{\"retention\":")
+            .Append(retention is null ? "null" : DocxSessionJson.SerializePreviewRetention(retention))
+            .Append(",\"warnings\":[");
+        for (int i = 0; i < warnings.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            sb.Append(DocxSessionJson.JsonString(warnings[i]));
+        }
+        return sb.Append("]}").ToString();
+    }
+
+    /// <summary>Guarded commit of a retained preview; see <see cref="DocxSession.CommitPreview"/>.</summary>
+    public static string CommitPreview(int handle, string previewId) =>
+        DocxSessionJson.SerializeMutationBatchResult(SessionRegistry.Get(handle).CommitPreview(previewId));
 
     /// <summary>
     /// Return the stable semantic changes between the package opened for this session and its current
