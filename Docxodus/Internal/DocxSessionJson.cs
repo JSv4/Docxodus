@@ -2209,6 +2209,113 @@ internal static class DocxSessionJson
     }
 
     /// <summary>Serialize the strict, part-aware revision registry wire shape.</summary>
+    public static string SerializeRevisionRepairProposals(IReadOnlyList<RevisionRepairProposal> proposals)
+    {
+        var sb = new StringBuilder(64 + proposals.Count * 160);
+        sb.Append('[');
+        for (int i = 0; i < proposals.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            var p = proposals[i];
+            sb.Append("{\"revisionId\":").Append(JsonString(p.RevisionId))
+              .Append(",\"kind\":").Append(JsonString(RevisionRepairKindWire(p.Kind)))
+              .Append(",\"partUri\":").Append(JsonString(p.PartUri))
+              .Append(",\"diagnostic\":{\"code\":").Append(JsonString(p.Diagnostic.Code))
+              .Append(",\"message\":").Append(JsonString(p.Diagnostic.Message)).Append('}')
+              .Append(",\"carriers\":[");
+            for (int c = 0; c < p.Carriers.Count; c++)
+            {
+                if (c > 0) sb.Append(',');
+                sb.Append(JsonString(p.Carriers[c]));
+            }
+            sb.Append("],\"repairable\":").Append(p.Repairable ? "true" : "false")
+              .Append(",\"reason\":").Append(JsonString(p.Reason))
+              .Append(",\"requiresAuthorship\":").Append(p.RequiresAuthorship ? "true" : "false")
+              .Append('}');
+        }
+        return sb.Append(']').ToString();
+    }
+
+    public static IReadOnlyList<RevisionRepairRequest> ParseRevisionRepairRequests(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return Array.Empty<RevisionRepairRequest>();
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        if (root.ValueKind != JsonValueKind.Array)
+            throw new ArgumentException("repairs must be a JSON array of {revisionId, kind, author?, date?}");
+        var requests = new List<RevisionRepairRequest>();
+        foreach (var item in root.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                throw new ArgumentException("each repair must be an object");
+            var kindText = TryGetString(item, "kind", null)
+                ?? throw new ArgumentException("repair kind is required");
+            requests.Add(new RevisionRepairRequest
+            {
+                RevisionId = TryGetString(item, "revisionId", null)
+                    ?? throw new ArgumentException("repair revisionId is required"),
+                Kind = ParseRevisionRepairKind(kindText),
+                Author = TryGetString(item, "author", null),
+                Date = TryGetString(item, "date", null),
+            });
+        }
+        return requests;
+    }
+
+    public static string SerializeRevisionRepairResult(RevisionRepairResult result)
+    {
+        var sb = new StringBuilder(256);
+        sb.Append("{\"success\":").Append(result.Success ? "true" : "false");
+        if (result.Error is not null)
+        {
+            sb.Append(",\"error\":{\"code\":\"").Append(EnumToSnake(result.Error.Code)).Append('"')
+              .Append(",\"message\":").Append(JsonString(result.Error.Message)).Append('}');
+        }
+        sb.Append(",\"repairs\":[");
+        for (int i = 0; i < result.Repairs.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            var r = result.Repairs[i];
+            sb.Append("{\"revisionId\":").Append(JsonString(r.RevisionId))
+              .Append(",\"kind\":").Append(JsonString(RevisionRepairKindWire(r.Kind)))
+              .Append(",\"partUri\":").Append(JsonString(r.PartUri))
+              .Append(",\"identities\":[");
+            for (int c = 0; c < r.Identities.Count; c++)
+            {
+                if (c > 0) sb.Append(',');
+                var identity = r.Identities[c];
+                sb.Append("{\"carrier\":").Append(JsonString(identity.Carrier))
+                  .Append(",\"oldId\":").Append(identity.OldId is null ? "null" : JsonString(identity.OldId))
+                  .Append(",\"newId\":").Append(JsonString(identity.NewId)).Append('}');
+            }
+            sb.Append("]}");
+        }
+        sb.Append("],\"modified\":");
+        AppendAnchorArray(sb, result.Modified);
+        return sb.Append('}').ToString();
+    }
+
+    private static string RevisionRepairKindWire(RevisionRepairKind kind) => kind switch
+    {
+        RevisionRepairKind.AssignIdentity => "assign_identity",
+        RevisionRepairKind.ReattachNumberingChange => "reattach_numbering_change",
+        RevisionRepairKind.ReattachCellMarker => "reattach_cell_marker",
+        RevisionRepairKind.RestoreOrphanText => "restore_orphan_text",
+        RevisionRepairKind.WrapOrphanTextAsDeletion => "wrap_orphan_text_as_deletion",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind)),
+    };
+
+    private static RevisionRepairKind ParseRevisionRepairKind(string wire) => wire switch
+    {
+        "assign_identity" => RevisionRepairKind.AssignIdentity,
+        "reattach_numbering_change" => RevisionRepairKind.ReattachNumberingChange,
+        "reattach_cell_marker" => RevisionRepairKind.ReattachCellMarker,
+        "restore_orphan_text" => RevisionRepairKind.RestoreOrphanText,
+        "wrap_orphan_text_as_deletion" => RevisionRepairKind.WrapOrphanTextAsDeletion,
+        _ => throw new ArgumentException(
+            $"unknown repair kind '{wire}'; expected assign_identity, reattach_numbering_change, reattach_cell_marker, restore_orphan_text, or wrap_orphan_text_as_deletion"),
+    };
+
     public static string SerializeRevisionList(IReadOnlyList<RevisionListEntry> revisions)
     {
         var sb = new StringBuilder(64 + revisions.Count * 128);

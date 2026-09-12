@@ -831,6 +831,17 @@ public static partial class DocxSessionBridge
     [JSExport]
     public static string ListRevisions(int h) => DocxSessionOps.ListRevisions(h);
 
+    /// <summary>The explicit repairs the registry offers for entries it refuses to resolve
+    /// (issues #754–#758): JSON array of proposals with carriers, repairability and reason.</summary>
+    [JSExport]
+    public static string ListRevisionRepairs(int h) => DocxSessionOps.ListRevisionRepairs(h);
+
+    /// <summary>Perform requested repairs atomically as one undo step; returns the repair
+    /// result envelope with the old-to-new carrier identity mapping.</summary>
+    [JSExport]
+    public static string RepairRevisions(int h, string repairsJson) =>
+        DocxSessionOps.RepairRevisions(h, repairsJson);
+
     /// <summary>Accept ONE revision by id (an undoable session mutation); returns an
     /// EditResult envelope.</summary>
     [JSExport]

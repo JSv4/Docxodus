@@ -16,6 +16,18 @@ All notable changes to this project will be documented in this file.
   `session.verify_deliverable(request)` with typed request dataclasses; MCP:
   `docxodus_get_content(format: "verification", verification: {...})` where a companion may be
   named by `path` inside the document scope. The existing simple calls are unchanged. (#747)
+- Explicit, previewable repair of native revision markup the registry refuses to resolve.
+  `ListRevisionRepairs()` reports, per refused entry, the repairs the registry can prove —
+  `AssignIdentity` for a missing, non-numeric or duplicated `w:id` (fresh document-unique ids,
+  range pairs kept paired), `ReattachNumberingChange` and `ReattachCellMarker` when the marker's
+  owner is unique, `RestoreOrphanText` or `WrapOrphanTextAsDeletion` (author and date required)
+  for deleted text with no wrapper — each with the carriers it touches, whether it is repairable,
+  and why. `RepairRevisions(requests)` applies chosen repairs atomically as one undo step and
+  returns the old-to-new carrier identity mapping; an unoffered kind, a non-repairable proposal,
+  missing authorship, or a repair that leaves its diagnostic in place refuses the whole call
+  (`revision_repair_rejected`). Listing, accept and reject still never repair. Wired through
+  WASM/npm, the stdio host and docx-scalpel, and MCP `docxodus_track_changes` (`repairs`,
+  `repair`). (#754, #755, #756, #757, #758)
 - Mutation-batch retry deduplication on every transport. The transaction journal the MCP server
   introduced in #449 (replay of the retained terminal response for an identical retry,
   `transaction_conflict` on id reuse, bounded retention with tombstones) now lives in the core as

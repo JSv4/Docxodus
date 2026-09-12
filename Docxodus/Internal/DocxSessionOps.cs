@@ -1143,6 +1143,15 @@ internal static class DocxSessionOps
 
     /// <summary>Markup-native revision listing — stable ids, true authors/dates, no
     /// accept/reject re-diff. See <see cref="DocxSession.ListRevisions"/>.</summary>
+    /// <summary>The explicit repairs the registry offers for entries it refuses to resolve.</summary>
+    public static string ListRevisionRepairs(int handle) =>
+        DocxSessionJson.SerializeRevisionRepairProposals(SessionRegistry.Get(handle).ListRevisionRepairs());
+
+    /// <summary>Perform the repairs in <paramref name="repairsJson"/> atomically as one undo step.</summary>
+    public static string RepairRevisions(int handle, string repairsJson) =>
+        DocxSessionJson.SerializeRevisionRepairResult(SessionRegistry.Get(handle).RepairRevisions(
+            DocxSessionJson.ParseRevisionRepairRequests(repairsJson)));
+
     public static string ListRevisions(int handle) =>
         DocxSessionJson.SerializeRevisionList(SessionRegistry.Get(handle).ListRevisions());
 

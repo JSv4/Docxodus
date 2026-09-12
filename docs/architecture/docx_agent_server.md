@@ -824,7 +824,11 @@ never claiming a capability it doesn't have:
   registry resolves the supported content, property, table-cell, content-control, and numbering
   families. A recognized family with no safe resolver, or malformed/ambiguous native topology,
   remains visible with a diagnostic and blocks both selective and bulk resolution until the
-  source document is repaired. This is a capability change: before #455, `accept_all`/
+  source document is repaired — `docxodus_track_changes` `repairs`/`repair` perform the
+  bounded, explicit repairs the registry can prove (fresh ids for missing, non-numeric or
+  duplicated `w:id`; reattaching a marker to its unique owner; restoring or, with caller-supplied
+  authorship, wrapping orphan deleted text), see `docx_mutation_api.md`. This is a capability
+  change: before #455, `accept_all`/
   `reject_all` were a whole-document `RevisionProcessor` transform that always succeeded, and
   there is deliberately no `force` mode. The refusing shapes are a missing or non-numeric
   `w:id`, one `w:id` shared by two live groups in one part, `w:customXmlMoveFromRange*`/
