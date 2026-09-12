@@ -70,6 +70,10 @@ import type {
   MutationBatchStep,
   MutationTransaction,
   MutationTransactionIdentity,
+  MutationPreviewRetention,
+  DeliveryBundleResult,
+  DeliveryEvidenceStatus,
+  DeliveryReceiptBuildOptions,
   MutationBatchStepResult,
   MutationPreconditions,
   CrossReferenceOptions,
@@ -142,9 +146,33 @@ function mutationBatchChangeSet<T>(
  * Sessions are not eligible for JS-side garbage collection — call {@link close}
  * (or use a `using` block under TypeScript 5.2+) when done.
  */
+/**
+ * Receipt warnings that say a fresh execution may regenerate ids or timestamps — the same
+ * text the .NET receipt attaches. {@link DocxSession.commitPreview} removes them, because a
+ * commit restores the previewed bytes rather than executing afresh.
+ */
+const BATCH_REPLAY_CAVEATS = {
+  revisionDates: "Tracked-revision date attributes may use the execution clock; compare revision ids, authors, types, text, and anchors across separate executions.",
+  commentDates: "Comment date attributes may be generated from the execution clock; supply dates explicitly when byte-identical replay is required.",
+  annotationMetadata: "Auto-generated annotation ids or creation timestamps are execution metadata; supply id and created explicitly when byte-identical replay is required.",
+  createdAnchors: "Created anchors and related OOXML ids may be generated independently on replay; preview/apply equivalence is semantic and packageHash or anchor ids may differ.",
+} as const;
+const BATCH_REPLAY_CAVEAT_TEXTS: ReadonlySet<string> = new Set(Object.values(BATCH_REPLAY_CAVEATS));
+
+type DeliveryBundleArtifactWire = Omit<DeliveryBundleResult["artifacts"][number], "bytes"> & { bytes?: string };
+
+/** Mirrors the .NET retained-preview count bound, so this client-side receipt map cannot outgrow it. */
+const RETAINED_PREVIEW_RECEIPTS = 8;
+
 export class DocxSession {
   private readonly handle: number;
   private readonly wasm: DocxodusWasmExports["DocxSessionBridge"];
+  /**
+   * The receipts this client composed for previews it retained, keyed by previewId. The host
+   * keeps the package and the binding; the step receipts live only here, so a commit can return
+   * the previewed steps and change sets without the host re-parsing a client-composed result.
+   */
+  private readonly retainedPreviewReceipts = new Map<string, MutationBatchResult>();
 
   /** @internal */
   constructor(handle: number, wasm: DocxodusWasmExports["DocxSessionBridge"]) {
@@ -227,8 +255,136 @@ export class DocxSession {
     if (mode !== "atomic" && mode !== "best_effort") {
       throw new RangeError(`unknown mutation batch mode: ${String(mode)}`);
     }
-    if (transaction === undefined) return this.runBatch(steps, mode);
+    if (transaction === undefined) return this.recorded(steps, mode, undefined, () => this.runBatch(steps, mode));
+    return this.runTransactional(transaction, mode,
+      identity => this.recorded(steps, mode, identity, () => this.runBatch(steps, mode)));
+  }
 
+  /**
+   * What the session's host-owned delivery evidence recorder holds (issue #748). `enabled` is
+   * false, with the reason, unless the session was opened with `captureDeliveryEvidence`.
+   */
+  getDeliveryEvidenceStatus(): DeliveryEvidenceStatus {
+    if (!this.wasm.GetDeliveryEvidenceStatus) {
+      throw new Error("This WASM bundle predates delivery evidence; rebuild docxodus.");
+    }
+    return JSON.parse(this.wasm.GetDeliveryEvidenceStatus(this.handle)) as DeliveryEvidenceStatus;
+  }
+
+  /**
+   * Build the receipt-bearing delivery of this session through the shared bundle service: the
+   * clean current package (`final-docx`), the source-to-delivered semantic delta, and the change
+   * receipt (`change-receipt`) minted from the captured evidence — verifiable with
+   * `verifyDeliveryReceipt` against the returned artifact bytes. A history that cannot be
+   * attested yields an `incomplete` bundle whose receipt artifact carries the reason, and
+   * `evidence.unavailableReason` says why.
+   */
+  buildDeliveryReceipt(options?: DeliveryReceiptBuildOptions): DeliveryBundleResult {
+    if (!this.wasm.BuildDeliveryReceipt) {
+      throw new Error("This WASM bundle predates delivery evidence; rebuild docxodus.");
+    }
+    const wire = JSON.parse(this.wasm.BuildDeliveryReceipt(this.handle, JSON.stringify(options ?? {}))) as {
+      status: DeliveryBundleResult["status"];
+      verified: boolean;
+      manifest: Record<string, unknown>;
+      manifestBytes: string;
+      artifacts: readonly (Omit<DeliveryBundleArtifactWire, "bytes"> & { bytes?: string })[];
+      evidence?: DeliveryEvidenceStatus;
+    };
+    const decode = (base64: string): Uint8Array => Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+    return {
+      status: wire.status,
+      verified: wire.verified,
+      manifest: wire.manifest,
+      manifestBytes: decode(wire.manifestBytes),
+      artifacts: wire.artifacts.map(artifact => {
+        const { bytes, ...rest } = artifact;
+        return bytes === undefined ? rest : { ...rest, bytes: decode(bytes) };
+      }),
+      ...(wire.evidence ? { evidence: wire.evidence } : {}),
+    };
+  }
+
+  /**
+   * Describe a batch to the session's delivery evidence recorder before running it, and hand
+   * it the step results afterwards, so the version steps the batch produced are recorded under
+   * this description rather than as unlabeled mutations. A bundle without the recorder, or a
+   * session not capturing evidence, simply runs the batch.
+   */
+  private recorded(
+    steps: readonly MutationBatchStep[],
+    mode: MutationBatchMode,
+    identity: MutationTransactionIdentity | undefined,
+    run: () => MutationBatchResult,
+  ): MutationBatchResult {
+    if (!this.wasm.BeginDeliveryEvidence || !this.wasm.CompleteDeliveryEvidence
+      || !this.wasm.AbandonDeliveryEvidence) {
+      return run();
+    }
+    const described = this.wasm.BeginDeliveryEvidence(
+      this.handle,
+      JSON.stringify(steps.map(step => step.args === undefined
+        ? { tool: step.tool, action: step.action }
+        : { tool: step.tool, action: step.action, args: step.args })),
+      mode,
+      identity ? JSON.stringify({ transactionId: identity.transactionId, requestFingerprint: identity.requestFingerprint }) : "",
+    );
+    if (!described) return run();
+    let result: MutationBatchResult | undefined;
+    try {
+      result = run();
+      return result;
+    } finally {
+      if (result) this.wasm.CompleteDeliveryEvidence(this.handle, JSON.stringify(result.steps));
+      else this.wasm.AbandonDeliveryEvidence(this.handle);
+    }
+  }
+
+  /**
+   * Make a preview retained by {@link previewBatch} (`retain: true`) the live document exactly
+   * as previewed: the previewed package is restored byte-for-byte as one undo step, so the
+   * generated anchor ids, timestamps and `packageHash` are exactly those the preview reported.
+   * The commit is guarded — it refuses with `preview_stale`, editing nothing, when the session's
+   * version, package content, tracked-changes mode or revision author moved since the preview,
+   * and with `preview_not_found` once the preview expired, was evicted, or was already
+   * committed. A `transaction` makes a retry after a lost response safe, as for
+   * {@link executeBatch}.
+   */
+  commitPreview(previewId: string, transaction?: MutationTransaction): MutationBatchResult {
+    if (!this.wasm.CommitPreview) {
+      throw new Error("This WASM bundle predates retained previews; rebuild docxodus.");
+    }
+    const commit = (): MutationBatchResult => {
+      const envelope = JSON.parse(this.wasm.CommitPreview!(this.handle, previewId)) as MutationBatchResult;
+      if (!envelope.success) {
+        if (envelope.failure?.error.code === "preview_not_found") this.retainedPreviewReceipts.delete(previewId);
+        return envelope;
+      }
+      const receipt = this.retainedPreviewReceipts.get(previewId);
+      this.retainedPreviewReceipts.delete(previewId);
+      // No receipt means another client of this handle retained the preview; the host's
+      // envelope (versions, hash, retention) is still exact, only the step receipts are unknown.
+      if (!receipt) return envelope;
+      return {
+        ...receipt,
+        preview: false,
+        html: null,
+        baseVersion: envelope.baseVersion,
+        resultVersion: envelope.resultVersion,
+        packageHash: envelope.packageHash,
+        warnings: receipt.warnings.filter(warning => !BATCH_REPLAY_CAVEAT_TEXTS.has(warning)),
+        retention: envelope.retention,
+      };
+    };
+    if (transaction === undefined) return commit();
+    return this.runTransactional(transaction, "atomic", () => commit());
+  }
+
+  private runTransactional(
+    transaction: MutationTransaction,
+    mode: MutationBatchMode,
+    body: (identity: MutationTransactionIdentity) => MutationBatchResult,
+  ): MutationBatchResult {
     // The batch is composed here from callbacks, so the session's journal (shared with every
     // other transport) is driven in three steps: resolve the id, run, retain the result.
     if (!this.wasm.BeginMutationTransaction
@@ -254,7 +410,7 @@ export class DocxSession {
     let completed = false;
     try {
       const result: MutationBatchResult = {
-        ...this.runBatch(steps, mode),
+        ...body(decision.transaction),
         transaction: decision.transaction,
       };
       this.wasm.CompleteMutationTransaction(
@@ -311,21 +467,21 @@ export class DocxSession {
         const warnings: string[] = [...observationWarnings];
         if ([...revisionChanges.added, ...revisionChanges.modified]
           .some(revision => revision.date !== undefined && revision.date !== null)) {
-          warnings.push("Tracked-revision date attributes may use the execution clock; compare revision ids, authors, types, text, and anchors across separate executions.");
+          warnings.push(BATCH_REPLAY_CAVEATS.revisionDates);
         }
         if ([...commentChanges.added, ...commentChanges.modified]
           .some(comment => comment.date !== undefined && comment.date !== null)) {
-          warnings.push("Comment date attributes may be generated from the execution clock; supply dates explicitly when byte-identical replay is required.");
+          warnings.push(BATCH_REPLAY_CAVEATS.commentDates);
         }
         // Same predicate as the .NET receipt (`annotation.Created.HasValue`): the warning is
         // about an execution CLOCK, so an annotation added with no created timestamp is
         // deterministic and must not raise it on one surface and not the other.
         if (annotationChanges.added
           .some(annotation => annotation.created !== undefined && annotation.created !== null)) {
-          warnings.push("Auto-generated annotation ids or creation timestamps are execution metadata; supply id and created explicitly when byte-identical replay is required.");
+          warnings.push(BATCH_REPLAY_CAVEATS.annotationMetadata);
         }
         if (result.steps.some(step => step.results.some(edit => edit.created.length > 0))) {
-          warnings.push("Created anchors and related OOXML ids may be generated independently on replay; preview/apply equivalence is semantic and packageHash or anchor ids may differ.");
+          warnings.push(BATCH_REPLAY_CAVEATS.createdAnchors);
         }
         if (mode === "best_effort" && !result.success) {
           warnings.push("Best-effort execution retains every successful step despite later failures.");
@@ -544,7 +700,32 @@ export class DocxSession {
       } catch (error) {
         warnings.push(`Preview HTML could not be generated: ${error instanceof Error ? error.message : String(error)}`);
       }
-      return { ...result, preview: true, warnings, html };
+      let retention: MutationPreviewRetention | undefined;
+      if (options?.retain) {
+        if (!this.wasm.RetainPreview) {
+          throw new Error("This WASM bundle predates retained previews; rebuild docxodus.");
+        }
+        if (!result.success) {
+          warnings.push("The preview did not succeed, so it was not retained for commit.");
+        } else {
+          const retained = JSON.parse(this.wasm.RetainPreview(shadow.handle)) as {
+            retention: MutationPreviewRetention | null;
+            warnings: readonly string[];
+          };
+          warnings.push(...retained.warnings);
+          retention = retained.retention ?? undefined;
+        }
+      }
+      const preview: MutationBatchResult = retention
+        ? { ...result, preview: true, warnings, html, retention }
+        : { ...result, preview: true, warnings, html };
+      if (retention) {
+        if (this.retainedPreviewReceipts.size >= RETAINED_PREVIEW_RECEIPTS) {
+          this.retainedPreviewReceipts.delete(this.retainedPreviewReceipts.keys().next().value!);
+        }
+        this.retainedPreviewReceipts.set(retention.previewId, { ...preview, html: null });
+      }
+      return preview;
     } finally {
       shadow.close();
     }
@@ -2075,6 +2256,7 @@ export class DocxSession {
   }
 
   close(): void {
+    this.retainedPreviewReceipts.clear();
     this.wasm.CloseSession(this.handle);
   }
 

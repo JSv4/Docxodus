@@ -107,6 +107,50 @@ comments and annotations, and `warnings`. `MutationPreviewHtmlMode.SCOPED` rende
 and requires `html_anchor_id`. `package_hash` is `None` — never `""` — when it could not be
 computed, so check it before using it as a replay assertion.
 
+A preview predicts generated values (new anchor ids, comment ids, revision timestamps), but a
+later `execute_batch` runs afresh and may generate them differently. `retain=True` keeps the
+successful preview's exact result package, and `commit_preview` makes it the live document as
+previewed — one undo step, same ids, same `package_hash`:
+
+```python
+preview = session.preview_batch(steps, retain=True)
+show_to_reviewer(preview.html, preview.revision_changes)
+commit = session.commit_preview(preview.retention.preview_id, transaction_id="plan-42-commit")
+assert commit.package_hash == preview.package_hash
+```
+
+The commit refuses with `EditErrorCode.PREVIEW_STALE`, editing nothing, if the session's
+version, package content, tracked-changes mode or revision author moved since the preview,
+and with `PREVIEW_NOT_FOUND` once the preview expired, was evicted (8 previews, 64 MiB,
+15 minutes per session) or was already committed.
+
+### Delivery receipts from captured evidence
+
+A session opened with `DocxSessionSettings(capture_delivery_evidence=True)` records the
+evidence a delivery change receipt needs as its edits execute — the exact package before and
+after every mutation, every direct operation's request (the host describes each one), each
+`execute_batch` step, transaction ids, and undo/redo lineage — and `build_delivery_receipt`
+mints a receipt `verify_delivery_receipt` accepts:
+
+```python
+from docx_scalpel import DeliveryReceiptPrivacyProfile, DocxSessionSettings, verify_delivery_receipt
+
+with open_session(docx_bytes, DocxSessionSettings(capture_delivery_evidence=True)) as session:
+    session.replace_text(first_p.id, "Final wording")
+    session.execute_batch(steps, transaction_id="plan-42")
+    bundle = session.build_delivery_receipt(privacy_profile=DeliveryReceiptPrivacyProfile.HASH_AND_SUMMARY)
+
+receipt = bundle.artifact("change-receipt")
+artifacts = {a.artifact_id: a.bytes for a in bundle.artifacts
+             if a.bytes is not None and a.artifact_id != "change-receipt"}
+assert verify_delivery_receipt(receipt.bytes.decode(), artifacts).is_valid
+```
+
+Deliver the bundle's `final-docx` artifact: it is the bytes the receipt attests.
+`get_delivery_evidence_status()` names the first reason a receipt cannot be minted (capture
+off, retention of 256 states / 512 MiB exceeded); the bundle is then `incomplete` and the
+receipt artifact carries the reason instead of claiming a history.
+
 A step's `operation` is any mutating session operation, including the structural
 table ops (`insert_table`, `insert_table_row`, `merge_cells`, …); read-only
 operations, `undo`/`redo`, and session configuration are rejected as

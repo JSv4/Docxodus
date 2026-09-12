@@ -380,6 +380,7 @@ internal static class DocxSessionJson
         bool smartQuotes = TryGetBool(root, "smartQuotes", false);
         bool emitMarkdownPatch = TryGetBool(root, "emitMarkdownPatch", true);
         bool captureInitialProjection = TryGetBool(root, "captureInitialProjection", true);
+        bool captureDeliveryEvidence = TryGetBool(root, "captureDeliveryEvidence", false);
         var projectionSettings = root.TryGetProperty("projectionSettings", out var ps) && ps.ValueKind == JsonValueKind.Object
             ? ParseProjectionSettings(ps)
             : new WmlToMarkdownConverterSettings();
@@ -394,6 +395,7 @@ internal static class DocxSessionJson
             SmartQuotes = smartQuotes,
             EmitMarkdownPatch = emitMarkdownPatch,
             CaptureInitialProjection = captureInitialProjection,
+            CaptureDeliveryEvidence = captureDeliveryEvidence,
             ProjectionSettings = projectionSettings,
         };
     }
@@ -1775,9 +1777,20 @@ internal static class DocxSessionJson
         sb.Append(']')
           .Append(",\"html\":")
           .Append(result.Html is null ? "null" : JsonString(result.Html));
+        if (result.Retention is { } retention)
+            sb.Append(",\"retention\":").Append(SerializePreviewRetention(retention));
         sb.Append('}');
         return sb.ToString();
     }
+
+    /// <summary>The identity of a preview retained for commit (issue #760), as every transport publishes it.</summary>
+    public static string SerializePreviewRetention(MutationPreviewRetention retention) =>
+        "{\"previewId\":" + JsonString(retention.PreviewId)
+        + ",\"baseVersion\":" + retention.BaseVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)
+        + ",\"basePackageHash\":" + JsonString(retention.BasePackageHash)
+        + ",\"expiresAt\":" + JsonString(retention.ExpiresAt.UtcDateTime
+            .ToString("O", System.Globalization.CultureInfo.InvariantCulture))
+        + "}";
 
     private static void AppendChangeSet<T>(
         StringBuilder sb,

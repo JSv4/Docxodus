@@ -72,6 +72,12 @@ import type {
   MarkdownProjection,
   MutationTransaction,
   MutationTransactionIdentity,
+  MutationPreviewRetention,
+  DeliveryEvidenceStatus,
+  DeliveryReceiptPrivacyProfile,
+  DeliveryReceiptBuildOptions,
+  DeliveryBundleArtifact,
+  DeliveryBundleResult,
   // DocxSession mutation API
   DocxSessionSettings,
 } from "./types.js";

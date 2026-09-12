@@ -15,6 +15,7 @@ where they're used in ``session.py``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import base64
 from enum import Enum
 from typing import Any, Callable, Generic, Mapping, Sequence, TypeVar
 
@@ -801,6 +802,107 @@ class DeliveryArtifactVerification:
                 VerificationDigest._from_wire(actual_digest)
                 if isinstance(actual_digest, Mapping)
                 else None
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DeliveryEvidenceStatus:
+    """What the session's host-owned delivery evidence recorder holds (issue #748).
+
+    ``unavailable_reason`` is ``None`` when a complete receipt can be minted, otherwise the
+    first reason it cannot (capture off, retention exceeded, an unrecordable step).
+    """
+
+    enabled: bool
+    transaction_count: int
+    lineage_event_count: int
+    #: Version steps applied by direct calls outside a described batch: exact packages,
+    #: unknown request.
+    unlabeled_transaction_count: int
+    retained_state_count: int
+    retained_bytes: int
+    source_version: int
+    current_version: int
+    unavailable_reason: str | None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "DeliveryEvidenceStatus":
+        return cls(
+            enabled=bool(d.get("enabled", False)),
+            transaction_count=int(d.get("transactionCount", 0)),
+            lineage_event_count=int(d.get("lineageEventCount", 0)),
+            unlabeled_transaction_count=int(d.get("unlabeledTransactionCount", 0)),
+            retained_state_count=int(d.get("retainedStateCount", 0)),
+            retained_bytes=int(d.get("retainedBytes", 0)),
+            source_version=int(d.get("sourceVersion", 0)),
+            current_version=int(d.get("currentVersion", 0)),
+            unavailable_reason=(
+                None if d.get("unavailableReason") is None else str(d["unavailableReason"])
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DeliveryBundleArtifact:
+    """One artifact of a delivery bundle: its bytes when available, else the reason."""
+
+    artifact_id: str
+    kind: str
+    requiredness: str
+    availability: str
+    relative_path: str
+    media_type: str
+    bytes: bytes | None = None
+    unavailable_reason: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "DeliveryBundleArtifact":
+        raw = d.get("bytes")
+        return cls(
+            artifact_id=str(d.get("artifactId", "")),
+            kind=str(d.get("kind", "")),
+            requiredness=str(d.get("requiredness", "")),
+            availability=str(d.get("availability", "")),
+            relative_path=str(d.get("relativePath", "")),
+            media_type=str(d.get("mediaType", "")),
+            bytes=None if raw is None else base64.b64decode(str(raw)),
+            unavailable_reason=(
+                None if d.get("unavailableReason") is None else str(d["unavailableReason"])
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DeliveryBundleResult:
+    """A delivery bundle as every transport publishes it (see ``build_delivery_receipt``).
+
+    ``status`` is ``complete``, ``incomplete`` or ``failed``; ``manifest`` is the verified
+    bundle manifest and ``manifest_bytes`` its canonical bytes; ``artifacts`` carry bytes or an
+    unavailable reason; ``evidence`` is the session's recorder status at delivery time.
+    """
+
+    status: str
+    verified: bool
+    manifest: Mapping[str, Any]
+    manifest_bytes: bytes
+    artifacts: tuple[DeliveryBundleArtifact, ...]
+    evidence: DeliveryEvidenceStatus | None = None
+
+    def artifact(self, artifact_id: str) -> DeliveryBundleArtifact | None:
+        return next((a for a in self.artifacts if a.artifact_id == artifact_id), None)
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "DeliveryBundleResult":
+        evidence = d.get("evidence")
+        return cls(
+            status=str(d.get("status", "failed")),
+            verified=bool(d.get("verified", False)),
+            manifest=dict(d.get("manifest") or {}),
+            manifest_bytes=base64.b64decode(str(d.get("manifestBytes", ""))),
+            artifacts=tuple(DeliveryBundleArtifact._from_wire(a) for a in d.get("artifacts", ())),
+            evidence=(
+                DeliveryEvidenceStatus._from_wire(evidence) if isinstance(evidence, Mapping) else None
             ),
         )
 
@@ -3130,6 +3232,30 @@ class MutationTransactionIdentity:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class MutationPreviewRetention:
+    """Identity of a preview retained for a guarded commit (issue #760).
+
+    ``base_version`` and ``base_package_hash`` describe the live state the preview was
+    predicted from; ``commit_preview`` refuses once either has moved. ``expires_at`` is the
+    host's ISO-8601 UTC expiry, after which the entry is gone.
+    """
+
+    preview_id: str
+    base_version: int
+    base_package_hash: str
+    expires_at: str
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "MutationPreviewRetention":
+        return cls(
+            preview_id=str(d.get("previewId", "")),
+            base_version=int(d.get("baseVersion", 0)),
+            base_package_hash=str(d.get("basePackageHash", "")),
+            expires_at=str(d.get("expiresAt", "")),
+        )
+
+
 _BatchItem = TypeVar("_BatchItem")
 
 
@@ -3183,11 +3309,14 @@ class MutationBatchResult:
     #: Present only for a batch executed under a ``transaction_id``: the identity the
     #: session's journal bound the request to, the same on the original call and on a replay.
     transaction: MutationTransactionIdentity | None = None
+    #: Present on a preview retained with ``retain=True`` and on the result of committing it.
+    retention: MutationPreviewRetention | None = None
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "MutationBatchResult":
         failure = d.get("failure")
         transaction = d.get("transaction")
+        retention = d.get("retention")
         return cls(
             mode=MutationBatchMode(d.get("mode", "atomic")),
             status=str(d.get("status", "failed")),
@@ -3215,6 +3344,10 @@ class MutationBatchResult:
             transaction=(
                 MutationTransactionIdentity._from_wire(transaction)
                 if isinstance(transaction, Mapping) else None
+            ),
+            retention=(
+                MutationPreviewRetention._from_wire(retention)
+                if isinstance(retention, Mapping) else None
             ),
         )
 
@@ -4356,6 +4489,12 @@ class DocxSessionSettings:
     #: Capture the initial projection for ``get_diff`` and retain exact opening
     #: package bytes for ``get_semantic_changes``. Disable to avoid both costs.
     capture_initial_projection: bool = True
+    #: Record the evidence a delivery change receipt needs as edits execute (issue #748):
+    #: the exact package before and after every version step, each request, transaction
+    #: ids and undo/redo lineage. ``build_delivery_receipt`` then mints a verifiable
+    #: receipt. Costs one clean package serialization per mutation plus bounded retention
+    #: (256 states / 512 MiB). Requires ``capture_initial_projection``.
+    capture_delivery_evidence: bool = False
     projection_settings: WmlToMarkdownConverterSettings | None = None
 
     def to_wire(self) -> dict[str, Any]:
@@ -4367,6 +4506,7 @@ class DocxSessionSettings:
             "persistAnchorIds": self.persist_anchor_ids,
             "smartQuotes": self.smart_quotes,
             "captureInitialProjection": self.capture_initial_projection,
+            "captureDeliveryEvidence": self.capture_delivery_evidence,
         }
         if self.revision_author is not None:
             out["revisionAuthor"] = self.revision_author

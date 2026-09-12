@@ -1080,6 +1080,55 @@ export interface DeliveryArtifactVerification {
  * Portable delivery change receipt verification verdict — the shared facade wire
  * shape every transport returns (issue #520).
  */
+/** What the session's host-owned delivery evidence recorder holds (issue #748). */
+export interface DeliveryEvidenceStatus {
+  enabled: boolean;
+  transactionCount: number;
+  lineageEventCount: number;
+  /** Version steps applied by direct calls: exact packages, unknown request. */
+  unlabeledTransactionCount: number;
+  retainedStateCount: number;
+  retainedBytes: number;
+  sourceVersion: number;
+  currentVersion: number;
+  /** Null when a complete receipt can be minted; otherwise the first reason it cannot. */
+  unavailableReason: string | null;
+}
+
+export type DeliveryReceiptPrivacyProfile = "hashOnly" | "hashAndSummary" | "fullEvidence";
+
+export interface DeliveryReceiptBuildOptions {
+  privacyProfile?: DeliveryReceiptPrivacyProfile;
+  failOnUnexpectedChanges?: boolean;
+}
+
+export interface DeliveryBundleArtifact {
+  artifactId: string;
+  kind: string;
+  requiredness: "required" | "optional";
+  availability: "available" | "unavailable";
+  relativePath: string;
+  mediaType: string;
+  /** Present when available. */
+  bytes?: Uint8Array;
+  /** Present when unavailable. */
+  unavailableReason?: string;
+}
+
+/**
+ * A delivery bundle as every transport publishes it: the verified manifest, its canonical bytes,
+ * and each artifact with its bytes or the reason it is unavailable. `evidence` is the session's
+ * recorder status at delivery time.
+ */
+export interface DeliveryBundleResult {
+  status: "complete" | "incomplete" | "failed";
+  verified: boolean;
+  manifest: Record<string, unknown>;
+  manifestBytes: Uint8Array;
+  artifacts: readonly DeliveryBundleArtifact[];
+  evidence?: DeliveryEvidenceStatus;
+}
+
 export interface DeliveryReceiptVerificationResult {
   isValid: boolean;
   receiptDigestValid: boolean;
@@ -1557,6 +1606,13 @@ export interface DocxodusWasmExports {
     BeginMutationTransaction?: (handle: number, transactionId: string, requestJson: string) => string;
     CompleteMutationTransaction?: (handle: number, transactionId: string, serializedResponse: string) => void;
     AbandonMutationTransaction?: (handle: number, transactionId: string) => void;
+    RetainPreview?: (shadowHandle: number) => string;
+    CommitPreview?: (handle: number, previewId: string) => string;
+    GetDeliveryEvidenceStatus?: (handle: number) => string;
+    BuildDeliveryReceipt?: (handle: number, optionsJson: string) => string;
+    BeginDeliveryEvidence?: (handle: number, operationsJson: string, mode: string, identityJson: string) => boolean;
+    CompleteDeliveryEvidence?: (handle: number, stepsJson: string) => void;
+    AbandonDeliveryEvidence?: (handle: number) => void;
     GetPackageManifest: (handle: number) => string;
     RenderPreviewHtml?: (handle: number) => string;
     RenderPreviewBlockHtml?: (handle: number, anchorId: string) => string;
@@ -1900,6 +1956,8 @@ export type EditErrorCode =
   | "transaction_conflict"
   | "transaction_result_evicted"
   | "transaction_incomplete"
+  | "preview_not_found"
+  | "preview_stale"
   | "revision_repair_rejected"
   | "hyperlink_not_found"
   | "bookmark_not_found"
@@ -1995,6 +2053,11 @@ export interface MutationBatchStep {
   mutation: () => EditResult | readonly EditResult[];
   /** Optional read-only validation: all run up front in atomic mode, per-step in best-effort. */
   preflight?: () => EditError | undefined;
+  /**
+   * The step's request arguments, recorded as the normalized request in delivery evidence
+   * (issue #748) when the session captures it. The callback hides them, so name them here.
+   */
+  args?: Record<string, unknown>;
 }
 
 /** A preview callback receives the isolated shadow session it must mutate/read. */
@@ -2009,6 +2072,25 @@ export interface MutationBatchPreviewOptions {
   html?: "none" | "scoped" | "full";
   /** Required for scoped HTML. */
   htmlAnchorId?: string;
+  /**
+   * Keep a successful preview's exact result package so {@link DocxSession.commitPreview} can
+   * later make it the live document with the previewed generated ids, timestamps and
+   * `packageHash`. The receipt then carries {@link MutationBatchResult.retention}. Retention
+   * is bounded (count, bytes and time) and cleared when the session closes.
+   */
+  retain?: boolean;
+}
+
+/**
+ * Identity of a preview retained for a guarded commit (issue #760). `baseVersion` and
+ * `basePackageHash` describe the live state the preview was predicted from; the commit refuses
+ * once either has moved. `expiresAt` is the ISO-8601 UTC instant after which the entry is gone.
+ */
+export interface MutationPreviewRetention {
+  previewId: string;
+  baseVersion: number;
+  basePackageHash: string;
+  expiresAt: string;
 }
 
 export interface MutationBatchStepResult {
@@ -2063,6 +2145,11 @@ export interface MutationBatchResult {
    * session's journal bound the request to — the same on the original call and on a replay.
    */
   transaction?: MutationTransactionIdentity;
+  /**
+   * Present on a preview retained with {@link MutationBatchPreviewOptions.retain} and on the
+   * result of {@link DocxSession.commitPreview}.
+   */
+  retention?: MutationPreviewRetention;
 }
 
 /** The versioned identity a transaction-aware batch result carries (issue #761). */
@@ -2822,6 +2909,15 @@ export interface DocxSessionSettings {
    * do not plan to call either comparison API.
    */
   captureInitialProjection?: boolean;
+  /**
+   * Record the evidence a delivery change receipt needs as edits execute (issue #748): the
+   * exact package before and after every version step, each batch's described request,
+   * transaction ids, and undo/redo lineage. {@link DocxSession.buildDeliveryReceipt} then mints
+   * a verifiable receipt. Default false: every version step serializes a clean package copy
+   * and retention holds them (bounded: 256 states / 512 MiB) until delivery. Requires
+   * `captureInitialProjection`.
+   */
+  captureDeliveryEvidence?: boolean;
 }
 
 /** One top-level render unit in a {@link RenderPlan}: a body block (`p`/`h`/`li`),

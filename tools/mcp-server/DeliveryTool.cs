@@ -22,7 +22,6 @@ internal static class DeliveryTool
 
         var baselineLocation = store.Documents.Resolve(String(args, "baselinePath"));
         var baselineBytes = store.Documents.Read(baselineLocation);
-        var workingBytes = DocxSessionOps.Save(session.Handle, persistAnchorIds: false);
         var baselineVersion = NonNegativeLong(args, "baselineDocumentVersion");
         var finalVersion = NonNegativeLong(args, "finalDocumentVersion");
         var finalName = String(args, "finalDocumentName");
@@ -34,6 +33,16 @@ internal static class DeliveryTool
             .Select(ParseArtifact)
             .ToArray();
 
+        // A requested change receipt is minted from the session's host-captured evidence
+        // (issue #748). The working document is then the recorder's own current state, so the
+        // delivered bytes are the last recorded after-state by construction; without a receipt
+        // request the clean save is used as before.
+        var evidence = artifacts.Any(artifact => artifact.Kind == DeliveryArtifactKind.ChangeReceipt)
+            ? ExportEvidence(session, args, baselineBytes)
+            : null;
+        var workingBytes = evidence?.Working.Bytes
+            ?? DocxSessionOps.Save(session.Handle, persistAnchorIds: false);
+
         var request = new DeliveryBundleBuildRequest(
             new DeliveryDocumentSnapshot(
                 "baseline:" + Path.GetFileName(baselineLocation),
@@ -41,7 +50,7 @@ internal static class DeliveryTool
                 baselineBytes),
             new DeliveryDocumentSnapshot(
                 "working:" + session.Id,
-                DocxSessionOps.GetVersion(session.Handle),
+                evidence?.Working.DocumentVersion ?? DocxSessionOps.GetVersion(session.Handle),
                 workingBytes),
             finalName,
             finalVersion,
@@ -52,7 +61,8 @@ internal static class DeliveryTool
                 GeneratedRevisions = RevisionPolicy(
                     String(policy, "generatedRevisions"), "generatedRevisions"),
             },
-            artifacts);
+            artifacts,
+            evidence?.ReceiptContext);
         var options = new DeliveryBundleBuildOptions
         {
             ReturnIncompleteBundle = OptionalBoolean(args, "returnIncompleteBundle", false),
@@ -71,7 +81,7 @@ internal static class DeliveryTool
                 .AsTask()
                 .GetAwaiter()
                 .GetResult();
-            return Serialize(bundle);
+            return DeliveryOps.SerializeBundle(bundle, MaxReturnedBytes, evidence?.Status);
         }
         catch (DeliveryBundleException ex)
         {
@@ -82,6 +92,34 @@ internal static class DeliveryTool
         {
             throw new McpToolException($"delivery_configuration_failed: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// The session's captured evidence for this delivery. The receipt's source document is the
+    /// package the session opened, so a baseline that is a different package cannot be attested
+    /// by this history; the receipt is then unavailable with that reason rather than rejected
+    /// deep inside lineage validation.
+    /// </summary>
+    private static DeliveryEvidenceExport ExportEvidence(DocSession session, JsonElement args, byte[] baselineBytes)
+    {
+        var options = args.TryGetProperty("changeReceipt", out var receipt) && receipt.ValueKind == JsonValueKind.Object
+            ? DeliveryOps.ParseReceiptBuildOptions(receipt.GetRawText())
+            : new DeliveryReceiptBuildOptions();
+        var export = DocxSessionOps.ExportDeliveryEvidence(session.Handle, options);
+        if (export.ReceiptContext is null) return export;
+        string? mismatch = null;
+        if (!baselineBytes.AsSpan().SequenceEqual(export.Source.Bytes))
+            mismatch = "the delivery baseline is not the package this session opened, so the captured history cannot attest it";
+        else if (NonNegativeLong(args, "baselineDocumentVersion") != export.Source.DocumentVersion)
+            mismatch = $"baselineDocumentVersion must be {export.Source.DocumentVersion}, the version the captured history starts at";
+        else if (NonNegativeLong(args, "finalDocumentVersion") != export.Working.DocumentVersion)
+            mismatch = $"finalDocumentVersion must be {export.Working.DocumentVersion}, the session version the captured history ends at";
+        if (mismatch is null) return export;
+        return new DeliveryEvidenceExport(
+            null,
+            export.Source,
+            export.Working,
+            export.Status with { UnavailableReason = mismatch });
     }
 
     private static DeliveryArtifactRequest ParseArtifact(JsonElement value)
@@ -105,52 +143,6 @@ internal static class DeliveryTool
             ReviewProfile = review,
             CommentProfile = comments,
         };
-    }
-
-    private static string Serialize(DeliveryBundle bundle)
-    {
-        var returnedBytes = bundle.ManifestBytes.LongLength;
-        foreach (var artifact in bundle.Manifest.Payload.Artifacts)
-        {
-            if (artifact.ByteLength is { } length)
-            {
-                if (returnedBytes > MaxReturnedBytes - Math.Min(length, MaxReturnedBytes))
-                    throw new McpToolException(
-                        $"delivery bundle exceeds the {MaxReturnedBytes}-byte MCP return limit; use the CLI or programmatic API");
-                returnedBytes += length;
-            }
-        }
-        var buffer = new ArrayBufferWriter<byte>();
-        using (var writer = new Utf8JsonWriter(buffer))
-        {
-            writer.WriteStartObject();
-            writer.WriteString("status", Name(bundle.Manifest.Payload.Status));
-            writer.WriteBoolean("verified", bundle.Verification.IsValid);
-            writer.WriteBoolean("manifestVerified", bundle.Verification.IsValid);
-            writer.WritePropertyName("manifest");
-            using (var manifest = JsonDocument.Parse(bundle.ManifestBytes))
-                manifest.RootElement.WriteTo(writer);
-            writer.WriteBase64String("manifestBytes", bundle.ManifestBytes);
-            writer.WriteStartArray("artifacts");
-            foreach (var artifact in bundle.Manifest.Payload.Artifacts)
-            {
-                writer.WriteStartObject();
-                writer.WriteString("artifactId", artifact.ArtifactId);
-                writer.WriteString("kind", Name(artifact.Kind));
-                writer.WriteString("requiredness", Name(artifact.Requiredness));
-                writer.WriteString("availability", Name(artifact.Availability));
-                writer.WriteString("relativePath", artifact.RelativePath);
-                writer.WriteString("mediaType", artifact.MediaType);
-                if (artifact.Availability == DeliveryArtifactAvailability.Available)
-                    writer.WriteBase64String("bytes", bundle.GetArtifactBytes(artifact.ArtifactId));
-                else
-                    writer.WriteString("unavailableReason", artifact.UnavailableReason);
-                writer.WriteEndObject();
-            }
-            writer.WriteEndArray();
-            writer.WriteEndObject();
-        }
-        return System.Text.Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 
     private static string Name<T>(T value)

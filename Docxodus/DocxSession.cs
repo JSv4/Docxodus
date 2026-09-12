@@ -1711,6 +1711,13 @@ public sealed class MutationBatchStep
     public string Action { get; }
     public Func<DocxSession, IReadOnlyList<EditResult>> Mutation { get; }
     public Func<DocxSession, EditError?>? Preflight { get; }
+
+    /// <summary>
+    /// The step's request arguments as a JSON object, for delivery evidence (issue #748). The
+    /// delegate hides them, so a transport that knows them attaches them here; a step without
+    /// them is recorded with empty arguments.
+    /// </summary>
+    public string? ArgumentsJson { get; init; }
 }
 
 /// <summary>Result of one batch step, including whether its effects were rolled back.</summary>
@@ -1755,7 +1762,27 @@ public sealed record MutationBatchPreviewOptions
 {
     public MutationPreviewHtmlMode HtmlMode { get; init; }
     public string? HtmlAnchorId { get; init; }
+
+    /// <summary>
+    /// Keep a successful preview's exact result package so <see cref="DocxSession.CommitPreview"/>
+    /// can later make it the live document with the previewed generated ids, timestamps and
+    /// package hash (issue #760). The receipt then carries <see cref="MutationBatchResult.Retention"/>.
+    /// Off by default: retention holds a whole package per preview.
+    /// </summary>
+    public bool Retain { get; init; }
 }
+
+/// <summary>
+/// Identity of a preview retained for a guarded commit (issue #760). The commit is bound to the
+/// live state the preview was predicted from: <see cref="BaseVersion"/> and
+/// <see cref="BasePackageHash"/> must still describe the session, and the entry is gone after
+/// <see cref="ExpiresAt"/>, after eviction, after the session closes, or once it is committed.
+/// </summary>
+public sealed record MutationPreviewRetention(
+    string PreviewId,
+    long BaseVersion,
+    string BasePackageHash,
+    DateTimeOffset ExpiresAt);
 
 /// <summary>Structured result of an atomic or explicit best-effort mutation batch.</summary>
 public sealed record MutationBatchResult
@@ -1790,6 +1817,12 @@ public sealed record MutationBatchResult
         MutationBatchChangeSet<DocumentAnnotation>.Empty;
     public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
     public string? Html { get; init; }
+
+    /// <summary>
+    /// Present on a preview retained for commit (<see cref="MutationBatchPreviewOptions.Retain"/>)
+    /// and on the result of committing it; null for every other batch.
+    /// </summary>
+    public MutationPreviewRetention? Retention { get; init; }
 }
 
 /// <summary>
@@ -2002,6 +2035,14 @@ public enum EditErrorCode
     /// <summary>A known transaction never recorded a terminal response, so its outcome is unknown.</summary>
     TransactionIncomplete,
 
+    /// <summary>No retained preview has this id: it was never retained, expired, was evicted,
+    /// or was already committed.</summary>
+    PreviewNotFound,
+
+    /// <summary>The retained preview was predicted from a live state the session no longer has
+    /// (version, package content, tracked-changes mode or revision author changed).</summary>
+    PreviewStale,
+
     /// <summary>The revision family is visible but has no safe selective resolver.</summary>
     RevisionUnsupported,
 
@@ -2142,6 +2183,15 @@ public sealed class DocxSessionSettings
     public bool CaptureInitialProjection { get; init; } = true;
 
     /// <summary>
+    /// Record the evidence a delivery change receipt needs as edits execute (issue #748): the
+    /// exact package before and after every version step, the request each transport described,
+    /// transaction identities, and undo/redo lineage. Requires <see cref="CaptureInitialProjection"/>
+    /// (the opening package is the receipt's source document). Off by default: every version
+    /// step then serializes a clean package copy, and retention holds them until delivery.
+    /// </summary>
+    public bool CaptureDeliveryEvidence { get; init; } = false;
+
+    /// <summary>
     /// Verification-only mode: resolution may remove only artifacts attributable to the selected
     /// revision. Ordinary editing retains its historical cleanup behavior.
     /// </summary>
@@ -2216,6 +2266,37 @@ public sealed partial class DocxSession : IDisposable
     private TrackedChangeMode _trackedChanges;
     private string? _revisionAuthor;
 
+    /// <summary>
+    /// Previews retained for a guarded commit (issue #760). Settable so tests can bound and clock
+    /// the store; production sessions use the defaults.
+    /// </summary>
+    internal Internal.RetainedPreviews RetainedPreviews { get; set; } = new();
+
+    /// <summary>Host-owned receipt evidence capture (issue #748); null unless the session was
+    /// opened with <see cref="DocxSessionSettings.CaptureDeliveryEvidence"/>.</summary>
+    private readonly Internal.DeliveryEvidenceRecorder? _deliveryEvidence;
+
+    /// <summary>A transport-composed batch the recorder is currently attributing version steps to.</summary>
+    private Internal.DeliveryEvidenceRecorder.PendingBatch? _clientEvidence;
+
+    internal Internal.DeliveryEvidenceRecorder? DeliveryEvidence => _deliveryEvidence;
+
+    internal bool InTransactionScope => _transactions.Count > 0;
+
+    /// <summary>
+    /// Set only on a preview shadow: the live session it was cloned from and the live state at
+    /// cloning, which a retained preview is bound to. The base bytes are the clone's own source
+    /// package, kept so the base hash is computed only when retention is requested.
+    /// </summary>
+    private ShadowOrigin? _shadowOrigin;
+
+    private sealed record ShadowOrigin(
+        DocxSession Owner,
+        long BaseVersion,
+        byte[] BaseBytes,
+        TrackedChangeMode TrackedChanges,
+        string? RevisionAuthor);
+
     private sealed record TransactionState(
         long Id,
         int OwnerThreadId,
@@ -2257,6 +2338,15 @@ public sealed partial class DocxSession : IDisposable
         {
             _initialPackageBytes = docxBytes.ToArray();
             _initialProjection = WmlToMarkdownConverter.Convert(_doc!, _settings.ProjectionSettings);
+        }
+
+        if (_settings.CaptureDeliveryEvidence && !skipInitialProjectionCapture)
+        {
+            if (_initialPackageBytes is null)
+                throw new ArgumentException(
+                    "CaptureDeliveryEvidence requires CaptureInitialProjection: the opening package is the receipt's source document.",
+                    nameof(settings));
+            _deliveryEvidence = new Internal.DeliveryEvidenceRecorder(this, _initialPackageBytes, _version);
         }
     }
 
@@ -4099,17 +4189,43 @@ public sealed partial class DocxSession : IDisposable
     /// </summary>
     public MutationBatchResult ExecuteBatch(
         IEnumerable<MutationBatchStep> steps,
-        MutationBatchMode mode = MutationBatchMode.Atomic)
+        MutationBatchMode mode = MutationBatchMode.Atomic) => ExecuteBatch(steps, mode, null);
+
+    /// <summary>
+    /// <see cref="ExecuteBatch(IEnumerable{MutationBatchStep}, MutationBatchMode)"/> with the
+    /// transaction identity a retry journal bound the request to, so delivery evidence records
+    /// the batch under that identity (issue #748).
+    /// </summary>
+    internal MutationBatchResult ExecuteBatch(
+        IEnumerable<MutationBatchStep> steps,
+        MutationBatchMode mode,
+        Verification.DeliveryTransactionIdentity? identity)
     {
         lock (_mutationGate)
         {
             var materialized = MaterializeBatchSteps(steps, mode);
             var before = ObserveBatchSemantics();
             var baseVersion = _version;
-            var result = mode == MutationBatchMode.Atomic
-                ? ExecuteAtomicBatch(materialized)
-                : ExecuteBestEffortBatch(materialized);
-            return CompleteBatchResult(result, before, baseVersion);
+            var evidence = _deliveryEvidence?.Begin(materialized, mode, identity);
+            MutationBatchResult result;
+            try
+            {
+                result = mode == MutationBatchMode.Atomic
+                    ? ExecuteAtomicBatch(materialized)
+                    : ExecuteBestEffortBatch(materialized, evidence);
+                result = CompleteBatchResult(result, before, baseVersion);
+            }
+            catch
+            {
+                _deliveryEvidence?.Abandon(evidence);
+                throw;
+            }
+            if (evidence is not null)
+            {
+                if (mode == MutationBatchMode.Atomic) _deliveryEvidence!.CompleteAtomic(evidence, result);
+                else _deliveryEvidence!.CompleteBestEffort(evidence);
+            }
+            return result;
         }
     }
 
@@ -4163,6 +4279,33 @@ public sealed partial class DocxSession : IDisposable
         if (materialized.Any(step => step is null))
             throw new ArgumentException("batch steps cannot contain null", nameof(steps));
         return materialized;
+    }
+
+    /// <summary>
+    /// Receipt warnings that say a fresh execution may regenerate ids or timestamps. Attached by
+    /// <see cref="CompleteBatchResult"/>; removed by <see cref="CommitPreview"/>, which does not
+    /// execute afresh but restores the previewed bytes.
+    /// </summary>
+    private static class BatchReplayCaveats
+    {
+        public const string RevisionDates =
+            "Tracked-revision date attributes may use the execution clock; compare revision " +
+            "ids, authors, types, text, and anchors across separate executions.";
+
+        public const string CommentDates =
+            "Comment date attributes may be generated from the execution clock; supply dates " +
+            "explicitly when byte-identical replay is required.";
+
+        public const string AnnotationMetadata =
+            "Auto-generated annotation ids or creation timestamps are execution metadata; " +
+            "supply id and created explicitly when byte-identical replay is required.";
+
+        public const string CreatedAnchors =
+            "Created anchors and related OOXML ids may be generated independently on replay; " +
+            "preview/apply equivalence is semantic and packageHash or anchor ids may differ.";
+
+        public static bool Contains(string warning) =>
+            warning is RevisionDates or CommentDates or AnnotationMetadata or CreatedAnchors;
     }
 
     private sealed record BatchSemanticObservation(
@@ -4221,31 +4364,15 @@ public sealed partial class DocxSession : IDisposable
                 StringComparison.Ordinal),
             "annotation", warnings);
         if (revisionChanges.Added.Concat(revisionChanges.Modified).Any(revision => revision.Date is not null))
-        {
-            warnings.Add(
-                "Tracked-revision date attributes may use the execution clock; compare revision " +
-                "ids, authors, types, text, and anchors across separate executions.");
-        }
+            warnings.Add(BatchReplayCaveats.RevisionDates);
         if (commentChanges.Added.Concat(commentChanges.Modified).Any(comment => comment.Date is not null))
-        {
-            warnings.Add(
-                "Comment date attributes may be generated from the execution clock; supply dates " +
-                "explicitly when byte-identical replay is required.");
-        }
+            warnings.Add(BatchReplayCaveats.CommentDates);
         if (annotationChanges.Added.Any(annotation => annotation.Created.HasValue))
-        {
-            warnings.Add(
-                "Auto-generated annotation ids or creation timestamps are execution metadata; " +
-                "supply id and created explicitly when byte-identical replay is required.");
-        }
+            warnings.Add(BatchReplayCaveats.AnnotationMetadata);
         try
         {
             if (result.Steps.SelectMany(step => step.Results).Any(edit => edit.Created.Count > 0))
-            {
-                warnings.Add(
-                    "Created anchors and related OOXML ids may be generated independently on replay; " +
-                    "preview/apply equivalence is semantic and packageHash or anchor ids may differ.");
-            }
+                warnings.Add(BatchReplayCaveats.CreatedAnchors);
         }
         catch (Exception ex)
         {
@@ -4353,6 +4480,163 @@ public sealed partial class DocxSession : IDisposable
     }
 
     /// <summary>Create a complete isolated clone for handle-based façades and abandonment tests.</summary>
+    internal const string NotCapturingDeliveryEvidence =
+        "Delivery evidence capture is not enabled for this session; open it with CaptureDeliveryEvidence.";
+
+    /// <summary>
+    /// What the host-owned evidence recorder holds (issue #748). <c>Enabled</c> is false, with
+    /// the reason, when the session was opened without
+    /// <see cref="DocxSessionSettings.CaptureDeliveryEvidence"/>.
+    /// </summary>
+    public Delivery.DeliveryEvidenceStatus GetDeliveryEvidenceStatus()
+    {
+        ThrowIfDisposed();
+        lock (_mutationGate)
+        {
+            if (_deliveryEvidence is null)
+            {
+                return new Delivery.DeliveryEvidenceStatus
+                {
+                    Enabled = false,
+                    CurrentVersion = _version,
+                    UnavailableReason = NotCapturingDeliveryEvidence,
+                };
+            }
+            _deliveryEvidence.Reconcile();
+            return _deliveryEvidence.Status();
+        }
+    }
+
+    /// <summary>
+    /// Hand the captured history to a delivery operation: the exact opening package as the
+    /// source, the recorder's exact current package as the working document, and — when the
+    /// history is complete — the ordered receipt context. When it is not, the context is null
+    /// and the status names the reason; a delivery then reports its change-receipt artifact
+    /// unavailable with that reason instead of minting a receipt that claims a history.
+    /// </summary>
+    public Delivery.DeliveryEvidenceExport ExportDeliveryEvidence(
+        Delivery.DeliveryReceiptBuildOptions? options = null)
+    {
+        ThrowIfDisposed();
+        options ??= new Delivery.DeliveryReceiptBuildOptions();
+        if (!Enum.IsDefined(options.PrivacyProfile))
+            throw new ArgumentOutOfRangeException(nameof(options), options.PrivacyProfile, "unknown privacy profile");
+        lock (_mutationGate)
+        {
+            if (_deliveryEvidence is not null) return _deliveryEvidence.Export(options);
+            if (_initialPackageBytes is null)
+                throw new InvalidOperationException(
+                    "Delivery evidence needs the opening package; open the session with CaptureInitialProjection.");
+            return new Delivery.DeliveryEvidenceExport(
+                null,
+                new Delivery.DeliveryDocumentSnapshot("source", 0, _initialPackageBytes),
+                new Delivery.DeliveryDocumentSnapshot("working", _version, SerializeCleanCheckpoint()),
+                new Delivery.DeliveryEvidenceStatus
+                {
+                    Enabled = false,
+                    CurrentVersion = _version,
+                    UnavailableReason = NotCapturingDeliveryEvidence,
+                });
+        }
+    }
+
+    /// <summary>
+    /// Build the receipt-bearing delivery of this session through the shared bundle service:
+    /// the clean current package, the source-to-delivered semantic delta, and the change
+    /// receipt minted from the captured evidence (issue #748). Revisions are preserved as they
+    /// are; the receipt attests the session's own edits. A history that cannot be attested
+    /// yields an <c>Incomplete</c> bundle whose receipt artifact carries the reason.
+    /// </summary>
+    public Delivery.DeliveryBundle BuildDeliveryReceipt(Delivery.DeliveryReceiptBuildOptions? options = null)
+    {
+        var export = ExportDeliveryEvidence(options);
+        var request = new Delivery.DeliveryBundleBuildRequest(
+            export.Source,
+            export.Working,
+            "delivered",
+            export.Working.DocumentVersion,
+            new Delivery.DeliveryBundleRevisionPolicy
+            {
+                PreExistingRevisions = Delivery.DeliveryRevisionPolicy.Preserve,
+                GeneratedRevisions = Delivery.DeliveryRevisionPolicy.Preserve,
+            },
+            new[]
+            {
+                new Delivery.DeliveryArtifactRequest
+                {
+                    ArtifactId = "final-docx",
+                    Kind = Delivery.DeliveryArtifactKind.FinalDocx,
+                    Requiredness = Delivery.DeliveryArtifactRequiredness.Required,
+                },
+                new Delivery.DeliveryArtifactRequest
+                {
+                    ArtifactId = "semantic-source-to-delivered",
+                    Kind = Delivery.DeliveryArtifactKind.SemanticDelta,
+                    Requiredness = Delivery.DeliveryArtifactRequiredness.Required,
+                },
+                new Delivery.DeliveryArtifactRequest
+                {
+                    ArtifactId = "change-receipt",
+                    Kind = Delivery.DeliveryArtifactKind.ChangeReceipt,
+                    Requiredness = Delivery.DeliveryArtifactRequiredness.Required,
+                },
+            },
+            export.ReceiptContext);
+        var bundleOptions = new Delivery.DeliveryBundleBuildOptions
+        {
+            ReturnIncompleteBundle = true,
+            FailOnDeliverableValidationFailure = false,
+        };
+        return new Delivery.DeliveryBundleService().BuildAsync(request, bundleOptions)
+            .AsTask().GetAwaiter().GetResult();
+    }
+
+    /// <summary>
+    /// A transport that composes its batch from individual calls (the browser client, or a
+    /// direct tool call on the stdio/MCP hosts) describes it before running it; the version
+    /// steps it produces are then attributed to that description at completion. Returns false
+    /// when nothing will be attributed (capture off, unavailable, or inside a transaction scope).
+    /// </summary>
+    internal bool BeginClientDeliveryEvidence(
+        IReadOnlyList<(string Tool, string Action, string? ArgumentsJson)> operations,
+        MutationBatchMode mode,
+        Verification.DeliveryTransactionIdentity? identity)
+    {
+        lock (_mutationGate)
+        {
+            if (_clientEvidence is not null) _deliveryEvidence?.Abandon(_clientEvidence);
+            _clientEvidence = _deliveryEvidence?.Begin(operations, mode, identity);
+            return _clientEvidence is not null;
+        }
+    }
+
+    internal void CompleteClientDeliveryEvidence(IReadOnlyList<MutationBatchStepResult> steps)
+    {
+        lock (_mutationGate)
+        {
+            if (_clientEvidence is { } pending) _deliveryEvidence!.CompleteClient(pending, steps);
+            _clientEvidence = null;
+        }
+    }
+
+    internal void CompleteClientDeliveryEvidence(IReadOnlyList<EditResult> directResults)
+    {
+        lock (_mutationGate)
+        {
+            if (_clientEvidence is { } pending) _deliveryEvidence!.CompleteDirect(pending, directResults);
+            _clientEvidence = null;
+        }
+    }
+
+    internal void AbandonClientDeliveryEvidence()
+    {
+        lock (_mutationGate)
+        {
+            _deliveryEvidence?.Abandon(_clientEvidence);
+            _clientEvidence = null;
+        }
+    }
+
     internal DocxSession CreateShadowSession()
     {
         lock (_mutationGate)
@@ -4378,6 +4662,8 @@ public sealed partial class DocxSession : IDisposable
                 _initialCheckpointBytes = _initialCheckpointBytes,
                 _trackedChanges = _trackedChanges,
                 _revisionAuthor = _revisionAuthor,
+                _shadowOrigin = new ShadowOrigin(
+                    this, _version, snapshot.PackageBytes!, _trackedChanges, _revisionAuthor),
             };
             return shadow;
         }
@@ -4469,11 +4755,176 @@ public sealed partial class DocxSession : IDisposable
             warnings.Add($"Preview HTML could not be generated: {ex.Message}");
         }
 
+        MutationPreviewRetention? retention = null;
+        if (options?.Retain == true)
+        {
+            if (!result.Success)
+                warnings.Add("The preview did not succeed, so it was not retained for commit.");
+            else
+                retention = RetainPreview(result, warnings);
+        }
+
         return result with
         {
             Preview = true,
             Warnings = warnings,
             Html = html,
+            Retention = retention,
+        };
+    }
+
+    /// <summary>
+    /// Keep this shadow's final package for a guarded commit on the live session it was cloned
+    /// from (issue #760). Runs on the shadow; the store lives on the owner. <paramref name="result"/>
+    /// is the receipt to return on commit, or null when the transport composes its own receipt
+    /// (the browser client). Returns null, with a warning, when the store refuses the package.
+    /// </summary>
+    internal MutationPreviewRetention? RetainPreview(
+        MutationBatchResult? result,
+        System.Collections.Generic.List<string> warnings)
+    {
+        ThrowIfDisposed();
+        var origin = _shadowOrigin
+            ?? throw new InvalidOperationException("only a preview shadow can retain its result for commit");
+        var store = origin.Owner.RetainedPreviews;
+        var snapshot = TakePackageSnapshot();
+        var retention = new MutationPreviewRetention(
+            Internal.RetainedPreviews.NewPreviewId(),
+            origin.BaseVersion,
+            HashPackageBytes(origin.BaseBytes),
+            store.ExpiryFromNow());
+        var retained = new Internal.RetainedPreview(
+            retention,
+            snapshot,
+            HashPackageBytes(snapshot.PackageBytes!),
+            origin.TrackedChanges,
+            origin.RevisionAuthor,
+            result);
+        if (store.Add(retained)) return retention;
+        warnings.Add(
+            $"The preview package ({retained.ApproximateBytes} bytes) exceeds the retained-preview " +
+            $"byte budget ({store.ByteBudget} bytes), so it was not retained for commit.");
+        return null;
+    }
+
+    /// <summary>
+    /// Make a retained preview the live document, exactly as previewed (issue #760). The commit
+    /// is guarded: it refuses, changing nothing, unless the session is still at the preview's base
+    /// version with the same package content, tracked-changes mode and revision author. On
+    /// success the previewed package — generated ids, timestamps and all — replaces the live one
+    /// as one undoable history step, the version becomes the previewed <c>ResultVersion</c>, and
+    /// the previewed receipt is returned with <see cref="MutationBatchResult.Preview"/> false.
+    /// A committed preview is consumed; retry deduplication belongs to the transaction journal.
+    /// </summary>
+    public MutationBatchResult CommitPreview(string previewId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(previewId);
+        lock (_mutationGate)
+        {
+            if (_disposed)
+                return CommitPreviewFailure(EditErrorCode.SessionDisposed, "session disposed", null);
+            if (!RetainedPreviews.TryGet(previewId, out var retained))
+            {
+                return CommitPreviewFailure(
+                    EditErrorCode.PreviewNotFound,
+                    $"no retained preview {previewId}: it was never retained, has expired, was evicted, " +
+                    "or was already committed",
+                    null);
+            }
+
+            var retention = retained.Retention;
+            if (_version != retention.BaseVersion)
+            {
+                return CommitPreviewFailure(
+                    EditErrorCode.PreviewStale,
+                    $"preview {previewId} was predicted from version {retention.BaseVersion} but the " +
+                    $"session is at version {_version}",
+                    retention);
+            }
+            if (_trackedChanges != retained.TrackedChanges
+                || !string.Equals(_revisionAuthor, retained.RevisionAuthor, StringComparison.Ordinal))
+            {
+                return CommitPreviewFailure(
+                    EditErrorCode.PreviewStale,
+                    $"the tracked-changes mode or revision author changed since preview {previewId}",
+                    retention);
+            }
+            string liveHash;
+            try
+            {
+                liveHash = GetPackageContentHash();
+            }
+            catch (Exception ex)
+            {
+                LastInternalError = ex;
+                return CommitPreviewFailure(EditErrorCode.InternalError, ex.Message, retention);
+            }
+            if (!string.Equals(liveHash, retention.BasePackageHash, StringComparison.Ordinal))
+            {
+                return CommitPreviewFailure(
+                    EditErrorCode.PreviewStale,
+                    $"the package content changed since preview {previewId} " +
+                    $"(predicted from {retention.BasePackageHash}, now {liveHash})",
+                    retention);
+            }
+
+            RetainedPreviews.Remove(previewId);
+            var evidence = _deliveryEvidence?.Begin(
+                new[] { ("docx_session", "commit_preview", (string?)("{\"previewId\":" + Internal.DocxSessionJson.JsonString(previewId) + "}")) },
+                MutationBatchMode.Atomic, null);
+            _history.RecordPreOp(TakePackageSnapshot());
+            try
+            {
+                // The retained snapshot IS the shadow's final state: its package bytes, the
+                // predicted version, and the revision generators the batch advanced.
+                RestoreSnapshot(retained.Snapshot);
+            }
+            catch (Exception ex)
+            {
+                LastInternalError = ex;
+                RollbackFailedOp();
+                _deliveryEvidence?.Abandon(evidence);
+                return CommitPreviewFailure(EditErrorCode.InternalError, ex.Message, retention);
+            }
+            if (evidence is not null)
+                _deliveryEvidence!.CompleteDirect(evidence, new[] { new EditResult { Success = true } });
+
+            var result = retained.Result
+                ?? new MutationBatchResult { Mode = MutationBatchMode.Atomic, Success = true };
+            return result with
+            {
+                Preview = false,
+                BaseVersion = retention.BaseVersion,
+                ResultVersion = _version,
+                PackageHash = retained.PackageHash,
+                // The generated-value caveats describe a fresh execution; this commit restored
+                // the previewed bytes, so every previewed id, timestamp and hash is now exact.
+                Warnings = result.Warnings.Where(warning => !BatchReplayCaveats.Contains(warning)).ToArray(),
+                Html = null,
+                Retention = retention,
+            };
+        }
+    }
+
+    private MutationBatchResult CommitPreviewFailure(
+        EditErrorCode code,
+        string message,
+        MutationPreviewRetention? retention)
+    {
+        var step = new MutationBatchStepResult(
+            0, "docx_session", "commit_preview",
+            new[] { new EditResult { Success = false, Error = new EditError(code, message) } },
+            false);
+        return new MutationBatchResult
+        {
+            Mode = MutationBatchMode.Atomic,
+            Success = false,
+            RolledBack = false,
+            BaseVersion = _version,
+            ResultVersion = _version,
+            Steps = new[] { step },
+            Failure = BatchFailure(step, rolledBack: false),
+            Retention = retention,
         };
     }
 
@@ -4517,7 +4968,9 @@ public sealed partial class DocxSession : IDisposable
         };
     }
 
-    private MutationBatchResult ExecuteBestEffortBatch(IReadOnlyList<MutationBatchStep> steps)
+    private MutationBatchResult ExecuteBestEffortBatch(
+        IReadOnlyList<MutationBatchStep> steps,
+        Internal.DeliveryEvidenceRecorder.PendingBatch? evidence = null)
     {
         var results = new List<MutationBatchStepResult>(steps.Count);
         MutationBatchStepResult? firstFailure = null;
@@ -4534,6 +4987,8 @@ public sealed partial class DocxSession : IDisposable
                 i, steps[i].Tool, steps[i].Action, stepResults, false);
             results.Add(step);
             if (!step.Success && firstFailure is null) firstFailure = step;
+            // Each best-effort step is its own version step, so it is its own receipt entry.
+            if (evidence is not null) _deliveryEvidence!.CompleteStep(evidence, i, step);
         }
 
         return new MutationBatchResult
@@ -7119,58 +7574,7 @@ public sealed partial class DocxSession : IDisposable
         var snapshot = TakeSnapshot();
         try
         {
-            foreach (var part in EnumerateProjectedParts())
-            {
-                var xdoc = part.GetXDocument();
-                if (xdoc.Root is null) continue;
-                // Other Custom XML parts are opaque application data (SharePoint metadata,
-                // SDT bindings, ink, and future extensions). They never contain projector Unids,
-                // and merely reading one must not cause Save(false) to reserialize its payload.
-                if (part is CustomXmlPart
-                    && (xdoc.Root.Name.NamespaceName != Internal.AnnotationsCustomXml.Namespace
-                        || xdoc.Root.Name.LocalName != "annotations"))
-                    continue;
-                foreach (var el in xdoc.Root.DescendantsAndSelf())
-                {
-                    var attr = el.Attribute(PtOpenXml.Unid);
-                    attr?.Remove();
-                }
-                // A persisted-anchor checkpoint is reopened during transaction rollback/undo.
-                // Its pt namespace declaration is then an explicit LINQ-to-XML attribute, unlike
-                // the serializer-generated declaration on an in-memory document. Once every Unid
-                // is stripped, remove that now-unused declaration too so normal Save output is
-                // identical before and after a transaction boundary.
-                bool ptNamespaceInUse = xdoc.Root.DescendantsAndSelf().Any(el =>
-                    el.Name.Namespace == PtOpenXml.pt
-                    || el.Attributes().Any(a => !a.IsNamespaceDeclaration
-                        && a.Name.Namespace == PtOpenXml.pt));
-                if (!ptNamespaceInUse)
-                {
-                    var ignorablePrefixes = xdoc.Root.DescendantsAndSelf()
-                        .Attributes(MC.Ignorable)
-                        .SelectMany(a => a.Value.Split(
-                            (char[]?)null, StringSplitOptions.RemoveEmptyEntries))
-                        .ToHashSet(StringComparer.Ordinal);
-                    var declarations = xdoc.Root.DescendantsAndSelf()
-                        .Attributes()
-                        .Where(a => a.IsNamespaceDeclaration
-                            && a.Value == PtOpenXml.pt.NamespaceName
-                            // mc:Ignorable contains QNames-as-prefix-tokens. Removing a namespace
-                            // declaration that one of those tokens names produces XML that is
-                            // well-formed but rejected by the Open XML markup-compatibility reader.
-                            && !ignorablePrefixes.Contains(a.Name.LocalName))
-                        .ToList();
-                    if (declarations.Count > 0)
-                        declarations.Remove();
-                }
-                // Serialize every projected part, even one with no Unid. This makes normal saves
-                // deterministic across a package checkpoint reopen (and also guarantees cached
-                // settings/story edits are never skipped merely because that part has no anchor).
-                // Rewriting a part is not the same as CHANGING it: PutXDocument preserves the
-                // part's byte-order-mark convention, so a part whose XML did not change comes back
-                // byte-identical (issue #668).
-                part.PutXDocument();
-            }
+            StripProjectorBookkeeping(_doc!);
             _doc!.Save();
             _stream!.Flush();
             _stream.Position = 0;
@@ -7179,6 +7583,90 @@ public sealed partial class DocxSession : IDisposable
         finally
         {
             RestoreSnapshot(snapshot);
+        }
+    }
+
+    /// <summary>
+    /// A clean serialization of the current package — every part payload exactly as
+    /// <see cref="Save(bool)"/> with <c>persistAnchorIds: false</c> writes it — produced from a
+    /// package clone, so the live stream, caches, and any element an in-flight operation has
+    /// already resolved are never touched. The clone re-serializes the package-level
+    /// relationship and content-type files, so the ZIP is not byte-identical to a save of a
+    /// document Word wrote; part payloads are. Delivery evidence records every package state
+    /// through this path, and a delivery built from it hands back these exact bytes as the
+    /// delivered document.
+    /// </summary>
+    internal byte[] SerializeCleanCheckpoint()
+    {
+        ThrowIfDisposed();
+        using var stream = new MemoryStream();
+        using (var clone = _doc!.Clone(stream, isEditable: true))
+        {
+            OverlayCachedParts(_doc!, clone);
+            StripProjectorBookkeeping(clone);
+            clone.Save();
+        }
+        return ZipPackageOutputNormalizer.Normalize(stream.ToArray());
+    }
+
+    /// <summary>
+    /// Strip the internal PtOpenXml:Unid attributes before serializing — they're projector
+    /// bookkeeping, not OOXML schema, and on a real document the bloat is significant (each
+    /// Unid is ~50 bytes and the projector assigns one to every descendant of every projected
+    /// scope). Every projected part is then rewritten, even one with no Unid: that makes clean
+    /// output deterministic across a package checkpoint reopen and guarantees cached
+    /// settings/story edits are never skipped merely because that part has no anchor.
+    /// Rewriting a part is not the same as CHANGING it: PutXDocument preserves the part's
+    /// byte-order-mark convention, so a part whose XML did not change comes back byte-identical
+    /// (issue #668).
+    /// </summary>
+    private static void StripProjectorBookkeeping(WordprocessingDocument document)
+    {
+        foreach (var part in EnumerateProjectedParts(document))
+        {
+            var xdoc = part.GetXDocument();
+            if (xdoc.Root is null) continue;
+            // Other Custom XML parts are opaque application data (SharePoint metadata,
+            // SDT bindings, ink, and future extensions). They never contain projector Unids,
+            // and merely reading one must not cause a clean save to reserialize its payload.
+            if (part is CustomXmlPart
+                && (xdoc.Root.Name.NamespaceName != Internal.AnnotationsCustomXml.Namespace
+                    || xdoc.Root.Name.LocalName != "annotations"))
+                continue;
+            foreach (var el in xdoc.Root.DescendantsAndSelf())
+            {
+                var attr = el.Attribute(PtOpenXml.Unid);
+                attr?.Remove();
+            }
+            // A persisted-anchor checkpoint is reopened during transaction rollback/undo.
+            // Its pt namespace declaration is then an explicit LINQ-to-XML attribute, unlike
+            // the serializer-generated declaration on an in-memory document. Once every Unid
+            // is stripped, remove that now-unused declaration too so normal Save output is
+            // identical before and after a transaction boundary.
+            bool ptNamespaceInUse = xdoc.Root.DescendantsAndSelf().Any(el =>
+                el.Name.Namespace == PtOpenXml.pt
+                || el.Attributes().Any(a => !a.IsNamespaceDeclaration
+                    && a.Name.Namespace == PtOpenXml.pt));
+            if (!ptNamespaceInUse)
+            {
+                var ignorablePrefixes = xdoc.Root.DescendantsAndSelf()
+                    .Attributes(MC.Ignorable)
+                    .SelectMany(a => a.Value.Split(
+                        (char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+                    .ToHashSet(StringComparer.Ordinal);
+                var declarations = xdoc.Root.DescendantsAndSelf()
+                    .Attributes()
+                    .Where(a => a.IsNamespaceDeclaration
+                        && a.Value == PtOpenXml.pt.NamespaceName
+                        // mc:Ignorable contains QNames-as-prefix-tokens. Removing a namespace
+                        // declaration that one of those tokens names produces XML that is
+                        // well-formed but rejected by the Open XML markup-compatibility reader.
+                        && !ignorablePrefixes.Contains(a.Name.LocalName))
+                    .ToList();
+                if (declarations.Count > 0)
+                    declarations.Remove();
+            }
+            part.PutXDocument();
         }
     }
 
@@ -7193,9 +7681,11 @@ public sealed partial class DocxSession : IDisposable
     /// <see cref="EnumerateProjectedPartsForSnapshot"/> instead, which narrows
     /// CustomXmlParts to the annotations part only — see that method for why.
     /// </remarks>
-    private IEnumerable<OpenXmlPart> EnumerateProjectedParts()
+    private IEnumerable<OpenXmlPart> EnumerateProjectedParts() => EnumerateProjectedParts(_doc!);
+
+    private static IEnumerable<OpenXmlPart> EnumerateProjectedParts(WordprocessingDocument document)
     {
-        var main = _doc!.MainDocumentPart;
+        var main = document.MainDocumentPart;
         if (main is null) yield break;
         yield return main;
         foreach (var h in main.HeaderParts) yield return h;
@@ -13587,12 +14077,14 @@ public sealed partial class DocxSession : IDisposable
     {
         if (_disposed) return false;
         if (_transactions.Count > 0) return false;
+        _deliveryEvidence?.Reconcile();
         var nextVersion = NextVersion();
         var (preOp, ok) = _history.PopForUndo();
         if (!ok) return false;
         _history.RecordForRedo(preOp.PackageBytes is null ? TakeSnapshot() : TakePackageSnapshot());
         RestoreSnapshot(preOp);
         _version = nextVersion;
+        _deliveryEvidence?.RecordLineage(Verification.DeliveryLineageAction.Undo);
         return true;
     }
 
@@ -13600,12 +14092,14 @@ public sealed partial class DocxSession : IDisposable
     {
         if (_disposed) return false;
         if (_transactions.Count > 0) return false;
+        _deliveryEvidence?.Reconcile();
         var nextVersion = NextVersion();
         var (postOp, ok) = _history.PopForRedo();
         if (!ok) return false;
         _history.PushBackForUndo(postOp.PackageBytes is null ? TakeSnapshot() : TakePackageSnapshot());
         RestoreSnapshot(postOp);
         _version = nextVersion;
+        _deliveryEvidence?.RecordLineage(Verification.DeliveryLineageAction.Redo);
         return true;
     }
 
@@ -13622,6 +14116,9 @@ public sealed partial class DocxSession : IDisposable
         }
         else
         {
+            // The previous version step is complete and the live package still holds its result:
+            // capture it before this op advances the version, so no step goes unrecorded.
+            _deliveryEvidence?.Reconcile();
             AdvanceVersion();
         }
     }
@@ -13662,6 +14159,8 @@ public sealed partial class DocxSession : IDisposable
             _transactions.Clear();
             _transactionPendingMutations = 0;
             _transactionMutationEpoch = 0;
+            RetainedPreviews.Clear();
+            _deliveryEvidence?.Clear();
         }
         finally
         {
@@ -13894,26 +14393,34 @@ public sealed partial class DocxSession : IDisposable
         using var stream = new MemoryStream();
         using (var clone = source.Clone(stream, isEditable: true))
         {
-            var cloneParts = EnumeratePackageParts(clone)
-                .ToDictionary(part => part.Uri.ToString(), StringComparer.Ordinal);
-            foreach (var sourcePart in EnumeratePackageParts(source))
-            {
-                var cached = sourcePart.Annotation<XDocument>();
-                if (cached is null) continue;
-                if (!cloneParts.TryGetValue(sourcePart.Uri.ToString(), out var clonePart))
-                    throw new InvalidOperationException(
-                        $"package clone omitted part {sourcePart.Uri}");
-                // Avoid reserializing an unchanged cached tree: XML declarations, BOMs, and
-                // prefix placement are package payload too. A semantic comparison lets the clone
-                // preserve the original part bytes when the cache is merely a read-through, while
-                // still overlaying every genuinely dirty cached document.
-                var clonedXml = clonePart.GetXDocument();
-                if (XNode.DeepEquals(cached.Root, clonedXml.Root)) continue;
-                clonePart.PutXDocument(new XDocument(cached));
-            }
+            OverlayCachedParts(source, clone);
             clone.Save();
         }
         return ZipPackageOutputNormalizer.Normalize(stream.ToArray());
+    }
+
+    /// <summary>Overlay every genuinely dirty cached XDocument of <paramref name="source"/> on its
+    /// counterpart in <paramref name="clone"/>, so edits that have not reached a part stream are
+    /// represented in the clone as well.</summary>
+    private static void OverlayCachedParts(WordprocessingDocument source, WordprocessingDocument clone)
+    {
+        var cloneParts = EnumeratePackageParts(clone)
+            .ToDictionary(part => part.Uri.ToString(), StringComparer.Ordinal);
+        foreach (var sourcePart in EnumeratePackageParts(source))
+        {
+            var cached = sourcePart.Annotation<XDocument>();
+            if (cached is null) continue;
+            if (!cloneParts.TryGetValue(sourcePart.Uri.ToString(), out var clonePart))
+                throw new InvalidOperationException(
+                    $"package clone omitted part {sourcePart.Uri}");
+            // Avoid reserializing an unchanged cached tree: XML declarations, BOMs, and
+            // prefix placement are package payload too. A semantic comparison lets the clone
+            // preserve the original part bytes when the cache is merely a read-through, while
+            // still overlaying every genuinely dirty cached document.
+            var clonedXml = clonePart.GetXDocument();
+            if (XNode.DeepEquals(cached.Root, clonedXml.Root)) continue;
+            clonePart.PutXDocument(new XDocument(cached));
+        }
     }
 
     /// <summary>
@@ -13935,9 +14442,11 @@ public sealed partial class DocxSession : IDisposable
     /// entry payloads excludes ZIP timestamps/compression while retaining every part byte and
     /// relationship payload, including media and opaque custom XML.
     /// </summary>
-    internal string GetPackageContentHash()
+    internal string GetPackageContentHash() => HashPackageBytes(SerializePackageCheckpoint());
+
+    /// <summary>The <see cref="GetPackageContentHash"/> digest of an already serialized checkpoint.</summary>
+    internal static string HashPackageBytes(byte[] packageBytes)
     {
-        var packageBytes = SerializePackageCheckpoint();
         try
         {
             using var stream = new MemoryStream(packageBytes, writable: false);

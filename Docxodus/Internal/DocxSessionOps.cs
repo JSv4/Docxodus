@@ -87,9 +87,10 @@ internal static class DocxSessionOps
     public static string ExecuteBatch(
         int handle,
         MutationBatchMode mode,
-        System.Collections.Generic.IEnumerable<MutationBatchStep> steps) =>
+        System.Collections.Generic.IEnumerable<MutationBatchStep> steps,
+        Verification.DeliveryTransactionIdentity? identity = null) =>
         DocxSessionJson.SerializeMutationBatchResult(
-            SessionRegistry.Get(handle).ExecuteBatch(steps, mode));
+            SessionRegistry.Get(handle).ExecuteBatch(steps, mode, identity));
 
     /// <summary>
     /// <see cref="ExecuteBatch"/> under a caller-chosen transaction id (issue #761): the session's
@@ -106,16 +107,46 @@ internal static class DocxSessionOps
         string transactionId,
         System.Text.Json.JsonElement request,
         MutationBatchMode mode,
-        System.Func<System.Collections.Generic.IEnumerable<MutationBatchStep>> steps)
+        System.Func<System.Collections.Generic.IEnumerable<MutationBatchStep>> steps) =>
+        RunTransactional(handle, transactionId, request, mode,
+            identity => ExecuteBatch(handle, mode, steps(), identity));
+
+    /// <summary>
+    /// <see cref="CommitPreview"/> under a caller-chosen transaction id: the same journal
+    /// semantics as <see cref="ExecuteBatchTransactional"/>, so a commit whose response was lost
+    /// can be retried without committing twice.
+    /// </summary>
+    public static string CommitPreviewTransactional(
+        int handle,
+        string transactionId,
+        System.Text.Json.JsonElement request,
+        string previewId) =>
+        RunTransactional(
+            handle, transactionId, request, MutationBatchMode.Atomic, _ => CommitPreview(handle, previewId));
+
+    private static string RunTransactional(
+        int handle,
+        string transactionId,
+        System.Text.Json.JsonElement request,
+        MutationBatchMode mode,
+        System.Func<Verification.DeliveryTransactionIdentity, string> execute)
     {
         if (MutationTransactions.ValidateTransactionId(transactionId) is { } invalid)
             throw new System.ArgumentException(invalid);
+        var fingerprint = MutationTransactions.Fingerprint(request);
+        // The identity the journal binds the request to is also what delivery evidence records
+        // the batch under, so a receipt and a retry replay name the same transaction.
+        var identity = new Verification.DeliveryTransactionIdentity
+        {
+            TransactionId = transactionId,
+            RequestFingerprint = fingerprint,
+        };
         return SessionRegistry.Transactions(handle).Run(
             transactionId,
-            MutationTransactions.Fingerprint(request),
+            fingerprint,
             mode,
             () => SessionRegistry.Get(handle).Version,
-            () => ExecuteBatch(handle, mode, steps()),
+            () => execute(identity),
             ex => ex is System.ArgumentException or System.FormatException
                     or System.Text.Json.JsonException or System.OverflowException
                 ? (EditErrorCode.InvalidBatchStep, "validation")
@@ -189,6 +220,76 @@ internal static class DocxSessionOps
         SessionRegistry.Get(handle).GetPackageContentHash();
 
     /// <summary>
+    /// Retain a preview shadow's final package for a guarded commit on its live session (issue
+    /// #760). The browser client, which composes its own receipt, calls this on the shadow handle
+    /// after a successful batch. Returns <c>{"retention":{…}|null,"warnings":[…]}</c>.
+    /// </summary>
+    public static string RetainPreview(int shadowHandle)
+    {
+        var warnings = new System.Collections.Generic.List<string>();
+        var retention = SessionRegistry.Get(shadowHandle).RetainPreview(null, warnings);
+        var sb = new System.Text.StringBuilder("{\"retention\":")
+            .Append(retention is null ? "null" : DocxSessionJson.SerializePreviewRetention(retention))
+            .Append(",\"warnings\":[");
+        for (int i = 0; i < warnings.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            sb.Append(DocxSessionJson.JsonString(warnings[i]));
+        }
+        return sb.Append("]}").ToString();
+    }
+
+    /// <summary>Guarded commit of a retained preview; see <see cref="DocxSession.CommitPreview"/>.</summary>
+    public static string CommitPreview(int handle, string previewId) =>
+        DocxSessionJson.SerializeMutationBatchResult(SessionRegistry.Get(handle).CommitPreview(previewId));
+
+    // ─── Delivery evidence (issue #748) ─────────────────────────────────
+
+    /// <summary>The typed export for in-process delivery hosts; see <see cref="DocxSession.ExportDeliveryEvidence"/>.</summary>
+    public static Delivery.DeliveryEvidenceExport ExportDeliveryEvidence(
+        int handle, Delivery.DeliveryReceiptBuildOptions? options) =>
+        SessionRegistry.Get(handle).ExportDeliveryEvidence(options);
+
+    /// <summary>What the session's host-owned evidence recorder holds; see <see cref="DocxSession.GetDeliveryEvidenceStatus"/>.</summary>
+    public static string GetDeliveryEvidenceStatus(int handle) =>
+        DeliveryOps.SerializeEvidenceStatus(SessionRegistry.Get(handle).GetDeliveryEvidenceStatus());
+
+    /// <summary>
+    /// The receipt-bearing delivery of a session (<see cref="DocxSession.BuildDeliveryReceipt"/>)
+    /// as the bundle wire shape every transport publishes. <paramref name="optionsJson"/> is
+    /// <c>{"privacyProfile","failOnUnexpectedChanges"}</c> or empty for the defaults.
+    /// </summary>
+    public static string BuildDeliveryReceipt(int handle, string? optionsJson)
+    {
+        var session = SessionRegistry.Get(handle);
+        var bundle = session.BuildDeliveryReceipt(DeliveryOps.ParseReceiptBuildOptions(optionsJson));
+        return DeliveryOps.SerializeBundle(bundle, DeliveryOps.DefaultMaxReturnedBytes, session.GetDeliveryEvidenceStatus());
+    }
+
+    /// <summary>
+    /// Describe a batch a transport is about to run against the live handle so the version
+    /// steps it produces are recorded under that description. <paramref name="operationsJson"/>
+    /// is <c>[{"tool","action","args"?}]</c>; <paramref name="identityJson"/> is the optional
+    /// <c>{"transactionId","requestFingerprint"}</c> the journal bound the request to. Returns
+    /// whether anything will be recorded; a false return needs no completion.
+    /// </summary>
+    public static bool BeginDeliveryEvidence(int handle, string operationsJson, MutationBatchMode mode, string? identityJson) =>
+        SessionRegistry.Get(handle).BeginClientDeliveryEvidence(
+            DeliveryOps.ParseEvidenceOperations(operationsJson), mode, DeliveryOps.ParseTransactionIdentity(identityJson));
+
+    /// <summary>Complete a described batch with its step results (<c>[{"index","tool","action","rolledBack","results"}]</c>).</summary>
+    public static void CompleteDeliveryEvidence(int handle, string stepsJson) =>
+        SessionRegistry.Get(handle).CompleteClientDeliveryEvidence(DeliveryOps.ParseBatchSteps(stepsJson));
+
+    /// <summary>Complete a described single operation with its edit result(s) JSON.</summary>
+    public static void CompleteDeliveryEvidenceDirect(int handle, string editResultsJson) =>
+        SessionRegistry.Get(handle).CompleteClientDeliveryEvidence(DocxSessionJson.DeserializeEditResults(editResultsJson));
+
+    /// <summary>Retire a described batch that produced no result; its version steps stay recorded, unlabeled.</summary>
+    public static void AbandonDeliveryEvidence(int handle) =>
+        SessionRegistry.Get(handle).AbandonClientDeliveryEvidence();
+
+    /// <summary>
     /// Return the stable semantic changes between the package opened for this session and its current
     /// logical state. Requires baseline capture at open time (enabled by default).
     /// </summary>
@@ -225,11 +326,15 @@ internal static class DocxSessionOps
         string tool,
         string action,
         System.Func<string> mutation,
-        System.Func<EditError?>? preflight = null) => new(
+        System.Func<EditError?>? preflight = null,
+        string? argumentsJson = null) => new(
             tool,
             action,
             _ => DocxSessionJson.DeserializeEditResults(mutation()),
-            preflight is null ? null : _ => preflight());
+            preflight is null ? null : _ => preflight())
+        {
+            ArgumentsJson = argumentsJson,
+        };
 
     // ─── Projection + discovery ─────────────────────────────────────────
 

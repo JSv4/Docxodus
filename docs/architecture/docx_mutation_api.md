@@ -217,6 +217,43 @@ npm exposes this as `session.previewBatch(steps, mode, { html, htmlAnchorId })` 
 that receive the shadow session, stdio/Python as `session.preview_batch(steps, mode,
 html_mode=…, html_anchor_id=…)`, and MCP as `docxodus_mutations` with `"mode": "preview"`.
 
+### Guarded commit of a retained preview
+
+A preview predicts generated values — new anchor ids, comment/note ids, revision timestamps
+— but a later apply executes afresh and may generate them differently, which is why the
+receipt warns. `MutationBatchPreviewOptions.Retain` (issue #760) closes that gap: a successful
+preview run with it keeps the shadow's final package checkpoint (the same `DocumentSnapshot`
+undo uses) on the live session, bound to the live state it was predicted from, and the receipt
+carries `Retention { PreviewId, BaseVersion, BasePackageHash, ExpiresAt }`.
+
+`CommitPreview(previewId)` then makes that package the live document. It is a snapshot
+transplant, not a re-execution: one package pre-op history entry is recorded and the retained
+snapshot is restored, so every previewed id, timestamp and the `packageHash` are exactly what
+the document now contains, the version becomes the previewed `ResultVersion`, and the commit
+is one undo/redo step. The returned receipt is the previewed one with `Preview = false`, the
+generated-value caveats removed, and `Retention` attached.
+
+The commit is guarded and refuses, changing nothing, unless the session is still at the
+preview's base version with the same package content hash, tracked-changes mode and
+revision author (`preview_stale`). The version is monotonic, so even a byte-identical base
+reached through undo is a different state: preview again rather than commit history. A
+preview that was never retained, has expired, was evicted, or was already committed answers
+`preview_not_found`. A failed preview is never retained (the receipt says so).
+
+Retention is bounded per session — 8 previews, 64 MiB of retained packages, 15 minutes —
+evicting oldest-first, refusing a single preview larger than the whole budget with a warning,
+and clearing on dispose (`Internal.RetainedPreviews`). Retention never touches live bytes or
+history. Commit consumes the preview; a retry after a lost response goes through the
+transaction journal (`DocxSessionOps.CommitPreviewTransactional`), which replays the retained
+response rather than committing twice.
+
+Surfaces: npm `session.previewBatch(steps, mode, { retain: true })` then
+`session.commitPreview(previewId, transaction?)` (the client keeps its own composed step
+receipts and merges them with the host's commit envelope); stdio/Python
+`preview_batch(..., retain=True)` then `commit_preview(preview_id, transaction_id=…)`; MCP
+`docxodus_mutations` with `retainPreview: true` on the preview and `commitPreviewId` (no
+`steps`) on the commit.
+
 Two properties of the wire-serialized transports (MCP and stdio, which round-trip
 each step's `EditResult` through `DocxSessionJson`) are worth stating explicitly:
 

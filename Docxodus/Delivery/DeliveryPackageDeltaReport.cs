@@ -168,9 +168,20 @@ public sealed record DeliveryPackageDeltaReport
             {
                 PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
                 WriteIndented = indented,
+                // Source-generated metadata keeps the report usable where reflection-based
+                // serialization is trimmed away (the browser build, issue #748).
+                TypeInfoResolver = DeliveryPackageDeltaJsonContext.Default,
             };
-            options.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+            options.Converters.Add(new JsonStringEnumConverter<DeliveryPackageDeltaChangeKind>(
+                JsonNamingPolicy.CamelCase));
             return options;
         }
     }
+}
+
+/// <summary>Trim/AOT-safe metadata for the package-delta report wire contract.</summary>
+[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
+[JsonSerializable(typeof(DeliveryPackageDeltaReport))]
+internal partial class DeliveryPackageDeltaJsonContext : JsonSerializerContext
+{
 }

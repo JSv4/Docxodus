@@ -36,6 +36,7 @@ from .enums import (
     ListFormat,
     MutationBatchMode,
     MutationPreviewHtmlMode,
+    DeliveryReceiptPrivacyProfile,
     PageNumberField,
     PlaceholderKinds,
     Position,
@@ -90,6 +91,8 @@ from .types import (
     ListMembership,
     MarkdownProjection,
     MutationBatchResult,
+    DeliveryBundleResult,
+    DeliveryEvidenceStatus,
     MutationBatchStep,
     MutationPreconditions,
     NumberFormat,
@@ -818,6 +821,7 @@ class DocxSession:
         *,
         html_mode: MutationPreviewHtmlMode | str = MutationPreviewHtmlMode.NONE,
         html_anchor_id: str | None = None,
+        retain: bool = False,
     ) -> MutationBatchResult:
         """Predict a batch on a complete clone without touching this live session.
 
@@ -825,6 +829,11 @@ class DocxSession:
         partial-success semantics. Optional ``scoped``/``full`` HTML is rendered only
         from the predicted shadow package. ``html_mode`` accepts a
         :class:`MutationPreviewHtmlMode` or its wire string.
+
+        ``retain=True`` keeps a successful preview's exact result package so
+        :meth:`commit_preview` can later apply it as previewed; the receipt then carries
+        ``result.retention``. Retention is bounded (count, bytes and time) and cleared
+        when the session closes.
         """
         try:
             html = MutationPreviewHtmlMode(html_mode)
@@ -837,10 +846,77 @@ class DocxSession:
                 "steps": [step.to_wire() for step in steps],
                 "htmlMode": html.value,
                 "htmlAnchorId": html_anchor_id,
+                "retain": retain,
             },
         )
         if not isinstance(result, Mapping):
             raise TypeError(f"preview_batch: expected object, got {result!r}")
+        return MutationBatchResult._from_wire(result)
+
+    def get_delivery_evidence_status(self) -> DeliveryEvidenceStatus:
+        """What the host-owned delivery evidence recorder holds (issue #748).
+
+        ``enabled`` is ``False``, with the reason, unless the session was opened with
+        ``DocxSessionSettings(capture_delivery_evidence=True)``.
+        """
+        result = self._call("get_delivery_evidence_status", {})
+        if not isinstance(result, Mapping):
+            raise TypeError(f"get_delivery_evidence_status: expected object, got {result!r}")
+        return DeliveryEvidenceStatus._from_wire(result)
+
+    def build_delivery_receipt(
+        self,
+        *,
+        privacy_profile: DeliveryReceiptPrivacyProfile | str = DeliveryReceiptPrivacyProfile.HASH_AND_SUMMARY,
+        fail_on_unexpected_changes: bool = False,
+    ) -> DeliveryBundleResult:
+        """Build the receipt-bearing delivery of this session.
+
+        The shared bundle service returns the clean current package (``final-docx``), the
+        source-to-delivered semantic delta and the change receipt (``change-receipt``) minted
+        from the captured evidence; verify it with :func:`verify_delivery_receipt` against the
+        returned artifact bytes. A history that cannot be attested yields an ``incomplete``
+        bundle whose receipt artifact carries the reason, and ``result.evidence`` says why.
+        """
+        try:
+            profile = DeliveryReceiptPrivacyProfile(privacy_profile)
+        except ValueError:
+            raise ValueError(f"unknown privacy profile: {privacy_profile}") from None
+        result = self._call(
+            "build_delivery_receipt",
+            {
+                "options": {
+                    "privacyProfile": profile.value,
+                    "failOnUnexpectedChanges": fail_on_unexpected_changes,
+                },
+            },
+        )
+        if not isinstance(result, Mapping):
+            raise TypeError(f"build_delivery_receipt: expected object, got {result!r}")
+        return DeliveryBundleResult._from_wire(result)
+
+    def commit_preview(
+        self,
+        preview_id: str,
+        *,
+        transaction_id: str | None = None,
+    ) -> MutationBatchResult:
+        """Make a preview retained by :meth:`preview_batch` the live document, as previewed.
+
+        The previewed package is restored byte-for-byte as one undo step, so the generated
+        anchor ids, timestamps and ``package_hash`` are exactly those the preview reported.
+        The commit is guarded: it refuses with ``preview_stale`` (editing nothing) when the
+        session's version, package content, tracked-changes mode or revision author moved
+        since the preview, and with ``preview_not_found`` once the preview expired, was
+        evicted, or was already committed. ``transaction_id`` makes a retry after a lost
+        response safe, exactly as for :meth:`execute_batch`.
+        """
+        args: dict[str, Any] = {"previewId": preview_id}
+        if transaction_id is not None:
+            args["transactionId"] = transaction_id
+        result = self._call("commit_preview", args)
+        if not isinstance(result, Mapping):
+            raise TypeError(f"commit_preview: expected object, got {result!r}")
         return MutationBatchResult._from_wire(result)
 
     def check_preconditions(self, preconditions: MutationPreconditions) -> EditResult:
