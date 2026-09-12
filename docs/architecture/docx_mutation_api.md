@@ -120,6 +120,46 @@ The same semantics reach `DocxSessionOps`/JSON, WASM and npm
 (`session.executeBatch`), stdio and Python (`session.execute_batch`), and MCP
 (`docxodus_mutations`).
 
+### Transaction ids: retry deduplication on every transport (issues #449, #761)
+
+An applying batch may carry a caller-chosen **transaction id** — a non-blank string of at most
+256 Unicode scalar values — so that a retry after a lost response does not apply the edit
+twice. One journal per live session owns the contract, whichever transport drives it:
+`Docxodus/Internal/MutationTransactions.cs`, held by `SessionRegistry` per handle (the MCP
+server installs its own configured instance there on open).
+
+- **Replay.** The first terminal response under an id — success, partial result, structured
+  failure, precondition failure, or a safely caught exception — is retained. An identical retry
+  returns that exact serialized `MutationBatchResult` before evaluating current preconditions
+  or running a step, so generated anchors, timestamps, versions, outcome, deltas and
+  `packageHash` are those of the original call. The result carries one extra top-level
+  `transaction: { schemaVersion: 1, transactionId, requestFingerprint }`.
+- **Identity.** The request fingerprint is SHA-256 over a canonical JSON rendering of the
+  transport's request object: root `sessionId`/`handle`/`transactionId` excluded, object keys
+  sorted, array order and string/number spelling kept, a missing root `mode` canonicalized as
+  `"atomic"`, duplicate keys rejected. Reusing an id for a different fingerprint returns
+  `transaction_conflict`; a known id whose response left bounded retention returns
+  `transaction_result_evicted`; an id bound to this request that never recorded a terminal
+  response returns `transaction_incomplete` (outcome unknown — inspect the document, retry
+  under a fresh id). Because each transport's request language differs (MCP `steps[].tool`,
+  the stdio host's `steps[].operation`, the browser's caller-supplied descriptor), an id is
+  scoped to the transport that minted it.
+- **Where it lives.** Stdio/Python: `execute_batch(steps, mode, transaction_id=...)`, the
+  host runs `DocxSessionOps.ExecuteBatchTransactional`. npm/WASM: the batch is composed in
+  JavaScript, so `session.executeBatch(steps, mode, { transactionId, request })` drives the
+  journal over the bridge — `BeginMutationTransaction` resolves the id (and returns the
+  terminal response for a replay or refusal), the client runs its steps, then
+  `CompleteMutationTransaction` retains the serialized result or `AbandonMutationTransaction`
+  retires the reservation if the batch could not produce one. `request` is the caller's own
+  serializable description of the batch and is what the fingerprint covers; pass the same
+  descriptor on a retry. MCP: `docxodus_mutations` with `transactionId`, unchanged.
+- **Lifecycle.** Preview batches reject transaction ids (`invalid_transaction`). Replay after
+  undo or redo returns the historical response without reapplying, undoing, redoing, or moving
+  a history cursor. Save keeps the journal; close clears it; reopening the same bytes starts a
+  new identity namespace. Retention is bounded per session by 128 full responses and 32 MiB of
+  retained text, then 1,024 response-less tombstones — after which a stale retry executes as a
+  fresh mutation. A structured validation failure is a terminal response and burns its id.
+
 ### Isolated previews
 
 `PreviewBatch(steps, mode, options)` runs the identical step delegates against a complete

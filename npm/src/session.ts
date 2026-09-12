@@ -68,6 +68,8 @@ import type {
   MutationBatchPreviewStep,
   MutationBatchResult,
   MutationBatchStep,
+  MutationTransaction,
+  MutationTransactionIdentity,
   MutationBatchStepResult,
   MutationPreconditions,
   CrossReferenceOptions,
@@ -217,10 +219,54 @@ export class DocxSession {
   executeBatch(
     steps: readonly MutationBatchStep[],
     mode: MutationBatchMode = "atomic",
+    transaction?: MutationTransaction,
   ): MutationBatchResult {
     if (mode !== "atomic" && mode !== "best_effort") {
       throw new RangeError(`unknown mutation batch mode: ${String(mode)}`);
     }
+    if (transaction === undefined) return this.runBatch(steps, mode);
+
+    // The batch is composed here from callbacks, so the session's journal (shared with every
+    // other transport) is driven in three steps: resolve the id, run, retain the result.
+    if (!this.wasm.BeginMutationTransaction
+      || !this.wasm.CompleteMutationTransaction
+      || !this.wasm.AbandonMutationTransaction) {
+      throw new Error("This WASM bundle predates mutation transactions; rebuild docxodus.");
+    }
+    if (typeof transaction.transactionId !== "string") {
+      throw new RangeError("transactionId must be a string");
+    }
+    if (transaction.request === null || typeof transaction.request !== "object"
+      || Array.isArray(transaction.request)) {
+      throw new RangeError("a mutation transaction needs a request object describing the batch");
+    }
+    const decision = JSON.parse(this.wasm.BeginMutationTransaction(
+      this.handle,
+      transaction.transactionId,
+      JSON.stringify({ ...transaction.request, mode }),
+    )) as { kind: string; transaction: MutationTransactionIdentity; response: string | null };
+    if (decision.response !== null) {
+      return JSON.parse(decision.response) as MutationBatchResult;
+    }
+    let completed = false;
+    try {
+      const result: MutationBatchResult = {
+        ...this.runBatch(steps, mode),
+        transaction: decision.transaction,
+      };
+      this.wasm.CompleteMutationTransaction(
+        this.handle, transaction.transactionId, JSON.stringify(result));
+      completed = true;
+      return result;
+    } finally {
+      if (!completed) this.wasm.AbandonMutationTransaction(this.handle, transaction.transactionId);
+    }
+  }
+
+  private runBatch(
+    steps: readonly MutationBatchStep[],
+    mode: MutationBatchMode,
+  ): MutationBatchResult {
     const baseVersion = this.getVersion();
     const observationWarnings: string[] = [];
     const inspect = <T>(label: string, read: () => T, fallback: T): T => {
