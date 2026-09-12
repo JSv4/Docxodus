@@ -583,7 +583,7 @@ internal static class RevisionOps
         || element.Name == W.customXmlMoveFromRangeStart
         || element.Name == W.customXmlMoveToRangeStart;
 
-    private static bool IsValidRevisionDate(string value)
+    internal static bool IsValidRevisionDate(string value)
     {
         if (!System.Text.RegularExpressions.Regex.IsMatch(
                 value,
@@ -1067,6 +1067,9 @@ internal static class RevisionOps
     private static long? WidOf(XElement el) =>
         TryParseCanonicalRevisionId((string?)el.Attribute(W.id), out var value) ? value : null;
 
+    internal static bool HasCanonicalRevisionId(XElement element) =>
+        TryParseCanonicalRevisionId((string?)element.Attribute(W.id), out _);
+
     private static bool TryParseCanonicalRevisionId(string? value, out long parsed)
     {
         if (!long.TryParse(value, System.Globalization.NumberStyles.AllowLeadingSign,
@@ -1538,7 +1541,7 @@ internal static class RevisionOps
             $"{name} is recognized tracked-change markup but cannot be selectively resolved."));
     }
 
-    private static string PrefixedName(XName name) =>
+    internal static string PrefixedName(XName name) =>
         name.Namespace == W.w ? "w:" + name.LocalName
         : name.Namespace == M.m ? "m:" + name.LocalName
         : name.Namespace == W14.w14 ? "w14:" + name.LocalName
@@ -1933,7 +1936,7 @@ internal static class RevisionOps
         return keys.Count > 0 ? keys : new[] { "empty" };
     }
 
-    private static string ElementPath(XElement element)
+    internal static string ElementPath(XElement element)
     {
         var segments = new Stack<string>();
         for (var current = element; current is not null; current = current.Parent)

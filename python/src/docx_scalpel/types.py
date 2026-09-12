@@ -3237,6 +3237,106 @@ class RevisionDiagnostic:
 
 
 @dataclass(frozen=True, slots=True)
+class RevisionRepairProposal:
+    """One repair the registry offers for one listed entry (issues #754–#758).
+
+    ``kind`` is one of ``assign_identity``, ``reattach_numbering_change``,
+    ``reattach_cell_marker``, ``restore_orphan_text``, ``wrap_orphan_text_as_deletion``.
+    ``carriers`` names every native carrier the repair touches; ``reason`` says what the
+    repair does or why the package's evidence does not permit it.
+    """
+
+    revision_id: str
+    kind: str
+    part_uri: str
+    diagnostic: RevisionDiagnostic
+    carriers: tuple[str, ...]
+    repairable: bool
+    reason: str
+    requires_authorship: bool = False
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "RevisionRepairProposal":
+        return cls(
+            revision_id=str(d["revisionId"]),
+            kind=str(d["kind"]),
+            part_uri=str(d.get("partUri", "")),
+            diagnostic=RevisionDiagnostic._from_wire(d.get("diagnostic") or {}),
+            carriers=tuple(str(c) for c in d.get("carriers", ())),
+            repairable=bool(d.get("repairable", False)),
+            reason=str(d.get("reason", "")),
+            requires_authorship=bool(d.get("requiresAuthorship", False)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RevisionRepairRequest:
+    """One repair to perform, exactly as a proposal offered it; ``author``/``date`` are
+    required for ``wrap_orphan_text_as_deletion`` (the registry fabricates no review metadata)."""
+
+    revision_id: str
+    kind: str
+    author: str | None = None
+    date: str | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"revisionId": self.revision_id, "kind": self.kind}
+        if self.author is not None:
+            out["author"] = self.author
+        if self.date is not None:
+            out["date"] = self.date
+        return out
+
+
+@dataclass(frozen=True, slots=True)
+class RevisionCarrierIdentity:
+    carrier: str
+    old_id: str | None
+    new_id: str
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "RevisionCarrierIdentity":
+        return cls(carrier=str(d["carrier"]), old_id=d.get("oldId"), new_id=str(d.get("newId", "")))
+
+
+@dataclass(frozen=True, slots=True)
+class RevisionRepairOutcome:
+    revision_id: str
+    kind: str
+    part_uri: str
+    identities: tuple[RevisionCarrierIdentity, ...]
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "RevisionRepairOutcome":
+        return cls(
+            revision_id=str(d["revisionId"]),
+            kind=str(d["kind"]),
+            part_uri=str(d.get("partUri", "")),
+            identities=tuple(RevisionCarrierIdentity._from_wire(i) for i in d.get("identities", ())),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RevisionRepairResult:
+    """Atomic, one undo step; repaired entries get new ids, so re-list afterwards."""
+
+    success: bool
+    error: EditError | None = None
+    repairs: tuple[RevisionRepairOutcome, ...] = ()
+    modified: tuple[Anchor, ...] = ()
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "RevisionRepairResult":
+        error = d.get("error")
+        return cls(
+            success=bool(d.get("success", False)),
+            error=EditError._from_wire(error) if isinstance(error, Mapping) else None,
+            repairs=tuple(RevisionRepairOutcome._from_wire(r) for r in d.get("repairs", ())),
+            modified=tuple(Anchor._from_wire(a) for a in d.get("modified", ())),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class RevisionListEntry:
     """One tracked revision read directly off the live markup — see
     ``Session.list_revisions``.

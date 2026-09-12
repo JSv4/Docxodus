@@ -379,6 +379,7 @@ class EditErrorCode(str, Enum):
     TRANSACTION_CONFLICT = "transaction_conflict"
     TRANSACTION_RESULT_EVICTED = "transaction_result_evicted"
     TRANSACTION_INCOMPLETE = "transaction_incomplete"
+    REVISION_REPAIR_REJECTED = "revision_repair_rejected"
     HYPERLINK_NOT_FOUND = "hyperlink_not_found"
     BOOKMARK_NOT_FOUND = "bookmark_not_found"
     DUPLICATE_BOOKMARK_NAME = "duplicate_bookmark_name"

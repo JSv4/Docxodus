@@ -6,6 +6,19 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Explicit, previewable repair of native revision markup the registry refuses to resolve.
+  `ListRevisionRepairs()` reports, per refused entry, the repairs the registry can prove —
+  `AssignIdentity` for a missing, non-numeric or duplicated `w:id` (fresh document-unique ids,
+  range pairs kept paired), `ReattachNumberingChange` and `ReattachCellMarker` when the marker's
+  owner is unique, `RestoreOrphanText` or `WrapOrphanTextAsDeletion` (author and date required)
+  for deleted text with no wrapper — each with the carriers it touches, whether it is repairable,
+  and why. `RepairRevisions(requests)` applies chosen repairs atomically as one undo step and
+  returns the old-to-new carrier identity mapping; an unoffered kind, a non-repairable proposal,
+  missing authorship, or a repair that leaves its diagnostic in place refuses the whole call
+  (`revision_repair_rejected`). Listing, accept and reject still never repair. Wired through
+  WASM/npm, the stdio host and docx-scalpel, and MCP `docxodus_track_changes` (`repairs`,
+  `repair`). (#754, #755, #756, #757, #758)
+
 - Revision registry: a mark under `m:ctrlPr` — Word's carrier for the insertion or deletion of
   a whole math object (fraction, radical, delimiter, …) — is now a native revision. The mark
   and the object's revised runs list as one `contentInsert`/`contentDelete` entry whose text

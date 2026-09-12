@@ -105,6 +105,9 @@ from .types import (
     CrossReferenceOptions,
     ReplaceOptions,
     RevisionListEntry,
+    RevisionRepairProposal,
+    RevisionRepairRequest,
+    RevisionRepairResult,
     SectionInfo,
     SemanticChangeSet,
     StyleInfo,
@@ -2044,6 +2047,25 @@ class DocxSession:
         authors/dates are the markup's own (no accept/reject re-diff)."""
         result = self._call("list_revisions", {})
         return tuple(RevisionListEntry._from_wire(r) for r in result)
+
+    def list_revision_repairs(self) -> tuple[RevisionRepairProposal, ...]:
+        """The explicit repairs the registry offers for entries it refuses to resolve
+        (issues #754–#758): which carriers are defective, whether a unique repair exists,
+        and what it would do. Read-only; listing, accept and reject never repair."""
+        result = self._call("list_revision_repairs", {})
+        return tuple(RevisionRepairProposal._from_wire(r) for r in result)
+
+    def repair_revisions(
+        self, repairs: Iterable[RevisionRepairRequest]
+    ) -> RevisionRepairResult:
+        """Perform requested repairs atomically as one undo step.
+
+        A kind the registry did not offer, a non-repairable proposal, or a wrap-as-deletion
+        without ``author``/``date`` refuses the whole call (``revision_repair_rejected``)
+        with nothing mutated. Repaired entries get new ids; re-list afterwards."""
+        return RevisionRepairResult._from_wire(
+            self._call("repair_revisions", {"repairs": [r.to_wire() for r in repairs]})
+        )
 
     def accept_revision(self, revision_id: str) -> EditResult:
         """Accept ONE revision by the id ``list_revisions`` reported — insertions keep

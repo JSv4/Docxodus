@@ -73,6 +73,9 @@ import type {
   CrossReferenceOptions,
   ReplaceOptions,
   RevisionListEntry,
+  RevisionRepairProposal,
+  RevisionRepairRequest,
+  RevisionRepairResult,
   SectionInfo,
   SemanticChangeSet,
   StyleInfo,
@@ -1284,6 +1287,30 @@ export class DocxSession {
    * are the markup's own (no accept/reject re-diff). */
   listRevisions(): RevisionListEntry[] {
     return JSON.parse(this.wasm.ListRevisions(this.handle)) as RevisionListEntry[];
+  }
+
+  /**
+   * The explicit repairs the registry offers for entries it refuses to resolve (issues
+   * #754–#758): which carriers are defective, whether a unique repair exists, and what it
+   * would do. Read-only; listing, accept and reject never repair.
+   */
+  listRevisionRepairs(): RevisionRepairProposal[] {
+    if (!this.wasm.ListRevisionRepairs) {
+      throw new Error("This WASM bundle predates revision repairs; rebuild docxodus.");
+    }
+    return JSON.parse(this.wasm.ListRevisionRepairs(this.handle)) as RevisionRepairProposal[];
+  }
+
+  /**
+   * Perform requested repairs atomically as one undo step. A kind the registry did not offer,
+   * a non-repairable proposal, or a wrap-as-deletion without author and date refuses the whole
+   * call (`revision_repair_rejected`) with nothing mutated. Repaired entries get new ids.
+   */
+  repairRevisions(repairs: readonly RevisionRepairRequest[]): RevisionRepairResult {
+    if (!this.wasm.RepairRevisions) {
+      throw new Error("This WASM bundle predates revision repairs; rebuild docxodus.");
+    }
+    return JSON.parse(this.wasm.RepairRevisions(this.handle, JSON.stringify(repairs))) as RevisionRepairResult;
   }
 
   /** Accept ONE revision by the id {@link listRevisions} reported — insertions keep

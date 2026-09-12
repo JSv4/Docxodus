@@ -1509,7 +1509,7 @@ Concretely, these shapes were resolvable before and are refused now:
 |-------|--------|-----------|
 | A revision element with no `w:id` | `Malformed` | `missing_revision_id` |
 | A revision element with a non-numeric `w:id` | `Malformed` | `invalid_revision_id` |
-| One `w:id` shared by two distinct live groups in one part | `Ambiguous` | `duplicate_revision_id` |
+| One `w:id` shared by two distinct live groups in one part | `Ambiguous` | `duplicate_revision_id` (repairable, see below) |
 | A structured-wrapper range marker (`w:customXml{Ins,Del,MoveFrom,MoveTo}Range*`) whose id has no counterpart, or more than one | `Malformed` / `Ambiguous` | `unpaired_range_marker`, `duplicate_range_id` |
 | A paired range that does not cross a `w:sdt`/`w:customXml` tag as one half of Word's two-range envelope | `Malformed` | `malformed_range_topology` |
 | A move envelope around a wrapper whose content carries no `w:moveFrom`/`w:moveTo` mark | `Malformed` | `orphan_custom_xml_move_range` |
@@ -1524,6 +1524,30 @@ public, so a caller that needs the old always-succeeding behaviour can run the t
 saved bytes and reopen the session. Whether the session surface should grow an explicit
 opt-in escape hatch is an open public-API decision, not something the resolver should decide
 silently.
+
+### Explicit repair of refused markup (issues #754–#758)
+
+Listing, accept and reject never repair anything. A caller that wants a refused entry made
+resolvable asks for the repairs the registry can offer and then requests them by kind:
+
+| Method | Description |
+|--------|-------------|
+| `ListRevisionRepairs()` | Read-only. For each listed entry with a defined repair, one `RevisionRepairProposal` per offered kind: the entry's `RevisionId` and diagnostic, every native carrier the repair touches (QName@element-path), whether it is `Repairable`, the `Reason` (what the repair does, or why the package's evidence forbids it), and whether it `RequiresAuthorship`. |
+| `RepairRevisions(requests)` | Atomic, one undo step. Every request must name a listed entry and a kind the proposal offered as repairable; anything else, a wrap without author/date, or a repair that leaves its own diagnostic in place, refuses the whole call (`RevisionRepairRejected`, or `RevisionNotFound`) with nothing mutated. Returns the old-to-new carrier identity mapping; repaired entries get new public ids (they derive from carrier identity), so re-list afterwards. |
+
+The kinds, and the evidence each demands:
+
+| Kind | Defect | Repair | Refused when |
+|------|--------|--------|--------------|
+| `AssignIdentity` | `missing_revision_id`, `invalid_revision_id`, `duplicate_revision_id` | Every carrier of the entry gets a fresh document-unique `w:id` from the session's own allocator; markers that shared one old id keep sharing the new one, so range pairs stay paired. Repairing one of two colliding groups makes both unique. | Never for these codes — the registry already groups the carriers, so the repair is unambiguous. Unpaired or crossing ranges are a different diagnostic and are not identity defects. |
+| `ReattachNumberingChange` | `orphan_numbering_revision`, or `unsupported_revision_family` on a `w:numberingChange` outside `w:numPr`/`w:fldChar` (the listing's code depends on where the walker met it; the repair keys on the marker) | Move the marker into its own paragraph's `w:numPr` (schema order kept). | The paragraph has no `w:numPr`, or the entry spans paragraphs: the package records no owner, and the registry will not guess a list. |
+| `ReattachCellMarker` | `orphan_cell_revision`, or `unsupported_revision_family` on a cell marker outside `w:tcPr` | Move each marker into the `w:tcPr` of its nearest enclosing cell, creating the property set when absent. | The marker sits outside any table cell. `invalid_cell_merge_state` has no repair at all: the package holds no original `w:vMerge` state to restore. |
+| `RestoreOrphanText` | `w:delText`/`w:delInstrText` with no deletion wrapper | Treat the payload as live text (`w:delText` → `w:t`, `w:delInstrText` → `w:instrText`). | Never; both orphan-text repairs are always offered, the caller chooses. |
+| `WrapOrphanTextAsDeletion` | same | Wrap the owning run in a `w:del` carrying the **caller-supplied** author and date. | The run also holds live text (wrapping would delete it), or the request omits author/date — the registry never fabricates review metadata. |
+
+Wired through every surface: WASM/npm `listRevisionRepairs()`/`repairRevisions(requests)`, stdio and
+Python `list_revision_repairs()`/`repair_revisions(requests)`, and MCP `docxodus_track_changes`
+actions `repairs`/`repair` (the latter batchable in `docxodus_mutations`).
 
 ## ApplyFormat — substring and TextMatch overloads
 

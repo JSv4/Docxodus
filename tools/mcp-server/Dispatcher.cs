@@ -1063,6 +1063,16 @@ internal static class Dispatcher
                 return FilterRevisions(revisionsJson, OptStr(args, "author"), OptStr(args, "changeType"),
                     OptStr(args, "family"), OptStr(args, "resolutionStatus"), OptStr(args, "partUri"));
             }
+            case "repairs":
+                // Read-only: what the registry could repair, with carriers and reasons.
+                return "{\"repairs\":" + DocxSessionOps.ListRevisionRepairs(session.Handle) + "}";
+            case "repair":
+            {
+                if (!args.TryGetProperty("repairs", out var repairs) || repairs.ValueKind != JsonValueKind.Array)
+                    throw new McpToolException("repair requires an array \"repairs\" of {revisionId, kind, author?, date?}");
+                return Guarded(session, ParsePreconditions(args, MutationTarget(args)), () =>
+                    DocxSessionOps.RepairRevisions(session.Handle, repairs.GetRawText()));
+            }
             case "accept":
                 return Guarded(session, ParsePreconditions(args, MutationTarget(args)), () =>
                     DocxSessionOps.AcceptRevision(session.Handle, Str(args, "revisionId")));
@@ -1471,7 +1481,7 @@ internal static class Dispatcher
                 or "set_checked" or "set_date" or "select_item" or "fill_picture"
                 or "add_repeating_item" or "remove_repeating_item",
             "docxodus_track_changes" => action is "accept" or "reject"
-                or "accept_all" or "reject_all",
+                or "accept_all" or "reject_all" or "repair",
             _ => false,
         };
         return known ? null : new EditError(
