@@ -105,7 +105,7 @@ action-specific arguments.
 | `docxodus_images` | grouped-intent | Native Word images: list, insert, replace, resize, set metadata or floating layout, remove. Payloads cross the JSON boundary as base64 only — the server never fetches a URL or reads an image path. |
 | `docxodus_content_controls` | grouped-intent | List and fill native Word content controls (`w:sdt`) — text, rich text, checkbox, date, list item, picture, repeating items — preserving each control's wrapper and metadata. |
 | `docxodus_track_changes` | grouped-intent | List tracked changes; accept or reject one by id or all; switch the session's recording mode; prove redline reversibility. |
-| `docxodus_mutations` | grouped-intent | Apply or safely preview a batch atomically by default, with opt-in best-effort and MCP-only transaction idempotency. |
+| `docxodus_mutations` | grouped-intent | Apply or safely preview a batch atomically by default, with opt-in best-effort and transaction-id retry deduplication (shared with every transport). |
 | `docxodus_table` | grouped-intent | Create and read tables; resolve canonical cell anchors ↔ grid coordinates; edit rows, columns, cell content, and style. |
 | `docxodus_compare` | sessionless | Diff or N-way consolidate stored document versions into one author-attributed native redline, written back into the document scope. |
 | `docxodus_deliver` | sessionless | Build a verified delivery bundle from a named baseline and the current session; return its manifest and available artifact bytes. |
@@ -184,9 +184,10 @@ and there is no TTL or idle-session eviction, so a long-lived server that is nev
 - **`transaction_incomplete`** means the id is bound to this exact request but no terminal response
   was ever recorded, so whether the mutation applied is *unknown*. Inspect the document and retry
   under a new id.
-- **Idempotency is MCP-only.** `execute_batch` through WASM/npm and through the stdio host /
-  `docx-scalpel` has no transaction identity and no replay: a retry there re-applies. Do not
-  assume the MCP guarantee from another transport.
+- **The same journal serves every transport.** `execute_batch` through the stdio host /
+  `docx-scalpel` and `executeBatch` through WASM/npm accept a transaction id with the identical
+  contract (`docs/architecture/docx_mutation_api.md`, "Transaction ids"); an id is scoped to
+  the transport that minted it, since each transport's request language differs.
 
 ## Known gaps
 

@@ -125,6 +125,19 @@ if (!result.success) console.error(result.failure);
 
 Pass `'best_effort'` explicitly only when partial successes should be retained.
 
+A retry after a lost response must not apply the edit twice. Give the batch a transaction id
+and a serializable description of what it does; an identical retry returns the original result
+without executing again, and reusing the id for a different request fails with
+`transaction_conflict`:
+
+```ts
+const result = session.executeBatch(steps, 'atomic', {
+  transactionId: 'plan-42-step-3',
+  request: { replace: firstAnchor, header: 'Confidential' },
+});
+result.transaction; // { schemaVersion: 1, transactionId, requestFingerprint }
+```
+
 `previewBatch` answers "what would this do?" without touching the live session. It runs the
 same steps against a complete isolated clone — each callback is handed the shadow session to
 mutate — and returns the same receipt plus optional predicted HTML:

@@ -15,6 +15,7 @@ namespace Docxodus.Internal;
 internal static class SessionRegistry
 {
     private static readonly ConcurrentDictionary<int, DocxSession> _sessions = new();
+    private static readonly ConcurrentDictionary<int, MutationTransactions> _transactions = new();
     private static int _nextId;
 
     public static int OpenSession(byte[] bytes, DocxSessionSettings? settings)
@@ -51,7 +52,29 @@ internal static class SessionRegistry
 
     public static void CloseSession(int handle)
     {
+        // Closing clears the journal: a reopened document starts a new transaction-identity
+        // namespace even when it opens the same saved bytes.
+        _transactions.TryRemove(handle, out _);
         if (_sessions.TryRemove(handle, out var s)) s.Dispose();
+    }
+
+    /// <summary>
+    /// The mutation-transaction journal of one live session — one per handle regardless of
+    /// which transport drives it, created on first use, discarded with the session.
+    /// </summary>
+    public static MutationTransactions Transactions(int handle)
+    {
+        _ = Get(handle);
+        return _transactions.GetOrAdd(handle, _ => new MutationTransactions());
+    }
+
+    /// <summary>Install a caller-configured journal (retention limits, clocks) for a live session,
+    /// replacing the default one. Hosts that own their own session wrapper call this on open.</summary>
+    public static void AttachTransactions(int handle, MutationTransactions journal)
+    {
+        ArgumentNullException.ThrowIfNull(journal);
+        _ = Get(handle);
+        _transactions[handle] = journal;
     }
 
     public static DocxSession Get(int handle)
@@ -65,6 +88,7 @@ internal static class SessionRegistry
 
     public static void DisposeAll()
     {
+        _transactions.Clear();
         foreach (var kv in _sessions)
         {
             if (_sessions.TryRemove(kv.Key, out var s)) s.Dispose();

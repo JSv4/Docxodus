@@ -2,6 +2,7 @@
 
 using System.Collections.Concurrent;
 using System.Text.Json;
+using Docxodus.Internal;
 using Docxodus.McpServer;
 using Xunit;
 

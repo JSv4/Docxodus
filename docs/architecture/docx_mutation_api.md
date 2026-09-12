@@ -120,6 +120,46 @@ The same semantics reach `DocxSessionOps`/JSON, WASM and npm
 (`session.executeBatch`), stdio and Python (`session.execute_batch`), and MCP
 (`docxodus_mutations`).
 
+### Transaction ids: retry deduplication on every transport (issues #449, #761)
+
+An applying batch may carry a caller-chosen **transaction id** — a non-blank string of at most
+256 Unicode scalar values — so that a retry after a lost response does not apply the edit
+twice. One journal per live session owns the contract, whichever transport drives it:
+`Docxodus/Internal/MutationTransactions.cs`, held by `SessionRegistry` per handle (the MCP
+server installs its own configured instance there on open).
+
+- **Replay.** The first terminal response under an id — success, partial result, structured
+  failure, precondition failure, or a safely caught exception — is retained. An identical retry
+  returns that exact serialized `MutationBatchResult` before evaluating current preconditions
+  or running a step, so generated anchors, timestamps, versions, outcome, deltas and
+  `packageHash` are those of the original call. The result carries one extra top-level
+  `transaction: { schemaVersion: 1, transactionId, requestFingerprint }`.
+- **Identity.** The request fingerprint is SHA-256 over a canonical JSON rendering of the
+  transport's request object: root `sessionId`/`handle`/`transactionId` excluded, object keys
+  sorted, array order and string/number spelling kept, a missing root `mode` canonicalized as
+  `"atomic"`, duplicate keys rejected. Reusing an id for a different fingerprint returns
+  `transaction_conflict`; a known id whose response left bounded retention returns
+  `transaction_result_evicted`; an id bound to this request that never recorded a terminal
+  response returns `transaction_incomplete` (outcome unknown — inspect the document, retry
+  under a fresh id). Because each transport's request language differs (MCP `steps[].tool`,
+  the stdio host's `steps[].operation`, the browser's caller-supplied descriptor), an id is
+  scoped to the transport that minted it.
+- **Where it lives.** Stdio/Python: `execute_batch(steps, mode, transaction_id=...)`, the
+  host runs `DocxSessionOps.ExecuteBatchTransactional`. npm/WASM: the batch is composed in
+  JavaScript, so `session.executeBatch(steps, mode, { transactionId, request })` drives the
+  journal over the bridge — `BeginMutationTransaction` resolves the id (and returns the
+  terminal response for a replay or refusal), the client runs its steps, then
+  `CompleteMutationTransaction` retains the serialized result or `AbandonMutationTransaction`
+  retires the reservation if the batch could not produce one. `request` is the caller's own
+  serializable description of the batch and is what the fingerprint covers; pass the same
+  descriptor on a retry. MCP: `docxodus_mutations` with `transactionId`, unchanged.
+- **Lifecycle.** Preview batches reject transaction ids (`invalid_transaction`). Replay after
+  undo or redo returns the historical response without reapplying, undoing, redoing, or moving
+  a history cursor. Save keeps the journal; close clears it; reopening the same bytes starts a
+  new identity namespace. Retention is bounded per session by 128 full responses and 32 MiB of
+  retained text, then 1,024 response-less tombstones — after which a stale retry executes as a
+  fresh mutation. A structured validation failure is a terminal response and burns its id.
+
 ### Isolated previews
 
 `PreviewBatch(steps, mode, options)` runs the identical step delegates against a complete
@@ -258,7 +298,7 @@ We didn't pick CommonMark or GFM as the input language because the projector's s
 Two round-trip quirks worth knowing when you write tests against the markdown output:
 
 - **The projector escapes markdown punctuation in text content.** `-`, `*`, `_`, `` ` ``, `~`, `\`, and other characters that could be parsed as markdown are backslash-escaped (e.g., `RAWSIBLING-INSERTED` projects as `RAWSIBLING\-INSERTED`). Don't write literal `Contains(...)` assertions over hyphenated tokens; either strip backslashes from the projection or use tokens without markdown-significant characters.
-- **`InsertParagraph` with a bulleted markdown payload does not inherit list numbering.** A payload like `- item one` parses as a `BulletItem` block and the created anchor has kind `li`, but the inserted paragraph has no `w:numPr`, so Word renders it as a plain paragraph (and `SetListLevel` will return `AnchorWrongKind` because there is no numbering to adjust). To get a real bulleted item in v1, use `Raw.InsertXml` with a fragment derived from `Raw.GetXml(existingListItemAnchor)` so the `w:numPr` and numbering id come along for free. A first-class numbering-inheritance path is on the v2 list (see Known limits).
+- **List payloads create native numbering (issue #759).** A `- item` or `3. item` block written through `InsertParagraph`, `ReplaceText` or `ReplaceCellContent` gets a real `w:numPr` from the same owner `ApplyListFormat` uses, so the created anchor's kind `li` matches what Word shows. The rules: consecutive ordered items form one list on one `w:num` instance whose `w:startOverride` is the first marker's number, so `3. a` / `4. b` renders 3 and 4; a non-list block or a top-level bullet ends that list, and a later ordered list restarts on its own instance; bullets share the document's Docxodus bullet definition; indent maps to `w:ilvl`; and the payload's first list continues an adjacent list item of the same family (bullet or numbered) — the block before the insertion point, or, when the whole payload is one list, the block after it — synthesizing any level the continued definition lacks. On a paragraph that is already a list item, `ReplaceText` treats the marker as the projection's own spelling echoed back and leaves the numbering alone (use `ApplyListFormat` to change format); on a plain paragraph it promotes, and in tracked mode records the promotion as a `w:numPr/w:ins` mark. Footnote, endnote and comment payloads still carry no numbering. A backslash-escaped marker (`\- text`) stays literal.
 
 ## Anchor lifecycle
 

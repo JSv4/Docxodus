@@ -82,6 +82,7 @@ __all__ = [
     "MutationBatchStep",
     "MutationBatchStepResult",
     "MutationBatchFailure",
+    "MutationTransactionIdentity",
     "MutationBatchChangeSet",
     "MutationBatchResult",
     "BlockMetadata",
@@ -3320,6 +3321,28 @@ class MutationBatchFailure:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class MutationTransactionIdentity:
+    """The versioned identity a transaction-aware batch result carries (issue #761).
+
+    ``request_fingerprint`` is the SHA-256 the host computed over the canonical request;
+    an identical retry under the same ``transaction_id`` replays the retained result and
+    reports the same fingerprint.
+    """
+
+    schema_version: int
+    transaction_id: str
+    request_fingerprint: str
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "MutationTransactionIdentity":
+        return cls(
+            schema_version=int(d.get("schemaVersion", 1)),
+            transaction_id=str(d.get("transactionId", "")),
+            request_fingerprint=str(d.get("requestFingerprint", "")),
+        )
+
+
 _BatchItem = TypeVar("_BatchItem")
 
 
@@ -3370,10 +3393,14 @@ class MutationBatchResult:
     )
     warnings: tuple[str, ...] = ()
     html: str | None = None
+    #: Present only for a batch executed under a ``transaction_id``: the identity the
+    #: session's journal bound the request to, the same on the original call and on a replay.
+    transaction: MutationTransactionIdentity | None = None
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "MutationBatchResult":
         failure = d.get("failure")
+        transaction = d.get("transaction")
         return cls(
             mode=MutationBatchMode(d.get("mode", "atomic")),
             status=str(d.get("status", "failed")),
@@ -3398,6 +3425,10 @@ class MutationBatchResult:
             ),
             warnings=tuple(str(value) for value in d.get("warnings", ())),
             html=d.get("html"),
+            transaction=(
+                MutationTransactionIdentity._from_wire(transaction)
+                if isinstance(transaction, Mapping) else None
+            ),
         )
 
 

@@ -1649,6 +1649,9 @@ export interface DocxodusWasmExports {
     GetPageMapStatus: (handle: number, requestJson: string) => string;
     GetPageCitation: (handle: number, anchorId: string, requestJson: string) => string;
     GetPackageContentHash?: (handle: number) => string;
+    BeginMutationTransaction?: (handle: number, transactionId: string, requestJson: string) => string;
+    CompleteMutationTransaction?: (handle: number, transactionId: string, serializedResponse: string) => void;
+    AbandonMutationTransaction?: (handle: number, transactionId: string) => void;
     GetPackageManifest: (handle: number) => string;
     RenderPreviewHtml?: (handle: number) => string;
     RenderPreviewBlockHtml?: (handle: number, anchorId: string) => string;
@@ -2148,6 +2151,33 @@ export interface MutationBatchResult {
   warnings: readonly string[];
   /** Shadow-only preview HTML when requested; null otherwise. */
   html: string | null;
+  /**
+   * Present only for a batch executed under a {@link MutationTransaction}: the identity the
+   * session's journal bound the request to — the same on the original call and on a replay.
+   */
+  transaction?: MutationTransactionIdentity;
+}
+
+/** The versioned identity a transaction-aware batch result carries (issue #761). */
+export interface MutationTransactionIdentity {
+  schemaVersion: number;
+  transactionId: string;
+  /** SHA-256 over the canonical rendering of {@link MutationTransaction.request} plus the mode. */
+  requestFingerprint: string;
+}
+
+/**
+ * Retry deduplication for {@link DocxSession.executeBatch}. The session's journal replays the
+ * original result for an identical retry under the same `transactionId` without executing the
+ * steps again, and refuses the id for a different request with `transaction_conflict`. Because
+ * the batch is composed from callbacks, `request` is the caller's own serializable description
+ * of what the batch does and is what the fingerprint covers: pass the same descriptor on a retry.
+ */
+export interface MutationTransaction {
+  /** Non-blank, at most 256 Unicode scalar values; scoped to this open session. */
+  transactionId: string;
+  /** A JSON object describing the batch (step kinds, targets, payloads). */
+  request: Record<string, unknown>;
 }
 
 export interface MarkdownPatch {

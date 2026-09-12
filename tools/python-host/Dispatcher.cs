@@ -924,6 +924,15 @@ internal static class Dispatcher
         };
         if (!args.TryGetProperty("steps", out var steps) || steps.ValueKind != JsonValueKind.Array)
             throw new ArgumentException("execute_batch requires an array 'steps'");
+        var transactionId = args.TryGetProperty("transactionId", out var transaction)
+            && transaction.ValueKind != JsonValueKind.Null
+            ? transaction.ValueKind == JsonValueKind.String
+                ? transaction.GetString()
+                : throw new ArgumentException("transactionId must be a string")
+            : null;
+        if (transactionId is not null
+            && MutationTransactions.ValidateTransactionId(transactionId) is { } invalidTransactionId)
+            throw new ArgumentException(invalidTransactionId);
 
         IEnumerable<MutationBatchStep> ParseSteps(int targetHandle)
         {
@@ -949,8 +958,28 @@ internal static class Dispatcher
             return parsed;
         }
 
+        if (transactionId is not null && preview)
+        {
+            long version;
+            try { version = DocxSessionOps.GetVersion(liveHandle); }
+            catch { version = 0; }
+            return MutationTransactions.SerializeFailure(
+                batchMode,
+                preview: true,
+                version,
+                EditErrorCode.InvalidTransaction,
+                "transactionId is not valid for preview batches",
+                "transaction");
+        }
         if (!preview)
-            return DocxSessionOps.ExecuteBatch(liveHandle, batchMode, ParseSteps(liveHandle));
+        {
+            // The session's journal (shared with every other transport) replays an identical
+            // retry, refuses a reused id, and otherwise executes once and retains the result.
+            return transactionId is null
+                ? DocxSessionOps.ExecuteBatch(liveHandle, batchMode, ParseSteps(liveHandle))
+                : DocxSessionOps.ExecuteBatchTransactional(
+                    liveHandle, transactionId, args, batchMode, () => ParseSteps(liveHandle));
+        }
 
         var htmlMode = args.TryGetProperty("htmlMode", out var html) && html.ValueKind == JsonValueKind.String
             ? html.GetString() switch
