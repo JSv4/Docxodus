@@ -1888,6 +1888,7 @@ export interface DocxodusWasmExports {
     ListImages: (handle: number, scopes: number) => string;
     InsertImage: (handle: number, anchor: string, characterOffset: number, imageBase64: string, optionsJson: string) => string;
     ReplaceImage: (handle: number, imageId: string, imageBase64: string) => string;
+    EmbedLinkedImage: (handle: number, imageId: string, imageBase64: string) => string;
     SetImageDimensions: (handle: number, imageId: string, dimensionsJson: string) => string;
     SetImageMetadata: (handle: number, imageId: string, altText: string | null, title: string | null) => string;
     SetImageFloatingLayout: (handle: number, imageId: string, layoutJson: string) => string;
@@ -2318,6 +2319,16 @@ export type ImageVerticalReference = "page" | "margin" | "paragraph" | "line" | 
 export type ImageHorizontalAlignment = "left" | "center" | "right" | "inside" | "outside" | "unknown";
 export type ImageVerticalAlignment = "top" | "center" | "bottom" | "inside" | "outside" | "unknown";
 
+/** One vertex of a tight/through wrap outline in DrawingML's 21600-unit picture space. */
+export interface ImageWrapPoint { x: number; y: number; }
+
+/**
+ * The outline text follows under tight/through wrap: a start vertex plus at least two line
+ * segments. Omit it on write to get the picture rectangle; a layout read from the document
+ * always carries the outline it holds.
+ */
+export interface ImageWrapPolygon { points: ImageWrapPoint[]; edited?: boolean; }
+
 export interface FloatingImageLayout {
   horizontalRelativeFrom?: ImageHorizontalReference;
   horizontalOffsetEmu?: number | null;
@@ -2327,6 +2338,7 @@ export interface FloatingImageLayout {
   verticalAlignment?: ImageVerticalAlignment | null;
   wrapMode?: ImageWrapMode;
   wrapSide?: ImageWrapSide;
+  wrapPolygon?: ImageWrapPolygon | null;
   distanceTopEmu?: number;
   distanceBottomEmu?: number;
   distanceLeftEmu?: number;
@@ -2363,6 +2375,9 @@ export interface ImageDimensions {
   preserveAspect?: boolean;
 }
 
+/** Whether one image operation applies to one occurrence in the session's current mode. */
+export interface ImageOperationSupport { operation: string; canMutate: boolean; reason?: string; }
+
 export interface ImageOccurrence {
   id: string; markupKind: ImageMarkupKind; placement?: ImagePlacement; canMutate: boolean;
   unsupportedReason?: string; owningPartUri: string; scope: string; anchorId: string; span: CharSpan;
@@ -2371,7 +2386,12 @@ export interface ImageOccurrence {
   format: ImageBinaryFormat; contentTypeMatchesBytes?: boolean; intrinsicWidthPixels?: number;
   intrinsicHeightPixels?: number; renderedWidthPoints?: number; renderedHeightPoints?: number;
   altText?: string; title?: string; floatingLayout?: FloatingImageLayout; floatingLayoutSupported: boolean;
+  /** replace, embed_linked, set_dimensions, set_metadata, set_floating_layout and remove, each answered. */
+  operations: ImageOperationSupport[];
 }
+
+/** Which operations one markup family accepts, independent of any occurrence. */
+export interface ImageMarkupCapability { markup: string; operations: string[]; limitation?: string; }
 
 export interface ImageFormatCapability {
   format: ImageBinaryFormat; contentType: string; canInspect: boolean; canInsert: boolean;
@@ -2384,6 +2404,7 @@ export interface ImageCapabilities {
   verticalReferences: ImageVerticalReference[]; maxInputBytes: number; maxRenderedPoints: number;
   defaultDpi: number; usesHeaderParsingOnly: boolean; acceptsBinaryBytes: boolean;
   supportsNetworkFetch: boolean; supportsFileIo: boolean;
+  markups: ImageMarkupCapability[]; trackedOperations: string[];
 }
 
 export type ContentControlType = "plain_text" | "rich_text" | "checkbox" | "date"

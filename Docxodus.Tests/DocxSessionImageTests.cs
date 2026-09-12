@@ -471,7 +471,7 @@ public class DocxSessionImageTests
     }
 
     [Fact]
-    public void IM016_AlternateContentDrawingAndVmlFallbackAreBothReadOnly()
+    public void IM016_AlternateContentDrawingWritesEveryBranch_AndVmlFallbackIsReadOnly()
     {
         using var seed = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
         Assert.True(seed.InsertImage(Paragraphs(seed)[0], 0, Png(2, 3)).Success);
@@ -498,12 +498,15 @@ public class DocxSessionImageTests
         Assert.Equal(2, images.Count);
         var modern = Assert.Single(images.Where(image => image.MarkupKind == ImageMarkupKind.ModernDrawing));
         var legacy = Assert.Single(images.Where(image => image.MarkupKind == ImageMarkupKind.LegacyVml));
-        Assert.False(modern.CanMutate);
+        // Issue #762: the modern occurrence is the one to operate on; every branch changes together.
+        Assert.True(modern.CanMutate, modern.UnsupportedReason);
         Assert.False(legacy.CanMutate);
-        Assert.Contains("AlternateContent", modern.UnsupportedReason);
+        Assert.Contains("modern occurrence", legacy.UnsupportedReason);
         Assert.Equal(modern.RelationshipId, legacy.RelationshipId);
         Assert.Equal(EditErrorCode.UnsupportedImageMarkup,
-            session.SetImageMetadata(modern.Id, "changed", null).Error!.Code);
+            session.SetImageMetadata(legacy.Id, "changed", null).Error!.Code);
+        Assert.True(session.SetImageMetadata(modern.Id, "changed", null).Success);
+        Assert.All(session.ListImages(), image => Assert.Equal("changed", image.AltText));
     }
 
     [Fact]
@@ -697,7 +700,7 @@ public class DocxSessionImageTests
     }
 
     [Fact]
-    public void IM021_SvgBlipExtensionOccurrenceIsEnumeratedButReadOnly()
+    public void IM021_SvgBlipExtensionOccurrenceRefusesReplaceOnly()
     {
         // An SVG picture stores its raster fallback in a:blip/@r:embed and the real art in an
         // asvg:svgBlip extension. Descendants(a:blip) still counts one blip, so without an
@@ -728,10 +731,10 @@ public class DocxSessionImageTests
         Assert.Contains("svgBlip", image.UnsupportedReason);
         Assert.Equal(EditErrorCode.UnsupportedImageMarkup,
             session.ReplaceImage(image.Id, Png(9, 9)).Error!.Code);
-        Assert.Equal(EditErrorCode.UnsupportedImageMarkup,
-            session.RemoveImage(image.Id).Error!.Code);
-        Assert.Equal(EditErrorCode.UnsupportedImageMarkup,
-            session.SetImageDimensions(image.Id, 36, null).Error!.Code);
+        Assert.False(image.Operations.Replace.CanMutate);
+        // Issue #762: sizing, metadata and removal touch both payloads together and stay open.
+        Assert.True(image.Operations.SetDimensions.CanMutate);
+        Assert.True(image.Operations.Remove.CanMutate);
 
         // Refusing must also leave both media parts intact through the normalizing save.
         Assert.Equal(2, FlatImageRelationships(session.Save(true)).Length);
@@ -813,33 +816,40 @@ public class DocxSessionImageTests
     }
 
     [Fact]
-    public void IM023_RenderInlineTrackedModeRejectsEveryImageMutation()
+    public void IM023_RenderInlineTrackedModeRecordsEveryImageMutation()
     {
+        // Issue #762: every image operation has a native tracked form — an inserted run for a new
+        // picture, a deleted run plus an inserted copy for a change to an existing one. The
+        // accept/reject/undo consequences are pinned in DocxSessionImageCoverageTests.
         using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
         var anchor = Paragraphs(session)[0];
         Assert.True(session.InsertImage(anchor, 0, Png(2, 3)).Success);
         var image = Assert.Single(session.ListImages());
 
         session.SetTrackedChanges(TrackedChangeMode.RenderInline);
-        Assert.Equal(EditErrorCode.TrackedOperationUnsupported,
-            session.InsertImage(anchor, 0, Png(4, 5)).Error!.Code);
-        Assert.Equal(EditErrorCode.TrackedOperationUnsupported,
-            session.ReplaceImage(image.Id, Png(4, 5)).Error!.Code);
-        Assert.Equal(EditErrorCode.TrackedOperationUnsupported,
-            session.SetImageDimensions(image.Id, 36, null).Error!.Code);
-        Assert.Equal(EditErrorCode.TrackedOperationUnsupported,
+        var tracked = Assert.Single(session.ListImages());
+        Assert.True(tracked.CanMutate, tracked.UnsupportedReason);
+        Assert.True(session.InsertImage(anchor, 0, Png(4, 5)).Success);
+        var replaced = session.ReplaceImage(image.Id, Png(4, 5));
+        Assert.True(replaced.Success, replaced.Error?.Message);
+        Assert.NotEqual(image.Id, replaced.ImageId);
+        Assert.True(session.SetImageDimensions(replaced.ImageId!, 36, null).Success);
+        Assert.True(session.SetImageMetadata(replaced.ImageId!, "alt", null).Success);
+        Assert.True(session.RemoveImage(replaced.ImageId!).Success);
+
+        // The original run is a tracked deletion the listing still shows but refuses to edit.
+        var deleted = Assert.Single(session.ListImages(), listed => listed.Id == image.Id);
+        Assert.False(deleted.CanMutate);
+        Assert.Contains("tracked deletion", deleted.UnsupportedReason);
+        Assert.Equal(EditErrorCode.UnsupportedImageMarkup,
             session.SetImageMetadata(image.Id, "alt", null).Error!.Code);
-        Assert.Equal(EditErrorCode.TrackedOperationUnsupported,
-            session.SetImageFloatingLayout(image.Id, new FloatingImageLayout()).Error!.Code);
-        Assert.Equal(EditErrorCode.TrackedOperationUnsupported,
-            session.RemoveImage(image.Id).Error!.Code);
+        var types = session.ListRevisions().Select(revision => revision.Type).ToList();
+        Assert.Contains("insert", types);
+        Assert.Contains("delete", types);
 
-        // Rejection is not a mutation: listing and the document are unchanged.
+        // …and rejecting everything restores the original picture untouched.
+        Assert.True(session.RejectAllRevisions().Success);
         Assert.Equal(image, Assert.Single(session.ListImages()));
-
-        // …and the ops come back once tracking is off.
-        session.SetTrackedChanges(TrackedChangeMode.Accept);
-        Assert.True(session.SetImageMetadata(image.Id, "alt", null).Success);
     }
 
     [Fact]

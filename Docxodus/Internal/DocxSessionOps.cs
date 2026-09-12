@@ -938,6 +938,12 @@ internal static class DocxSessionOps
         return DocxSessionJson.Serialize(SessionRegistry.Get(handle).ReplaceImage(imageId, bytes!));
     }
 
+    public static string EmbedLinkedImage(int handle, string imageId, string imageBase64)
+    {
+        if (!TryDecodeImageBase64(imageBase64, null, out var bytes, out var error)) return error!;
+        return DocxSessionJson.Serialize(SessionRegistry.Get(handle).EmbedLinkedImage(imageId, bytes!));
+    }
+
     public static string SetImageDimensions(int handle, string imageId, string dimensionsJson)
     {
         try
