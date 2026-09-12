@@ -199,12 +199,23 @@ function handleVerifyDeliverable(
 ): { verification?: DeliverableVerificationResult; error?: string } {
   try {
     const converter = ensureInitialized().DocumentConverter;
-    const json = request.baselineBytes === undefined
-      ? converter.VerifyDeliverable(request.documentBytes)
-      : converter.VerifyDeliverableWithBaseline(
-          request.baselineBytes,
-          request.documentBytes
-        );
+    let json: string;
+    if (request.requestJson !== undefined) {
+      if (!converter.VerifyDeliverableWithRequest || !converter.VerifyDeliverableWithBaselineAndRequest) {
+        throw new Error("This WASM bundle predates full verification requests; rebuild docxodus.");
+      }
+      json = request.baselineBytes === undefined
+        ? converter.VerifyDeliverableWithRequest(request.documentBytes, request.requestJson)
+        : converter.VerifyDeliverableWithBaselineAndRequest(
+            request.baselineBytes, request.documentBytes, request.requestJson);
+    } else {
+      json = request.baselineBytes === undefined
+        ? converter.VerifyDeliverable(request.documentBytes)
+        : converter.VerifyDeliverableWithBaseline(
+            request.baselineBytes,
+            request.documentBytes
+          );
+    }
     return {
       verification: JSON.parse(json) as DeliverableVerificationResult,
     };
@@ -553,9 +564,16 @@ function handleSessionVerifyDeliverable(
   request: WorkerSessionVerifyDeliverableRequest
 ): { verification?: DeliverableVerificationResult; error?: string } {
   try {
-    const json = ensureInitialized().DocxSessionBridge.VerifyDeliverable(
-      request.handle
-    );
+    const bridge = ensureInitialized().DocxSessionBridge;
+    let json: string;
+    if (request.requestJson !== undefined) {
+      if (!bridge.VerifyDeliverableWithRequest) {
+        throw new Error("This WASM bundle predates full verification requests; rebuild docxodus.");
+      }
+      json = bridge.VerifyDeliverableWithRequest(request.handle, request.requestJson);
+    } else {
+      json = bridge.VerifyDeliverable(request.handle);
+    }
     return {
       verification: JSON.parse(json) as DeliverableVerificationResult,
     };

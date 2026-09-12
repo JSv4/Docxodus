@@ -70,6 +70,7 @@ from .types import (
     DocxDiffSettings,
     DocxSessionSettings,
     DeliverableVerificationResult,
+    DeliverableVerificationRequest,
     DeliveryReceiptVerificationResult,
     RedlineReversibilityProof,
     EditError,
@@ -205,16 +206,23 @@ def generate_package_manifest(
 def verify_deliverable(
     data: bytes,
     baseline: bytes | None = None,
+    *,
+    request: DeliverableVerificationRequest | None = None,
 ) -> DeliverableVerificationResult:
-    """Run the default bounded deliverable gate over exact supplied DOCX bytes.
+    """Run the bounded deliverable gate over exact supplied DOCX bytes.
 
     Malformed, encrypted, and safety-limited packages are represented by typed
     report findings rather than requiring the bytes to open as an editable session.
-    When provided, ``baseline`` is compared as exact opening-package bytes.
+    When provided, ``baseline`` is compared as exact opening-package bytes. ``request``
+    (issue #747) adds the full policy: options and inspection limits, the approved
+    semantic and package changes, and companion renderer artifacts; omitted, the
+    default policy applies. The host enforces every limit before decoding an artifact.
     """
-    args = {"docxB64": base64.b64encode(data).decode("ascii")}
+    args: dict[str, Any] = {"docxB64": base64.b64encode(data).decode("ascii")}
     if baseline is not None:
         args["baselineB64"] = base64.b64encode(baseline).decode("ascii")
+    if request is not None:
+        args["request"] = request.to_wire()
     result = _call(
         "verify_deliverable",
         args,
@@ -743,13 +751,19 @@ class DocxSession:
             raise TypeError(f"get_package_manifest: expected object, got {result!r}")
         return PackageManifest._from_wire(result)
 
-    def verify_deliverable(self) -> DeliverableVerificationResult:
-        """Verify this session's clean-save checkpoint with the default policy.
+    def verify_deliverable(
+        self, request: DeliverableVerificationRequest | None = None
+    ) -> DeliverableVerificationResult:
+        """Verify this session's clean-save checkpoint.
 
         Initial package capture is enabled by default; when present, those exact
-        opening bytes are used as the report baseline.
+        opening bytes are used as the report baseline. ``request`` (issue #747) adds
+        the full policy, expected deltas and companion artifacts; omitted, the default
+        policy applies.
         """
-        result = self._call("verify_deliverable", {})
+        result = self._call(
+            "verify_deliverable", {} if request is None else {"request": request.to_wire()}
+        )
         if not isinstance(result, Mapping):
             raise TypeError(f"verify_deliverable: expected object, got {result!r}")
         return DeliverableVerificationResult._from_wire(result)

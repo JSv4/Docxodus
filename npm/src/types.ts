@@ -1089,6 +1089,95 @@ export interface DeliveryReceiptVerificationResult {
   findings: string[];
 }
 
+/** One approved package-level delta the deliverable is expected to show (issue #747). */
+export interface DeliverablePackageChangeExpectation {
+  kind: DeliverablePackageChangeKind;
+  location: ChangeLocation;
+  beforeDigest?: VerificationDigest;
+  afterDigest?: VerificationDigest;
+  beforeValue?: string;
+  afterValue?: string;
+}
+
+export type DeliverableRenderDiagnosticKind =
+  | "warning"
+  | "unsupportedContent"
+  | "missingFont"
+  | "fontSubstitution";
+
+/** One render warning or limitation reported by the companion renderer. */
+export interface DeliverableRenderDiagnostic {
+  kind: DeliverableRenderDiagnosticKind;
+  message: string;
+  severity?: VerificationFindingSeverity;
+  code?: string;
+  phase?: string;
+}
+
+/** Bytes and renderer/document binding for one companion artifact submitted for verification. */
+export interface DeliverableCompanionArtifactInput {
+  artifactId: string;
+  role: DeliverableArtifactRole;
+  mediaType: string;
+  /** Defaults to `available`. */
+  availability?: DeliverableArtifactAvailability;
+  bytes?: Uint8Array;
+  unavailableReason?: string;
+  pageCount?: number;
+  rendererFingerprint?: string;
+  /** Digest of the exact package the renderer consumed; a mismatch is a stale artifact. */
+  sourcePackageDigest?: VerificationDigest;
+  pageMapDigest?: VerificationDigest;
+  renderDiagnostics?: readonly DeliverableRenderDiagnostic[];
+}
+
+/**
+ * Policy and inspection limits for verification (issue #747). Every field is optional; an
+ * omitted field takes the verifier's own default. Unknown fields are rejected.
+ */
+export interface DeliverableVerificationPolicyOptions {
+  mode?: DeliverableVerificationMode;
+  openXmlVersion?: string;
+  failOnUnexpectedChanges?: boolean;
+  requireNoPlaceholders?: boolean;
+  detectBracketedAlternativeClauses?: boolean;
+  editorialMarkers?: readonly string[];
+  placeholderTokens?: readonly string[];
+  maxPackageBytes?: number;
+  maxFindings?: number;
+  maxDetectorNodes?: number;
+  maxDetectorRelationships?: number;
+  maxDetectorTextCharacters?: number;
+  maxDetectorRegexMatches?: number;
+  maxDetectorSteps?: number;
+  maxCompanionArtifactBytes?: number;
+  maxTotalCompanionArtifactBytes?: number;
+  maxCompanionArtifacts?: number;
+  maxRenderDiagnostics?: number;
+  maxExpectedChanges?: number;
+  maxReportedDeltaChanges?: number;
+  packageManifest?: {
+    maxEntryCount?: number;
+    maxEntryUncompressedBytes?: number;
+    maxTotalUncompressedBytes?: number;
+    maxXmlPartBytes?: number;
+    maxCompressionRatio?: number;
+    maxUriLength?: number;
+  };
+}
+
+/**
+ * The full bounded verification request (issue #747): what the typed .NET request adds to the
+ * package bytes. Package bytes are passed alongside, never inside, this object.
+ */
+export interface DeliverableVerificationRequest {
+  options?: DeliverableVerificationPolicyOptions;
+  /** The canonical semantic-changes object (as `getSemanticChanges` returns it). */
+  expectedSemanticChanges?: SemanticChangeSet;
+  expectedPackageChanges?: readonly DeliverablePackageChangeExpectation[];
+  companionArtifacts?: readonly DeliverableCompanionArtifactInput[];
+}
+
 export interface DeliverableVerificationResult {
   schema: "https://docxodus.dev/schemas/verification/deliverable-verification/v1";
   schemaVersion: 1;
@@ -1284,6 +1373,12 @@ export interface DocxodusWasmExports {
   DocumentConverter: {
     GeneratePackageManifest: (bytes: Uint8Array) => string;
     VerifyDeliverable: (bytes: Uint8Array) => string;
+    VerifyDeliverableWithRequest?: (bytes: Uint8Array, requestJson: string) => string;
+    VerifyDeliverableWithBaselineAndRequest?: (
+      baselineBytes: Uint8Array,
+      bytes: Uint8Array,
+      requestJson: string,
+    ) => string;
     VerifyDeliveryReceipt: (receiptJson: string, artifactsJson: string) => string;
     VerifyDeliverableWithBaseline: (
       baselineBytes: Uint8Array,
@@ -1797,6 +1892,7 @@ export interface DocxodusWasmExports {
     GetDiff: (handle: number, format: number) => string;
     GetSemanticChanges: (handle: number) => string;
     VerifyDeliverable: (handle: number) => string;
+    VerifyDeliverableWithRequest?: (handle: number, requestJson: string) => string;
     FindByAnnotation: (handle: number, annotationId: string) => string;
     FindByAnnotationWithCitations: (handle: number, annotationId: string, requestJson: string) => string;
     FindByLabel: (handle: number, labelId: string) => string;
@@ -4136,6 +4232,8 @@ export interface WorkerVerifyDeliverableRequest extends WorkerRequestBase {
   type: "verifyDeliverable";
   documentBytes: Uint8Array;
   baselineBytes?: Uint8Array;
+  /** The serialized full request (issue #747); absent means the default policy. */
+  requestJson?: string;
 }
 
 /**
@@ -4243,6 +4341,8 @@ export interface WorkerSessionGetSemanticChangesRequest extends WorkerRequestBas
 export interface WorkerSessionVerifyDeliverableRequest extends WorkerRequestBase {
   type: "sessionVerifyDeliverable";
   handle: number;
+  /** The serialized full request (issue #747); absent means the default policy. */
+  requestJson?: string;
 }
 
 /**

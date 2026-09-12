@@ -135,6 +135,21 @@ internal static class DocxSessionOps
         SessionRegistry.Get(handle).VerifyDeliverableJson();
 
     /// <summary>
+    /// <see cref="VerifyDeliverable(int)"/> under the full wire request (issue #747): the
+    /// session's clean-save bytes and opening-package baseline, plus the policy, expected
+    /// deltas and companion artifacts the request carries.
+    /// </summary>
+    public static string VerifyDeliverable(int handle, string? requestJson)
+    {
+        var parsed = DeliverableVerificationRequestJson.Parse(requestJson);
+        return SessionRegistry.Get(handle).VerifyDeliverable(
+            parsed.Options,
+            parsed.ExpectedSemanticChanges,
+            parsed.ExpectedPackageChanges,
+            parsed.CompanionArtifacts).ToCanonicalJson();
+    }
+
+    /// <summary>
     /// Render a preview shadow to the SAME complete-document profile
     /// <see cref="DocxSession.PreviewBatch"/> uses (<see cref="HtmlConversionOps.PreviewDocumentOptions"/>).
     /// Exists so the callback-shaped npm preview — which drives its shadow from JS and therefore

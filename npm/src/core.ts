@@ -8,6 +8,12 @@ import type {
   CompareResult,
   PackageManifest,
   DeliverableVerificationResult,
+  DeliverableVerificationRequest,
+  DeliverableVerificationPolicyOptions,
+  DeliverablePackageChangeExpectation,
+  DeliverableCompanionArtifactInput,
+  DeliverableRenderDiagnostic,
+  DeliverableRenderDiagnosticKind,
   DeliveryReceiptVerificationResult,
   RedlineReversibilityProof,
   DocxodusWasmExports,
@@ -69,6 +75,7 @@ import type {
 } from "./types.js";
 
 import { DocxSession, openDocxSession as openDocxSessionImpl } from "./session.js";
+import { serializeVerificationRequest } from "./verification-request.js";
 import { DocxHistoryArchive, DocxHistoryClient, installHistoryStorageImports } from './history.js';
 import type { HistoryStorage } from './history.js';
 export * from './history.js';
@@ -177,6 +184,12 @@ export type {
   PackageRevisionCounts,
   PackageAnnotationCounts,
   DeliverableVerificationResult,
+  DeliverableVerificationRequest,
+  DeliverableVerificationPolicyOptions,
+  DeliverablePackageChangeExpectation,
+  DeliverableCompanionArtifactInput,
+  DeliverableRenderDiagnostic,
+  DeliverableRenderDiagnosticKind,
   DeliveryArtifactVerification,
   DeliveryArtifactVerificationStatus,
   DeliveryReceiptVerificationResult,
@@ -669,11 +682,25 @@ export async function generatePackageManifest(
 export async function verifyDeliverable(
   document: File | Uint8Array,
   baseline?: File | Uint8Array,
+  request?: DeliverableVerificationRequest,
 ): Promise<DeliverableVerificationResult> {
   const exports = ensureInitialized();
   const bytes = await toBytes(document);
   const baselineBytes = baseline === undefined ? undefined : await toBytes(baseline);
   await yieldToMain();
+  if (request !== undefined) {
+    // The full request (issue #747): the same wire shape every transport parses.
+    const requestJson = serializeVerificationRequest(request);
+    const converter = exports.DocumentConverter;
+    if (!converter.VerifyDeliverableWithRequest || !converter.VerifyDeliverableWithBaselineAndRequest) {
+      throw new Error("This WASM bundle predates full verification requests; rebuild docxodus.");
+    }
+    return JSON.parse(
+      baselineBytes === undefined
+        ? converter.VerifyDeliverableWithRequest(bytes, requestJson)
+        : converter.VerifyDeliverableWithBaselineAndRequest(baselineBytes, bytes, requestJson),
+    ) as DeliverableVerificationResult;
+  }
   return JSON.parse(
     baselineBytes === undefined
       ? exports.DocumentConverter.VerifyDeliverable(bytes)

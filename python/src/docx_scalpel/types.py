@@ -14,6 +14,8 @@ where they're used in ``session.py``.
 
 from __future__ import annotations
 
+import base64
+
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Generic, Mapping, Sequence, TypeVar
@@ -131,6 +133,11 @@ __all__ = [
     "DeliverableSemanticDelta",
     "DeliverableArtifactMetadata",
     "DeliverableVerificationResult",
+    "DeliverablePackageChangeExpectation",
+    "DeliverableRenderDiagnostic",
+    "DeliverableCompanionArtifact",
+    "DeliverableVerificationOptions",
+    "DeliverableVerificationRequest",
     "RedlineReversibilityProof",
     "RedlineProofPathResult",
     "RedlineProofPackageIdentity",
@@ -833,6 +840,212 @@ class DeliveryReceiptVerificationResult:
             ),
             findings=tuple(str(item) for item in d.get("findings", ())),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class DeliverablePackageChangeExpectation:
+    """One approved package-level delta the deliverable is expected to show (issue #747)."""
+
+    kind: DeliverablePackageChangeKind
+    location: ChangeLocation
+    before_digest: VerificationDigest | None = None
+    after_digest: VerificationDigest | None = None
+    before_value: str | None = None
+    after_value: str | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "kind": self.kind.value,
+            "location": _location_to_wire(self.location),
+        }
+        if self.before_digest is not None:
+            out["beforeDigest"] = _digest_to_wire(self.before_digest)
+        if self.after_digest is not None:
+            out["afterDigest"] = _digest_to_wire(self.after_digest)
+        if self.before_value is not None:
+            out["beforeValue"] = self.before_value
+        if self.after_value is not None:
+            out["afterValue"] = self.after_value
+        return out
+
+
+@dataclass(frozen=True, slots=True)
+class DeliverableRenderDiagnostic:
+    """One render warning or limitation reported by a companion renderer."""
+
+    kind: str
+    message: str
+    severity: VerificationFindingSeverity = VerificationFindingSeverity.WARNING
+    code: str | None = None
+    phase: str | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "kind": self.kind,
+            "message": self.message,
+            "severity": self.severity.value,
+        }
+        if self.code is not None:
+            out["code"] = self.code
+        if self.phase is not None:
+            out["phase"] = self.phase
+        return out
+
+
+@dataclass(frozen=True, slots=True)
+class DeliverableCompanionArtifact:
+    """Bytes and renderer/document binding for one companion artifact submitted for verification."""
+
+    artifact_id: str
+    role: DeliverableArtifactRole
+    media_type: str
+    availability: DeliverableArtifactAvailability = DeliverableArtifactAvailability.AVAILABLE
+    data: bytes | None = None
+    unavailable_reason: str | None = None
+    page_count: int | None = None
+    renderer_fingerprint: str | None = None
+    #: Digest of the exact package the renderer consumed; a mismatch is a stale artifact.
+    source_package_digest: VerificationDigest | None = None
+    page_map_digest: VerificationDigest | None = None
+    render_diagnostics: tuple[DeliverableRenderDiagnostic, ...] = ()
+
+    def to_wire(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "artifactId": self.artifact_id,
+            "role": self.role.value,
+            "mediaType": self.media_type,
+            "availability": self.availability.value,
+            "renderDiagnostics": [d.to_wire() for d in self.render_diagnostics],
+        }
+        if self.data is not None:
+            out["bytesB64"] = base64.b64encode(self.data).decode("ascii")
+        if self.unavailable_reason is not None:
+            out["unavailableReason"] = self.unavailable_reason
+        if self.page_count is not None:
+            out["pageCount"] = self.page_count
+        if self.renderer_fingerprint is not None:
+            out["rendererFingerprint"] = self.renderer_fingerprint
+        if self.source_package_digest is not None:
+            out["sourcePackageDigest"] = _digest_to_wire(self.source_package_digest)
+        if self.page_map_digest is not None:
+            out["pageMapDigest"] = _digest_to_wire(self.page_map_digest)
+        return out
+
+
+@dataclass(frozen=True, slots=True)
+class DeliverableVerificationOptions:
+    """Policy and inspection limits for verification (issue #747).
+
+    Every field defaults to ``None``, meaning the verifier's own default; only fields
+    you set are sent. Unknown fields are rejected by the host.
+    """
+
+    mode: DeliverableVerificationMode | None = None
+    open_xml_version: str | None = None
+    fail_on_unexpected_changes: bool | None = None
+    require_no_placeholders: bool | None = None
+    detect_bracketed_alternative_clauses: bool | None = None
+    editorial_markers: tuple[str, ...] | None = None
+    placeholder_tokens: tuple[str, ...] | None = None
+    max_package_bytes: int | None = None
+    max_findings: int | None = None
+    max_detector_nodes: int | None = None
+    max_detector_relationships: int | None = None
+    max_detector_text_characters: int | None = None
+    max_detector_regex_matches: int | None = None
+    max_detector_steps: int | None = None
+    max_companion_artifact_bytes: int | None = None
+    max_total_companion_artifact_bytes: int | None = None
+    max_companion_artifacts: int | None = None
+    max_render_diagnostics: int | None = None
+    max_expected_changes: int | None = None
+    max_reported_delta_changes: int | None = None
+    package_manifest: Mapping[str, int | float] | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        names = {
+            "mode": "mode",
+            "open_xml_version": "openXmlVersion",
+            "fail_on_unexpected_changes": "failOnUnexpectedChanges",
+            "require_no_placeholders": "requireNoPlaceholders",
+            "detect_bracketed_alternative_clauses": "detectBracketedAlternativeClauses",
+            "editorial_markers": "editorialMarkers",
+            "placeholder_tokens": "placeholderTokens",
+            "max_package_bytes": "maxPackageBytes",
+            "max_findings": "maxFindings",
+            "max_detector_nodes": "maxDetectorNodes",
+            "max_detector_relationships": "maxDetectorRelationships",
+            "max_detector_text_characters": "maxDetectorTextCharacters",
+            "max_detector_regex_matches": "maxDetectorRegexMatches",
+            "max_detector_steps": "maxDetectorSteps",
+            "max_companion_artifact_bytes": "maxCompanionArtifactBytes",
+            "max_total_companion_artifact_bytes": "maxTotalCompanionArtifactBytes",
+            "max_companion_artifacts": "maxCompanionArtifacts",
+            "max_render_diagnostics": "maxRenderDiagnostics",
+            "max_expected_changes": "maxExpectedChanges",
+            "max_reported_delta_changes": "maxReportedDeltaChanges",
+            "package_manifest": "packageManifest",
+        }
+        out: dict[str, Any] = {}
+        for attr, wire in names.items():
+            value = getattr(self, attr)
+            if value is None:
+                continue
+            if isinstance(value, Enum):
+                value = value.value
+            elif isinstance(value, tuple):
+                value = list(value)
+            elif isinstance(value, Mapping):
+                value = dict(value)
+            out[wire] = value
+        return out
+
+
+@dataclass(frozen=True, slots=True)
+class DeliverableVerificationRequest:
+    """The full bounded verification request (issue #747): what the typed .NET request adds
+    to the package bytes. ``expected_semantic_changes`` is the canonical semantic-changes
+    object (``SemanticChangeSet`` from ``get_semantic_changes``, or its wire mapping).
+    """
+
+    options: DeliverableVerificationOptions | None = None
+    expected_semantic_changes: "SemanticChangeSet | Mapping[str, Any] | None" = None
+    expected_package_changes: tuple[DeliverablePackageChangeExpectation, ...] = ()
+    companion_artifacts: tuple[DeliverableCompanionArtifact, ...] = ()
+
+    def to_wire(self) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        if self.options is not None:
+            out["options"] = self.options.to_wire()
+        if self.expected_semantic_changes is not None:
+            semantic = self.expected_semantic_changes
+            out["expectedSemanticChanges"] = (
+                semantic.to_wire() if hasattr(semantic, "to_wire") else dict(semantic)  # type: ignore[arg-type]
+            )
+        if self.expected_package_changes:
+            out["expectedPackageChanges"] = [c.to_wire() for c in self.expected_package_changes]
+        if self.companion_artifacts:
+            out["companionArtifacts"] = [a.to_wire() for a in self.companion_artifacts]
+        return out
+
+
+def _digest_to_wire(digest: VerificationDigest) -> dict[str, str]:
+    return {"algorithm": digest.algorithm, "value": digest.value}
+
+
+def _location_to_wire(location: ChangeLocation) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for attr, wire in (
+        ("entry_uri", "entryUri"),
+        ("owner_uri", "ownerUri"),
+        ("relationship_id", "relationshipId"),
+        ("target_uri", "targetUri"),
+        ("property_path", "propertyPath"),
+    ):
+        value = getattr(location, attr, None)
+        if value is not None:
+            out[wire] = value
+    return out
 
 
 @dataclass(frozen=True, slots=True)
@@ -3932,6 +4145,27 @@ class SemanticValue:
             profile=d.get("profile"),
         )
 
+    def to_wire(self) -> dict[str, Any]:
+        """The canonical schema-v1 form, the inverse of :meth:`_from_wire`."""
+        if self.kind is SemanticValueKind.ABSENT:
+            return {"kind": "absent"}
+        if self.kind is SemanticValueKind.DIGEST:
+            return {
+                "kind": "digest",
+                "algorithm": self.algorithm,
+                "profile": self.profile,
+                "value": self.value,
+            }
+        if self.kind is SemanticValueKind.OBJECT:
+            members = self.value
+            return {
+                "kind": "object",
+                "value": {name: member.to_wire() for name, member in members.items()},  # type: ignore[union-attr]
+            }
+        if self.kind is SemanticValueKind.ARRAY:
+            return {"kind": "array", "value": [item.to_wire() for item in self.value]}  # type: ignore[union-attr]
+        return {"kind": self.kind.value, "value": self.value}
+
 
 @dataclass(frozen=True, slots=True)
 class SemanticChange:
@@ -3967,6 +4201,23 @@ class SemanticChange:
             after=SemanticValue._from_wire(d["after"]),
         )
 
+    def to_wire(self) -> dict[str, Any]:
+        """The canonical schema-v1 form, the inverse of :meth:`_from_wire`."""
+        return {
+            "id": self.id,
+            "operation": self.operation.value,
+            "family": self.family.value,
+            "partUri": self.part_uri,
+            "path": self.path,
+            "leftAnchor": self.left_anchor,
+            "rightAnchor": self.right_anchor,
+            "leftScope": self.left_scope,
+            "rightScope": self.right_scope,
+            "moveId": self.move_id,
+            "before": self.before.to_wire(),
+            "after": self.after.to_wire(),
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class SemanticChangeSet:
@@ -3992,6 +4243,15 @@ class SemanticChangeSet:
                 f"semantic-change count {change_count} does not match {len(changes)} entries"
             )
         return cls(schema, schema_version, change_count, changes)
+
+    def to_wire(self) -> dict[str, Any]:
+        """The canonical schema-v1 form, accepted back as a verification expectation."""
+        return {
+            "schema": self.schema,
+            "schemaVersion": self.schema_version,
+            "changeCount": self.change_count,
+            "changes": [change.to_wire() for change in self.changes],
+        }
 
 
 # ---------------------------------------------------------------------------
