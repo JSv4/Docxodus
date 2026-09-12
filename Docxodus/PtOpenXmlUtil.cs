@@ -5984,6 +5984,13 @@ listSeparator
         public static XName FontName = pt + "FontName";
         public static XName LanguageType = pt + "LanguageType";
         public static XName AbstractNumId = pt + "AbstractNumId";
+        /// <summary>Counter vector ("2,3") a paragraph declares for itself, stamped by a render
+        /// that cloned it out of a live document whose numbering was already resolved. The
+        /// retriever takes it over recounting (see <c>ListItemRetriever</c>).</summary>
+        public static XName LevelNumbers = pt + "LevelNumbers";
+        /// <summary>Companion to <see cref="LevelNumbers"/>: "true" when the paragraph continues
+        /// a flat sequence at a deeper level (rendered with level 0's format).</summary>
+        public static XName ListContinuation = pt + "ListContinuation";
         public static XName HtmlStructure = pt + "HtmlStructure";
         public static XName HtmlStyle = pt + "HtmlStyle";
         public static XName StyleName = pt + "StyleName";

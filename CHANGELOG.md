@@ -6,6 +6,19 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- `DocxEditor.openAsync()` mounts a document without holding the main thread for the whole
+  document (issue #776). `open()` renders and wires everything in one synchronous task — on a
+  17-page document about 1.2 s on a fast laptop and far more on a slow one, with the tab frozen
+  throughout. The new entry point pays only the session open up front, then mounts body units
+  in windows (default 24) and yields to the event loop between them, so the page stays
+  responsive and `onProgress` can drive a loading state. The engine gained what the mount needs:
+  the render plan now says which section wrapper each unit renders into and which border box
+  the renderer groups it with (`section`, `group`), a chrome render
+  (`RenderEditorChromeHtml`) produces the stylesheet, section wrappers, header/footer registry
+  and footnote/endnote sections at a fraction of the full render's cost, and a range render
+  (`RenderEditorRangeHtml`) lays a group-aligned window out exactly as the full render does. The
+  DOM `openAsync()` lands is the one `open()` produces; paginated mounts assemble off-screen and
+  paginate once at the end. A bundle without the new renders falls back to the synchronous mount.
 - Native image coverage matrix and tracked image edits (issue #762). Every listed picture now
   carries `operations` — one `{operation, canMutate, reason}` answer for `replace`,
   `embed_linked`, `set_dimensions`, `set_metadata`, `set_floating_layout` and `remove` in the
@@ -133,6 +146,30 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- A block rendered on its own (the editor's per-block re-render after an edit, and the
+  stateless `RenderBlockHtml`) showed the wrong list number for any item the shell could not
+  count from the few blocks it holds: the fifth item of a list came back as "2.", and a deeper
+  item continuing a flat sequence as "1.4" instead of "4.". The live document's resolved
+  counters now ride to the shell on the cloned paragraphs (`pt:LevelNumbers`,
+  `pt:ListContinuation`), which the list item retriever takes over recounting; the annotation
+  transplant that was meant to do this never survived the converter's markup rewrite.
+- A block render dropped external hyperlinks (their runs rendered as plain text) because the
+  shell's main part did not declare the link's relationship, and a block cut from the middle of
+  a field that spans blocks — a table of contents — either failed to convert (an orphan field
+  marker) or lost its field-result presentation. The shell now re-declares the block's link
+  relationships and re-opens and closes every spanning field around the run, the way it already
+  brackets open comment ranges.
+- A block re-rendered into the paginated editor ignored page view: an anchored picture or text
+  box came back centred in the flow instead of positioned absolutely inside its page box, and a
+  footnote marker came back with a link page view never resolves. The editor's block profile now
+  carries the pagination mode and scale, the block renderer honours them, and the footnote marker
+  emits no `href` in page view on any path (a whole-document render used to strip it afterwards;
+  a block render cannot ask whether the target exists and has to agree from the start).
+- The full render's `data-source-anchor-id` called every list item a plain paragraph
+  (`p:body:…`) where the session's own anchor, the block renders and the markdown projection
+  say `li:body:…`, because the canonical index was built after formatting assembly had stripped
+  `w:numPr`. The index is now built from the source trees before any rewrite and resolved by
+  part and Unid, so a citation's `li:` anchor now finds its paragraph in a paginated view.
 - Browser mutation previews no longer stall on a module instance's first preview. The first
   `previewBatch` after opening a document could hang in the browser (never natively): the
   shadow session's first transaction serializes a package snapshot on an interpreted cold path

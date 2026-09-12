@@ -180,6 +180,8 @@ export interface DocxEditorExports {
     RenderEditorHtml?: (handle: number, optionsJson: string) => string;
     RenderEditorBlockHtml?: (handle: number, anchorId: string, optionsJson: string) => string;
     RenderEditorBlocksHtml?: (handle: number, anchorIdsJson: string, optionsJson: string) => string;
+    RenderEditorChromeHtml?: (handle: number, optionsJson: string) => string;
+    RenderEditorRangeHtml?: (handle: number, anchorIdsJson: string, optionsJson: string) => string;
     /** Review-mode controls (optional). */
     SetTrackedChanges?: (handle: number, mode: number) => void;
     SetRevisionAuthor?: (handle: number, author: string) => void;
@@ -303,6 +305,19 @@ export interface DocxEditorOptions {
   onCommentsChange?: (info: { threads: number; open: number; active: string | null }) => void;
 }
 
+/** Options for {@link DocxEditor.openAsync}: the mount's window size and a progress callback. */
+export interface DocxEditorOpenAsyncOptions extends DocxEditorOptions {
+  /**
+   * Body units (top-level paragraphs and tables) mounted per task before yielding to the event
+   * loop. Default 24 — on the reference 17-page document that is a ~50 ms task. A window is
+   * extended past the size so it never ends inside a border box the renderer groups adjacent
+   * paragraphs into.
+   */
+  windowSize?: number;
+  /** Called after each window lands with the count of body units mounted so far. */
+  onProgress?: (mounted: number, total: number) => void;
+}
+
 /**
  * Word's Page Setup, as {@link DocxEditor.setPageSetup} takes it — the session's own
  * {@link PageSetupOp} (all twips; omit = unchanged), so the two cannot drift.
@@ -416,6 +431,30 @@ function ensureBlockDragStyles(doc: Document): void {
 .docx-block-live-region { position: fixed; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 `;
   (doc.head ?? doc.documentElement).appendChild(style);
+}
+
+/**
+ * Let the event loop run — input, rendering, and any other task — before the next window
+ * of a mount. `scheduler.yield` where the browser has it (it keeps the continuation ahead of
+ * other tasks), otherwise a frame followed by a macrotask.
+ */
+/**
+ * Give the page a turn between mount windows: a frame, so a paint and any input handling
+ * happen, then a macrotask, so the host's own timers run too. `scheduler.yield()` is not used
+ * on purpose — its continuation is scheduled ahead of timer tasks, so a progress spinner or a
+ * poll the host drives with `setInterval` would not tick until the whole mount was done.
+ */
+/** The anchor of the empty paragraphs a chrome render leaves where body content was
+ *  (`HtmlConversionOps.ChromeCarrierAnchor`); a windowed mount removes them before it fills
+ *  the sections. */
+const CHROME_CARRIER_ANCHOR = "chrome-carrier";
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    const settle = (): void => { setTimeout(resolve, 0); };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(settle);
+    else settle();
+  });
 }
 
 function trackedChangeWireName(mode: TrackedChangeMode): "accept" | "render_inline" | "strip_deletions" {
@@ -1421,7 +1460,78 @@ export class DocxEditor {
     exports: DocxEditorExports,
     options: DocxEditorOptions = {},
   ): DocxEditor {
-    const opts = {
+    const opts = DocxEditor.resolveOptions(options);
+    const editor = DocxEditor.openSession(container, bytes, exports, opts);
+    try {
+      editor.refreshAnchorMap();
+      if (opts.headerFooter) editor.createRegion();
+      // First paint goes through the session-attached editor render when the bundle has it, so
+      // the comment markup (and everything else in the profile) is exactly what a remount will
+      // produce; older bundles take the bytes path with the same profile.
+      const fullHtml = editor.renderFullHtml(bytes);
+      if (opts.paginated) editor.mountPaginated(fullHtml);
+      else editor.mountHtml(fullHtml);
+      editor.finishMount();
+      return editor;
+    } catch (error) {
+      editor.close();
+      throw error;
+    }
+  }
+
+  /**
+   * Open a document without holding the main thread for the whole mount (issue #776).
+   *
+   * {@link open} renders and wires the entire document in one synchronous task, which on a
+   * long document is the largest single block of a reading-and-editing session. This variant
+   * pays only the session open up front, then mounts the document in windows of body units,
+   * yielding to the event loop between them: the chrome — stylesheet, section wrappers with
+   * their page geometry, footnote and endnote sections — comes from one cheap engine render
+   * that sees no body content, and each window from the engine's block renderer, which lays
+   * units out exactly as the full render does (the plan's border-box grouping is never split).
+   * The DOM that results is the one {@link open} produces; blocks already mounted are editable
+   * while later windows are still landing, and edits made meanwhile are honoured because every
+   * window renders from the live session.
+   *
+   * Paginated mounts assemble the windows off-screen and paginate once at the end, since
+   * pagination is a one-shot flow over the whole document; the main thread is still free
+   * between windows, and `onProgress` lets a host show the fill.
+   *
+   * A bundle that predates the windowed renders mounts synchronously, exactly like {@link open}.
+   */
+  static async openAsync(
+    container: HTMLElement,
+    bytes: Uint8Array,
+    exports: DocxEditorExports,
+    options: DocxEditorOpenAsyncOptions = {},
+  ): Promise<DocxEditor> {
+    const bridge = exports.DocxSessionBridge;
+    if (
+      typeof bridge.RenderEditorChromeHtml !== "function"
+      || typeof bridge.RenderEditorRangeHtml !== "function"
+      || typeof bridge.ListRenderedBlocks !== "function"
+    ) {
+      return DocxEditor.open(container, bytes, exports, options);
+    }
+    const opts = DocxEditor.resolveOptions(options);
+    const editor = DocxEditor.openSession(container, bytes, exports, opts);
+    try {
+      editor.refreshAnchorMap();
+      if (opts.headerFooter) editor.createRegion();
+      await editor.mountWindowed(
+        Math.max(1, Math.floor(options.windowSize ?? 24)),
+        options.onProgress,
+      );
+      editor.finishMount();
+      return editor;
+    } catch (error) {
+      editor.close();
+      throw error;
+    }
+  }
+
+  private static resolveOptions(options: DocxEditorOptions): DocxEditor["options"] {
+    return {
       cssPrefix: options.cssPrefix ?? "docx-",
       fabricateClasses: options.fabricateClasses ?? false,
       editable: options.editable ?? true,
@@ -1440,6 +1550,14 @@ export class DocxEditor {
       onStoryChange: options.onStoryChange,
       onCommentsChange: options.onCommentsChange,
     };
+  }
+
+  private static openSession(
+    container: HTMLElement,
+    bytes: Uint8Array,
+    exports: DocxEditorExports,
+    opts: DocxEditor["options"],
+  ): DocxEditor {
     // NOT persistAnchorIds: that setting applies to every Save on the session, so it put the
     // projector's Unid bookkeeping into the bytes the USER downloads — ~6x the file size for
     // attributes no renderer reads. Only the remount's re-render needs id stability across a
@@ -1451,23 +1569,123 @@ export class DocxEditor {
       trackedChanges: trackedChangeWireName(opts.trackedChanges),
       revisionAuthor: opts.revisionAuthor,
     }));
-    const editor = new DocxEditor(container, exports, handle, opts);
-    try {
-      editor.refreshAnchorMap();
-      if (opts.headerFooter) editor.createRegion();
-      // First paint goes through the session-attached editor render when the bundle has it, so
-      // the comment markup (and everything else in the profile) is exactly what a remount will
-      // produce; older bundles take the bytes path with the same profile.
-      const fullHtml = editor.renderFullHtml(bytes);
-      if (opts.paginated) editor.mountPaginated(fullHtml);
-      else editor.mountHtml(fullHtml);
-      editor.syncRegionToBody();
-      editor.setupBlockDrag();
-      if (opts.comments) editor.createGutter();
-      return editor;
-    } catch (error) {
-      editor.close();
-      throw error;
+    return new DocxEditor(container, exports, handle, opts);
+  }
+
+  /** The steps every mount ends with once the body is in the DOM. */
+  private finishMount(): void {
+    this.syncRegionToBody();
+    this.setupBlockDrag();
+    if (this.options.comments) this.createGutter();
+  }
+
+  /**
+   * The windowed mount behind {@link openAsync}: chrome first, then body units in plan order,
+   * a group-aligned window per task. See {@link openAsync} for the contract.
+   */
+  private async mountWindowed(
+    windowSize: number,
+    onProgress?: (mounted: number, total: number) => void,
+  ): Promise<void> {
+    const bridge = this.exports.DocxSessionBridge;
+    // The full render stamps source anchor ids on every unit; the windows must too, or the DOM
+    // would differ from open()'s by exactly that attribute.
+    const profile = JSON.stringify({ ...JSON.parse(this.editorRenderProfile()), stampAnchors: true });
+    const chrome = bridge.RenderEditorChromeHtml!(this.handle, profile);
+    if (chrome.trimStart().startsWith("{")) {
+      throw new Error((JSON.parse(chrome) as { error?: string }).error ?? "chrome render failed");
+    }
+    const parsed = new DOMParser().parseFromString(chrome, "text/html");
+    // The chrome renders an empty carrier paragraph where each section break and note reference
+    // was; those are not units and go before anything lands. Everything else inside a section
+    // wrapper is chrome that stays — page view puts the endnotes section in the last one.
+    parsed.body.querySelectorAll<HTMLElement>(`[data-section-index] > [data-anchor="${CHROME_CARRIER_ANCHOR}"]`)
+      .forEach((el) => el.remove());
+    const styles = Array.from(parsed.querySelectorAll("style")).map((s) => s.outerHTML).join("");
+    const flow = document.createElement("div");
+    flow.className = "docx-body-flow";
+    flow.innerHTML = parsed.body.innerHTML;
+    const hosts = new Map<number, HTMLElement>();
+    flow.querySelectorAll<HTMLElement>("[data-section-index]").forEach((el) =>
+      hosts.set(Number(el.getAttribute("data-section-index")), el));
+    const attachNow = !this.options.paginated;
+    // A flow mount wires blocks as they land — the chrome's own (footnote and endnote
+    // paragraphs) now, each window's as it arrives — the way open() wires everything under
+    // the flow. A paginated mount hands the paginator unwired HTML and wires the page clones
+    // afterwards, exactly as open() does; wiring first would leave the paginator's
+    // contenteditable="false" stamp on every band paragraph.
+    const wireNow = attachNow && this.options.editable;
+    if (wireNow) this.wireBlocks(flow);
+    if (attachNow) {
+      this.region?.detachPages();
+      this.container.innerHTML = styles;
+      this.readoptGutter();
+      this.container.appendChild(flow);
+      this.editRoot = flow;
+    }
+
+    const plan = JSON.parse(this.renderPlanJson()) as RenderPlan & { error?: string };
+    if (plan.error) throw new Error(plan.error);
+    const units = plan.body;
+    const sectionOf = new Map(units.map((u) => [unidOf(u.id), u.section ?? 0]));
+    const mounted = new Set<string>();
+    const place = (el: HTMLElement, sameHostAs?: HTMLElement): HTMLElement => {
+      // Per-block converter output carries the XHTML xmlns; a full render only has it on the
+      // document root, and open()'s DOM is the contract.
+      el.removeAttribute("xmlns");
+      const unit = el.hasAttribute("data-anchor") ? el : el.querySelector<HTMLElement>("[data-anchor]");
+      const unid = unit?.getAttribute("data-anchor") ?? "";
+      const host = sameHostAs ?? hosts.get(sectionOf.get(unid) ?? 0) ?? hosts.values().next().value ?? flow;
+      // Units precede the chrome a section wrapper already holds (page view's endnotes section).
+      host.insertBefore(el, host.querySelector(":scope > section.endnotes"));
+      if (wireNow) {
+        // wireBlocks wires a root's descendants; the node itself may be the unit.
+        if (el.hasAttribute("data-anchor")) this.wireBlock(el);
+        this.wireBlocks(el);
+      }
+      unit && mounted.add(unid);
+      el.querySelectorAll("[data-anchor]").forEach((n) => mounted.add(n.getAttribute("data-anchor")!));
+      return host;
+    };
+    for (let start = 0; start < units.length;) {
+      let end = Math.min(start + windowSize, units.length);
+      // Never cut through a border box: extend to the end of the group the window stopped in.
+      while (end < units.length && units[end].group !== undefined && units[end].group === units[end - 1].group) end++;
+      const window = units.slice(start, end);
+      const rendered = JSON.parse(bridge.RenderEditorRangeHtml!(
+        this.handle, JSON.stringify(window.map((u) => u.id)), profile,
+      )) as string[] | { error?: string };
+      if (!Array.isArray(rendered)) throw new Error(rendered.error ?? "window render failed");
+      for (const html of rendered) {
+        // One rendered node can parse into several elements: the HTML parser closes a paragraph
+        // at a block-level child (page view's page-break marker div), exactly as it does for the
+        // full render's string, so every element it produced lands in order in the unit's section.
+        let host: HTMLElement | undefined;
+        for (const el of Array.from(new DOMParser().parseFromString(html, "text/html").body.children)) {
+          host = place(el as HTMLElement, host);
+        }
+      }
+      // A unit the range render could not place (a box that would have straddled the window)
+      // still lands, on its own, through the per-block renderer.
+      for (const unit of window) {
+        if (mounted.has(unidOf(unit.id))) continue;
+        const el = this.renderInto(unit.id);
+        if (el) place(el);
+      }
+      start = end;
+      onProgress?.(start, units.length);
+      if (start < units.length) await yieldToEventLoop();
+    }
+
+    if (attachNow) {
+      this.stampPlanState();
+      if (this.region) this.dockBands(flow);
+      this.viewport.attach(flow, true);
+    } else {
+      // Pagination is a one-shot flow over the whole document: hand it the assembled document
+      // the way open() hands it the full render — head content (the meta tags, the title and
+      // the stylesheet, which the paginator keeps in the flow) followed by the body.
+      this.mountPaginated(parsed.head.innerHTML + flow.innerHTML);
     }
   }
 

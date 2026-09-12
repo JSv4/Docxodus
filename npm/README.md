@@ -72,6 +72,13 @@ Two layers, so you can take as much UI as you want:
 import { DocxEditor } from 'docxodus';
 const editor = DocxEditor.open(container, docxBytes, exports);
 
+// Long document? Mount it in windows instead, yielding to the event loop between them, so the
+// tab stays responsive and you can show progress. The result is the same editor and the same DOM.
+const editor = await DocxEditor.openAsync(container, docxBytes, exports, {
+  windowSize: 24,
+  onProgress: (mounted, total) => console.log(`${mounted}/${total} blocks`),
+});
+
 // Or the whole surface: Word's tabbed ribbon (fonts, colour, styles, find & replace, links,
 // pictures, tables, page setup, tracked changes), Word-style comment bubbles beside the page,
 // in-place header/footer editing, a status bar with zoom, and the loading overlay.

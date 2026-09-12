@@ -404,6 +404,25 @@ render plan missed the sdt's content blocks, the plan/DOM diff read as 100 % chu
 structural op silently fell back to the multi-second full remount. `ListBlocks` now flattens
 `w:sdtContent` exactly as the renderer does, so the diff actually engages.
 
+**Opening without freezing the tab (`DocxEditor.openAsync`, issue #776).** `open()` is one
+synchronous task: the session open, the whole-document render and the DOM build all happen
+before the browser paints again — about 1.2 s on this document on a fast laptop, tens of seconds
+on a slow one, with the loading overlay frozen throughout. `openAsync()` keeps the session open
+up front (it is one engine call) and mounts the body in windows. The engine gives it three
+things the render plan did not carry before: each unit's section (`section`, the
+`[data-section-index]` wrapper it renders into) and border-box group (`group`, the converter's
+`CreateBorderDivs` grouping — a window is cut between groups, never through one), a chrome
+render (`RenderEditorChromeHtml`: the stylesheet, the section wrappers with their geometry, the
+header/footer registry and the note sections, with the body reduced to one carrier paragraph per
+section), and a range render (`RenderEditorRangeHtml`: a window's top-level nodes as the full
+render lays them out, through the same shell the per-block re-render uses). The mount removes the
+carriers, fills each section host window by window, wires each window's blocks and yields to the
+event loop between windows (`onProgress` reports units mounted), then finishes exactly as
+`open()` does — a paginated mount assembles the flow off-screen and paginates once at the end.
+The DOM it lands is `open()`'s, byte for byte; `editor-open-async.spec.ts` holds both mounts to
+that, and `HtmlConversionWindowedMountTests` holds the engine side to the full render for
+windows of 24 and of 1. A bundle without the two renders falls back to the synchronous mount.
+
 ### The move surface
 
 Block drag/reorder has its own instrument, `npm/tests/editor-move-latency-bench.spec.ts`, run

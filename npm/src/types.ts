@@ -1791,6 +1791,8 @@ export interface DocxodusWasmExports {
     /** Batch block render with the editor profile — `RenderBlocksHtml` plus comment markup;
      *  same JSON-object result (`{ [anchorId]: html | null }`, or `{"error": …}`). */
     RenderEditorBlocksHtml?: (handle: number, anchorIdsJson: string, optionsJson: string) => string;
+    RenderEditorChromeHtml?: (handle: number, optionsJson: string) => string;
+    RenderEditorRangeHtml?: (handle: number, anchorIdsJson: string, optionsJson: string) => string;
     /** Single-block render with the editor profile — `RenderBlockHtml` plus comment markup. */
     RenderEditorBlockHtml?: (handle: number, anchorId: string, optionsJson: string) => string;
     ReplaceText: (handle: number, anchor: string, md: string) => string;
@@ -3042,6 +3044,13 @@ export interface DocxSessionSettings {
 export interface RenderUnit {
   id: string;
   kind: string;
+  /** Content signature for change detection (leaf blocks omit it). */
+  sig?: string;
+  /** Index of the section wrapper (`[data-section-index]`) the unit renders into. */
+  section?: number;
+  /** Ordinal of the border box the renderer groups adjacent bordered paragraphs into; units
+   *  sharing a group render inside one wrapper, so a windowed mount never splits one. */
+  group?: number;
 }
 
 /** Ordered top-level render units per scope container — the authority for "what

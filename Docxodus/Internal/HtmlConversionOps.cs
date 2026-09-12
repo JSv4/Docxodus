@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Xml.Linq;
@@ -184,6 +185,92 @@ internal static class HtmlConversionOps
         ConvertToHtml(SessionRegistry.Get(handle), options);
 
     /// <summary>
+    /// The document's rendered chrome without its body units (issue #776): the stylesheet, every
+    /// section wrapper with its page geometry, the header/footer registry the paginator reads,
+    /// and the footnote and endnote sections. It is what a windowed mount cannot get from the
+    /// per-block renderer, at a fraction of the full render's cost, because the converter sees
+    /// only section breaks and note references. Body-level units are dropped from a saved copy;
+    /// a block that closes a section (see <see cref="DocxSession.ClosesSection"/>) is reduced to
+    /// an anchor-less carrier paragraph holding its <c>w:sectPr</c>, so the section it ends is
+    /// still rendered with the right geometry; and every footnote/endnote reference is re-emitted
+    /// in document order in such carriers, so the notes sections come out complete and in
+    /// citation order. The carriers render as empty paragraphs the mount discards.
+    /// </summary>
+    public static string RenderChromeHtml(DocxSession session, HtmlConversionOptions options)
+    {
+        if (session is null) throw new ArgumentNullException(nameof(session));
+        ArgumentNullException.ThrowIfNull(options);
+        var bytes = session.Save(persistAnchorIds: true);
+        using var stream = new MemoryStream();
+        stream.Write(bytes, 0, bytes.Length);
+        stream.Position = 0;
+        using (var doc = WordprocessingDocument.Open(stream, true))
+        {
+            var main = doc.MainDocumentPart ?? throw new InvalidOperationException("document has no main part");
+            var body = main.GetXDocument().Root?.Element(W.body)
+                ?? throw new InvalidOperationException("document has no body");
+            ReduceToChrome(body);
+            main.PutXDocument();
+        }
+        return ConvertToHtml(stream.ToArray(), options);
+    }
+
+    /// <summary>The anchor every chrome carrier paragraph renders with. A mount removes those
+    /// paragraphs before it fills the sections; nothing else ever carries this identity.</summary>
+    public const string ChromeCarrierAnchor = "chrome-carrier";
+
+    private static XElement Carrier() => new(W.p, new XAttribute(PtOpenXml.Unid, ChromeCarrierAnchor));
+
+    private static void ReduceToChrome(XElement body)
+    {
+        // The converter emits a section wrapper only for a section that holds a block, so a
+        // section left with nothing keeps one empty carrier — the final section included.
+        bool sectionHasBlock = false;
+        void Reduce(XElement container)
+        {
+            foreach (var child in container.Elements().ToList())
+            {
+                if (child.Name == W.sectPr)
+                {
+                    if (!sectionHasBlock) child.AddBeforeSelf(Carrier());
+                    continue;
+                }
+                if (child.Name == W.sdt)
+                {
+                    // A block-level content control flows its blocks inline in the render; keep the
+                    // wrapper only while something inside it still matters to the chrome.
+                    if (child.Element(W.sdtContent) is { } content) Reduce(content);
+                    if (child.Element(W.sdtContent)?.HasElements != true) child.Remove();
+                    continue;
+                }
+                var references = child.Descendants()
+                    .Where(e => e.Name == W.footnoteReference || e.Name == W.endnoteReference)
+                    .Select(e => new XElement(W.r, new XElement(e)))
+                    .ToList();
+                var sectPr = child.Name == W.p
+                    ? child.Element(W.pPr)?.Element(W.sectPr)
+                    : child.Descendants(W.sectPr).FirstOrDefault(s => s.Parent?.Name == W.pPr);
+                if (references.Count == 0 && sectPr is null)
+                {
+                    child.Remove();
+                    continue;
+                }
+                var carrier = Carrier();
+                if (sectPr is not null)
+                {
+                    var properties = new XElement(sectPr);
+                    properties.DescendantsAndSelf().Attributes(PtOpenXml.Unid).Remove();
+                    carrier.Add(new XElement(W.pPr, properties));
+                }
+                carrier.Add(references);
+                child.ReplaceWith(carrier);
+                sectionHasBlock = sectPr is null;
+            }
+        }
+        Reduce(body);
+    }
+
+    /// <summary>
     /// The single definition of the option profile a mutation-batch preview renders with
     /// (<see cref="MutationPreviewHtmlMode.Full"/>). A preview answers "what would the document
     /// become", so it shows everything the applied document would carry — tracked changes,
@@ -220,8 +307,8 @@ internal static class HtmlConversionOps
     /// HTML. Builds a throwaway document that copies the source's styles/numbering/theme
     /// parts and contains just the one block, then runs the standard converter. The full
     /// document render is the faithfulness oracle — this must match the corresponding
-    /// <c>data-anchor</c> element from a full render. Known limits: a list item loses
-    /// numbering continuation, and an inline image loses its (uncopied) image part.
+    /// <c>data-anchor</c> element from a full render; a list item carries the counters the
+    /// whole document resolves for it, so it shows the number the full render shows.
     /// </summary>
     public static string RenderBlockHtml(byte[] docxBytes, string anchorId, HtmlConversionOptions options)
     {
@@ -303,6 +390,60 @@ internal static class HtmlConversionOps
         }
         sb.Append('}');
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Render a contiguous window of body units as the full render lays them out (issue #776):
+    /// a JSON array of top-level HTML nodes in document order, each a unit or the wrapper the
+    /// converter groups units into. Cut windows at the render plan's group boundaries; a node
+    /// that would mix requested and unrequested units is left out, and the caller falls back to
+    /// <see cref="RenderBlocksHtml(DocxSession, IReadOnlyList{string}, HtmlConversionOptions)"/>
+    /// for anything missing.
+    /// </summary>
+    public static string RenderBlocksRangeHtml(DocxSession session, IReadOnlyList<string> anchorIds, HtmlConversionOptions options)
+    {
+        if (session is null) throw new ArgumentNullException(nameof(session));
+        ArgumentNullException.ThrowIfNull(anchorIds);
+        ArgumentNullException.ThrowIfNull(options);
+        var liveDoc = session.LiveDocument;
+        EnsureListAnnotations(liveDoc);
+        var targets = new List<XElement>();
+        foreach (var anchorId in anchorIds.Distinct(StringComparer.Ordinal))
+        {
+            var el = ResolveSessionAnchor(session, anchorId);
+            if (el is not null && (el.Name == W.p || el.Name == W.tbl)) targets.Add(el);
+        }
+        var rendered = new List<(string FirstUnid, string Html)>();
+        if (targets.Count > 0) RenderTargetsFromShell(session, liveDoc, targets, options, topLevel: rendered);
+        // The shell renders one run per parent container, so a content control's blocks come
+        // out after the body's; the caller asked in document order, so answer in it.
+        var order = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (int i = 0; i < anchorIds.Count; i++) order.TryAdd(AnchorUnid(anchorIds[i]), i);
+        var nodes = rendered
+            .OrderBy(node => order.TryGetValue(node.FirstUnid, out var index) ? index : int.MaxValue)
+            .Select(node => node.Html).ToList();
+        var sb = new System.Text.StringBuilder(nodes.Sum(n => n.Length + 8) + 2).Append('[');
+        for (int i = 0; i < nodes.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            sb.Append(DocxSessionJson.JsonString(nodes[i]));
+        }
+        return sb.Append(']').ToString();
+    }
+
+    /// <summary>Range overload for a registered session handle (anchor ids as a JSON string array).</summary>
+    public static string RenderBlocksRangeHtml(int handle, string anchorIdsJson, HtmlConversionOptions options) =>
+        RenderBlocksRangeHtml(SessionRegistry.Get(handle), ParseAnchorIds(anchorIdsJson), options);
+
+    private static List<string> ParseAnchorIds(string anchorIdsJson)
+    {
+        var ids = new List<string>();
+        using var doc = System.Text.Json.JsonDocument.Parse(anchorIdsJson);
+        foreach (var e in doc.RootElement.EnumerateArray())
+        {
+            if (e.GetString() is { } s) ids.Add(s);
+        }
+        return ids;
     }
 
     /// <summary>Batch overload for a registered session handle (anchor ids as a JSON string array).</summary>
@@ -435,7 +576,7 @@ internal static class HtmlConversionOps
     /// </summary>
     private static Dictionary<string, string?> RenderTargetsFromShell(
         DocxSession session, WordprocessingDocument liveDoc, List<XElement> targets, HtmlConversionOptions options,
-        bool disableDenseText = false)
+        bool disableDenseText = false, List<(string FirstUnid, string Html)>? topLevel = null)
     {
         // The shell also carries the comments family, so a comment mutation must rebuild it —
         // the formatting parts alone cannot see one (see DocxSession.CommentsVersion).
@@ -518,6 +659,11 @@ internal static class HtmlConversionOps
         var rangeIndex = options.CommentRenderMode >= 0 && HasCommentDefinitions(liveDoc) && runs.Count > 0
             ? CommentRangeIndex.Build(runs.Select(r => r.Siblings[r.Start]))
             : null;
+        // A complex field that spans blocks (a TOC: begin in its first entry, end in its last,
+        // every entry between them its result) is re-opened and closed around each run the
+        // same way, so the shell never holds an orphan marker and the run's runs keep their
+        // field-result presentation.
+        var fieldIndex = runs.Count > 0 ? FieldContextIndex.Build(runs.Select(r => r.Siblings[r.Start])) : null;
 
         var bodyContent = new List<XElement>();
         var denseText = new Dictionary<string, DenseTextParagraph>(StringComparer.Ordinal);
@@ -528,6 +674,7 @@ internal static class HtmlConversionOps
                 foreach (var id in rangeIndex.OpenBefore(siblings[start]))
                     bodyContent.Add(new XElement(W.commentRangeStart, new XAttribute(W.id, id)));
             }
+            if (fieldIndex?.Opener(siblings[start]) is { } opener) bodyContent.Add(opener);
             for (int i = start; i <= end; i++)
             {
                 // Comments/annotations can cover a paragraph from outside its
@@ -541,12 +688,13 @@ internal static class HtmlConversionOps
                     dense = DenseTextParagraph.TryCompact(siblings[i]);
                     if (dense is not null) denseText[denseUnid] = dense;
                 }
-                var clone = dense?.Template ?? CloneWithListAnnotations(siblings[i]);
+                var clone = dense?.Template ?? CloneWithListNumbers(siblings[i]);
                 if (dense is null)
-                    RetargetEmbeddedImages(liveDoc, siblings[i], clone, renderMain, copiedImages);
+                    RetargetPartRelationships(liveDoc, siblings[i], clone, renderMain, copiedImages);
                 identity?.Record(siblings[i], clone);
                 bodyContent.Add(clone);
             }
+            if (fieldIndex?.Closer(siblings, start, end) is { } closer) bodyContent.Add(closer);
             if (rangeIndex is not null)
             {
                 foreach (var id in rangeIndex.OpenAfterRun(siblings, start, end))
@@ -566,7 +714,7 @@ internal static class HtmlConversionOps
         // render paid the package open + styles/numbering parse + cache rebuild on every
         // keystroke commit, and it dominated single-block render time.
         renderMain.PutXDocument(
-            BuildBodyDocument(bodyContent.Cast<object>().ToArray()));
+            BuildShellDocument(liveDoc.MainDocumentPart?.GetXDocument().Root, bodyContent.Cast<object>().ToArray()));
 
         var blockSettings = BuildBlockConverterSettings(options);
         if (identity is not null) blockSettings.SourceAnchorIdentityProvider = identity.Resolve;
@@ -603,6 +751,29 @@ internal static class HtmlConversionOps
                 session.DenseTextRenderTemplates[(options, templateKey)] = new XElement(htmlElement);
             }
         }
+        if (topLevel is not null)
+        {
+            // Windowed-mount extraction (issue #776): the rendered run's top-level nodes in
+            // document order — a unit, or the wrapper the converter put around one or more units
+            // (a border box, a table's alignment div) — keeping only nodes whose units were all
+            // asked for. The ±1 context siblings, and anything the converter grouped with them,
+            // stay out; a window cut at the plan's group boundaries never shares a box with them.
+            var sections = htmlElement.Descendants()
+                .Where(d => d.Attribute("data-section-index") is not null).ToList();
+            var hosts = sections.Count > 0 ? sections
+                : htmlElement.Descendants().Where(d => d.Name.LocalName == "body").Take(1).ToList();
+            foreach (var node in hosts.SelectMany(host => host.Elements()))
+            {
+                var units = node.DescendantsAndSelf()
+                    .Where(d => d.Attribute("data-anchor") is not null
+                        && !d.Ancestors().TakeWhile(a => !ReferenceEquals(a, node.Parent))
+                            .Any(a => a.Attribute("data-anchor") is not null))
+                    .Select(d => (string)d.Attribute("data-anchor")!)
+                    .ToList();
+                if (units.Count > 0 && units.All(wantedUnids.Contains))
+                    topLevel.Add((units[0], node.ToString(SaveOptions.DisableFormatting)));
+            }
+        }
         foreach (var e in htmlElement.Descendants())
         {
             var u = (string?)e.Attribute("data-anchor");
@@ -612,7 +783,7 @@ internal static class HtmlConversionOps
                 // A converter changed its wrapper shape. Fail back to the
                 // ordinary conversion, never expose a formatting template.
                 return RenderTargetsFromShell(session, liveDoc, targets,
-                    options, disableDenseText: true);
+                    options, disableDenseText: true, topLevel: topLevel);
             }
             // A table always renders inside a generated single-child alignment <div>
             // (see the converter's tableDiv). Return that wrapper so an incremental
@@ -697,6 +868,99 @@ internal static class HtmlConversionOps
     }
 
     /// <summary>
+    /// Which complex fields are open around the blocks a shell render starts a run with —
+    /// built by ONE pre-order walk per owning part over the live tree, like
+    /// <see cref="CommentRangeIndex"/>. A field that spans blocks (a TOC's begin sits in its
+    /// first entry and its end in its last; every entry between them is its result) leaves a run
+    /// cut from its middle with dangling markers, which the converter's field retriever rejects
+    /// (an orphan separate or end), and without the field the run's runs are no longer a field
+    /// result, which changes how a TOC entry's hyperlink is drawn. The run is bracketed the way
+    /// comment ranges are: a synthetic paragraph re-opens every field open before its first block
+    /// (begin, the code seen so far, and separate when the field had reached it) and another
+    /// closes every field still open after its last. The synthetic paragraphs carry no Unid, so
+    /// no render extracts them.
+    /// </summary>
+    private sealed class FieldContextIndex
+    {
+        private sealed record OpenField(string Code, bool Separated);
+
+        private readonly Dictionary<XElement, List<OpenField>> _openBefore = new();
+
+        public static FieldContextIndex Build(IEnumerable<XElement> runStarts)
+        {
+            var index = new FieldContextIndex();
+            var wanted = new HashSet<XElement>(runStarts);
+            foreach (var root in wanted.Select(e => e.AncestorsAndSelf().Last()).Distinct())
+            {
+                var open = new List<OpenField>();
+                foreach (var el in root.DescendantsAndSelf())
+                {
+                    if (wanted.Contains(el))
+                    {
+                        index._openBefore[el] = new List<OpenField>(open);
+                        if (index._openBefore.Count == wanted.Count) break;
+                    }
+                    Step(el, open);
+                }
+            }
+            return index;
+        }
+
+        /// <summary>A paragraph re-opening the fields open before <paramref name="block"/>, or
+        /// null when none is.</summary>
+        public XElement? Opener(XElement block)
+        {
+            if (!_openBefore.TryGetValue(block, out var open) || open.Count == 0) return null;
+            var paragraph = new XElement(W.p);
+            foreach (var field in open)
+            {
+                paragraph.Add(Marker("begin"));
+                if (field.Code.Length > 0)
+                {
+                    paragraph.Add(new XElement(W.r, new XElement(W.instrText,
+                        new XAttribute(XNamespace.Xml + "space", "preserve"), field.Code)));
+                }
+                if (field.Separated) paragraph.Add(Marker("separate"));
+            }
+            return paragraph;
+        }
+
+        /// <summary>A paragraph closing the fields still open after the run
+        /// <c>siblings[start..end]</c> — the state before its first block, replayed through
+        /// every marker the run's blocks contain — or null when none is.</summary>
+        public XElement? Closer(List<XElement> siblings, int start, int end)
+        {
+            var open = _openBefore.TryGetValue(siblings[start], out var before)
+                ? new List<OpenField>(before)
+                : new List<OpenField>();
+            for (int i = start; i <= end; i++)
+                foreach (var el in siblings[i].DescendantsAndSelf())
+                    Step(el, open);
+            return open.Count == 0 ? null : new XElement(W.p, Enumerable.Range(0, open.Count).Select(_ => Marker("end")));
+        }
+
+        private static XElement Marker(string type) =>
+            new(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, type)));
+
+        private static void Step(XElement el, List<OpenField> open)
+        {
+            if (el.Name == W.fldChar)
+            {
+                switch ((string?)el.Attribute(W.fldCharType))
+                {
+                    case "begin": open.Add(new OpenField("", false)); break;
+                    case "separate": if (open.Count > 0) open[^1] = open[^1] with { Separated = true }; break;
+                    case "end": if (open.Count > 0) open.RemoveAt(open.Count - 1); break;
+                }
+            }
+            else if (el.Name == W.instrText && open.Count > 0 && !open[^1].Separated)
+            {
+                open[^1] = open[^1] with { Code = open[^1].Code + el.Value };
+            }
+        }
+    }
+
+    /// <summary>
     /// Make sure the live document carries <see cref="ListItemRetriever"/> annotations
     /// (per-paragraph <c>ListItemInfo</c> + per-item <c>LevelNumbers</c> counter
     /// vectors). One <see cref="ListItemRetriever.RetrieveListItem(WordprocessingDocument, XElement)"/>
@@ -713,14 +977,16 @@ internal static class HtmlConversionOps
     }
 
     /// <summary>
-    /// Clone a block element and transplant the LIVE document's list-numbering
-    /// annotations onto the clone's paragraphs (XElement cloning drops annotations).
-    /// The throwaway converter then reads the live counters instead of recomputing
-    /// them from the throwaway's tiny body — where every list item would count from 1.
-    /// Annotation reads are first-added-wins, so even if the converter re-initializes
-    /// the throwaway document, the transplanted values hold.
+    /// Clone a block element and declare the LIVE document's resolved list counters on the
+    /// clone's paragraphs (<see cref="PtOpenXml.LevelNumbers"/> and
+    /// <see cref="PtOpenXml.ListContinuation"/>, read by <see cref="ListItemRetriever"/>). The
+    /// converter rewrites the shell's markup before it numbers anything (markup simplification,
+    /// formatting assembly), so an annotation transplanted onto the clone never reaches the
+    /// retriever; an attribute rides through every rewrite the way the Unid does. Without it the
+    /// shell recounts the list from the few blocks it holds — the fifth item of a list rendered on
+    /// its own came out as "2.".
     /// </summary>
-    private static XElement CloneWithListAnnotations(XElement src)
+    private static XElement CloneWithListNumbers(XElement src)
     {
         var clone = new XElement(src);
         using var s = src.DescendantsAndSelf().GetEnumerator();
@@ -728,9 +994,13 @@ internal static class HtmlConversionOps
         while (s.MoveNext() && c.MoveNext())
         {
             if (s.Current.Name != W.p) continue;
-            if (s.Current.Annotation<ListItemRetriever.ListItemInfo>() is { } lii) c.Current.AddAnnotation(lii);
-            if (s.Current.Annotation<ListItemRetriever.LevelNumbers>() is { } ln) c.Current.AddAnnotation(ln);
-            if (s.Current.Annotation<ListItemRetriever.ContinuationInfo>() is { } ci) c.Current.AddAnnotation(ci);
+            if (s.Current.Annotation<ListItemRetriever.LevelNumbers>() is { } numbers)
+            {
+                c.Current.SetAttributeValue(PtOpenXml.LevelNumbers, string.Join(",",
+                    numbers.LevelNumbersArray.Select(n => n.ToString(CultureInfo.InvariantCulture))));
+            }
+            if (s.Current.Annotation<ListItemRetriever.ContinuationInfo>() is { IsContinuation: true })
+                c.Current.SetAttributeValue(PtOpenXml.ListContinuation, true);
         }
         return clone;
     }
@@ -868,7 +1138,8 @@ internal static class HtmlConversionOps
             WmlToMarkdownConverter.BuildAnchorIndexOnly(
                 sourceDoc, new WmlToMarkdownConverterSettings { Scopes = ProjectionScopes.All }),
             sourceDoc);
-        var blockClone = new XElement(blockElement);
+        EnsureListAnnotations(sourceDoc);
+        var blockClone = CloneWithListNumbers(blockElement);
         identity?.Record(blockElement, blockClone);
 
         // Build a throwaway doc: copied formatting parts + just this block.
@@ -878,9 +1149,14 @@ internal static class HtmlConversionOps
         {
             var main = blockDoc.AddMainDocumentPart();
             AddFormattingParts(blockDoc, sourceDoc);
-            RetargetEmbeddedImages(sourceDoc, blockElement, blockClone, main,
+            RetargetPartRelationships(sourceDoc, blockElement, blockClone, main,
                 new Dictionary<string, string>(StringComparer.Ordinal));
-            main.PutXDocument(BuildBodyDocument(blockClone));
+            var fieldIndex = FieldContextIndex.Build(new[] { blockElement });
+            var bodyContent = new List<object>();
+            if (fieldIndex.Opener(blockElement) is { } opener) bodyContent.Add(opener);
+            bodyContent.Add(blockClone);
+            if (fieldIndex.Closer(new List<XElement> { blockElement }, 0, 0) is { } closer) bodyContent.Add(closer);
+            main.PutXDocument(BuildShellDocument(sourceDoc.MainDocumentPart?.GetXDocument().Root, bodyContent.ToArray()));
         }
         blockStream.Position = 0;
         using var renderDoc = WordprocessingDocument.Open(blockStream, true);
@@ -994,12 +1270,15 @@ internal static class HtmlConversionOps
     }
 
     /// <summary>
-    /// Copy embedded image parts referenced by a cloned block into its throwaway main part and
-    /// rewrite the clone's relationship ids. OOXML relationship ids are scoped to their owning
-    /// package part; copying only the XML leaves a perfectly valid live image pointing at no part
-    /// in the render shell, which WmlToHtmlConverter correctly omits.
+    /// Point the clone's part references at the shell. A block's XML refers to relationships of
+    /// the story part that owns it — an embedded picture (<c>r:embed</c>) and an external
+    /// hyperlink (<c>r:id</c> on <c>w:hyperlink</c>) — which the shell's main part does not
+    /// have: the picture's part is copied in (once per render, keyed by owner and id through
+    /// <paramref name="copied"/>) and the link's relationship is re-declared, reused when the
+    /// shell already declares that target. Without the link the converter renders the
+    /// hyperlink's runs as plain text, where the full render puts an <c>a</c> around them.
     /// </summary>
-    private static void RetargetEmbeddedImages(
+    private static void RetargetPartRelationships(
         WordprocessingDocument sourceDoc,
         XElement source,
         XElement clone,
@@ -1024,15 +1303,48 @@ internal static class HtmlConversionOps
             }
             embed.Value = newId;
         }
+        foreach (var hyperlink in clone.DescendantsAndSelf(W.hyperlink))
+        {
+            var oldId = (string?)hyperlink.Attribute(R.id);
+            var relationship = owner.HyperlinkRelationships.FirstOrDefault(candidate => candidate.Id == oldId);
+            if (relationship is null) continue;
+            var existing = destination.HyperlinkRelationships.FirstOrDefault(candidate =>
+                candidate.IsExternal == relationship.IsExternal
+                && string.Equals(candidate.Uri.OriginalString, relationship.Uri.OriginalString, StringComparison.Ordinal));
+            hyperlink.SetAttributeValue(R.id,
+                (existing ?? destination.AddHyperlinkRelationship(relationship.Uri, relationship.IsExternal)).Id);
+        }
     }
 
     /// <summary>A minimal <c>w:document</c> wrapping <paramref name="bodyContent"/> (or an empty body).</summary>
     private static XDocument BuildBodyDocument(params object[] bodyContent) =>
-        new XDocument(
-            new XElement(W.document,
-                new XAttribute(XNamespace.Xmlns + "w", W.w),
-                new XAttribute(XNamespace.Xmlns + "r", R.r),
-                new XElement(W.body, bodyContent)));
+        BuildShellDocument(null, bodyContent);
+
+    /// <summary>
+    /// The shell's main document. It declares the source root's namespace prefixes and its
+    /// <c>mc:Ignorable</c> list, because a Markup Compatibility choice is selected by resolving
+    /// the prefixes in its <c>Requires</c> attribute against the document's declarations: a
+    /// shell that declared only <c>w</c> and <c>r</c> could not resolve <c>wps</c>, so every text
+    /// box in a block render fell back to its VML branch while the full render took the
+    /// DrawingML one.
+    /// </summary>
+    private static XDocument BuildShellDocument(XElement? sourceRoot, object[] bodyContent)
+    {
+        var root = new XElement(W.document,
+            new XAttribute(XNamespace.Xmlns + "w", W.w),
+            new XAttribute(XNamespace.Xmlns + "r", R.r));
+        if (sourceRoot is not null)
+        {
+            foreach (var attribute in sourceRoot.Attributes())
+            {
+                if ((attribute.IsNamespaceDeclaration || attribute.Name == MC.Ignorable)
+                    && root.Attribute(attribute.Name) is null)
+                    root.Add(new XAttribute(attribute));
+            }
+        }
+        root.Add(new XElement(W.body, bodyContent));
+        return new XDocument(root);
+    }
 
     private static WmlToHtmlConverterSettings BuildBlockConverterSettings(HtmlConversionOptions options) =>
         new WmlToHtmlConverterSettings
@@ -1063,6 +1375,13 @@ internal static class HtmlConversionOps
             // mode only) never fires here; the editor profile asks for it explicitly when it is
             // itself painting page boxes. Default false keeps the pinned output identical.
             StampPageNumberFields = options.StampPageNumberFields,
+            // Pagination changes within-block output too: an anchored picture or text box is
+            // positioned absolutely inside its page box, where the flow render centres it as a
+            // block. A block re-rendered into a paginated editor must follow the same profile,
+            // or the object jumps into the flow (and a windowed mount's pages break elsewhere).
+            RenderPagination = (PaginationMode)options.PaginationMode,
+            PaginationScale = options.PaginationScale > 0 ? options.PaginationScale : 1.0,
+            PaginationCssClassPrefix = options.PaginationCssClassPrefix,
             // Incremental block renders must carry the same native image
             // contract as a full-document render. Without an image handler
             // WmlToHtmlConverter deliberately drops w:drawing/w:pict content,
