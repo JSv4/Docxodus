@@ -1557,6 +1557,8 @@ export interface DocxodusWasmExports {
     BeginMutationTransaction?: (handle: number, transactionId: string, requestJson: string) => string;
     CompleteMutationTransaction?: (handle: number, transactionId: string, serializedResponse: string) => void;
     AbandonMutationTransaction?: (handle: number, transactionId: string) => void;
+    RetainPreview?: (shadowHandle: number) => string;
+    CommitPreview?: (handle: number, previewId: string) => string;
     GetPackageManifest: (handle: number) => string;
     RenderPreviewHtml?: (handle: number) => string;
     RenderPreviewBlockHtml?: (handle: number, anchorId: string) => string;
@@ -1900,6 +1902,8 @@ export type EditErrorCode =
   | "transaction_conflict"
   | "transaction_result_evicted"
   | "transaction_incomplete"
+  | "preview_not_found"
+  | "preview_stale"
   | "revision_repair_rejected"
   | "hyperlink_not_found"
   | "bookmark_not_found"
@@ -2009,6 +2013,25 @@ export interface MutationBatchPreviewOptions {
   html?: "none" | "scoped" | "full";
   /** Required for scoped HTML. */
   htmlAnchorId?: string;
+  /**
+   * Keep a successful preview's exact result package so {@link DocxSession.commitPreview} can
+   * later make it the live document with the previewed generated ids, timestamps and
+   * `packageHash`. The receipt then carries {@link MutationBatchResult.retention}. Retention
+   * is bounded (count, bytes and time) and cleared when the session closes.
+   */
+  retain?: boolean;
+}
+
+/**
+ * Identity of a preview retained for a guarded commit (issue #760). `baseVersion` and
+ * `basePackageHash` describe the live state the preview was predicted from; the commit refuses
+ * once either has moved. `expiresAt` is the ISO-8601 UTC instant after which the entry is gone.
+ */
+export interface MutationPreviewRetention {
+  previewId: string;
+  baseVersion: number;
+  basePackageHash: string;
+  expiresAt: string;
 }
 
 export interface MutationBatchStepResult {
@@ -2063,6 +2086,11 @@ export interface MutationBatchResult {
    * session's journal bound the request to — the same on the original call and on a replay.
    */
   transaction?: MutationTransactionIdentity;
+  /**
+   * Present on a preview retained with {@link MutationBatchPreviewOptions.retain} and on the
+   * result of {@link DocxSession.commitPreview}.
+   */
+  retention?: MutationPreviewRetention;
 }
 
 /** The versioned identity a transaction-aware batch result carries (issue #761). */
