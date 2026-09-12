@@ -223,7 +223,7 @@ operations (`docxodus_compare`, `docxodus_deliver`, `docxodus_verify_receipt`). 
 
 | Tool | Arguments | Result |
 |---|---|---|
-| `docxodus_open` | `path` (a location within the configured scope — see Document storage), `trackedChanges?` (`accept`\|`render_inline`\|`strip_deletions`), `revisionAuthor?`, `undoDepth?`, `persistAnchorIds?` (default false — see Anchor stability below), `captureInitialProjection?` (default true; false frees the per-session baseline copy of the opening package and makes `semantic_changes`/diff formats refuse) | `{ sessionId, path }` — `path` is the **resolved** location |
+| `docxodus_open` | `path` (a location within the configured scope — see Document storage), `trackedChanges?` (`accept`\|`render_inline`\|`strip_deletions`), `revisionAuthor?`, `undoDepth?`, `persistAnchorIds?` (default false — see Anchor stability below), `captureInitialProjection?` (default true; false frees the per-session baseline copy of the opening package and makes `semantic_changes`/diff formats refuse), `captureDeliveryEvidence?` (default false; records every mutation's exact before/after package, each tool call's request, transaction ids and undo/redo lineage so `docxodus_deliver` can mint a `changeReceipt` — see `delivery_change_receipt.md`) | `{ sessionId, path }` — `path` is the **resolved** location |
 | `docxodus_save` | `sessionId`, `path?` (resolved the same way; defaults to the location the session was opened from), `persistAnchorIds?` (per-call override of the session's open-time setting; absent = use it) | `{ path, bytesWritten }` |
 | `docxodus_close` | `sessionId` | `{ closed: true }` |
 
@@ -740,10 +740,25 @@ resolves through the standard store resolver, so it cannot point outside the ser
 The response returns canonical manifest bytes plus every available artifact as base64, bounded
 to 64 MiB before base64 expansion. HTML/PDF/PageMap/render-report artifacts require the
 process-owned export host configuration (`DOCXODUS_NODE_PATH`, `DOCXODUS_EXPORT_HOST_PATH`,
-optionally `DOCXODUS_CHROMIUM_PATH`); tool arguments can never select an executable. Change
-receipts are truthfully unavailable on this surface because issuance requires exact transaction
-snapshots and contributions. Not batchable: a bundle is evidence about a saved document, not a
-mutation.
+optionally `DOCXODUS_CHROMIUM_PATH`); tool arguments can never select an executable. Not
+batchable: a bundle is evidence about a saved document, not a mutation.
+
+A `changeReceipt` artifact is minted from the evidence the session captured as its edits
+executed (issue #748; open the session with `captureDeliveryEvidence: true`). Every direct
+mutating tool call is described to the recorder by the dispatcher — tool, action and arguments
+— and every `docxodus_mutations` batch by its steps and, when it carried one, its
+`transactionId` and request fingerprint, so a receipt entry and a replayed response name the
+same transaction and an identical retry adds nothing. `undo`/`redo` are lineage events;
+`docxodus_save` is not a transaction. The working document of such a delivery is the recorder's
+current state, so the delivered bytes are the last recorded after-state by construction. The
+receipt attests the session's own edits from the package it opened: `baselinePath` must be that
+package (save elsewhere, or keep a copy, before delivering) and `baselineDocumentVersion` /
+`finalDocumentVersion` must be the versions the captured history starts and ends at. Optional
+`changeReceipt: { privacyProfile, failOnUnexpectedChanges }` sets the receipt policy. When the
+receipt cannot be minted — capture off, retention exceeded (256 states / 512 MiB per session),
+a mismatched baseline or version, a history the receipt contract rejects — the artifact is
+reported unavailable and the response's `evidence` block (the recorder status) names the
+reason; a `required` receipt then fails the bundle unless `returnIncompleteBundle` is set.
 
 ### `docxodus_verify_receipt` — portable receipt verification (issue #520)
 

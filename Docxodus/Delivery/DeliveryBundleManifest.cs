@@ -381,11 +381,52 @@ internal static class DeliveryBundleCanonicalJson
             WriteIndented = indented,
             MaxDepth = 64,
             UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+            // Source-generated metadata keeps the bundle usable where reflection-based
+            // serialization is trimmed away (the browser build, issue #748); the runtime
+            // options above and the converters below still apply through the metadata path.
+            TypeInfoResolver = DeliveryBundleJsonContext.Default,
         };
-        options.Converters.Add(new JsonStringEnumConverter(
-            JsonNamingPolicy.CamelCase, allowIntegerValues: false));
+        // Generic enum converters are trim/AOT-safe. Registered explicitly because the
+        // source-generation switch emits enum member names verbatim, while the durable wire
+        // vocabulary is camelCase.
+        AddEnum<DeliveryRevisionPolicy>(options);
+        AddEnum<DeliveryArtifactRequiredness>(options);
+        AddEnum<DeliveryArtifactProvenance>(options);
+        AddEnum<DeliveryArtifactAvailability>(options);
+        AddEnum<DeliveryArtifactKind>(options);
+        AddEnum<DeliveryReviewProfile>(options);
+        AddEnum<DeliveryCommentProfile>(options);
+        AddEnum<DeliveryBundleStatus>(options);
+        AddEnum<DeliveryArtifactRelationshipKind>(options);
+        AddEnum<DeliveryBundleArtifactVerificationStatus>(options);
+        AddEnum<DeliverableRenderDiagnosticKind>(options);
+        AddEnum<VerificationFindingSeverity>(options);
+        AddEnum<DeliverableVerificationMode>(options);
+        AddEnum<DeliverableVerificationDecision>(options);
+        AddEnum<DeliverableCheckStatus>(options);
+        AddEnum<DeliverableFindingCategory>(options);
+        AddEnum<DeliverableFindingDisposition>(options);
+        AddEnum<DeliverablePackageChangeKind>(options);
+        AddEnum<SemanticChangeOperation>(options);
+        AddEnum<SemanticChangeFamily>(options);
+        AddEnum<DeliverableArtifactRole>(options);
+        AddEnum<DeliverableArtifactAvailability>(options);
         return options;
     }
+
+    private static void AddEnum<TEnum>(JsonSerializerOptions options)
+        where TEnum : struct, Enum =>
+        options.Converters.Add(new JsonStringEnumConverter<TEnum>(
+            JsonNamingPolicy.CamelCase, allowIntegerValues: false));
+}
+
+/// <summary>Trim/AOT-safe metadata for the bundle manifest and validation report wire contracts.</summary>
+[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
+[JsonSerializable(typeof(DeliveryBundleManifest))]
+[JsonSerializable(typeof(DeliveryBundleManifestPayload))]
+[JsonSerializable(typeof(DeliveryBundleValidationReport))]
+internal partial class DeliveryBundleJsonContext : JsonSerializerContext
+{
 }
 
 internal static class DeliveryBundlePath

@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Docxodus;
 using Docxodus.Internal;
+using Docxodus.Verification;
 
 namespace Docxodus.McpServer;
 
@@ -53,7 +54,20 @@ internal static class Dispatcher
         // This includes reads and saves, because their relative order with a mutation/replay is
         // observable, and makes HTTP's request-level concurrency safe without transport locks.
         var sessionId = Str(args, "sessionId");
-        return store.Dispatch(sessionId, () => tool switch
+        return store.Dispatch(sessionId, () =>
+        {
+            // A direct mutating call is described to the session's delivery evidence recorder
+            // before it runs (issue #748), so its version step is attributed to this request
+            // rather than recorded as an unlabeled mutation. Batches describe their own steps;
+            // undo/redo are lineage the core records itself.
+            if (DescribedMutation(tool, args) is { } described)
+                return WithDeliveryEvidence(store, args, described, () => Invoke(store, tool, args));
+            return Invoke(store, tool, args);
+        });
+    }
+
+    private static string Invoke(SessionStore store, string tool, JsonElement args) =>
+        tool switch
         {
             "docxodus_save" => Save(store, args),
             "docxodus_get_content" => GetContent(store, args),
@@ -75,7 +89,58 @@ internal static class Dispatcher
             "docxodus_deliver" => DeliveryTool.Execute(store, Session(store, args), args),
             "docxodus_table" => Table(store, args),
             _ => throw new McpToolException($"unknown tool: {tool}"),
-        });
+        };
+
+    private static readonly string[] AnnotationMutations = { "add", "update", "remove", "move" };
+
+    /// <summary>The evidence description of a direct call that is a known document mutation, else null.</summary>
+    private static string? DescribedMutation(string tool, JsonElement args)
+    {
+        var action = OptStr(args, "action");
+        if (action is null) return null;
+        bool mutation = tool == "docxodus_annotate"
+            ? AnnotationMutations.Contains(action)
+            : tool != "docxodus_mutations" && ValidateMutationBatchAction(tool, action) is null;
+        if (!mutation) return null;
+        return "[{\"tool\":" + JsonRpcIo.JsonString(tool) + ",\"action\":" + JsonRpcIo.JsonString(action)
+            + ",\"args\":" + WithoutSessionId(args) + "}]";
+    }
+
+    private static string WithDeliveryEvidence(
+        SessionStore store, JsonElement args, string described, Func<string> run)
+    {
+        var handle = Session(store, args).Handle;
+        if (!DocxSessionOps.BeginDeliveryEvidence(handle, described, MutationBatchMode.Atomic, null))
+            return run();
+        string response;
+        try
+        {
+            response = run();
+        }
+        catch
+        {
+            DocxSessionOps.AbandonDeliveryEvidence(handle);
+            throw;
+        }
+        DocxSessionOps.CompleteDeliveryEvidenceDirect(handle, response);
+        return response;
+    }
+
+    /// <summary>The request as the receipt records it: the session id is transport routing, not part of the request.</summary>
+    private static string WithoutSessionId(JsonElement args)
+    {
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            foreach (var property in args.EnumerateObject())
+            {
+                if (property.NameEquals("sessionId")) continue;
+                property.WriteTo(writer);
+            }
+            writer.WriteEndObject();
+        }
+        return System.Text.Encoding.UTF8.GetString(buffer.ToArray());
     }
 
     // ─── Lifecycle ──────────────────────────────────────────────────────
@@ -108,6 +173,8 @@ internal static class Dispatcher
             // semantic_changes and the markdown diff then refuse with the setting's name.
             CaptureInitialProjection = BoolOpt(
                 args, "captureInitialProjection", settingDefaults.CaptureInitialProjection),
+            CaptureDeliveryEvidence = BoolOpt(
+                args, "captureDeliveryEvidence", settingDefaults.CaptureDeliveryEvidence),
         };
 
         var session = store.Open(bytes, location, settings);
@@ -1174,12 +1241,17 @@ internal static class Dispatcher
         // The journal owns the whole flow (issue #761): replay, conflict, eviction and
         // incomplete refusals, execution under a fresh reservation, retention, and retirement
         // of a reservation that never reached a terminal response.
+        var identity = new DeliveryTransactionIdentity
+        {
+            TransactionId = transactionId,
+            RequestFingerprint = requestFingerprint,
+        };
         return liveSession.MutationTransactions.Run(
             transactionId,
             requestFingerprint,
             RequestedCoreMode(args),
             () => DocxSessionOps.GetVersion(liveSession.Handle),
-            () => ExecuteMutationRequest(liveSession, args, transactional: true),
+            () => ExecuteMutationRequest(liveSession, args, transactional: true, identity),
             ex => ex is McpToolException or FormatException or JsonException or OverflowException
                 ? (EditErrorCode.InvalidBatchStep, "validation")
                 : (EditErrorCode.InternalError, "dispatch"));
@@ -1188,7 +1260,8 @@ internal static class Dispatcher
     private static string ExecuteMutationRequest(
         DocSession liveSession,
         JsonElement args,
-        bool transactional)
+        bool transactional,
+        DeliveryTransactionIdentity? identity = null)
     {
         var mode = args.TryGetProperty("mode", out _)
             ? Str(args, "mode")
@@ -1282,7 +1355,7 @@ internal static class Dispatcher
                 rolledBack: coreMode == MutationBatchMode.Atomic);
         }
         var liveSteps = BuildMutationBatchSteps(liveSession, stepsEl, legacyApply: mode == "apply");
-        return DocxSessionOps.ExecuteBatch(liveSession.Handle, coreMode, liveSteps);
+        return DocxSessionOps.ExecuteBatch(liveSession.Handle, coreMode, liveSteps, identity);
     }
 
     private static string? TransactionId(JsonElement args)
@@ -1363,7 +1436,8 @@ internal static class Dispatcher
                     "docxodus_track_changes" => RunTrackChangesAction(session, action, mutationArgs),
                     _ => throw new McpToolException($"docxodus_mutations does not accept \"{stepTool}\" as a step"),
                 },
-                () => ValidateMutationBatchStep(session, stepTool, action, stepArgs)));
+                () => ValidateMutationBatchStep(session, stepTool, action, stepArgs),
+                argumentsJson: stepArgs.GetRawText()));
         }
         return result;
     }

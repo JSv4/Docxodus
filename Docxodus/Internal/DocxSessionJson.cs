@@ -380,6 +380,7 @@ internal static class DocxSessionJson
         bool smartQuotes = TryGetBool(root, "smartQuotes", false);
         bool emitMarkdownPatch = TryGetBool(root, "emitMarkdownPatch", true);
         bool captureInitialProjection = TryGetBool(root, "captureInitialProjection", true);
+        bool captureDeliveryEvidence = TryGetBool(root, "captureDeliveryEvidence", false);
         var projectionSettings = root.TryGetProperty("projectionSettings", out var ps) && ps.ValueKind == JsonValueKind.Object
             ? ParseProjectionSettings(ps)
             : new WmlToMarkdownConverterSettings();
@@ -394,6 +395,7 @@ internal static class DocxSessionJson
             SmartQuotes = smartQuotes,
             EmitMarkdownPatch = emitMarkdownPatch,
             CaptureInitialProjection = captureInitialProjection,
+            CaptureDeliveryEvidence = captureDeliveryEvidence,
             ProjectionSettings = projectionSettings,
         };
     }

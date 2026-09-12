@@ -26,16 +26,47 @@ public sealed class DeliveryReceiptTransactionEvidence
 }
 
 /// <summary>
+/// One step of a session's edit history in the order it happened: either a transaction's
+/// evidence or an undo/redo lineage event. The receipt validates lineage as a single ordered
+/// sequence, so an undo that happened between two transactions must be replayed between them
+/// — a transactions-then-lineage split cannot express that.
+/// </summary>
+public sealed class DeliveryReceiptHistoryEvent
+{
+    private DeliveryReceiptHistoryEvent(
+        DeliveryReceiptTransactionEvidence? transaction,
+        DeliveryLineageEventInput? lineage)
+    {
+        Transaction = transaction;
+        Lineage = lineage;
+    }
+
+    public DeliveryReceiptTransactionEvidence? Transaction { get; }
+
+    public DeliveryLineageEventInput? Lineage { get; }
+
+    public static DeliveryReceiptHistoryEvent FromTransaction(DeliveryReceiptTransactionEvidence evidence) =>
+        new(evidence ?? throw new ArgumentNullException(nameof(evidence)), null);
+
+    public static DeliveryReceiptHistoryEvent FromLineage(DeliveryLineageEventInput lineage) =>
+        new(null, lineage ?? throw new ArgumentNullException(nameof(lineage)));
+}
+
+/// <summary>
 /// Authoritative transaction/lineage evidence needed to mint a #458 receipt. The bundle service
 /// never synthesizes missing mutation history from a baseline/final comparison.
 /// </summary>
 public sealed class DeliveryReceiptContext
 {
-    private readonly DeliveryReceiptTransactionEvidence[] _transactions;
-    private readonly DeliveryLineageEventInput[] _lineage;
+    private readonly DeliveryReceiptHistoryEvent[] _history;
     private readonly DeliveryChangeAttributionRule[] _attributionRules;
     private readonly string[] _warnings;
 
+    /// <summary>
+    /// The original shape: every transaction, then every lineage event. Equivalent to the
+    /// history constructor with that ordering, which is only a valid lineage when no undo or
+    /// redo happened before the last transaction.
+    /// </summary>
     public DeliveryReceiptContext(
         IEnumerable<DeliveryReceiptTransactionEvidence> transactions,
         IEnumerable<DeliveryLineageEventInput>? lineage = null,
@@ -43,15 +74,30 @@ public sealed class DeliveryReceiptContext
         IEnumerable<string>? warnings = null,
         DeliveryReceiptPrivacyProfile privacyProfile = DeliveryReceiptPrivacyProfile.HashAndSummary,
         bool failOnUnexpectedChanges = false)
+        : this(
+            InOrder(
+                transactions ?? throw new ArgumentNullException(nameof(transactions)),
+                lineage ?? Array.Empty<DeliveryLineageEventInput>()),
+            attributionRules,
+            warnings,
+            privacyProfile,
+            failOnUnexpectedChanges)
     {
-        _transactions = transactions?.ToArray()
-            ?? throw new ArgumentNullException(nameof(transactions));
-        _lineage = lineage?.ToArray() ?? Array.Empty<DeliveryLineageEventInput>();
+    }
+
+    /// <summary>Evidence in the exact order the session applied it (issue #748).</summary>
+    public DeliveryReceiptContext(
+        IEnumerable<DeliveryReceiptHistoryEvent> history,
+        IEnumerable<DeliveryChangeAttributionRule>? attributionRules = null,
+        IEnumerable<string>? warnings = null,
+        DeliveryReceiptPrivacyProfile privacyProfile = DeliveryReceiptPrivacyProfile.HashAndSummary,
+        bool failOnUnexpectedChanges = false)
+    {
+        _history = history?.ToArray() ?? throw new ArgumentNullException(nameof(history));
         _attributionRules = attributionRules?.ToArray()
             ?? Array.Empty<DeliveryChangeAttributionRule>();
         _warnings = warnings?.ToArray() ?? Array.Empty<string>();
-        if (_transactions.Any(item => item is null)
-            || _lineage.Any(item => item is null)
+        if (_history.Any(item => item is null)
             || _attributionRules.Any(item => item is null)
             || _warnings.Any(string.IsNullOrWhiteSpace))
             throw new ArgumentException("Receipt context collections cannot contain null or blank entries.");
@@ -63,18 +109,37 @@ public sealed class DeliveryReceiptContext
 
     public DeliveryReceiptPrivacyProfile PrivacyProfile { get; }
     public bool FailOnUnexpectedChanges { get; }
+    public IReadOnlyList<DeliveryReceiptHistoryEvent> History => _history.ToArray();
     public IReadOnlyList<DeliveryReceiptTransactionEvidence> Transactions =>
-        _transactions.ToArray();
-    public IReadOnlyList<DeliveryLineageEventInput> Lineage => _lineage.ToArray();
+        _history.Where(item => item.Transaction is not null).Select(item => item.Transaction!).ToArray();
+    public IReadOnlyList<DeliveryLineageEventInput> Lineage =>
+        _history.Where(item => item.Lineage is not null).Select(item => item.Lineage!).ToArray();
     public IReadOnlyList<DeliveryChangeAttributionRule> AttributionRules =>
         _attributionRules.ToArray();
     public IReadOnlyList<string> Warnings => _warnings.ToArray();
 
-    internal IReadOnlyList<DeliveryReceiptTransactionEvidence> TransactionSnapshot => _transactions;
-    internal IReadOnlyList<DeliveryLineageEventInput> LineageSnapshot => _lineage;
+    internal IReadOnlyList<DeliveryReceiptHistoryEvent> HistorySnapshot => _history;
     internal IReadOnlyList<DeliveryChangeAttributionRule> AttributionRuleSnapshot =>
         _attributionRules;
     internal IReadOnlyList<string> WarningSnapshot => _warnings;
+
+    private static IEnumerable<DeliveryReceiptHistoryEvent> InOrder(
+        IEnumerable<DeliveryReceiptTransactionEvidence> transactions,
+        IEnumerable<DeliveryLineageEventInput> lineage)
+    {
+        foreach (var transaction in transactions)
+        {
+            if (transaction is null)
+                throw new ArgumentException("Receipt context collections cannot contain null or blank entries.");
+            yield return DeliveryReceiptHistoryEvent.FromTransaction(transaction);
+        }
+        foreach (var lineageEvent in lineage)
+        {
+            if (lineageEvent is null)
+                throw new ArgumentException("Receipt context collections cannot contain null or blank entries.");
+            yield return DeliveryReceiptHistoryEvent.FromLineage(lineageEvent);
+        }
+    }
 }
 
 /// <summary>Caller intent before revision policy derives the exact named final bytes.</summary>

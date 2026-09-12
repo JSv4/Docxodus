@@ -36,6 +36,7 @@ from .enums import (
     ListFormat,
     MutationBatchMode,
     MutationPreviewHtmlMode,
+    DeliveryReceiptPrivacyProfile,
     PageNumberField,
     PlaceholderKinds,
     Position,
@@ -90,6 +91,8 @@ from .types import (
     ListMembership,
     MarkdownProjection,
     MutationBatchResult,
+    DeliveryBundleResult,
+    DeliveryEvidenceStatus,
     MutationBatchStep,
     MutationPreconditions,
     NumberFormat,
@@ -849,6 +852,48 @@ class DocxSession:
         if not isinstance(result, Mapping):
             raise TypeError(f"preview_batch: expected object, got {result!r}")
         return MutationBatchResult._from_wire(result)
+
+    def get_delivery_evidence_status(self) -> DeliveryEvidenceStatus:
+        """What the host-owned delivery evidence recorder holds (issue #748).
+
+        ``enabled`` is ``False``, with the reason, unless the session was opened with
+        ``DocxSessionSettings(capture_delivery_evidence=True)``.
+        """
+        result = self._call("get_delivery_evidence_status", {})
+        if not isinstance(result, Mapping):
+            raise TypeError(f"get_delivery_evidence_status: expected object, got {result!r}")
+        return DeliveryEvidenceStatus._from_wire(result)
+
+    def build_delivery_receipt(
+        self,
+        *,
+        privacy_profile: DeliveryReceiptPrivacyProfile | str = DeliveryReceiptPrivacyProfile.HASH_AND_SUMMARY,
+        fail_on_unexpected_changes: bool = False,
+    ) -> DeliveryBundleResult:
+        """Build the receipt-bearing delivery of this session.
+
+        The shared bundle service returns the clean current package (``final-docx``), the
+        source-to-delivered semantic delta and the change receipt (``change-receipt``) minted
+        from the captured evidence; verify it with :func:`verify_delivery_receipt` against the
+        returned artifact bytes. A history that cannot be attested yields an ``incomplete``
+        bundle whose receipt artifact carries the reason, and ``result.evidence`` says why.
+        """
+        try:
+            profile = DeliveryReceiptPrivacyProfile(privacy_profile)
+        except ValueError:
+            raise ValueError(f"unknown privacy profile: {privacy_profile}") from None
+        result = self._call(
+            "build_delivery_receipt",
+            {
+                "options": {
+                    "privacyProfile": profile.value,
+                    "failOnUnexpectedChanges": fail_on_unexpected_changes,
+                },
+            },
+        )
+        if not isinstance(result, Mapping):
+            raise TypeError(f"build_delivery_receipt: expected object, got {result!r}")
+        return DeliveryBundleResult._from_wire(result)
 
     def commit_preview(
         self,

@@ -54,6 +54,207 @@ public static class DeliveryOps
         return Serialize(DeliveryChangeReceiptVerifier.VerifyJson(receiptJson, artifacts));
     }
 
+    /// <summary>Cap on the bytes a transport returns inline for one bundle (manifest plus artifacts).</summary>
+    public const long DefaultMaxReturnedBytes = 64L * 1024 * 1024;
+
+    /// <summary>
+    /// The delivery-bundle wire shape every transport publishes: bundle status, manifest (as an
+    /// object and as its canonical bytes), and each artifact with base64 bytes or the reason it
+    /// is unavailable. <paramref name="evidence"/>, when given, is the session's recorder status
+    /// so a caller reading an unavailable change receipt sees why in the same response.
+    /// </summary>
+    public static string SerializeBundle(
+        Delivery.DeliveryBundle bundle,
+        long maxReturnedBytes = DefaultMaxReturnedBytes,
+        Delivery.DeliveryEvidenceStatus? evidence = null)
+    {
+        ArgumentNullException.ThrowIfNull(bundle);
+        var manifestBytes = bundle.ManifestBytes;
+        var returnedBytes = manifestBytes.LongLength;
+        foreach (var artifact in bundle.Manifest.Payload.Artifacts)
+        {
+            if (artifact.ByteLength is { } length)
+            {
+                if (returnedBytes > maxReturnedBytes - Math.Min(length, maxReturnedBytes))
+                    throw new InvalidOperationException(
+                        $"delivery bundle exceeds the {maxReturnedBytes}-byte return limit; use the CLI or programmatic API");
+                returnedBytes += length;
+            }
+        }
+        var buffer = new System.Buffers.ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("status", CamelCase(bundle.Manifest.Payload.Status));
+            writer.WriteBoolean("verified", bundle.Verification.IsValid);
+            writer.WriteBoolean("manifestVerified", bundle.Verification.IsValid);
+            writer.WritePropertyName("manifest");
+            using (var manifest = JsonDocument.Parse(manifestBytes))
+                manifest.RootElement.WriteTo(writer);
+            writer.WriteBase64String("manifestBytes", manifestBytes);
+            writer.WriteStartArray("artifacts");
+            foreach (var artifact in bundle.Manifest.Payload.Artifacts)
+            {
+                writer.WriteStartObject();
+                writer.WriteString("artifactId", artifact.ArtifactId);
+                writer.WriteString("kind", CamelCase(artifact.Kind));
+                writer.WriteString("requiredness", CamelCase(artifact.Requiredness));
+                writer.WriteString("availability", CamelCase(artifact.Availability));
+                writer.WriteString("relativePath", artifact.RelativePath);
+                writer.WriteString("mediaType", artifact.MediaType);
+                if (artifact.Availability == Delivery.DeliveryArtifactAvailability.Available)
+                    writer.WriteBase64String("bytes", bundle.GetArtifactBytes(artifact.ArtifactId));
+                else
+                    writer.WriteString("unavailableReason", artifact.UnavailableReason);
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+            if (evidence is not null)
+            {
+                writer.WritePropertyName("evidence");
+                WriteEvidenceStatus(writer, evidence);
+            }
+            writer.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    /// <summary>The recorder status wire shape shared by every transport.</summary>
+    public static string SerializeEvidenceStatus(Delivery.DeliveryEvidenceStatus status)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+        var buffer = new System.Buffers.ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer))
+            WriteEvidenceStatus(writer, status);
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    private static void WriteEvidenceStatus(Utf8JsonWriter writer, Delivery.DeliveryEvidenceStatus status)
+    {
+        writer.WriteStartObject();
+        writer.WriteBoolean("enabled", status.Enabled);
+        writer.WriteNumber("transactionCount", status.TransactionCount);
+        writer.WriteNumber("lineageEventCount", status.LineageEventCount);
+        writer.WriteNumber("unlabeledTransactionCount", status.UnlabeledTransactionCount);
+        writer.WriteNumber("retainedStateCount", status.RetainedStateCount);
+        writer.WriteNumber("retainedBytes", status.RetainedBytes);
+        writer.WriteNumber("sourceVersion", status.SourceVersion);
+        writer.WriteNumber("currentVersion", status.CurrentVersion);
+        if (status.UnavailableReason is null) writer.WriteNull("unavailableReason");
+        else writer.WriteString("unavailableReason", status.UnavailableReason);
+        writer.WriteEndObject();
+    }
+
+    /// <summary><c>{"privacyProfile","failOnUnexpectedChanges"}</c>; null or empty means the defaults.</summary>
+    public static Delivery.DeliveryReceiptBuildOptions ParseReceiptBuildOptions(string? optionsJson)
+    {
+        var options = new Delivery.DeliveryReceiptBuildOptions();
+        if (string.IsNullOrWhiteSpace(optionsJson)) return options;
+        using var document = JsonDocument.Parse(optionsJson);
+        var root = document.RootElement;
+        if (root.ValueKind == JsonValueKind.Null) return options;
+        if (root.ValueKind != JsonValueKind.Object)
+            throw new ArgumentException("delivery receipt options must be a JSON object");
+        if (root.TryGetProperty("privacyProfile", out var profile) && profile.ValueKind != JsonValueKind.Null)
+        {
+            if (profile.ValueKind != JsonValueKind.String)
+                throw new ArgumentException("privacyProfile must be a string");
+            options = options with { PrivacyProfile = ParsePrivacyProfile(profile.GetString()!) };
+        }
+        if (root.TryGetProperty("failOnUnexpectedChanges", out var fail) && fail.ValueKind != JsonValueKind.Null)
+        {
+            if (fail.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                throw new ArgumentException("failOnUnexpectedChanges must be a boolean");
+            options = options with { FailOnUnexpectedChanges = fail.GetBoolean() };
+        }
+        return options;
+    }
+
+    /// <summary>Accepts the receipt's camelCase spelling and snake_case: <c>hashOnly</c>, <c>hash_and_summary</c>, ….</summary>
+    public static DeliveryReceiptPrivacyProfile ParsePrivacyProfile(string value)
+    {
+        var compact = value.Replace("_", string.Empty, StringComparison.Ordinal)
+            .Replace("-", string.Empty, StringComparison.Ordinal);
+        foreach (var candidate in Enum.GetValues<DeliveryReceiptPrivacyProfile>())
+        {
+            if (string.Equals(candidate.ToString(), compact, StringComparison.OrdinalIgnoreCase))
+                return candidate;
+        }
+        throw new ArgumentException($"unknown privacy profile: {value}");
+    }
+
+    /// <summary><c>[{"tool","action","args"?}]</c> as a transport describes the batch it is about to run.</summary>
+    public static IReadOnlyList<(string Tool, string Action, string? ArgumentsJson)> ParseEvidenceOperations(string operationsJson)
+    {
+        ArgumentNullException.ThrowIfNull(operationsJson);
+        using var document = JsonDocument.Parse(operationsJson);
+        if (document.RootElement.ValueKind != JsonValueKind.Array)
+            throw new ArgumentException("evidence operations must be a JSON array");
+        var operations = new List<(string, string, string?)>();
+        foreach (var element in document.RootElement.EnumerateArray())
+        {
+            if (element.ValueKind != JsonValueKind.Object
+                || !element.TryGetProperty("tool", out var tool) || tool.ValueKind != JsonValueKind.String
+                || !element.TryGetProperty("action", out var action) || action.ValueKind != JsonValueKind.String)
+                throw new ArgumentException("each evidence operation needs string \"tool\" and \"action\"");
+            string? args = element.TryGetProperty("args", out var argsElement)
+                && argsElement.ValueKind == JsonValueKind.Object
+                ? argsElement.GetRawText()
+                : null;
+            operations.Add((tool.GetString()!, action.GetString()!, args));
+        }
+        return operations;
+    }
+
+    /// <summary><c>{"transactionId","requestFingerprint"}</c> or null/empty for none.</summary>
+    public static DeliveryTransactionIdentity? ParseTransactionIdentity(string? identityJson)
+    {
+        if (string.IsNullOrWhiteSpace(identityJson)) return null;
+        using var document = JsonDocument.Parse(identityJson);
+        var root = document.RootElement;
+        if (root.ValueKind == JsonValueKind.Null) return null;
+        if (root.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty("transactionId", out var id) || id.ValueKind != JsonValueKind.String
+            || !root.TryGetProperty("requestFingerprint", out var fingerprint) || fingerprint.ValueKind != JsonValueKind.String)
+            throw new ArgumentException("a transaction identity needs string \"transactionId\" and \"requestFingerprint\"");
+        return new DeliveryTransactionIdentity
+        {
+            TransactionId = id.GetString()!,
+            RequestFingerprint = fingerprint.GetString()!,
+        };
+    }
+
+    /// <summary>The <c>steps</c> array of a transport-composed batch result.</summary>
+    public static IReadOnlyList<MutationBatchStepResult> ParseBatchSteps(string stepsJson)
+    {
+        ArgumentNullException.ThrowIfNull(stepsJson);
+        using var document = JsonDocument.Parse(stepsJson);
+        if (document.RootElement.ValueKind != JsonValueKind.Array)
+            throw new ArgumentException("batch steps must be a JSON array");
+        var steps = new List<MutationBatchStepResult>();
+        foreach (var element in document.RootElement.EnumerateArray())
+        {
+            if (element.ValueKind != JsonValueKind.Object
+                || !element.TryGetProperty("index", out var index) || !index.TryGetInt32(out var indexValue)
+                || !element.TryGetProperty("tool", out var tool) || tool.ValueKind != JsonValueKind.String
+                || !element.TryGetProperty("action", out var action) || action.ValueKind != JsonValueKind.String
+                || !element.TryGetProperty("results", out var results) || results.ValueKind != JsonValueKind.Array)
+                throw new ArgumentException("each batch step needs index, tool, action and a results array");
+            var rolledBack = element.TryGetProperty("rolledBack", out var rb) && rb.ValueKind == JsonValueKind.True;
+            steps.Add(new MutationBatchStepResult(
+                indexValue,
+                tool.GetString()!,
+                action.GetString()!,
+                DocxSessionJson.DeserializeEditResults(results.GetRawText()),
+                rolledBack));
+        }
+        return steps;
+    }
+
+    private static string CamelCase<T>(T value)
+        where T : struct, Enum =>
+        JsonNamingPolicy.CamelCase.ConvertName(value.ToString());
+
     private static Dictionary<string, byte[]> ParseArtifacts(string? artifactsBase64Json)
     {
         var artifacts = new Dictionary<string, byte[]>(StringComparer.Ordinal);

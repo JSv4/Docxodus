@@ -877,6 +877,41 @@ public static partial class DocxSessionBridge
     public static string CommitPreview(int h, string previewId) =>
         DocxSessionOps.CommitPreview(h, previewId);
 
+    /// <summary>What the session's host-owned delivery evidence recorder holds (issue #748).</summary>
+    [JSExport]
+    public static string GetDeliveryEvidenceStatus(int h) =>
+        DocxSessionOps.GetDeliveryEvidenceStatus(h);
+
+    /// <summary>The receipt-bearing delivery of a session, as the shared bundle wire shape.</summary>
+    [JSExport]
+    public static string BuildDeliveryReceipt(int h, string optionsJson) =>
+        DocxSessionOps.BuildDeliveryReceipt(h, optionsJson);
+
+    /// <summary>Describe a client-composed batch before running it so its version steps are
+    /// recorded under that description; false means nothing will be recorded.</summary>
+    [JSExport]
+    public static bool BeginDeliveryEvidence(int h, string operationsJson, string mode, string identityJson) =>
+        DocxSessionOps.BeginDeliveryEvidence(
+            h,
+            operationsJson,
+            mode switch
+            {
+                "atomic" => MutationBatchMode.Atomic,
+                "best_effort" => MutationBatchMode.BestEffort,
+                _ => throw new System.ArgumentException($"unknown mutation batch mode: {mode}"),
+            },
+            identityJson);
+
+    /// <summary>Complete a described batch with its serialized step results.</summary>
+    [JSExport]
+    public static void CompleteDeliveryEvidence(int h, string stepsJson) =>
+        DocxSessionOps.CompleteDeliveryEvidence(h, stepsJson);
+
+    /// <summary>Retire a described batch that produced no result.</summary>
+    [JSExport]
+    public static void AbandonDeliveryEvidence(int h) =>
+        DocxSessionOps.AbandonDeliveryEvidence(h);
+
     /// <summary>Reject ONE revision by id — the inverse of AcceptRevision.</summary>
     [JSExport]
     public static string RejectRevision(int h, string revisionId) =>
