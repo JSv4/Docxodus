@@ -1802,10 +1802,8 @@ public class HtmlConversionOpsTests
     // markers deep in a list (numbering continuation, the M9 gap the single-block
     // path had) and contextualSpacing-dependent margins (neighbor context). This is
     // deliberately stronger than HCO050's tag+text check. Canonicalized away: XML attribute
-    // ORDER (no semantics), and the KIND segment of data-source-anchor-id (see
-    // CanonicalizeRenderedFragment — a full-render defect, not a block-render one). The
-    // attribute's addressing dimensions, scope and unid, are still compared exactly, and
-    // HCO083 pins the block path's complete value.
+    // ORDER only (no semantics); data-source-anchor-id is compared whole, and HCO083 pins the
+    // block path's complete value.
     [Fact]
     public void HCO081_RenderBlocksHtml_MatchesFullRenderFragments()
     {
@@ -1894,23 +1892,9 @@ public class HtmlConversionOpsTests
         var clone = new System.Xml.Linq.XElement(source);
         foreach (var element in clone.DescendantsAndSelf())
         {
-            // data-source-anchor-id: compare SCOPE and UNID exactly, drop the kind segment.
-            // The full render builds its canonical index from the FINAL (post-preprocessing)
-            // trees, and FormattingAssembler's NormalizeListItems has already stripped w:numPr
-            // by then — so WmlToMarkdownConverter.KindFor sees a plain paragraph and every list
-            // item is stamped "p:body:<unid>" where the session's own anchor id (the value
-            // PM100 asserts, and the value npm/src/pagination.ts:256 matches citations against)
-            // is "li:body:<unid>". Measured on this fixture: 30 of 177 stamped ids, kind-only,
-            // scope and unid always correct. The BLOCK path stamps the session anchor id
-            // verbatim (HCO083), so this exemption covers a full-render defect; delete it — and
-            // watch this assertion go green on its own — once that index is built pre-normalize.
-            if (element.Attribute("data-source-anchor-id") is { } sourceAnchor)
-            {
-                var value = sourceAnchor.Value;
-                var kindEnd = value.IndexOf(':');
-                if (kindEnd >= 0) sourceAnchor.Value = value.Substring(kindEnd + 1);
-            }
-
+            // data-source-anchor-id is compared whole, kind included: the full render builds its
+            // canonical index from the source trees before formatting assembly strips w:numPr, so
+            // a list item is "li:body:<unid>" on both paths (#781).
             var attributes = element.Attributes()
                 .Select(attribute => new System.Xml.Linq.XAttribute(attribute))
                 .OrderBy(attribute => attribute.Name.NamespaceName, StringComparer.Ordinal)
