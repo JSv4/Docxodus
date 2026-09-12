@@ -16,6 +16,19 @@ All notable changes to this project will be documented in this file.
   `session.verify_deliverable(request)` with typed request dataclasses; MCP:
   `docxodus_get_content(format: "verification", verification: {...})` where a companion may be
   named by `path` inside the document scope. The existing simple calls are unchanged. (#747)
+- Guarded commit of a retained preview (issue #760). `PreviewBatch` takes a `Retain` option:
+  a successful preview then keeps its exact result package on the live session and reports
+  `retention { previewId, baseVersion, basePackageHash, expiresAt }`. `CommitPreview(previewId)`
+  restores that package as one undo step, so the previewed anchor ids, comment/note ids,
+  revision timestamps and `packageHash` are exactly what the document gets — the gap the
+  generated-value receipt warnings described. The commit is guarded: `preview_stale` (no edit)
+  once the session's version, package content, tracked-changes mode or revision author moved,
+  `preview_not_found` once the preview expired, was evicted (8 previews / 64 MiB / 15 minutes per
+  session), or was already committed. Commit composes with the transaction journal for safe
+  retries. Surfaces: npm `previewBatch(steps, mode, { retain: true })` +
+  `commitPreview(previewId, transaction?)`, `docx-scalpel` `preview_batch(..., retain=True)` +
+  `commit_preview(preview_id, transaction_id=...)`, MCP `docxodus_mutations` `retainPreview` +
+  `commitPreviewId`, and the `RetainPreview`/`CommitPreview` bridge exports.
 - Explicit, previewable repair of native revision markup the registry refuses to resolve.
   `ListRevisionRepairs()` reports, per refused entry, the repairs the registry can prove —
   `AssignIdentity` for a missing, non-numeric or duplicated `w:id` (fresh document-unique ids,

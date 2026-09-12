@@ -1247,12 +1247,25 @@ internal static class Dispatcher
             : "atomic";
         if (mode is not ("atomic" or "best_effort" or "apply" or "preview"))
             throw new McpToolException($"unknown docxodus_mutations mode: {mode}");
-        if (!args.TryGetProperty("steps", out var stepsEl) || stepsEl.ValueKind != JsonValueKind.Array)
-            throw new McpToolException("docxodus_mutations requires an array \"steps\"");
-
         var preview = mode == "preview" || BoolOpt(args, "preview", false);
         if (mode == "apply" && preview)
             throw new McpToolException("docxodus_mutations preview cannot be combined with deprecated mode 'apply'");
+
+        // A guarded commit of a retained preview (issue #760) applies the previewed package
+        // itself; it takes no steps and, like any applying request, may carry a transactionId.
+        if (OptStr(args, "commitPreviewId") is { } commitPreviewId)
+        {
+            if (preview)
+                throw new McpToolException("commitPreviewId commits a retained preview and cannot itself be a preview");
+            if (args.TryGetProperty("steps", out _))
+                throw new McpToolException("commitPreviewId commits the previewed steps; do not pass \"steps\" with it");
+            return DocxSessionOps.CommitPreview(liveSession.Handle, commitPreviewId);
+        }
+        if (!args.TryGetProperty("steps", out var stepsEl) || stepsEl.ValueKind != JsonValueKind.Array)
+            throw new McpToolException("docxodus_mutations requires an array \"steps\"");
+        var retain = BoolOpt(args, "retainPreview", false);
+        if (!preview && retain)
+            throw new McpToolException("retainPreview is only valid for a preview batch");
         var policyName = mode == "preview"
             ? OptStr(args, "previewPolicy") ?? "atomic"
             : mode;
@@ -1300,6 +1313,7 @@ internal static class Dispatcher
                 {
                     HtmlMode = htmlMode,
                     HtmlAnchorId = OptStr(args, "previewAnchorId"),
+                    Retain = retain,
                 });
         }
 

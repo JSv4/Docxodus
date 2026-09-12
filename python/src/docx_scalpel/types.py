@@ -3343,6 +3343,30 @@ class MutationTransactionIdentity:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class MutationPreviewRetention:
+    """Identity of a preview retained for a guarded commit (issue #760).
+
+    ``base_version`` and ``base_package_hash`` describe the live state the preview was
+    predicted from; ``commit_preview`` refuses once either has moved. ``expires_at`` is the
+    host's ISO-8601 UTC expiry, after which the entry is gone.
+    """
+
+    preview_id: str
+    base_version: int
+    base_package_hash: str
+    expires_at: str
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "MutationPreviewRetention":
+        return cls(
+            preview_id=str(d.get("previewId", "")),
+            base_version=int(d.get("baseVersion", 0)),
+            base_package_hash=str(d.get("basePackageHash", "")),
+            expires_at=str(d.get("expiresAt", "")),
+        )
+
+
 _BatchItem = TypeVar("_BatchItem")
 
 
@@ -3396,11 +3420,14 @@ class MutationBatchResult:
     #: Present only for a batch executed under a ``transaction_id``: the identity the
     #: session's journal bound the request to, the same on the original call and on a replay.
     transaction: MutationTransactionIdentity | None = None
+    #: Present on a preview retained with ``retain=True`` and on the result of committing it.
+    retention: MutationPreviewRetention | None = None
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "MutationBatchResult":
         failure = d.get("failure")
         transaction = d.get("transaction")
+        retention = d.get("retention")
         return cls(
             mode=MutationBatchMode(d.get("mode", "atomic")),
             status=str(d.get("status", "failed")),
@@ -3428,6 +3455,10 @@ class MutationBatchResult:
             transaction=(
                 MutationTransactionIdentity._from_wire(transaction)
                 if isinstance(transaction, Mapping) else None
+            ),
+            retention=(
+                MutationPreviewRetention._from_wire(retention)
+                if isinstance(retention, Mapping) else None
             ),
         )
 
