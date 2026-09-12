@@ -1756,6 +1756,8 @@ export interface DocxodusWasmExports {
     MoveBookmark: (handle: number, name: string, startAnchor: string, startOffset: number, endAnchor: string, endOffset: number) => string;
     RemoveBookmark: (handle: number, name: string) => string;
     ListRevisions: (handle: number) => string;
+    ListRevisionRepairs?: (handle: number) => string;
+    RepairRevisions?: (handle: number, repairsJson: string) => string;
     AcceptRevision: (handle: number, revisionId: string) => string;
     RejectRevision: (handle: number, revisionId: string) => string;
     AcceptAllRevisions: (handle: number) => string;
@@ -1898,6 +1900,7 @@ export type EditErrorCode =
   | "transaction_conflict"
   | "transaction_result_evicted"
   | "transaction_incomplete"
+  | "revision_repair_rejected"
   | "hyperlink_not_found"
   | "bookmark_not_found"
   | "duplicate_bookmark_name"
@@ -2304,6 +2307,58 @@ export type RevisionFamily =
   | "numbering_properties_insert" | "numbering_change" | "properties_change"
   | "unsupported";
 export type RevisionResolutionStatus = "supported" | "unsupported" | "malformed" | "ambiguous";
+
+/** The explicit repairs the revision registry can perform on markup it refuses to resolve. */
+export type RevisionRepairKind =
+  | "assign_identity"
+  | "reattach_numbering_change"
+  | "reattach_cell_marker"
+  | "restore_orphan_text"
+  | "wrap_orphan_text_as_deletion";
+
+/** One repair the registry offers for one listed entry, and whether it can perform it. */
+export interface RevisionRepairProposal {
+  revisionId: string;
+  kind: RevisionRepairKind;
+  partUri: string;
+  diagnostic: RevisionDiagnostic;
+  /** Every native carrier the repair touches, as QName@element-path keys. */
+  carriers: readonly string[];
+  repairable: boolean;
+  /** What the repair does, or why the package's evidence does not permit it. */
+  reason: string;
+  /** The request must supply `author` and `date`. */
+  requiresAuthorship: boolean;
+}
+
+export interface RevisionRepairRequest {
+  revisionId: string;
+  kind: RevisionRepairKind;
+  author?: string;
+  date?: string;
+}
+
+/** One carrier's identity before and after a repair; `newId` is empty when it was moved, not renumbered. */
+export interface RevisionCarrierIdentity {
+  carrier: string;
+  oldId: string | null;
+  newId: string;
+}
+
+export interface RevisionRepairOutcome {
+  revisionId: string;
+  kind: RevisionRepairKind;
+  partUri: string;
+  identities: readonly RevisionCarrierIdentity[];
+}
+
+/** Atomic, one undo step; repaired entries get new ids, so re-list afterwards. */
+export interface RevisionRepairResult {
+  success: boolean;
+  error?: EditError;
+  repairs: readonly RevisionRepairOutcome[];
+  modified: readonly AnchorRef[];
+}
 
 export interface RevisionDiagnostic {
   code: string;
