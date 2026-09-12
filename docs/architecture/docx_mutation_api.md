@@ -532,11 +532,16 @@ under it appear in `Modified`, without duplicates. A remaining structural
 fall-through that must be hard-removed appears in `Removed`; it is never silently
 omitted from both lists.
 
-`w:customXml` wrappers are deliberately unsupported in tracked bulk deletion.
-If any selected block contains one, the operation fails before taking an undo
-snapshot or changing the document with `IncompatibleElementType` and a message
-identifying `w:customXml`. This is the explicit unsupported branch of the
-custom-XML deletion contract; accepted-mode bulk deletion remains unchanged.
+Block `w:customXml` wrappers (issue #764) take the same envelope as block
+content controls: the wrapper is its own content container, so the two deletion
+ranges cross its opening and closing tags with `w:customXmlPr` left in schema
+position ahead of the inner range marker, and every payload block is tracked
+recursively. Nested and mixed `w:sdt`/`w:customXml` wrappers each receive their
+own envelope. The one shape still refused before mutation — with
+`IncompatibleElementType`, no undo snapshot, and an unchanged document — is
+run-level `w:customXml` inside a selected paragraph: the paragraph deleter marks
+direct-child runs only and would leave that wrapper's text undeleted.
+Accepted-mode bulk deletion is unchanged.
 
 ### `DeleteSection` — heading-bounded bulk removal
 
@@ -549,9 +554,9 @@ If the target heading has no sibling-heading boundary after it, the section
 extends to the end of the parent.
 
 Built on `DeleteRange` semantics via the shared `DeleteSiblingRangeCore` helper:
-same undo, same `EditResult` accounting, the same native `w:sdt` envelope and
-recursive payload markup, the same pre-mutation `w:customXml` refusal, and the
-same reported structural fall-through.
+same undo, same `EditResult` accounting, the same native `w:sdt`/`w:customXml`
+envelope and recursive payload markup, the same pre-mutation refusal of run-level
+`w:customXml`, and the same reported structural fall-through.
 
 ## Native hyperlinks and bookmarks
 

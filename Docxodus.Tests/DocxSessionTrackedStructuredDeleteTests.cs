@@ -163,17 +163,172 @@ public class DocxSessionTrackedStructuredDeleteTests
         AssertSchemaValid(rejected);
     }
 
-    [Fact]
-    public void DS476_CustomXmlBlock_FailsBeforeMutationWithStructuredError()
+    // Issue #764: a block w:customXml wrapper gets the same reversible envelope as a block
+    // w:sdt. Its w:customXmlPr stays put (the schema orders it ahead of the range markup),
+    // accept removes wrapper and payload, reject restores wrapper, attributes, properties
+    // and text — through the session registry, individually and in bulk.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void DS479_CustomXmlBlock_TracksWrapperAndRoundTripsThroughTheRegistry(bool accept)
     {
-        using var session = OpenTrackedSession(BuildDocument(
+        byte[] tracked;
+        string customParagraph;
+        using (var session = OpenTrackedSession(BuildDocument(
             ParagraphWithText("before"),
             ParagraphWithText("delete start"),
             CustomXmlBlock("clause", ParagraphWithText("custom payload")),
+            ParagraphWithText("after"))))
+        {
+            var projection = session.Project();
+            var from = FindByText(session, projection, "delete start");
+            customParagraph = FindByText(session, projection, "custom payload");
+            var to = FindByText(session, projection, "after");
+
+            var result = session.DeleteRange(from, to);
+
+            Assert.True(result.Success, result.Error?.Message);
+            AssertAnchorAccounting(result, new[] { from, customParagraph }, Array.Empty<string>());
+            tracked = session.Save();
+        }
+
+        var body = Body(tracked);
+        var wrapper = Assert.Single(body.Elements(W.customXml));
+        Assert.Equal(W.customXmlPr, wrapper.Elements().First().Name);
+        Assert.Equal(W.customXmlDelRangeEnd, wrapper.Elements().Skip(1).First().Name);
+        Assert.Equal(W.customXmlDelRangeStart, wrapper.Elements().Last().Name);
+        Assert.Equal(W.customXmlDelRangeStart, wrapper.ElementsBeforeSelf().Last().Name);
+        Assert.Equal(W.customXmlDelRangeEnd, wrapper.ElementsAfterSelf().First().Name);
+        Assert.NotNull(wrapper.Descendants(W.p).Single().Element(W.pPr)?.Element(W.rPr)?.Element(W.del));
+        AssertSchemaValid(tracked);
+
+        using var review = new DocxSession(tracked);
+        var envelope = Assert.Single(review.ListRevisions(), revision =>
+            revision.Family == RevisionFamily.ContentControlDelete);
+        Assert.Equal(RevisionResolutionStatus.Supported, envelope.ResolutionStatus);
+        // Anchor ids are session-minted, so the payload paragraph is identified by kind and
+        // by the entry's text; a wrapper with no anchor of its own must not surface as an
+        // empty anchor.
+        Assert.Single(envelope.AffectedAnchors, anchor => anchor.Kind == "p");
+        Assert.All(envelope.AffectedAnchors, anchor => Assert.NotEmpty(anchor.Id));
+        Assert.Contains("custom payload", envelope.Text, StringComparison.Ordinal);
+
+        var resolved = accept
+            ? review.AcceptRevision(envelope.Id)
+            : review.RejectRevision(envelope.Id);
+        Assert.True(resolved.Success, resolved.Error?.Message);
+        var reviewed = Body(review.Save());
+        if (accept)
+        {
+            Assert.Empty(reviewed.Descendants(W.customXml));
+            Assert.DoesNotContain("custom payload", reviewed.Value);
+        }
+        else
+        {
+            var restored = Assert.Single(reviewed.Elements(W.customXml));
+            Assert.Equal("clause", (string?)restored.Attribute(W.element));
+            Assert.Equal(W.customXmlPr, restored.Elements().First().Name);
+            Assert.Equal("custom payload", restored.Value);
+        }
+        Assert.DoesNotContain(reviewed.Descendants(), element =>
+            element.Name == W.customXmlDelRangeStart || element.Name == W.customXmlDelRangeEnd);
+        AssertSchemaValid(review.Save());
+
+        using var bulk = new DocxSession(tracked);
+        Assert.True((accept ? bulk.AcceptAllRevisions() : bulk.RejectAllRevisions()).Success);
+        Assert.Empty(bulk.ListRevisions());
+        Assert.Equal(accept ? new[] { "before", "after" }
+            : new[] { "before", "delete start", "custom payload", "after" },
+            Body(bulk.Save()).Descendants(W.p).Select(p => p.Value).ToArray());
+    }
+
+    // Mixed nesting: a custom-XML wrapper holding a content control holding a table, and a
+    // content control holding a custom-XML wrapper. Every wrapper gets its own envelope, a
+    // user bookmark inside survives, and both directions round-trip through the registry.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void DS480_MixedCustomXmlAndControlNesting_RoundTrips(bool accept)
+    {
+        var bookmarked = ParagraphWithText("inner paragraph");
+        bookmarked.PrependChild(new BookmarkStart { Id = "5", Name = "keep" });
+        bookmarked.AppendChild(new BookmarkEnd { Id = "5" });
+        byte[] tracked;
+        using (var session = OpenTrackedSession(BuildDocument(
+            ParagraphWithText("before"),
+            ParagraphWithText("delete start"),
+            CustomXmlBlock("outer", BlockControl("table-control", TwoCellTable())),
+            BlockControl("control", CustomXmlBlock("inner", bookmarked)),
+            ParagraphWithText("after"))))
+        {
+            var projection = session.Project();
+            var from = FindByText(session, projection, "delete start");
+            var to = FindByText(session, projection, "after");
+
+            var result = session.DeleteRange(from, to);
+
+            Assert.True(result.Success, result.Error?.Message);
+            Assert.Empty(result.Removed);
+            tracked = session.Save();
+        }
+
+        var body = Body(tracked);
+        Assert.Equal(2, body.Descendants(W.customXml).Count());
+        Assert.Equal(2, body.Descendants(W.sdt).Count());
+        Assert.Equal(8, body.Descendants(W.customXmlDelRangeStart).Count());
+        Assert.Equal(8, body.Descendants(W.customXmlDelRangeEnd).Count());
+        Assert.Single(body.Descendants(W.trPr).Elements(W.del));
+        AssertSchemaValid(tracked);
+
+        using var review = new DocxSession(tracked);
+        var envelopes = review.ListRevisions()
+            .Where(r => r.Family == RevisionFamily.ContentControlDelete).ToList();
+        Assert.Equal(2, envelopes.Count);
+        Assert.All(envelopes, r => Assert.Equal(RevisionResolutionStatus.Supported, r.ResolutionStatus));
+
+        Assert.True((accept ? review.AcceptAllRevisions() : review.RejectAllRevisions()).Success);
+        Assert.Empty(review.ListRevisions());
+        var reviewed = Body(review.Save());
+        Assert.DoesNotContain(reviewed.Descendants(), element =>
+            element.Name.LocalName.StartsWith("customXmlDel", StringComparison.Ordinal));
+        if (accept)
+        {
+            Assert.Empty(reviewed.Descendants(W.customXml));
+            Assert.Empty(reviewed.Descendants(W.sdt));
+            Assert.Empty(reviewed.Descendants(W.tbl));
+            Assert.Equal(new[] { "before", "after" },
+                reviewed.Descendants(W.p).Select(p => p.Value).ToArray());
+        }
+        else
+        {
+            Assert.Equal(2, reviewed.Descendants(W.customXml).Count());
+            Assert.Equal(2, reviewed.Descendants(W.sdt).Count());
+            Assert.Single(reviewed.Descendants(W.tbl));
+            Assert.Single(reviewed.Descendants(W.bookmarkStart));
+            Assert.Contains("inner paragraph", reviewed.Value);
+            Assert.Contains("Cell A", reviewed.Value);
+        }
+        AssertSchemaValid(review.Save());
+    }
+
+    // Run-level custom XML inside a paragraph is the one shape the paragraph deleter cannot
+    // represent (it marks direct-child runs only), so the pre-mutation refusal survives for it.
+    [Fact]
+    public void DS481_InlineCustomXml_FailsBeforeMutationWithStructuredError()
+    {
+        var inline = new CustomXmlRun(new CustomXmlProperties())
+        {
+            Uri = "urn:docxodus:test",
+            Element = "inline",
+        };
+        inline.Append(new Run(new Text("inline payload")));
+        using var session = OpenTrackedSession(BuildDocument(
+            ParagraphWithText("before"),
+            ParagraphWithText("delete start"),
+            new Paragraph(new Run(new Text("host ")), inline),
             ParagraphWithText("after")));
         var projection = session.Project();
         var from = FindByText(session, projection, "delete start");
-        var customParagraph = FindByText(session, projection, "custom payload");
         var to = FindByText(session, projection, "after");
 
         var before = session.Save();
@@ -181,17 +336,9 @@ public class DocxSessionTrackedStructuredDeleteTests
 
         Assert.False(result.Success);
         Assert.Equal(EditErrorCode.IncompatibleElementType, result.Error?.Code);
-        Assert.Contains("w:customXml", result.Error?.Message);
-        AssertAnchorAccounting(result, Array.Empty<string>(), Array.Empty<string>());
+        Assert.Contains("run-level w:customXml", result.Error?.Message);
         Assert.Equal(0, session.UndoCount);
-
-        var after = session.Save();
-        Assert.True(XNode.DeepEquals(Body(before), Body(after)));
-        var preserved = Assert.Single(Body(after).Elements(W.customXml));
-        Assert.Equal("clause", (string?)preserved.Attribute(W.element));
-        Assert.Contains("custom payload", preserved.Value);
-        Assert.Equal("custom payload", session.GetAnchorInfo(customParagraph)?.TextPreview);
-        AssertSchemaValid(after);
+        Assert.True(XNode.DeepEquals(Body(before), Body(session.Save())));
     }
 
     [Fact]
