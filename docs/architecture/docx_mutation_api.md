@@ -1512,8 +1512,8 @@ Concretely, these shapes were resolvable before and are refused now:
 | One `w:id` shared by two distinct live groups in one part | `Ambiguous` | `duplicate_revision_id` |
 | `w:customXmlMoveFromRange*`/`w:customXmlMoveToRange*` ranges | `Unsupported` | `unsupported_custom_xml_move_range` |
 | `w:ins`/`w:del` inside an `m:ctrlPr` (math control properties) | `Unsupported` | `unsupported_revision_family` |
-| `w:del` on a run's `w:rPr` or on a paragraph's `w:numPr` | `Unsupported` | `unsupported_revision_family` |
-| A content-control (`w:sdt`) envelope whose range topology is not Word's two-pair shape | `Unsupported` | `unsupported_revision_family` |
+| A revision mark under a run's `w:rPr`, or a `w:del`/move mark under `w:numPr` — positions the schema never allows (`CT_RPr` carries no marks; `CT_NumPr` admits only `w:ins` and `w:numberingChange`, removed numbering being archived in `w:pPrChange`) | `Malformed` | `invalid_revision_carrier` |
+| A content-control (`w:sdt`) envelope whose range topology is not Word's two-pair shape | `Malformed` / `Ambiguous` | `malformed_range_topology`, `duplicate_range_id` |
 | `w:numberingChange` not attached to `w:numPr` or a LISTNUM field | `Malformed` | `orphan_numbering_revision` |
 | A cell marker that is not a direct `w:tcPr` property, or `w:cellMerge` without `w:vMerge` | `Malformed` | `orphan_cell_revision`, `invalid_cell_merge_state` |
 

@@ -542,25 +542,59 @@ public class DocxSessionStructuralRevisionTests
     }
 
     [Theory]
-    [InlineData("math_ctrlpr")]
-    [InlineData("numbering_delete")]
-    [InlineData("run_properties_delete")]
-    public void DS45516_UnhandledRecognizedFamilies_AreListedAndBlockBulk(string shape)
+    [InlineData("math_ctrlpr", RevisionResolutionStatus.Unsupported,
+        "unsupported_revision_family", EditErrorCode.RevisionUnsupported)]
+    [InlineData("numbering_delete", RevisionResolutionStatus.Malformed,
+        "invalid_revision_carrier", EditErrorCode.RevisionMalformed)]
+    [InlineData("run_properties_delete", RevisionResolutionStatus.Malformed,
+        "invalid_revision_carrier", EditErrorCode.RevisionMalformed)]
+    [InlineData("run_properties_insert", RevisionResolutionStatus.Malformed,
+        "invalid_revision_carrier", EditErrorCode.RevisionMalformed)]
+    public void DS45516_UnhandledRecognizedFamilies_AreListedAndBlockBulk(
+        string shape, RevisionResolutionStatus status, string code, EditErrorCode error)
     {
         var input = BuildUnsupportedRevisionDocument(shape);
         using var session = new DocxSession(input);
         var before = MainRoot(session.Save());
         var revision = Assert.Single(session.ListRevisions());
         Assert.Equal(RevisionFamily.Unsupported, revision.Family);
-        Assert.Equal(RevisionResolutionStatus.Unsupported, revision.ResolutionStatus);
-        Assert.Equal("unsupported_revision_family", revision.Diagnostic!.Code);
+        Assert.Equal(status, revision.ResolutionStatus);
+        Assert.Equal(code, revision.Diagnostic!.Code);
 
-        var result = session.AcceptAllRevisions();
-
-        Assert.False(result.Success);
-        Assert.Equal(EditErrorCode.RevisionUnsupported, result.Error!.Code);
+        foreach (var result in new[]
+        {
+            session.AcceptRevision(revision.Id),
+            session.RejectRevision(revision.Id),
+            session.AcceptAllRevisions(),
+            session.RejectAllRevisions(),
+        })
+        {
+            Assert.False(result.Success);
+            Assert.Equal(error, result.Error!.Code);
+        }
         Assert.True(XNode.DeepEquals(before, MainRoot(session.Save())));
         Assert.False(session.Undo());
+    }
+
+    // The malformed verdict above rests on the schema, not on resolver preference: the SDK
+    // validator rejects the same mark in the same position, and the diagnostic names the
+    // legal spelling a producer should have written instead.
+    [Theory]
+    [InlineData("numbering_delete", ":del", "archived in w:pPrChange")]
+    [InlineData("run_properties_delete", ":del", "outside the w:r")]
+    [InlineData("run_properties_insert", ":ins", "outside the w:r")]
+    public void DS45532_SchemaIllegalCarrier_IsRejectedByTheValidatorAndNamedByTheDiagnostic(
+        string shape, string markerSuffix, string legalSpelling)
+    {
+        var input = BuildUnsupportedRevisionDocument(shape);
+        Assert.Contains(ValidationErrors(input), error =>
+            error.Contains("invalid child element", StringComparison.Ordinal)
+            && error.Contains(markerSuffix + "'", StringComparison.Ordinal));
+
+        using var session = new DocxSession(input);
+        var diagnostic = Assert.Single(session.ListRevisions()).Diagnostic!;
+        Assert.Equal("invalid_revision_carrier", diagnostic.Code);
+        Assert.Contains(legalSpelling, diagnostic.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1254,6 +1288,10 @@ public class DocxSessionStructuralRevisionTests
                     break;
                 case "run_properties_delete":
                     paragraph.Elements(W.r).First().AddFirst(new XElement(W.rPr, marker));
+                    break;
+                case "run_properties_insert":
+                    paragraph.Elements(W.r).First().AddFirst(new XElement(W.rPr,
+                        new XElement(W.ins, marker.Attributes())));
                     break;
                 default:
                     throw new ArgumentOutOfRangeException(nameof(shape));
