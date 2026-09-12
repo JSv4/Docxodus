@@ -1412,6 +1412,16 @@ export class DocxSession {
       this.handle, imageId, imageBytesToBase64(bytes))) as EditResult;
   }
 
+  /**
+   * Convert an external linked picture into an embedded one using bytes the caller fetched;
+   * the engine never reaches the network itself. Refused for pictures that already embed
+   * their media — see `ImageOccurrence.operations`.
+   */
+  embedLinkedImage(imageId: string, bytes: Uint8Array): EditResult {
+    return JSON.parse(this.wasm.EmbedLinkedImage(
+      this.handle, imageId, imageBytesToBase64(bytes))) as EditResult;
+  }
+
   setImageDimensions(imageId: string, dimensions: ImageDimensions): EditResult {
     return JSON.parse(this.wasm.SetImageDimensions(
       this.handle, imageId, JSON.stringify(dimensions))) as EditResult;

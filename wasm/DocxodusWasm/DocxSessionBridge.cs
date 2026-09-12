@@ -743,6 +743,10 @@ public static partial class DocxSessionBridge
         DocxSessionOps.ReplaceImage(h, imageId, imageBase64);
 
     [JSExport]
+    public static string EmbedLinkedImage(int h, string imageId, string imageBase64) =>
+        DocxSessionOps.EmbedLinkedImage(h, imageId, imageBase64);
+
+    [JSExport]
     public static string SetImageDimensions(int h, string imageId, string dimensionsJson) =>
         DocxSessionOps.SetImageDimensions(h, imageId, dimensionsJson);
 

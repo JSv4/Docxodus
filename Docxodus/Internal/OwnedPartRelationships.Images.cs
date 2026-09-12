@@ -102,6 +102,10 @@ internal static partial class OwnedPartRelationships
             ImageBinaryFormat.Gif => ImagePartType.Gif,
             ImageBinaryFormat.Bmp => ImagePartType.Bmp,
             ImageBinaryFormat.Tiff => ImagePartType.Tiff,
+            // The SDK's ImagePartType table predates Word's WebP support; PartTypeInfo is the
+            // same (content type, extension) pair the table entries are, so the package gets a
+            // proper image/webp media part with a .webp target rather than an invented capability.
+            ImageBinaryFormat.Webp => new PartTypeInfo("image/webp", ".webp"),
             _ => throw new NotSupportedException($"unsupported image format: {format}"),
         };
         ImagePart created = owner switch

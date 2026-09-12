@@ -159,6 +159,10 @@ __all__ = [
     "ImageInsertOptions",
     "ImageDimensions",
     "ImageFormatCapability",
+    "ImageMarkupCapability",
+    "ImageOperationSupport",
+    "ImageWrapPoint",
+    "ImageWrapPolygon",
     "ImageOccurrence",
     "ImageCapabilities",
     "ContentControlType",
@@ -2057,6 +2061,38 @@ class ImageVerticalAlignment(str, Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class ImageWrapPoint:
+    """One vertex of a tight/through wrap outline in DrawingML's 21600-unit picture space."""
+
+    x: int
+    y: int
+
+    def to_wire(self) -> dict[str, int]:
+        return {"x": self.x, "y": self.y}
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "ImageWrapPoint":
+        return cls(int(d["x"]), int(d["y"]))
+
+
+@dataclass(frozen=True, slots=True)
+class ImageWrapPolygon:
+    """The outline text follows under tight/through wrap: a start vertex plus at least two
+    line segments. ``None`` on write means the picture rectangle."""
+
+    points: tuple[ImageWrapPoint, ...]
+    edited: bool = False
+
+    def to_wire(self) -> dict[str, Any]:
+        return {"points": [point.to_wire() for point in self.points], "edited": self.edited}
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "ImageWrapPolygon":
+        return cls(tuple(ImageWrapPoint._from_wire(point) for point in d.get("points", ())),
+                   bool(d.get("edited", False)))
+
+
+@dataclass(frozen=True, slots=True)
 class FloatingImageLayout:
     horizontal_relative_from: ImageHorizontalReference = ImageHorizontalReference.COLUMN
     horizontal_offset_emu: int | None = 0
@@ -2066,6 +2102,7 @@ class FloatingImageLayout:
     vertical_alignment: ImageVerticalAlignment | None = None
     wrap_mode: ImageWrapMode = ImageWrapMode.SQUARE
     wrap_side: ImageWrapSide = ImageWrapSide.BOTH_SIDES
+    wrap_polygon: ImageWrapPolygon | None = None
     distance_top_emu: int = 0
     distance_bottom_emu: int = 0
     distance_left_emu: int = 0
@@ -2095,6 +2132,7 @@ class FloatingImageLayout:
                 "verticalAlignment": (self.vertical_alignment.value
                                        if self.vertical_alignment is not None else None),
                 "wrapMode": self.wrap_mode.value, "wrapSide": self.wrap_side.value,
+                "wrapPolygon": (self.wrap_polygon.to_wire() if self.wrap_polygon is not None else None),
                 "distanceTopEmu": self.distance_top_emu, "distanceBottomEmu": self.distance_bottom_emu,
                 "distanceLeftEmu": self.distance_left_emu, "distanceRightEmu": self.distance_right_emu,
                 "relativeHeight": self.relative_height, "behindDocument": self.behind_document,
@@ -2118,6 +2156,8 @@ class FloatingImageLayout:
                                 if vertical_alignment is not None else None),
             wrap_mode=ImageWrapMode(d.get("wrapMode", "unknown")),
             wrap_side=ImageWrapSide(d.get("wrapSide", "unknown")),
+            wrap_polygon=(ImageWrapPolygon._from_wire(d["wrapPolygon"])
+                          if d.get("wrapPolygon") is not None else None),
             distance_top_emu=int(d.get("distanceTopEmu", 0)),
             distance_bottom_emu=int(d.get("distanceBottomEmu", 0)),
             distance_left_emu=int(d.get("distanceLeftEmu", 0)),
@@ -2173,6 +2213,19 @@ class ImageDimensions:
 
 
 @dataclass(frozen=True, slots=True)
+class ImageOperationSupport:
+    """Whether one image operation applies to one occurrence in the session's current mode."""
+
+    operation: str
+    can_mutate: bool
+    reason: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "ImageOperationSupport":
+        return cls(d["operation"], bool(d["canMutate"]), d.get("reason"))
+
+
+@dataclass(frozen=True, slots=True)
 class ImageOccurrence:
     id: str
     markup_kind: ImageMarkupKind
@@ -2202,6 +2255,12 @@ class ImageOccurrence:
     title: str | None
     floating_layout: FloatingImageLayout | None
     floating_layout_supported: bool
+    operations: tuple[ImageOperationSupport, ...] = ()
+
+    def operation(self, name: str) -> ImageOperationSupport | None:
+        """The matrix entry for ``name`` (``replace``, ``embed_linked``, ``set_dimensions``,
+        ``set_metadata``, ``set_floating_layout`` or ``remove``)."""
+        return next((entry for entry in self.operations if entry.operation == name), None)
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "ImageOccurrence":
@@ -2235,7 +2294,22 @@ class ImageOccurrence:
             floating_layout=(FloatingImageLayout._from_wire(d["floatingLayout"])
                              if "floatingLayout" in d else None),
             floating_layout_supported=bool(d.get("floatingLayoutSupported", False)),
+            operations=tuple(ImageOperationSupport._from_wire(entry)
+                             for entry in d.get("operations", ())),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class ImageMarkupCapability:
+    """Which operations one markup family accepts, independent of any occurrence."""
+
+    markup: str
+    operations: tuple[str, ...]
+    limitation: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "ImageMarkupCapability":
+        return cls(d["markup"], tuple(d.get("operations", ())), d.get("limitation"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -2270,6 +2344,8 @@ class ImageCapabilities:
     accepts_binary_bytes: bool
     supports_network_fetch: bool
     supports_file_io: bool
+    markups: tuple[ImageMarkupCapability, ...] = ()
+    tracked_operations: tuple[str, ...] = ()
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "ImageCapabilities":
@@ -2292,6 +2368,9 @@ class ImageCapabilities:
             accepts_binary_bytes=bool(d["acceptsBinaryBytes"]),
             supports_network_fetch=bool(d["supportsNetworkFetch"]),
             supports_file_io=bool(d["supportsFileIo"]),
+            markups=tuple(ImageMarkupCapability._from_wire(value)
+                          for value in d.get("markups", ())),
+            tracked_operations=tuple(d.get("trackedOperations", ())),
         )
 
 

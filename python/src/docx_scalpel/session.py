@@ -1263,6 +1263,13 @@ class DocxSession:
             "imageId": image_id, "imageBase64": base64.b64encode(image_bytes).decode("ascii"),
         }))
 
+    def embed_linked_image(self, image_id: str, image_bytes: bytes) -> EditResult:
+        """Convert an external linked picture into an embedded one using bytes the caller
+        fetched; the session never reaches the network itself."""
+        return EditResult._from_wire(self._call("embed_linked_image", {
+            "imageId": image_id, "imageBase64": base64.b64encode(image_bytes).decode("ascii"),
+        }))
+
     def set_image_dimensions(self, image_id: str, dimensions: ImageDimensions) -> EditResult:
         return EditResult._from_wire(self._call("set_image_dimensions", {
             "imageId": image_id, "dimensions": dimensions.to_wire(),

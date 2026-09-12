@@ -748,6 +748,8 @@ internal static class Dispatcher
                 Int(args, "characterOffset"), Str(args, "imageBase64"), RawObjectOrEmpty(args, "options")),
             "replace" => DocxSessionOps.ReplaceImage(session.Handle,
                 Str(args, "imageId"), Str(args, "imageBase64")),
+            "embed_linked" => DocxSessionOps.EmbedLinkedImage(session.Handle,
+                Str(args, "imageId"), Str(args, "imageBase64")),
             "set_dimensions" => DocxSessionOps.SetImageDimensions(session.Handle,
                 Str(args, "imageId"), RawObject(args, "dimensions")),
             "set_metadata" => SetImageMetadata(session, args),
@@ -1494,7 +1496,7 @@ internal static class Dispatcher
             "docxodus_links" => action is "add_hyperlink" or "update_hyperlink" or "remove_hyperlink"
                 or "add_bookmark" or "move_bookmark" or "rename_bookmark" or "remove_bookmark"
                 or "insert_cross_reference",
-            "docxodus_images" => action is "insert" or "replace" or "set_dimensions"
+            "docxodus_images" => action is "insert" or "replace" or "embed_linked" or "set_dimensions"
                 or "set_metadata" or "set_floating_layout" or "remove",
             "docxodus_content_controls" => action is "fill_text" or "fill_rich_text"
                 or "set_checked" or "set_date" or "select_item" or "fill_picture"
@@ -1797,6 +1799,7 @@ internal static class Dispatcher
                 _ = RawObjectOrEmpty(args, "options");
                 break;
             case ("docxodus_images", "replace"):
+            case ("docxodus_images", "embed_linked"):
                 RequireStrings(args, "imageId", "imageBase64");
                 break;
             case ("docxodus_images", "set_dimensions"):

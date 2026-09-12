@@ -819,6 +819,7 @@ internal static class DocxSessionJson
             VerticalAlignment = verticalAlignment,
             WrapMode = ParseWrapMode(StrictString(root, "wrapMode", "square")),
             WrapSide = ParseWrapSide(StrictString(root, "wrapSide", "both_sides")),
+            WrapPolygon = ParseWrapPolygon(root),
             DistanceTopEmu = StrictInt64(root, "distanceTopEmu", 0),
             DistanceBottomEmu = StrictInt64(root, "distanceBottomEmu", 0),
             DistanceLeftEmu = StrictInt64(root, "distanceLeftEmu", 0),
@@ -829,6 +830,23 @@ internal static class DocxSessionJson
             LayoutInCell = StrictBool(root, "layoutInCell", true),
             AllowOverlap = StrictBool(root, "allowOverlap", true),
         };
+    }
+
+    private static ImageWrapPolygon? ParseWrapPolygon(JsonElement root)
+    {
+        if (!root.TryGetProperty("wrapPolygon", out var polygon) || polygon.ValueKind == JsonValueKind.Null)
+            return null;
+        if (polygon.ValueKind != JsonValueKind.Object || !polygon.TryGetProperty("points", out var points)
+            || points.ValueKind != JsonValueKind.Array)
+            throw new System.ArgumentException("wrapPolygon must be an object with a points array");
+        var vertices = new List<ImageWrapPoint>();
+        foreach (var point in points.EnumerateArray())
+        {
+            if (point.ValueKind != JsonValueKind.Object)
+                throw new System.ArgumentException("wrapPolygon points must be {x,y} objects");
+            vertices.Add(new ImageWrapPoint(StrictInt64(point, "x", 0), StrictInt64(point, "y", 0)));
+        }
+        return new ImageWrapPolygon(vertices, StrictBool(polygon, "edited", false));
     }
 
     public static (double? Width, double? Height, bool PreserveAspect) ParseImageDimensions(string json)
@@ -1323,7 +1341,19 @@ internal static class DocxSessionJson
                 AppendFloatingLayout(sb, image.FloatingLayout);
             }
             sb.Append(",\"floatingLayoutSupported\":")
-              .Append(image.FloatingLayoutSupported ? "true" : "false").Append('}');
+              .Append(image.FloatingLayoutSupported ? "true" : "false")
+              .Append(",\"operations\":[");
+            bool firstOperation = true;
+            foreach (var support in image.Operations.All)
+            {
+                if (!firstOperation) sb.Append(',');
+                firstOperation = false;
+                sb.Append("{\"operation\":").Append(JsonString(support.Operation))
+                  .Append(",\"canMutate\":").Append(support.CanMutate ? "true" : "false");
+                AppendString(sb, "reason", support.Reason);
+                sb.Append('}');
+            }
+            sb.Append("]}");
         }
         return sb.Append(']').ToString();
     }
@@ -1408,7 +1438,19 @@ internal static class DocxSessionJson
           .Append(",\"acceptsBinaryBytes\":").Append(capabilities.AcceptsBinaryBytes ? "true" : "false")
           .Append(",\"supportsNetworkFetch\":").Append(capabilities.SupportsNetworkFetch ? "true" : "false")
           .Append(",\"supportsFileIo\":").Append(capabilities.SupportsFileIo ? "true" : "false")
-          .Append('}');
+          .Append(",\"markups\":[");
+        for (int i = 0; i < capabilities.Markups.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            var markup = capabilities.Markups[i];
+            sb.Append("{\"markup\":").Append(JsonString(markup.Markup)).Append(",\"operations\":");
+            AppendStringArray(sb, markup.Operations);
+            AppendString(sb, "limitation", markup.Limitation);
+            sb.Append('}');
+        }
+        sb.Append("],\"trackedOperations\":");
+        AppendStringArray(sb, capabilities.TrackedOperations);
+        sb.Append('}');
         return sb.ToString();
     }
 
@@ -1421,7 +1463,19 @@ internal static class DocxSessionJson
         AppendNullableNumber(sb, "verticalOffsetEmu", layout.VerticalOffsetEmu);
         AppendEnum(sb, "verticalAlignment", layout.VerticalAlignment);
         sb.Append(",\"wrapMode\":").Append(JsonString(ToSnake(layout.WrapMode.ToString())))
-          .Append(",\"wrapSide\":").Append(JsonString(ToSnake(layout.WrapSide.ToString())))
+          .Append(",\"wrapSide\":").Append(JsonString(ToSnake(layout.WrapSide.ToString())));
+        if (layout.WrapPolygon is { } polygon)
+        {
+            sb.Append(",\"wrapPolygon\":{\"points\":[");
+            for (int i = 0; i < polygon.Points.Count; i++)
+            {
+                if (i > 0) sb.Append(',');
+                sb.Append("{\"x\":").Append(InvariantNumber(polygon.Points[i].X))
+                  .Append(",\"y\":").Append(InvariantNumber(polygon.Points[i].Y)).Append('}');
+            }
+            sb.Append("],\"edited\":").Append(polygon.Edited ? "true" : "false").Append('}');
+        }
+        sb
           // A read-only occurrence can carry a negative wrap distance parsed straight out of the
           // document, so these go through the invariant formatter too.
           .Append(",\"distanceTopEmu\":").Append(InvariantNumber(layout.DistanceTopEmu))
