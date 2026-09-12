@@ -46,7 +46,7 @@ test.describe('DocxSession native images (typed wrapper — Issue #453)', () => 
     }, Array.from(docx));
 
     expect(capabilities.runtime).toBe('browser-wasm');
-    expect(capabilities.schemaVersion).toBe(1);
+    expect(capabilities.schemaVersion).toBe(2);
     expect(capabilities.acceptsBinaryBytes).toBe(true);
     // A browser build must never claim it can reach the network or the filesystem.
     expect(capabilities.supportsNetworkFetch).toBe(false);
@@ -58,7 +58,7 @@ test.describe('DocxSession native images (typed wrapper — Issue #453)', () => 
     expect(png.canReplace).toBe(true);
     const webp = capabilities.formats.find((f: any) => f.format === 'webp');
     expect(webp.canInspect).toBe(true);
-    expect(webp.canInsert).toBe(false);
+    expect(webp.canInsert).toBe(true);
   });
 
   test('insertImage sends a real multi-chunk PNG across the base64 boundary intact', async ({

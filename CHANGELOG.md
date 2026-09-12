@@ -6,6 +6,73 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- `DocxEditor.openAsync()` mounts a document without holding the main thread for the whole
+  document (issue #776). `open()` renders and wires everything in one synchronous task — on a
+  17-page document about 1.2 s on a fast laptop and far more on a slow one, with the tab frozen
+  throughout. The new entry point pays only the session open up front, then mounts body units
+  in windows (default 24) and yields to the event loop between them, so the page stays
+  responsive and `onProgress` can drive a loading state. The engine gained what the mount needs:
+  the render plan now says which section wrapper each unit renders into and which border box
+  the renderer groups it with (`section`, `group`), a chrome render
+  (`RenderEditorChromeHtml`) produces the stylesheet, section wrappers, header/footer registry
+  and footnote/endnote sections at a fraction of the full render's cost, and a range render
+  (`RenderEditorRangeHtml`) lays a group-aligned window out exactly as the full render does. The
+  DOM `openAsync()` lands is the one `open()` produces; paginated mounts assemble off-screen and
+  paginate once at the end. A bundle without the new renders falls back to the synchronous mount.
+- The external annotation family is available on the Web Worker proxy (issue #775).
+  `createWorkerDocxodus()` now exposes `createExternalAnnotationSet`, `validateExternalAnnotations`,
+  `projectAnnotationsOntoHtml`, `convertDocxToHtmlWithExternalAnnotations` and
+  `exportToOpenContract`, each the same engine call the main-thread entry point makes, read
+  through one shared wire module (`external-annotation-wire.ts`) so the worker returns the
+  identical typed objects. A read-only viewer that renders through the worker no longer needs a
+  second .NET runtime on the main thread to annotate; the main thread's `exportToOpenContract`
+  and `createExternalAnnotationSet` also shed a duplicated converter in the process.
+- Content controls: explicit nested fills and native tracked mutations (issue #763).
+  `ContentControlFillOptions.NestedControls` decides what a text or rich-text fill does with the
+  controls nested in its target — `refuse` (default, as before), `preserve` (keep every nested
+  control in place and replace only the content outside them, with `ChildFills` filling named
+  nested text controls in the same operation) or `replace` (discard the payload, nested controls
+  included, each reported removed; a locked or data-bound nested control refuses). Under
+  `render_inline`, text/rich-text fills record run-level deletions and insertions inside the
+  wrapper, a picture fill a deleted and an inserted run, and repeating-item add/remove the paired
+  custom-XML range envelopes, so accept yields the intended payload and reject the original;
+  checkbox, date and list state has no tracked representation and refuses with a reason naming
+  the property. A control keeps reading as inline or block through its own revision markup, so
+  it can be listed and filled again: refilling un-inserts the author's own earlier payload the
+  way Word does, and a repeating section clones its last clone-safe item rather than the tracked
+  insertion just added. `ContentControlInfo` gains `NestedControlAnchorIds` and `Operations`, a
+  per-operation (and per nested policy) `canMutate`/`reason` matrix evaluated by the one gate
+  every operation applies. Exposed on npm, `docx-scalpel` and MCP (`nestedControls`, `childFills`).
+- Native image coverage matrix and tracked image edits (issue #762). Every listed picture now
+  carries `operations` — one `{operation, canMutate, reason}` answer for `replace`,
+  `embed_linked`, `set_dimensions`, `set_metadata`, `set_floating_layout` and `remove` in the
+  session's current mode — and `GetImageCapabilities()` publishes the same matrix per markup
+  family (`markups`) plus `trackedOperations`. Coverage grew along it: WebP is insertable and
+  replaceable as a real `image/webp` media part; floating wrap covers `tight`, `through` and
+  `top_and_bottom` with a typed `wrapPolygon` (the picture rectangle when omitted); linked
+  pictures take the explicit `EmbedLinkedImage` / `embedLinkedImage` / `embed_linked_image` /
+  MCP `embed_linked` conversion (caller-supplied bytes become an embedded part, the external
+  relationship is swept) and accept sizing, metadata, layout and removal; legacy VML pictures
+  replace, resize (CSS style width/height), describe and remove; SVG/artistic-effect pictures
+  size, describe and remove while still refusing a fallback-only replace; a canonical
+  `mc:AlternateContent` picture changes every branch together. Under `render_inline` image
+  mutations are recorded natively — an insert is a tracked insertion, any change to an existing
+  picture is a tracked deletion of its run plus a tracked insertion of the re-identified copy,
+  and a picture inside the author's own insertion is edited in place — so accepting yields the
+  intended picture and rejecting restores bytes, relationship, metadata and geometry. Refusals
+  keep explicit reasons: multi-picture drawings, tracked deletions, another author's insertion,
+  field-generated pictures, and unmodeled layout tokens (which now block only
+  `set_floating_layout`).
+- The full deliverable-verification request reaches every transport. One wire shape — policy and
+  inspection-limit `options` (defaults read from the .NET model), `expectedSemanticChanges` (the
+  canonical semantic-changes object), `expectedPackageChanges`, and `companionArtifacts` with
+  base64 bytes, digests and render diagnostics — is parsed by the core with unknown properties
+  rejected and every count/byte limit enforced before an artifact is decoded. npm:
+  `verifyDeliverable(document, baseline?, request?)` and `session.verifyDeliverable(request?)`
+  (worker proxy included); Python: `verify_deliverable(..., request=)` and
+  `session.verify_deliverable(request)` with typed request dataclasses; MCP:
+  `docxodus_get_content(format: "verification", verification: {...})` where a companion may be
+  named by `path` inside the document scope. The existing simple calls are unchanged. (#747)
 - Host-captured delivery evidence and receipt-bearing deliveries on every client surface
   (issue #748). A session opened with `CaptureDeliveryEvidence` (`captureDeliveryEvidence` /
   `capture_delivery_evidence`) records, as its edits execute, the exact package before and after
@@ -103,6 +170,36 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- A block rendered on its own (the editor's per-block re-render after an edit, and the
+  stateless `RenderBlockHtml`) showed the wrong list number for any item the shell could not
+  count from the few blocks it holds: the fifth item of a list came back as "2.", and a deeper
+  item continuing a flat sequence as "1.4" instead of "4.". The live document's resolved
+  counters now ride to the shell on the cloned paragraphs (`pt:LevelNumbers`,
+  `pt:ListContinuation`), which the list item retriever takes over recounting; the annotation
+  transplant that was meant to do this never survived the converter's markup rewrite.
+- A block render dropped external hyperlinks (their runs rendered as plain text) because the
+  shell's main part did not declare the link's relationship, and a block cut from the middle of
+  a field that spans blocks — a table of contents — either failed to convert (an orphan field
+  marker) or lost its field-result presentation. The shell now re-declares the block's link
+  relationships and re-opens and closes every spanning field around the run, the way it already
+  brackets open comment ranges.
+- A block re-rendered into the paginated editor ignored page view: an anchored picture or text
+  box came back centred in the flow instead of positioned absolutely inside its page box, and a
+  footnote marker came back with a link page view never resolves. The editor's block profile now
+  carries the pagination mode and scale, the block renderer honours them, and the footnote marker
+  emits no `href` in page view on any path (a whole-document render used to strip it afterwards;
+  a block render cannot ask whether the target exists and has to agree from the start).
+- The full render's `data-source-anchor-id` called every list item a plain paragraph
+  (`p:body:…`) where the session's own anchor, the block renders and the markdown projection
+  say `li:body:…`, because the canonical index was built after formatting assembly had stripped
+  `w:numPr`. The index is now built from the source trees before any rewrite and resolved by
+  part and Unid, so a citation's `li:` anchor now finds its paragraph in a paginated view.
+- Browser mutation previews no longer stall on a module instance's first preview. The first
+  `previewBatch` after opening a document could hang in the browser (never natively): the
+  shadow session's first transaction serializes a package snapshot on an interpreted cold path
+  with the live package and the clone already on the heap, the same conservative-GC collapse
+  fixed for comparisons in #697. `OpenPreviewSession` now warms that path once on a
+  one-paragraph seed session (`PreviewEngine.EnsureWarm`), mirroring the comparison invariant.
 - Tracked `DeleteRange`/`DeleteSection` stamped each paragraph, row and wrapper marker with
   its own clock reading, so an operation straddling a second boundary produced payload marks
   the registry could not fold into their wrapper's envelope; resolving the pieces separately

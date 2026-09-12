@@ -422,23 +422,31 @@ body/header/footer/note part; internal targets are relationship-free `w:anchor` 
 wrap/reference vocabulary, limits, units, and lack of network/file I/O. `list` accepts
 `scope: body|headers|footers|footnotes|endnotes|comments|all` and returns one occurrence per DrawingML
 `a:blip` or VML `v:imagedata`, including owner part, anchor/span, relationship topology, detected
-binary format and dimensions, rendered size, metadata, floating layout, and an explicit
-`canMutate`/`unsupportedReason` decision.
+binary format and dimensions, rendered size, metadata, floating layout, an explicit
+`canMutate`/`unsupportedReason` summary, and an `operations` matrix answering
+`replace`/`embed_linked`/`set_dimensions`/`set_metadata`/`set_floating_layout`/`remove` one by
+one for the session's current tracked-change mode (issue #762).
 
 `insert` takes a paragraph `anchorId`, `characterOffset`, `imageBase64`, and optional placement,
-size, metadata, and floating-layout options. `replace`, `set_dimensions`, `set_metadata`,
-`set_floating_layout`, and `remove` consume the `imageId` returned by insert/list. This JSON tool
-accepts bytes only as base64: it never interprets a URL or local path, and malformed base64 is a
-typed `invalid_image_data` result. Rendered width/height are points; floating offsets and wrap
-distances are exact EMUs. Omitted insert size uses intrinsic pixels at 96 DPI (0.75 point/pixel).
+size, metadata, and floating-layout options. `replace`, `embed_linked`, `set_dimensions`,
+`set_metadata`, `set_floating_layout`, and `remove` consume the `imageId` returned by insert/list.
+This JSON tool accepts bytes only as base64: it never interprets a URL or local path, and
+malformed base64 is a typed `invalid_image_data` result. Rendered width/height are points;
+floating offsets and wrap distances are exact EMUs. Omitted insert size uses intrinsic pixels at
+96 DPI (0.75 point/pixel).
 
-The writable subset is deliberately strict: embedded canonical DrawingML pictures, inline or
-floating with `none`/`square` wrap. PNG, JPEG, GIF, BMP, and TIFF are writable. External linked
-images, legacy VML, WebP, multi-picture/non-canonical DrawingML, unsupported wrap geometry, and
-malformed or content-type-mismatched media stay enumerable but read-only. The Open XML SDK
-version used here has no Word `ImagePartType` for WebP, so advertising WebP insertion would be a
-false capability claim. Image mutations are also rejected under `render_inline` tracked mode
-because OOXML cannot represent them faithfully as this API's tracked revisions. The full core and
+Coverage follows the markup, and `capabilities.markups` publishes the same matrix per family:
+embedded canonical DrawingML pictures take every operation; a linked picture takes
+`embed_linked` (the caller's fetched bytes become an embedded media part) instead of `replace`;
+an SVG or artistic-effect picture refuses `replace` but sizes, describes and removes; legacy VML
+replaces, sizes, describes and removes but refuses `set_floating_layout`; a canonical
+`mc:AlternateContent` picture changes every branch at once; multi-picture drawings stay
+inspection-only. PNG, JPEG, GIF, BMP, TIFF and WebP are writable, and floating wrap covers
+`none`/`square`/`tight`/`through`/`top_and_bottom` (tight/through take an optional
+`wrapPolygon`). Under `render_inline` every image mutation is recorded natively: an insert is a
+tracked insertion, and any change to an existing picture is a tracked deletion of its run plus a
+tracked insertion of the changed copy, so accepting yields the intended picture and rejecting
+restores the original bytes, relationship, metadata and geometry. The full core and
 cross-language contract is in `docs/architecture/native_images.md`.
 
 ### `docxodus_content_controls` — native Word content controls (issue #452)
@@ -458,14 +466,24 @@ failures. It accounts for malformed or duplicate native ids, malformed ancestors
 families and placements, nested targets, repeating-section topology, picture topology, bookmark
 ranges the fill would orphan or that an internal hyperlink still targets, locks (own or
 inherited), data bindings (own or inherited), **and the session's tracked-change mode** — under
-`render_inline` every control reports `canMutate: false` with the tracked reason, because a
-whole-control fill has no faithful tracked representation.
+`render_inline` a checkbox, date or list control reports `canMutate: false` with the tracked
+reason (its state lives in `w:sdtPr`, which no revision covers), while text, rich-text and
+picture fills and repeating-item add/remove record native tracked changes (issue #763). Each
+entry also carries `nestedControlAnchorIds` and an `operations` array — one
+`{ operation, nestedControls?, canMutate, reason? }` per operation of the family, and per
+nested policy when the target contains nested controls — evaluated by the very gate the
+operation applies, so an agent can pick the option that will apply instead of guessing.
 
 `fill_text`, `fill_rich_text`, `set_checked`, `set_date`, and `select_item` replace the target's
 complete `w:sdtContent` payload while preserving the wrapper and its `w:sdtPr` metadata (the
 placeholder definition survives; only `w:showingPlcHdr` is cleared). They are refused for
-row/cell placements, for targets containing nested controls, and when the replacement would
-orphan a bookmark range or dangle an internal hyperlink. `fill_picture` retargets the blip
+row/cell placements and when the replacement would orphan a bookmark range or dangle an
+internal hyperlink. A target containing nested controls refuses by default; `fill_text` and
+`fill_rich_text` take `nestedControls: preserve` (keep every nested control in place and
+replace only the content outside them, optionally filling named nested text controls through
+`childFills: { anchorId: text }` in the same call) or `nestedControls: replace` (discard the
+whole payload, nested controls included — each is reported removed, and a locked or
+data-bound nested control refuses). `fill_picture` retargets the blip
 relationship of the single canonical embedded image a picture control owns — it does not rebuild
 the payload. `add_repeating_item`/`remove_repeating_item` clone or drop one direct
 `w15:repeatingSectionItem`; the clone gets fresh `w:sdtPr/w:id`, `wp:docPr` and `w14:paraId`
@@ -727,8 +745,8 @@ monotonic document version; `format: "check_preconditions"` evaluates guards
 without mutating. Preview evaluates these guards and predicts versions entirely on the shadow, so a
 dry-run does not make an otherwise-current live plan stale.
 
-Image `insert`/`replace`/`set_dimensions`/`set_metadata`/`set_floating_layout`/`remove` actions
-are batchable; image `capabilities` and `list` are rejected as read-only steps.
+Image `insert`/`replace`/`embed_linked`/`set_dimensions`/`set_metadata`/`set_floating_layout`/`remove`
+actions are batchable; image `capabilities` and `list` are rejected as read-only steps.
 
 ### `docxodus_deliver` — verified delivery bundle (issue #465)
 

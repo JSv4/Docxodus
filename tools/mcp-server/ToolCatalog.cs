@@ -83,6 +83,7 @@ internal static class ToolCatalog
                   },
                   "required": ["documentVersion", "rendererFingerprint"]
                 },
+                "verification": { "type": "object", "description": "verification only: the full bounded request. options (mode standard|strict|reportOnly, failOnUnexpectedChanges, requireNoPlaceholders, detectBracketedAlternativeClauses, editorialMarkers, placeholderTokens, and the inspection limits maxFindings/maxDetector*/maxCompanionArtifact*/maxRenderDiagnostics/maxExpectedChanges/maxReportedDeltaChanges/packageManifest.*), expectedSemanticChanges (the canonical semantic-changes object, as returned by format semantic_changes), expectedPackageChanges (kind, location, before/afterDigest, before/afterValue), companionArtifacts (artifactId, role html|pdf|pageMap|pageImage|renderReport|other, mediaType, availability, path inside the document scope OR bytesB64, pageCount, rendererFingerprint, sourcePackageDigest, pageMapDigest, renderDiagnostics). Omitted: the default policy. Unknown properties are rejected; limits apply before any artifact is decoded." },
                 "preconditions": { "type": "object", "description": "check_preconditions: expectedVersion and/or anchorId plus expectedContentHash, expectedText/expectedTextRange, expectedKind, expectedScope, or expectedMatchCount." }
               },
               "required": ["sessionId", "format"]
@@ -516,30 +517,30 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_images",
-            "Inspect and mutate native Word images. Binary payloads cross this JSON boundary only as base64; the server never fetches URLs or reads image paths. PNG, JPEG, GIF, BMP, and TIFF are writable; WebP, legacy VML, external links, and unsupported DrawingML remain inspection-only. Rendered dimensions are points; floating offsets/distances are exact EMUs at a documented 96-DPI default.",
+            "Inspect and mutate native Word images. Binary payloads cross this JSON boundary only as base64; the server never fetches URLs or reads image paths. PNG, JPEG, GIF, BMP, TIFF, and WebP are writable. Every listed occurrence carries an operations matrix saying which of replace/embed_linked/set_dimensions/set_metadata/set_floating_layout/remove it accepts and why not otherwise: embedded pictures take everything, linked pictures take embed_linked (caller-supplied bytes) instead of replace, SVG/artistic-effect pictures refuse replace, legacy VML refuses set_floating_layout, and multi-picture drawings are inspection-only. Under render_inline every mutation is recorded as a tracked deletion plus a tracked insertion of the changed picture. Rendered dimensions are points; floating offsets/distances are exact EMUs at a documented 96-DPI default.",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string", "description": "Required except for capabilities." },
-                "action": { "type": "string", "enum": ["capabilities", "list", "insert", "replace", "set_dimensions", "set_metadata", "set_floating_layout", "remove"] },
+                "action": { "type": "string", "enum": ["capabilities", "list", "insert", "replace", "embed_linked", "set_dimensions", "set_metadata", "set_floating_layout", "remove"] },
                 "scope": { "type": "string", "enum": ["body", "headers", "footers", "footnotes", "endnotes", "comments", "all"] },
                 "anchorId": { "type": "string", "description": "insert: paragraph anchor." },
                 "characterOffset": { "type": "integer", "minimum": 0 },
                 "imageId": { "type": "string", "description": "replace/set/remove: id from list or insert." },
-                "imageBase64": { "type": "string", "description": "insert/replace only; raw image bytes encoded as base64." },
+                "imageBase64": { "type": "string", "description": "insert/replace/embed_linked only; raw image bytes encoded as base64. embed_linked converts an external linked picture into an embedded one using these bytes." },
                 "options": { "type": "object", "description": "insert options: placement inline|floating, widthPoints, heightPoints, preserveAspect, altText, title, and optional floatingLayout." },
                 "dimensions": { "type": "object", "description": "set_dimensions: widthPoints and/or heightPoints plus preserveAspect (default true)." },
                 "altText": { "type": ["string", "null"], "description": "set_metadata full value; null removes it." },
                 "title": { "type": ["string", "null"], "description": "set_metadata full value; null removes it." },
-                "layout": { "type": "object", "description": "set_floating_layout: none/square wrap; typed references/alignments; exact EMU positions/distances and flags." }
+                "layout": { "type": "object", "description": "set_floating_layout: none/square/tight/through/top_and_bottom wrap (tight/through take an optional wrapPolygon {points:[{x,y}],edited} in 21600-unit picture space, defaulting to the picture rectangle); typed references/alignments; exact EMU positions/distances and flags." }
               },
               "required": ["action"]
             }
             """),
         new ToolDefinition(
             "docxodus_content_controls",
-            "Inspect and fill native Word content controls (structured-document tags) while preserving their wrappers and metadata. Bound controls fail closed unless bindingPolicy is detach_target, which removes only the selected control's own binding. Text, checkbox, date, and list whole-content replacements are refused for row/cell placements; nested targets and render_inline tracked-change mode fail closed for every whole-control fill.",
+            "Inspect and fill native Word content controls (structured-document tags) while preserving their wrappers and metadata. Bound controls fail closed unless bindingPolicy is detach_target, which removes only the selected control's own binding. Text, checkbox, date, and list whole-content replacements are refused for row/cell placements. A target containing nested controls needs nestedControls=preserve (keep them, optionally childFills them) or replace (drop them; locked or bound children refuse). Under render_inline, text/rich-text/picture fills and repeating-item add/remove record native tracked changes; checkbox, date and list state has no tracked representation. list reports per-operation canMutate/reason under operations.",
             """
             {
               "type": "object",
@@ -558,7 +559,9 @@ internal static class ToolCatalog
                 "sectionAnchorId": { "type": "string", "description": "add_repeating_item section control." },
                 "afterItemAnchorId": { "type": "string", "description": "Optional direct item after which the clone is inserted." },
                 "itemAnchorId": { "type": "string", "description": "remove_repeating_item direct item." },
-                "bindingPolicy": { "type": "string", "enum": ["preserve", "detach_target"], "description": "Default preserve. detach_target removes only the selected target's own native w:dataBinding or w15:dataBinding element; a bound ancestor still fails closed." }
+                "bindingPolicy": { "type": "string", "enum": ["preserve", "detach_target"], "description": "Default preserve. detach_target removes only the selected target's own native w:dataBinding or w15:dataBinding element; a bound ancestor still fails closed." },
+                "nestedControls": { "type": "string", "enum": ["refuse", "preserve", "replace"], "description": "fill_text/fill_rich_text on a target containing nested controls. Default refuse. preserve keeps every nested control in place and replaces only the content outside them; replace discards the whole payload, nested controls included (each is reported removed; a locked or data-bound nested control refuses)." },
+                "childFills": { "type": "object", "additionalProperties": { "type": "string" }, "description": "With nestedControls=preserve: plain-text fills for nested text/rich-text controls of the target, keyed by their sdt anchor, applied in the same operation. A key that is not a nested textual control, or a child that fails its own gates, fails the whole call without mutating." }
               },
               "required": ["sessionId", "action"]
             }

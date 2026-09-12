@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Xml.Linq;
@@ -1076,9 +1077,16 @@ namespace Docxodus
                     ListItemInfo? listItemInfoInEffect = null;
                     if (ilvl > 0)
                         listItemInfoInEffect = listItemInfoInEffectForStartOverride[ilvl - 1];
-                    var levelNumbers = new List<int>();
 
-                    for (int level = 0; level <= ilvl; level++)
+                    // A paragraph cloned out of a live document declares the counters that
+                    // document resolved (pt:LevelNumbers, stamped by the block renders in
+                    // HtmlConversionOps). A render shell holds a few blocks of a list and cannot
+                    // recount it from that slice; the declared vector is authoritative and the
+                    // paragraphs after it in the shell continue from it.
+                    var declared = DeclaredLevelNumbers(paragraph);
+                    var levelNumbers = declared ?? new List<int>();
+
+                    for (int level = 0; declared == null && level <= ilvl; level++)
                     {
                         var numId = listItemInfo.NumId;
                         var startOverride = listItemInfo.StartOverride(level);
@@ -1184,7 +1192,13 @@ namespace Docxodus
                     // a flat list rather than being truly nested (e.g., 1., 2., 3. at level 0,
                     // then 4. at level 1 with start=4 should display as "4." not "3.4")
                     bool isContinuation = false;
-                    if (ilvl > 0)
+                    if ((bool?)paragraph.Attribute(PtOpenXml.ListContinuation) is { } declaredContinuation)
+                    {
+                        // Declared alongside pt:LevelNumbers: continuation is inherited from the
+                        // previous item at this level, which the shell may not hold.
+                        isContinuation = declaredContinuation;
+                    }
+                    else if (ilvl > 0)
                     {
                         // Continuation only makes sense for ORDINAL (numbered) levels — a deeper
                         // numbered item whose counter continues the parent's sequence renders flat
@@ -1244,6 +1258,16 @@ namespace Docxodus
                     }
                 }
             }
+        }
+
+        /// <summary>The counter vector a paragraph declares through <see cref="PtOpenXml.LevelNumbers"/>
+        /// ("2,3"), or null when it carries none.</summary>
+        private static List<int>? DeclaredLevelNumbers(XElement paragraph)
+        {
+            var declared = (string?)paragraph.Attribute(PtOpenXml.LevelNumbers);
+            if (string.IsNullOrEmpty(declared))
+                return null;
+            return declared.Split(',').Select(n => int.Parse(n, CultureInfo.InvariantCulture)).ToList();
         }
 
         /// <summary>

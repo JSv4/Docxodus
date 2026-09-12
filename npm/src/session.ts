@@ -18,6 +18,7 @@ import type {
   DocumentAnnotation,
   DocumentRange,
   DeliverableVerificationResult,
+  DeliverableVerificationRequest,
   DocxodusWasmExports,
   DocxSessionProjection,
   DocxSessionSettings,
@@ -88,6 +89,7 @@ import type {
   TemplatePlaceholder,
   TextMatch,
 } from "./types.js";
+import { serializeVerificationRequest } from "./verification-request.js";
 import type { PageMap } from "./pagination.js";
 import { ContextBoundary, DiffFormat, PlaceholderKinds, ProjectionDepth, ProjectionScopes, TrackedChangeMode } from "./types.js";
 
@@ -1412,6 +1414,16 @@ export class DocxSession {
       this.handle, imageId, imageBytesToBase64(bytes))) as EditResult;
   }
 
+  /**
+   * Convert an external linked picture into an embedded one using bytes the caller fetched;
+   * the engine never reaches the network itself. Refused for pictures that already embed
+   * their media — see `ImageOccurrence.operations`.
+   */
+  embedLinkedImage(imageId: string, bytes: Uint8Array): EditResult {
+    return JSON.parse(this.wasm.EmbedLinkedImage(
+      this.handle, imageId, imageBytesToBase64(bytes))) as EditResult;
+  }
+
   setImageDimensions(imageId: string, dimensions: ImageDimensions): EditResult {
     return JSON.parse(this.wasm.SetImageDimensions(
       this.handle, imageId, JSON.stringify(dimensions))) as EditResult;
@@ -1982,7 +1994,15 @@ export class DocxSession {
    * With initial projection capture enabled (the default), exact opening bytes are the
    * baseline used for dispositions and semantic/package deltas.
    */
-  verifyDeliverable(): DeliverableVerificationResult {
+  verifyDeliverable(request?: DeliverableVerificationRequest): DeliverableVerificationResult {
+    if (request !== undefined) {
+      // The full request (issue #747): policy/limit options, expected deltas, companions.
+      if (!this.wasm.VerifyDeliverableWithRequest) {
+        throw new Error("This WASM bundle predates full verification requests; rebuild docxodus.");
+      }
+      return JSON.parse(this.wasm.VerifyDeliverableWithRequest(
+        this.handle, serializeVerificationRequest(request))) as DeliverableVerificationResult;
+    }
     return JSON.parse(
       this.wasm.VerifyDeliverable(this.handle),
     ) as DeliverableVerificationResult;

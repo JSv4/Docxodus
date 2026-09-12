@@ -78,6 +78,32 @@ public partial class DocumentConverter
     }
 
     /// <summary>
+    /// The full bounded verification request (issue #747): exact DOCX bytes plus the JSON wire
+    /// request carrying policy/limit options, expected semantic and package changes, and
+    /// companion artifacts (base64 bytes, diagnostics). An empty request is the default policy.
+    /// </summary>
+    [JSExport]
+    public static string VerifyDeliverableWithRequest(byte[] docxBytes, string requestJson)
+    {
+        ArgumentNullException.ThrowIfNull(docxBytes);
+        ValidateVerificationPackageBudget(docxBytes);
+        return VerificationOps.VerifyDeliverable(docxBytes, null, requestJson);
+    }
+
+    /// <summary><see cref="VerifyDeliverableWithRequest"/> classified against exact baseline bytes.</summary>
+    [JSExport]
+    public static string VerifyDeliverableWithBaselineAndRequest(
+        byte[] baselineBytes,
+        byte[] docxBytes,
+        string requestJson)
+    {
+        ArgumentNullException.ThrowIfNull(baselineBytes);
+        ArgumentNullException.ThrowIfNull(docxBytes);
+        ValidateVerificationPackageBudget(docxBytes, baselineBytes);
+        return VerificationOps.VerifyDeliverable(docxBytes, baselineBytes, requestJson);
+    }
+
+    /// <summary>
     /// Verify a portable JSON delivery change receipt against optionally supplied artifact
     /// bytes. <paramref name="artifactsJson"/> is a JSON object of
     /// <c>{"artifactId": "&lt;base64&gt;"}</c>; pass an empty string to check the receipt

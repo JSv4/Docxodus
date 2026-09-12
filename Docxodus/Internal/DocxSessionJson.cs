@@ -28,6 +28,11 @@ internal sealed record EditorRenderOptions
     public double Scale { get; init; } = 1.0;
     public bool RenderTrackedChanges { get; init; }
     public bool Comments { get; init; }
+    /// <summary>Stamp <c>data-source-anchor-id</c> on block renders, as the full render always
+    /// does. Off by default for the incremental swap path (which has no use for it and whose
+    /// session index the preceding mutation just invalidated); a windowed initial mount turns it
+    /// on so its blocks are attribute-for-attribute the full render's.</summary>
+    public bool StampAnchors { get; init; }
 }
 
 internal static class DocxSessionJson
@@ -508,6 +513,7 @@ internal static class DocxSessionJson
             Scale = TryGetDoubleNullable(root, "scale") ?? options.Scale,
             RenderTrackedChanges = TryGetBoolNullable(root, "renderTrackedChanges") ?? options.RenderTrackedChanges,
             Comments = TryGetBoolNullable(root, "comments") ?? options.Comments,
+            StampAnchors = TryGetBoolNullable(root, "stampAnchors") ?? options.StampAnchors,
         };
     }
 
@@ -819,6 +825,7 @@ internal static class DocxSessionJson
             VerticalAlignment = verticalAlignment,
             WrapMode = ParseWrapMode(StrictString(root, "wrapMode", "square")),
             WrapSide = ParseWrapSide(StrictString(root, "wrapSide", "both_sides")),
+            WrapPolygon = ParseWrapPolygon(root),
             DistanceTopEmu = StrictInt64(root, "distanceTopEmu", 0),
             DistanceBottomEmu = StrictInt64(root, "distanceBottomEmu", 0),
             DistanceLeftEmu = StrictInt64(root, "distanceLeftEmu", 0),
@@ -829,6 +836,23 @@ internal static class DocxSessionJson
             LayoutInCell = StrictBool(root, "layoutInCell", true),
             AllowOverlap = StrictBool(root, "allowOverlap", true),
         };
+    }
+
+    private static ImageWrapPolygon? ParseWrapPolygon(JsonElement root)
+    {
+        if (!root.TryGetProperty("wrapPolygon", out var polygon) || polygon.ValueKind == JsonValueKind.Null)
+            return null;
+        if (polygon.ValueKind != JsonValueKind.Object || !polygon.TryGetProperty("points", out var points)
+            || points.ValueKind != JsonValueKind.Array)
+            throw new System.ArgumentException("wrapPolygon must be an object with a points array");
+        var vertices = new List<ImageWrapPoint>();
+        foreach (var point in points.EnumerateArray())
+        {
+            if (point.ValueKind != JsonValueKind.Object)
+                throw new System.ArgumentException("wrapPolygon points must be {x,y} objects");
+            vertices.Add(new ImageWrapPoint(StrictInt64(point, "x", 0), StrictInt64(point, "y", 0)));
+        }
+        return new ImageWrapPolygon(vertices, StrictBool(polygon, "edited", false));
     }
 
     public static (double? Width, double? Height, bool PreserveAspect) ParseImageDimensions(string json)
@@ -846,7 +870,7 @@ internal static class DocxSessionJson
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
         RequireObject(root, "content-control fill options");
-        RequireOnlyProperties(root, "bindingPolicy");
+        RequireOnlyProperties(root, "bindingPolicy", "nestedControls", "childFills");
         var policy = StrictString(root, "bindingPolicy", "preserve") switch
         {
             "preserve" => ContentControlBindingPolicy.Preserve,
@@ -854,7 +878,33 @@ internal static class DocxSessionJson
             var token => throw new System.ArgumentException(
                 $"unknown bindingPolicy '{token}'; expected preserve or detach_target"),
         };
-        return new ContentControlFillOptions { BindingPolicy = policy };
+        var nested = StrictString(root, "nestedControls", "refuse") switch
+        {
+            "refuse" => ContentControlNestedPolicy.Refuse,
+            "preserve" => ContentControlNestedPolicy.Preserve,
+            "replace" => ContentControlNestedPolicy.Replace,
+            var token => throw new System.ArgumentException(
+                $"unknown nestedControls '{token}'; expected refuse, preserve or replace"),
+        };
+        Dictionary<string, string>? childFills = null;
+        if (root.TryGetProperty("childFills", out var fills) && fills.ValueKind != JsonValueKind.Null)
+        {
+            if (fills.ValueKind != JsonValueKind.Object)
+                throw new System.ArgumentException("childFills must be an object of {anchorId: text}");
+            childFills = new Dictionary<string, string>(System.StringComparer.Ordinal);
+            foreach (var property in fills.EnumerateObject())
+            {
+                if (property.Value.ValueKind != JsonValueKind.String)
+                    throw new System.ArgumentException($"childFills['{property.Name}'] must be a string");
+                childFills[property.Name] = property.Value.GetString()!;
+            }
+        }
+        return new ContentControlFillOptions
+        {
+            BindingPolicy = policy,
+            NestedControls = nested,
+            ChildFills = childFills,
+        };
     }
 
     private static void RequireObject(JsonElement root, string description)
@@ -1323,7 +1373,19 @@ internal static class DocxSessionJson
                 AppendFloatingLayout(sb, image.FloatingLayout);
             }
             sb.Append(",\"floatingLayoutSupported\":")
-              .Append(image.FloatingLayoutSupported ? "true" : "false").Append('}');
+              .Append(image.FloatingLayoutSupported ? "true" : "false")
+              .Append(",\"operations\":[");
+            bool firstOperation = true;
+            foreach (var support in image.Operations.All)
+            {
+                if (!firstOperation) sb.Append(',');
+                firstOperation = false;
+                sb.Append("{\"operation\":").Append(JsonString(support.Operation))
+                  .Append(",\"canMutate\":").Append(support.CanMutate ? "true" : "false");
+                AppendString(sb, "reason", support.Reason);
+                sb.Append('}');
+            }
+            sb.Append("]}");
         }
         return sb.Append(']').ToString();
     }
@@ -1372,7 +1434,20 @@ internal static class DocxSessionJson
             sb.Append(",\"text\":").Append(JsonString(control.Text))
               .Append(",\"itemValues\":");
             AppendStringArray(sb, control.ItemValues);
-            sb.Append('}');
+            sb.Append(",\"nestedControlAnchorIds\":");
+            AppendStringArray(sb, control.NestedControlAnchorIds);
+            sb.Append(",\"operations\":[");
+            for (int j = 0; j < control.Operations.Count; j++)
+            {
+                if (j > 0) sb.Append(',');
+                var operation = control.Operations[j];
+                sb.Append("{\"operation\":").Append(JsonString(operation.Operation));
+                AppendString(sb, "nestedControls", operation.NestedControls);
+                sb.Append(",\"canMutate\":").Append(operation.CanMutate ? "true" : "false");
+                AppendString(sb, "reason", operation.Reason);
+                sb.Append('}');
+            }
+            sb.Append("]}");
         }
         return sb.Append(']').ToString();
     }
@@ -1408,7 +1483,19 @@ internal static class DocxSessionJson
           .Append(",\"acceptsBinaryBytes\":").Append(capabilities.AcceptsBinaryBytes ? "true" : "false")
           .Append(",\"supportsNetworkFetch\":").Append(capabilities.SupportsNetworkFetch ? "true" : "false")
           .Append(",\"supportsFileIo\":").Append(capabilities.SupportsFileIo ? "true" : "false")
-          .Append('}');
+          .Append(",\"markups\":[");
+        for (int i = 0; i < capabilities.Markups.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            var markup = capabilities.Markups[i];
+            sb.Append("{\"markup\":").Append(JsonString(markup.Markup)).Append(",\"operations\":");
+            AppendStringArray(sb, markup.Operations);
+            AppendString(sb, "limitation", markup.Limitation);
+            sb.Append('}');
+        }
+        sb.Append("],\"trackedOperations\":");
+        AppendStringArray(sb, capabilities.TrackedOperations);
+        sb.Append('}');
         return sb.ToString();
     }
 
@@ -1421,7 +1508,19 @@ internal static class DocxSessionJson
         AppendNullableNumber(sb, "verticalOffsetEmu", layout.VerticalOffsetEmu);
         AppendEnum(sb, "verticalAlignment", layout.VerticalAlignment);
         sb.Append(",\"wrapMode\":").Append(JsonString(ToSnake(layout.WrapMode.ToString())))
-          .Append(",\"wrapSide\":").Append(JsonString(ToSnake(layout.WrapSide.ToString())))
+          .Append(",\"wrapSide\":").Append(JsonString(ToSnake(layout.WrapSide.ToString())));
+        if (layout.WrapPolygon is { } polygon)
+        {
+            sb.Append(",\"wrapPolygon\":{\"points\":[");
+            for (int i = 0; i < polygon.Points.Count; i++)
+            {
+                if (i > 0) sb.Append(',');
+                sb.Append("{\"x\":").Append(InvariantNumber(polygon.Points[i].X))
+                  .Append(",\"y\":").Append(InvariantNumber(polygon.Points[i].Y)).Append('}');
+            }
+            sb.Append("],\"edited\":").Append(polygon.Edited ? "true" : "false").Append('}');
+        }
+        sb
           // A read-only occurrence can carry a negative wrap distance parsed straight out of the
           // document, so these go through the invariant formatter too.
           .Append(",\"distanceTopEmu\":").Append(InvariantNumber(layout.DistanceTopEmu))
@@ -2167,6 +2266,8 @@ internal static class DocxSessionJson
                   .Append(",\"kind\":").Append(JsonString(units[i].Kind));
                 if (units[i].Sig is { } sig)
                     sb.Append(",\"sig\":").Append(JsonString(sig));
+                sb.Append(",\"section\":").Append(units[i].Section)
+                  .Append(",\"group\":").Append(units[i].Group);
                 sb.Append('}');
             }
             sb.Append(']');

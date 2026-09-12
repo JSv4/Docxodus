@@ -72,6 +72,13 @@ Two layers, so you can take as much UI as you want:
 import { DocxEditor } from 'docxodus';
 const editor = DocxEditor.open(container, docxBytes, exports);
 
+// Long document? Mount it in windows instead, yielding to the event loop between them, so the
+// tab stays responsive and you can show progress. The result is the same editor and the same DOM.
+const editor = await DocxEditor.openAsync(container, docxBytes, exports, {
+  windowSize: 24,
+  onProgress: (mounted, total) => console.log(`${mounted}/${total} blocks`),
+});
+
 // Or the whole surface: Word's tabbed ribbon (fonts, colour, styles, find & replace, links,
 // pictures, tables, page setup, tracked changes), Word-style comment bubbles beside the page,
 // in-place header/footer editing, a status bar with zoom, and the loading overlay.
@@ -588,9 +595,20 @@ const redlined = await docxodus.compareDocuments(original, modified, options);
 const revisions = await docxodus.getRevisions(docxFile);
 const metadata = await docxodus.getDocumentMetadata(docxFile);
 
+// The external annotation family runs there too, so a read-only viewer that renders
+// through the worker can annotate without booting a second runtime on the main thread.
+const set = await docxodus.createExternalAnnotationSet(docxFile, 'doc-1');
+const annotated = await docxodus.projectAnnotationsOntoHtml(html, set);
+const validation = await docxodus.validateExternalAnnotations(docxFile, set);
+const exported = await docxodus.exportToOpenContract(docxFile);
+
 // Terminate when done
 docxodus.terminate();
 ```
+
+`projectAnnotationsOntoHtml` parses its input as XML: hand it the converter's output (or
+another well-formed serialization), not a live DOM's `innerHTML`, which leaves `<br>` and
+`<img>` unclosed. `DocxEditor.open()` stays main-thread only — it writes into a live container.
 
 #### First-call warmup
 

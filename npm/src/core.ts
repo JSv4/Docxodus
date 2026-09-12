@@ -14,6 +14,12 @@ import type {
   CompareResult,
   PackageManifest,
   DeliverableVerificationResult,
+  DeliverableVerificationRequest,
+  DeliverableVerificationPolicyOptions,
+  DeliverablePackageChangeExpectation,
+  DeliverableCompanionArtifactInput,
+  DeliverableRenderDiagnostic,
+  DeliverableRenderDiagnosticKind,
   DeliveryReceiptVerificationResult,
   RedlineReversibilityProof,
   DocxodusWasmExports,
@@ -72,6 +78,8 @@ import type {
   MarkdownProjection,
   MutationTransaction,
   MutationTransactionIdentity,
+  ContentControlNestedPolicy,
+  ContentControlOperationSupport,
   MutationPreviewRetention,
   DeliveryEvidenceStatus,
   DeliveryReceiptPrivacyProfile,
@@ -83,6 +91,13 @@ import type {
 } from "./types.js";
 
 import { DocxSession, openDocxSession as openDocxSessionImpl } from "./session.js";
+import { serializeVerificationRequest } from "./verification-request.js";
+import {
+  readExternalAnnotationSet,
+  readExternalAnnotationValidation,
+  readOpenContractExport,
+  readProjectedHtml,
+} from "./external-annotation-wire.js";
 import { DocxHistoryArchive, DocxHistoryClient, installHistoryStorageImports } from './history.js';
 import type { HistoryStorage } from './history.js';
 export * from './history.js';
@@ -139,12 +154,16 @@ export type {
   ImageHorizontalAlignment,
   ImageHorizontalReference,
   ImageInsertOptions,
+  ImageMarkupCapability,
   ImageMarkupKind,
   ImageOccurrence,
+  ImageOperationSupport,
   ImagePlacement,
   ImageVerticalAlignment,
   ImageVerticalReference,
   ImageWrapMode,
+  ImageWrapPoint,
+  ImageWrapPolygon,
   ImageWrapSide,
   FloatingImageLayout,
   LineSpacingRule,
@@ -191,6 +210,12 @@ export type {
   PackageRevisionCounts,
   PackageAnnotationCounts,
   DeliverableVerificationResult,
+  DeliverableVerificationRequest,
+  DeliverableVerificationPolicyOptions,
+  DeliverablePackageChangeExpectation,
+  DeliverableCompanionArtifactInput,
+  DeliverableRenderDiagnostic,
+  DeliverableRenderDiagnosticKind,
   DeliveryArtifactVerification,
   DeliveryArtifactVerificationStatus,
   DeliveryReceiptVerificationResult,
@@ -689,11 +714,25 @@ export async function generatePackageManifest(
 export async function verifyDeliverable(
   document: File | Uint8Array,
   baseline?: File | Uint8Array,
+  request?: DeliverableVerificationRequest,
 ): Promise<DeliverableVerificationResult> {
   const exports = ensureInitialized();
   const bytes = await toBytes(document);
   const baselineBytes = baseline === undefined ? undefined : await toBytes(baseline);
   await yieldToMain();
+  if (request !== undefined) {
+    // The full request (issue #747): the same wire shape every transport parses.
+    const requestJson = serializeVerificationRequest(request);
+    const converter = exports.DocumentConverter;
+    if (!converter.VerifyDeliverableWithRequest || !converter.VerifyDeliverableWithBaselineAndRequest) {
+      throw new Error("This WASM bundle predates full verification requests; rebuild docxodus.");
+    }
+    return JSON.parse(
+      baselineBytes === undefined
+        ? converter.VerifyDeliverableWithRequest(bytes, requestJson)
+        : converter.VerifyDeliverableWithBaselineAndRequest(baselineBytes, bytes, requestJson),
+    ) as DeliverableVerificationResult;
+  }
   return JSON.parse(
     baselineBytes === undefined
       ? exports.DocumentConverter.VerifyDeliverable(bytes)
@@ -2068,87 +2107,7 @@ export async function exportToOpenContract(
     throw new Error(`Failed to export to OpenContract format: ${error.error}`);
   }
 
-  const parsed = JSON.parse(result);
-
-  // Convert from PascalCase to camelCase
-  const convertPawlsPage = (p: any): PawlsPage => ({
-    page: {
-      width: p.Page?.Width ?? p.page?.width,
-      height: p.Page?.Height ?? p.page?.height,
-      index: p.Page?.Index ?? p.page?.index,
-    },
-    tokens: (p.Tokens || p.tokens || []).map((t: any) => ({
-      x: t.X ?? t.x,
-      y: t.Y ?? t.y,
-      width: t.Width ?? t.width,
-      height: t.Height ?? t.height,
-      text: t.Text ?? t.text,
-    })),
-  });
-
-  const convertAnnotation = (a: any): OpenContractsAnnotation => ({
-    id: a.Id ?? a.id,
-    annotationLabel: a.AnnotationLabel ?? a.annotationLabel,
-    rawText: a.RawText ?? a.rawText,
-    page: a.Page ?? a.page,
-    annotationJson: convertAnnotationJson(a.AnnotationJson ?? a.annotationJson),
-    parentId: a.ParentId ?? a.parentId,
-    annotationType: a.AnnotationType ?? a.annotationType,
-    structural: a.Structural ?? a.structural,
-  });
-
-  const convertAnnotationJson = (json: any): TextSpan | Record<string, OpenContractsSinglePageAnnotation> | undefined => {
-    if (!json) return undefined;
-
-    // Check if it's a TextSpan
-    if (json.Start !== undefined || json.start !== undefined) {
-      return {
-        id: json.Id ?? json.id,
-        start: json.Start ?? json.start,
-        end: json.End ?? json.end,
-        text: json.Text ?? json.text,
-      };
-    }
-
-    // Otherwise it's a dictionary of single-page annotations
-    const result: Record<string, OpenContractsSinglePageAnnotation> = {};
-    for (const [key, value] of Object.entries(json)) {
-      const v = value as any;
-      result[key] = {
-        bounds: {
-          top: v.Bounds?.Top ?? v.bounds?.top,
-          bottom: v.Bounds?.Bottom ?? v.bounds?.bottom,
-          left: v.Bounds?.Left ?? v.bounds?.left,
-          right: v.Bounds?.Right ?? v.bounds?.right,
-        },
-        tokensJsons: (v.TokensJsons || v.tokensJsons || []).map((t: any) => ({
-          pageIndex: t.PageIndex ?? t.pageIndex,
-          tokenIndex: t.TokenIndex ?? t.tokenIndex,
-        })),
-        rawText: v.RawText ?? v.rawText,
-      };
-    }
-    return result;
-  };
-
-  const convertRelationship = (r: any): OpenContractsRelationship => ({
-    id: r.Id ?? r.id,
-    relationshipLabel: r.RelationshipLabel ?? r.relationshipLabel,
-    sourceAnnotationIds: r.SourceAnnotationIds ?? r.sourceAnnotationIds ?? [],
-    targetAnnotationIds: r.TargetAnnotationIds ?? r.targetAnnotationIds ?? [],
-    structural: r.Structural ?? r.structural,
-  });
-
-  return {
-    title: parsed.Title ?? parsed.title,
-    content: parsed.Content ?? parsed.content,
-    description: parsed.Description ?? parsed.description,
-    pageCount: parsed.PageCount ?? parsed.pageCount,
-    pawlsFileContent: (parsed.PawlsFileContent || parsed.pawlsFileContent || []).map(convertPawlsPage),
-    docLabels: parsed.DocLabels ?? parsed.docLabels ?? [],
-    labelledText: (parsed.LabelledText || parsed.labelledText || []).map(convertAnnotation),
-    relationships: (parsed.Relationships || parsed.relationships)?.map(convertRelationship),
-  };
+  return readOpenContractExport(JSON.parse(result));
 }
 
 /**
@@ -2424,10 +2383,7 @@ export async function createExternalAnnotationSet(
     throw new Error(`Failed to create external annotation set: ${error.error}`);
   }
 
-  const parsed = JSON.parse(result);
-
-  // Convert from PascalCase to camelCase
-  return convertExternalAnnotationSet(parsed);
+  return readExternalAnnotationSet(JSON.parse(result));
 }
 
 /**
@@ -2471,19 +2427,7 @@ export async function validateExternalAnnotations(
     throw new Error(`Failed to validate external annotations: ${error.error}`);
   }
 
-  const parsed = JSON.parse(result);
-
-  return {
-    isValid: parsed.IsValid ?? parsed.isValid,
-    hashMismatch: parsed.HashMismatch ?? parsed.hashMismatch,
-    issues: (parsed.Issues || parsed.issues || []).map((i: any) => ({
-      annotationId: i.AnnotationId ?? i.annotationId,
-      issueType: i.IssueType ?? i.issueType,
-      description: i.Description ?? i.description,
-      expectedText: i.ExpectedText ?? i.expectedText,
-      actualText: i.ActualText ?? i.actualText,
-    })),
-  };
+  return readExternalAnnotationValidation(JSON.parse(result));
 }
 
 /**
@@ -2542,8 +2486,7 @@ export async function convertDocxToHtmlWithExternalAnnotations(
     throw new Error(`Failed to convert with external annotations: ${error.error}`);
   }
 
-  const parsed = JSON.parse(result);
-  return parsed.Html ?? parsed.html;
+  return readProjectedHtml(JSON.parse(result));
 }
 
 /**
@@ -2730,115 +2673,6 @@ export function findTextOccurrences(
 }
 
 // Helper function to convert PascalCase response to camelCase ExternalAnnotationSet
-function convertExternalAnnotationSet(parsed: any): ExternalAnnotationSet {
-  const convertLabel = (l: any): AnnotationLabel => ({
-    id: l.Id ?? l.id,
-    color: l.Color ?? l.color,
-    description: l.Description ?? l.description ?? "",
-    icon: l.Icon ?? l.icon ?? "",
-    text: l.Text ?? l.text,
-    labelType: l.LabelType ?? l.labelType ?? "text",
-  });
-
-  const convertPawlsPage = (p: any): PawlsPage => ({
-    page: {
-      width: p.Page?.Width ?? p.page?.width,
-      height: p.Page?.Height ?? p.page?.height,
-      index: p.Page?.Index ?? p.page?.index,
-    },
-    tokens: (p.Tokens || p.tokens || []).map((t: any) => ({
-      x: t.X ?? t.x,
-      y: t.Y ?? t.y,
-      width: t.Width ?? t.width,
-      height: t.Height ?? t.height,
-      text: t.Text ?? t.text,
-    })),
-  });
-
-  const convertAnnotation = (a: any): OpenContractsAnnotation => ({
-    id: a.Id ?? a.id,
-    annotationLabel: a.AnnotationLabel ?? a.annotationLabel,
-    rawText: a.RawText ?? a.rawText,
-    page: a.Page ?? a.page,
-    annotationJson: convertAnnotationJson(a.AnnotationJson ?? a.annotationJson),
-    parentId: a.ParentId ?? a.parentId,
-    annotationType: a.AnnotationType ?? a.annotationType,
-    structural: a.Structural ?? a.structural,
-  });
-
-  const convertAnnotationJson = (json: any): TextSpan | Record<string, OpenContractsSinglePageAnnotation> | undefined => {
-    if (!json) return undefined;
-
-    // Check if it's a TextSpan
-    if (json.Start !== undefined || json.start !== undefined) {
-      return {
-        id: json.Id ?? json.id,
-        start: json.Start ?? json.start,
-        end: json.End ?? json.end,
-        text: json.Text ?? json.text,
-      };
-    }
-
-    // Otherwise it's a dictionary of single-page annotations
-    const result: Record<string, OpenContractsSinglePageAnnotation> = {};
-    for (const [key, value] of Object.entries(json)) {
-      const v = value as any;
-      result[key] = {
-        bounds: {
-          top: v.Bounds?.Top ?? v.bounds?.top,
-          bottom: v.Bounds?.Bottom ?? v.bounds?.bottom,
-          left: v.Bounds?.Left ?? v.bounds?.left,
-          right: v.Bounds?.Right ?? v.bounds?.right,
-        },
-        tokensJsons: (v.TokensJsons || v.tokensJsons || []).map((t: any) => ({
-          pageIndex: t.PageIndex ?? t.pageIndex,
-          tokenIndex: t.TokenIndex ?? t.tokenIndex,
-        })),
-        rawText: v.RawText ?? v.rawText,
-      };
-    }
-    return result;
-  };
-
-  const convertRelationship = (r: any): OpenContractsRelationship => ({
-    id: r.Id ?? r.id,
-    relationshipLabel: r.RelationshipLabel ?? r.relationshipLabel,
-    sourceAnnotationIds: r.SourceAnnotationIds ?? r.sourceAnnotationIds ?? [],
-    targetAnnotationIds: r.TargetAnnotationIds ?? r.targetAnnotationIds ?? [],
-    structural: r.Structural ?? r.structural,
-  });
-
-  // Convert label dictionaries
-  const textLabels: Record<string, AnnotationLabel> = {};
-  const rawTextLabels = parsed.TextLabels || parsed.textLabels || {};
-  for (const [key, value] of Object.entries(rawTextLabels)) {
-    textLabels[key] = convertLabel(value);
-  }
-
-  const docLabelDefinitions: Record<string, AnnotationLabel> = {};
-  const rawDocLabelDefs = parsed.DocLabelDefinitions || parsed.docLabelDefinitions || {};
-  for (const [key, value] of Object.entries(rawDocLabelDefs)) {
-    docLabelDefinitions[key] = convertLabel(value);
-  }
-
-  return {
-    documentId: parsed.DocumentId ?? parsed.documentId,
-    documentHash: parsed.DocumentHash ?? parsed.documentHash,
-    createdAt: parsed.CreatedAt ?? parsed.createdAt,
-    updatedAt: parsed.UpdatedAt ?? parsed.updatedAt,
-    version: parsed.Version ?? parsed.version,
-    title: parsed.Title ?? parsed.title,
-    content: parsed.Content ?? parsed.content,
-    description: parsed.Description ?? parsed.description,
-    pageCount: parsed.PageCount ?? parsed.pageCount,
-    pawlsFileContent: (parsed.PawlsFileContent || parsed.pawlsFileContent || []).map(convertPawlsPage),
-    docLabels: parsed.DocLabels ?? parsed.docLabels ?? [],
-    labelledText: (parsed.LabelledText || parsed.labelledText || []).map(convertAnnotation),
-    relationships: (parsed.Relationships || parsed.relationships)?.map(convertRelationship),
-    textLabels,
-    docLabelDefinitions,
-  };
-}
 
 // ============================================================================
 // Incremental Annotation Overlay API (Issue #106)
@@ -2894,8 +2728,7 @@ export async function projectAnnotationsOntoHtml(
     throw new Error(`Failed to project annotations: ${error.error}`);
   }
 
-  const parsed = JSON.parse(result);
-  return parsed.Html ?? parsed.html;
+  return readProjectedHtml(JSON.parse(result));
 }
 
 /**
@@ -2941,8 +2774,7 @@ export async function addAnnotationToHtml(
     throw new Error(`Failed to add annotation to HTML: ${error.error}`);
   }
 
-  const parsed = JSON.parse(result);
-  return parsed.Html ?? parsed.html;
+  return readProjectedHtml(JSON.parse(result));
 }
 
 /**
@@ -2980,8 +2812,7 @@ export async function removeAnnotationFromHtml(
     throw new Error(`Failed to remove annotation from HTML: ${error.error}`);
   }
 
-  const parsed = JSON.parse(result);
-  return parsed.Html ?? parsed.html;
+  return readProjectedHtml(JSON.parse(result));
 }
 
 /**

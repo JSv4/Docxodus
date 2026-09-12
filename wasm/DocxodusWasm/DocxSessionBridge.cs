@@ -36,8 +36,13 @@ public static partial class DocxSessionBridge
     /// undo/redo history; callers must close it. Abandonment cannot affect the live handle.
     /// </summary>
     [JSExport]
-    public static int OpenPreviewSession(int liveHandle) =>
-        SessionRegistry.CloneSessionForPreview(liveHandle);
+    public static int OpenPreviewSession(int liveHandle)
+    {
+        // The first preview of a module instance must not be the one that walks the cold
+        // clone-and-snapshot path — see PreviewEngine for why that can stop finishing.
+        PreviewEngine.EnsureWarm();
+        return SessionRegistry.CloneSessionForPreview(liveHandle);
+    }
 
     [JSExport]
     public static void CloseSession(int handle)
@@ -302,6 +307,24 @@ public static partial class DocxSessionBridge
         {
             return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}";
         }
+    }
+
+    /// <summary>The document's chrome (stylesheet, section wrappers, header/footer registry,
+    /// footnote/endnote sections) without its body units — the start of a windowed mount.</summary>
+    [JSExport]
+    public static string RenderEditorChromeHtml(int h, string optionsJson)
+    {
+        try { return DocxSessionOps.RenderEditorChromeHtml(h, optionsJson); }
+        catch (Exception ex) { return DocumentConverter.SerializeError(ex.Message, ex.GetType().Name); }
+    }
+
+    /// <summary>A contiguous window of body units as the full render lays them out — the
+    /// windowed mount's fill step.</summary>
+    [JSExport]
+    public static string RenderEditorRangeHtml(int h, string anchorIdsJson, string optionsJson)
+    {
+        try { return DocxSessionOps.RenderEditorRangeHtml(h, anchorIdsJson, optionsJson); }
+        catch (Exception ex) { return DocumentConverter.SerializeError(ex.Message, ex.GetType().Name); }
     }
 
     /// <summary>Batch block editor render — <see cref="RenderBlocksHtml"/> plus comment markup;
@@ -743,6 +766,10 @@ public static partial class DocxSessionBridge
         DocxSessionOps.ReplaceImage(h, imageId, imageBase64);
 
     [JSExport]
+    public static string EmbedLinkedImage(int h, string imageId, string imageBase64) =>
+        DocxSessionOps.EmbedLinkedImage(h, imageId, imageBase64);
+
+    [JSExport]
     public static string SetImageDimensions(int h, string imageId, string dimensionsJson) =>
         DocxSessionOps.SetImageDimensions(h, imageId, dimensionsJson);
 
@@ -1154,6 +1181,12 @@ public static partial class DocxSessionBridge
     [JSExport]
     public static string VerifyDeliverable(int h) =>
         DocxSessionOps.VerifyDeliverable(h);
+
+    /// <summary>Session verification under the full wire request (issue #747): policy/limit
+    /// options, expected semantic and package changes, companion artifacts.</summary>
+    [JSExport]
+    public static string VerifyDeliverableWithRequest(int h, string requestJson) =>
+        DocxSessionOps.VerifyDeliverable(h, requestJson);
 
     /// <summary>
     /// Bridge for <see cref="DocxSession.FindByAnnotation"/>. Returns a JSON array of

@@ -22,6 +22,14 @@ import type {
   WorkerCompareRequest,
   WorkerCompareToHtmlRequest,
   WorkerGetSemanticChangesRequest,
+  WorkerCreateExternalAnnotationSetRequest,
+  WorkerValidateExternalAnnotationsRequest,
+  WorkerProjectAnnotationsOntoHtmlRequest,
+  WorkerConvertWithExternalAnnotationsRequest,
+  WorkerExportToOpenContractRequest,
+  ExternalAnnotationSet,
+  ExternalAnnotationValidationResult,
+  OpenContractDocExport,
   WorkerGetRevisionsRequest,
   WorkerGetDocumentMetadataRequest,
   WorkerSessionOpenRequest,
@@ -47,6 +55,13 @@ import type {
   RedlineReversibilityProof,
   SemanticChangeSet,
 } from "./types.js";
+import { AnnotationLabelMode } from "./types.js";
+import {
+  readExternalAnnotationSet,
+  readExternalAnnotationValidation,
+  readOpenContractExport,
+  readProjectedHtml,
+} from "./external-annotation-wire.js";
 
 // Worker-local state
 let wasmExports: DocxodusWasmExports | null = null;
@@ -199,12 +214,23 @@ function handleVerifyDeliverable(
 ): { verification?: DeliverableVerificationResult; error?: string } {
   try {
     const converter = ensureInitialized().DocumentConverter;
-    const json = request.baselineBytes === undefined
-      ? converter.VerifyDeliverable(request.documentBytes)
-      : converter.VerifyDeliverableWithBaseline(
-          request.baselineBytes,
-          request.documentBytes
-        );
+    let json: string;
+    if (request.requestJson !== undefined) {
+      if (!converter.VerifyDeliverableWithRequest || !converter.VerifyDeliverableWithBaselineAndRequest) {
+        throw new Error("This WASM bundle predates full verification requests; rebuild docxodus.");
+      }
+      json = request.baselineBytes === undefined
+        ? converter.VerifyDeliverableWithRequest(request.documentBytes, request.requestJson)
+        : converter.VerifyDeliverableWithBaselineAndRequest(
+            request.baselineBytes, request.documentBytes, request.requestJson);
+    } else {
+      json = request.baselineBytes === undefined
+        ? converter.VerifyDeliverable(request.documentBytes)
+        : converter.VerifyDeliverableWithBaseline(
+            request.baselineBytes,
+            request.documentBytes
+          );
+    }
     return {
       verification: JSON.parse(json) as DeliverableVerificationResult,
     };
@@ -225,6 +251,93 @@ function handleGetSemanticChanges(
     );
     if (isErrorResponse(json)) return { error: parseError(json).error };
     return { semanticChanges: JSON.parse(json) as SemanticChangeSet };
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
+// ─── External annotations (issue #775) ───────────────────────────────
+// The read/annotate family touches no DOM, so a viewer that renders through the worker can
+// annotate through it too instead of booting a second runtime on the main thread. Each handler
+// is the same engine call the main-thread entry point makes, read through the shared wire
+// module so the worker hands back identical typed objects.
+
+function handleCreateExternalAnnotationSet(
+  request: WorkerCreateExternalAnnotationSetRequest
+): { annotationSet?: ExternalAnnotationSet; error?: string } {
+  try {
+    const json = ensureInitialized().DocumentConverter.CreateExternalAnnotationSet(
+      request.documentBytes,
+      request.documentId
+    );
+    if (isErrorResponse(json)) return { error: parseError(json).error };
+    return { annotationSet: readExternalAnnotationSet(JSON.parse(json)) };
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
+function handleValidateExternalAnnotations(
+  request: WorkerValidateExternalAnnotationsRequest
+): { validation?: ExternalAnnotationValidationResult; error?: string } {
+  try {
+    const json = ensureInitialized().DocumentConverter.ValidateExternalAnnotations(
+      request.documentBytes,
+      JSON.stringify(request.annotationSet)
+    );
+    if (isErrorResponse(json)) return { error: parseError(json).error };
+    return { validation: readExternalAnnotationValidation(JSON.parse(json)) };
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
+function handleProjectAnnotationsOntoHtml(
+  request: WorkerProjectAnnotationsOntoHtmlRequest
+): { html?: string; error?: string } {
+  try {
+    const json = ensureInitialized().DocumentConverter.ProjectAnnotationsOntoHtml(
+      request.html,
+      JSON.stringify(request.annotationSet),
+      request.projectionOptions?.cssClassPrefix ?? "ext-annot-",
+      request.projectionOptions?.labelMode ?? AnnotationLabelMode.Above
+    );
+    if (isErrorResponse(json)) return { error: parseError(json).error };
+    return { html: readProjectedHtml(JSON.parse(json)) };
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
+function handleConvertWithExternalAnnotations(
+  request: WorkerConvertWithExternalAnnotationsRequest
+): { html?: string; error?: string } {
+  try {
+    const options = request.conversionOptions;
+    const json = ensureInitialized().DocumentConverter.ConvertDocxToHtmlWithExternalAnnotations(
+      request.documentBytes,
+      JSON.stringify(request.annotationSet),
+      options?.pageTitle ?? "Document",
+      options?.cssPrefix ?? "docx-",
+      options?.fabricateClasses ?? true,
+      options?.additionalCss ?? "",
+      request.projectionOptions?.cssClassPrefix ?? "ext-annot-",
+      request.projectionOptions?.labelMode ?? AnnotationLabelMode.Above
+    );
+    if (isErrorResponse(json)) return { error: parseError(json).error };
+    return { html: readProjectedHtml(JSON.parse(json)) };
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
+function handleExportToOpenContract(
+  request: WorkerExportToOpenContractRequest
+): { export?: OpenContractDocExport; error?: string } {
+  try {
+    const json = ensureInitialized().DocumentConverter.ExportToOpenContract(request.documentBytes);
+    if (isErrorResponse(json)) return { error: parseError(json).error };
+    return { export: readOpenContractExport(JSON.parse(json)) };
   } catch (error) {
     return { error: String(error) };
   }
@@ -553,9 +666,16 @@ function handleSessionVerifyDeliverable(
   request: WorkerSessionVerifyDeliverableRequest
 ): { verification?: DeliverableVerificationResult; error?: string } {
   try {
-    const json = ensureInitialized().DocxSessionBridge.VerifyDeliverable(
-      request.handle
-    );
+    const bridge = ensureInitialized().DocxSessionBridge;
+    let json: string;
+    if (request.requestJson !== undefined) {
+      if (!bridge.VerifyDeliverableWithRequest) {
+        throw new Error("This WASM bundle predates full verification requests; rebuild docxodus.");
+      }
+      json = bridge.VerifyDeliverableWithRequest(request.handle, request.requestJson);
+    } else {
+      json = bridge.VerifyDeliverable(request.handle);
+    }
     return {
       verification: JSON.parse(json) as DeliverableVerificationResult,
     };
@@ -857,6 +977,76 @@ self.addEventListener("message", async (event: MessageEvent<WorkerRequest>) => {
           type: "getSemanticChanges",
           success: !result.error,
           semanticChanges: result.semanticChanges,
+          error: result.error,
+        };
+        break;
+      }
+
+      case "createExternalAnnotationSet": {
+        const result = handleCreateExternalAnnotationSet(
+          request as WorkerCreateExternalAnnotationSetRequest
+        );
+        response = {
+          id: request.id,
+          type: "createExternalAnnotationSet",
+          success: !result.error,
+          annotationSet: result.annotationSet,
+          error: result.error,
+        };
+        break;
+      }
+
+      case "validateExternalAnnotations": {
+        const result = handleValidateExternalAnnotations(
+          request as WorkerValidateExternalAnnotationsRequest
+        );
+        response = {
+          id: request.id,
+          type: "validateExternalAnnotations",
+          success: !result.error,
+          validation: result.validation,
+          error: result.error,
+        };
+        break;
+      }
+
+      case "projectAnnotationsOntoHtml": {
+        const result = handleProjectAnnotationsOntoHtml(
+          request as WorkerProjectAnnotationsOntoHtmlRequest
+        );
+        response = {
+          id: request.id,
+          type: "projectAnnotationsOntoHtml",
+          success: !result.error,
+          html: result.html,
+          error: result.error,
+        };
+        break;
+      }
+
+      case "convertDocxToHtmlWithExternalAnnotations": {
+        const result = handleConvertWithExternalAnnotations(
+          request as WorkerConvertWithExternalAnnotationsRequest
+        );
+        response = {
+          id: request.id,
+          type: "convertDocxToHtmlWithExternalAnnotations",
+          success: !result.error,
+          html: result.html,
+          error: result.error,
+        };
+        break;
+      }
+
+      case "exportToOpenContract": {
+        const result = handleExportToOpenContract(
+          request as WorkerExportToOpenContractRequest
+        );
+        response = {
+          id: request.id,
+          type: "exportToOpenContract",
+          success: !result.error,
+          export: result.export,
           error: result.error,
         };
         break;

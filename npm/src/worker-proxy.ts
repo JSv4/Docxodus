@@ -25,11 +25,21 @@ import type {
   WorkerConvertResponse,
   WorkerGeneratePackageManifestResponse,
   WorkerVerifyDeliverableResponse,
+  DeliverableVerificationRequest,
   WorkerProveRedlineReversibilityResponse,
   WorkerProjectReviewProfileResponse,
   WorkerCompareResponse,
   WorkerCompareToHtmlResponse,
   WorkerGetSemanticChangesResponse,
+  WorkerCreateExternalAnnotationSetResponse,
+  WorkerValidateExternalAnnotationsResponse,
+  WorkerProjectAnnotationsOntoHtmlResponse,
+  WorkerConvertWithExternalAnnotationsResponse,
+  WorkerExportToOpenContractResponse,
+  ExternalAnnotationSet,
+  ExternalAnnotationValidationResult,
+  ExternalAnnotationProjectionSettings,
+  OpenContractDocExport,
   WorkerGetRevisionsResponse,
   WorkerGetDocumentMetadataResponse,
   WorkerGetVersionResponse,
@@ -58,6 +68,7 @@ import type {
   PackageManifestInspectionLimits,
   WorkerErrorCode,
 } from "./types.js";
+import { serializeVerificationRequest } from "./verification-request.js";
 
 /**
  * Rejection carrying the worker's machine-readable cause. Callers classify failures with
@@ -134,7 +145,7 @@ export interface WorkerDocxSession {
   getPackageManifest(): Promise<PackageManifest>;
 
   /** Run the default deliverable gate over the session's clean-save checkpoint. */
-  verifyDeliverable(): Promise<DeliverableVerificationResult>;
+  verifyDeliverable(request?: DeliverableVerificationRequest): Promise<DeliverableVerificationResult>;
 
   /** Compare the current logical checkpoint with the exact opening package. */
   getSemanticChanges(): Promise<SemanticChangeSet>;
@@ -219,7 +230,8 @@ export interface WorkerDocxodus {
   /** Run the default bounded deliverable gate, optionally against an exact baseline. */
   verifyDeliverable(
     document: File | Uint8Array,
-    baseline?: File | Uint8Array
+    baseline?: File | Uint8Array,
+    request?: DeliverableVerificationRequest,
   ): Promise<DeliverableVerificationResult>;
 
   /**
@@ -239,6 +251,44 @@ export interface WorkerDocxodus {
     right: File | Uint8Array,
     settings?: DocxDiffSettings
   ): Promise<SemanticChangeSet>;
+
+  /**
+   * Create an empty external annotation set bound to the document's content hash — the input
+   * to every other call in the annotation family. Runs in the worker, so a read-only viewer
+   * that renders through this proxy needs no main-thread runtime to annotate (issue #775).
+   */
+  createExternalAnnotationSet(
+    document: File | Uint8Array,
+    documentId: string,
+  ): Promise<ExternalAnnotationSet>;
+
+  /** Validate an annotation set against a document: hash match and per-annotation text. */
+  validateExternalAnnotations(
+    document: File | Uint8Array,
+    annotationSet: ExternalAnnotationSet,
+  ): Promise<ExternalAnnotationValidationResult>;
+
+  /**
+   * Project an annotation set onto HTML the engine rendered. The input is parsed as XML, so
+   * hand it the converter's output (or another well-formed serialization), not a live DOM's
+   * `innerHTML`.
+   */
+  projectAnnotationsOntoHtml(
+    html: string,
+    annotationSet: ExternalAnnotationSet,
+    projectionOptions?: ExternalAnnotationProjectionSettings,
+  ): Promise<string>;
+
+  /** Convert a document and project an annotation set onto it in one round trip. */
+  convertDocxToHtmlWithExternalAnnotations(
+    document: File | Uint8Array,
+    annotationSet: ExternalAnnotationSet,
+    conversionOptions?: ConversionOptions,
+    projectionOptions?: ExternalAnnotationProjectionSettings,
+  ): Promise<string>;
+
+  /** Export a document to the OpenContracts format (text, layout tokens, labels). */
+  exportToOpenContract(document: File | Uint8Array): Promise<OpenContractDocExport>;
 
   /**
    * Convert a DOCX document to HTML.
@@ -515,7 +565,8 @@ export async function createWorkerDocxodus(
 
     async verifyDeliverable(
       document: File | Uint8Array,
-      baseline?: File | Uint8Array
+      baseline?: File | Uint8Array,
+      request?: DeliverableVerificationRequest,
     ): Promise<DeliverableVerificationResult> {
       const bytes = await toBytes(document);
       const baselineBytes = baseline === undefined ? undefined : await toBytes(baseline);
@@ -527,6 +578,7 @@ export async function createWorkerDocxodus(
           type: "verifyDeliverable",
           documentBytes: bytes,
           baselineBytes,
+          requestJson: request === undefined ? undefined : serializeVerificationRequest(request),
         },
         transfer
       );
@@ -578,6 +630,90 @@ export async function createWorkerDocxodus(
         [leftBytes.buffer, rightBytes.buffer]
       );
       return response.semanticChanges!;
+    },
+
+    async createExternalAnnotationSet(
+      document: File | Uint8Array,
+      documentId: string,
+    ): Promise<ExternalAnnotationSet> {
+      const bytes = await toBytes(document);
+      const response = await sendRequest<WorkerCreateExternalAnnotationSetResponse>(
+        { id: generateId(), type: "createExternalAnnotationSet", documentBytes: bytes, documentId },
+        [bytes.buffer]
+      );
+      if (!response.success || !response.annotationSet) {
+        throw new Error(response.error ?? "createExternalAnnotationSet failed");
+      }
+      return response.annotationSet;
+    },
+
+    async validateExternalAnnotations(
+      document: File | Uint8Array,
+      annotationSet: ExternalAnnotationSet,
+    ): Promise<ExternalAnnotationValidationResult> {
+      const bytes = await toBytes(document);
+      const response = await sendRequest<WorkerValidateExternalAnnotationsResponse>(
+        { id: generateId(), type: "validateExternalAnnotations", documentBytes: bytes, annotationSet },
+        [bytes.buffer]
+      );
+      if (!response.success || !response.validation) {
+        throw new Error(response.error ?? "validateExternalAnnotations failed");
+      }
+      return response.validation;
+    },
+
+    async projectAnnotationsOntoHtml(
+      html: string,
+      annotationSet: ExternalAnnotationSet,
+      projectionOptions?: ExternalAnnotationProjectionSettings,
+    ): Promise<string> {
+      const response = await sendRequest<WorkerProjectAnnotationsOntoHtmlResponse>({
+        id: generateId(),
+        type: "projectAnnotationsOntoHtml",
+        html,
+        annotationSet,
+        projectionOptions,
+      });
+      if (!response.success || response.html === undefined) {
+        throw new Error(response.error ?? "projectAnnotationsOntoHtml failed");
+      }
+      return response.html;
+    },
+
+    async convertDocxToHtmlWithExternalAnnotations(
+      document: File | Uint8Array,
+      annotationSet: ExternalAnnotationSet,
+      conversionOptions?: ConversionOptions,
+      projectionOptions?: ExternalAnnotationProjectionSettings,
+    ): Promise<string> {
+      const bytes = await toBytes(document);
+      const response = await sendRequest<WorkerConvertWithExternalAnnotationsResponse>(
+        {
+          id: generateId(),
+          type: "convertDocxToHtmlWithExternalAnnotations",
+          documentBytes: bytes,
+          annotationSet,
+          conversionOptions,
+          projectionOptions,
+        },
+        [bytes.buffer]
+      );
+      if (!response.success || response.html === undefined) {
+        throw new Error(response.error ?? "convertDocxToHtmlWithExternalAnnotations failed");
+      }
+      return response.html;
+    },
+
+    async exportToOpenContract(document: File | Uint8Array): Promise<OpenContractDocExport> {
+      const bytes = await toBytes(document);
+      const response = await sendRequest<WorkerExportToOpenContractResponse>(
+        { id: generateId(), type: "exportToOpenContract", documentBytes: bytes },
+        [bytes.buffer]
+      );
+      if (!response.success || !response.export) {
+        throw new Error(response.error ?? "exportToOpenContract failed");
+      }
+      return response.export;
     },
 
     async generatePackageManifestJson(
@@ -785,11 +921,14 @@ export async function createWorkerDocxodus(
           return res.semanticChanges;
         },
 
-        async verifyDeliverable(): Promise<DeliverableVerificationResult> {
+        async verifyDeliverable(
+          request?: DeliverableVerificationRequest,
+        ): Promise<DeliverableVerificationResult> {
           const res = await sendRequest<WorkerSessionVerifyDeliverableResponse>({
             id: generateId(),
             type: "sessionVerifyDeliverable",
             handle,
+            requestJson: request === undefined ? undefined : serializeVerificationRequest(request),
           });
           if (!res.success || !res.verification) {
             throw new Error(res.error ?? "sessionVerifyDeliverable failed");

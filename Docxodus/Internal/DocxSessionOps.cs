@@ -301,6 +301,21 @@ internal static class DocxSessionOps
         SessionRegistry.Get(handle).VerifyDeliverableJson();
 
     /// <summary>
+    /// <see cref="VerifyDeliverable(int)"/> under the full wire request (issue #747): the
+    /// session's clean-save bytes and opening-package baseline, plus the policy, expected
+    /// deltas and companion artifacts the request carries.
+    /// </summary>
+    public static string VerifyDeliverable(int handle, string? requestJson)
+    {
+        var parsed = DeliverableVerificationRequestJson.Parse(requestJson);
+        return SessionRegistry.Get(handle).VerifyDeliverable(
+            parsed.Options,
+            parsed.ExpectedSemanticChanges,
+            parsed.ExpectedPackageChanges,
+            parsed.CompanionArtifacts).ToCanonicalJson();
+    }
+
+    /// <summary>
     /// Render a preview shadow to the SAME complete-document profile
     /// <see cref="DocxSession.PreviewBatch"/> uses (<see cref="HtmlConversionOps.PreviewDocumentOptions"/>).
     /// Exists so the callback-shaped npm preview — which drives its shadow from JS and therefore
@@ -423,10 +438,15 @@ internal static class DocxSessionOps
     /// plus, when <c>comments</c> is true, Inline comment rendering with the <c>comment-</c> class
     /// prefix the editor's first paint uses.
     /// </summary>
-    public static string RenderEditorHtml(int handle, string optionsJson)
-    {
-        var o = DocxSessionJson.ParseEditorRenderOptions(optionsJson);
-        return HtmlConversionOps.ConvertToHtml(SessionRegistry.Get(handle), new HtmlConversionOptions
+    public static string RenderEditorHtml(int handle, string optionsJson) =>
+        HtmlConversionOps.ConvertToHtml(SessionRegistry.Get(handle),
+            EditorDocumentRenderOptions(DocxSessionJson.ParseEditorRenderOptions(optionsJson)));
+
+    /// <summary>The whole-document profile behind <see cref="RenderEditorHtml"/>; the chrome render
+    /// of a windowed mount uses the same one so its stylesheet, section wrappers and note sections
+    /// are the full render's.</summary>
+    private static HtmlConversionOptions EditorDocumentRenderOptions(EditorRenderOptions o) =>
+        new HtmlConversionOptions
         {
             CssClassPrefix = o.CssPrefix,
             FabricateCssClasses = o.FabricateClasses,
@@ -438,11 +458,28 @@ internal static class DocxSessionOps
             StampAnchors = true,
             CommentRenderMode = o.Comments ? (int)CommentRenderMode.Inline : -1,
             CommentCssClassPrefix = EditorCommentCssPrefix,
-        });
-    }
+        };
 
     /// <summary>Batch block render with the editor profile — <see cref="RenderBlocksHtml"/> plus
     /// comment markup when <c>comments</c> is true. Same JSON-object result shape.</summary>
+    /// <summary>
+    /// The document's rendered chrome with the editor profile — stylesheet, every section
+    /// wrapper with its page geometry, the header/footer registry, the footnote and endnote
+    /// sections — and none of its body units. A windowed mount (issue #776) starts from this and
+    /// fills the sections from <see cref="RenderEditorBlocksHtml"/> a window at a time, so the
+    /// first paint never pays the whole-document render. See
+    /// <see cref="HtmlConversionOps.RenderChromeHtml"/>.
+    /// </summary>
+    public static string RenderEditorChromeHtml(int handle, string optionsJson) =>
+        HtmlConversionOps.RenderChromeHtml(SessionRegistry.Get(handle),
+            EditorDocumentRenderOptions(DocxSessionJson.ParseEditorRenderOptions(optionsJson)));
+
+    /// <summary>A contiguous window of body units as the full render lays them out (issue #776) —
+    /// see <see cref="HtmlConversionOps.RenderBlocksRangeHtml(DocxSession, IReadOnlyList{string}, HtmlConversionOptions)"/>.</summary>
+    public static string RenderEditorRangeHtml(int handle, string anchorIdsJson, string optionsJson) =>
+        HtmlConversionOps.RenderBlocksRangeHtml(handle, anchorIdsJson,
+            EditorBlockRenderOptions(DocxSessionJson.ParseEditorRenderOptions(optionsJson)));
+
     public static string RenderEditorBlocksHtml(int handle, string anchorIdsJson, string optionsJson) =>
         HtmlConversionOps.RenderBlocksHtml(handle, anchorIdsJson,
             EditorBlockRenderOptions(DocxSessionJson.ParseEditorRenderOptions(optionsJson)));
@@ -465,6 +502,7 @@ internal static class DocxSessionOps
             FabricateCssClasses = o.FabricateClasses,
             RenderFootnotesAndEndnotes = true,
             RenderTrackedChanges = o.RenderTrackedChanges,
+            StampAnchors = o.StampAnchors,
             CommentRenderMode = o.Comments ? (int)CommentRenderMode.Inline : -1,
             CommentCssClassPrefix = EditorCommentCssPrefix,
             // The paginated full render marks PAGE/NUMPAGES results with data-field so the page
@@ -474,6 +512,11 @@ internal static class DocxSessionOps
             // inside page boxes.
             StampPageNumberFields = o.Paginated,
             StampPageNumberFieldsInRunningStories = true,
+            // Page view also changes how a block itself renders — an anchored picture or text
+            // box is positioned absolutely inside its page box — so a block re-rendered into
+            // page view follows the same profile the full render used.
+            PaginationMode = o.Paginated ? 1 : 0,
+            PaginationScale = o.Scale,
         };
 
     /// <summary>
@@ -921,6 +964,12 @@ internal static class DocxSessionOps
     {
         if (!TryDecodeImageBase64(imageBase64, null, out var bytes, out var error)) return error!;
         return DocxSessionJson.Serialize(SessionRegistry.Get(handle).ReplaceImage(imageId, bytes!));
+    }
+
+    public static string EmbedLinkedImage(int handle, string imageId, string imageBase64)
+    {
+        if (!TryDecodeImageBase64(imageBase64, null, out var bytes, out var error)) return error!;
+        return DocxSessionJson.Serialize(SessionRegistry.Get(handle).EmbedLinkedImage(imageId, bytes!));
     }
 
     public static string SetImageDimensions(int handle, string imageId, string dimensionsJson)

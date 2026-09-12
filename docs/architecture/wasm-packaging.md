@@ -190,6 +190,15 @@ the tier did not change behaviour; both ran green on the AOT bundle before it sh
 
 ### The cold path can collapse, so every comparison warms first (issues #695, #696)
 
+The same collapse has a second home: the mutation preview. `OpenPreviewSession` clones the
+live package into a shadow session, and the shadow's first transaction serializes every part
+into a package snapshot — an allocation-heavy cold path that, run interpreted with the live
+package, the clone and the caller's listings already on the heap, stopped finishing in the
+browser (`previewBatch` never returned; the same preview is ~400 ms natively).
+`PreviewEngine.EnsureWarm()` is the invariant `DocxSessionBridge.OpenPreviewSession` holds
+before the first shadow: clone, begin, mutate and roll back a one-paragraph seed session once
+per module instance. A new preview entry point must hold it too.
+
 A stale profile costs speed, never correctness — but the *cold path* costs more than speed.
 The first comparison a module instance runs executes the engine's whole cold path (assembly
 resolution, type loads, static constructors, first-time entry into every method the diff and

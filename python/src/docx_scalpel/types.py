@@ -14,6 +14,8 @@ where they're used in ``session.py``.
 
 from __future__ import annotations
 
+import base64
+
 from dataclasses import dataclass, field
 import base64
 from enum import Enum
@@ -133,6 +135,11 @@ __all__ = [
     "DeliverableSemanticDelta",
     "DeliverableArtifactMetadata",
     "DeliverableVerificationResult",
+    "DeliverablePackageChangeExpectation",
+    "DeliverableRenderDiagnostic",
+    "DeliverableCompanionArtifact",
+    "DeliverableVerificationOptions",
+    "DeliverableVerificationRequest",
     "RedlineReversibilityProof",
     "RedlineProofPathResult",
     "RedlineProofPackageIdentity",
@@ -159,6 +166,10 @@ __all__ = [
     "ImageInsertOptions",
     "ImageDimensions",
     "ImageFormatCapability",
+    "ImageMarkupCapability",
+    "ImageOperationSupport",
+    "ImageWrapPoint",
+    "ImageWrapPolygon",
     "ImageOccurrence",
     "ImageCapabilities",
     "ContentControlType",
@@ -936,6 +947,212 @@ class DeliveryReceiptVerificationResult:
             ),
             findings=tuple(str(item) for item in d.get("findings", ())),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class DeliverablePackageChangeExpectation:
+    """One approved package-level delta the deliverable is expected to show (issue #747)."""
+
+    kind: DeliverablePackageChangeKind
+    location: ChangeLocation
+    before_digest: VerificationDigest | None = None
+    after_digest: VerificationDigest | None = None
+    before_value: str | None = None
+    after_value: str | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "kind": self.kind.value,
+            "location": _location_to_wire(self.location),
+        }
+        if self.before_digest is not None:
+            out["beforeDigest"] = _digest_to_wire(self.before_digest)
+        if self.after_digest is not None:
+            out["afterDigest"] = _digest_to_wire(self.after_digest)
+        if self.before_value is not None:
+            out["beforeValue"] = self.before_value
+        if self.after_value is not None:
+            out["afterValue"] = self.after_value
+        return out
+
+
+@dataclass(frozen=True, slots=True)
+class DeliverableRenderDiagnostic:
+    """One render warning or limitation reported by a companion renderer."""
+
+    kind: str
+    message: str
+    severity: VerificationFindingSeverity = VerificationFindingSeverity.WARNING
+    code: str | None = None
+    phase: str | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "kind": self.kind,
+            "message": self.message,
+            "severity": self.severity.value,
+        }
+        if self.code is not None:
+            out["code"] = self.code
+        if self.phase is not None:
+            out["phase"] = self.phase
+        return out
+
+
+@dataclass(frozen=True, slots=True)
+class DeliverableCompanionArtifact:
+    """Bytes and renderer/document binding for one companion artifact submitted for verification."""
+
+    artifact_id: str
+    role: DeliverableArtifactRole
+    media_type: str
+    availability: DeliverableArtifactAvailability = DeliverableArtifactAvailability.AVAILABLE
+    data: bytes | None = None
+    unavailable_reason: str | None = None
+    page_count: int | None = None
+    renderer_fingerprint: str | None = None
+    #: Digest of the exact package the renderer consumed; a mismatch is a stale artifact.
+    source_package_digest: VerificationDigest | None = None
+    page_map_digest: VerificationDigest | None = None
+    render_diagnostics: tuple[DeliverableRenderDiagnostic, ...] = ()
+
+    def to_wire(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "artifactId": self.artifact_id,
+            "role": self.role.value,
+            "mediaType": self.media_type,
+            "availability": self.availability.value,
+            "renderDiagnostics": [d.to_wire() for d in self.render_diagnostics],
+        }
+        if self.data is not None:
+            out["bytesB64"] = base64.b64encode(self.data).decode("ascii")
+        if self.unavailable_reason is not None:
+            out["unavailableReason"] = self.unavailable_reason
+        if self.page_count is not None:
+            out["pageCount"] = self.page_count
+        if self.renderer_fingerprint is not None:
+            out["rendererFingerprint"] = self.renderer_fingerprint
+        if self.source_package_digest is not None:
+            out["sourcePackageDigest"] = _digest_to_wire(self.source_package_digest)
+        if self.page_map_digest is not None:
+            out["pageMapDigest"] = _digest_to_wire(self.page_map_digest)
+        return out
+
+
+@dataclass(frozen=True, slots=True)
+class DeliverableVerificationOptions:
+    """Policy and inspection limits for verification (issue #747).
+
+    Every field defaults to ``None``, meaning the verifier's own default; only fields
+    you set are sent. Unknown fields are rejected by the host.
+    """
+
+    mode: DeliverableVerificationMode | None = None
+    open_xml_version: str | None = None
+    fail_on_unexpected_changes: bool | None = None
+    require_no_placeholders: bool | None = None
+    detect_bracketed_alternative_clauses: bool | None = None
+    editorial_markers: tuple[str, ...] | None = None
+    placeholder_tokens: tuple[str, ...] | None = None
+    max_package_bytes: int | None = None
+    max_findings: int | None = None
+    max_detector_nodes: int | None = None
+    max_detector_relationships: int | None = None
+    max_detector_text_characters: int | None = None
+    max_detector_regex_matches: int | None = None
+    max_detector_steps: int | None = None
+    max_companion_artifact_bytes: int | None = None
+    max_total_companion_artifact_bytes: int | None = None
+    max_companion_artifacts: int | None = None
+    max_render_diagnostics: int | None = None
+    max_expected_changes: int | None = None
+    max_reported_delta_changes: int | None = None
+    package_manifest: Mapping[str, int | float] | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        names = {
+            "mode": "mode",
+            "open_xml_version": "openXmlVersion",
+            "fail_on_unexpected_changes": "failOnUnexpectedChanges",
+            "require_no_placeholders": "requireNoPlaceholders",
+            "detect_bracketed_alternative_clauses": "detectBracketedAlternativeClauses",
+            "editorial_markers": "editorialMarkers",
+            "placeholder_tokens": "placeholderTokens",
+            "max_package_bytes": "maxPackageBytes",
+            "max_findings": "maxFindings",
+            "max_detector_nodes": "maxDetectorNodes",
+            "max_detector_relationships": "maxDetectorRelationships",
+            "max_detector_text_characters": "maxDetectorTextCharacters",
+            "max_detector_regex_matches": "maxDetectorRegexMatches",
+            "max_detector_steps": "maxDetectorSteps",
+            "max_companion_artifact_bytes": "maxCompanionArtifactBytes",
+            "max_total_companion_artifact_bytes": "maxTotalCompanionArtifactBytes",
+            "max_companion_artifacts": "maxCompanionArtifacts",
+            "max_render_diagnostics": "maxRenderDiagnostics",
+            "max_expected_changes": "maxExpectedChanges",
+            "max_reported_delta_changes": "maxReportedDeltaChanges",
+            "package_manifest": "packageManifest",
+        }
+        out: dict[str, Any] = {}
+        for attr, wire in names.items():
+            value = getattr(self, attr)
+            if value is None:
+                continue
+            if isinstance(value, Enum):
+                value = value.value
+            elif isinstance(value, tuple):
+                value = list(value)
+            elif isinstance(value, Mapping):
+                value = dict(value)
+            out[wire] = value
+        return out
+
+
+@dataclass(frozen=True, slots=True)
+class DeliverableVerificationRequest:
+    """The full bounded verification request (issue #747): what the typed .NET request adds
+    to the package bytes. ``expected_semantic_changes`` is the canonical semantic-changes
+    object (``SemanticChangeSet`` from ``get_semantic_changes``, or its wire mapping).
+    """
+
+    options: DeliverableVerificationOptions | None = None
+    expected_semantic_changes: "SemanticChangeSet | Mapping[str, Any] | None" = None
+    expected_package_changes: tuple[DeliverablePackageChangeExpectation, ...] = ()
+    companion_artifacts: tuple[DeliverableCompanionArtifact, ...] = ()
+
+    def to_wire(self) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        if self.options is not None:
+            out["options"] = self.options.to_wire()
+        if self.expected_semantic_changes is not None:
+            semantic = self.expected_semantic_changes
+            out["expectedSemanticChanges"] = (
+                semantic.to_wire() if hasattr(semantic, "to_wire") else dict(semantic)  # type: ignore[arg-type]
+            )
+        if self.expected_package_changes:
+            out["expectedPackageChanges"] = [c.to_wire() for c in self.expected_package_changes]
+        if self.companion_artifacts:
+            out["companionArtifacts"] = [a.to_wire() for a in self.companion_artifacts]
+        return out
+
+
+def _digest_to_wire(digest: VerificationDigest) -> dict[str, str]:
+    return {"algorithm": digest.algorithm, "value": digest.value}
+
+
+def _location_to_wire(location: ChangeLocation) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for attr, wire in (
+        ("entry_uri", "entryUri"),
+        ("owner_uri", "ownerUri"),
+        ("relationship_id", "relationshipId"),
+        ("target_uri", "targetUri"),
+        ("property_path", "propertyPath"),
+    ):
+        value = getattr(location, attr, None)
+        if value is not None:
+            out[wire] = value
+    return out
 
 
 @dataclass(frozen=True, slots=True)
@@ -2057,6 +2274,38 @@ class ImageVerticalAlignment(str, Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class ImageWrapPoint:
+    """One vertex of a tight/through wrap outline in DrawingML's 21600-unit picture space."""
+
+    x: int
+    y: int
+
+    def to_wire(self) -> dict[str, int]:
+        return {"x": self.x, "y": self.y}
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "ImageWrapPoint":
+        return cls(int(d["x"]), int(d["y"]))
+
+
+@dataclass(frozen=True, slots=True)
+class ImageWrapPolygon:
+    """The outline text follows under tight/through wrap: a start vertex plus at least two
+    line segments. ``None`` on write means the picture rectangle."""
+
+    points: tuple[ImageWrapPoint, ...]
+    edited: bool = False
+
+    def to_wire(self) -> dict[str, Any]:
+        return {"points": [point.to_wire() for point in self.points], "edited": self.edited}
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "ImageWrapPolygon":
+        return cls(tuple(ImageWrapPoint._from_wire(point) for point in d.get("points", ())),
+                   bool(d.get("edited", False)))
+
+
+@dataclass(frozen=True, slots=True)
 class FloatingImageLayout:
     horizontal_relative_from: ImageHorizontalReference = ImageHorizontalReference.COLUMN
     horizontal_offset_emu: int | None = 0
@@ -2066,6 +2315,7 @@ class FloatingImageLayout:
     vertical_alignment: ImageVerticalAlignment | None = None
     wrap_mode: ImageWrapMode = ImageWrapMode.SQUARE
     wrap_side: ImageWrapSide = ImageWrapSide.BOTH_SIDES
+    wrap_polygon: ImageWrapPolygon | None = None
     distance_top_emu: int = 0
     distance_bottom_emu: int = 0
     distance_left_emu: int = 0
@@ -2095,6 +2345,7 @@ class FloatingImageLayout:
                 "verticalAlignment": (self.vertical_alignment.value
                                        if self.vertical_alignment is not None else None),
                 "wrapMode": self.wrap_mode.value, "wrapSide": self.wrap_side.value,
+                "wrapPolygon": (self.wrap_polygon.to_wire() if self.wrap_polygon is not None else None),
                 "distanceTopEmu": self.distance_top_emu, "distanceBottomEmu": self.distance_bottom_emu,
                 "distanceLeftEmu": self.distance_left_emu, "distanceRightEmu": self.distance_right_emu,
                 "relativeHeight": self.relative_height, "behindDocument": self.behind_document,
@@ -2118,6 +2369,8 @@ class FloatingImageLayout:
                                 if vertical_alignment is not None else None),
             wrap_mode=ImageWrapMode(d.get("wrapMode", "unknown")),
             wrap_side=ImageWrapSide(d.get("wrapSide", "unknown")),
+            wrap_polygon=(ImageWrapPolygon._from_wire(d["wrapPolygon"])
+                          if d.get("wrapPolygon") is not None else None),
             distance_top_emu=int(d.get("distanceTopEmu", 0)),
             distance_bottom_emu=int(d.get("distanceBottomEmu", 0)),
             distance_left_emu=int(d.get("distanceLeftEmu", 0)),
@@ -2173,6 +2426,19 @@ class ImageDimensions:
 
 
 @dataclass(frozen=True, slots=True)
+class ImageOperationSupport:
+    """Whether one image operation applies to one occurrence in the session's current mode."""
+
+    operation: str
+    can_mutate: bool
+    reason: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "ImageOperationSupport":
+        return cls(d["operation"], bool(d["canMutate"]), d.get("reason"))
+
+
+@dataclass(frozen=True, slots=True)
 class ImageOccurrence:
     id: str
     markup_kind: ImageMarkupKind
@@ -2202,6 +2468,12 @@ class ImageOccurrence:
     title: str | None
     floating_layout: FloatingImageLayout | None
     floating_layout_supported: bool
+    operations: tuple[ImageOperationSupport, ...] = ()
+
+    def operation(self, name: str) -> ImageOperationSupport | None:
+        """The matrix entry for ``name`` (``replace``, ``embed_linked``, ``set_dimensions``,
+        ``set_metadata``, ``set_floating_layout`` or ``remove``)."""
+        return next((entry for entry in self.operations if entry.operation == name), None)
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "ImageOccurrence":
@@ -2235,7 +2507,22 @@ class ImageOccurrence:
             floating_layout=(FloatingImageLayout._from_wire(d["floatingLayout"])
                              if "floatingLayout" in d else None),
             floating_layout_supported=bool(d.get("floatingLayoutSupported", False)),
+            operations=tuple(ImageOperationSupport._from_wire(entry)
+                             for entry in d.get("operations", ())),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class ImageMarkupCapability:
+    """Which operations one markup family accepts, independent of any occurrence."""
+
+    markup: str
+    operations: tuple[str, ...]
+    limitation: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "ImageMarkupCapability":
+        return cls(d["markup"], tuple(d.get("operations", ())), d.get("limitation"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -2270,6 +2557,8 @@ class ImageCapabilities:
     accepts_binary_bytes: bool
     supports_network_fetch: bool
     supports_file_io: bool
+    markups: tuple[ImageMarkupCapability, ...] = ()
+    tracked_operations: tuple[str, ...] = ()
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "ImageCapabilities":
@@ -2292,6 +2581,9 @@ class ImageCapabilities:
             accepts_binary_bytes=bool(d["acceptsBinaryBytes"]),
             supports_network_fetch=bool(d["supportsNetworkFetch"]),
             supports_file_io=bool(d["supportsFileIo"]),
+            markups=tuple(ImageMarkupCapability._from_wire(value)
+                          for value in d.get("markups", ())),
+            tracked_operations=tuple(d.get("trackedOperations", ())),
         )
 
 
@@ -2316,6 +2608,14 @@ class ContentControlPlacement(str, Enum):
     UNKNOWN = "unknown"
 
 
+class ContentControlNestedPolicy(str, Enum):
+    """How a whole-control fill treats nested controls inside its target (issue #763)."""
+
+    REFUSE = "refuse"
+    PRESERVE = "preserve"
+    REPLACE = "replace"
+
+
 class ContentControlBindingPolicy(str, Enum):
     PRESERVE = "preserve"
     DETACH_TARGET = "detach_target"
@@ -2324,9 +2624,44 @@ class ContentControlBindingPolicy(str, Enum):
 @dataclass(frozen=True, slots=True)
 class ContentControlFillOptions:
     binding_policy: ContentControlBindingPolicy = ContentControlBindingPolicy.PRESERVE
+    #: How a text/rich-text fill treats nested controls inside the target: ``REFUSE``
+    #: (default), ``PRESERVE`` (keep them; ``child_fills`` may fill named textual
+    #: children in the same operation) or ``REPLACE`` (drop them; a locked or data-bound
+    #: nested control refuses).
+    nested_controls: ContentControlNestedPolicy = ContentControlNestedPolicy.REFUSE
+    #: With ``PRESERVE``: plain-text fills for nested text/rich-text controls, keyed by
+    #: their ``sdt`` anchor. A key that is not a nested textual control, or a child that
+    #: fails its own gates, fails the whole call without mutating.
+    child_fills: Mapping[str, str] | None = None
 
     def to_wire(self) -> dict[str, Any]:
-        return {"bindingPolicy": self.binding_policy.value}
+        out: dict[str, Any] = {
+            "bindingPolicy": self.binding_policy.value,
+            "nestedControls": self.nested_controls.value,
+        }
+        if self.child_fills is not None:
+            out["childFills"] = dict(self.child_fills)
+        return out
+
+
+@dataclass(frozen=True, slots=True)
+class ContentControlOperationSupport:
+    """Whether one operation would succeed on a control right now, by the gates it applies."""
+
+    operation: str
+    can_mutate: bool
+    nested_controls: ContentControlNestedPolicy | None = None
+    reason: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "ContentControlOperationSupport":
+        nested = d.get("nestedControls")
+        return cls(
+            operation=str(d.get("operation", "")),
+            can_mutate=bool(d.get("canMutate", False)),
+            nested_controls=None if nested is None else ContentControlNestedPolicy(str(nested)),
+            reason=d.get("reason"),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -2363,6 +2698,11 @@ class ContentControlInfo:
     unsupported_reason: str | None
     text: str
     item_values: tuple[str, ...]
+    #: Anchors of the controls nested anywhere inside this control's payload.
+    nested_control_anchor_ids: tuple[str, ...] = ()
+    #: Per-operation support, including nested-policy variants of a fill when the target
+    #: contains nested controls and the session's tracked-change mode.
+    operations: tuple[ContentControlOperationSupport, ...] = ()
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "ContentControlInfo":
@@ -2382,6 +2722,10 @@ class ContentControlInfo:
             can_detach_target_binding=bool(d.get("canDetachTargetBinding", False)),
             unsupported_reason=d.get("unsupportedReason"), text=d.get("text", ""),
             item_values=tuple(d.get("itemValues", ())),
+            nested_control_anchor_ids=tuple(d.get("nestedControlAnchorIds", ())),
+            operations=tuple(
+                ContentControlOperationSupport._from_wire(entry) for entry in d.get("operations", ())
+            ),
         )
 
 
@@ -4196,6 +4540,27 @@ class SemanticValue:
             profile=d.get("profile"),
         )
 
+    def to_wire(self) -> dict[str, Any]:
+        """The canonical schema-v1 form, the inverse of :meth:`_from_wire`."""
+        if self.kind is SemanticValueKind.ABSENT:
+            return {"kind": "absent"}
+        if self.kind is SemanticValueKind.DIGEST:
+            return {
+                "kind": "digest",
+                "algorithm": self.algorithm,
+                "profile": self.profile,
+                "value": self.value,
+            }
+        if self.kind is SemanticValueKind.OBJECT:
+            members = self.value
+            return {
+                "kind": "object",
+                "value": {name: member.to_wire() for name, member in members.items()},  # type: ignore[union-attr]
+            }
+        if self.kind is SemanticValueKind.ARRAY:
+            return {"kind": "array", "value": [item.to_wire() for item in self.value]}  # type: ignore[union-attr]
+        return {"kind": self.kind.value, "value": self.value}
+
 
 @dataclass(frozen=True, slots=True)
 class SemanticChange:
@@ -4231,6 +4596,23 @@ class SemanticChange:
             after=SemanticValue._from_wire(d["after"]),
         )
 
+    def to_wire(self) -> dict[str, Any]:
+        """The canonical schema-v1 form, the inverse of :meth:`_from_wire`."""
+        return {
+            "id": self.id,
+            "operation": self.operation.value,
+            "family": self.family.value,
+            "partUri": self.part_uri,
+            "path": self.path,
+            "leftAnchor": self.left_anchor,
+            "rightAnchor": self.right_anchor,
+            "leftScope": self.left_scope,
+            "rightScope": self.right_scope,
+            "moveId": self.move_id,
+            "before": self.before.to_wire(),
+            "after": self.after.to_wire(),
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class SemanticChangeSet:
@@ -4256,6 +4638,15 @@ class SemanticChangeSet:
                 f"semantic-change count {change_count} does not match {len(changes)} entries"
             )
         return cls(schema, schema_version, change_count, changes)
+
+    def to_wire(self) -> dict[str, Any]:
+        """The canonical schema-v1 form, accepted back as a verification expectation."""
+        return {
+            "schema": self.schema,
+            "schemaVersion": self.schema_version,
+            "changeCount": self.change_count,
+            "changes": [change.to_wire() for change in self.changes],
+        }
 
 
 # ---------------------------------------------------------------------------

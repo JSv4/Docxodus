@@ -1,4 +1,6 @@
 #nullable enable
+using System;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -1800,10 +1802,8 @@ public class HtmlConversionOpsTests
     // markers deep in a list (numbering continuation, the M9 gap the single-block
     // path had) and contextualSpacing-dependent margins (neighbor context). This is
     // deliberately stronger than HCO050's tag+text check. Canonicalized away: XML attribute
-    // ORDER (no semantics), and the KIND segment of data-source-anchor-id (see
-    // CanonicalizeRenderedFragment — a full-render defect, not a block-render one). The
-    // attribute's addressing dimensions, scope and unid, are still compared exactly, and
-    // HCO083 pins the block path's complete value.
+    // ORDER only (no semantics); data-source-anchor-id is compared whole, and HCO083 pins the
+    // block path's complete value.
     [Fact]
     public void HCO081_RenderBlocksHtml_MatchesFullRenderFragments()
     {
@@ -1892,23 +1892,9 @@ public class HtmlConversionOpsTests
         var clone = new System.Xml.Linq.XElement(source);
         foreach (var element in clone.DescendantsAndSelf())
         {
-            // data-source-anchor-id: compare SCOPE and UNID exactly, drop the kind segment.
-            // The full render builds its canonical index from the FINAL (post-preprocessing)
-            // trees, and FormattingAssembler's NormalizeListItems has already stripped w:numPr
-            // by then — so WmlToMarkdownConverter.KindFor sees a plain paragraph and every list
-            // item is stamped "p:body:<unid>" where the session's own anchor id (the value
-            // PM100 asserts, and the value npm/src/pagination.ts:256 matches citations against)
-            // is "li:body:<unid>". Measured on this fixture: 30 of 177 stamped ids, kind-only,
-            // scope and unid always correct. The BLOCK path stamps the session anchor id
-            // verbatim (HCO083), so this exemption covers a full-render defect; delete it — and
-            // watch this assertion go green on its own — once that index is built pre-normalize.
-            if (element.Attribute("data-source-anchor-id") is { } sourceAnchor)
-            {
-                var value = sourceAnchor.Value;
-                var kindEnd = value.IndexOf(':');
-                if (kindEnd >= 0) sourceAnchor.Value = value.Substring(kindEnd + 1);
-            }
-
+            // data-source-anchor-id is compared whole, kind included: the full render builds its
+            // canonical index from the source trees before formatting assembly strips w:numPr, so
+            // a list item is "li:body:<unid>" on both paths (#781).
             var attributes = element.Attributes()
                 .Select(attribute => new System.Xml.Linq.XAttribute(attribute))
                 .OrderBy(attribute => attribute.Name.NamespaceName, StringComparer.Ordinal)
@@ -2081,5 +2067,136 @@ public class HtmlConversionOpsTests
         Assert.False(string.IsNullOrEmpty(map.RootElement.GetProperty(goodId).GetString()));
         Assert.Equal(System.Text.Json.JsonValueKind.Null,
             map.RootElement.GetProperty("p:body:00000000000000000000000000000000").ValueKind);
+    }
+
+    // A block render must show the number the full render shows. The converter rewrites the
+    // shell's markup before it numbers anything, so the live counters reach it as paragraph
+    // attributes; without them the shell recounts the list from the few blocks it holds and
+    // the fifth item of a list, rendered on its own, came out as "2.".
+    [Fact]
+    public void HCO086_BlockRendersShowTheNumbersTheFullRenderShows()
+    {
+        byte[] bytes = File.ReadAllBytes(Path.Combine("..", "..", "..", "..", "TestFiles",
+            "HC031-Complicated-Document.docx"));
+        var opts = new HtmlConversionOptions { FabricateCssClasses = false, CssClassPrefix = "pt-", StampAnchors = true };
+        using var session = new DocxSession(bytes);
+        var full = XElement.Parse(HtmlConversionOps.ConvertToHtml(session, opts));
+        var fullMarkers = full.Descendants()
+            .Where(e => e.Attribute("data-anchor") is not null)
+            .ToDictionary(e => (string)e.Attribute("data-anchor")!, MarkerOf, StringComparer.Ordinal);
+
+        var index = session.Project().AnchorIndex;
+        var listItems = index.Keys
+            .Where(k => (k.StartsWith("p:body:") || k.StartsWith("li:body:")) && fullMarkers.TryGetValue(k.Split(':')[^1], out var m) && m.Length > 0)
+            .ToList();
+        Assert.True(listItems.Count >= 30, $"expected HC031's numbered paragraphs, found {listItems.Count}");
+
+        var mismatches = new List<string>();
+        foreach (var anchor in listItems)
+        {
+            string expected = fullMarkers[anchor.Split(':')[^1]];
+            string viaSession = MarkerOf(XElement.Parse(HtmlConversionOps.RenderBlockHtml(session, anchor, opts)));
+            string viaBytes = MarkerOf(XElement.Parse(HtmlConversionOps.RenderBlockHtml(bytes, anchor, opts)));
+            if (viaSession != expected || viaBytes != expected)
+                mismatches.Add($"{index[anchor].TextPreview.Trim()[..Math.Min(20, index[anchor].TextPreview.Trim().Length)]}: full '{expected}' session '{viaSession}' stateless '{viaBytes}'");
+        }
+        Assert.True(mismatches.Count == 0, string.Join("\n", mismatches));
+
+        // The list whose items all share one level: the last item counts to five on every path.
+        var fifth = listItems.Single(a => index[a].TextPreview.TrimStart().StartsWith("Fusce est"));
+        Assert.Equal("5.", fullMarkers[fifth.Split(':')[^1]]);
+        Assert.Equal("5.", MarkerOf(XElement.Parse(HtmlConversionOps.RenderBlockHtml(session, fifth, opts))));
+    }
+
+    // Continuation is inherited from the previous item at the same level, which a block render's
+    // shell does not hold: a deeper item that continues a flat sequence (1., 2., 3., then a
+    // level-1 item starting at 4) renders "4." on every path, never "1.4".
+    [Fact]
+    public void HCO087_BlockRenderKeepsContinuationNumbering()
+    {
+        byte[] bytes = BuildContinuationList();
+        var opts = new HtmlConversionOptions { FabricateCssClasses = false, CssClassPrefix = "pt-", StampAnchors = true };
+        var full = XElement.Parse(HtmlConversionOps.ConvertToHtml(bytes, opts));
+        Assert.Equal(new[] { "1.", "2.", "3.", "4." }, full.Descendants()
+            .Where(e => e.Attribute("data-anchor") is not null).Select(MarkerOf));
+
+        using var session = new DocxSession(bytes);
+        var fourth = session.Project().AnchorIndex.Single(kv => kv.Value.TextPreview.Contains("Fourth")).Key;
+        Assert.Equal("4.", MarkerOf(XElement.Parse(HtmlConversionOps.RenderBlockHtml(session, fourth, opts))));
+        Assert.Equal("4.", MarkerOf(XElement.Parse(HtmlConversionOps.RenderBlockHtml(bytes, fourth, opts))));
+    }
+
+    // A block's hyperlink refers to a relationship of the story part that owns it; the shell
+    // re-declares it, so the block render puts the same <a href> around the runs the full
+    // render does instead of rendering them as plain text. The table of contents' entries are
+    // hyperlinks inside a field that spans every entry; the shell re-opens that field around
+    // the block, so an entry rendered alone is the full render's entry byte for byte.
+    [Fact]
+    public void HCO088_BlockRenderKeepsHyperlinksAndTheFieldAroundThem()
+    {
+        byte[] bytes = File.ReadAllBytes(Path.Combine("..", "..", "..", "..", "TestFiles",
+            "HC031-Complicated-Document.docx"));
+        var opts = new HtmlConversionOptions { FabricateCssClasses = false, CssClassPrefix = "pt-", StampAnchors = true };
+        using var session = new DocxSession(bytes);
+        var full = XElement.Parse(HtmlConversionOps.ConvertToHtml(session, opts));
+        var linked = full.Descendants().Where(e => e.Name.LocalName == "a" && e.Attribute("href") is not null)
+            .Select(a => a.Ancestors().First(e => e.Attribute("data-anchor") is not null))
+            .Distinct().ToList();
+        Assert.NotEmpty(linked);
+        foreach (var block in linked)
+        {
+            var anchor = session.Project().AnchorIndex.Keys.Single(k => k.EndsWith(":" + (string)block.Attribute("data-anchor")!));
+            var expected = block.Descendants().Where(e => e.Name.LocalName == "a").Select(a => (string?)a.Attribute("href")).ToList();
+            string Links(string html) => string.Join(" ", XElement.Parse(html).Descendants()
+                .Where(e => e.Name.LocalName == "a").Select(a => (string?)a.Attribute("href")));
+            string viaSession = HtmlConversionOps.RenderBlockHtml(session, anchor, opts);
+            Assert.Equal(string.Join(" ", expected), Links(viaSession));
+            Assert.Equal(string.Join(" ", expected), Links(HtmlConversionOps.RenderBlockHtml(bytes, anchor, opts)));
+            Assert.Equal(block.ToString(SaveOptions.DisableFormatting), XElement.Parse(viaSession).ToString(SaveOptions.DisableFormatting));
+        }
+        Assert.Contains(linked, block => ((string?)block.Attribute("style") ?? "").Length > 0 && block.Descendants()
+            .Any(a => a.Name.LocalName == "a" && ((string?)a.Attribute("href") ?? "").StartsWith("#_Toc")));
+    }
+
+    /// <summary>The visible marker text of the list item in <paramref name="html"/> ("" when none).</summary>
+    private static string MarkerOf(XElement html) => string.Concat(html.DescendantsAndSelf()
+        .Where(e => (string?)e.Attribute("data-list-marker") == "true"
+            && !e.Ancestors().Any(a => (string?)a.Attribute("data-list-marker") == "true"))
+        .Select(e => e.Value)).Trim();
+
+    /// <summary>Three level-0 items then a level-1 item whose level starts at 4 with legal
+    /// numbering: Word renders the fourth as "4.", continuing the sequence.</summary>
+    private static byte[] BuildContinuationList()
+    {
+        Wp.Paragraph Item(int level, string text) => new(
+            new Wp.ParagraphProperties(new Wp.NumberingProperties(
+                new Wp.NumberingLevelReference { Val = level }, new Wp.NumberingId { Val = 1 })),
+            new Wp.Run(new Wp.Text(text)));
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            var styles = main.AddNewPart<StyleDefinitionsPart>();
+            styles.Styles = new Wp.Styles(new Wp.Style(new Wp.StyleName { Val = "Normal" }, new Wp.PrimaryStyle())
+                { Type = Wp.StyleValues.Paragraph, StyleId = "Normal", Default = true });
+            var settings = main.AddNewPart<DocumentSettingsPart>();
+            settings.Settings = new Wp.Settings();
+            var numbering = main.AddNewPart<NumberingDefinitionsPart>();
+            numbering.Numbering = new Wp.Numbering(
+                new Wp.AbstractNum(
+                    new Wp.Level(new Wp.StartNumberingValue { Val = 1 },
+                        new Wp.NumberingFormat { Val = Wp.NumberFormatValues.Decimal },
+                        new Wp.LevelText { Val = "%1." },
+                        new Wp.PreviousParagraphProperties(new Wp.Indentation { Left = "360", Hanging = "360" })) { LevelIndex = 0 },
+                    new Wp.Level(new Wp.StartNumberingValue { Val = 4 }, new Wp.IsLegalNumberingStyle(),
+                        new Wp.NumberingFormat { Val = Wp.NumberFormatValues.Decimal },
+                        new Wp.LevelText { Val = "%1.%2" },
+                        new Wp.PreviousParagraphProperties(new Wp.Indentation { Left = "1560", Hanging = "480" })) { LevelIndex = 1 })
+                { AbstractNumberId = 1, MultiLevelType = new Wp.MultiLevelType { Val = Wp.MultiLevelValues.HybridMultilevel } },
+                new Wp.NumberingInstance(new Wp.AbstractNumId { Val = 1 }) { NumberID = 1 });
+            main.Document = new Wp.Document(new Wp.Body(
+                Item(0, "First item"), Item(0, "Second item"), Item(0, "Third item"), Item(1, "Fourth item")));
+        }
+        return ms.ToArray();
     }
 }

@@ -1138,6 +1138,95 @@ export interface DeliveryReceiptVerificationResult {
   findings: string[];
 }
 
+/** One approved package-level delta the deliverable is expected to show (issue #747). */
+export interface DeliverablePackageChangeExpectation {
+  kind: DeliverablePackageChangeKind;
+  location: ChangeLocation;
+  beforeDigest?: VerificationDigest;
+  afterDigest?: VerificationDigest;
+  beforeValue?: string;
+  afterValue?: string;
+}
+
+export type DeliverableRenderDiagnosticKind =
+  | "warning"
+  | "unsupportedContent"
+  | "missingFont"
+  | "fontSubstitution";
+
+/** One render warning or limitation reported by the companion renderer. */
+export interface DeliverableRenderDiagnostic {
+  kind: DeliverableRenderDiagnosticKind;
+  message: string;
+  severity?: VerificationFindingSeverity;
+  code?: string;
+  phase?: string;
+}
+
+/** Bytes and renderer/document binding for one companion artifact submitted for verification. */
+export interface DeliverableCompanionArtifactInput {
+  artifactId: string;
+  role: DeliverableArtifactRole;
+  mediaType: string;
+  /** Defaults to `available`. */
+  availability?: DeliverableArtifactAvailability;
+  bytes?: Uint8Array;
+  unavailableReason?: string;
+  pageCount?: number;
+  rendererFingerprint?: string;
+  /** Digest of the exact package the renderer consumed; a mismatch is a stale artifact. */
+  sourcePackageDigest?: VerificationDigest;
+  pageMapDigest?: VerificationDigest;
+  renderDiagnostics?: readonly DeliverableRenderDiagnostic[];
+}
+
+/**
+ * Policy and inspection limits for verification (issue #747). Every field is optional; an
+ * omitted field takes the verifier's own default. Unknown fields are rejected.
+ */
+export interface DeliverableVerificationPolicyOptions {
+  mode?: DeliverableVerificationMode;
+  openXmlVersion?: string;
+  failOnUnexpectedChanges?: boolean;
+  requireNoPlaceholders?: boolean;
+  detectBracketedAlternativeClauses?: boolean;
+  editorialMarkers?: readonly string[];
+  placeholderTokens?: readonly string[];
+  maxPackageBytes?: number;
+  maxFindings?: number;
+  maxDetectorNodes?: number;
+  maxDetectorRelationships?: number;
+  maxDetectorTextCharacters?: number;
+  maxDetectorRegexMatches?: number;
+  maxDetectorSteps?: number;
+  maxCompanionArtifactBytes?: number;
+  maxTotalCompanionArtifactBytes?: number;
+  maxCompanionArtifacts?: number;
+  maxRenderDiagnostics?: number;
+  maxExpectedChanges?: number;
+  maxReportedDeltaChanges?: number;
+  packageManifest?: {
+    maxEntryCount?: number;
+    maxEntryUncompressedBytes?: number;
+    maxTotalUncompressedBytes?: number;
+    maxXmlPartBytes?: number;
+    maxCompressionRatio?: number;
+    maxUriLength?: number;
+  };
+}
+
+/**
+ * The full bounded verification request (issue #747): what the typed .NET request adds to the
+ * package bytes. Package bytes are passed alongside, never inside, this object.
+ */
+export interface DeliverableVerificationRequest {
+  options?: DeliverableVerificationPolicyOptions;
+  /** The canonical semantic-changes object (as `getSemanticChanges` returns it). */
+  expectedSemanticChanges?: SemanticChangeSet;
+  expectedPackageChanges?: readonly DeliverablePackageChangeExpectation[];
+  companionArtifacts?: readonly DeliverableCompanionArtifactInput[];
+}
+
 export interface DeliverableVerificationResult {
   schema: "https://docxodus.dev/schemas/verification/deliverable-verification/v1";
   schemaVersion: 1;
@@ -1333,6 +1422,12 @@ export interface DocxodusWasmExports {
   DocumentConverter: {
     GeneratePackageManifest: (bytes: Uint8Array) => string;
     VerifyDeliverable: (bytes: Uint8Array) => string;
+    VerifyDeliverableWithRequest?: (bytes: Uint8Array, requestJson: string) => string;
+    VerifyDeliverableWithBaselineAndRequest?: (
+      baselineBytes: Uint8Array,
+      bytes: Uint8Array,
+      requestJson: string,
+    ) => string;
     VerifyDeliveryReceipt: (receiptJson: string, artifactsJson: string) => string;
     VerifyDeliverableWithBaseline: (
       baselineBytes: Uint8Array,
@@ -1696,6 +1791,8 @@ export interface DocxodusWasmExports {
     /** Batch block render with the editor profile — `RenderBlocksHtml` plus comment markup;
      *  same JSON-object result (`{ [anchorId]: html | null }`, or `{"error": …}`). */
     RenderEditorBlocksHtml?: (handle: number, anchorIdsJson: string, optionsJson: string) => string;
+    RenderEditorChromeHtml?: (handle: number, optionsJson: string) => string;
+    RenderEditorRangeHtml?: (handle: number, anchorIdsJson: string, optionsJson: string) => string;
     /** Single-block render with the editor profile — `RenderBlockHtml` plus comment markup. */
     RenderEditorBlockHtml?: (handle: number, anchorId: string, optionsJson: string) => string;
     ReplaceText: (handle: number, anchor: string, md: string) => string;
@@ -1793,6 +1890,7 @@ export interface DocxodusWasmExports {
     ListImages: (handle: number, scopes: number) => string;
     InsertImage: (handle: number, anchor: string, characterOffset: number, imageBase64: string, optionsJson: string) => string;
     ReplaceImage: (handle: number, imageId: string, imageBase64: string) => string;
+    EmbedLinkedImage: (handle: number, imageId: string, imageBase64: string) => string;
     SetImageDimensions: (handle: number, imageId: string, dimensionsJson: string) => string;
     SetImageMetadata: (handle: number, imageId: string, altText: string | null, title: string | null) => string;
     SetImageFloatingLayout: (handle: number, imageId: string, layoutJson: string) => string;
@@ -1858,6 +1956,7 @@ export interface DocxodusWasmExports {
     GetDiff: (handle: number, format: number) => string;
     GetSemanticChanges: (handle: number) => string;
     VerifyDeliverable: (handle: number) => string;
+    VerifyDeliverableWithRequest?: (handle: number, requestJson: string) => string;
     FindByAnnotation: (handle: number, annotationId: string) => string;
     FindByAnnotationWithCitations: (handle: number, annotationId: string, requestJson: string) => string;
     FindByLabel: (handle: number, labelId: string) => string;
@@ -2222,6 +2321,16 @@ export type ImageVerticalReference = "page" | "margin" | "paragraph" | "line" | 
 export type ImageHorizontalAlignment = "left" | "center" | "right" | "inside" | "outside" | "unknown";
 export type ImageVerticalAlignment = "top" | "center" | "bottom" | "inside" | "outside" | "unknown";
 
+/** One vertex of a tight/through wrap outline in DrawingML's 21600-unit picture space. */
+export interface ImageWrapPoint { x: number; y: number; }
+
+/**
+ * The outline text follows under tight/through wrap: a start vertex plus at least two line
+ * segments. Omit it on write to get the picture rectangle; a layout read from the document
+ * always carries the outline it holds.
+ */
+export interface ImageWrapPolygon { points: ImageWrapPoint[]; edited?: boolean; }
+
 export interface FloatingImageLayout {
   horizontalRelativeFrom?: ImageHorizontalReference;
   horizontalOffsetEmu?: number | null;
@@ -2231,6 +2340,7 @@ export interface FloatingImageLayout {
   verticalAlignment?: ImageVerticalAlignment | null;
   wrapMode?: ImageWrapMode;
   wrapSide?: ImageWrapSide;
+  wrapPolygon?: ImageWrapPolygon | null;
   distanceTopEmu?: number;
   distanceBottomEmu?: number;
   distanceLeftEmu?: number;
@@ -2267,6 +2377,9 @@ export interface ImageDimensions {
   preserveAspect?: boolean;
 }
 
+/** Whether one image operation applies to one occurrence in the session's current mode. */
+export interface ImageOperationSupport { operation: string; canMutate: boolean; reason?: string; }
+
 export interface ImageOccurrence {
   id: string; markupKind: ImageMarkupKind; placement?: ImagePlacement; canMutate: boolean;
   unsupportedReason?: string; owningPartUri: string; scope: string; anchorId: string; span: CharSpan;
@@ -2275,7 +2388,12 @@ export interface ImageOccurrence {
   format: ImageBinaryFormat; contentTypeMatchesBytes?: boolean; intrinsicWidthPixels?: number;
   intrinsicHeightPixels?: number; renderedWidthPoints?: number; renderedHeightPoints?: number;
   altText?: string; title?: string; floatingLayout?: FloatingImageLayout; floatingLayoutSupported: boolean;
+  /** replace, embed_linked, set_dimensions, set_metadata, set_floating_layout and remove, each answered. */
+  operations: ImageOperationSupport[];
 }
+
+/** Which operations one markup family accepts, independent of any occurrence. */
+export interface ImageMarkupCapability { markup: string; operations: string[]; limitation?: string; }
 
 export interface ImageFormatCapability {
   format: ImageBinaryFormat; contentType: string; canInspect: boolean; canInsert: boolean;
@@ -2288,6 +2406,7 @@ export interface ImageCapabilities {
   verticalReferences: ImageVerticalReference[]; maxInputBytes: number; maxRenderedPoints: number;
   defaultDpi: number; usesHeaderParsingOnly: boolean; acceptsBinaryBytes: boolean;
   supportsNetworkFetch: boolean; supportsFileIo: boolean;
+  markups: ImageMarkupCapability[]; trackedOperations: string[];
 }
 
 export type ContentControlType = "plain_text" | "rich_text" | "checkbox" | "date"
@@ -2296,8 +2415,33 @@ export type ContentControlType = "plain_text" | "rich_text" | "checkbox" | "date
 export type ContentControlPlacement = "inline" | "block" | "row" | "cell" | "unknown";
 export type ContentControlBindingPolicy = "preserve" | "detach_target";
 
+/** How a whole-control fill treats nested controls inside its target (issue #763). */
+export type ContentControlNestedPolicy = "refuse" | "preserve" | "replace";
+
 export interface ContentControlFillOptions {
   bindingPolicy?: ContentControlBindingPolicy;
+  /**
+   * Default `refuse`. `preserve` keeps every nested control in place and replaces only the
+   * content outside them; `replace` discards the whole payload, nested controls included
+   * (each is reported removed; a locked or data-bound nested control refuses).
+   */
+  nestedControls?: ContentControlNestedPolicy;
+  /**
+   * With `preserve`: plain-text fills for nested text/rich-text controls of the target, keyed
+   * by their `sdt` anchor, applied in the same operation. A key that is not a nested textual
+   * control, or a child that fails its own gates, fails the whole call without mutating.
+   */
+  childFills?: Record<string, string>;
+}
+
+/** Whether one operation would succeed on a control right now, by the gates the operation applies. */
+export interface ContentControlOperationSupport {
+  operation: "fill_text" | "fill_rich_text" | "set_checked" | "set_date" | "select_item"
+    | "fill_picture" | "add_repeating_item" | "remove_repeating_item";
+  /** The nested policy this entry describes, when the target contains nested controls. */
+  nestedControls?: ContentControlNestedPolicy;
+  canMutate: boolean;
+  reason?: string;
 }
 
 export interface ContentControlBindingInfo {
@@ -2328,6 +2472,13 @@ export interface ContentControlInfo {
   unsupportedReason?: string;
   text: string;
   itemValues: string[];
+  /** Anchors of the controls nested anywhere inside this control's payload, in story order. */
+  nestedControlAnchorIds: string[];
+  /**
+   * Per-operation support for this control's family, including nested-policy variants of a
+   * fill when the target contains nested controls and the session's tracked-change mode.
+   */
+  operations: ContentControlOperationSupport[];
 }
 
 export interface DocumentRange {
@@ -2925,6 +3076,13 @@ export interface DocxSessionSettings {
 export interface RenderUnit {
   id: string;
   kind: string;
+  /** Content signature for change detection (leaf blocks omit it). */
+  sig?: string;
+  /** Index of the section wrapper (`[data-section-index]`) the unit renders into. */
+  section?: number;
+  /** Ordinal of the border box the renderer groups adjacent bordered paragraphs into; units
+   *  sharing a group render inside one wrapper, so a windowed mount never splits one. */
+  group?: number;
 }
 
 /** Ordered top-level render units per scope container — the authority for "what
@@ -4244,6 +4402,11 @@ export type WorkerRequestType =
   | "compareDocuments"
   | "compareDocumentsToHtml"
   | "getSemanticChanges"
+  | "createExternalAnnotationSet"
+  | "validateExternalAnnotations"
+  | "projectAnnotationsOntoHtml"
+  | "convertDocxToHtmlWithExternalAnnotations"
+  | "exportToOpenContract"
   | "getRevisions"
   | "getDocumentMetadata"
   | "getVersion"
@@ -4317,6 +4480,8 @@ export interface WorkerVerifyDeliverableRequest extends WorkerRequestBase {
   type: "verifyDeliverable";
   documentBytes: Uint8Array;
   baselineBytes?: Uint8Array;
+  /** The serialized full request (issue #747); absent means the default policy. */
+  requestJson?: string;
 }
 
 /**
@@ -4362,6 +4527,43 @@ export interface WorkerGetSemanticChangesRequest extends WorkerRequestBase {
   leftBytes: Uint8Array;
   rightBytes: Uint8Array;
   settings?: DocxDiffSettings;
+}
+
+/** Create an empty external annotation set bound to a document's hash (issue #775). */
+export interface WorkerCreateExternalAnnotationSetRequest extends WorkerRequestBase {
+  type: "createExternalAnnotationSet";
+  documentBytes: Uint8Array;
+  documentId: string;
+}
+
+/** Validate an external annotation set against a document. */
+export interface WorkerValidateExternalAnnotationsRequest extends WorkerRequestBase {
+  type: "validateExternalAnnotations";
+  documentBytes: Uint8Array;
+  annotationSet: ExternalAnnotationSet;
+}
+
+/** Project an annotation set onto already-rendered (XML-well-formed) HTML. */
+export interface WorkerProjectAnnotationsOntoHtmlRequest extends WorkerRequestBase {
+  type: "projectAnnotationsOntoHtml";
+  html: string;
+  annotationSet: ExternalAnnotationSet;
+  projectionOptions?: ExternalAnnotationProjectionSettings;
+}
+
+/** Convert a document and project an annotation set onto it in one round trip. */
+export interface WorkerConvertWithExternalAnnotationsRequest extends WorkerRequestBase {
+  type: "convertDocxToHtmlWithExternalAnnotations";
+  documentBytes: Uint8Array;
+  annotationSet: ExternalAnnotationSet;
+  conversionOptions?: ConversionOptions;
+  projectionOptions?: ExternalAnnotationProjectionSettings;
+}
+
+/** Export a document to the OpenContracts format. */
+export interface WorkerExportToOpenContractRequest extends WorkerRequestBase {
+  type: "exportToOpenContract";
+  documentBytes: Uint8Array;
 }
 
 /**
@@ -4424,6 +4626,8 @@ export interface WorkerSessionGetSemanticChangesRequest extends WorkerRequestBas
 export interface WorkerSessionVerifyDeliverableRequest extends WorkerRequestBase {
   type: "sessionVerifyDeliverable";
   handle: number;
+  /** The serialized full request (issue #747); absent means the default policy. */
+  requestJson?: string;
 }
 
 /**
@@ -4491,6 +4695,11 @@ export type WorkerRequest =
   | WorkerCompareRequest
   | WorkerCompareToHtmlRequest
   | WorkerGetSemanticChangesRequest
+  | WorkerCreateExternalAnnotationSetRequest
+  | WorkerValidateExternalAnnotationsRequest
+  | WorkerProjectAnnotationsOntoHtmlRequest
+  | WorkerConvertWithExternalAnnotationsRequest
+  | WorkerExportToOpenContractRequest
   | WorkerGetRevisionsRequest
   | WorkerGetDocumentMetadataRequest
   | WorkerGetVersionRequest
@@ -4587,6 +4796,31 @@ export interface WorkerGetSemanticChangesResponse extends WorkerResponseBase {
   semanticChanges?: SemanticChangeSet;
 }
 
+export interface WorkerCreateExternalAnnotationSetResponse extends WorkerResponseBase {
+  type: "createExternalAnnotationSet";
+  annotationSet?: ExternalAnnotationSet;
+}
+
+export interface WorkerValidateExternalAnnotationsResponse extends WorkerResponseBase {
+  type: "validateExternalAnnotations";
+  validation?: ExternalAnnotationValidationResult;
+}
+
+export interface WorkerProjectAnnotationsOntoHtmlResponse extends WorkerResponseBase {
+  type: "projectAnnotationsOntoHtml";
+  html?: string;
+}
+
+export interface WorkerConvertWithExternalAnnotationsResponse extends WorkerResponseBase {
+  type: "convertDocxToHtmlWithExternalAnnotations";
+  html?: string;
+}
+
+export interface WorkerExportToOpenContractResponse extends WorkerResponseBase {
+  type: "exportToOpenContract";
+  export?: OpenContractDocExport;
+}
+
 /**
  * Response from getRevisions request.
  */
@@ -4681,6 +4915,11 @@ export type WorkerResponse =
   | WorkerCompareResponse
   | WorkerCompareToHtmlResponse
   | WorkerGetSemanticChangesResponse
+  | WorkerCreateExternalAnnotationSetResponse
+  | WorkerValidateExternalAnnotationsResponse
+  | WorkerProjectAnnotationsOntoHtmlResponse
+  | WorkerConvertWithExternalAnnotationsResponse
+  | WorkerExportToOpenContractResponse
   | WorkerGetRevisionsResponse
   | WorkerGetDocumentMetadataResponse
   | WorkerGetVersionResponse

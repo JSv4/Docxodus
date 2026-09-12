@@ -201,6 +201,56 @@ internal static class Dispatcher
         return $"{{\"path\":{JsonRpcIo.JsonString(destination)},\"bytesWritten\":{bytes.Length}}}";
     }
 
+    /// <summary>
+    /// The full verification request (issue #747) in the shared wire shape, with one MCP
+    /// addition: a companion artifact may name a <c>path</c> instead of <c>bytesB64</c>. Paths
+    /// resolve through the configured document store, so an artifact outside its scope is
+    /// refused there, and the bytes are read only after the request's own artifact-count limit
+    /// (default or caller-supplied) admits the entry.
+    /// </summary>
+    private static string? VerificationRequestJson(SessionStore store, JsonElement args)
+    {
+        if (!args.TryGetProperty("verification", out var request) || request.ValueKind == JsonValueKind.Null)
+            return null;
+        if (request.ValueKind != JsonValueKind.Object)
+            throw new McpToolException("verification must be an object");
+        if (!request.TryGetProperty("companionArtifacts", out var artifacts)
+            || artifacts.ValueKind != JsonValueKind.Array)
+            return request.GetRawText();
+
+        var limit = new Verification.DeliverableVerificationOptions().MaxCompanionArtifacts;
+        if (request.TryGetProperty("options", out var options)
+            && options.ValueKind == JsonValueKind.Object
+            && options.TryGetProperty("maxCompanionArtifacts", out var configured)
+            && configured.TryGetInt32(out var configuredLimit))
+            limit = configuredLimit;
+        if (artifacts.GetArrayLength() > limit)
+            throw new McpToolException(
+                $"verification.companionArtifacts has {artifacts.GetArrayLength()} entries, more than maxCompanionArtifacts ({limit})");
+
+        var rewritten = new List<Dictionary<string, JsonElement>>();
+        foreach (var artifact in artifacts.EnumerateArray())
+        {
+            if (artifact.ValueKind != JsonValueKind.Object)
+                throw new McpToolException("verification.companionArtifacts entries must be objects");
+            var fields = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(artifact.GetRawText())!;
+            if (fields.Remove("path", out var pathValue))
+            {
+                if (fields.ContainsKey("bytesB64"))
+                    throw new McpToolException("a companion artifact takes either path or bytesB64, not both");
+                var path = pathValue.GetString();
+                if (string.IsNullOrWhiteSpace(path))
+                    throw new McpToolException("companion artifact path must be a non-empty string");
+                fields["bytesB64"] = JsonSerializer.SerializeToElement(
+                    Convert.ToBase64String(store.Documents.Read(store.Documents.Resolve(path))));
+            }
+            rewritten.Add(fields);
+        }
+        var envelope = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(request.GetRawText())!;
+        envelope["companionArtifacts"] = JsonSerializer.SerializeToElement(rewritten);
+        return JsonSerializer.Serialize(envelope);
+    }
+
     private static string Close(SessionStore store, JsonElement args)
     {
         store.Close(Str(args, "sessionId"));
@@ -225,7 +275,9 @@ internal static class Dispatcher
                 if (args.TryGetProperty("anchorId", out _))
                     throw new McpToolException(
                         "verification is document-wide and does not accept anchorId");
-                return DocxSessionOps.VerifyDeliverable(session.Handle);
+                return VerificationRequestJson(store, args) is { } verificationRequest
+                    ? DocxSessionOps.VerifyDeliverable(session.Handle, verificationRequest)
+                    : DocxSessionOps.VerifyDeliverable(session.Handle);
 
             case "manifest":
                 // Manifest is intentionally package-wide. Reject the property itself rather than
@@ -748,6 +800,8 @@ internal static class Dispatcher
                 Int(args, "characterOffset"), Str(args, "imageBase64"), RawObjectOrEmpty(args, "options")),
             "replace" => DocxSessionOps.ReplaceImage(session.Handle,
                 Str(args, "imageId"), Str(args, "imageBase64")),
+            "embed_linked" => DocxSessionOps.EmbedLinkedImage(session.Handle,
+                Str(args, "imageId"), Str(args, "imageBase64")),
             "set_dimensions" => DocxSessionOps.SetImageDimensions(session.Handle,
                 Str(args, "imageId"), RawObject(args, "dimensions")),
             "set_metadata" => SetImageMetadata(session, args),
@@ -810,8 +864,13 @@ internal static class Dispatcher
 
     private static string BuildContentControlOptionsJson(JsonElement args)
     {
-        var policy = OptionalStringValue(args, "bindingPolicy");
-        return policy is null ? "{}" : JsonSerializer.Serialize(new { bindingPolicy = policy });
+        var options = new Dictionary<string, object>(StringComparer.Ordinal);
+        if (OptionalStringValue(args, "bindingPolicy") is { } policy) options["bindingPolicy"] = policy;
+        if (OptionalStringValue(args, "nestedControls") is { } nested) options["nestedControls"] = nested;
+        if (args.ValueKind == JsonValueKind.Object && args.TryGetProperty("childFills", out var fills)
+            && fills.ValueKind == JsonValueKind.Object)
+            options["childFills"] = fills;
+        return options.Count == 0 ? "{}" : JsonSerializer.Serialize(options);
     }
 
     private static bool RequiredBool(JsonElement args, string name)
@@ -1494,7 +1553,7 @@ internal static class Dispatcher
             "docxodus_links" => action is "add_hyperlink" or "update_hyperlink" or "remove_hyperlink"
                 or "add_bookmark" or "move_bookmark" or "rename_bookmark" or "remove_bookmark"
                 or "insert_cross_reference",
-            "docxodus_images" => action is "insert" or "replace" or "set_dimensions"
+            "docxodus_images" => action is "insert" or "replace" or "embed_linked" or "set_dimensions"
                 or "set_metadata" or "set_floating_layout" or "remove",
             "docxodus_content_controls" => action is "fill_text" or "fill_rich_text"
                 or "set_checked" or "set_date" or "select_item" or "fill_picture"
@@ -1797,6 +1856,7 @@ internal static class Dispatcher
                 _ = RawObjectOrEmpty(args, "options");
                 break;
             case ("docxodus_images", "replace"):
+            case ("docxodus_images", "embed_linked"):
                 RequireStrings(args, "imageId", "imageBase64");
                 break;
             case ("docxodus_images", "set_dimensions"):
@@ -1819,10 +1879,14 @@ internal static class Dispatcher
             case ("docxodus_content_controls", "fill_text"):
                 RequireStrings(args, "anchorId", "text");
                 ValidateOptionalEnum(args, "bindingPolicy", "preserve", "detach_target");
+                ValidateOptionalEnum(args, "nestedControls", "refuse", "preserve", "replace");
+                ValidateOptionalChildFills(args);
                 break;
             case ("docxodus_content_controls", "fill_rich_text"):
                 RequireStrings(args, "anchorId", "markdown");
                 ValidateOptionalEnum(args, "bindingPolicy", "preserve", "detach_target");
+                ValidateOptionalEnum(args, "nestedControls", "refuse", "preserve", "replace");
+                ValidateOptionalChildFills(args);
                 break;
             case ("docxodus_content_controls", "set_checked"):
                 RequireStrings(args, "anchorId");
@@ -1960,6 +2024,16 @@ internal static class Dispatcher
     {
         _ = Str(args, name);
         ValidateOptionalEnum(args, name, values);
+    }
+
+    private static void ValidateOptionalChildFills(JsonElement args)
+    {
+        if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty("childFills", out var fills)) return;
+        if (fills.ValueKind != JsonValueKind.Object)
+            throw new McpToolException("childFills must be an object of {anchorId: text}");
+        foreach (var property in fills.EnumerateObject())
+            if (property.Value.ValueKind != JsonValueKind.String)
+                throw new McpToolException($"childFills[\"{property.Name}\"] must be a string");
     }
 
     private static void ValidateOptionalEnum(JsonElement args, string name, params string[] values)

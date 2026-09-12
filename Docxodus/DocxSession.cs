@@ -1427,7 +1427,7 @@ public sealed record MarkdownPatch(string ScopeAnchorId, string Markdown);
 /// structure change re-derives, so a changed container diffs as an in-place
 /// substitution. <c>null</c> for leaf blocks, whose own unid IS their content
 /// signature.</para></summary>
-public sealed record RenderUnit(string Id, string Kind, string? Sig = null);
+public sealed record RenderUnit(string Id, string Kind, string? Sig = null, int Section = 0, int Group = 0);
 
 /// <summary>
 /// A block a move source may legally land against, and on which side. The two positions are
@@ -2770,23 +2770,49 @@ public sealed partial class DocxSession : IDisposable
             // w:sdt (a TOC is the everyday case) contributes its w:sdtContent blocks as
             // top-level units here — without this, every document containing one diffs as
             // full churn and the incremental reconcile permanently falls back to remount.
+            // The renderer wraps each section's units in its own container (see the
+            // data-section-index divs), so a unit's section index is part of the plan: a
+            // windowed mount needs it to place a unit rendered on its own. A section ends at
+            // the block carrying its w:sectPr — a body paragraph's own properties, or a cell
+            // paragraph's inside a table (issue #51) — and that block still belongs to it.
+            // A unit's group ordinal names the run of units the renderer draws inside one
+            // wrapper: adjacent bordered paragraphs share a border div (the converter's
+            // CreateBorderDivs) per container. A windowed mount cuts windows between groups,
+            // never through them.
+            int section = 0;
+            int group = 0;
             void AddUnits(XElement container)
             {
+                string? previousKey = null;
                 foreach (var el in container.Elements())
                 {
                     if (el.Name == W.sdt)
                     {
                         if (el.Element(W.sdtContent) is { } content) AddUnits(content);
+                        previousKey = null;
                         continue;
                     }
                     string? kind =
                         el.Name == W.tbl ? "tbl" :
                         el.Name == W.p ? WmlToMarkdownConverter.KindFor(el) : null;
+                    bool closesSection = ClosesSection(el);
                     if (!renderTrackedChanges && IsRemovedInAcceptedRevisionView(el))
+                    {
+                        if (closesSection) section++;
                         continue;
+                    }
+                    // The renderer keys on assembled properties, so a border the style chain
+                    // contributes must count here too.
+                    var key = WmlToHtmlConverter.BorderGroupKey(el, el.Name == W.p
+                        ? FormattingAssembler.ResolveEffectiveParagraphProperties(LiveDocument, el)
+                        : null);
+                    if (key.Length == 0 || key == "table" || !string.Equals(key, previousKey, StringComparison.Ordinal))
+                        group++;
+                    previousKey = key;
                     var unid = (string?)el.Attribute(PtOpenXml.Unid);
-                    if (kind is null || unid is null) continue;
-                    body.Add(new RenderUnit($"{kind}:body:{unid}", kind, UnidHelper.ContentHash(el)));
+                    if (kind is not null && unid is not null)
+                        body.Add(new RenderUnit($"{kind}:body:{unid}", kind, UnidHelper.ContentHash(el), section, group));
+                    if (closesSection) { section++; previousKey = null; }
                 }
             }
             AddUnits(bodyEl);
@@ -2830,6 +2856,13 @@ public sealed partial class DocxSession : IDisposable
             Notes(main?.FootnotesPart?.GetXDocument().Root, W.footnote, endnotes: false, "fn"),
             Notes(main?.EndnotesPart?.GetXDocument().Root, W.endnote, endnotes: true, "en"));
     }
+
+    /// <summary>Whether a body block carries the section break that ends its section: a
+    /// paragraph's own <c>w:pPr/w:sectPr</c>, or one on a paragraph inside a table's cells.</summary>
+    internal static bool ClosesSection(XElement block) =>
+        block.Name == W.p
+            ? block.Element(W.pPr)?.Element(W.sectPr) is not null
+            : block.Name == W.tbl && block.Descendants(W.sectPr).Any(s => s.Parent?.Name == W.pPr);
 
     private static bool IsRemovedInAcceptedRevisionView(XElement block)
     {
