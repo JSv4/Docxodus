@@ -97,7 +97,7 @@ fi
 
 # Precompress every framework asset with Brotli (quality 11) so hosts that support
 # content negotiation (nginx brotli_static, Caddy precompressed, Netlify, Vercel,
-# Cloudflare Pages) can serve ~4.8 MB over the wire instead of ~21 MB. The .br
+# Cloudflare Pages) can serve ~5.4 MiB over the wire instead of ~24.5 MiB. The .br
 # siblings ship in the npm package; hosts that ignore them serve the raw files
 # exactly as before. gzip is deliberately NOT precompressed — gzip-capable hosts
 # compress on the fly, while brotli-11 is too slow for that.
@@ -137,12 +137,13 @@ echo "Total WASM directory size:"
 du -sh "$WASM_DIST"
 
 # Wire-size budget gate. The brotli total is what a negotiation-capable host actually
-# sends to boot the runtime. Budget 5.25 MB (measured ~5.03 MB: ~3.6 MB of trimmed IL and
-# runtime plus ~1.2 MB of profile-guided AOT code, and the portable-history archive reader
-# the browser bindings now reach) — if this trips, something re-rooted an assembly, a
-# dependency grew, or a re-recorded AOT profile got much wider; see
+# sends to boot the runtime. Budget 5.75 MiB (measured 5.44 MiB after adding full editor
+# mounts, conversion options, and external annotation creation to the AOT profile).
+# The additional 286.5 KiB buys a sustained ~2–3x annotation speedup (#783). If this
+# trips, something re-rooted an assembly, a dependency grew, or a re-recorded profile
+# got much wider; see benchmarks/aot-coverage/README.md and
 # docs/architecture/wasm-packaging.md before raising it.
-WIRE_BUDGET_BYTES=$((5376 * 1024))
+WIRE_BUDGET_BYTES=$((5888 * 1024))
 WIRE_BYTES=$(cat "$WASM_DIST/_framework/.wire-size")
 rm -f "$WASM_DIST/_framework/.wire-size"
 echo ""

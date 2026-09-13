@@ -1,6 +1,6 @@
 #!/bin/bash
 # Re-record wasm/DocxodusWasm/docxodus.aotprofile, the method list that the WASM build
-# compiles ahead of time (RunAOTCompilation + AOTProfilePath in DocxodusWasm.csproj).
+# compiles ahead of time (RunAOTCompilation + WasmAotProfilePath in DocxodusWasm.csproj).
 # Everything not in the profile runs on the interpreter/jiterpreter, so a stale profile
 # costs steady-state speed, never correctness. Re-run it when the hot paths move — a new
 # engine stage, a renamed hot class — and check the wire size the final build prints.
@@ -16,11 +16,12 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 echo "==> 1/3 profiler build (interpreter + AOT profiler)"
 "$SCRIPT_DIR/build-wasm.sh" -p:RunAOTCompilation=false -p:WasmProfilers=aot
+cd "$REPO_ROOT/npm"
+npm run build:js
 
 echo "==> 2/3 recording the profile over the representative workload"
-cd "$REPO_ROOT/npm"
 DOCXODUS_RECORD_AOT_PROFILE=1 npm test -- aot-profile-record.spec.ts --project=chromium --reporter=line
 
 echo "==> 3/3 rebuilding the shipped configuration"
-npm run build:wasm
-ls -la "$REPO_ROOT/wasm/DocxodusWasm/docxodus.aotprofile"
+npm run build
+ls -la "${DOCXODUS_AOT_PROFILE_OUT:-$REPO_ROOT/wasm/DocxodusWasm/docxodus.aotprofile}"

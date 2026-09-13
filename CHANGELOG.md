@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Browser AOT coverage now includes full editor mounts, conversion with headers/footers,
+  anchors and pagination, and external annotation-set creation (issue #783). The expanded
+  profile makes annotation creation roughly 2–3 times faster on the measured documents,
+  with smaller gains for conversion and mounting, for an additional 286.5 KiB compressed.
+  The WASM wire budget increases from 5.25 to 5.75 MiB. Profile changes now invalidate
+  cached AOT outputs, including when publishing directly with `dotnet publish`.
+
 ## [12.5.0] - 2026-09-12
 
 ### Added

@@ -1,0 +1,49 @@
+<Project>
+  <!-- Mono's AOT up-to-date check compares assemblies with their bitcode outputs,
+       but does not track profile contents. Invalidate only the generated AOT files
+       when the selected profile changes; native runtime sources remain reusable. -->
+  <Target Name="InvalidateDocxodusAotProfileCache"
+          BeforeTargets="_WasmAotCompileApp"
+          Condition="'$(_WasmShouldAOT)' == 'true'">
+    <PropertyGroup>
+      <_DocxodusAotProfileStamp>$(_WasmIntermediateOutputPath)docxodus-aot-profile.sha256</_DocxodusAotProfileStamp>
+      <_DocxodusAotProfileKey>full-aot</_DocxodusAotProfileKey>
+    </PropertyGroup>
+    <GetFileHash Files="$(WasmAotProfilePath)" Algorithm="SHA256"
+                 Condition="'$(WasmAotProfilePath)' != ''">
+      <Output TaskParameter="Items" ItemName="_DocxodusAotProfileFile" />
+    </GetFileHash>
+    <PropertyGroup Condition="'@(_DocxodusAotProfileFile)' != ''">
+      <_DocxodusAotProfileKey>@(_DocxodusAotProfileFile->'%(FileHash)', '|')</_DocxodusAotProfileKey>
+    </PropertyGroup>
+    <ReadLinesFromFile File="$(_DocxodusAotProfileStamp)"
+                       Condition="Exists('$(_DocxodusAotProfileStamp)')">
+      <Output TaskParameter="Lines" ItemName="_DocxodusPreviousAotProfile" />
+    </ReadLinesFromFile>
+    <PropertyGroup>
+      <_DocxodusAotProfileChanged Condition="'@(_DocxodusPreviousAotProfile)' != '$(_DocxodusAotProfileKey)'">true</_DocxodusAotProfileChanged>
+    </PropertyGroup>
+    <ItemGroup Condition="'$(_DocxodusAotProfileChanged)' == 'true'">
+      <_DocxodusStaleAotFile Include="$(_WasmIntermediateOutputPath)*.dll.bc;
+                                     $(_WasmIntermediateOutputPath)*.dll.o;
+                                     $(_WasmIntermediateOutputPath)aot_compiler_cache.json;
+                                     $(_WasmIntermediateOutputPath)monoAotPropertyValues.txt" />
+    </ItemGroup>
+    <Message Text="AOT profile changed: invalidating compiled method selection."
+             Importance="High" Condition="'$(_DocxodusAotProfileChanged)' == 'true'" />
+    <Delete Files="@(_DocxodusStaleAotFile)" />
+    <RemoveDir Directories="$(_WasmIntermediateOutputPath)tokens"
+               Condition="'$(_DocxodusAotProfileChanged)' == 'true'" />
+  </Target>
+
+  <!-- A failed compilation must not mark the new profile as successfully built. -->
+  <Target Name="RecordDocxodusAotProfileCache"
+          AfterTargets="_WasmAotCompileApp"
+          Condition="'$(_WasmShouldAOT)' == 'true'">
+    <WriteLinesToFile File="$(_DocxodusAotProfileStamp)" Lines="$(_DocxodusAotProfileKey)"
+                      Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <ItemGroup>
+      <FileWrites Include="$(_DocxodusAotProfileStamp)" />
+    </ItemGroup>
+  </Target>
+</Project>

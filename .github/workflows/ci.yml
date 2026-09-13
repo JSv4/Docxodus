@@ -117,6 +117,9 @@ jobs:
       - name: Build npm package (WASM + TypeScript)
         run: cd npm && npm run build
 
+      - name: Check AOT profile cache invalidation
+        run: node --test scripts/aot-profile-cache.test.mjs
+
       - name: TypeScript type check
         run: cd npm && npx tsc --noEmit
 
