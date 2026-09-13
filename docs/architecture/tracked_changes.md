@@ -644,6 +644,32 @@ var html = WmlToHtmlConverter.ConvertToHtml(wmlDoc, settings);
 
 See [Pagination Architecture](pagination.md) for details on the pagination system.
 
+## Note insertion under `render_inline` recording (resolved, #614)
+
+`DocxSession.insertFootnote` / `insertEndnote` under
+`TrackedChangeMode.RenderInline` used to write the citation and the note definition
+as ordinary content, so **reject-all did not undo them**: the note's text survived
+into the "rejected" document and `proveRedlineReversibility` reported a reject-path
+divergence in `/word/footnotes.xml`. Fixed in #625, then completed in #638: both
+halves record — the citation is wrapped in `w:ins` and the definition's own content
+is insertion-marked — and the prune that removes an orphaned definition is guarded
+on it also being emptied. The encoding, the note-lifecycle rule and why the guard
+matters are documented in
+[`docx_mutation_api.md`](docx_mutation_api.md#recording-a-note-as-a-tracked-change-issue-614);
+this page does not restate them.
+
+Worth recording is how it surfaced, because that mechanism is still running.
+`docs/demo/redline.html` footnotes the negotiated liability cap in its Act II and
+then, in the finale, runs `proveRedlineReversibility` over the whole redline and
+classifies each reject-path divergence against a **closed set** of parts that review
+comments legitimately explain. A note part is not in that set, so it showed up as
+unexplained rather than being absorbed by a permissive pattern match. The demo
+re-runs that check on every load, which makes it a live regression guard for the
+fix: `docs/demo/tools/redline-theater.test.mjs` asserts the footnote step is still
+in the script, and `npm/tests/demo-redline.spec.ts` asserts the proof still comes
+back clean with it there, that the citation run sits inside a `w:ins`, and that the
+definition carries the insertion markup #638 added.
+
 ## Conclusion
 
 This design provides a comprehensive approach to rendering tracked changes in HTML while:

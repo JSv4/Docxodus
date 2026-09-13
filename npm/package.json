@@ -74,7 +74,7 @@
     "build:export-assets": "node scripts/generate-export-assets.mjs",
     "build": "npm run build:wasm && npm run build:ts && npm run build:pagination-bundle && npm run build:session-bundle && npm run build:editor-bundle && npm run build:embed-bundle && npm run build:worker-bundle && npm run build:export-browser && npm run build:export-assets && npm run build:web",
     "pretest": "npm run test:demo-logic && npm run typecheck && node scripts/stage-web.mjs --tests && node scripts/fetch-doom-iwad.mjs && npm run test:package-boundary",
-    "test:demo-logic": "node ../docs/demo/tools/ascii-arcade.test.mjs && node ../docs/demo/tools/doom-ascii.test.mjs && node ../docs/demo/tools/docx-golf.test.mjs && node ../docs/demo/tools/canvas-font.test.mjs && node ../docs/demo/tools/engine-pin.test.mjs",
+    "test:demo-logic": "node ../docs/demo/tools/ascii-arcade.test.mjs && node ../docs/demo/tools/doom-ascii.test.mjs && node ../docs/demo/tools/docx-golf.test.mjs && node ../docs/demo/tools/redline-theater.test.mjs && node ../docs/demo/tools/diff-stress.test.mjs && node ../docs/demo/tools/canvas-font.test.mjs && node ../docs/demo/tools/engine-pin.test.mjs",
     "test:package-boundary": "node scripts/check-package-boundary.mjs",
     "test": "playwright test",
     "test:visual-parity": "npm run pretest && DOCXODUS_VISUAL_PARITY=1 playwright test visual-parity.spec.ts visual-parity-reductions.spec.ts --project=chromium --reporter=line",
