@@ -4,14 +4,25 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Fixed
+### Changed
 
 - Browser AOT coverage now includes full editor mounts, conversion with headers/footers,
   anchors and pagination, and external annotation-set creation (issue #783). The expanded
   profile makes annotation creation roughly 2–3 times faster on the measured documents,
   with smaller gains for conversion and mounting, for an additional 286.5 KiB compressed.
-  The WASM wire budget increases from 5.25 to 5.75 MiB. Profile changes now invalidate
-  cached AOT outputs, including when publishing directly with `dotnet publish`.
+  The WASM wire budget increases from 5.25 to 5.75 MiB. The recorder
+  (`scripts/record-aot-profile.sh`) rebuilds the TypeScript bundles through the new
+  `npm run build:js` before recording, and `DOCXODUS_AOT_PROFILE_OUT` directs the recorded
+  profile to a path outside the tree for A/B experiments (`benchmarks/aot-coverage/`).
+
+### Fixed
+
+- A re-recorded or switched AOT profile no longer reuses cached AOT outputs compiled for
+  the previous profile (issue #783). `wasm/DocxodusWasm/AotProfile.targets` keys the AOT
+  cache on the profile's content hash, invalidates the compiled method selection and the
+  IL-stripped assemblies when it changes, and fails the publish if the cache was not
+  recorded for the selected profile. This applies to `dotnet publish` as well as
+  `scripts/build-wasm.sh`.
 
 ## [12.5.0] - 2026-09-12
 

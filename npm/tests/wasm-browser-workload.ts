@@ -18,7 +18,8 @@ export interface BrowserSample {
   outputLength: number;
   outputHash: string;
   anchors: number;
-  pages: number;
+  /** Rendered page boxes for editor mounts; null for conversions, which paginate client-side later. */
+  pages: number | null;
   progress: number;
   firstWindowMs: number | null;
 }
@@ -62,6 +63,7 @@ export async function runWasmBrowserWorkload(input: BrowserWorkloadInput): Promi
         const options = {
           paginated: op !== 'editor.openAsync.flow',
           editable: true,
+          headerFooter: true, // createRibbonEditor's default; trains the header/footer region path.
           columnWidth: 'section',
           windowSize: 24,
           onProgress: () => {
@@ -114,7 +116,7 @@ export async function runWasmBrowserWorkload(input: BrowserWorkloadInput): Promi
         outputLength: output.length,
         outputHash: Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, '0')).join(''),
         anchors: root.querySelectorAll('[data-anchor]').length,
-        pages: root.querySelectorAll('.page-box').length,
+        pages: op.startsWith('editor.') ? root.querySelectorAll('.page-box').length : null,
         progress, firstWindowMs,
       });
     } finally {

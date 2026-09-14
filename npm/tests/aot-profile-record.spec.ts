@@ -97,6 +97,7 @@ test.describe('AOT profile recording', () => {
       .not.toBeNull();
     expect(profile!.length).toBeGreaterThan(1000);
 
+    fs.mkdirSync(path.dirname(PROFILE_PATH), { recursive: true });
     fs.writeFileSync(PROFILE_PATH, Buffer.from(profile!));
     console.log(`wrote ${profile!.length} bytes to ${PROFILE_PATH}`);
   });

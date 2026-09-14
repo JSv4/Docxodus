@@ -4,6 +4,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 const [input, output] = process.argv.slice(2);
 if (!input || !output) throw new Error('Usage: node summarize.mjs RESULTS_JSON SUMMARY_JSON');
 const data = JSON.parse(await readFile(input, 'utf8'));
+assert.ok(data.method.warmup < data.method.iterations, 'no warm samples: warmup must be below iterations');
 const median = values => {
   const sorted = [...values].sort((a, b) => a - b);
   const middle = Math.floor(sorted.length / 2);

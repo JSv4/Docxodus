@@ -16,6 +16,15 @@ await cp(join(repo, 'npm/tests/test-harness.html'), join(dest, 'test-harness.htm
 for (const name of ['editor.bundle.js', 'session.bundle.js']) await cp(join(repo, 'npm/dist', name), join(dest, name));
 await cp(resolve(profilePath), join(dest, 'profile.aotprofile'));
 const digest = async path => createHash('sha256').update(await readFile(path)).digest('hex');
+// The IL-stripped managed assemblies must match the native code; identical managed sets
+// across arms mean a stale strip survived a profile switch.
+const managedDigest = async dir => {
+  const hash = createHash('sha256');
+  for (const name of (await readdir(dir)).filter(n => n.endsWith('.wasm') && n !== 'dotnet.native.wasm').sort()) {
+    hash.update(name).update(await readFile(join(dir, name)));
+  }
+  return hash.digest('hex');
+};
 const framework = join(dest, '_framework');
 let rawBytes = 0, brotliBytes = 0;
 for (const name of await readdir(framework)) {
@@ -33,9 +42,8 @@ const metadata = {
   nativeBytes: (await stat(join(framework, 'dotnet.native.wasm'))).size,
   editorSha256: await digest(join(dest, 'editor.bundle.js')),
   sessionSha256: await digest(join(dest, 'session.bundle.js')),
+  managedSha256: await managedDigest(framework),
   rawBytes, brotliBytes,
-  wireBudgetBytes: Number((await readFile(join(repo, 'scripts/build-wasm.sh'), 'utf8'))
-    .match(/WIRE_BUDGET_BYTES=\$\(\((\d+) \* 1024\)\)/)[1]) * 1024,
 };
 await writeFile(join(dest, 'build.json'), JSON.stringify(metadata, null, 2) + '\n');
 console.log(JSON.stringify(metadata, null, 2));

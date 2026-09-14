@@ -188,10 +188,13 @@ from the SDK docs:
   the compiler's incremental check ignores the profile and can reuse old code even
   when a different profile is selected. `AotProfile.targets` hashes the selected
   profile contents before AOT. A changed or missing stamp removes generated AOT
-  bitcode, objects and trimming-token files, while preserving native runtime sources.
-  The stamp is written only after AOT succeeds. This applies to direct `dotnet publish`
-  and the build scripts; an unchanged profile keeps incremental compilation. The
-  regression tests run with `node --test scripts/aot-profile-cache.test.mjs`.
+  bitcode, objects, trimming-token files and the IL-stripped assemblies (ILStrip's own
+  check is mtime-only, and stripped IL bodies must match the compiled method set), while
+  preserving native runtime sources. The stamp is written only after AOT succeeds, and the
+  outer publish fails if the stamp does not match the selected profile, so a renamed SDK
+  hook cannot silently ship code compiled for a previous profile. This applies to direct
+  `dotnet publish` and the build scripts; an unchanged profile keeps incremental
+  compilation. The regression tests run with `node --test scripts/aot-profile-cache.test.mjs`.
 
 - **`WasmAotProfilePath`, not `AOTProfilePath`.** `WasmApp.Common.targets` passes both to
   the `MonoAOTCompiler` task under what is, to MSBuild, one case-insensitive parameter; the

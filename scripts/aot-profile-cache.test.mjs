@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,7 +12,10 @@ const xml = value => value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').re
 // Run the real MSBuild targets around a tiny stand-in for the expensive compiler.
 // Real profile-switch publishes are also measured in benchmarks/aot-coverage/.
 test('AOT caching follows profile contents and successful compilation', async t => {
-  const dir = mkdtempSync(join(tmpdir(), 'docxodus-aot-cache-'));
+  const base = mkdtempSync(join(tmpdir(), 'docxodus-aot-cache-'));
+  // The SDK's nested-publish layout, which the publish-time verifier depends on.
+  const dir = join(base, 'wasm', 'for-publish');
+  mkdirSync(dir, { recursive: true });
   try {
     const profile = join(dir, 'recording.aotprofile');
     const alternate = join(dir, 'alternate.aotprofile');
@@ -23,21 +26,24 @@ test('AOT caching follows profile contents and successful compilation', async t 
     writeFileSync(project, `<Project DefaultTargets="_WasmAotCompileApp">
       <PropertyGroup>
         <_WasmShouldAOT>true</_WasmShouldAOT>
+        <IntermediateOutputPath>${xml(base)}/</IntermediateOutputPath>
         <_WasmIntermediateOutputPath>${xml(dir)}/</_WasmIntermediateOutputPath>
       </PropertyGroup>
       <Import Project="${xml(join(repo, 'wasm/DocxodusWasm/AotProfile.targets'))}" />
       <Target Name="_WasmAotCompileApp">
         <ItemGroup>
-          <AotOutput Include="${xml(dir)}/Example.dll.bc;${xml(dir)}/Example.dll.o;${xml(dir)}/aot_compiler_cache.json;${xml(dir)}/monoAotPropertyValues.txt;${xml(dir)}/tokens/Example.dll.bin" />
+          <AotOutput Include="${xml(dir)}/Example.dll.bc;${xml(dir)}/Example.dll.o;${xml(dir)}/aot_compiler_cache.json;${xml(dir)}/monoAotPropertyValues.txt;${xml(dir)}/tokens/Example.dll.bin;${xml(dir)}/stripped/Example.dll" />
         </ItemGroup>
         <Error Condition="'$(ExpectInvalidated)' == 'true' and Exists('%(AotOutput.Identity)')"
                Text="Stale AOT output survived: %(AotOutput.Identity)" />
         <Error Condition="'$(ExpectInvalidated)' == 'false' and !Exists('%(AotOutput.Identity)')"
                Text="Unchanged AOT output was deleted: %(AotOutput.Identity)" />
-        <MakeDir Directories="${xml(dir)}/tokens" />
+        <MakeDir Directories="${xml(dir)}/tokens;${xml(dir)}/stripped" />
         <WriteLinesToFile File="%(AotOutput.Identity)" Lines="compiled output" Overwrite="true" />
         <Error Condition="'$(FailCompilation)' == 'true'" Text="Simulated AOT failure" />
       </Target>
+      <Target Name="WasmTriggerPublishApp" DependsOnTargets="_WasmAotCompileApp" />
+      <Target Name="Publish" />
     </Project>`);
     const publish = (selectedProfile = profile, invalidated = true, extra = []) => {
       const result = spawnSync('dotnet', ['msbuild', project, '-nologo', '-verbosity:minimal',
@@ -95,7 +101,25 @@ test('AOT caching follows profile contents and successful compilation', async t 
       succeeds(alternate, false, ['-p:_WasmShouldAOT=false']);
       assert.equal(readFileSync(stamp, 'utf8'), before);
     });
+    await t.test('a missing intermediate path fails instead of deleting from the project directory', () => {
+      const before = readFileSync(stamp, 'utf8');
+      const result = publish(alternate, true, ['-p:_WasmIntermediateOutputPath=']);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stdout, /_WasmIntermediateOutputPath is empty/);
+      assert.equal(readFileSync(stamp, 'utf8'), before);
+    });
+    await t.test('publish fails closed when the AOT hooks do not run', () => {
+      const aot = ['-t:Publish', '-p:RunAOTCompilation=true'];
+      succeeds(profile, false, aot);
+      succeeds(alternate, true, aot);
+      writeFileSync(alternate, 'profile the hooks never saw');
+      const result = publish(alternate, false, [...aot, '-p:_WasmShouldAOT=false']);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stdout, /AOT profile cache was not recorded/);
+      succeeds(alternate, false, ['-t:Publish', '-p:RunAOTCompilation=false', '-p:_WasmShouldAOT=false']);
+      succeeds(alternate, true, aot);
+    });
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(base, { recursive: true, force: true });
   }
 });

@@ -8,24 +8,36 @@ import { createRequire } from 'node:module';
 import { cpus, platform, release } from 'node:os';
 import { dirname, extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const require = createRequire(join(repo, 'npm/package.json'));
 const { chromium } = require('playwright');
 const { transform } = require('esbuild');
-const args = new Map();
-for (let i = 2; i < process.argv.length; i += 2) args.set(process.argv[i], process.argv[i + 1]);
-const bundleRoot = resolve(args.get('--root') ?? '/tmp/docxodus-issue-783/bundles');
-const out = resolve(args.get('--out') ?? '/tmp/docxodus-issue-783/results.json');
-const arms = (args.get('--arms') ?? 'original,expanded').split(',');
-const operations = (args.get('--ops') ?? [
-  'html.bare', 'html.headers', 'html.anchors', 'html.paginated',
-  'annotation.create', 'editor.open', 'editor.openAsync',
-].join(',')).split(',');
-const fixtures = (args.get('--fixtures') ?? 'HC031-Complicated-Document.docx,NVCA-Model-COI.docx').split(',');
-const repetitions = Number(args.get('--repetitions') ?? 3);
-const iterations = Number(args.get('--iterations') ?? 8);
-const warmup = Number(args.get('--warmup') ?? 3);
+const { values: args } = parseArgs({
+  strict: true,
+  options: {
+    root: { type: 'string', default: '/tmp/docxodus-issue-783/bundles' },
+    out: { type: 'string', default: '/tmp/docxodus-issue-783/results.json' },
+    arms: { type: 'string', default: 'original,expanded' },
+    ops: { type: 'string', default: 'html.bare,html.headers,html.anchors,html.paginated,annotation.create,editor.open,editor.openAsync' },
+    fixtures: { type: 'string', default: 'HC031-Complicated-Document.docx,NVCA-Model-COI.docx' },
+    repetitions: { type: 'string', default: '3' },
+    iterations: { type: 'string', default: '8' },
+    warmup: { type: 'string', default: '3' },
+  },
+});
+const bundleRoot = resolve(args.root);
+const out = resolve(args.out);
+const arms = args.arms.split(',');
+const operations = args.ops.split(',');
+const fixtures = args.fixtures.split(',');
+const repetitions = Number(args.repetitions);
+const iterations = Number(args.iterations);
+const warmup = Number(args.warmup);
+if (![repetitions, iterations, warmup].every(Number.isInteger) || warmup >= iterations) {
+  throw new Error('--repetitions, --iterations and --warmup must be integers with --warmup < --iterations');
+}
 const source = await readFile(join(repo, 'npm/tests/wasm-browser-workload.ts'), 'utf8');
 const { code } = await transform(source, { loader: 'ts', format: 'esm', target: 'es2022' });
 const { runWasmBrowserWorkload } = await import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'));
@@ -68,6 +80,9 @@ try {
     }
     if (results.bundles.original.nativeSha256 === results.bundles.expanded.nativeSha256) {
       throw new Error('Native binaries are identical: clear the AOT build cache before measuring the new profile');
+    }
+    if (!results.bundles.original.managedSha256 || results.bundles.original.managedSha256 === results.bundles.expanded.managedSha256) {
+      throw new Error('Managed assemblies are identical or unrecorded: the IL strip did not follow the profile switch');
     }
   }
   for (const fixture of fixtures) {
