@@ -30,8 +30,10 @@ All notable changes to this project will be documented in this file.
   later session replaces the same paragraph (issue #786). Superseded runs are deleted where
   they sit — inside hyperlinks, fields, inline controls and other authors' insertions, as
   `w:ins > w:del`, the shape Word writes — so accepting keeps only the latest proposal and
-  rejecting restores the original, and an author replacing their own pending text leaves no
-  struck-through first attempt. Note and comment references survive in place on both accept
+  rejecting restores the original. Deleting or replacing text inside the session author's own
+  pending insertion un-inserts it outright, as Word does, so no struck-through first attempt
+  remains, and a note that only that text referenced is pruned with it. Note and comment
+  references survive in place on both accept
   and reject, including a footnote reference inside an earlier insertion or hyperlink and a
   note's own number mark when its body is replaced. A paragraph holding inline custom XML or
   an empty simple field is refused before mutation, as `DeleteBlock` already does. Because

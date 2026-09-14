@@ -676,6 +676,32 @@ public class DocxSessionTrackedDeleteBlockTests
     }
 
     [Fact]
+    public void DeletingAnOwnInsertedParagraph_PrunesTheNoteInsertedWithIt()
+    {
+        using var session = Open(Build(new[] { P("before"), P("after") }));
+        Assert.True(session.InsertParagraph(Anchor(session, "p", 0), Position.After, "inserted").Success);
+        var note = session.InsertFootnote(Anchor(session, "p", 1), 8, "own note");
+        Assert.True(note.Success, note.Error?.Message);
+        Assert.Single(BodyNotes(session.Save()));
+
+        var deletion = session.DeleteBlock(Anchor(session, "p", 1));
+
+        Assert.True(deletion.Success, deletion.Error?.Message);
+        var tracked = session.Save();
+        AssertValid(tracked);
+        // The author's own inserted text is un-inserted outright, so the note it carried has no
+        // reference left anywhere, goes with it, and nothing in its body is listed as pending.
+        Assert.Empty(Root(tracked).Descendants(W.footnoteReference));
+        Assert.Empty(BodyNotes(tracked));
+        Assert.All(session.ListRevisions(), r => Assert.DoesNotContain("own note", r.Text));
+        Assert.True(session.AcceptAllRevisions().Success);
+        AssertXmlEqual(E("body", P("before"), P("after")), Body(session.Save()));
+
+        static IEnumerable<XElement> BodyNotes(byte[] bytes) => Root(bytes, "word/footnotes.xml")
+            .Descendants(W.footnote).Where(f => f.Attribute(W.w + "type") is null);
+    }
+
+    [Fact]
     public void InlineControlHoldingATextBox_IsDeletedWithItsParagraph()
     {
         var control = E("sdt", E("sdtPr", E("id", A("val", "7"))), E("sdtContent", TextBox()));

@@ -8268,8 +8268,14 @@ public sealed partial class DocxSession : IDisposable
         if (ValidateBookmarkRemoval(structuralRoots, anchorForPatchScope.Anchor.Id, toRemove) is { } bookmarkError)
             return bookmarkError;
 
+        // Content the session author inserted is un-inserted outright rather than marked (see
+        // MarkParagraphContentAndMark), which can orphan the notes, hyperlinks and images it
+        // carried, so a deletion touching an own insertion sweeps like a structural removal.
+        var author = _revisionAuthor ?? "docxodus";
         bool structurallyRemoves = !trackedChanges || toRemove.Any(el =>
-            el.Name != W.p && el.Name != W.tbl && el.Name != W.sdt && el.Name != W.customXml);
+            (el.Name != W.p && el.Name != W.tbl && el.Name != W.sdt && el.Name != W.customXml)
+            || el.Descendants(W.ins).Any(ins =>
+                string.Equals((string?)ins.Attribute(W.author), author, StringComparison.Ordinal)));
         var hyperlinkOwner = structurallyRemoves
             ? Internal.OwnedPartRelationships.FindOwner(_doc!, fromElement) : null;
         var referencedNotesBefore = structurallyRemoves ? ReferencedNoteIds()
