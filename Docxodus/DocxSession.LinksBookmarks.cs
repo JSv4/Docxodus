@@ -883,9 +883,10 @@ public sealed partial class DocxSession
     }
 
     /// <summary>
-    /// Guard generic structural deletions from leaving half a bookmark pair or a dangling
-    /// internal hyperlink. A complete unreferenced pair may be deleted with its containing
-    /// content; ranges crossing the deletion boundary are rejected before the undo snapshot.
+    /// Guard structural deletions, and tracked deletions whose acceptance removes the same
+    /// markup, from leaving half a bookmark pair or a dangling internal hyperlink. A complete
+    /// unreferenced pair may be deleted with its containing content; ranges crossing the
+    /// deletion boundary are rejected before the undo snapshot.
     /// </summary>
     private EditResult? ValidateBookmarkRemoval(IEnumerable<XElement> removalRoots, string anchorId,
         IEnumerable<XElement>? referenceRemovalRoots = null)
@@ -907,14 +908,14 @@ public sealed partial class DocxSession
             var ends = BookmarkEndsForStart(start, id);
             if (name is null || ends.Count != 1 || !IsRemoved(ends[0]))
                 return EditResult.Fail(EditErrorCode.UnsupportedInlineBoundary,
-                    "structural deletion would leave a bookmark range endpoint orphaned", anchorId);
+                    "deletion would leave a bookmark range endpoint orphaned", anchorId);
             if (name.StartsWith(AnnotationManager.BookmarkPrefix, StringComparison.Ordinal))
                 return EditResult.Fail(EditErrorCode.ManagedBookmark,
-                    $"structural deletion includes an annotation-managed bookmark: {name}", anchorId);
+                    $"deletion includes an annotation-managed bookmark: {name}", anchorId);
             if (BookmarkReferences(name).Any(reference => !referenceRoots.Any(root =>
                     ReferenceEquals(root, reference.Element) || reference.Element.Ancestors().Any(a => ReferenceEquals(a, root)))))
                 return EditResult.Fail(EditErrorCode.BookmarkInUse,
-                    "structural deletion would remove a bookmark still targeted by an internal hyperlink "
+                    "deletion would remove a bookmark still targeted by an internal hyperlink "
                     + $"or cross-reference field: {name}", anchorId);
         }
 
@@ -923,7 +924,7 @@ public sealed partial class DocxSession
             var owner = OwnedPartRelationships.FindOwner(_doc!, end);
             var id = (string?)end.Attribute(W.id);
             if (owner is null) return EditResult.Fail(EditErrorCode.UnsupportedInlineBoundary,
-                "structural deletion contains an ownerless bookmarkEnd", anchorId);
+                "deletion contains an ownerless bookmarkEnd", anchorId);
             var starts = owner.Value.Part.GetXDocument().Descendants(W.bookmarkStart)
                 .Where(start =>
                 {
@@ -934,7 +935,7 @@ public sealed partial class DocxSession
                 .ToList();
             if (starts.Count != 1 || !IsRemoved(starts[0]))
                 return EditResult.Fail(EditErrorCode.UnsupportedInlineBoundary,
-                    "structural deletion would leave a bookmark range endpoint orphaned", anchorId);
+                    "deletion would leave a bookmark range endpoint orphaned", anchorId);
         }
         return null;
     }

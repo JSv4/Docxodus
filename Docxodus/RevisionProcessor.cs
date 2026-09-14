@@ -804,7 +804,8 @@ namespace Docxodus
                 // Hyperlinks and simple fields own their content revisions inside the
                 // container. Reject restores those runs by reversing w:del → w:ins.
                 if (element.Name == W.del &&
-                    (parent?.Name == W.p || parent?.Name == W.hyperlink || parent?.Name == W.fldSimple))
+                    (parent?.Name == W.p || parent?.Name == W.hyperlink || parent?.Name == W.fldSimple
+                     || parent?.Name == W.dir || parent?.Name == W.bdo))
                 {
                     return new XElement(W.ins,
                         element.Nodes().Select(n => ReverseRevisionsTransform(n, rri)));
@@ -884,7 +885,8 @@ namespace Docxodus
 #endif
                 // Symmetric handling for inserted paragraph, hyperlink and field runs.
                 if (element.Name == W.ins &&
-                    (parent?.Name == W.p || parent?.Name == W.hyperlink || parent?.Name == W.fldSimple))
+                    (parent?.Name == W.p || parent?.Name == W.hyperlink || parent?.Name == W.fldSimple
+                     || parent?.Name == W.dir || parent?.Name == W.bdo))
                 {
                     var newRri = new ReverseRevisionsInfo() { InInsert = true };
                     return new XElement(W.del,
@@ -2026,13 +2028,15 @@ namespace Docxodus
                         return null;
                 }
 
-                // Accept revisions for a wholly-deleted hyperlink or simple field whose content children all
-                // sit inside w:del/w:moveFrom would otherwise collapse to an empty <w:hyperlink> shell that
-                // keeps its paragraph alive (visible when rejecting an inserted hyperlink — the reversed
-                // w:ins→w:del removes every run but the shell survived). Drop the shell; bookmark markers
-                // inside it are preserved (the hyperlink-shell analogue of the wholly-deleted-table rule).
+                // Accept revisions for a wholly-deleted hyperlink, simple field or bidirectional
+                // container whose content children all sit inside w:del/w:moveFrom would otherwise
+                // collapse to an empty shell that keeps its paragraph alive (visible when rejecting an
+                // inserted hyperlink — the reversed w:ins→w:del removes every run but the shell
+                // survived). Drop the shell; bookmark markers inside it are preserved (the
+                // hyperlink-shell analogue of the wholly-deleted-table rule).
 
-                if ((element.Name == W.hyperlink || element.Name == W.fldSimple) &&
+                if ((element.Name == W.hyperlink || element.Name == W.fldSimple
+                     || element.Name == W.dir || element.Name == W.bdo) &&
                     element.Elements().Any(e => e.Name == W.del || e.Name == W.moveFrom))
                 {
                     var transformed = new XElement(element.Name,
@@ -2736,7 +2740,7 @@ namespace Docxodus
             if (element != null)
             {
                 if (element.Name == W.dir ||
-                    element.Name == W.bdr ||
+                    element.Name == W.bdo ||
                     element.Name == W.ins ||
                     element.Name == W.moveTo ||
                     element.Name == W.smartTag ||

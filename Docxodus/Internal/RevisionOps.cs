@@ -2524,9 +2524,13 @@ internal static class RevisionOps
     {
         var parent = wrapper.Parent;
         wrapper.Remove();
-        // Collapse a hyperlink or simple field emptied by this removal. Preserve its
-        // range markers and reference-only runs at the container's former position.
-        while (parent is not null && (parent.Name == W.hyperlink || parent.Name == W.fldSimple)
+        // Collapse a hyperlink, simple field, bidirectional container, or earlier
+        // insertion/move destination emptied by this removal: accepting the deletion of
+        // inserted text ends the insertion too. Preserve range markers and reference-only
+        // runs at the container's former position.
+        while (parent is not null && (parent.Name == W.hyperlink || parent.Name == W.fldSimple
+                || parent.Name == W.dir || parent.Name == W.bdo
+                || parent.Name == W.ins || parent.Name == W.moveTo)
             && parent.Elements().All(IsIgnorableBetween))
         {
             var grandParent = parent.Parent;

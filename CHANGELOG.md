@@ -24,12 +24,22 @@ All notable changes to this project will be documented in this file.
   deletion logic, keeps anchors live in `Modified`, and refuses unsupported inline custom XML
   before mutation. Deleted runs also retain their positions within bookmark and comment
   ranges, preserving those ranges when the deletion is rejected. Deletion includes runs
-  inside hyperlinks, fields, inline controls and earlier insertions, and rows inside
-  structured wrappers; row properties remain in schema order. Retained cells and stories
-  keep their final paragraph and formatting consistently across review engines. Referenced
-  table bookmarks are guarded before recording, identical headers report the correct story
-  anchor, and block custom XML inside text boxes is accepted. Recording and resolving
-  revisions preserve unrelated orphan relationships.
+  inside hyperlinks, fields, inline controls, bidirectional containers and earlier
+  insertions, math objects, and rows inside structured wrappers; row properties and
+  paragraph marks stay in schema order, including on a deleted move destination. An empty
+  simple field or subdocument reference is refused before mutation, like inline custom XML.
+  Retained cells and stories keep their final paragraph and formatting consistently across
+  review engines, also when a table would otherwise end the story. Bookmarks that
+  acceptance would strand — in a table, an inline control, or a paragraph followed by a
+  table or by a neighbour an earlier revision already deleted — are guarded before
+  recording, so tracked `DeleteBlock` now refuses a few shapes untracked deletion always
+  refused; identical headers report the correct story anchor, and block custom XML inside
+  text boxes is accepted. Accepting a deleted section-break paragraph no longer fails, and
+  accepting only the deletion of earlier-inserted content leaves no empty insertion behind.
+  Rows inside structured wrappers count as the table's own for the accepted-view block
+  list, untracked row and column deletion, and comparison redlines. Recording and resolving
+  revisions preserve unrelated orphan hyperlink relationships; orphaned media is still
+  swept at the mutation boundary.
 - A re-recorded or switched AOT profile no longer reuses cached AOT outputs compiled for
   the previous profile (issue #783). `wasm/DocxodusWasm/AotProfile.targets` keys the AOT
   cache on the profile's content hash, invalidates the compiled method selection and the

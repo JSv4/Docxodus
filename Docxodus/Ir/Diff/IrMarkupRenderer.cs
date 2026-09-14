@@ -4373,7 +4373,9 @@ internal static class IrMarkupRenderer
     /// </summary>
     private static void MarkWholeTable(XElement tbl, RevKind kind, RenderState state)
     {
-        foreach (var tr in tbl.Elements(W.tr).ToList())
+        // Rows inside structured wrappers belong to the table too: accept treats the table as
+        // removed only when EVERY owned row is deleted, so an unmarked wrapped row would survive.
+        foreach (var tr in WordprocessingMLUtil.TableRows(tbl).ToList())
         {
             // Mark the row inserted/deleted via w:trPr/w:ins|w:del.
             var trPr = tr.Element(W.trPr);
