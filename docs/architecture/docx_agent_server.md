@@ -313,7 +313,8 @@ All search modes accept the exact citation token and attach a citation envelope 
 ### `docxodus_edit` — text/block CRUD + undo/redo
 
 `insert_paragraph`, `replace_text`, `replace_text_range`, `delete_block`, `delete_range`,
-`delete_section`, `split_paragraph`, `merge_paragraphs`, `undo`, `redo` → the identically-named
+`replace_text_at_span_with_format`, `delete_section`, `split_paragraph`, `merge_paragraphs`,
+`undo`, `redo` → the identically-named
 (camelCase) `DocxSession` methods via `DocxSessionOps`. `markdown` payloads use the supported
 subset documented in `docx_mutation_api.md` (ATX headings, bulleted/ordered lists, bold/italic/
 code/strike, links, hard breaks).

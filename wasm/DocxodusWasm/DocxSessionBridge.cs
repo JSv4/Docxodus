@@ -1109,6 +1109,12 @@ public static partial class DocxSessionBridge
     public static string ReplaceTextAtSpan(int h, string anchor, int spanStart, int spanLength, string replace) =>
         DocxSessionOps.ReplaceTextAtSpan(h, anchor, spanStart, spanLength, replace);
 
+    [JSExport]
+    public static string ReplaceTextAtSpanWithFormat(
+        int h, string anchor, int spanStart, int spanLength, string replace, string formatJson) =>
+        DocxSessionOps.ReplaceTextAtSpanWithFormat(
+            h, anchor, spanStart, spanLength, replace, DocxSessionJson.ParseFormatOp(formatJson));
+
     /// <summary>
     /// Bridge for <see cref="DocxSession.ReplaceInner(TextMatch, string)"/>. Takes the
     /// match's text (so the shared core can locate the brackets) plus anchor+span (so

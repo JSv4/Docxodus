@@ -1737,8 +1737,21 @@ export class DocxSession {
    * `enclosingAnchor.id` + `span.{start,length}`, so identical needles in the
    * same paragraph (the template-fill case where five `[___]` placeholders
    * each get a different value) don't collide.
+   *
+   * Pass `format` to replace text and format exactly the replacement atomically, with one
+   * undo/version unit. This interactive path returns an ordinary EditResult and avoids the
+   * package checkpoint/hash required by executeBatch's receipt. Empty replacements only delete.
    */
-  replaceMatch(match: TextMatch, replace: string): EditResult {
+  replaceMatch(match: TextMatch, replace: string, format?: FormatOp): EditResult {
+    if (format !== undefined) {
+      if (!this.wasm.ReplaceTextAtSpanWithFormat) {
+        throw new Error("This WASM bundle predates atomic text-plus-format edits; rebuild docxodus.");
+      }
+      return JSON.parse(this.wasm.ReplaceTextAtSpanWithFormat(
+        this.handle, match.enclosingAnchor.id, match.span.start, match.span.length, replace,
+        JSON.stringify(format),
+      )) as EditResult;
+    }
     return JSON.parse(
       this.wasm.ReplaceTextAtSpan(this.handle, match.enclosingAnchor.id, match.span.start, match.span.length, replace)
     ) as EditResult;

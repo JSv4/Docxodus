@@ -120,6 +120,32 @@ The same semantics reach `DocxSessionOps`/JSON, WASM and npm
 (`session.executeBatch`), stdio and Python (`session.execute_batch`), and MCP
 (`docxodus_mutations`).
 
+### Interactive text with typing formatting
+
+For a paragraph-local replacement plus explicit typing formatting, use
+`ReplaceTextAtSpanWithFormat(anchorId, start, length, replacement, format)` (.NET),
+or pass the optional third argument to npm's `replaceMatch`:
+
+```ts
+const edit = session.replaceMatch(match, "new document", { bold: true });
+```
+
+The text and formatting commit atomically as one version and undo/redo unit. A failure
+restores both edits and the prior history. Formatting applies only to the replacement;
+an empty replacement only deletes. Text replacement, run-boundary insertion, smart quotes,
+and tracked changes follow the existing `ReplaceTextAtSpan` / `ApplyFormat` semantics.
+Python accepts `format=FormatOp(bold=True)` on `replace_match` and `replace_text_at_span`;
+MCP exposes `docxodus_edit` action `replace_text_at_span_with_format` with `anchorId`,
+`spanStart`, `spanLength`, `replace`, and `format`.
+
+This operation returns an ordinary `EditResult`. Its fixed mutation scope uses in-memory
+part snapshots, avoiding full-package checkpoint serialization and receipt hashing on the
+typing path. It does not produce a batch receipt; use `executeBatch` when package hashes,
+semantic change sets, retry identities, or arbitrary atomic compositions are required.
+Those batch guarantees remain unchanged. Browser hosts that do not consume Markdown
+patches should open with `emitMarkdownPatch: false`. Optional delivery-evidence capture
+still incurs its own package work.
+
 ### Transaction ids: retry deduplication on every transport (issues #449, #761)
 
 An applying batch may carry a caller-chosen **transaction id** — a non-blank string of at most

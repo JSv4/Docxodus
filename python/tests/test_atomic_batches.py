@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from docx_scalpel import (
     EditErrorCode,
+    FormatOp,
     DocxSession,
     DocxSessionSettings,
     MutationBatchMode,
@@ -81,6 +82,33 @@ def test_atomic_success_is_one_version_and_undo_unit(tour_plan_bytes: bytes) -> 
         assert session.undo()
         assert "Python batch first." not in session.project().markdown
         assert not session.undo()
+
+
+def test_text_with_format_is_atomic_and_available_in_batches(tour_plan_bytes: bytes) -> None:
+    with open_session(tour_plan_bytes) as session:
+        target = _body_paragraphs(session)[0]
+        assert session.replace_text(target, "Original text.").success
+        before = session.project().markdown
+        version = session.get_version()
+        match = next(m for m in session.grep("Original") if m.enclosing_anchor.id == target)
+        assert session.replace_match(match, "New", format=FormatOp(bold=True)).success
+        assert session.get_version() == version + 1
+        assert "**New** text." in session.project().markdown
+        assert session.undo()
+        assert session.project().markdown == before
+        assert session.redo()
+        assert "**New** text." in session.project().markdown
+
+        result = session.execute_batch([
+            MutationBatchStep("replace_text_at_span_with_format", {
+                "anchorId": target, "spanStart": 0, "spanLength": 3,
+                "replace": "Bad", "format": {"highlight": "invalid-highlight"},
+            }),
+        ])
+        assert not result.success
+        assert result.rolled_back
+        assert result.package_hash
+        assert "**New** text." in session.project().markdown
 
 
 def test_best_effort_is_explicit_and_invalid_steps_are_structured(

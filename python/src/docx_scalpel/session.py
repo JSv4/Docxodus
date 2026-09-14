@@ -1536,16 +1536,22 @@ class DocxSession:
         )
 
     def replace_text_at_span(
-        self, anchor_id: str, span_start: int, span_length: int, replace: str
+        self, anchor_id: str, span_start: int, span_length: int, replace: str,
+        *, format: FormatOp | None = None,
     ) -> EditResult:
+        """Replace a span, optionally formatting the replacement as one atomic undo unit.
+
+        Returns an ordinary edit result; use execute_batch for a package-hashed receipt.
+        """
         return EditResult._from_wire(
             self._call(
-                "replace_text_at_span",
+                "replace_text_at_span" if format is None else "replace_text_at_span_with_format",
                 {
                     "anchorId": anchor_id,
                     "spanStart": span_start,
                     "spanLength": span_length,
                     "replace": replace,
+                    **({"format": format.to_wire()} if format is not None else {}),
                 },
             )
         )
@@ -1584,14 +1590,16 @@ class DocxSession:
             )
         )
 
-    def replace_match(self, match: TextMatch, replace: str) -> EditResult:
+    def replace_match(
+        self, match: TextMatch, replace: str, *, format: FormatOp | None = None,
+    ) -> EditResult:
         """Client-side sugar over :meth:`replace_text_at_span` keyed by a prior search hit.
 
         Sends no wire op beyond what ``replace_text_at_span`` already sends —
         the .NET side does not need to re-parse the full ``TextMatch``.
         """
         return self.replace_text_at_span(
-            match.enclosing_anchor.id, match.span.start, match.span.length, replace
+            match.enclosing_anchor.id, match.span.start, match.span.length, replace, format=format,
         )
 
     def delete_block(self, anchor_id: str) -> EditResult:
