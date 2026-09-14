@@ -370,7 +370,8 @@ Each mutation reports which anchors it created, removed, or modified. This table
 | Op | Created | Removed | Modified | Patch scope |
 |---|---|---|---|---|
 | `ReplaceText(p, md)` | — (markdown subset can't introduce inline anchors in v1) | descendant inline anchors that no longer exist (rare) | `p` | `p` |
-| `DeleteBlock(p)` (or `h`/`li`/`tbl`) | — | `p` + all descendant anchors, plus any `fn`/`en` definition whose last reference the delete removed (issue #591 — the same Word-faithful prune revision resolution performs; shared notes, pre-existing danglers, and the separator notes survive; likewise for `DeleteRange`/`DeleteSection`/`DeleteTableRow`/`DeleteTableColumn`) | — | nearest stable ancestor |
+| `DeleteBlock(p)` (or `h`/`li`/`tbl`), untracked | — | `p` + all descendant anchors, plus any `fn`/`en` definition whose last reference the delete removed (issue #591 — the same Word-faithful prune revision resolution performs; shared notes, pre-existing danglers, and the separator notes survive; likewise for `DeleteRange`/`DeleteSection`/`DeleteTableRow`/`DeleteTableColumn`) | — | nearest stable ancestor |
+| `DeleteBlock(p)` (or `h`/`li`/`tbl`), `RenderInline` | — | — | the target anchor, in its original story; descendant anchors stay live until review | target's patch scope |
 | `DeleteBlock(fn)` / `DeleteBlock(en)` / `DeleteBlock(cmt)` | — | the definition anchor (and any cross-references it pointed at — those become "gone" but aren't separately addressed) | — | nearest stable ancestor in the body |
 | `InsertParagraph(p, pos, md)` | one anchor per new block | — | — | smallest enclosing common parent |
 | `SplitParagraph(p, offset)` | the **second** half | — | `p` (first half — convention) | enclosing parent |
@@ -615,8 +616,32 @@ descendant anchors of removed blocks) that disappeared.
 wraps each removed paragraph's runs in `w:del` and marks the paragraph mark
 itself as deleted via `w:pPr/w:rPr/w:del`. Tables get `w:trPr/w:del` on every
 row (Word's row-deletion convention — there is no table-level "delete" markup),
-plus the same run/paragraph-mark wrapping inside every cell. Nested tables
-recurse.
+plus the same run/paragraph-mark wrapping inside every cell. Rows inside structured
+wrappers and nested tables are included. Existing row properties stay in schema order.
+
+`DeleteBlock` uses this same tracked-deletion path for a single paragraph, heading,
+list item, or table (issue #784). Accepting removes the block, including its paragraph
+break or table rows; rejecting restores it. A retained cell, header, footer, note or
+content control keeps its final paragraph and formatting, including when the deletion
+would otherwise leave it ending in a table: the content is deleted while that final
+paragraph mark remains. Runs inside hyperlinks, fields, inline controls and bidirectional
+containers are included, as are math objects. Deleting previously inserted content
+records a separate deletion, so the new deletion can be rejected without accepting or
+rejecting the earlier insertion; accepting only the deletion ends the emptied insertion.
+
+The target is reported in `Modified`, and its descendant anchors stay live until review.
+Tracked table deletion applies the bookmark-removal guard before recording because
+acceptance removes its rows and their bookmark endpoints. The guard also covers deleted
+inline controls and paragraphs whose bookmarks cannot migrate to a following paragraph —
+because a table, a wrapper or the end of the story follows, or because the neighbouring
+paragraph was already deleted by an earlier revision. A surviving external link or
+cross-reference, a managed bookmark, or a range crossing that boundary is refused just as
+for structural deletion. Deleting a bookmark and its references together is allowed.
+Other paragraph bookmark markers migrate with the surviving paragraph on acceptance.
+Recording an ordinary tracked block deletion does not prune notes or sweep relationships;
+revision resolution removes only relationships attributable to the resolved changes and
+sweeps orphaned media at the mutation boundary as every edit does.
+The run-level custom-XML refusal below applies to `DeleteBlock` too.
 
 Block-level `w:sdt` content controls are reversible too. Two paired
 `w:customXmlDelRangeStart` / `w:customXmlDelRangeEnd` ranges cross the control's
@@ -642,8 +667,10 @@ position ahead of the inner range marker, and every payload block is tracked
 recursively. Nested and mixed `w:sdt`/`w:customXml` wrappers each receive their
 own envelope. The one shape still refused before mutation — with
 `IncompatibleElementType`, no undo snapshot, and an unchanged document — is
-run-level `w:customXml` inside a selected paragraph: the paragraph deleter marks
-direct-child runs only and would leave that wrapper's text undeleted.
+run-level `w:customXml` inside a selected paragraph, whose wrapper deletion is not
+supported. An empty `w:fldSimple` (no result run) and a `w:subDoc` reference are refused
+the same way: neither can sit inside a `w:del`. Block custom XML inside a text box is
+distinct and does not trigger that refusal.
 Accepted-mode bulk deletion is unchanged.
 
 ### `DeleteSection` — heading-bounded bulk removal

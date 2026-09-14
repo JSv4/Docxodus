@@ -790,6 +790,20 @@ namespace Docxodus
 
     public static class WordprocessingMLUtil
     {
+        /// <summary>Rows owned by this table, including rows in SDT/custom-XML wrappers,
+        /// but excluding rows of nested tables inside its cells.</summary>
+        internal static IEnumerable<XElement> TableRows(XElement table)
+        {
+            foreach (var child in table.Elements())
+            {
+                if (child.Name == W.tr) yield return child;
+                // Stop at a row instead of traversing its cells and paragraph content.
+                // A nested table has its own row ownership and is visited separately.
+                else if (child.Name != W.tbl)
+                    foreach (var row in TableRows(child)) yield return row;
+            }
+        }
+
         public static int CalcWidthOfRunInTwips(XElement r)
         {
             var KnownFamilies = FontFamilyHelper.KnownFamilies;
@@ -1435,10 +1449,11 @@ listSeparator
 
         private static Dictionary<XName, int> Order_rPr = new Dictionary<XName, int>
         {
-            { W.moveFrom, 5 },
-            { W.moveTo, 7 },
-            { W.ins, 10 },
-            { W.del, 20 },
+            // CT_ParaRPr opens with ins, del, moveFrom, moveTo in that order.
+            { W.ins, 5 },
+            { W.del, 7 },
+            { W.moveFrom, 10 },
+            { W.moveTo, 20 },
             { W.rStyle, 30 },
             { W.rFonts, 40 },
             { W.b, 50 },
@@ -4851,6 +4866,7 @@ listSeparator
         public static readonly XName bar = w + "bar";
         public static readonly XName basedOn = w + "basedOn";
         public static readonly XName bCs = w + "bCs";
+        public static readonly XName bdo = w + "bdo";
         public static readonly XName bdr = w + "bdr";
         public static readonly XName before = w + "before";
         public static readonly XName beforeAutospacing = w + "beforeAutospacing";
