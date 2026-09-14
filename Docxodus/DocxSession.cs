@@ -8921,15 +8921,15 @@ public sealed partial class DocxSession : IDisposable
 
     /// <summary>
     /// Wrap the live runs of <paramref name="paragraph"/> in a
-    /// <paramref name="wrapperName"/> revision envelope and mark the paragraph mark to match.
+    /// <paramref name="wrapperName"/> revision envelope and optionally mark the paragraph mark to match.
     /// </summary>
     /// <remarks>
-    /// Shared by whole-block deletion, paragraph/table moves and paragraph/row insertion.
+    /// Shared by whole-block deletion, text replacement, paragraph/table moves and paragraph/row insertion.
     /// A DELETING wrapper also converts
     /// <c>w:t</c>→<c>w:delText</c> (and <c>w:instrText</c>→<c>w:delInstrText</c>), which is what
     /// Word writes, what <c>IrMarkupRenderer.ConvertTextToDelText</c> produces, and what
     /// <see cref="RevisionProcessor"/>'s reject path swaps back. The paragraph mark belongs
-    /// to the same operation, except for a final paragraph a retained container must keep.
+    /// to the same operation unless the caller retains it (a replacement or a final retained paragraph).
     /// </remarks>
     private XElement? MarkParagraphContentAndMark(
         XElement paragraph, XName wrapperName, string author, string date,
@@ -15204,25 +15204,9 @@ public sealed partial class DocxSession : IDisposable
         foreach (var m in preNoteRefs) m.Remove();
         foreach (var m in postNoteRefs) m.Remove();
 
-        // Wrap remaining existing runs (the visible text) in w:del (converting w:t to w:delText).
-        var existingRuns = paragraph.Elements(W.r).ToList();
-        XElement? del = null;
-        if (existingRuns.Count > 0)
-        {
-            del = CreateRevisionEnvelope(W.del, author, date);
-            foreach (var run in existingRuns)
-            {
-                run.Remove();
-                foreach (var t in run.Elements(W.t).ToList())
-                {
-                    var dt = new XElement(W.delText,
-                        new XAttribute(XNamespace.Xml + "space", "preserve"),
-                        (string)t);
-                    t.ReplaceWith(dt);
-                }
-                del.Add(run);
-            }
-        }
+        // Delete live content in place, including inside prior insertions (w:ins > w:del).
+        // Existing deletions keep their ownership; this replacement retains the paragraph break.
+        MarkParagraphContentAndMark(paragraph, W.del, author, date, preserveParagraphMark: true);
 
         XElement? ins = null;
         if (blocks.Count > 0 && blocks[0].RunElements.Count > 0)
@@ -15232,8 +15216,10 @@ public sealed partial class DocxSession : IDisposable
                 ins.Add(new XElement(run));
         }
 
-        foreach (var m in preNoteRefs) paragraph.Add(m);
-        if (del is not null) paragraph.Add(del);
+        if (paragraph.Elements().FirstOrDefault(e => e.Name != W.pPr) is { } firstContent)
+            firstContent.AddBeforeSelf(preNoteRefs);
+        else
+            paragraph.Add(preNoteRefs);
         if (ins is not null) paragraph.Add(ins);
         foreach (var m in postNoteRefs) paragraph.Add(m);
     }
