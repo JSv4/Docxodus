@@ -36,7 +36,9 @@ delivery/verification subsystems, and pagination. The AOT tier then moved
 `dotnet.native.wasm`: the compiled methods live there, while the assemblies keep their size
 (the IL bodies of AOT-compiled methods are zeroed in place, which is why they cost nothing
 after compression). The guardrail that matters is the brotli wire total, which
-`scripts/build-wasm.sh` prints and holds under a 5376 KB budget.
+`scripts/build-wasm.sh` prints and holds under a 5888 KiB (5.75 MiB) budget.
+The table above records the original AOT rollout; the expanded browser profile
+below measures 5.44 MiB Brotli on SDK 10.0.301.
 
 ## Trimming policy
 
@@ -90,12 +92,12 @@ base is calls all the way down (XLinq accessors, LINQ, virtual dispatch).
 The fix (issue #652) is **profile-guided AOT**: `RunAOTCompilation=true` with
 `WasmAotProfilePath` pointing at `wasm/DocxodusWasm/docxodus.aotprofile`. The AOT compiler
 then runs with `profile-only,profile=…` and compiles *only the methods listed in the
-profile* — the ~6k the representative workload executes — while everything else stays on the
+profile* — selected by the representative workload — while everything else stays on the
 interpreter (`AOTMode=LLVMOnlyInterp`, the SDK default). The profile is recorded with the
 Mono AOT profiler over the same workload the steady-state spec times (`npm/tests/wasm-workload.ts`:
 DocxDiff compare of a small pair and of a 147 KB legal form against an edited variant of
 itself, DOCX→HTML on two documents, and the editor's per-mutation ReplaceText + single-block
-re-render), so what is measured is by construction what is compiled.
+re-render), plus the additional browser paths described below.
 
 The recording spec also exercises a dense terminal-style paragraph through
 `RawReplaceXml` and incremental rendering: 1,200 runs with repeated formats and
@@ -105,6 +107,14 @@ That additional coverage initially measured **5,172,053 bytes (4.93 MiB) Brotli*
 on SDK 10.0.301. After merging the history bridge and building with CI's SDK
 10.0.400 / wasm-tools workload set 10.0.400.1 / runtime 10.0.11, the combined
 payload reached 5128 KiB and exceeded the unchanged 5 MiB wire budget.
+
+The recorder also exercises full synchronous and asynchronous paginated editor mounts,
+conversion with headers/footers, anchor stamping, pagination and notes, and external
+annotation-set creation (#783). HC031 and the sections-with-headers fixture train these
+paths; NVCA is an additional benchmark input for them. The controlled A/B experiment
+measured roughly **2–3x faster annotation creation**, with smaller 2–8% mount gains,
+for **286.5 KiB more Brotli** (5.16 → 5.44 MiB). See
+[the results and reproduction steps](../../benchmarks/aot-coverage/README.md).
 
 Release builds now add `WasmOptConfigurationFlags Include="-Oz"` to the SDK's
 post-link Binaryen pass. This optimizes the complete native WASM before the SDK
@@ -150,24 +160,41 @@ already optimized inside the AOT compiler and the volume is method count, not co
 ### Re-recording the profile
 
 ```bash
-./scripts/record-aot-profile.sh     # ~4 min: profiler build → browser run → shipped rebuild
+./scripts/record-aot-profile.sh     # profiler build → browser run → shipped rebuild
 ```
 
 The script publishes the **profiler flavour** (`-p:RunAOTCompilation=false
 -p:WasmProfilers=aot`: AOT off, because AOT-compiled methods are invisible to the profiler),
 runs `npm/tests/aot-profile-record.spec.ts` (opt-in via `DOCXODUS_RECORD_AOT_PROFILE=1`),
-which drives the shared workload in `test-harness.html?aotProfile=1` and writes
+which drives the shared workloads in `test-harness.html?aotProfile=1` and writes
 `INTERNAL.aotProfileData` to `wasm/DocxodusWasm/docxodus.aotprofile`, then rebuilds the
-shipped configuration so `dist/wasm` never holds the profiler flavour. Commit the profile
-(1.3 MB raw, ~250 KB in git). Re-record when the hot paths move — a new engine stage, a
+shipped configuration. It builds the JavaScript harness dependencies before recording
+and regenerates the export assets and staged site for the final shipping bundle.
+Commit the profile with the workload change. `DOCXODUS_AOT_PROFILE_OUT` can direct an
+experimental recording to a separate file; the final rebuild still uses the checked-in
+shipping profile. Re-record when the hot paths move — a new engine stage, a
 renamed hot class, a runtime bump. A **stale profile costs speed, never correctness**: a method
 missing from it simply runs interpreted, and a method it names that no longer exists is
 skipped. The steady-state spec's numbers are how you notice drift.
 
-The Mono AOT profiler records every method the runtime compiles (there is no hotness
-threshold), so the profile is exactly the code the workload touched; widen the workload in
-`wasm-workload.ts` (or the supplemental recording-spec workload) if a new user-facing path needs the tier, and expect the wire total to
-follow. Three things about the recording that are not obvious from the SDK docs:
+The Mono AOT profiler records method compilation/preparation and generic instances
+(there is no hotness threshold). The profile selects whole methods, including shared
+helpers; it does not rank CPU cost or limit compilation to the branches executed.
+Widen `wasm-workload.ts` or the supplemental recording workload when a new user-facing
+path needs the tier, and expect the wire total to follow. These details are not obvious
+from the SDK docs:
+
+- **Profile changes must invalidate AOT outputs.** On SDK 10.0.301 / runtime 10.0.9,
+  the compiler's incremental check ignores the profile and can reuse old code even
+  when a different profile is selected. `AotProfile.targets` hashes the selected
+  profile contents before AOT. A changed or missing stamp removes generated AOT
+  bitcode, objects, trimming-token files and the IL-stripped assemblies (ILStrip's own
+  check is mtime-only, and stripped IL bodies must match the compiled method set), while
+  preserving native runtime sources. The stamp is written only after AOT succeeds, and the
+  outer publish fails if the stamp does not match the selected profile, so a renamed SDK
+  hook cannot silently ship code compiled for a previous profile. This applies to direct
+  `dotnet publish` and the build scripts; an unchanged profile keeps incremental
+  compilation. The regression tests run with `node --test scripts/aot-profile-cache.test.mjs`.
 
 - **`WasmAotProfilePath`, not `AOTProfilePath`.** `WasmApp.Common.targets` passes both to
   the `MonoAOTCompiler` task under what is, to MSBuild, one case-insensitive parameter; the
@@ -288,9 +315,8 @@ is worth ~80 ms even on localhost (less IL to parse) and ~700 ms at 50 Mbps.
 
 ## Size guardrail
 
-`build-wasm.sh` computes the brotli wire total on every build and **fails above 5.25 MB**
-(measured 5.03 MB: ~3.6 MB of trimmed IL and runtime, ~1.2 MB of profile-guided AOT
-code, and the portable-history archive reader the browser bindings now reach). If it trips:
+`build-wasm.sh` computes the brotli wire total on every build and **fails above 5.75 MiB**
+(5888 KiB; measured 5.44 MiB with the expanded browser AOT profile). If it trips:
 look for a re-rooted assembly (`TrimmerRootAssembly`), a dependency bump growing the SDK, a
 new package reference, or a re-recorded AOT profile that got much wider. The npm CI job runs
 the same script, so regressions surface at PR time.
@@ -310,8 +336,17 @@ the first time. That lands at 5151 KB.
 Re-recording the profile without the dense-text workload was measured as an alternative: it
 recovers 28 KB (5123 KB) — still over the old budget, and it costs the formatting-template
 and batched-identity coverage that workload exists to provide. Paying 31 KB of wire for a
-feature that ships in every other transport was the better trade. The new line keeps ~225 KB
-of headroom; spend it deliberately.
+feature that ships in every other transport was the better trade. That line kept ~225 KB
+of headroom at the time.
+
+### Why the budget moved from 5.25 MiB to 5.75 MiB
+
+The full-mount, conversion-options and annotation workloads add 286.5 KiB compressed,
+bringing the framework to 5,704,974 bytes on SDK 10.0.301. Annotation creation improves
+roughly 2–3x on the measured documents, including a longer warm-up check. The broader
+profile is an accepted download/performance tradeoff; 5.75 MiB leaves about 315 KiB for
+toolchain variation and subsequent changes. The benchmark records the original 5.25 MiB
+gate failure rather than retroactively applying the new limit to those measurements.
 
 ## Future size work (not implemented)
 

@@ -1,13 +1,13 @@
 // Records wasm/DocxodusWasm/docxodus.aotprofile — the list of methods the shipped build
-// compiles ahead of time (RunAOTCompilation + AOTProfilePath in DocxodusWasm.csproj);
+// compiles ahead of time (RunAOTCompilation + WasmAotProfilePath in DocxodusWasm.csproj);
 // everything not in it stays on the interpreter/jiterpreter.
 //
 // Opt-in, and only meaningful against a profiler build: scripts/record-aot-profile.sh
 // builds the bundle with <WasmProfilers>aot</WasmProfilers> and AOT off (AOT-compiled
 // methods are invisible to the profiler), runs this spec, then rebuilds the shipped
 // configuration. The Mono AOT profiler records every method the runtime compiles, so
-// the workload — the steady-state suite plus a dense-text editor sample below —
-// is exactly what ends up AOT'd.
+// the workload selects the methods eligible for AOT, including generic instances
+// and shared library helpers. It records coverage, with no timing threshold.
 // The profile is written once, when the write-at method (DocumentComparer.Warmup, armed
 // by test-harness.html?aotProfile=1) is first compiled, into INTERNAL.aotProfileData.
 import { test, expect } from '@playwright/test';
@@ -15,8 +15,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { loadWorkloadInput, runWasmWorkload } from './wasm-workload';
+import { runWasmBrowserWorkload, BrowserOperation } from './wasm-browser-workload';
 
-const PROFILE_PATH = path.join(
+const PROFILE_PATH = process.env.DOCXODUS_AOT_PROFILE_OUT ?? path.join(
   path.dirname(fileURLToPath(import.meta.url)), '../../wasm/DocxodusWasm/docxodus.aotprofile');
 
 test.describe('AOT profile recording', () => {
@@ -34,7 +35,8 @@ test.describe('AOT profile recording', () => {
     await page.goto('/test-harness.html?aotProfile=1');
     await page.waitForFunction(() => (window as any).DocxodusReady === true, { timeout: 60000 });
 
-    // Coverage is what matters here, not repetition: one pass compiles every method.
+    // Different documents and options reach different methods; repetition alone
+    // does not expand coverage of the same path.
     const input = loadWorkloadInput({
       warmup: 0,
       iterations: { compareSmall: 1, compareHeavy: 1, convert: 1, convertHeavy: 1, sessionRefresh: 5 },
@@ -70,6 +72,21 @@ test.describe('AOT profile recording', () => {
       } finally { bridge.CloseSession(handle); }
     });
 
+    // Full mounts and option-specific conversion/export helpers do not all run
+    // during a single-block refresh (#783). Keep the larger NVCA document out of
+    // these added training paths so the benchmark also measures an untrained input.
+    for (const fixture of ['HC031-Complicated-Document.docx', 'DB002-Sections-With-Headers.docx']) {
+      const bytes = Array.from(fs.readFileSync(path.join(
+        path.dirname(fileURLToPath(import.meta.url)), '../../TestFiles', fixture)));
+      const operations: BrowserOperation[] = [
+        'html.headers', 'html.options', 'annotation.create', 'editor.open', 'editor.openAsync',
+      ];
+      for (const operation of operations) {
+        const samples = await page.evaluate(runWasmBrowserWorkload, { bytes, operation, iterations: 1 });
+        expect(samples[0].outputLength, `${fixture}: ${operation} produced output`).toBeGreaterThan(0);
+      }
+    }
+
     const profile = await page.evaluate(() => {
       (window as any).Docxodus.DocumentComparer.Warmup();
       const data = (window as any).DocxodusRuntime.INTERNAL.aotProfileData as Uint8Array | undefined;
@@ -80,6 +97,7 @@ test.describe('AOT profile recording', () => {
       .not.toBeNull();
     expect(profile!.length).toBeGreaterThan(1000);
 
+    fs.mkdirSync(path.dirname(PROFILE_PATH), { recursive: true });
     fs.writeFileSync(PROFILE_PATH, Buffer.from(profile!));
     console.log(`wrote ${profile!.length} bytes to ${PROFILE_PATH}`);
   });

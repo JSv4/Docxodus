@@ -47,14 +47,12 @@
     <DebuggerSupport Condition="'$(Configuration)' == 'Release'">false</DebuggerSupport>
     <EventSourceSupport Condition="'$(Configuration)' == 'Release'">false</EventSourceSupport>
 
-    <!-- Profile-guided AOT (issue #652). The browser build runs on the Mono interpreter
-         (tiered by the jiterpreter), 5-10x slower than warm native at steady state. Full AOT
-         closes that gap but compiles ~90k methods: 60 MB raw / 9.7 MB brotli, 2.6x the wire
-         budget. With a profile the AOT compiler gets `profile-only`: only the ~6k methods the
-         representative workload actually executes (DocxDiff compare, DOCX->HTML, editor
-         refresh) are compiled, everything else stays on the interpreter, and the result is
-         as fast as full AOT (3.5-4.3x over the interpreter, 1.5-2.7x warm native) for +6.5 MB
-         raw / +1.2 MB brotli. Measured frontier: docs/architecture/wasm-packaging.md.
+    <!-- Profile-guided AOT (issues #652, #783). Compile the methods reached by the
+         representative compare, conversion, annotation, and editor workloads;
+         other reachable methods stay on the interpreter/jiterpreter. The broader
+         browser workload speeds up annotation creation by ~2–3x for +286.5 KiB
+         Brotli, bringing the framework to 5.44 MiB on SDK 10.0.301.
+         Measurements: benchmarks/aot-coverage/README.md.
 
          WasmAotProfilePath, not the documented AOTProfilePath: the SDK passes both to the
          AOT task under one case-insensitive parameter and the (empty) item wins, so
@@ -67,6 +65,8 @@
     <!-- Define WASM_BUILD to enable SkiaSharp-free code paths in Docxodus -->
     <DefineConstants>$(DefineConstants);WASM_BUILD</DefineConstants>
   </PropertyGroup>
+
+  <Import Project="AotProfile.targets" />
 
   <!-- Apply size optimization in the SDK's post-link Binaryen pass, before it
        generates asset hashes. Keep the default -O2 AOT compilation and link,
