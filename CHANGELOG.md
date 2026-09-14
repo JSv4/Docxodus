@@ -17,6 +17,13 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `DeleteBlock` now records complete paragraph and table deletions under `RenderInline`
+  (issue #784). Accepting removes the paragraph, including its numbering, instead of
+  leaving an empty paragraph behind. Tables remain visible as tracked row deletions
+  until review, so rejecting restores their contents. The operation shares `DeleteRange`'s
+  deletion logic, keeps anchors live in `Modified`, and refuses unsupported inline custom XML
+  before mutation. Deleted runs also retain their positions within bookmark and comment
+  ranges, preserving those ranges when the deletion is rejected.
 - A re-recorded or switched AOT profile no longer reuses cached AOT outputs compiled for
   the previous profile (issue #783). `wasm/DocxodusWasm/AotProfile.targets` keys the AOT
   cache on the profile's content hash, invalidates the compiled method selection and the

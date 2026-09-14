@@ -592,6 +592,14 @@ row (Word's row-deletion convention — there is no table-level "delete" markup)
 plus the same run/paragraph-mark wrapping inside every cell. Nested tables
 recurse.
 
+`DeleteBlock` uses this same tracked-deletion path for a single paragraph, heading,
+list item, or table (issue #784). Accepting removes the entire block, including its
+paragraph break or table rows; rejecting restores it. The target is reported in
+`Modified`, and its descendant anchors stay live until review. Bookmark-removal
+validation applies when a block is structurally removed, not when it is retained
+as a tracked deletion. The run-level custom-XML refusal below applies to
+`DeleteBlock` too.
+
 Block-level `w:sdt` content controls are reversible too. Two paired
 `w:customXmlDelRangeStart` / `w:customXmlDelRangeEnd` ranges cross the control's
 opening and closing tags, matching Word's native content-control deletion shape.

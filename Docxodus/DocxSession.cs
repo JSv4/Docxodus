@@ -7964,7 +7964,6 @@ public sealed partial class DocxSession : IDisposable
         var element = target.Resolve(_doc!);
         if (element is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId);
-        var hyperlinkOwner = Internal.OwnedPartRelationships.FindOwner(_doc!, element);
 
         // Word reserves the TYPED footnote/endnote definitions (separator, continuationSeparator,
         // continuationNotice) for page-rendering scaffolding; they carry no user content and
@@ -7975,32 +7974,21 @@ public sealed partial class DocxSession : IDisposable
                 $"cannot delete a Word-reserved {target.Anchor.Kind} of type='{(string?)element.Attribute(W.type)}'",
                 anchorId);
 
-        bool structurallyDeletes = _trackedChanges != TrackedChangeMode.RenderInline
-            || target.Anchor.Kind is not ("p" or "h" or "li");
-        if (structurallyDeletes && ValidateBookmarkRemoval(new[] { element }, anchorId) is { } bookmarkError)
+        // Use the range deleter for exactly this block so recording includes paragraph
+        // marks and table rows, preserves anchors, and shares its pre-mutation guards.
+        // fn/en/cmt are definitions in their own parts and retain structural deletion.
+        if (_trackedChanges == TrackedChangeMode.RenderInline
+            && target.Anchor.Kind is "p" or "h" or "li" or "tbl")
+            return DeleteSiblingRangeCore(target, element, element.ElementsAfterSelf().FirstOrDefault());
+
+        if (ValidateBookmarkRemoval(new[] { element }, anchorId) is { } bookmarkError)
             return bookmarkError;
 
+        var hyperlinkOwner = Internal.OwnedPartRelationships.FindOwner(_doc!, element);
         var referencedNotesBefore = ReferencedNoteIds();
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            // Tracked-change mode wraps removed runs in w:del — only meaningful for
-            // body-level paragraph kinds. fn/en/cmt are structural definitions in
-            // their own parts; "tracking" a definition deletion has no Word semantics,
-            // so for those we always perform the structural delete.
-            if (_trackedChanges == TrackedChangeMode.RenderInline
-                && target.Anchor.Kind is "p" or "h" or "li")
-            {
-                WrapRunsInDel(element, NewRevisionStamp());
-                InvalidateProjectionCache();
-                return new EditResult
-                {
-                    Success = true,
-                    Modified = new[] { target.Anchor },
-                    Patch = PatchFor(target),
-                };
-            }
-
             // For fn/en/cmt: also remove every cross-reference (footnoteReference,
             // endnoteReference, commentReference/RangeStart/RangeEnd) anywhere in
             // the package that points at this definition's id. Otherwise Word
@@ -8174,7 +8162,8 @@ public sealed partial class DocxSession : IDisposable
     }
 
     /// <summary>
-    /// Shared core for <see cref="DeleteRange"/> and <see cref="DeleteSection"/>.
+    /// Shared core for <see cref="DeleteRange"/>, <see cref="DeleteSection"/>, and
+    /// tracked <see cref="DeleteBlock"/>.
     /// Takes resolved XElement endpoints — <paramref name="toElementExclusive"/> may be
     /// <c>null</c> to mean "delete to the end of the parent". Records one snapshot and
     /// returns a single <see cref="EditResult"/> aggregating every removed anchor.
@@ -8203,7 +8192,7 @@ public sealed partial class DocxSession : IDisposable
         {
             return EditResult.Fail(
                 EditErrorCode.IncompatibleElementType,
-                "Tracked DeleteRange/DeleteSection does not support run-level w:customXml inside a paragraph; no changes were made.",
+                "Tracked block deletion does not support run-level w:customXml inside a paragraph; no changes were made.",
                 anchorForPatchScope.Anchor.Id);
         }
 
@@ -15107,13 +15096,15 @@ public sealed partial class DocxSession : IDisposable
     {
         foreach (var run in element.Elements(W.r).ToList())
         {
-            run.Remove();
             foreach (var t in run.Elements(W.t).ToList())
                 t.ReplaceWith(new XElement(W.delText,
                     new XAttribute(XNamespace.Xml + "space", "preserve"),
                     (string)t));
-            var del = CreateRevisionEnvelope(W.del, stamp, run);
-            element.Add(del);
+            // Preserve the run's position relative to bookmark/comment range markers
+            // so rejecting the deletion restores their original extents.
+            var del = CreateRevisionEnvelope(W.del, stamp);
+            run.ReplaceWith(del);
+            del.Add(run);
         }
     }
 
