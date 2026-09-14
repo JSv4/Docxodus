@@ -120,20 +120,20 @@ public class DocxSessionSurgicalTrackedChangesTests
         Assert.Equal("ZZMARK Bonn." + untouched, AcceptedText(bytes));
         AssertSchemaValid(bytes);
 
+        // A's proposal is deleted inside A's insertion (w:ins > w:del, Word's own shape); B's
+        // earlier proposal is un-inserted outright, as Word does when an author retypes their
+        // own pending text, so no struck-through first attempt remains.
         var paragraph = MainRoot(bytes).Descendants(W.p).First();
         var insertions = paragraph.Elements(W.ins).ToArray();
-        Assert.Equal(new[] { "A", "B", "B" }, insertions.Select(e => (string?)e.Attribute(W.author)));
-        Assert.Equal(new[] { "ZZMARK Hamburg.", "ZZMARK Köln." }, insertions.Take(2)
-            .Select(e => string.Concat(e.Descendants(W.delText).Select(t => t.Value))));
-        Assert.All(insertions.Take(2), insertion =>
-        {
-            Assert.Empty(insertion.Descendants(W.t));
-            Assert.NotEmpty(insertion.Descendants(W.del));
-            Assert.All(insertion.Descendants(W.del), deletion =>
-                Assert.Equal("B", (string?)deletion.Attribute(W.author)));
-        });
-        Assert.Equal("ZZMARK Bonn.", Text(insertions[2]));
-        Assert.Empty(insertions[2].Descendants(W.del));
+        Assert.Equal(new[] { "A", "B" }, insertions.Select(e => (string?)e.Attribute(W.author)));
+        Assert.Equal("ZZMARK Hamburg.", string.Concat(insertions[0].Descendants(W.delText).Select(t => t.Value)));
+        Assert.Empty(insertions[0].Descendants(W.t));
+        Assert.NotEmpty(insertions[0].Descendants(W.del));
+        Assert.All(insertions[0].Descendants(W.del), deletion =>
+            Assert.Equal("B", (string?)deletion.Attribute(W.author)));
+        Assert.Equal("ZZMARK Bonn.", Text(insertions[1]));
+        Assert.Empty(insertions[1].Descendants(W.del));
+        Assert.DoesNotContain("ZZMARK Köln.", paragraph.ToString());
 
         // Exercise the session APIs used by the bindings as well as RevisionProcessor above.
         foreach (var accept in new[] { true, false })
@@ -183,7 +183,7 @@ public class DocxSessionSurgicalTrackedChangesTests
     }
 
     [Fact]
-    public void ReplaceText_Tracked_PreservesLeadingNoteReferenceOnAcceptAndReject()
+    public void ReplaceText_Tracked_PreservesInterleavedNoteReferenceOnAcceptAndReject()
     {
         using var session = new DocxSession(DocxSessionTests.BuildDS140_FootnoteFixture(),
             new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline });
@@ -200,7 +200,7 @@ public class DocxSessionSurgicalTrackedChangesTests
             var textWithReference = string.Concat(paragraph.Descendants()
                 .Where(e => e.Name == W.t || e.Name == W.footnoteReference)
                 .Select(e => e.Name == W.footnoteReference ? "[note]" : e.Value));
-            Assert.Equal(accept ? "[note]Replacement." : "[note]Main text continued.", textWithReference);
+            Assert.Equal(accept ? "[note]Replacement." : "Main text[note] continued.", textWithReference);
         }
     }
 

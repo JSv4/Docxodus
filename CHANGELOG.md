@@ -26,6 +26,21 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Tracked `ReplaceText` no longer keeps an earlier tracked replacement's text alive when a
+  later session replaces the same paragraph (issue #786). Superseded runs are deleted where
+  they sit — inside hyperlinks, fields, inline controls and other authors' insertions, as
+  `w:ins > w:del`, the shape Word writes — so accepting keeps only the latest proposal and
+  rejecting restores the original, and an author replacing their own pending text leaves no
+  struck-through first attempt. Note and comment references survive in place on both accept
+  and reject, including a footnote reference inside an earlier insertion or hyperlink and a
+  note's own number mark when its body is replaced. A paragraph holding inline custom XML or
+  an empty simple field is refused before mutation, as `DeleteBlock` already does. Because
+  each live span is deleted separately, one replacement lists one deletion per span between
+  existing revisions rather than a single envelope.
+- The markdown projection treats text deleted inside an insertion as deleted and projects
+  revised hyperlink runs, `ListRevisions` reports the text of a superseded insertion, and
+  revision dates are stamped under the invariant culture regardless of the host's current
+  culture (a Finnish or Thai culture previously produced dates the schema rejects).
 - `DeleteBlock` now records complete paragraph and table deletions under `RenderInline`
   (issue #784). Accepting removes the paragraph, including its numbering, instead of
   leaving an empty paragraph behind. Tables remain visible as tracked row deletions
