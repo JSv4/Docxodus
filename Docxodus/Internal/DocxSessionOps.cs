@@ -672,6 +672,11 @@ internal static class DocxSessionOps
         Mutate(handle, preconditions, anchorId,
             s => s.ReplaceTextAtSpan(anchorId, spanStart, spanLength, replace));
 
+    public static string ReplaceTextAtSpanWithFormat(int handle, string anchorId, int spanStart, int spanLength,
+        string replace, FormatOp format, MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId,
+            s => s.ReplaceTextAtSpanWithFormat(anchorId, spanStart, spanLength, replace, format));
+
     /// <summary>
     /// Bracket-aware variant of <see cref="ReplaceTextAtSpan"/>. Parses the brackets out
     /// of <paramref name="matchText"/> and substitutes <paramref name="newInner"/> for the

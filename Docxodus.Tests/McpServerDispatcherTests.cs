@@ -115,6 +115,32 @@ public class McpServerDispatcherTests : IDisposable
     // ─── Lifecycle ──────────────────────────────────────────────────────
 
     [Fact]
+    public void MCP788_TextWithFormat_UsesAtomicOperationAndHonorsGuards()
+    {
+        var sessionId = OpenSession();
+        var anchor = InsertParagraph(sessionId, "Original text.");
+        var session = Docxodus.Internal.SessionRegistry.Get(_store.Get(sessionId).Handle);
+        var before = session.GetPackageContentHash();
+        var args = new
+        {
+            sessionId, action = "replace_text_at_span_with_format", anchorId = anchor,
+            spanStart = 0, spanLength = 8, replace = "New", format = new { bold = true },
+            preconditions = new { expectedVersion = session.Version },
+        };
+        var result = Parse(Dispatcher.Call(_store, "docxodus_edit", J(JsonSerializer.Serialize(args))));
+        Assert.True(result.GetProperty("success").GetBoolean());
+        var run = session.GetFormatting(anchor)!.Runs.First();
+        Assert.Equal("New", run.Text);
+        Assert.True(run.Effective.Bold);
+
+        var stale = Parse(Dispatcher.Call(_store, "docxodus_edit", J(JsonSerializer.Serialize(args))));
+        Assert.False(stale.GetProperty("success").GetBoolean());
+        Assert.Equal("precondition_failed", stale.GetProperty("error").GetProperty("code").GetString());
+        Assert.True(session.Undo());
+        Assert.Equal(before, session.GetPackageContentHash());
+    }
+
+    [Fact]
     public void MCP001_OpenSaveClose_RoundTrips()
     {
         var sessionId = OpenSession();

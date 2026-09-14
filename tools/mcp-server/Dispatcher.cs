@@ -535,6 +535,9 @@ internal static class Dispatcher
         "insert_paragraph" => DocxSessionOps.InsertParagraph(
             session.Handle, Str(args, "anchorId"), ParsePos(args), Str(args, "markdown")),
         "replace_text" => DocxSessionOps.ReplaceText(session.Handle, Str(args, "anchorId"), Str(args, "markdown")),
+        "replace_text_at_span_with_format" => DocxSessionOps.ReplaceTextAtSpanWithFormat(
+            session.Handle, Str(args, "anchorId"), Int(args, "spanStart"), Int(args, "spanLength"),
+            Str(args, "replace"), ParseFormatOp(args), preconditions),
         "replace_text_range" => DocxSessionOps.ReplaceTextRange(
             session.Handle, Str(args, "anchorId"), Str(args, "find"), Str(args, "replace"),
             new ReplaceOptions { IgnoreCase = !BoolOpt(args, "caseSensitive", false) }, preconditions),
@@ -1532,6 +1535,7 @@ internal static class Dispatcher
         bool known = tool switch
         {
             "docxodus_edit" => action is "insert_paragraph" or "replace_text" or "replace_text_range"
+                or "replace_text_at_span_with_format"
                 or "delete_block" or "move_block" or "delete_range" or "delete_section"
                 or "split_paragraph" or "merge_paragraphs",
             "docxodus_format" => action is "apply_format" or "apply_format_by_substring"
@@ -1616,6 +1620,12 @@ internal static class Dispatcher
             case ("docxodus_edit", "replace_text_range"):
                 RequireStrings(args, "anchorId", "find", "replace");
                 ValidateOptionalBool(args, "caseSensitive");
+                break;
+            case ("docxodus_edit", "replace_text_at_span_with_format"):
+                RequireStrings(args, "anchorId", "replace");
+                RequireNumbers(args, "spanStart", "spanLength");
+                ValidateOptionalObject(args, "format");
+                _ = ParseFormatOp(args);
                 break;
             case ("docxodus_edit", "delete_block"):
                 RequireStrings(args, "anchorId");

@@ -1934,6 +1934,7 @@ export interface DocxodusWasmExports {
     GrepCrossBlock: (handle: number, pattern: string, optionsJson: string) => string;
     ReplaceTextRange: (handle: number, anchor: string, find: string, replace: string, optionsJson: string) => string;
     ReplaceTextAtSpan: (handle: number, anchor: string, spanStart: number, spanLength: number, replace: string) => string;
+    ReplaceTextAtSpanWithFormat?: (handle: number, anchor: string, spanStart: number, spanLength: number, replace: string, formatJson: string) => string;
     ReplaceInner: (
       handle: number,
       matchText: string,

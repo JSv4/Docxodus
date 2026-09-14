@@ -4100,17 +4100,27 @@ public sealed partial class DocxSession : IDisposable
     /// nest in strict LIFO order: an inner commit remains speculative until its outer transaction
     /// commits, while an inner rollback restores the state visible at the inner begin boundary.
     /// </summary>
-    public DocxSessionTransaction BeginTransaction()
+    public DocxSessionTransaction BeginTransaction() => BeginTransaction(fullPackage: true);
+
+    // Only fixed, internal compositions whose mutations are covered by TakeSnapshot may use
+    // the selective snapshot. Arbitrary caller callbacks always require the complete package.
+    private DocxSessionTransaction BeginTransaction(bool fullPackage)
     {
         ThrowIfDisposed();
         System.Threading.Monitor.Enter(_mutationGate);
         try
         {
+            if (!fullPackage && _transactions.Count == 0)
+                _deliveryEvidence?.Reconcile();
             var id = checked(++_nextTransactionId);
             var state = new TransactionState(
                 id,
                 Environment.CurrentManagedThreadId,
-                TakePackageSnapshot(),
+                fullPackage ? TakePackageSnapshot() : TakeSnapshot() with
+                {
+                    RevisionCounter = _revisionCounter,
+                    LastFormatRevisionTicks = _lastFormatRevisionTicks,
+                },
                 _history.CaptureState(),
                 _transactionPendingMutations,
                 _transactionMutationEpoch,
@@ -4147,7 +4157,7 @@ public sealed partial class DocxSession : IDisposable
             {
                 // An inner commit stays represented by its ordinary speculative history entries.
                 // The outermost commit is the only boundary that squashes them into one
-                // full-package pre-batch snapshot and advances caller-visible version once.
+                // pre-batch snapshot and advances caller-visible version once.
                 // The epoch, not the pending count, decides: a scope whose ops all self-rolled
                 // back nets the pending count to baseline yet may still have left the package
                 // dirty, and squashing that into "nothing happened" would strand it with no
@@ -5955,6 +5965,36 @@ public sealed partial class DocxSession : IDisposable
         if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
         if (match is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "match is null");
         return ReplaceTextAtSpan(match.EnclosingAnchor.Anchor.Id, match.Span.Start, match.Span.Length, replace);
+    }
+
+    /// <summary>
+    /// Replace a paragraph-local text span and apply <paramref name="format"/> to exactly the
+    /// replacement text as one atomic edit and undo/version unit. Uses the same text, boundary
+    /// insertion and tracked-format semantics as ReplaceTextAtSpan followed by ApplyFormat.
+    /// An empty replacement deletes the span without formatting adjacent text.
+    /// </summary>
+    /// <remarks>
+    /// Intended for interactive typing: returns an ordinary EditResult, with no package hash or
+    /// batch receipt. Use ExecuteBatch when those receipts or arbitrary compositions are needed.
+    /// </remarks>
+    public EditResult ReplaceTextAtSpanWithFormat(
+        string anchorId, int spanStart, int spanLength, string replace, FormatOp format)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (format is null) return EditResult.Fail(EditErrorCode.MalformedMarkdown, "null format op", anchorId);
+
+        // These two operations touch only snapshot-scoped XML/styles and owned story images.
+        // Reuse transaction rollback/history handling without serializing the entire OPC package.
+        using var transaction = BeginTransaction(fullPackage: false);
+        var result = ReplaceTextAtSpan(anchorId, spanStart, spanLength, replace);
+        if (!result.Success) return result;
+        if (replace.Length > 0)
+        {
+            result = ApplyFormat(anchorId, new CharSpan(spanStart, replace.Length), format);
+            if (!result.Success) return result;
+        }
+        transaction.Commit();
+        return result;
     }
 
     /// <summary>
@@ -14530,14 +14570,14 @@ public sealed partial class DocxSession : IDisposable
         // next use. Seeding only ever raises the counter, so this can never hand out an id
         // that is already live.
         _revisionCounterSeeded = false;
+        if (snapshot.RevisionCounter is { } revisionCounter)
+            _revisionCounter = revisionCounter;
+        if (snapshot.LastFormatRevisionTicks is { } formatTicks)
+            _lastFormatRevisionTicks = formatTicks;
         if (snapshot.PackageBytes is { } packageBytes)
         {
             RestorePackage(packageBytes);
             _version = snapshot.Version;
-            if (snapshot.RevisionCounter is { } revisionCounter)
-                _revisionCounter = revisionCounter;
-            if (snapshot.LastFormatRevisionTicks is { } formatTicks)
-                _lastFormatRevisionTicks = formatTicks;
             return;
         }
 

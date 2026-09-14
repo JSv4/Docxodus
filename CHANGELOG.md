@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Atomic text replacement with typing formatting (issue #788): npm's
+  `session.replaceMatch(match, text, format)` and .NET's `ReplaceTextAtSpanWithFormat`
+  return one ordinary edit result and preserve one undo/version unit, including failure
+  rollback, without serializing and hashing a full package on the typing path. Python
+  accepts `format=` on span/match replacement; MCP adds `replace_text_at_span_with_format`.
+  Receipt-producing `executeBatch` retains its existing guarantees and costs.
+
 ### Changed
 
 - Browser AOT coverage now includes full editor mounts, conversion with headers/footers,
