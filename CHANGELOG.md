@@ -23,7 +23,13 @@ All notable changes to this project will be documented in this file.
   until review, so rejecting restores their contents. The operation shares `DeleteRange`'s
   deletion logic, keeps anchors live in `Modified`, and refuses unsupported inline custom XML
   before mutation. Deleted runs also retain their positions within bookmark and comment
-  ranges, preserving those ranges when the deletion is rejected.
+  ranges, preserving those ranges when the deletion is rejected. Deletion includes runs
+  inside hyperlinks, fields, inline controls and earlier insertions, and rows inside
+  structured wrappers; row properties remain in schema order. Retained cells and stories
+  keep their final paragraph and formatting consistently across review engines. Referenced
+  table bookmarks are guarded before recording, identical headers report the correct story
+  anchor, and block custom XML inside text boxes is accepted. Recording and resolving
+  revisions preserve unrelated orphan relationships.
 - A re-recorded or switched AOT profile no longer reuses cached AOT outputs compiled for
   the previous profile (issue #783). `wasm/DocxodusWasm/AotProfile.targets` keys the AOT
   cache on the profile's content hash, invalidates the compiled method selection and the

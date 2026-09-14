@@ -801,13 +801,10 @@ namespace Docxodus
       </w:r>
     </w:p>
 #endif
-                // A deleted run directly under a w:p OR under a w:hyperlink (a deleted hyperlink-text run; the
-                // schema nests the revision marker INSIDE the link, so its parent is w:hyperlink, not w:p). Reject
-                // restores it by reversing w:del → w:ins. The hyperlink case is what the IR produces for a
-                // changed/removed hyperlink (WmlComparer never hits it — it strips hyperlinks pre-compare via
-                // RemoveHyperlinks — so this only ADDS handling for a previously-unhandled valid shape).
+                // Hyperlinks and simple fields own their content revisions inside the
+                // container. Reject restores those runs by reversing w:del → w:ins.
                 if (element.Name == W.del &&
-                    (parent?.Name == W.p || parent?.Name == W.hyperlink))
+                    (parent?.Name == W.p || parent?.Name == W.hyperlink || parent?.Name == W.fldSimple))
                 {
                     return new XElement(W.ins,
                         element.Nodes().Select(n => ReverseRevisionsTransform(n, rri)));
@@ -885,11 +882,9 @@ namespace Docxodus
       </w:r>
     </w:p>
 #endif
-                // An inserted run directly under a w:p OR under a w:hyperlink (an inserted hyperlink-text run).
-                // Reject removes the insertion by reversing w:ins → w:del. The hyperlink case is the symmetric
-                // partner of the deleted-hyperlink-run rule above (see its note) — additive, valid-shape only.
+                // Symmetric handling for inserted paragraph, hyperlink and field runs.
                 if (element.Name == W.ins &&
-                    (parent?.Name == W.p || parent?.Name == W.hyperlink))
+                    (parent?.Name == W.p || parent?.Name == W.hyperlink || parent?.Name == W.fldSimple))
                 {
                     var newRri = new ReverseRevisionsInfo() { InInsert = true };
                     return new XElement(W.del,
@@ -2026,21 +2021,21 @@ namespace Docxodus
 
                 if (element.Name == W.tbl)
                 {
-                    var rows = element.Elements(W.tr).ToList();
+                    var rows = WordprocessingMLUtil.TableRows(element).ToList();
                     if (rows.Count > 0 && rows.All(tr => tr.Elements(W.trPr).Elements(W.del).Any()))
                         return null;
                 }
 
-                // Accept revisions for a wholly-deleted hyperlink: a w:hyperlink whose content children all
+                // Accept revisions for a wholly-deleted hyperlink or simple field whose content children all
                 // sit inside w:del/w:moveFrom would otherwise collapse to an empty <w:hyperlink> shell that
                 // keeps its paragraph alive (visible when rejecting an inserted hyperlink — the reversed
                 // w:ins→w:del removes every run but the shell survived). Drop the shell; bookmark markers
                 // inside it are preserved (the hyperlink-shell analogue of the wholly-deleted-table rule).
 
-                if (element.Name == W.hyperlink &&
+                if ((element.Name == W.hyperlink || element.Name == W.fldSimple) &&
                     element.Elements().Any(e => e.Name == W.del || e.Name == W.moveFrom))
                 {
-                    var transformed = new XElement(W.hyperlink,
+                    var transformed = new XElement(element.Name,
                         element.Attributes(),
                         element.Nodes().Select(n => AcceptAllOtherRevisionsTransform(n)));
                     var hasContent = transformed.Elements().Any(e =>
@@ -2077,8 +2072,10 @@ namespace Docxodus
                 // collapses to an EMPTY shell. Drop it — an empty hyperlink is invisible and an artifact of a
                 // hyperlink-text revision (the IR's del-old-link/ins-new-link shape; WmlComparer never produces
                 // one because it strips hyperlinks pre-compare). Checked AFTER transforming children so it only
-                // fires when the link genuinely has no surviving run/content.
-                if (element.Name == W.hyperlink)
+                // fires when the link has no surviving run/content. For simple fields,
+                // require deletion markup so a pre-existing field with no cached result survives.
+                if (element.Name == W.hyperlink || (element.Name == W.fldSimple
+                    && element.Descendants(W.del).Any()))
                 {
                     var transformed = new XElement(element.Name, element.Attributes(),
                         element.Nodes().Select(n => AcceptAllOtherRevisionsTransform(n)));
@@ -2705,8 +2702,8 @@ namespace Docxodus
         /// by the deleted-paragraph-mark coalescing above.
         /// </summary>
         private static bool TableIsEntirelyDeleted(XElement tbl) =>
-            tbl.Elements(W.tr).Any() &&
-            tbl.Elements(W.tr).All(tr => tr.Elements(W.trPr).Elements(W.del).Any()) &&
+            WordprocessingMLUtil.TableRows(tbl).Any() &&
+            WordprocessingMLUtil.TableRows(tbl).All(tr => tr.Elements(W.trPr).Elements(W.del).Any()) &&
             !tbl.Descendants(W.ins).Any() &&
             !tbl.Descendants(W.t).Any(t =>
                 !t.Ancestors(W.del).Any() && !t.Ancestors(W.moveFrom).Any());
@@ -2747,7 +2744,8 @@ namespace Docxodus
                     // a w:hyperlink holding only w:del content is not surviving content (IsRunContent
                     // would otherwise count the shell itself as content and keep an empty paragraph
                     // alive — visible when rejecting an inserted trailing hyperlink paragraph).
-                    element.Name == W.hyperlink)
+                    element.Name == W.hyperlink ||
+                    (element.Name == W.fldSimple && element.Descendants(W.del).Any()))
                     // Recurse while collapsing. Inline wrappers can nest (for example,
                     // w:hyperlink > w:ins > w:r); returning only the immediate children would
                     // leave w:ins at paragraph level, where AllParaContentIsDeleted cannot

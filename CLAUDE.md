@@ -58,7 +58,7 @@ file that could fire them.
 **`Docxodus.csproj` and `Docxodus.Tests.csproj` both override it to `false`**, so the core
 library and the test project do *not* fail on warnings. The CLI tools, MCP server,
 python-host and WASM project do inherit it. Current baseline: the library builds with
-**175 warnings**, the test project with **671** (mostly StyleCop `SA1633` missing file headers
+**175 warnings**, the test project with **788** (mostly StyleCop `SA1633` missing file headers
 and `SA1206` modifier/using order). Don't add to either baseline. Measure with
 `--no-incremental` — a warm incremental build reports zero because nothing recompiles.
 

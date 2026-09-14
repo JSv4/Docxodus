@@ -922,8 +922,9 @@ internal static class RevisionOps
         {
             foreach (var pc in trPr.Descendants().Where(d => PropsChangeNames.Contains(d.Name)))
                 sink.Add(MakePropsUnit(pc, null));
-            var mark = trPr.Elements().FirstOrDefault(e => e.Name == W.ins || e.Name == W.del);
-            if (mark is not null)
+            // An inserted row can subsequently be deleted. Both existence revisions
+            // remain independently reviewable, just like stacked paragraph marks.
+            foreach (var mark in trPr.Elements().Where(e => e.Name == W.ins || e.Name == W.del))
             {
                 rowType = mark.Name == W.ins ? TypeInsert : TypeDelete;
                 sink.Add(new RevisionUnit
@@ -935,7 +936,7 @@ internal static class RevisionOps
                     Author = AuthorOf(mark),
                     Date = (string?)mark.Attribute(W.date),
                     MarkedRow = tr,
-                    Table = tr.Parent,
+                    Table = tr.Ancestors(W.tbl).FirstOrDefault(),
                     Wid = WidOf(mark),
                     NativeId = (string?)mark.Attribute(W.id),
                 });
@@ -2523,10 +2524,9 @@ internal static class RevisionOps
     {
         var parent = wrapper.Parent;
         wrapper.Remove();
-        // Collapse a hyperlink shell left with no content (mirrors RevisionProcessor's
-        // wholly-deleted-hyperlink rule); range markers and reference-only runs are
-        // transparent and are preserved at the hyperlink's former position.
-        while (parent is not null && parent.Name == W.hyperlink
+        // Collapse a hyperlink or simple field emptied by this removal. Preserve its
+        // range markers and reference-only runs at the container's former position.
+        while (parent is not null && (parent.Name == W.hyperlink || parent.Name == W.fldSimple)
             && parent.Elements().All(IsIgnorableBetween))
         {
             var grandParent = parent.Parent;
@@ -2549,11 +2549,11 @@ internal static class RevisionOps
 
     private static void RemoveRow(XElement tr, List<XElement> removedBlocks)
     {
-        var tbl = tr.Parent;
+        var tbl = tr.Ancestors(W.tbl).FirstOrDefault();
         tr.Remove();
         removedBlocks.Add(tr);
         // A table needs at least one row; resolving away the last one removes the table.
-        if (tbl is not null && tbl.Name == W.tbl && !tbl.Elements(W.tr).Any())
+        if (tbl is not null && !WordprocessingMLUtil.TableRows(tbl).Any())
         {
             tbl.Remove();
             removedBlocks.Add(tbl);

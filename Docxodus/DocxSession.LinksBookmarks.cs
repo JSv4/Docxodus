@@ -887,9 +887,11 @@ public sealed partial class DocxSession
     /// internal hyperlink. A complete unreferenced pair may be deleted with its containing
     /// content; ranges crossing the deletion boundary are rejected before the undo snapshot.
     /// </summary>
-    private EditResult? ValidateBookmarkRemoval(IEnumerable<XElement> removalRoots, string anchorId)
+    private EditResult? ValidateBookmarkRemoval(IEnumerable<XElement> removalRoots, string anchorId,
+        IEnumerable<XElement>? referenceRemovalRoots = null)
     {
         var roots = removalRoots.Distinct().ToList();
+        var referenceRoots = referenceRemovalRoots?.ToList() ?? roots;
         bool IsRemoved(XElement element) => roots.Any(root =>
             ReferenceEquals(root, element) || element.Ancestors().Any(a => ReferenceEquals(a, root)));
 
@@ -909,7 +911,8 @@ public sealed partial class DocxSession
             if (name.StartsWith(AnnotationManager.BookmarkPrefix, StringComparison.Ordinal))
                 return EditResult.Fail(EditErrorCode.ManagedBookmark,
                     $"structural deletion includes an annotation-managed bookmark: {name}", anchorId);
-            if (BookmarkReferences(name).Any(reference => !IsRemoved(reference.Element)))
+            if (BookmarkReferences(name).Any(reference => !referenceRoots.Any(root =>
+                    ReferenceEquals(root, reference.Element) || reference.Element.Ancestors().Any(a => ReferenceEquals(a, root)))))
                 return EditResult.Fail(EditErrorCode.BookmarkInUse,
                     "structural deletion would remove a bookmark still targeted by an internal hyperlink "
                     + $"or cross-reference field: {name}", anchorId);

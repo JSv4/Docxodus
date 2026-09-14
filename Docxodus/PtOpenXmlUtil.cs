@@ -790,6 +790,20 @@ namespace Docxodus
 
     public static class WordprocessingMLUtil
     {
+        /// <summary>Rows owned by this table, including rows in SDT/custom-XML wrappers,
+        /// but excluding rows of nested tables inside its cells.</summary>
+        internal static IEnumerable<XElement> TableRows(XElement table)
+        {
+            foreach (var child in table.Elements())
+            {
+                if (child.Name == W.tr) yield return child;
+                // Stop at a row instead of traversing its cells and paragraph content.
+                // A nested table has its own row ownership and is visited separately.
+                else if (child.Name != W.tbl)
+                    foreach (var row in TableRows(child)) yield return row;
+            }
+        }
+
         public static int CalcWidthOfRunInTwips(XElement r)
         {
             var KnownFamilies = FontFamilyHelper.KnownFamilies;

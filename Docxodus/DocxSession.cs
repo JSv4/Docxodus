@@ -2193,7 +2193,8 @@ public sealed class DocxSessionSettings
 
     /// <summary>
     /// Verification-only mode: resolution may remove only artifacts attributable to the selected
-    /// revision. Ordinary editing retains its historical cleanup behavior.
+    /// revision. Ordinary editing also scopes relationship cleanup to the resolved changes,
+    /// but retains its historical handling of other empty markup containers.
     /// </summary>
     internal bool ProofSafeRevisionResolution { get; init; }
 
@@ -3190,10 +3191,7 @@ public sealed partial class DocxSession : IDisposable
                 owningPart.PutXDocument();
             if (owningPart is not null)
             {
-                if (_settings.ProofSafeRevisionResolution)
-                    SweepOrphanedStoryRelationships(owningPart, relationshipCandidates);
-                else
-                    SweepOrphanedStoryRelationships(owningPart);
+                SweepOrphanedStoryRelationships(owningPart, relationshipCandidates);
             }
             if (!accept && rejectedNumberingIds.Length > 0)
                 PruneUnreferencedDocxodusNumbering(rejectedNumberingIds);
@@ -3218,8 +3216,7 @@ public sealed partial class DocxSession : IDisposable
             // relationship sweep above is deliberately limited to ids carried by this group;
             // a global image sweep here could erase a pre-existing orphan or hide an unrelated
             // redline-only relationship from a whole-package reversibility proof.
-            InvalidateProjectionCache(
-                sweepOrphanedImages: !_settings.ProofSafeRevisionResolution);
+            InvalidateProjectionCache(sweepOrphanedImages: false);
             return new EditResult
             {
                 Success = true,
@@ -3280,16 +3277,9 @@ public sealed partial class DocxSession : IDisposable
             {
                 if (story.Part is NumberingDefinitionsPart)
                     story.Part.PutXDocument();
-                if (_settings.ProofSafeRevisionResolution)
-                {
-                    if (relationshipCandidates.TryGetValue(
-                            story.Part.Uri.ToString(), out var candidates))
-                        SweepOrphanedStoryRelationships(story.Part, candidates);
-                }
-                else
-                {
-                    SweepOrphanedStoryRelationships(story.Part);
-                }
+                if (relationshipCandidates.TryGetValue(
+                        story.Part.Uri.ToString(), out var candidates))
+                    SweepOrphanedStoryRelationships(story.Part, candidates);
             }
             if (!accept && rejectedNumberingIds.Length > 0)
                 PruneUnreferencedDocxodusNumbering(rejectedNumberingIds);
@@ -3316,8 +3306,7 @@ public sealed partial class DocxSession : IDisposable
 
             // ResolveAll has already swept only relationships referenced by the groups it
             // resolved. Preserve every unrelated relationship for exact package semantics.
-            InvalidateProjectionCache(
-                sweepOrphanedImages: !_settings.ProofSafeRevisionResolution);
+            InvalidateProjectionCache(sweepOrphanedImages: false);
             return new EditResult
             {
                 Success = true,
@@ -8188,7 +8177,8 @@ public sealed partial class DocxSession : IDisposable
 
         if (_trackedChanges == TrackedChangeMode.RenderInline &&
             toRemove.Any(element => element.DescendantsAndSelf(W.customXml)
-                .Any(wrapper => wrapper.Ancestors(W.p).Any())))
+                .Any(wrapper => wrapper.Ancestors().TakeWhile(a => a.Name != W.txbxContent)
+                    .Any(a => a.Name == W.p))))
         {
             return EditResult.Fail(
                 EditErrorCode.IncompatibleElementType,
@@ -8196,20 +8186,51 @@ public sealed partial class DocxSession : IDisposable
                 anchorForPatchScope.Anchor.Id);
         }
 
-        var hyperlinkOwner = Internal.OwnedPartRelationships.FindOwner(_doc!, fromElement);
-        var structuralRoots = _trackedChanges == TrackedChangeMode.RenderInline
-            ? toRemove.Where(el => el.Name != W.p && el.Name != W.tbl).ToList()
+        bool trackedChanges = _trackedChanges == TrackedChangeMode.RenderInline;
+        // A live non-body container keeps its final paragraph and its formatting. Record
+        // the content deletion without deleting that pilcrow, so every review engine keeps
+        // the same paragraph rather than synthesizing one or emptying the story entirely.
+        var retainedParagraph = trackedChanges && fromElement.Parent is { } parent && parent.Name != W.body
+            && !parent.Elements().Except(toRemove).Any(IsSurvivingParagraphContainerBlock)
+            ? toRemove.LastOrDefault(el => el.Name == W.p) : null;
+
+        // Paragraph markers normally migrate to a surviving following paragraph. Tables,
+        // inline controls, and terminal paragraphs instead lose their bookmark endpoints.
+        // References inside any selected block are being deleted too, even when its
+        // paragraph shell survives, and must not cause a false BookmarkInUse refusal.
+        var structuralRoots = trackedChanges
+            ? toRemove.Where(el => el.Name != W.p || ParagraphWillBeRemoved(el))
+                .Concat(toRemove.Where(el => el.Name == W.p).SelectMany(el =>
+                    el.Descendants(W.sdt).Where(sdt => !sdt.Descendants(W.p).Any()))).ToList()
             : toRemove;
-        if (ValidateBookmarkRemoval(structuralRoots, anchorForPatchScope.Anchor.Id) is { } bookmarkError)
+        if (ValidateBookmarkRemoval(structuralRoots, anchorForPatchScope.Anchor.Id, toRemove) is { } bookmarkError)
             return bookmarkError;
 
-        var referencedNotesBefore = ReferencedNoteIds();
+        bool ParagraphWillBeRemoved(XElement paragraph)
+        {
+            for (var candidate = paragraph; candidate is not null;)
+            {
+                if (candidate == retainedParagraph) return false;
+                var next = candidate.ElementsAfterSelf().FirstOrDefault(el =>
+                    el.Name == W.p || el.Name == W.tbl || el.Name == W.sdt
+                    || el.Name == W.customXml || el.Name == W.altChunk);
+                if (next?.Name != W.p) return true;
+                if (!toRemove.Contains(next)) return false;
+                candidate = next;
+            }
+            return true;
+        }
+
+        bool structurallyRemoves = !trackedChanges || toRemove.Any(el =>
+            el.Name != W.p && el.Name != W.tbl && el.Name != W.sdt && el.Name != W.customXml);
+        var hyperlinkOwner = structurallyRemoves
+            ? Internal.OwnedPartRelationships.FindOwner(_doc!, fromElement) : null;
+        var referencedNotesBefore = structurallyRemoves ? ReferencedNoteIds()
+            : ((HashSet<int> Footnotes, HashSet<int> Endnotes)?)null;
         _history.RecordPreOp(TakeSnapshot());
         try
         {
             var index = AnchorIndex();
-            bool trackedChanges = _trackedChanges == TrackedChangeMode.RenderInline;
-
             if (trackedChanges)
             {
                 // Tracked-change path: mark each block with w:del markup rather than
@@ -8228,17 +8249,17 @@ public sealed partial class DocxSession : IDisposable
                 {
                     if (el.Name == W.p)
                     {
-                        CollectAnchors(el, includeDescendants: false, index, modified, modifiedIds);
-                        MarkParagraphAsTrackedDeleted(el, stamp);
+                        CollectAnchors(el, includeDescendants: false, index, anchorForPatchScope, modified, modifiedIds);
+                        MarkParagraphAsTrackedDeleted(el, stamp, preserveParagraphMark: el == retainedParagraph);
                     }
                     else if (el.Name == W.tbl)
                     {
-                        CollectAnchors(el, includeDescendants: false, index, modified, modifiedIds);
+                        CollectAnchors(el, includeDescendants: false, index, anchorForPatchScope, modified, modifiedIds);
                         MarkTableAsTrackedDeleted(el, stamp);
                     }
                     else if (el.Name == W.sdt || el.Name == W.customXml)
                     {
-                        CollectAnchors(el, includeDescendants: true, index, modified, modifiedIds);
+                        CollectAnchors(el, includeDescendants: true, index, anchorForPatchScope, modified, modifiedIds);
                         MarkStructuredBlockAsTrackedDeleted(el, stamp);
                     }
                     else
@@ -8247,16 +8268,17 @@ public sealed partial class DocxSession : IDisposable
                             el,
                             includeDescendants: true,
                             index,
+                            anchorForPatchScope,
                             trackedRemoved,
                             trackedRemovedIds);
                         el.Remove();
                     }
                 }
-                AppendPrunedNoteAnchors(
-                    PruneOrphanedNotes(referencedNotesBefore), trackedRemoved, trackedRemovedIds);
+                if (referencedNotesBefore is { } before)
+                    AppendPrunedNoteAnchors(PruneOrphanedNotes(before), trackedRemoved, trackedRemovedIds);
                 if (hyperlinkOwner is { } trackedOwner)
                     SweepOrphanedStoryRelationships(trackedOwner.Part);
-                InvalidateProjectionCache();
+                InvalidateProjectionCache(sweepOrphanedImages: structurallyRemoves);
                 return new EditResult
                 {
                     Success = true,
@@ -8271,10 +8293,10 @@ public sealed partial class DocxSession : IDisposable
             foreach (var el in toRemove)
             {
                 // Collect this element's anchor plus every descendant anchor.
-                CollectAnchors(el, includeDescendants: true, index, removed, removedIds);
+                CollectAnchors(el, includeDescendants: true, index, anchorForPatchScope, removed, removedIds);
                 el.Remove();
             }
-            AppendPrunedNoteAnchors(PruneOrphanedNotes(referencedNotesBefore), removed, removedIds);
+            AppendPrunedNoteAnchors(PruneOrphanedNotes(referencedNotesBefore!.Value), removed, removedIds);
             if (hyperlinkOwner is { } owner)
                 SweepOrphanedStoryRelationships(owner.Part);
             InvalidateProjectionCache();
@@ -8297,6 +8319,7 @@ public sealed partial class DocxSession : IDisposable
         XElement el,
         bool includeDescendants,
         IReadOnlyDictionary<string, AnchorTarget> index,
+        AnchorTarget scope,
         List<Anchor> destination,
         HashSet<string> seenIds)
     {
@@ -8305,11 +8328,20 @@ public sealed partial class DocxSession : IDisposable
         {
             var unid = (string?)candidate.Attribute(PtOpenXml.Unid);
             if (unid is null) continue;
-            var anchor = index.Values.FirstOrDefault(target => target.Unid == unid)?.Anchor;
+            // The known target needs no reverse scan. Every other lookup is part-scoped:
+            // identical header/footer content can legitimately share the same Unid.
+            var anchor = unid == scope.Unid ? scope.Anchor
+                : index.Values.FirstOrDefault(target => target.PartUri == scope.PartUri && target.Unid == unid)?.Anchor;
             if (anchor is { } found && seenIds.Add(found.Id))
                 destination.Add(found);
         }
     }
+
+    private static bool IsSurvivingParagraphContainerBlock(XElement element) =>
+        (element.Name == W.p && element.Element(W.pPr)?.Element(W.rPr)?.Element(W.del) is null)
+        || (element.Name == W.tbl && !WordprocessingMLUtil.TableRows(element)
+            .All(row => row.Element(W.trPr)?.Element(W.del) is not null)) || element.Name == W.sdt
+        || element.Name == W.customXml || element.Name == W.altChunk;
 
     /// <summary>
     /// Strips every cross-reference pointing at the named footnote/endnote/comment id
@@ -8777,55 +8809,52 @@ public sealed partial class DocxSession : IDisposable
             (e.Name == W.p || e.Name == W.tbl));
 
     /// <summary>
-    /// Wrap every not-already-revised run of <paramref name="paragraph"/> in a
+    /// Wrap the live runs of <paramref name="paragraph"/> in a
     /// <paramref name="wrapperName"/> revision envelope and mark the paragraph mark to match.
     /// </summary>
     /// <remarks>
-    /// The single owner of "this whole paragraph is one revision" for <see cref="MoveBlock"/> —
-    /// used for a paragraph move (<c>w:moveFrom</c>/<c>w:moveTo</c>) and for the cell paragraphs
-    /// of a moved table (<c>w:del</c>/<c>w:ins</c>). A DELETING wrapper also converts
+    /// Shared by whole-block deletion, paragraph/table moves and paragraph/row insertion.
+    /// A DELETING wrapper also converts
     /// <c>w:t</c>→<c>w:delText</c> (and <c>w:instrText</c>→<c>w:delInstrText</c>), which is what
     /// Word writes, what <c>IrMarkupRenderer.ConvertTextToDelText</c> produces, and what
-    /// <see cref="RevisionProcessor"/>'s reject path swaps back. Without the paragraph mark,
-    /// accepting the move leaves an empty source paragraph and rejecting leaves an empty
-    /// destination one; <c>RevisionOps</c> associates the mark with the named range.
+    /// <see cref="RevisionProcessor"/>'s reject path swaps back. The paragraph mark belongs
+    /// to the same operation, except for a final paragraph a retained container must keep.
     /// </remarks>
-    private XElement MarkParagraphContentAndMark(
-        XElement paragraph, XName wrapperName, string author, string date)
+    private XElement? MarkParagraphContentAndMark(
+        XElement paragraph, XName wrapperName, string author, string date,
+        bool preserveParagraphMark = false)
     {
         bool deleting = wrapperName == W.del || wrapperName == W.moveFrom;
 
-        // Keep hyperlink/SDT/field containers in place and revision-wrap their runs.
-        // This is the schema-safe shape (w:hyperlink > w:moveFrom|moveTo > w:r).
-        foreach (var run in paragraph.Descendants(W.r).ToList())
+        // Hyperlinks/fields own their revised runs. An inline SDT can itself be a
+        // w:del child: deleting its existence as well avoids leaving an empty control
+        // in the following paragraph after its pilcrow is accepted.
+        var content = paragraph.Descendants().Where(e => e.Name == W.r
+            || (wrapperName == W.del && e.Name == W.sdt && !e.Descendants(W.p).Any())).ToList();
+        foreach (var element in content)
         {
-            if (run.Ancestors().Any(e =>
-                    e.Name == W.ins || e.Name == W.del ||
-                    e.Name == W.moveFrom || e.Name == W.moveTo))
+            // A deletion inside an earlier insertion must remain independently rejectable.
+            // Existing deletions/move sources are already absent from the accepted view;
+            // ordinary insertion/move marking retains its existing revision ownership.
+            if (element.Ancestors().Any(e => e.Name == W.del || e.Name == W.moveFrom
+                    || (wrapperName != W.del && (e.Name == W.ins || e.Name == W.moveTo))))
                 continue;
             var envelope = CreateRevisionEnvelope(wrapperName, author, date);
-            run.ReplaceWith(envelope);
-            envelope.Add(run);
-            if (deleting) ConvertTextToDeletedText(run);
+            element.ReplaceWith(envelope);
+            envelope.Add(element);
+            if (deleting) ConvertTextToDeletedText(element);
         }
 
         var pPr = paragraph.Element(W.pPr);
+        if (preserveParagraphMark) return pPr;
         if (pPr is null)
         {
             pPr = new XElement(W.pPr);
             paragraph.AddFirst(pPr);
         }
-        var rPr = pPr.Element(W.rPr);
-        if (rPr is null)
-        {
-            rPr = new XElement(W.rPr);
-            var sectPr = pPr.Element(W.sectPr);
-            var pPrChange = pPr.Element(W.pPrChange);
-            if (sectPr is not null) sectPr.AddBeforeSelf(rPr);
-            else if (pPrChange is not null) pPrChange.AddBeforeSelf(rPr);
-            else pPr.Add(rPr);
-        }
-        rPr.AddFirst(CreateRevisionEnvelope(wrapperName, author, date));
+        var rPr = GetOrCreatePPrChild(pPr, W.rPr);
+        if (rPr.Element(wrapperName) is null)
+            WordprocessingMLUtil.InsertRPrChildInOrder(rPr, CreateRevisionEnvelope(wrapperName, author, date));
         return pPr;
     }
 
@@ -8844,7 +8873,7 @@ public sealed partial class DocxSession : IDisposable
     {
         EnsureTrackRevisionsEnabled();
         var pPr = MarkParagraphContentAndMark(
-            paragraph, from ? W.moveFrom : W.moveTo, author, date);
+            paragraph, from ? W.moveFrom : W.moveTo, author, date)!;
 
         int rangeId = NextRevisionId();
         var start = new XElement(from ? W.moveFromRangeStart : W.moveToRangeStart,
@@ -12283,21 +12312,25 @@ public sealed partial class DocxSession : IDisposable
         current.Add(CreateRevisionEnvelope(changeName, author, date, oldBase));
     }
 
-    private void MarkRowAsTrackedRevision(XElement row, bool inserted, string author, string date)
+    private void MarkRowAsTrackedRevision(XElement row, bool inserted, string author, string date,
+        bool markContent = true)
     {
         var wrapperName = inserted ? W.ins : W.del;
         var trPr = row.Element(W.trPr);
         if (trPr is null)
         {
             trPr = new XElement(W.trPr);
-            row.AddFirst(trPr);
+            if (row.Element(W.tblPrEx) is { } exceptions) exceptions.AddAfterSelf(trPr);
+            else row.AddFirst(trPr);
         }
         // Schema position, not append: CT_TrPr orders base properties → ins → del →
         // trPrChange, so a row that already carries a trPrChange from a tracked
         // SetTableRowOptions would otherwise get an out-of-order w:del after it.
-        SetChildInOrder(trPr, CreateRevisionEnvelope(wrapperName, author, date), TrPrChildOrder);
-        foreach (var paragraph in row.Descendants(W.p).ToList())
-            MarkParagraphContentAndMark(paragraph, wrapperName, author, date);
+        if (trPr.Element(wrapperName) is null)
+            SetChildInOrder(trPr, CreateRevisionEnvelope(wrapperName, author, date), TrPrChildOrder);
+        if (markContent)
+            foreach (var paragraph in row.Descendants(W.p).ToList())
+                MarkParagraphContentAndMark(paragraph, wrapperName, author, date);
     }
 
     /// <summary>An empty clone of <paramref name="referenceCell"/>'s shell (width, borders, shading,
@@ -15092,47 +15125,17 @@ public sealed partial class DocxSession : IDisposable
         foreach (var m in postNoteRefs) paragraph.Add(m);
     }
 
-    private void WrapRunsInDel(XElement element, RevisionStamp stamp)
-    {
-        foreach (var run in element.Elements(W.r).ToList())
-        {
-            foreach (var t in run.Elements(W.t).ToList())
-                t.ReplaceWith(new XElement(W.delText,
-                    new XAttribute(XNamespace.Xml + "space", "preserve"),
-                    (string)t));
-            // Preserve the run's position relative to bookmark/comment range markers
-            // so rejecting the deletion restores their original extents.
-            var del = CreateRevisionEnvelope(W.del, stamp);
-            run.ReplaceWith(del);
-            del.Add(run);
-        }
-    }
-
     /// <summary>
-    /// Marks a whole paragraph as a tracked deletion: wraps every direct-child run in
-    /// <c>w:del</c> (via <see cref="WrapRunsInDel"/>) AND marks the paragraph mark
+    /// Marks a whole paragraph as a tracked deletion: wraps live descendant runs in
+    /// <c>w:del</c> AND marks the paragraph mark
     /// itself by adding <c>w:del</c> inside <c>w:pPr/w:rPr</c>. The combination tells
     /// Word the entire paragraph — content plus paragraph break — is a tracked deletion,
     /// so accepting the change actually removes the paragraph (instead of leaving an
-    /// empty paragraph behind, which is what <see cref="WrapRunsInDel"/> alone produces).
+    /// empty paragraph behind). The final pilcrow of a retained story/cell is preserved.
     /// </summary>
-    private void MarkParagraphAsTrackedDeleted(XElement paragraph, RevisionStamp stamp)
-    {
-        WrapRunsInDel(paragraph, stamp);
-
-        var pPr = paragraph.Element(W.pPr);
-        if (pPr is null)
-        {
-            pPr = new XElement(W.pPr);
-            paragraph.AddFirst(pPr);
-        }
-        var rPr = GetOrCreatePPrChild(pPr, W.rPr);
-        if (rPr.Element(W.del) is null)
-        {
-            WordprocessingMLUtil.InsertRPrChildInOrder(
-                rPr, CreateRevisionEnvelope(W.del, stamp));
-        }
-    }
+    private void MarkParagraphAsTrackedDeleted(XElement paragraph, RevisionStamp stamp,
+        bool preserveParagraphMark = false) =>
+        MarkParagraphContentAndMark(paragraph, W.del, stamp.Author, stamp.Date, preserveParagraphMark);
 
     /// <summary>
     /// Marks a whole table as a tracked deletion: every row gets a <c>w:trPr/w:del</c>
@@ -15142,20 +15145,11 @@ public sealed partial class DocxSession : IDisposable
     /// </summary>
     private void MarkTableAsTrackedDeleted(XElement table, RevisionStamp stamp)
     {
-        foreach (var row in table.Elements(W.tr))
+        foreach (var row in WordprocessingMLUtil.TableRows(table).ToList())
         {
-            var trPr = row.Element(W.trPr);
-            if (trPr is null)
-            {
-                trPr = new XElement(W.trPr);
-                row.AddFirst(trPr);
-            }
-            if (trPr.Element(W.del) is null)
-            {
-                trPr.Add(CreateRevisionEnvelope(W.del, stamp));
-            }
+            MarkRowAsTrackedRevision(row, inserted: false, stamp.Author, stamp.Date, markContent: false);
 
-            foreach (var cell in row.Elements(W.tc))
+            foreach (var cell in row.Descendants(W.tc).Where(cell => cell.Ancestors(W.tr).First() == row).ToList())
             {
                 foreach (var child in cell.Elements().ToList())
                     MarkTrackedStructuredContentChild(child, stamp);

@@ -107,7 +107,7 @@ public class DocxSessionTrackedDeleteBlockTests
     [Theory]
     [InlineData("p")]
     [InlineData("tbl")]
-    public void DeleteBlock_KeepsReferencedBookmarkAndItsRangeUntilReview(string kind)
+    public void DeleteBlock_PreservesReferencedBookmarksOrRefusesBeforeRecording(string kind)
     {
         var target = TargetBlock(kind);
         var paragraph = target is Paragraph p ? p : target.Descendants<Paragraph>().First();
@@ -126,7 +126,13 @@ public class DocxSessionTrackedDeleteBlockTests
 
         using var session = OpenTracked(original);
         var result = session.DeleteBlock(TargetAnchor(session));
-        Assert.True(result.Success, result.Error?.Message);
+        if (kind == "tbl")
+        {
+            Assert.Equal(EditErrorCode.BookmarkInUse, result.Error?.Code);
+            Assert.Equal(0, session.UndoCount);
+            Assert.Empty(session.ListRevisions());
+        }
+        else Assert.True(result.Success, result.Error?.Message);
         Assert.Empty(result.Removed);
         Assert.Equal("TableBookmark", Assert.Single(session.ListBookmarks()).Name);
         Assert.Equal(kind == "tbl" ? 1 : 0, Body(session.Save()).Descendants(W.tbl).Count());
