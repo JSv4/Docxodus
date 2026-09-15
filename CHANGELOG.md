@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [12.6.0] - 2026-09-14
+
 ### Added
 
 - Document-level comment reading on the worker proxy (issue #790): `WorkerDocxodus.getComments(document)`
