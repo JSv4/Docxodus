@@ -1112,7 +1112,10 @@ public static class WmlToMarkdownConverter
         // Word writes w:hyperlink > w:del > w:r for a deleted link and w:ins > w:del > w:r
         // for an insertion another author later deleted — so the walk carries the enclosing
         // link and revision state down instead of reading one level. Content deleted inside
-        // an insertion is deleted: gone from the accepted view and struck through inline.
+        // an insertion is deleted: gone from the accepted view and struck through inline. A
+        // move reads as its two halves: the source is deleted text, the destination inserted.
+        // Inside an envelope a run's own descendants — a text box anchored in it — contribute
+        // their runs too, as the flat text that span operations address counts them.
         // A simple field's cached-result runs are what a reader sees — the HTML converter
         // renders them and the flat text the span machinery addresses includes them, so
         // dropping them left a hole in the projection an agent reads (issue #559: a
@@ -1126,12 +1129,15 @@ public static class WmlToMarkdownConverter
             foreach (var child in container.Elements())
             {
                 if (child.Name == W.r)
+                {
                     Add(child, ReadRunFormatting(child, url, revision));
+                    if (nested && child.HasElements) Walk(child, url, revision, nested: true);
+                }
                 else if (child.Name == W.hyperlink)
                     Enclosed(child, ResolveHyperlinkUrl(child) ?? url, revision);
-                else if (child.Name == W.ins)
+                else if (child.Name == W.ins || child.Name == W.moveTo)
                     Enclosed(child, url, revision == Revision.Deleted ? Revision.Deleted : Revision.Inserted);
-                else if (child.Name == W.del)
+                else if (child.Name == W.del || child.Name == W.moveFrom)
                     Enclosed(child, url, Revision.Deleted);
                 else if (child.Name == W.fldSimple)
                     Enclosed(child, url, revision);

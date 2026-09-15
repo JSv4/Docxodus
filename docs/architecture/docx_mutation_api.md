@@ -670,7 +670,10 @@ own envelope. The one shape still refused before mutation — with
 run-level `w:customXml` inside a selected paragraph, whose wrapper deletion is not
 supported. An empty `w:fldSimple` (no result run) and a `w:subDoc` reference are refused
 the same way: neither can sit inside a `w:del`. Block custom XML inside a text box is
-distinct and does not trigger that refusal.
+distinct and does not trigger that refusal, and neither does any of these shapes when it
+rides inside a text box anchored in the paragraph, whose anchoring run is deleted whole.
+Tracked `ReplaceText` applies the same refusal, with the same code and the same unchanged
+document, to the paragraph it would replace.
 Accepted-mode bulk deletion is unchanged.
 
 ### `DeleteSection` — heading-bounded bulk removal

@@ -676,6 +676,70 @@ public class DocxSessionTrackedDeleteBlockTests
     }
 
     [Fact]
+    public void DeletingTheAuthorsOwnInsertedParagraph_RemovesItOutright()
+    {
+        var original = Build(new[] { P("before"), P("after") });
+        using var session = Open(original);
+        Assert.True(session.InsertParagraph(Anchor(session, "p", 0), Position.After, "inserted text").Success);
+        var inserted = Anchor(session, "p", 1);
+
+        var result = session.DeleteBlock(inserted);
+
+        // Word removes an author's own pending paragraph rather than recording a deletion of
+        // it that nobody could reject into anything.
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Contains(result.Removed, a => a.Id == inserted);
+        Assert.Empty(session.ListRevisions());
+        AssertXmlEqual(Body(original), Body(session.Save()));
+    }
+
+    [Fact]
+    public void DeletingAParagraphWhoseOnlyOwnInsertionIsItsMark_RecordsADeletionAndSweepsNothing()
+    {
+        var mark = E("pPr", E("rPr", E("ins", A("id", "1"), A("author", "Reviewer"), A("date", "2026-01-01T00:00:00Z"))));
+        var input = Build(new[] { P("before"), E("p", mark, E("ins", Stamp(), Run("earlier text"))), P("after") },
+            (main, _) => main.AddHyperlinkRelationship(new Uri("https://example.com/orphan"), true, "rIdOrphanLink"));
+        Assert.Contains("rIdOrphanLink", RelationshipIds(input));
+        using var session = Open(input);
+
+        var result = session.DeleteBlock(Anchor(session, "p", 1));
+
+        // Only the pilcrow is the author's; the text is not, so nothing is removed outright and
+        // an unrelated pre-existing orphan relationship is not swept away.
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Empty(result.Removed);
+        var tracked = session.Save();
+        Assert.Equal("earlier text", string.Concat(Body(tracked).Descendants(W.delText).Select(t => t.Value)));
+        Assert.Contains("rIdOrphanLink", RelationshipIds(tracked));
+        Assert.Equal(new[] { "before", "after" }, Body(Resolve(tracked, "session", true)).Elements(W.p).Select(p => p.Value));
+    }
+
+    [Fact]
+    public void DeletingAParagraph_KeepsTheAuthorsOwnCommentReferenceReversible()
+    {
+        var reference = E("ins", A("id", "5"), A("author", "Reviewer"), A("date", "2026-01-01T00:00:00Z"),
+            E("r", E("commentReference", A("id", "0"))));
+        var input = Build(new[]
+        {
+            P("before"),
+            E("p", E("commentRangeStart", A("id", "0")), Run("text"), E("commentRangeEnd", A("id", "0")), reference),
+            P("after"),
+        }, (main, _) => main.AddNewPart<WordprocessingCommentsPart>().PutXDocument(new XDocument(E("comments",
+            E("comment", A("id", "0"), A("author", "Reviewer"), P("why"))))));
+        using var session = Open(input);
+
+        Assert.True(session.DeleteBlock(Anchor(session, "p", 1)).Success);
+
+        var tracked = session.Save();
+        AssertValid(tracked);
+        Assert.Single(Body(tracked).Descendants(W.commentReference));
+        foreach (var deletion in session.ListRevisions().Where(r => r.Type == "delete").ToList())
+            Assert.True(session.RejectRevision(deletion.Id).Success);
+        var restored = Assert.Single(Body(session.Save()).Descendants(W.commentReference));
+        Assert.DoesNotContain(restored.Ancestors(), a => a.Name == W.del);
+    }
+
+    [Fact]
     public void DeletingAnOwnInsertedParagraph_PrunesTheNoteInsertedWithIt()
     {
         using var session = Open(Build(new[] { P("before"), P("after") }));

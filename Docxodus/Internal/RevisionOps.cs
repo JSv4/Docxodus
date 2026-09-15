@@ -1981,17 +1981,20 @@ internal static class RevisionOps
                             mathObject,
                             u.Element.Name == W.del ? W.delText : W.t,
                             sb,
-                            maximum);
+                            maximum,
+                            includeDeleted: u.Element.Name == W.moveFrom);
                     break;
                 case UnitKind.Content:
-                    // An insertion's text stays its text after another author deletes it
-                    // inside the envelope (w:ins > w:del > w:delText, Word's own shape).
+                    // A move source's text is spelled w:delText by Word and by the session's
+                    // own move writer, and w:t by some other producers; an insertion's text
+                    // stays its text after another author deletes it inside the envelope
+                    // (w:ins > w:del > w:delText, Word's own shape). Read both spellings there.
                     if (!AppendVisibleText(
                             u.Element,
                             u.Element.Name == W.del ? W.delText : W.t,
                             sb,
                             maximum,
-                            includeDeleted: u.Element.Name == W.ins || u.Element.Name == W.moveTo))
+                            includeDeleted: u.Element.Name != W.del))
                         complete = false;
                     break;
                 case UnitKind.ParaMark:

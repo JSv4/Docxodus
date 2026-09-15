@@ -668,30 +668,14 @@ public sealed partial class DocxSession
     }
 
     /// <summary>Delete every run under <paramref name="container"/> the way Word does, in place,
-    /// keeping hyperlink and field containers: an ordinary run becomes <c>w:del</c>; a run already
-    /// deleted or moved away stays as it is; a run inside the session author's own insertion is
-    /// simply un-inserted (retyping your own tracked text leaves no trace of the first attempt);
-    /// a run inside another author's insertion is deleted inside that insertion.</summary>
+    /// keeping hyperlink and field containers — the policy <see cref="DeleteInlineElementInPlace"/>
+    /// owns: an ordinary run becomes <c>w:del</c>, a run already deleted or moved away stays as it
+    /// is, a run inside another author's insertion is deleted inside that insertion, and a run
+    /// inside the session author's own insertion is simply un-inserted.</summary>
     private void WrapDescendantRunsInDel(XElement container, RevisionStamp stamp)
     {
         foreach (var run in container.Descendants(W.r).ToList())
-        {
-            if (run.Ancestors().Any(ancestor => ancestor.Name == W.del || ancestor.Name == W.moveFrom))
-                continue;
-            var insertion = run.Ancestors().FirstOrDefault(ancestor =>
-                ancestor.Name == W.ins || ancestor.Name == W.moveTo);
-            if (insertion is not null
-                && string.Equals((string?)insertion.Attribute(W.author), stamp.Author, StringComparison.Ordinal))
-            {
-                run.Remove();
-                if (!insertion.HasElements) insertion.Remove();
-                continue;
-            }
-            var envelope = CreateRevisionEnvelope(W.del, stamp);
-            run.ReplaceWith(envelope);
-            envelope.Add(run);
-            ConvertTextToDeletedText(run);
-        }
+            DeleteInlineElementInPlace(run, stamp, keepMarkers: false);
     }
 
     /// <summary>

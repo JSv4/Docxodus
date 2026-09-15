@@ -100,6 +100,8 @@ public class DocxSessionReplaceTextTrackedReviewTests
     [InlineData("interleaved", "Main text[note] continued.", "[note]New")]
     [InlineData("hyperlink", "Link[note] text", "[note]New")]
     [InlineData("prior-deletion", "Old [note]text", "[note]New")]
+    [InlineData("inserted-trailing", "Main text", "New[note]")]
+    [InlineData("hyperlink-trailing", "See link[note]", "New[note]")]
     public void Tracked_ReplaceText_LeavesNoteReferencesWhereTheySit(string shape, string rejected, string accepted)
     {
         var paragraph = shape switch
@@ -108,6 +110,8 @@ public class DocxSessionReplaceTextTrackedReviewTests
             "trailing" => E("p", Run("text"), NoteRef("1")),
             "interleaved" => E("p", Run("Main text"), NoteRef("1"), Run(" continued.")),
             "hyperlink" => E("p", E("hyperlink", A("anchor", "x"), Run("Link")), NoteRef("1"), Run(" text")),
+            "inserted-trailing" => E("p", Run("Main text"), Ins("A", NoteRef("1"))),
+            "hyperlink-trailing" => E("p", Run("See "), E("hyperlink", A("anchor", "x"), Run("link"), NoteRef("1"))),
             _ => E("p", Del("A", "Old "), NoteRef("1"), Run("text")),
         };
         var bytes = Build(new[] { paragraph }, WithFootnotes(Footnote("1", "A note.")));
@@ -117,11 +121,229 @@ public class DocxSessionReplaceTextTrackedReviewTests
 
         foreach (var (resolver, resolve) in Resolvers())
         {
-            Assert.True(rejected == TextWithNotes(Body(resolve(bytes, false))),
-                $"{resolver} reject: expected '{rejected}' but got '{TextWithNotes(Body(resolve(bytes, false)))}'");
-            Assert.True(accepted == TextWithNotes(Body(resolve(bytes, true))),
-                $"{resolver} accept: expected '{accepted}' but got '{TextWithNotes(Body(resolve(bytes, true)))}'");
+            var afterReject = TextWithNotes(Body(resolve(bytes, false)));
+            Assert.True(rejected == afterReject, $"{resolver} reject: expected '{rejected}' but got '{afterReject}'");
+            var afterAccept = TextWithNotes(Body(resolve(bytes, true)));
+            Assert.True(accepted == afterAccept, $"{resolver} accept: expected '{accepted}' but got '{afterAccept}'");
         }
+    }
+
+    [Fact]
+    public void Tracked_ReplaceText_LeavesTextBoxRevisionsUntouched()
+    {
+        var bytes = Build(E("p", Run("Intro "), TextBox(Ins("A", Run("Boxed"))), Run(" tail")));
+
+        bytes = Replace(bytes, "B", "Replacement.");
+        AssertValid(bytes);
+
+        // A's insertion inside the box is A's revision, not text this deletion owns.
+        var boxed = Body(bytes).Descendants(W.txbxContent).Single();
+        Assert.Empty(boxed.Descendants(W.delText));
+        Assert.Equal("Boxed", Text(boxed));
+
+        using var review = new DocxSession(bytes);
+        foreach (var deletion in review.ListRevisions().Where(r => r.Author == "B" && r.Type == "delete").ToList())
+            Assert.True(review.RejectRevision(deletion.Id).Success);
+        foreach (var insertion in review.ListRevisions().Where(r => r.Author == "A").ToList())
+            Assert.True(review.AcceptRevision(insertion.Id).Success);
+        var resolved = Body(review.Save());
+        Assert.Empty(resolved.Descendants(W.delText));
+        Assert.Equal("Boxed", Text(resolved.Descendants(W.txbxContent).Single()));
+    }
+
+    [Fact]
+    public void Tracked_ReplaceText_NestsInsertedLinkRunsInsideTheHyperlink()
+    {
+        var bytes = Build(P("Old."));
+
+        bytes = Replace(bytes, "B", "See [the site](https://example.com/x) now.");
+        AssertValid(bytes);
+
+        var paragraph = Body(bytes).Element(W.p)!;
+        Assert.DoesNotContain(paragraph.Elements(W.ins), i => i.Element(W.hyperlink) is not null);
+        var hyperlink = Assert.Single(paragraph.Elements(W.hyperlink));
+        Assert.Equal("the site", Text(Assert.Single(hyperlink.Elements(W.ins))));
+        Assert.Equal("See the site now.", Text(Body(Accepted(bytes))));
+        Assert.Equal("Old.", Text(Body(Rejected(bytes))));
+    }
+
+    [Fact]
+    public void Tracked_ReplaceText_UnInsertsTheAuthorsOwnFieldAndNestedEnvelopes()
+    {
+        var bytes = Build(E("p", Run("Ref: "),
+            E("fldSimple", A("instr", " REF x "), Ins("B", Run("cached"))),
+            Ins("B", Ins("B", Run("twice")))));
+
+        bytes = Replace(bytes, "B", "New");
+        AssertValid(bytes);
+
+        var paragraph = Body(bytes).Element(W.p)!;
+        Assert.Empty(paragraph.Descendants(W.fldSimple));
+        Assert.Equal("New", Text(Assert.Single(paragraph.Descendants(W.ins))));
+        using var review = new DocxSession(bytes);
+        Assert.All(review.ListRevisions(), r => Assert.NotEqual(string.Empty, r.Text));
+
+        // The previous replacement must not have manufactured a shape the next one refuses.
+        bytes = Replace(bytes, "B", "Again");
+        Assert.Equal("Again", Text(Body(Accepted(bytes))));
+    }
+
+    [Theory]
+    [InlineData("own-control")]
+    [InlineData("existing-control")]
+    public void Tracked_ReplaceText_UnInsertsInsideAControlWithoutBreakingIt(string shape)
+    {
+        var control = shape == "own-control"
+            ? Ins("B", E("sdt", E("sdtPr", E("id", A("val", "7"))), E("sdtContent", Run("draft"))))
+            : E("sdt", E("sdtPr", E("id", A("val", "7"))), E("sdtContent", Ins("B", Run("draft"))));
+        var bytes = Build(E("p", Run("Amount: "), control));
+
+        bytes = Replace(bytes, "B", "Final.");
+        AssertValid(bytes);
+
+        var paragraph = Body(bytes).Element(W.p)!;
+        if (shape == "own-control")
+            Assert.Empty(paragraph.Descendants(W.sdt));
+        else
+            Assert.NotNull(Assert.Single(paragraph.Descendants(W.sdt)).Element(W.sdtContent));
+        Assert.Equal("Final.", Text(Body(Accepted(bytes))));
+    }
+
+    [Fact]
+    public void Projection_TreatsMovedRunsAsRevisions()
+    {
+        var bytes = Build(
+            E("p", Run("Visit "),
+                E("moveFromRangeStart", A("id", "90"), A("name", "move1"), A("author", "A"), A("date", "2026-01-01T00:00:00Z")),
+                E("hyperlink", A("anchor", "site"), E("moveFrom", Stamp("A"), DeletedRun("the site"))),
+                E("moveFromRangeEnd", A("id", "90")),
+                Run(" today")),
+            E("p",
+                E("moveToRangeStart", A("id", "91"), A("name", "move1"), A("author", "A"), A("date", "2026-01-01T00:00:00Z")),
+                E("moveTo", Stamp("A"), Run("the site")),
+                E("moveToRangeEnd", A("id", "91"))));
+
+        using var accepted = new DocxSession(bytes);
+        var acceptedMarkdown = accepted.Project().Markdown;
+        Assert.DoesNotContain("[the site](#site)", acceptedMarkdown);
+        Assert.Contains("the site", acceptedMarkdown);
+
+        using var inline = new DocxSession(bytes, InlineProjection());
+        var inlineMarkdown = inline.Project().Markdown;
+        Assert.Contains("{-[the site](#site)-}", inlineMarkdown);
+        Assert.Contains("{+the site+}", inlineMarkdown);
+    }
+
+    [Fact]
+    public void Projection_KeepsTextBoxRunsInsideARevisionEnvelope()
+    {
+        // The flat text span operations address counts a text box's runs when the box rides
+        // inside an envelope; the projection must show the same characters.
+        var bytes = Build(E("p", Run("Intro"), Ins("A", TextBox(Run("Box text")))));
+
+        using var accepted = new DocxSession(bytes);
+        Assert.Contains("IntroBox text", accepted.Project().Markdown);
+        using var inline = new DocxSession(bytes, InlineProjection());
+        Assert.Contains("Intro{+Box text+}", inline.Project().Markdown);
+    }
+
+    [Fact]
+    public void Tracked_ReplaceText_PrunesANoteWhoseOnlyReferenceItUnInserted()
+    {
+        var mixed = E("r", E("t", new XAttribute(XNamespace.Xml + "space", "preserve"), "mixed"),
+            E("footnoteReference", A("id", "1")));
+        var bytes = Build(new[] { E("p", Run("Lead "), Ins("B", mixed)) }, WithFootnotes(Footnote("1", "A note.")));
+        using var session = Open(bytes, "B");
+
+        var result = session.ReplaceText(Anchor(session, "p"), "New");
+
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.NotEmpty(result.Removed);
+        var edited = session.Save();
+        Assert.Empty(Body(edited).Descendants(W.footnoteReference));
+        Assert.DoesNotContain(Root(edited, "word/footnotes.xml").Descendants(W.footnote), f => f.Attribute(W.w + "type") is null);
+        Assert.DoesNotContain(session.ListRevisions(), r => r.Text.Contains("A note", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Tracked_ReplaceText_AllowsUnrecordableContentInsideATextBox()
+    {
+        var bytes = Build(E("p", Run("Body "), TextBox(Run("Page "), E("fldSimple", A("instr", " PAGE "))), Run(" tail")));
+        AssertValid(bytes);
+
+        bytes = Replace(bytes, "B", "Replaced.");
+
+        AssertValid(bytes);
+        Assert.Equal("Replaced.", Text(Body(Accepted(bytes))));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ReplaceText_WithAnEmptyPayload_EmptiesTheParagraph(bool tracked)
+    {
+        var bytes = Build(P("Original."));
+        using var session = new DocxSession(bytes, new DocxSessionSettings
+        {
+            TrackedChanges = tracked ? TrackedChangeMode.RenderInline : TrackedChangeMode.Accept,
+            RevisionAuthor = "B",
+        });
+
+        var result = session.ReplaceText(Anchor(session, "p"), string.Empty);
+
+        Assert.True(result.Success, result.Error?.Message);
+        var edited = session.Save();
+        Assert.Equal(string.Empty, Text(Body(edited)));
+        if (tracked) Assert.Equal("Original.", Text(Body(Rejected(edited))));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ReplaceText_InACommentBody_KeepsTheAnnotationMark(bool tracked)
+    {
+        var bytes = Build(P("Body text."));
+        using (var author = new DocxSession(bytes))
+        {
+            var added = author.AddComment(Anchor(author, "p"), new CharSpan(0, 4), "A", "Why?");
+            Assert.True(added.Success, added.Error?.Message);
+            bytes = author.Save();
+        }
+        Assert.Single(Root(bytes, "word/comments.xml").Descendants(W.annotationRef));
+        using var session = new DocxSession(bytes, new DocxSessionSettings
+        {
+            TrackedChanges = tracked ? TrackedChangeMode.RenderInline : TrackedChangeMode.Accept,
+            RevisionAuthor = "B",
+        });
+        var anchor = session.Project().AnchorIndex.Values
+            .Single(a => a.Anchor.Kind == "p" && a.Anchor.Scope == "cmt").Anchor.Id;
+
+        var result = session.ReplaceText(anchor, "Edited comment.");
+
+        Assert.True(result.Success, result.Error?.Message);
+        var edited = session.Save();
+        var resolutions = tracked
+            ? new List<(string name, byte[] bytes)> { ("session", ResolveSession(edited, true)) }
+            : new List<(string name, byte[] bytes)> { ("untracked", edited) };
+        foreach (var (name, resolved) in resolutions)
+        {
+            var paragraph = Root(resolved, "word/comments.xml").Descendants(W.comment).Single().Element(W.p)!;
+            Assert.True(paragraph.Descendants(W.annotationRef).Count() == 1, $"{name}: annotation mark lost");
+            Assert.Equal("Edited comment.", Text(paragraph));
+        }
+    }
+
+    [Fact]
+    public void ListRevisions_ReportsTheTextOfAMoveSource()
+    {
+        var bytes = Build(P("Moved paragraph."), P("Anchor."));
+        using var session = Open(bytes, "B");
+
+        var moved = session.MoveBlock(Anchor(session, "p"), Anchor(session, "p", 1), Position.After);
+
+        Assert.True(moved.Success, moved.Error?.Message);
+        var entry = Assert.Single(session.ListRevisions(), r => r.Type == "move");
+        Assert.Contains("Moved paragraph.", entry.Text);
     }
 
     [Fact]
@@ -318,8 +540,13 @@ public class DocxSessionReplaceTextTrackedReviewTests
         A("author", author), A("date", "2026-01-01T00:00:00Z"),
     };
     private static XElement Ins(string author, params object[] content) => E("ins", Stamp(author), content);
-    private static XElement Del(string author, string text) => E("del", Stamp(author),
-        E("r", E("delText", new XAttribute(XNamespace.Xml + "space", "preserve"), text)));
+    private static XElement DeletedRun(string text) =>
+        E("r", E("delText", new XAttribute(XNamespace.Xml + "space", "preserve"), text));
+    private static XElement Del(string author, string text) => E("del", Stamp(author), DeletedRun(text));
+    private static readonly XNamespace Vml = "urn:schemas-microsoft-com:vml";
+    private static XElement TextBox(params object[] paragraphContent) => E("r", E("pict",
+        new XElement(Vml + "shape", new XAttribute("id", "TextBox1"), new XAttribute("style", "width:100pt;height:30pt"),
+            new XElement(Vml + "textbox", E("txbxContent", E("p", paragraphContent))))));
 
     private static DocxSessionSettings InlineProjection() => new()
     {
@@ -331,8 +558,8 @@ public class DocxSessionReplaceTextTrackedReviewTests
         TrackedChanges = TrackedChangeMode.RenderInline, RevisionAuthor = author,
     });
 
-    private static string Anchor(DocxSession session, string kind) => session.Project().AnchorIndex.Values
-        .First(a => a.Anchor.Kind == kind && a.Anchor.Scope == "body").Anchor.Id;
+    private static string Anchor(DocxSession session, string kind, int skip = 0) => session.Project().AnchorIndex.Values
+        .Where(a => a.Anchor.Kind == kind && a.Anchor.Scope == "body").Skip(skip).First().Anchor.Id;
 
     private static byte[] Replace(byte[] bytes, string author, string text)
     {
@@ -357,6 +584,8 @@ public class DocxSessionReplaceTextTrackedReviewTests
         using (var document = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
         {
             var main = document.AddMainDocumentPart();
+            main.AddNewPart<StyleDefinitionsPart>().PutXDocument(new XDocument(E("styles")));
+            main.AddNewPart<DocumentSettingsPart>().PutXDocument(new XDocument(E("settings")));
             setup?.Invoke(main);
             main.PutXDocument(new XDocument(E("document", new XAttribute(XNamespace.Xmlns + "w", W.w),
                 new XAttribute(XNamespace.Xmlns + "r", R.r), E("body", blocks))));

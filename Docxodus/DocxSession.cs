@@ -7343,8 +7343,7 @@ public sealed partial class DocxSession : IDisposable
     /// culture. A culture-sensitive format swaps the time separator (fi-FI writes
     /// <c>14.27.09</c>) or the calendar (th-TH writes year 2569), neither of which is the
     /// <c>xsd:dateTime</c> the schema and every reader expect.</summary>
-    private static string RevisionDateNow() =>
-        DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture);
+    private static string RevisionDateNow() => Internal.CommentOps.FormatDate(DateTime.UtcNow);
 
     private XElement CreateRevisionEnvelope(
         XName name, RevisionStamp stamp, params object[] content) =>
@@ -7843,8 +7842,7 @@ public sealed partial class DocxSession : IDisposable
                 "tracked whole-paragraph replacement containing bookmark markers is unsupported; use a surgical span replacement or switch recording mode",
                 anchorId);
         if (_trackedChanges == TrackedChangeMode.RenderInline
-            && element.Descendants().Select(UnrecordableInlineContentKind)
-                .FirstOrDefault(kind => kind is not null) is { } unrecordable)
+            && FirstUnrecordableInlineContent(new[] { element }) is { } unrecordable)
             return EditResult.Fail(EditErrorCode.IncompatibleElementType,
                 $"Tracked whole-paragraph replacement does not support {unrecordable} inside a paragraph; no changes were made.",
                 anchorId);
@@ -7880,7 +7878,8 @@ public sealed partial class DocxSession : IDisposable
         // A list marker on a paragraph that is not yet a list item promotes it, exactly as
         // ApplyListFormat would; on an existing list item the marker is the projection's own
         // spelling echoed back and the numbering is left alone.
-        var declaredList = parsed.Blocks[0].Kind
+        var declaredList = parsed.Blocks.Count == 1
+            && parsed.Blocks[0].Kind
                 is Internal.ParserBlockKind.BulletItem or Internal.ParserBlockKind.OrderedItem
             && ((int?)element.Element(W.pPr)?.Element(W.numPr)?.Element(W.numId)?.Attribute(W.val) ?? 0) == 0
             && ResolveStyleNumbering(element).numId is null
@@ -7912,6 +7911,13 @@ public sealed partial class DocxSession : IDisposable
         if (declaredStyle is not null || declaredList is not null)
             oldPPr = new XElement(element.Element(W.pPr) ?? new XElement(W.pPr));
 
+        // A replacement can drop a note's only reference: an untracked one removes a run that
+        // mixes text with the reference, a tracked one un-inserts such a run inside the author's
+        // own insertion. Baseline the referenced notes so the orphaned definition goes too.
+        var referencedNotesBefore = element.Descendants()
+            .Any(d => d.Name == W.footnoteReference || d.Name == W.endnoteReference)
+            ? ReferencedNoteIds()
+            : ((HashSet<int> Footnotes, HashSet<int> Endnotes)?)null;
         _history.RecordPreOp(preOp);
         try
         {
@@ -7923,6 +7929,9 @@ public sealed partial class DocxSession : IDisposable
             {
                 ApplyReplaceTextAccept(element, parsed.Blocks);
             }
+            var removed = new List<Anchor>();
+            if (referencedNotesBefore is { } notesBefore)
+                AppendPrunedNoteAnchors(PruneOrphanedNotes(notesBefore), removed, new HashSet<string>(StringComparer.Ordinal));
             if (declaredStyle is not null)
             {
                 var pPr = element.Element(W.pPr);
@@ -7965,6 +7974,7 @@ public sealed partial class DocxSession : IDisposable
             {
                 Success = true,
                 Modified = new[] { updated },
+                Removed = removed,
                 Patch = PatchFor(target),
             };
         }
@@ -8229,8 +8239,7 @@ public sealed partial class DocxSession : IDisposable
                 anchorForPatchScope.Anchor.Id);
 
         bool trackedChanges = _trackedChanges == TrackedChangeMode.RenderInline;
-        if (trackedChanges && toRemove.SelectMany(element => element.DescendantsAndSelf())
-                .Select(UnrecordableInlineContentKind).FirstOrDefault(kind => kind is not null) is { } unrecordable)
+        if (trackedChanges && FirstUnrecordableInlineContent(toRemove) is { } unrecordable)
         {
             return EditResult.Fail(
                 EditErrorCode.IncompatibleElementType,
@@ -8269,13 +8278,15 @@ public sealed partial class DocxSession : IDisposable
             return bookmarkError;
 
         // Content the session author inserted is un-inserted outright rather than marked (see
-        // MarkParagraphContentAndMark), which can orphan the notes, hyperlinks and images it
-        // carried, so a deletion touching an own insertion sweeps like a structural removal.
+        // DeleteInlineElementInPlace), which can orphan the notes, hyperlinks and images it
+        // carried, so a deletion that removes own content sweeps like a structural removal.
+        // A mere own paragraph mark or row mark removes nothing and must not trigger the
+        // whole-part sweep that would take unrelated pre-existing orphan relationships with it.
         var author = _revisionAuthor ?? "docxodus";
         bool structurallyRemoves = !trackedChanges || toRemove.Any(el =>
             (el.Name != W.p && el.Name != W.tbl && el.Name != W.sdt && el.Name != W.customXml)
-            || el.Descendants(W.ins).Any(ins =>
-                string.Equals((string?)ins.Attribute(W.author), author, StringComparison.Ordinal)));
+            || (el.Name == W.p && el != retainedParagraph && IsWhollyOwnInsertion(el, author))
+            || HasOwnInsertedContent(el, author));
         var hyperlinkOwner = structurallyRemoves
             ? Internal.OwnedPartRelationships.FindOwner(_doc!, fromElement) : null;
         var referencedNotesBefore = structurallyRemoves ? ReferencedNoteIds()
@@ -8302,6 +8313,15 @@ public sealed partial class DocxSession : IDisposable
                 {
                     if (el.Name == W.p)
                     {
+                        if (el != retainedParagraph && IsWhollyOwnInsertion(el, stamp.Author))
+                        {
+                            // The author's own pending paragraph, text and pilcrow alike: Word
+                            // removes it outright rather than recording a deletion of an
+                            // insertion that nobody could reject into anything.
+                            CollectAnchors(el, includeDescendants: true, index, anchorForPatchScope, trackedRemoved, trackedRemovedIds);
+                            el.Remove();
+                            continue;
+                        }
                         CollectAnchors(el, includeDescendants: false, index, anchorForPatchScope, modified, modifiedIds);
                         MarkParagraphAsTrackedDeleted(el, stamp, preserveParagraphMark: el == retainedParagraph);
                     }
@@ -8427,9 +8447,18 @@ public sealed partial class DocxSession : IDisposable
             : element.Name == W.subDoc ? "w:subDoc"
             : null;
         return kind is not null
-            && element.Ancestors().TakeWhile(a => a.Name != W.txbxContent).Any(a => a.Name == W.p)
+            && element.Ancestors().Any(a => a.Name == W.p)
+            && !element.Ancestors().Any(a => a.Name == W.txbxContent)
             ? kind : null;
     }
+
+    /// <summary>The first content under <paramref name="roots"/> a tracked deletion cannot mark,
+    /// named for the refusal, or null. Shared by block deletion and whole-paragraph replacement
+    /// so both refuse the same shapes before mutating anything.</summary>
+    private static string? FirstUnrecordableInlineContent(IEnumerable<XElement> roots) =>
+        roots.SelectMany(root => root.DescendantsAndSelf())
+            .Select(UnrecordableInlineContentKind)
+            .FirstOrDefault(kind => kind is not null);
 
     /// <summary>
     /// The paragraphs a tracked deletion of <paramref name="range"/> removes outright on
@@ -8961,32 +8990,23 @@ public sealed partial class DocxSession : IDisposable
         // pilcrow is accepted. A content replacement keeps the control shell and deletes inside
         // it instead, so a run another author inserted there is deleted BELOW that insertion —
         // the shape Word writes, and the only one whose deletion rejects on its own.
+        var stamp = new RevisionStamp(author, date);
         var content = paragraph.Descendants().Where(e => e.Name == W.r
             || (wrapperName == W.del && (e.Name == M.oMath || e.Name == M.oMathPara
                 || (!retainInlineStructure && e.Name == W.sdt && IsInlineControl(e))))).ToList();
         foreach (var element in content)
         {
-            // Zero-width marker runs (note and comment references) are not content a
-            // replacement supersedes: they survive on both accept and reject, where they sit.
-            if (retainInlineStructure && IsMarkerOnlyRun(element)) continue;
-            // A deletion inside an earlier insertion must remain independently rejectable.
+            if (wrapperName == W.del)
+            {
+                DeleteInlineElementInPlace(element, stamp, keepMarkers: retainInlineStructure);
+                continue;
+            }
             // Existing deletions/move sources are already absent from the accepted view;
             // ordinary insertion/move marking retains its existing revision ownership.
             if (element.Ancestors().Any(e => e.Name == W.del || e.Name == W.moveFrom
-                    || (wrapperName != W.del && (e.Name == W.ins || e.Name == W.moveTo))))
+                    || e.Name == W.ins || e.Name == W.moveTo))
                 continue;
-            // Deleting text the same author inserted un-inserts it, as Word does and as
-            // FillContentControlText already does: retyping your own pending text leaves no
-            // struck-through first attempt behind.
-            if (wrapperName == W.del
-                && element.Ancestors().FirstOrDefault(e => e.Name == W.ins || e.Name == W.moveTo) is { } insertion
-                && insertion.Name == W.ins
-                && string.Equals((string?)insertion.Attribute(W.author), author, StringComparison.Ordinal))
-            {
-                RemoveFromInsertion(element, insertion);
-                continue;
-            }
-            var envelope = CreateRevisionEnvelope(wrapperName, author, date);
+            var envelope = CreateRevisionEnvelope(wrapperName, stamp);
             element.ReplaceWith(envelope);
             envelope.Add(element);
             if (deleting) ConvertTextToDeletedText(element);
@@ -9005,31 +9025,120 @@ public sealed partial class DocxSession : IDisposable
         return pPr;
     }
 
+    /// <summary>
+    /// Delete one run-level element in place the way Word does, keeping the hyperlink, field
+    /// and control shells around it. An ordinary run becomes <c>w:del</c>; a run already deleted
+    /// or moved away stays as it is; a run inside another author's insertion is deleted inside
+    /// that insertion (<c>w:ins &gt; w:del</c>, so the deletion rejects on its own); a run inside
+    /// the session author's own insertion is simply un-inserted — retyping your own pending text
+    /// leaves no struck-through first attempt — except a zero-width marker run (a note or comment
+    /// reference), which is only ever marked so a reject can still restore it. With
+    /// <paramref name="keepMarkers"/> a marker-only run is left live: a content replacement
+    /// supersedes text, not the references that must survive it on accept and reject. The one
+    /// owner of this policy for whole-paragraph, block and control-fill deletions.
+    /// </summary>
+    private void DeleteInlineElementInPlace(XElement element, RevisionStamp stamp, bool keepMarkers)
+    {
+        bool marker = IsMarkerOnlyRun(element);
+        if (keepMarkers && marker) return;
+        if (element.Ancestors().Any(e => e.Name == W.del || e.Name == W.moveFrom)) return;
+        if (!marker
+            && element.Ancestors().FirstOrDefault(e => e.Name == W.ins || e.Name == W.moveTo) is { } insertion
+            && insertion.Name == W.ins
+            && string.Equals((string?)insertion.Attribute(W.author), stamp.Author, StringComparison.Ordinal))
+        {
+            RemoveFromInsertion(element, insertion);
+            return;
+        }
+        var envelope = CreateRevisionEnvelope(W.del, stamp);
+        element.ReplaceWith(envelope);
+        envelope.Add(element);
+        ConvertTextToDeletedText(element);
+    }
+
     /// <summary>Remove <paramref name="element"/> from the session author's own pending
-    /// <paramref name="insertion"/>, together with every container it leaves empty up to and
-    /// including the insertion envelope itself.</summary>
+    /// <paramref name="insertion"/>, together with every container it leaves empty on the way up
+    /// to the paragraph: the envelope itself, an enclosing envelope, and a hyperlink or simple
+    /// field with nothing else in it (an empty field is a shape the tracked deleter refuses). An
+    /// emptied control keeps its shell unless the control itself sat inside the insertion — was
+    /// the author's own — and a move envelope is never removed, its partner still needs it.</summary>
     private static void RemoveFromInsertion(XElement element, XElement insertion)
     {
         var parent = element.Parent;
         element.Remove();
-        while (parent is not null && !parent.HasElements)
+        while (parent is not null && parent.Name != W.p && !parent.HasElements)
         {
             var emptied = parent;
             parent = emptied.Parent;
+            if (emptied.Name == W.moveTo || emptied.Name == W.moveFrom) break;
+            if (emptied.Name == W.sdtContent)
+            {
+                if (parent is null || parent.Name != W.sdt
+                    || !parent.Ancestors().Any(a => ReferenceEquals(a, insertion)))
+                    break;
+                var control = parent;
+                parent = control.Parent;
+                control.Remove();
+                continue;
+            }
             emptied.Remove();
-            if (ReferenceEquals(emptied, insertion)) break;
         }
     }
 
-    /// <summary>Convert a deleted run-level element's text to its deleted spelling in place.
-    /// Mirrors <c>IrMarkupRenderer.ConvertTextToDelText</c>.</summary>
+    private static readonly HashSet<XName> RevisionWrapperNames = new()
+    {
+        W.ins, W.del, W.moveFrom, W.moveTo,
+    };
+
+    /// <summary>Convert a deleted run-level element's text to its deleted spelling in place,
+    /// mirroring <c>IrMarkupRenderer.ConvertTextToDelText</c>. Text under a revision nested
+    /// inside the element — a text box paragraph's own insertion, say — keeps its spelling: that
+    /// revision owns it, and renaming it would leave <c>w:delText</c> that no reject of THIS
+    /// deletion could ever restore.</summary>
     private static void ConvertTextToDeletedText(XElement runLevel)
     {
         foreach (var t in runLevel.DescendantsAndSelf(W.t).ToList())
-            t.Name = W.delText;
+            if (!UnderNestedRevision(t, runLevel)) t.Name = W.delText;
         foreach (var instr in runLevel.DescendantsAndSelf(W.instrText).ToList())
-            instr.Name = W.delInstrText;
+            if (!UnderNestedRevision(instr, runLevel)) instr.Name = W.delInstrText;
     }
+
+    private static bool UnderNestedRevision(XElement text, XElement runLevel) =>
+        text.Ancestors().TakeWhile(a => !ReferenceEquals(a, runLevel))
+            .Any(a => RevisionWrapperNames.Contains(a.Name));
+
+    private static bool IsOwnInsertion(XElement? insertion, string author) =>
+        insertion is not null
+        && string.Equals((string?)insertion.Attribute(W.author), author, StringComparison.Ordinal);
+
+    /// <summary>Whether a tracked deletion of <paramref name="root"/> removes content outright
+    /// rather than marking it: a run (other than a marker-only one) inside the session author's
+    /// own pending insertion, which <see cref="DeleteInlineElementInPlace"/> un-inserts.</summary>
+    private static bool HasOwnInsertedContent(XElement root, string author) =>
+        root.Descendants(W.r).Any(run => !IsMarkerOnlyRun(run)
+            && !run.Ancestors().Any(a => a.Name == W.del || a.Name == W.moveFrom)
+            && run.Ancestors().FirstOrDefault(a => a.Name == W.ins || a.Name == W.moveTo) is { } insertion
+            && insertion.Name == W.ins && IsOwnInsertion(insertion, author));
+
+    /// <summary>Whether <paramref name="paragraph"/> is, in its entirety, the session author's
+    /// own pending insertion: its pilcrow carries the author's <c>w:ins</c> and every child is
+    /// the author's insertion (directly, or through a hyperlink, field or smart tag holding only
+    /// the author's insertions), with no range marker whose partner may lie elsewhere. Such a
+    /// paragraph is un-inserted outright by a tracked deletion, as Word does.</summary>
+    private static bool IsWhollyOwnInsertion(XElement paragraph, string author) =>
+        IsOwnInsertion(paragraph.Element(W.pPr)?.Element(W.rPr)?.Element(W.ins), author)
+        && paragraph.Elements().Where(child => child.Name != W.pPr).All(child => IsOwnInsertedContent(child, author))
+        && !paragraph.Descendants().Any(d => d.Name == W.bookmarkStart || d.Name == W.bookmarkEnd
+            || d.Name == W.commentRangeStart || d.Name == W.commentRangeEnd
+            || d.Name == W.permStart || d.Name == W.permEnd
+            || d.Name == W.moveFromRangeStart || d.Name == W.moveFromRangeEnd
+            || d.Name == W.moveToRangeStart || d.Name == W.moveToRangeEnd);
+
+    private static bool IsOwnInsertedContent(XElement element, string author) =>
+        element.Name == W.proofErr
+        || (element.Name == W.ins && IsOwnInsertion(element, author))
+        || ((element.Name == W.hyperlink || element.Name == W.fldSimple || element.Name == W.smartTag)
+            && element.HasElements && element.Elements().All(child => IsOwnInsertedContent(child, author)));
 
     private void MarkParagraphAsTrackedMove(
         XElement paragraph, bool from, string moveName, string author, string date)
@@ -15129,12 +15238,13 @@ public sealed partial class DocxSession : IDisposable
     // a bare paragraph child, so it is detected per run via IsMarkerOnlyRun: the body-side
     // note references (dropping <w:footnoteReference w:id="N"/> orphans the note definition
     // and silently loses content on a text edit — issue B3), the comment reference that
-    // makes a comment range visible at all, and — inside a note body — the note's own number
-    // mark and separator marks, without which Word renders the note unnumbered.
+    // makes a comment range visible at all, and — inside a note or comment body — the note's
+    // own number mark and separator marks and the comment's annotation mark, without which
+    // Word renders the note unnumbered or the comment without its author and date.
     private static readonly HashSet<XName> MarkerRunContentNames = new()
     {
         W.footnoteReference, W.endnoteReference, W.commentReference,
-        W.footnoteRef, W.endnoteRef, W.separator, W.continuationSeparator,
+        W.footnoteRef, W.endnoteRef, W.separator, W.continuationSeparator, W.annotationRef,
     };
 
     // True for a run whose only meaningful (non-rPr) content is a marker — i.e. it carries
@@ -15153,10 +15263,22 @@ public sealed partial class DocxSession : IDisposable
         return sawMarker;
     }
 
-    /// <summary>A paragraph child a replacement keeps: a bare range/marker element or a
-    /// marker-only run.</summary>
+    // Carriers whose visible width is the sum of their children's, so one that holds nothing
+    // but markers is itself a marker: a tracked-inserted note reference, a link holding only a
+    // reference, an emptied shell.
+    private static readonly HashSet<XName> ZeroWidthCarrierNames = new()
+    {
+        W.ins, W.del, W.moveTo, W.moveFrom, W.hyperlink, W.fldSimple, W.smartTag,
+        W.sdtContent, W.customXml, W.dir, W.bdo,
+    };
+
+    /// <summary>A paragraph child a replacement keeps where it sits: a bare range/marker
+    /// element, a marker-only run, or an envelope or carrier containing nothing else.</summary>
     private static bool IsZeroWidthMarker(XElement e) =>
-        PreservedMarkerNames.Contains(e.Name) || IsMarkerOnlyRun(e);
+        PreservedMarkerNames.Contains(e.Name)
+        || (e.Name == W.r ? IsMarkerOnlyRun(e)
+            : e.Name == W.sdt ? e.Element(W.sdtContent) is not { } content || IsZeroWidthMarker(content)
+            : ZeroWidthCarrierNames.Contains(e.Name) && e.Elements().All(IsZeroWidthMarker));
 
     private sealed record PreservedMarkerPosition(XElement Element, int Offset, int Order);
 
@@ -15237,15 +15359,46 @@ public sealed partial class DocxSession : IDisposable
         MarkParagraphAsTrackedDeleted(paragraph, stamp, preserveParagraphMark: true, retainInlineStructure: true);
 
         if (blocks.Count == 0 || blocks[0].RunElements.Count == 0) return;
-        var ins = CreateRevisionEnvelope(W.ins, stamp);
-        foreach (var run in blocks[0].RunElements)
-            ins.Add(new XElement(run));
+        var inserted = WrapPayloadAsInserted(blocks[0].RunElements, stamp);
 
-        // The replacement follows the last content it supersedes and precedes any trailing
-        // markers, so a note reference that closed the old sentence closes the new one too.
-        var last = paragraph.Elements().LastOrDefault(e => e.Name != W.pPr && !IsZeroWidthMarker(e));
-        if (last is null) paragraph.Add(ins);
-        else last.AddAfterSelf(ins);
+        // The replacement precedes the paragraph's trailing markers — the references and range
+        // ends after its last text-bearing run, wherever they sit, and the carrier that holds
+        // them — so a note reference that closed the old sentence closes the new one too. With
+        // no trailing marker it simply follows everything it supersedes.
+        var lastText = paragraph.Descendants(W.r).LastOrDefault(run => !IsMarkerOnlyRun(run));
+        var firstTrailingMarker = paragraph.Descendants()
+            .Where(d => PreservedMarkerNames.Contains(d.Name) || IsMarkerOnlyRun(d))
+            .FirstOrDefault(marker => lastText is null || marker.IsAfter(lastText));
+        if (firstTrailingMarker is null)
+            paragraph.Add(inserted);
+        else
+            firstTrailingMarker.AncestorsAndSelf().First(e => ReferenceEquals(e.Parent, paragraph))
+                .AddBeforeSelf(inserted);
+    }
+
+    /// <summary>Wrap a parsed payload's inline elements as the session author's insertion.
+    /// Contiguous runs share one <c>w:ins</c>; a hyperlink keeps its shell and owns its inserted
+    /// runs (<c>w:hyperlink &gt; w:ins &gt; w:r</c>), the only nesting the schema allows and the
+    /// shape Word writes — <c>w:ins &gt; w:hyperlink</c> fails validation.</summary>
+    private List<XElement> WrapPayloadAsInserted(IReadOnlyList<XElement> runElements, RevisionStamp stamp)
+    {
+        var result = new List<XElement>();
+        XElement? envelope = null;
+        foreach (var element in runElements)
+        {
+            if (element.Name == W.r)
+            {
+                if (envelope is null) result.Add(envelope = CreateRevisionEnvelope(W.ins, stamp));
+                envelope.Add(new XElement(element));
+                continue;
+            }
+            envelope = null;
+            var carrier = new XElement(element.Name, element.Attributes());
+            carrier.Add(CreateRevisionEnvelope(W.ins, stamp,
+                element.Elements().Select(child => new XElement(child)).ToArray()));
+            result.Add(carrier);
+        }
+        return result;
     }
 
     /// <summary>

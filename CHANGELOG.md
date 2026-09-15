@@ -30,19 +30,29 @@ All notable changes to this project will be documented in this file.
   later session replaces the same paragraph (issue #786). Superseded runs are deleted where
   they sit — inside hyperlinks, fields, inline controls and other authors' insertions, as
   `w:ins > w:del`, the shape Word writes — so accepting keeps only the latest proposal and
-  rejecting restores the original. Deleting or replacing text inside the session author's own
-  pending insertion un-inserts it outright, as Word does, so no struck-through first attempt
-  remains, and a note that only that text referenced is pruned with it. Note and comment
-  references survive in place on both accept
-  and reject, including a footnote reference inside an earlier insertion or hyperlink and a
-  note's own number mark when its body is replaced. A paragraph holding inline custom XML or
-  an empty simple field is refused before mutation, as `DeleteBlock` already does. Because
-  each live span is deleted separately, one replacement lists one deletion per span between
-  existing revisions rather than a single envelope.
-- The markdown projection treats text deleted inside an insertion as deleted and projects
-  revised hyperlink runs, `ListRevisions` reports the text of a superseded insertion, and
-  revision dates are stamped under the invariant culture regardless of the host's current
-  culture (a Finnish or Thai culture previously produced dates the schema rejects).
+  rejecting restores the original, and a revision nested inside a text box keeps its own
+  text. Text inside the session author's own pending insertion is un-inserted outright by
+  `ReplaceText` and block deletion, as Word does, together with the envelope, link, field or
+  own control it empties, so no struck-through first attempt remains; a block deletion removes
+  the author's own pending paragraph outright, and a note whose only reference went with such
+  text is pruned. Note and comment references survive where they sit on both accept and
+  reject — including a footnote reference inside an earlier insertion or hyperlink, a note's
+  own number mark and a comment's annotation mark when their bodies are replaced — and a
+  reference the author inserted is only ever marked, never un-inserted, so a reject still
+  restores it. The replacement lands ahead of the paragraph's trailing references. A payload
+  hyperlink is inserted as `w:hyperlink > w:ins`, the nesting the schema allows. A paragraph
+  holding inline custom XML or an empty simple field is refused before mutation, as
+  `DeleteBlock` already does, unless that content rides inside a text box; an empty payload
+  empties the paragraph instead of throwing. Because each live span is deleted separately,
+  one replacement lists one deletion per span between existing revisions rather than a single
+  envelope.
+- The markdown projection treats text deleted inside an insertion as deleted, projects
+  revised hyperlink runs and move sources and destinations as revisions, and keeps a text
+  box's runs inside a revision envelope in step with the flat text; `ListRevisions` reports
+  the text of a superseded insertion and of a move source; revision dates are stamped under
+  the invariant culture regardless of the host's current culture (a Finnish or Thai culture
+  previously produced dates the schema rejects); and a tracked block deletion that removes
+  nothing outright no longer sweeps unrelated pre-existing orphan relationships.
 - `DeleteBlock` now records complete paragraph and table deletions under `RenderInline`
   (issue #784). Accepting removes the paragraph, including its numbering, instead of
   leaving an empty paragraph behind. Tables remain visible as tracked row deletions
