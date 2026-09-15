@@ -1981,14 +1981,20 @@ internal static class RevisionOps
                             mathObject,
                             u.Element.Name == W.del ? W.delText : W.t,
                             sb,
-                            maximum);
+                            maximum,
+                            includeDeleted: u.Element.Name == W.moveFrom);
                     break;
                 case UnitKind.Content:
+                    // A move source's text is spelled w:delText by Word and by the session's
+                    // own move writer, and w:t by some other producers; an insertion's text
+                    // stays its text after another author deletes it inside the envelope
+                    // (w:ins > w:del > w:delText, Word's own shape). Read both spellings there.
                     if (!AppendVisibleText(
                             u.Element,
                             u.Element.Name == W.del ? W.delText : W.t,
                             sb,
-                            maximum))
+                            maximum,
+                            includeDeleted: u.Element.Name != W.del))
                         complete = false;
                     break;
                 case UnitKind.ParaMark:
@@ -2027,14 +2033,14 @@ internal static class RevisionOps
     }
 
     private static bool AppendVisibleText(
-        XElement el, XName textName, StringBuilder sb, int maximumCharacters)
+        XElement el, XName textName, StringBuilder sb, int maximumCharacters, bool includeDeleted = false)
     {
         foreach (var child in el.Elements())
         {
             var n = child.Name;
             if (n == W.pPr || n == W.rPr || n == W.trPr || n == W.tcPr || n == W.tblPr) continue;
             // Math text is never renamed for deletion, so it reads the same in either state.
-            if (n == textName || n == M.t)
+            if (n == textName || n == M.t || (includeDeleted && n == W.delText))
             {
                 var value = child.Value;
                 if (sb.Length > maximumCharacters - value.Length) return false;
@@ -2048,7 +2054,7 @@ internal static class RevisionOps
                 continue;
             }
             if (child.HasElements
-                && !AppendVisibleText(child, textName, sb, maximumCharacters))
+                && !AppendVisibleText(child, textName, sb, maximumCharacters, includeDeleted))
                 return false;
         }
         return true;

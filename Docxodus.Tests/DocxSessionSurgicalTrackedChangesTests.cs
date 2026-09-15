@@ -89,7 +89,119 @@ public class DocxSessionSurgicalTrackedChangesTests
             .Validate(document)
             .Select(e => $"{e.Part?.Uri}: {e.Description} ({e.Path?.XPath})")
             .ToArray();
-        Assert.Empty(errors);
+        Assert.True(errors.Length == 0, string.Join(Environment.NewLine, errors));
+    }
+
+    [Theory]
+    [InlineData("ZZMARK Hamburg.")]
+    [InlineData("**ZZMARK** Hamburg.")]
+    public void ReplaceText_TrackedAcrossSessions_SupersedesPriorInsertions(string firstReplacement)
+    {
+        const string original = "ZZMARK München.";
+        const string untouched = "Untouched.";
+        var bytes = BuildDocument(new XElement(W.p, Run(original)), new XElement(W.p, Run(untouched)));
+
+        // Issue #786: re-open and re-read the anchor for each round, including B editing B's work.
+        foreach (var (author, text) in new[]
+                 { ("A", firstReplacement), ("B", "ZZMARK Köln."), ("B", "ZZMARK Bonn.") })
+        {
+            using var session = new DocxSession(bytes, new DocxSessionSettings
+            {
+                TrackedChanges = TrackedChangeMode.RenderInline,
+                RevisionAuthor = author,
+            });
+            var anchor = session.Project().AnchorIndex.Values.First().Anchor.Id;
+            var result = session.ReplaceText(anchor, text);
+            Assert.True(result.Success, result.Error?.Message);
+            bytes = session.Save();
+        }
+
+        Assert.Equal(original + untouched, RejectedText(bytes));
+        Assert.Equal("ZZMARK Bonn." + untouched, AcceptedText(bytes));
+        AssertSchemaValid(bytes);
+
+        // A's proposal is deleted inside A's insertion (w:ins > w:del, Word's own shape); B's
+        // earlier proposal is un-inserted outright, as Word does when an author retypes their
+        // own pending text, so no struck-through first attempt remains.
+        var paragraph = MainRoot(bytes).Descendants(W.p).First();
+        var insertions = paragraph.Elements(W.ins).ToArray();
+        Assert.Equal(new[] { "A", "B" }, insertions.Select(e => (string?)e.Attribute(W.author)));
+        Assert.Equal("ZZMARK Hamburg.", string.Concat(insertions[0].Descendants(W.delText).Select(t => t.Value)));
+        Assert.Empty(insertions[0].Descendants(W.t));
+        Assert.NotEmpty(insertions[0].Descendants(W.del));
+        Assert.All(insertions[0].Descendants(W.del), deletion =>
+            Assert.Equal("B", (string?)deletion.Attribute(W.author)));
+        Assert.Equal("ZZMARK Bonn.", Text(insertions[1]));
+        Assert.Empty(insertions[1].Descendants(W.del));
+        Assert.DoesNotContain("ZZMARK Köln.", paragraph.ToString());
+
+        // Exercise the session APIs used by the bindings as well as RevisionProcessor above.
+        foreach (var accept in new[] { true, false })
+        {
+            using var review = new DocxSession(bytes);
+            Assert.NotEmpty(review.ListRevisions());
+            var result = accept ? review.AcceptAllRevisions() : review.RejectAllRevisions();
+            Assert.True(result.Success, result.Error?.Message);
+            Assert.Empty(review.ListRevisions());
+            var resolved = review.Save();
+            Assert.Equal(new[] { accept ? "ZZMARK Bonn." : original, untouched },
+                MainRoot(resolved).Descendants(W.p).Select(Text));
+            AssertSchemaValid(resolved);
+        }
+    }
+
+    [Fact]
+    public void ReplaceText_TrackedInsertionInsideHyperlink_PreservesRevisionHistory()
+    {
+        XElement Revision(XName name, int id, XElement run) => new(name,
+            new XAttribute(W.id, id), new XAttribute(W.author, "A"),
+            new XAttribute(W.date, "2026-01-01T00:00:00Z"), run);
+        var source = BuildDocument(new XElement(W.p,
+            Run("Venue: "),
+            new XElement(W.hyperlink, new XAttribute(W.anchor, "venue"),
+                Revision(W.del, 1, new XElement(W.r, new XElement(W.delText, "München."))),
+                Revision(W.ins, 2, Run("Hamburg.", new XElement(W.b))))));
+        AssertSchemaValid(source);
+        using var session = new DocxSession(source, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "B",
+        });
+
+        var result = session.ReplaceText(session.Project().AnchorIndex.Values.Single().Anchor.Id, "Venue: Bonn.");
+
+        Assert.True(result.Success, result.Error?.Message);
+        var tracked = session.Save();
+        Assert.Equal("Venue: Bonn.", AcceptedText(tracked));
+        Assert.Equal("Venue: München.", RejectedText(tracked));
+        var hyperlink = Assert.Single(MainRoot(tracked).Descendants(W.hyperlink));
+        Assert.Equal("A", (string?)Assert.Single(hyperlink.Elements(W.del)).Attribute(W.author));
+        var insertion = Assert.Single(hyperlink.Elements(W.ins));
+        Assert.Equal("Hamburg.", Assert.Single(insertion.Descendants(W.delText)).Value);
+        Assert.NotNull(Assert.Single(insertion.Descendants(W.r)).Element(W.rPr)?.Element(W.b));
+        AssertSchemaValid(tracked);
+    }
+
+    [Fact]
+    public void ReplaceText_Tracked_PreservesInterleavedNoteReferenceOnAcceptAndReject()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS140_FootnoteFixture(),
+            new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline });
+        var anchor = session.Project().AnchorIndex.Values
+            .Single(a => a.Anchor.Kind == "p" && a.Anchor.Scope == "body").Anchor.Id;
+        Assert.True(session.ReplaceText(anchor, "Replacement.").Success);
+        var tracked = new WmlDocument("notes.docx", session.Save());
+
+        foreach (var accept in new[] { true, false })
+        {
+            var resolved = accept ? RevisionProcessor.AcceptRevisions(tracked)
+                : RevisionProcessor.RejectRevisions(tracked);
+            var paragraph = MainRoot(resolved.DocumentByteArray).Descendants(W.p).Single();
+            var textWithReference = string.Concat(paragraph.Descendants()
+                .Where(e => e.Name == W.t || e.Name == W.footnoteReference)
+                .Select(e => e.Name == W.footnoteReference ? "[note]" : e.Value));
+            Assert.Equal(accept ? "[note]Replacement." : "Main text[note] continued.", textWithReference);
+        }
     }
 
     [Fact]

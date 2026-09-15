@@ -407,7 +407,7 @@ Two conventions worth pinning down because they affect agent reasoning:
 - **`SplitParagraph` keeps the original Unid on the first half.** Reason: external systems (LLM context windows, search indices) bias toward the pre-split anchor position; keeping the prefix-half stable minimizes invalidation downstream.
 - **`MergeParagraphs` lets the first anchor absorb the second.** Symmetric reason: the first anchor is to the left in reading order and is more likely to be the one a caller has cached.
 
-**Tracked-change mode shifts the semantics for `ReplaceText` and block deletion (`DeleteBlock`, `DeleteRange`, and `DeleteSection`).** When `Settings.TrackedChanges = RenderInline`, supported deletions don't remove elements — they wrap old runs in `w:del` and new content in `w:ins`. So the affected anchor stays live and appears in `Modified` instead of `Removed`. The agent's view of the world doesn't have to change; the `EditResult` shape is unchanged. The mode is switchable mid-session — see "Switching tracked-changes mode mid-session" below.
+**Tracked-change mode shifts the semantics for `ReplaceText` and block deletion (`DeleteBlock`, `DeleteRange`, and `DeleteSection`).** When `Settings.TrackedChanges = RenderInline`, supported deletions don't remove elements — they wrap old runs in `w:del` and new content in `w:ins`. `ReplaceText` deletes each live run where it sits — inside hyperlinks, fields, inline controls and other authors' insertions (`w:ins > w:del`, so the deletion rejects on its own) — un-inserts the session author's own pending runs, keeps zero-width markers (bookmark/comment ranges, note and comment reference runs) in place, and inserts the replacement after the last superseded run, ahead of any trailing markers. So the affected anchor stays live and appears in `Modified` instead of `Removed`. The agent's view of the world doesn't have to change; the `EditResult` shape is unchanged. The mode is switchable mid-session — see "Switching tracked-changes mode mid-session" below.
 
 Structural tracking is deliberately capability-gated. Row insertion/deletion and column
 insertion emit native Word row/cell/property revisions; single-paragraph list application,
@@ -670,7 +670,10 @@ own envelope. The one shape still refused before mutation — with
 run-level `w:customXml` inside a selected paragraph, whose wrapper deletion is not
 supported. An empty `w:fldSimple` (no result run) and a `w:subDoc` reference are refused
 the same way: neither can sit inside a `w:del`. Block custom XML inside a text box is
-distinct and does not trigger that refusal.
+distinct and does not trigger that refusal, and neither does any of these shapes when it
+rides inside a text box anchored in the paragraph, whose anchoring run is deleted whole.
+Tracked `ReplaceText` applies the same refusal, with the same code and the same unchanged
+document, to the paragraph it would replace.
 Accepted-mode bulk deletion is unchanged.
 
 ### `DeleteSection` — heading-bounded bulk removal

@@ -988,6 +988,50 @@ single author; the leak when the flag is off.
 
 ---
 
+## Tracked changes: superseding pending text nests `w:ins > w:del`, and an author's own text just disappears
+
+### Symptom
+
+Two tracked whole-paragraph replacements in a row (author A, then author B) accepted to the
+concatenation of both proposals (issue #786): the first replacement's `w:ins` was left live
+beside the second one's `w:del` of the original text.
+
+### What Word writes
+
+When B deletes text that A inserted and nobody has accepted yet, Word does not remove A's
+insertion and does not wrap it: it records B's deletion *inside* A's insertion, converting the
+text to its deleted spelling:
+
+```xml
+<w:ins w:author="A"><w:del w:author="B"><w:r><w:delText>Hamburg</w:delText></w:r></w:del></w:ins>
+<w:ins w:author="B"><w:r><w:t>Köln</w:t></w:r></w:ins>
+```
+
+Accepting everything keeps only `Köln`; rejecting everything restores the original; rejecting
+only B's deletion brings `Hamburg` back as A's pending insertion. When B deletes text that **B**
+inserted, Word writes nothing at all — the text simply disappears, envelope and all — because a
+pending insertion its own author withdraws has no reviewable state left. The same holds for a
+whole paragraph B inserted and then deleted: it is gone, not marked.
+
+A deleted hyperlink keeps its shell and carries the deletion inside it (`w:hyperlink > w:del >
+w:r`); an inserted one carries the insertion the same way. `CT_RunTrackChange` does not admit
+`w:hyperlink` as a child, so `w:ins > w:hyperlink` fails schema validation.
+
+| Engine | B replaces A's pending text | B replaces B's pending text |
+|---|---|---|
+| Word | `w:ins(A) > w:del(B)`; accept keeps only the latest | text removed outright |
+| Docxodus before #786 | A's `w:ins` left live beside B's `w:del` of the original | same |
+| Docxodus | matches Word | matches Word |
+
+### Docxodus code
+
+`DocxSession.DeleteInlineElementInPlace` is the single owner of the in-place deletion policy
+(`ReplaceText`, `DeleteBlock`/`DeleteRange`/`DeleteSection`, content-control fills); the
+stateless `RevisionProcessor` reverses `w:del` only under `w:p`, `w:hyperlink`, `w:fldSimple`,
+`w:dir` and `w:bdo` (looking through `w:sdt`/`w:sdtContent`/`w:smartTag`), which is why
+deletions are written per run inside their carriers and never as `w:del > w:sdt` or under
+`w:customXml`.
+
 ## Office Math: revision wrappers nested inside `m:r` are invalid, and Docxodus preserves them
 
 **Status:** Deliberate — not repaired (decided 2026-09-02, issue #642)

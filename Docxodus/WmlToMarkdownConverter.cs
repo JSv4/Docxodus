@@ -1042,24 +1042,27 @@ public static class WmlToMarkdownConverter
                     break;
             }
 
+            var (revisionOpen, revisionClose) = ctx.Settings.TrackedChanges == TrackedChangeMode.RenderInline
+                ? fmt.Revision switch
+                {
+                    Revision.Inserted => ("{+", "+}"),
+                    Revision.Deleted => ("{-", "-}"),
+                    _ => (string.Empty, string.Empty),
+                }
+                : (string.Empty, string.Empty);
+
             if (fmt.HyperlinkUrl != null)
             {
-                ctx.Sb.Append('[');
+                ctx.Sb.Append(revisionOpen).Append('[');
                 foreach (var r in runs) AppendRunText(r, ctx);
-                ctx.Sb.Append("](").Append(fmt.HyperlinkUrl).Append(')');
+                ctx.Sb.Append("](").Append(fmt.HyperlinkUrl).Append(')').Append(revisionClose);
                 continue;
             }
 
             var (open, close) = MarkdownDelimiters(fmt);
-            if (ctx.Settings.TrackedChanges == TrackedChangeMode.RenderInline)
-            {
-                if (fmt.Revision == Revision.Inserted) { open = "{+" + open; close += "+}"; }
-                else if (fmt.Revision == Revision.Deleted) { open = "{-" + open; close += "-}"; }
-            }
-
-            ctx.Sb.Append(open);
+            ctx.Sb.Append(revisionOpen).Append(open);
             foreach (var r in runs) AppendRunText(r, ctx);
-            ctx.Sb.Append(close);
+            ctx.Sb.Append(close).Append(revisionClose);
         }
     }
 
@@ -1105,50 +1108,52 @@ public static class WmlToMarkdownConverter
             primed = true;
         }
 
-        foreach (var child in p.Elements())
+        // Runs nest inside hyperlinks, fields and revision envelopes in any combination —
+        // Word writes w:hyperlink > w:del > w:r for a deleted link and w:ins > w:del > w:r
+        // for an insertion another author later deleted — so the walk carries the enclosing
+        // link and revision state down instead of reading one level. Content deleted inside
+        // an insertion is deleted: gone from the accepted view and struck through inline. A
+        // move reads as its two halves: the source is deleted text, the destination inserted.
+        // Inside an envelope a run's own descendants — a text box anchored in it — contribute
+        // their runs too, as the flat text that span operations address counts them.
+        // A simple field's cached-result runs are what a reader sees — the HTML converter
+        // renders them and the flat text the span machinery addresses includes them, so
+        // dropping them left a hole in the projection an agent reads (issue #559: a
+        // Word-authored REF/STYLEREF/SEQ field contributed nothing to the markdown). They
+        // project as ordinary text; the field itself stays atomic for mutation addressing,
+        // exactly like a hyperlink wrapper. Inline w:sdt/w:smartTag carriers deliberately
+        // stay projected-out at paragraph level — their runs remain in the flat text but not
+        // the rendered markdown — while a carrier inside an envelope keeps contributing.
+        void Walk(XElement container, string? url, Revision revision, bool nested)
         {
-            if (child.Name == W.r)
+            foreach (var child in container.Elements())
             {
-                Add(child, ReadRunFormatting(child, hyperlinkUrl: null, revision: Revision.None));
-            }
-            else if (child.Name == W.hyperlink)
-            {
-                var url = ResolveHyperlinkUrl(child);
-                Flush();
-                foreach (var r in child.Elements(W.r))
-                    Add(r, ReadRunFormatting(r, hyperlinkUrl: url, revision: Revision.None));
-                Flush();
-            }
-            else if (child.Name == W.ins)
-            {
-                Flush();
-                foreach (var r in child.Descendants(W.r))
-                    Add(r, ReadRunFormatting(r, hyperlinkUrl: null, revision: Revision.Inserted));
-                Flush();
-            }
-            else if (child.Name == W.del)
-            {
-                Flush();
-                foreach (var r in child.Descendants(W.r))
-                    Add(r, ReadRunFormatting(r, hyperlinkUrl: null, revision: Revision.Deleted));
-                Flush();
-            }
-            else if (child.Name == W.fldSimple)
-            {
-                // A simple field's cached-result runs are what a reader sees — the HTML
-                // converter renders them and the flat text the span machinery addresses
-                // includes them, so dropping them here left a hole in the projection an agent
-                // reads (issue #559: a Word-authored REF/STYLEREF/SEQ field contributed
-                // nothing to the markdown). Project the runs as ordinary text; the field
-                // itself stays atomic for mutation addressing, exactly like a hyperlink
-                // wrapper. Inline w:sdt/w:smartTag carriers deliberately stay projected-out —
-                // their runs remain in the flat text but not the rendered markdown.
-                Flush();
-                foreach (var r in child.Descendants(W.r))
-                    Add(r, ReadRunFormatting(r, hyperlinkUrl: null, revision: Revision.None));
-                Flush();
+                if (child.Name == W.r)
+                {
+                    Add(child, ReadRunFormatting(child, url, revision));
+                    if (nested && child.HasElements) Walk(child, url, revision, nested: true);
+                }
+                else if (child.Name == W.hyperlink)
+                    Enclosed(child, ResolveHyperlinkUrl(child) ?? url, revision);
+                else if (child.Name == W.ins || child.Name == W.moveTo)
+                    Enclosed(child, url, revision == Revision.Deleted ? Revision.Deleted : Revision.Inserted);
+                else if (child.Name == W.del || child.Name == W.moveFrom)
+                    Enclosed(child, url, Revision.Deleted);
+                else if (child.Name == W.fldSimple)
+                    Enclosed(child, url, revision);
+                else if (nested && child.HasElements)
+                    Walk(child, url, revision, nested: true);
             }
         }
+
+        void Enclosed(XElement container, string? url, Revision revision)
+        {
+            Flush();
+            Walk(container, url, revision, nested: true);
+            Flush();
+        }
+
+        Walk(p, url: null, Revision.None, nested: false);
         Flush();
         return groups;
     }
