@@ -443,6 +443,33 @@ test.describe("Docxodus Web Worker Tests", () => {
 
       console.log(`Extracted ${result.revisions.length} revisions`);
     }, { timeout: 60000 });
+
+    test("getComments reads a document's comments without a session", async ({ page }) => {
+      const withComments = readTestFile("DD/DD002-DenseComments.docx");
+      const withoutComments = readTestFile("WC/WC001-Digits.docx");
+
+      const [dense, empty] = await page.evaluate(async ([a, b]) => {
+        await (window as any).createDocxodusWorker();
+        const t = (window as any).DocxodusWorkerTests;
+        return [await t.getComments(a), await t.getComments(b)];
+      }, [Array.from(withComments), Array.from(withoutComments)]);
+
+      expect(dense.error).toBeUndefined();
+      // Same wire shape as session.listComments(): anchor-addressed, comments-part order.
+      expect(dense.comments).toHaveLength(10);
+      expect(dense.comments[0]).toMatchObject({ id: 0, author: "Alice", initials: "A" });
+      // Threading and resolution ride along: comment 7 replies to comment 6, none are done.
+      expect(dense.comments[7]).toMatchObject({
+        author: "Heidi", parentAnchorId: dense.comments[6].anchorId, resolved: false,
+      });
+      for (const c of dense.comments) {
+        expect(c.anchorId).toMatch(/^cmt:cmt:/);
+        expect(c.text.length).toBeGreaterThan(0);
+      }
+
+      expect(empty.error).toBeUndefined();
+      expect(empty.comments).toEqual([]);
+    }, { timeout: 60000 });
   });
 
   test.describe("Error Handling", () => {

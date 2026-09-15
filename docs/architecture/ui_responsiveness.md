@@ -52,6 +52,7 @@ This guarantees that any pending DOM updates (like showing a loading spinner) ar
 - `compareDocuments()` - Document comparison
 - `compareDocumentsToHtml()` - Comparison + conversion
 - `getRevisions()` - Revision extraction
+- `getComments()` - Comment extraction
 - `addAnnotation()` - Document modification
 - `addAnnotationWithTarget()` - Document modification
 - `getDocumentStructure()` - Structure analysis
@@ -253,6 +254,7 @@ test.describe('Docxodus Web Worker Tests', () => {
   test('compareDocuments produces valid redlined document');
   test('compareDocumentsToHtml produces HTML with tracked changes');
   test('getRevisions extracts revisions from compared document');
+  test("getComments reads a document's comments without a session");
 
   // Error handling
   test('handles invalid document gracefully');

@@ -41,6 +41,7 @@ import type {
   ExternalAnnotationProjectionSettings,
   OpenContractDocExport,
   WorkerGetRevisionsResponse,
+  WorkerGetCommentsResponse,
   WorkerGetDocumentMetadataResponse,
   WorkerGetVersionResponse,
   WorkerPrepareResponse,
@@ -54,6 +55,7 @@ import type {
   CompareOptions,
   DocxDiffSettings,
   RevisionListEntry,
+  CommentListEntry,
   VersionInfo,
   DocumentMetadata,
   DocxSessionSettings,
@@ -335,6 +337,15 @@ export interface WorkerDocxodus {
    * @returns Array of revisions
    */
   getRevisions(document: File | Uint8Array): Promise<RevisionListEntry[]>;
+
+  /**
+   * Read a document's native Word comments — the comment twin of {@link getRevisions}.
+   * Same entries as `session.listComments()` without a session, so a read-only viewer
+   * needs no main-thread runtime to show comment threads.
+   * @param document - DOCX file as File object or Uint8Array
+   * @returns Array of comments in comments-part order (empty when there are none)
+   */
+  getComments(document: File | Uint8Array): Promise<CommentListEntry[]>;
 
   /**
    * Get document metadata for lazy loading pagination.
@@ -831,6 +842,15 @@ export async function createWorkerDocxodus(
         [bytes.buffer]
       );
       return response.revisions!;
+    },
+
+    async getComments(document: File | Uint8Array): Promise<CommentListEntry[]> {
+      const bytes = await toBytes(document);
+      const response = await sendRequest<WorkerGetCommentsResponse>(
+        { id: generateId(), type: "getComments", documentBytes: bytes },
+        [bytes.buffer]
+      );
+      return response.comments!;
     },
 
     async getDocumentMetadata(

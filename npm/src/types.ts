@@ -1616,6 +1616,7 @@ export interface DocxodusWasmExports {
       caseInsensitive: boolean
     ) => Uint8Array;
     GetRevisionsJson: (comparedDocBytes: Uint8Array) => string;
+    GetCommentsJson: (docBytes: Uint8Array) => string;
   };
   DocxDiffBridge: {
     /** Redlined DOCX bytes (native markup), or empty array on error. */
@@ -4409,6 +4410,7 @@ export type WorkerRequestType =
   | "convertDocxToHtmlWithExternalAnnotations"
   | "exportToOpenContract"
   | "getRevisions"
+  | "getComments"
   | "getDocumentMetadata"
   | "getVersion"
   | "prepare"
@@ -4577,6 +4579,15 @@ export interface WorkerGetRevisionsRequest extends WorkerRequestBase {
 }
 
 /**
+ * Get comments from a document request.
+ */
+export interface WorkerGetCommentsRequest extends WorkerRequestBase {
+  type: "getComments";
+  /** Document bytes */
+  documentBytes: Uint8Array;
+}
+
+/**
  * Get document metadata for lazy loading request.
  */
 export interface WorkerGetDocumentMetadataRequest extends WorkerRequestBase {
@@ -4702,6 +4713,7 @@ export type WorkerRequest =
   | WorkerConvertWithExternalAnnotationsRequest
   | WorkerExportToOpenContractRequest
   | WorkerGetRevisionsRequest
+  | WorkerGetCommentsRequest
   | WorkerGetDocumentMetadataRequest
   | WorkerGetVersionRequest
   | WorkerPrepareRequest
@@ -4832,6 +4844,15 @@ export interface WorkerGetRevisionsResponse extends WorkerResponseBase {
 }
 
 /**
+ * Response from getComments request.
+ */
+export interface WorkerGetCommentsResponse extends WorkerResponseBase {
+  type: "getComments";
+  /** Array of comments */
+  comments?: CommentListEntry[];
+}
+
+/**
  * Response from getDocumentMetadata request.
  */
 export interface WorkerGetDocumentMetadataResponse extends WorkerResponseBase {
@@ -4922,6 +4943,7 @@ export type WorkerResponse =
   | WorkerConvertWithExternalAnnotationsResponse
   | WorkerExportToOpenContractResponse
   | WorkerGetRevisionsResponse
+  | WorkerGetCommentsResponse
   | WorkerGetDocumentMetadataResponse
   | WorkerGetVersionResponse
   | WorkerPrepareResponse

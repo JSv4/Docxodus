@@ -31,6 +31,7 @@ import type {
   ExternalAnnotationValidationResult,
   OpenContractDocExport,
   WorkerGetRevisionsRequest,
+  WorkerGetCommentsRequest,
   WorkerGetDocumentMetadataRequest,
   WorkerSessionOpenRequest,
   WorkerSessionGetPackageManifestRequest,
@@ -45,6 +46,7 @@ import type {
   ConversionOptions,
   CompareOptions,
   RevisionListEntry,
+  CommentListEntry,
   RevisionType,
   DocumentMetadata,
   SectionMetadata,
@@ -549,6 +551,25 @@ function handleGetRevisions(
     const revisions = JSON.parse(result) as RevisionListEntry[];
 
     return { revisions };
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
+/**
+ * Handle getComments request.
+ */
+function handleGetComments(
+  request: WorkerGetCommentsRequest
+): { comments?: CommentListEntry[]; error?: string } {
+  const exports = ensureInitialized();
+  try {
+    const result = exports.DocumentComparer.GetCommentsJson(request.documentBytes);
+    if (isErrorResponse(result)) {
+      return parseError(result);
+    }
+    // The payload is the session's own comment wire shape, so it needs no remapping.
+    return { comments: JSON.parse(result) as CommentListEntry[] };
   } catch (error) {
     return { error: String(error) };
   }
@@ -1060,6 +1081,18 @@ self.addEventListener("message", async (event: MessageEvent<WorkerRequest>) => {
           type: "getRevisions",
           success: !result.error,
           revisions: result.revisions,
+          error: result.error,
+        };
+        break;
+      }
+
+      case "getComments": {
+        const result = handleGetComments(request as WorkerGetCommentsRequest);
+        response = {
+          id: request.id,
+          type: "getComments",
+          success: !result.error,
+          comments: result.comments,
           error: result.error,
         };
         break;
