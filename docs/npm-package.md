@@ -343,6 +343,13 @@ const revisions = await getRevisions(comparedDoc, { detectMoves: false });
 
 The annotation system allows you to add, remove, and render custom highlights and labels on DOCX documents. Annotations are stored non-destructively in the document and can be rendered in HTML output.
 
+#### `getComments(document): Promise<CommentListEntry[]>`
+
+Read a document's native Word comments without opening a session — the comment twin of
+`getRevisions()`. Returns the same entries as `session.listComments()` (anchor, id, author,
+text, threading, resolved state) in comments-part order. Also available on the worker proxy as
+`docxodus.getComments(document)`, so a read-only reviewing viewer needs no main-thread runtime.
+
 #### `getAnnotations(document): Promise<Annotation[]>`
 
 Get all annotations from a document.

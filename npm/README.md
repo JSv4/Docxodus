@@ -593,6 +593,7 @@ const docxodus = await createWorkerDocxodus({ wasmBasePath: '/wasm/' });
 const html = await docxodus.convertDocxToHtml(docxFile, options);
 const redlined = await docxodus.compareDocuments(original, modified, options);
 const revisions = await docxodus.getRevisions(docxFile);
+const comments = await docxodus.getComments(docxFile);
 const metadata = await docxodus.getDocumentMetadata(docxFile);
 
 // The external annotation family runs there too, so a read-only viewer that renders

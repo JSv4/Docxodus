@@ -3,6 +3,7 @@ import type {
   ConversionOptions,
   CompareOptions,
   RevisionListEntry,
+  CommentListEntry,
   RevisionRepairKind,
   RevisionRepairProposal,
   RevisionRepairRequest,
@@ -1104,6 +1105,28 @@ export async function getRevisions(
 
   // The payload is the session's own revision wire shape, so it needs no remapping.
   return JSON.parse(result) as RevisionListEntry[];
+}
+
+/**
+ * Read a document's native Word comments without opening a session — the comment
+ * twin of {@link getRevisions}. Same entries as `session.listComments()`, in
+ * comments-part order; empty when the document has no comments part.
+ *
+ * @param document - DOCX file as File object or Uint8Array
+ * @throws Error if operation fails
+ */
+export async function getComments(
+  document: File | Uint8Array
+): Promise<CommentListEntry[]> {
+  const exports = ensureInitialized();
+  const bytes = await toBytes(document);
+  await yieldToMain();
+
+  const result = exports.DocumentComparer.GetCommentsJson(bytes);
+  if (isErrorResponse(result)) {
+    throw new Error(`Failed to get comments: ${parseError(result).error}`);
+  }
+  return JSON.parse(result) as CommentListEntry[];
 }
 
 // ─── DocxDiff (IR diff engine) ──────────────────────────────────────────────

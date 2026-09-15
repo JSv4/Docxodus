@@ -103,6 +103,19 @@
                 }
             },
 
+            // Get comments using worker
+            getComments: async function(docxBytes) {
+                if (!window.DocxodusWorker) {
+                    return { error: { message: 'Worker not initialized' } };
+                }
+                try {
+                    const comments = await window.DocxodusWorker.getComments(new Uint8Array(docxBytes));
+                    return { comments };
+                } catch (error) {
+                    return { error: { message: error.message } };
+                }
+            },
+
             // Get version using worker
             getVersion: async function() {
                 if (!window.DocxodusWorker) {

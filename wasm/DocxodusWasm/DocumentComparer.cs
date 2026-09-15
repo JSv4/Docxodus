@@ -213,6 +213,34 @@ public partial class DocumentComparer
     }
 
     /// <summary>
+    /// Read the native Word comments already present in a document, as JSON — the comment
+    /// twin of <see cref="GetRevisionsJson"/>. The payload is
+    /// <see cref="DocxSessionJson.SerializeCommentList"/> verbatim, the same wire shape the
+    /// session's own <c>listComments</c> returns, so a read-only viewer gets comment threads
+    /// without opening a session (issue #790).
+    /// </summary>
+    /// <param name="docBytes">A document that may carry comments</param>
+    /// <returns>JSON array of comments (empty when there is no comments part), or JSON error object</returns>
+    [JSExport]
+    public static string GetCommentsJson(byte[] docBytes)
+    {
+        if (docBytes == null || docBytes.Length == 0)
+        {
+            return DocumentConverter.SerializeError("No document data provided");
+        }
+
+        try
+        {
+            using var session = new DocxSession(docBytes);
+            return DocxSessionJson.SerializeCommentList(session.ListComments());
+        }
+        catch (Exception ex)
+        {
+            return DocumentConverter.SerializeError(ex.Message, ex.GetType().Name);
+        }
+    }
+
+    /// <summary>
     /// Compare two DOCX documents and return the result as HTML with full options.
     /// Supports the comparison settings that survive (caseInsensitive) plus HTML rendering options.
     /// </summary>

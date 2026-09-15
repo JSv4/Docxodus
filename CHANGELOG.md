@@ -6,6 +6,11 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Document-level comment reading on the worker proxy (issue #790): `WorkerDocxodus.getComments(document)`
+  and its main-thread twin `getComments` from `docxodus/core` return the same
+  `CommentListEntry[]` as `session.listComments()` without opening a session, mirroring
+  `getRevisions`. A read-only reviewing viewer (`convertDocxToHtml` + `getRevisions` +
+  `getComments`) now needs no main-thread runtime.
 - Atomic text replacement with typing formatting (issue #788): npm's
   `session.replaceMatch(match, text, format)` and .NET's `ReplaceTextAtSpanWithFormat`
   return one ordinary edit result and preserve one undo/version unit, including failure

@@ -52,6 +52,7 @@ This guarantees that any pending DOM updates (like showing a loading spinner) ar
 - `compareDocuments()` - Document comparison
 - `compareDocumentsToHtml()` - Comparison + conversion
 - `getRevisions()` - Revision extraction
+- `getComments()` - Comment extraction
 - `addAnnotation()` - Document modification
 - `addAnnotationWithTarget()` - Document modification
 - `getDocumentStructure()` - Structure analysis
