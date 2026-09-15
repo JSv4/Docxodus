@@ -22,7 +22,7 @@ namespace Docxodus.Tests;
 /// on a <c>p:cmt</c> paragraph); removal through <see cref="DocxSession.RemoveComment"/> /
 /// <see cref="DocxSession.DeleteBlock"/>. Replies use Word's reference-only child shape plus
 /// <c>commentsExtended.xml</c>; resolve/reopen state is carried by <c>w15:done</c>. Test IDs use
-/// DS34x/DS35x/DS36x (DS346+) for base comments and DS400–DS404 for threading/state.
+/// DS34x/DS35x/DS36x (DS346+) for base comments and DS400–DS405 for threading/state.
 /// </summary>
 public class DocxSessionCommentAuthoringTests
 {
@@ -914,6 +914,44 @@ public class DocxSessionCommentAuthoringTests
         var resolve = session.SetCommentResolved(host, true);
         Assert.False(resolve.Success);
         Assert.Equal(EditErrorCode.AnchorWrongKind, resolve.Error!.Code);
+    }
+
+    /// <summary>
+    /// Issue #792: commenting a paragraph and then replacing its text under
+    /// <see cref="TrackedChangeMode.RenderInline"/> left the <c>w:commentReference</c> run inside
+    /// the deletion envelope, so accepting the edit orphaned the range (a package the deliverable
+    /// gate blocks) and a reply placed beside the reference went with it.
+    /// </summary>
+    [Theory]
+    [InlineData("session")]
+    [InlineData("stateless")]
+    public void DS405_TrackedReplaceOfCommentedParagraph_KeepsTheThreadOnAccept(string accepter)
+    {
+        using var session = new DocxSession(BuildSingleParagraphDoc("Gerichtsstand ist Berlin."),
+            new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline, RevisionAuthor = "A" });
+        var paragraph = FirstBodyParagraph(session);
+        Assert.True(session.AddComment(paragraph, null, "A", "Warum?").Success);
+        Assert.True(session.ReplaceText(paragraph, "Gerichtsstand ist Hamburg.").Success);
+        var reply = session.AddCommentReply(session.ListComments().Single().DefAnchorId, "B", "Weil.");
+        Assert.True(reply.Success, reply.Error?.Message);
+
+        byte[] accepted;
+        if (accepter == "session")
+        {
+            Assert.True(session.AcceptAllRevisions().Success);
+            accepted = session.Save();
+        }
+        else
+        {
+            accepted = RevisionProcessor.AcceptRevisions(new WmlDocument("x.docx", session.Save())).DocumentByteArray;
+        }
+
+        var body = BodyXml(accepted);
+        Assert.Equal("Gerichtsstand ist Hamburg.", string.Concat(body.Descendants(W + "t").Select(t => t.Value)));
+        Assert.Single(body.Descendants(W + "commentRangeStart"));
+        Assert.Single(body.Descendants(W + "commentRangeEnd"));
+        Assert.Equal(2, body.Descendants(W + "commentReference").Count());
+        Assert.Empty(Docxodus.Verification.DeliverableVerifier.VerifyDeliverable(accepted).Findings);
     }
 
     [Fact]
