@@ -54,6 +54,12 @@ All notable changes to this project will be documented in this file.
   empties the paragraph instead of throwing. Because each live span is deleted separately,
   one replacement lists one deletion per span between existing revisions rather than a single
   envelope.
+- A comment's `w:commentReference` mark survives a tracked whole-paragraph `ReplaceText` on
+  accept (issue #792). In 12.5.0 the reference run went inside the deletion envelope, so
+  accepting a commented-then-edited clause left a comment range with no reference — a package
+  `VerifyDeliverable` blocks — and a reply attached beside that reference was unreachable.
+  The marker rule above keeps the reference where it sits; `DS405` pins the reported
+  sequence (comment, tracked replace, reply, accept) through the deliverable gate.
 - The markdown projection treats text deleted inside an insertion as deleted, projects
   revised hyperlink runs and move sources and destinations as revisions, and keeps a text
   box's runs inside a revision envelope in step with the flat text; `ListRevisions` reports
