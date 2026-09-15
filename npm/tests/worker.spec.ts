@@ -458,6 +458,10 @@ test.describe("Docxodus Web Worker Tests", () => {
       // Same wire shape as session.listComments(): anchor-addressed, comments-part order.
       expect(dense.comments).toHaveLength(10);
       expect(dense.comments[0]).toMatchObject({ id: 0, author: "Alice", initials: "A" });
+      // Threading and resolution ride along: comment 7 replies to comment 6, none are done.
+      expect(dense.comments[7]).toMatchObject({
+        author: "Heidi", parentAnchorId: dense.comments[6].anchorId, resolved: false,
+      });
       for (const c of dense.comments) {
         expect(c.anchorId).toMatch(/^cmt:cmt:/);
         expect(c.text.length).toBeGreaterThan(0);

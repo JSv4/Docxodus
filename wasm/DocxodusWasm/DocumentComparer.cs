@@ -11,6 +11,11 @@ namespace DocxodusWasm;
 /// JSExport methods for DOCX document comparison (redlining).
 /// These methods are callable from JavaScript.
 ///
+/// <para>Also hosts the two single-document review-markup readers, <see cref="GetRevisionsJson"/>
+/// and <see cref="GetCommentsJson"/>, which read what a comparison produces and share
+/// <see cref="OpenForRead"/>. Neither runs a comparison, so the warm-up invariant below does not
+/// apply to them.</para>
+///
 /// <para><b>Invariant.</b> Every export here that runs a comparison calls
 /// <see cref="ComparisonEngine.EnsureWarm"/> first; a new one must too. See that class for why
 /// the browser cannot be left to discover the engine's cold path on a real document.</para>
@@ -178,6 +183,18 @@ public partial class DocumentComparer
     }
 
     /// <summary>
+    /// A throwaway session for a one-shot read. The default settings serve an editing session
+    /// and would price a document-level read at a whole-document markdown projection that the
+    /// read never consults; the read-only preset skips it.
+    /// </summary>
+    private static DocxSession OpenForRead(byte[] docxBytes) =>
+        new(docxBytes, new DocxSessionSettings
+        {
+            CaptureInitialProjection = false,
+            EmitMarkdownPatch = false,
+        });
+
+    /// <summary>
     /// Read the tracked revisions already present in a document, as JSON.
     ///
     /// <para>Through v10 this re-derived moves by running the legacy comparer's move detection over the
@@ -203,7 +220,7 @@ public partial class DocumentComparer
 
         try
         {
-            using var session = new DocxSession(comparedDocBytes);
+            using var session = OpenForRead(comparedDocBytes);
             return DocxSessionJson.SerializeRevisionList(session.ListRevisions());
         }
         catch (Exception ex)
@@ -231,7 +248,7 @@ public partial class DocumentComparer
 
         try
         {
-            using var session = new DocxSession(docBytes);
+            using var session = OpenForRead(docBytes);
             return DocxSessionJson.SerializeCommentList(session.ListComments());
         }
         catch (Exception ex)

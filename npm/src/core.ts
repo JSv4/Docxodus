@@ -1063,29 +1063,13 @@ export async function compareDocumentsToHtml(
 
 
 /**
- * Get revisions from a compared document.
+ * Read the tracked revisions already present in a document without opening a session.
+ * Same entries as `session.listRevisions()`; moves come from the document's own
+ * `w:moveFrom`/`w:moveTo` markup, so there are no detection options.
  *
- * @param document - A document that has been through comparison (has tracked changes)
- * @param options - Optional move detection configuration
+ * @param document - A document carrying tracked changes
  * @returns Array of revisions
  * @throws Error if operation fails
- *
- * @example
- * ```typescript
- * // Default settings (move detection enabled, 80% threshold)
- * const revisions = await getRevisions(comparedDoc);
- *
- * // Custom move detection settings
- * const revisions = await getRevisions(comparedDoc, {
- *   detectMoves: true,
- *   moveSimilarityThreshold: 0.9,  // Require 90% word overlap
- *   moveMinimumWordCount: 5,       // Only consider phrases of 5+ words
- *   caseInsensitive: true          // Ignore case when matching
- * });
- *
- * // Disable move detection entirely
- * const revisions = await getRevisions(comparedDoc, { detectMoves: false });
- * ```
  */
 export async function getRevisions(
   document: File | Uint8Array

@@ -254,6 +254,7 @@ test.describe('Docxodus Web Worker Tests', () => {
   test('compareDocuments produces valid redlined document');
   test('compareDocumentsToHtml produces HTML with tracked changes');
   test('getRevisions extracts revisions from compared document');
+  test("getComments reads a document's comments without a session");
 
   // Error handling
   test('handles invalid document gracefully');
