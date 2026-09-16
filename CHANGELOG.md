@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [12.6.1] - 2026-09-15
+
 ### Fixed
 
 - Atomic formatted insertion now accepts a caret inside an ordinary text run (issue #799).
