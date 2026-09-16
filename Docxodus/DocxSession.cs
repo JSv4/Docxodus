@@ -6112,8 +6112,8 @@ public sealed partial class DocxSession : IDisposable
     /// where Word's next field update would discard them. The new run copies the formatting of
     /// the run it follows (or precedes, at offset 0), minus any revision marker, and lands
     /// OUTSIDE any field whose chrome surrounds the boundary — after the field's <c>end</c> run,
-    /// or before its <c>begin</c>. Interior insertion is limited to plain text runs directly in
-    /// the paragraph, outside fields, and must not split a UTF-16 surrogate pair.
+    /// or before its <c>begin</c>. Interior insertion accepts text runs with optional leading tabs
+    /// directly in the paragraph, outside fields, and must not split a UTF-16 surrogate pair.
     /// </summary>
     private EditResult InsertTextAtBoundary(
         AnchorTarget target, XElement element, Internal.RunTextMap.Map map, int offset, string replace)
@@ -6135,11 +6135,11 @@ public sealed partial class DocxSession : IDisposable
             if (seg.StartOffsetInBlock == offset) { before = seg.Run; break; }
             if (seg.StartOffsetInBlock < offset && offset < seg.EndOffsetInBlock)
             {
-                if (!IsPlainTextRun(seg.Run) || !ReferenceEquals(seg.Run.Parent, element)
+                if (!CanSplitTextRun(seg.Run) || !ReferenceEquals(seg.Run.Parent, element)
                     || IsInsideComplexField(seg.Run)
                     || char.IsSurrogatePair(map.FlatText, offset - 1))
                     return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
-                        "interior insertion requires an ordinary character boundary in a plain text run outside fields and inline containers", anchorId);
+                        "interior insertion requires an ordinary character boundary in a text run with only optional leading tabs, outside fields and inline containers", anchorId);
                 after = seg.Run;
                 splitRun = true;
                 break;
@@ -6273,6 +6273,13 @@ public sealed partial class DocxSession : IDisposable
         run.Name == W.r
         && run.Elements().All(e => e.Name == W.rPr || e.Name == W.t)
         && run.Elements(W.t).Any();
+
+    // SplitRunsAtOffset keeps non-text children on the prefix, ahead of its text.
+    // Leading tabs are safe there; a tab after text or other run content could move.
+    private static bool CanSplitTextRun(XElement run) =>
+        run.Name == W.r && run.Elements(W.t).Any()
+        && run.Elements().Where(e => e.Name != W.rPr)
+            .SkipWhile(e => e.Name == W.tab).All(e => e.Name == W.t);
 
     // Complex fields can cross paragraphs. Text boxes, notes and comments have separate stories.
     private static bool IsInsideComplexField(XElement run)

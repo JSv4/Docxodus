@@ -49,13 +49,16 @@ test.describe('DocxSession atomic batches (#445)', () => {
     expect(result.markdown).toBe(true);
   });
 
+  const bodyTarget = { scope: 'body', prefix: 'The Certificate of Incorporation', needle: 'document' };
   for (const scenario of [
-    { name: 'replacement', offset: 0, length: 8, replacement: 'new document' },
-    { name: 'interior insertion', offset: 4, length: 0, replacement: ' inserted ' },
+    { ...bodyTarget, name: 'replacement', offset: 0, length: 8, replacement: 'new document' },
+    { ...bodyTarget, name: 'interior insertion', offset: 4, length: 0, replacement: ' inserted ' },
+    { name: 'footnote tab/text insertion', scope: 'fn', prefix: 'Consider adding other exceptions',
+      needle: 'Consider', offset: 24, length: 0, replacement: ' inserted ' },
   ]) {
     test(`NVCA ${scenario.name} with Bold is atomic without package checkpoint/hash calls`, async ({ page }) => {
       const nvca = fs.readFileSync(path.join(__dirname, '../../TestFiles/NVCA-Model-COI.docx'));
-      const result = await page.evaluate(({ bytes, offset, length, replacement }) => {
+      const result = await page.evaluate(({ bytes, scope, prefix, needle, offset, length, replacement }) => {
         const api = (window as any).Docxodus;
         const session = api.openTypedSession(new Uint8Array(bytes), JSON.stringify({
           emitMarkdownPatch: false, persistAnchorIds: true,
@@ -68,18 +71,22 @@ test.describe('DocxSession atomic batches (#445)', () => {
         bridge.GetPackageContentHash = (...args: any[]) => { packageCalls++; return hash(...args); };
         try {
           const anchor = (Object.entries(session.project().anchorIndex) as [string, any][])
-            .find(([, a]) => a.scope === 'body' && a.textPreview.startsWith('The Certificate of Incorporation'))![0];
+            .find(([, a]) => a.kind === 'p' && a.scope === scope && a.textPreview.startsWith(prefix))![0];
           const formatting = () => session.getFormatting(anchor).runs
             .map(({ text, span, effective }: any) => ({ text, span, effective }));
           const before = formatting();
           const text = before.map((r: any) => r.text).join('');
-          const sourceRun = before.find((r: any) => r.text.includes('document'));
-          if (!sourceRun) throw new Error('NVCA fixture no longer has a run containing document');
-          const start = sourceRun.span.start + sourceRun.text.indexOf('document') + offset;
+          const sourceRun = before.find((r: any) => r.text.includes(needle));
+          if (!sourceRun) throw new Error(`NVCA fixture no longer has a run containing ${needle}`);
+          const start = sourceRun.span.start + sourceRun.text.indexOf(needle) + offset;
           const match = { enclosingAnchor: { id: anchor }, span: { start, length } };
           const edit = session.replaceMatch(match, replacement, { bold: true });
           const version = session.getVersion();
           const after = formatting();
+          const word = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+          const xml = new DOMParser().parseFromString(session.raw.getXml(anchor), 'application/xml');
+          const tabPrefixes = Array.from(xml.getElementsByTagNameNS(word, 'tab')).map(tab =>
+            Array.from(tab.parentElement!.getElementsByTagNameNS(word, 't')).map(t => t.textContent).join(''));
           const undo = session.undo() && JSON.stringify(formatting()) === JSON.stringify(before);
           const redo = session.redo() && JSON.stringify(formatting()) === JSON.stringify(after);
           const failed = session.replaceMatch(
@@ -87,7 +94,7 @@ test.describe('DocxSession atomic batches (#445)', () => {
             { code: true, highlight: 'invalid-highlight' },
           );
           return {
-            edit, version, undo, redo, packageCalls,
+            edit, version, undo, redo, packageCalls, tabPrefixes,
             expected: text.slice(0, start) + replacement + text.slice(start + length),
             actual: after.map((r: any) => r.text).join(''),
             bold: after.filter((r: any) => r.span.start < start + replacement.length && r.span.start + r.span.length > start)
@@ -106,6 +113,7 @@ test.describe('DocxSession atomic batches (#445)', () => {
       expect(result.edit.patch).toBeFalsy();
       expect(result.version).toBe(1);
       expect(result.actual).toBe(result.expected);
+      expect(result.tabPrefixes).toEqual(scenario.scope === 'fn' ? [scenario.prefix.slice(0, 24)] : []);
       expect(result.bold.map((r: any) => r.text).join('')).toBe(scenario.replacement);
       expect(result.bold.every((r: any) => r.bold === true)).toBe(true);
       expect(result.undo).toBe(true);
