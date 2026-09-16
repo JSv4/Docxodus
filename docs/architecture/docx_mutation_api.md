@@ -132,8 +132,9 @@ const edit = session.replaceMatch(match, "new document", { bold: true });
 
 The text and formatting commit atomically as one version and undo/redo unit. A failure
 restores both edits and the prior history. Formatting applies only to the replacement;
-an empty replacement only deletes. Text replacement, run-boundary insertion, smart quotes,
-and tracked changes follow the existing `ReplaceTextAtSpan` / `ApplyFormat` semantics.
+an empty replacement only deletes. Text replacement, insertion inside ordinary text runs
+or at run boundaries, smart quotes, and tracked changes follow the existing
+`ReplaceTextAtSpan` / `ApplyFormat` semantics.
 Python accepts `format=FormatOp(bold=True)` on `replace_match` and `replace_text_at_span`;
 MCP exposes `docxodus_edit` action `replace_text_at_span_with_format` with `anchorId`,
 `spanStart`, `spanLength`, `replace`, and `format`.
@@ -1982,7 +1983,9 @@ Multiple matches in the same paragraph are applied in **reverse document order**
 
 If the agent has computed five `[___]` placeholder matches in the same paragraph from `Grep` and wants to fill each with a different value, `ReplaceTextRange` would only see "five identical `[___]` needles" and replace each with the first value (or all with the same value). `ReplaceTextAtSpan` (or `ReplaceMatch`) addresses each match by its exact coordinates so the disambiguation is unambiguous. Apply spans in **reverse offset order** in this case for the same reason — earlier spans stay valid after later edits.
 
-A **zero-length** span is a pure insertion. When it sits on a run boundary (the end of one run's text, the start of another's, offset 0, or the end of the paragraph) the text lands as a **new run** that copies the neighbouring run's formatting — and steps outside any complex field whose chrome surrounds the boundary, so text inserted after `Page {PAGE} of {NUMPAGES}` follows the field's `end` run rather than joining the NUMPAGES result Word would discard on its next field update. A zero-length span strictly inside a run's text is refused with `offset_out_of_range`; use a one-character span there (the browser editor does exactly this as its fallback).
+A **zero-length** span is a pure insertion. At an ordinary character boundary inside a plain text run directly in the paragraph, it splits the run and inserts text between the two halves, preserving their formatting. `ReplaceTextAtSpanWithFormat` applies the typing format only to that new text. Interior offsets in fields, inline containers (including existing revisions), mixed-content runs, or UTF-16 surrogate pairs are refused with `offset_out_of_range`.
+
+At a run boundary (the end of one run's text, the start of another's, offset 0, or the end of the paragraph), insertion copies the neighbouring run's formatting and can coalesce with an ordinary adjacent run. It steps outside any complex field whose chrome surrounds the boundary, so text inserted after `Page {PAGE} of {NUMPAGES}` follows the field's `end` run rather than joining the NUMPAGES result Word would discard on its next field update.
 
 ### Recipe: enumerate-and-fill via Grep + ReplaceMatch
 

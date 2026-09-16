@@ -638,10 +638,6 @@ public class DocxSessionEditorParityTests
         // Before the first run: a new run at the very start.
         var head = session.ReplaceTextAtSpan(footerPara, 0, 0, "> ");
         Assert.True(head.Success, head.Error?.Message);
-        // Strictly inside a run's text is not a boundary.
-        var mid = session.ReplaceTextAtSpan(footerPara, 3, 0, "x");
-        Assert.False(mid.Success);
-        Assert.Equal(EditErrorCode.OffsetOutOfRange, mid.Error!.Code);
 
         var xml = XElement.Parse(session.Raw.GetXml(footerPara));
         var runs = xml.Elements(W + "r").ToList();

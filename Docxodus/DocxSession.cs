@@ -5960,7 +5960,7 @@ public sealed partial class DocxSession : IDisposable
 
     /// <summary>
     /// Replace a paragraph-local text span and apply <paramref name="format"/> to exactly the
-    /// replacement text as one atomic edit and undo/version unit. Uses the same text, boundary
+    /// replacement text as one atomic edit and undo/version unit. Uses the same text,
     /// insertion and tracked-format semantics as ReplaceTextAtSpan followed by ApplyFormat.
     /// An empty replacement deletes the span without formatting adjacent text.
     /// </summary>
@@ -6106,15 +6106,14 @@ public sealed partial class DocxSession : IDisposable
 
     /// <summary>
     /// The zero-length form of <see cref="ReplaceTextAtSpan"/>: insert <paramref name="replace"/>
-    /// at a RUN BOUNDARY as a new run, rather than rewriting a neighbouring run's text. The
+    /// as a new run, splitting an ordinary text run when the caret is inside it. The
     /// difference matters next to a complex field: a browser editor that types after
     /// <c>Page {PAGE} of {NUMPAGES}</c> must not put its keystrokes inside the NUMPAGES result run,
     /// where Word's next field update would discard them. The new run copies the formatting of
     /// the run it follows (or precedes, at offset 0), minus any revision marker, and lands
     /// OUTSIDE any field whose chrome surrounds the boundary — after the field's <c>end</c> run,
-    /// or before its <c>begin</c>. An offset strictly inside a run's text is not a boundary and is
-    /// refused with <see cref="EditErrorCode.OffsetOutOfRange"/>, as the old zero-length span was;
-    /// callers keep using a one-character span there.
+    /// or before its <c>begin</c>. Interior insertion is limited to plain text runs directly in
+    /// the paragraph, outside fields, and must not split a UTF-16 surrogate pair.
     /// </summary>
     private EditResult InsertTextAtBoundary(
         AnchorTarget target, XElement element, Internal.RunTextMap.Map map, int offset, string replace)
@@ -6128,14 +6127,23 @@ public sealed partial class DocxSession : IDisposable
         // paragraph itself.
         XElement? after = null;
         XElement? before = null;
+        bool splitRun = false;
         foreach (var seg in map.Segments)
         {
             if (seg.Length == 0) continue;
             if (seg.EndOffsetInBlock == offset) { after = seg.Run; break; }
             if (seg.StartOffsetInBlock == offset) { before = seg.Run; break; }
             if (seg.StartOffsetInBlock < offset && offset < seg.EndOffsetInBlock)
-                return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
-                    "a zero-length span must sit on a run boundary", anchorId);
+            {
+                if (!IsPlainTextRun(seg.Run) || !ReferenceEquals(seg.Run.Parent, element)
+                    || IsInsideComplexField(seg.Run)
+                    || char.IsSurrogatePair(map.FlatText, offset - 1))
+                    return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
+                        "interior insertion requires an ordinary character boundary in a plain text run outside fields and inline containers", anchorId);
+                after = seg.Run;
+                splitRun = true;
+                break;
+            }
         }
         if (after is null && before is null && offset != 0 && map.FlatText.Length != 0)
             return EditResult.Fail(EditErrorCode.OffsetOutOfRange, "span resolved to no runs", anchorId);
@@ -6170,7 +6178,7 @@ public sealed partial class DocxSession : IDisposable
         // field to reach (its identity is unchanged by the step above), that is a direct child of
         // the paragraph holding only text, and only with tracked changes off — a tracked insertion
         // needs its own w:ins run. The rPr already came from this same run, so formatting matches.
-        if (_trackedChanges != TrackedChangeMode.RenderInline)
+        if (!splitRun && _trackedChanges != TrackedChangeMode.RenderInline)
         {
             XElement? mergeInto = null;
             bool appendAtEnd = false;
@@ -6217,6 +6225,7 @@ public sealed partial class DocxSession : IDisposable
         _history.RecordPreOp(TakeSnapshot());
         try
         {
+            if (splitRun) SplitRunsAtOffset(element, offset);
             var run = new XElement(W.r, rPr,
                 new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), replace));
             XElement node = run;
@@ -6254,8 +6263,6 @@ public sealed partial class DocxSession : IDisposable
         }
     }
 
-    /// <summary>If <paramref name="run"/> sits inside a complex field (between a <c>begin</c> and
-    /// its <c>end</c> <c>w:fldChar</c> among its siblings), the field's <c>end</c> run; else the run.</summary>
     /// <summary>
     /// True when <paramref name="run"/> is an ordinary text run — a <c>w:r</c> carrying only its
     /// optional <c>w:rPr</c> and one or more <c>w:t</c>, with no field char, break, tab, drawing,
@@ -6267,6 +6274,27 @@ public sealed partial class DocxSession : IDisposable
         && run.Elements().All(e => e.Name == W.rPr || e.Name == W.t)
         && run.Elements(W.t).Any();
 
+    // Complex fields can cross paragraphs. Text boxes, notes and comments have separate stories.
+    private static bool IsInsideComplexField(XElement run)
+    {
+        var root = run.Ancestors().FirstOrDefault(e => e.Name == W.txbxContent
+            || e.Name == W.footnote || e.Name == W.endnote || e.Name == W.comment)
+            ?? run.Ancestors().Last();
+        int depth = 0;
+        foreach (var element in root.DescendantsTrimmed(e =>
+            e.Name == W.txbxContent || e.Name == W.del || e.Name == W.moveFrom))
+        {
+            if (ReferenceEquals(element, run)) break;
+            if (element.Name != W.fldChar) continue;
+            var kind = (string?)element.Attribute(W.fldCharType);
+            if (kind == "begin") depth++;
+            else if (kind == "end" && depth > 0) depth--;
+        }
+        return depth > 0;
+    }
+
+    /// <summary>If <paramref name="run"/> sits inside a complex field (between a <c>begin</c> and
+    /// its <c>end</c> <c>w:fldChar</c> among its siblings), the field's <c>end</c> run; else the run.</summary>
     private static XElement FieldEndRunOrSelf(XElement run)
     {
         int depth = 0;

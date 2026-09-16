@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Atomic formatted insertion now accepts a caret inside an ordinary text run (issue #799).
+  Only the inserted text receives the typing format; neighboring formatting, one-step
+  undo/redo, and failure rollback are preserved without full-package checkpoint/hash work.
+  Interior offsets in fields, inline containers, mixed-content runs, or UTF-16 surrogate
+  pairs remain refused.
+
 ## [12.6.0] - 2026-09-14
 
 ### Added

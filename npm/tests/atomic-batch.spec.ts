@@ -49,67 +49,73 @@ test.describe('DocxSession atomic batches (#445)', () => {
     expect(result.markdown).toBe(true);
   });
 
-  test('NVCA typing with Bold is atomic without package checkpoint/hash bridge calls (#788)', async ({ page }) => {
-    const nvca = fs.readFileSync(path.join(__dirname, '../../TestFiles/NVCA-Model-COI.docx'));
-    const result = await page.evaluate((bytes: number[]) => {
-      const api = (window as any).Docxodus;
-      const session = api.openTypedSession(new Uint8Array(bytes), JSON.stringify({
-        emitMarkdownPatch: false, persistAnchorIds: true,
-      }));
-      const bridge = api.DocxSessionBridge;
-      const begin = bridge.BeginTransaction;
-      const hash = bridge.GetPackageContentHash;
-      let packageCalls = 0;
-      bridge.BeginTransaction = (...args: any[]) => { packageCalls++; return begin(...args); };
-      bridge.GetPackageContentHash = (...args: any[]) => { packageCalls++; return hash(...args); };
-      try {
-        const anchor = (Object.entries(session.project().anchorIndex) as [string, any][])
-          .find(([, a]) => a.scope === 'body' && a.textPreview.startsWith('The Certificate of Incorporation'))![0];
-        const formatting = () => session.getFormatting(anchor).runs
-          .map(({ text, span, effective }: any) => ({ text, span, effective }));
-        const before = formatting();
-        const text = before.map((r: any) => r.text).join('');
-        const start = text.indexOf('document');
-        if (start < 0) throw new Error('NVCA fixture paragraph changed');
-        const match = { enclosingAnchor: { id: anchor }, span: { start, length: 8 } };
-        const edit = session.replaceMatch(match, 'new document', { bold: true });
-        const version = session.getVersion();
-        const after = formatting();
-        const undo = session.undo() && JSON.stringify(formatting()) === JSON.stringify(before);
-        const redo = session.redo() && JSON.stringify(formatting()) === JSON.stringify(after);
-        const failed = session.replaceMatch(
-          { ...match, span: { start, length: 12 } }, 'failed text',
-          { code: true, highlight: 'invalid-highlight' },
-        );
-        return {
-          edit, version, undo, redo, packageCalls,
-          expected: text.slice(0, start) + 'new document' + text.slice(start + 8),
-          actual: after.map((r: any) => r.text).join(''),
-          bold: after.filter((r: any) => r.span.start < start + 12 && r.span.start + r.span.length > start)
-            .map((r: any) => ({ text: r.text, bold: r.effective.bold })),
-          failed: failed.success,
-          failureRestored: JSON.stringify(formatting()) === JSON.stringify(after),
-          versionAfterFailure: session.getVersion(),
-        };
-      } finally {
-        bridge.BeginTransaction = begin;
-        bridge.GetPackageContentHash = hash;
-        session.close();
-      }
-    }, Array.from(nvca));
-    expect(result.edit.success).toBe(true);
-    expect(result.edit.patch).toBeFalsy();
-    expect(result.version).toBe(1);
-    expect(result.actual).toBe(result.expected);
-    expect(result.bold.map((r: any) => r.text).join('')).toBe('new document');
-    expect(result.bold.every((r: any) => r.bold === true)).toBe(true);
-    expect(result.undo).toBe(true);
-    expect(result.redo).toBe(true);
-    expect(result.failed).toBe(false);
-    expect(result.failureRestored).toBe(true);
-    expect(result.versionAfterFailure).toBe(3);
-    expect(result.packageCalls).toBe(0);
-  });
+  for (const scenario of [
+    { name: 'replacement', offset: 0, length: 8, replacement: 'new document' },
+    { name: 'interior insertion', offset: 4, length: 0, replacement: ' inserted ' },
+  ]) {
+    test(`NVCA ${scenario.name} with Bold is atomic without package checkpoint/hash calls`, async ({ page }) => {
+      const nvca = fs.readFileSync(path.join(__dirname, '../../TestFiles/NVCA-Model-COI.docx'));
+      const result = await page.evaluate(({ bytes, offset, length, replacement }) => {
+        const api = (window as any).Docxodus;
+        const session = api.openTypedSession(new Uint8Array(bytes), JSON.stringify({
+          emitMarkdownPatch: false, persistAnchorIds: true,
+        }));
+        const bridge = api.DocxSessionBridge;
+        const begin = bridge.BeginTransaction;
+        const hash = bridge.GetPackageContentHash;
+        let packageCalls = 0;
+        bridge.BeginTransaction = (...args: any[]) => { packageCalls++; return begin(...args); };
+        bridge.GetPackageContentHash = (...args: any[]) => { packageCalls++; return hash(...args); };
+        try {
+          const anchor = (Object.entries(session.project().anchorIndex) as [string, any][])
+            .find(([, a]) => a.scope === 'body' && a.textPreview.startsWith('The Certificate of Incorporation'))![0];
+          const formatting = () => session.getFormatting(anchor).runs
+            .map(({ text, span, effective }: any) => ({ text, span, effective }));
+          const before = formatting();
+          const text = before.map((r: any) => r.text).join('');
+          const sourceRun = before.find((r: any) => r.text.includes('document'));
+          if (!sourceRun) throw new Error('NVCA fixture no longer has a run containing document');
+          const start = sourceRun.span.start + sourceRun.text.indexOf('document') + offset;
+          const match = { enclosingAnchor: { id: anchor }, span: { start, length } };
+          const edit = session.replaceMatch(match, replacement, { bold: true });
+          const version = session.getVersion();
+          const after = formatting();
+          const undo = session.undo() && JSON.stringify(formatting()) === JSON.stringify(before);
+          const redo = session.redo() && JSON.stringify(formatting()) === JSON.stringify(after);
+          const failed = session.replaceMatch(
+            { ...match, span: { start, length: replacement.length } }, 'failed text',
+            { code: true, highlight: 'invalid-highlight' },
+          );
+          return {
+            edit, version, undo, redo, packageCalls,
+            expected: text.slice(0, start) + replacement + text.slice(start + length),
+            actual: after.map((r: any) => r.text).join(''),
+            bold: after.filter((r: any) => r.span.start < start + replacement.length && r.span.start + r.span.length > start)
+              .map((r: any) => ({ text: r.text, bold: r.effective.bold })),
+            failed: failed.success,
+            failureRestored: JSON.stringify(formatting()) === JSON.stringify(after),
+            versionAfterFailure: session.getVersion(),
+          };
+        } finally {
+          bridge.BeginTransaction = begin;
+          bridge.GetPackageContentHash = hash;
+          session.close();
+        }
+      }, { bytes: Array.from(nvca), ...scenario });
+      expect(result.edit.success).toBe(true);
+      expect(result.edit.patch).toBeFalsy();
+      expect(result.version).toBe(1);
+      expect(result.actual).toBe(result.expected);
+      expect(result.bold.map((r: any) => r.text).join('')).toBe(scenario.replacement);
+      expect(result.bold.every((r: any) => r.bold === true)).toBe(true);
+      expect(result.undo).toBe(true);
+      expect(result.redo).toBe(true);
+      expect(result.failed).toBe(false);
+      expect(result.failureRestored).toBe(true);
+      expect(result.versionAfterFailure).toBe(3);
+      expect(result.packageCalls).toBe(0);
+    });
+  }
 
   test('rollback is exact and success is one version/undo unit', async ({ page }) => {
     const result = await page.evaluate((bytes: number[]) => {
