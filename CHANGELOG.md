@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Atomic formatted insertion accepts a caret inside text preceded by leading tabs in the
+  same run, including NVCA footnotes (issue #802). Tabs and surrounding formatting stay
+  in place, with failure rollback and one-step undo/redo on the existing lightweight path.
+  Tabs after text and other mixed run content remain refused for interior insertion.
+
 ## [12.6.1] - 2026-09-15
 
 ### Fixed
