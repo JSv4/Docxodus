@@ -1608,7 +1608,9 @@ export class PaginationEngine {
   /**
    * Builds a clone of a simple table wrapper containing a contiguous run of rows.
    * Complex table features are deliberately rejected by the caller: a split across
-   * merged cells, nested tables, or footnotes cannot be made correct by cloning rows.
+   * vertically merged cells (rowspan), nested tables, or footnotes cannot be made
+   * correct by cloning rows. Horizontal merges (colspan) are safe: a colspan lives
+   * entirely inside one row, and rows are only ever cloned whole.
    */
   private createSimpleTableFragment(
     wrapper: HTMLElement,
@@ -1678,7 +1680,7 @@ export class PaginationEngine {
       table.tFoot ||
       body.rows.length < 2 ||
       Array.from(table.children).some(child => child !== body && child.tagName !== "COLGROUP") ||
-      table.querySelector("table, [rowspan], [colspan], [data-footnote-id]") ||
+      table.querySelector("table, [rowspan], [data-footnote-id]") ||
       wrapper.querySelector("[data-footnote-id]")
     ) {
       return null;

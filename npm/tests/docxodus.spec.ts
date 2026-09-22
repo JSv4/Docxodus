@@ -934,7 +934,83 @@ test.describe('Docxodus WASM Tests', () => {
       expect(paginationResult.retainedAnchors).toBe(1);
     });
 
-    test('does not split an oversized table with merged cells', async ({ page }) => {
+    test('splits an oversized table whose only merges are horizontal (colspan)', async ({ page }) => {
+      const bytes = readTestFile('HW002-Table14.docx');
+      const result = await convertToHtmlWithPagination(page, bytes, 1, 1.0);
+
+      expect(result.error).toBeUndefined();
+      expect(result.html).toBeDefined();
+
+      await page.addScriptTag({ path: 'dist/pagination.bundle.js' });
+
+      const paginationResult = await page.evaluate((html) => {
+        const container = document.createElement('div');
+        container.id = 'test-pagination-colspan-oversized-table';
+        container.innerHTML = html;
+        document.body.appendChild(container);
+
+        const staging = container.querySelector('#pagination-staging') as HTMLElement;
+        const pageContainer = container.querySelector('#pagination-container') as HTMLElement;
+        const sourceTable = staging?.querySelector('table') as HTMLTableElement | null;
+        if (!staging || !pageContainer || !sourceTable) {
+          document.body.removeChild(container);
+          return { error: 'Pagination elements or source table not found' };
+        }
+
+        // Turn a middle row into a full-width section-header row — the shape of a
+        // legal issues list, whose header rows span every column. A colspan lives
+        // entirely inside one row, so a row-boundary split can never break it.
+        const headerRow = sourceTable.rows[1];
+        const columnCount = sourceTable.rows[0].cells.length;
+        while (headerRow.cells.length > 1) {
+          headerRow.deleteCell(1);
+        }
+        headerRow.cells[0].colSpan = columnCount;
+
+        const sourceRows = Array.from(sourceTable.rows).map(row =>
+          (row.textContent || '').replace(/\s+/g, ' ').trim()
+        );
+
+        const { PaginationEngine } = (window as any).DocxodusPagination;
+        try {
+          const engine = new PaginationEngine(staging, pageContainer, {
+            scale: 1,
+            showPageNumbers: true
+          });
+          const pagination = engine.paginate();
+
+          const renderedTables = Array.from(
+            pageContainer.querySelectorAll('.page-content table')
+          ) as HTMLTableElement[];
+          const renderedRows = renderedTables.flatMap(table =>
+            Array.from(table.rows).map(row => (row.textContent || '').replace(/\s+/g, ' ').trim())
+          );
+          const outcome = {
+            totalPages: pagination.totalPages,
+            tableFragments: renderedTables.length,
+            sourceRows,
+            renderedRows,
+            colspanCells: pageContainer.querySelectorAll('.page-content table [colspan]').length
+          };
+          document.body.removeChild(container);
+          return outcome;
+        } catch (e) {
+          document.body.removeChild(container);
+          return { error: (e as Error).message };
+        }
+      }, result.html!);
+
+      if ('error' in paginationResult) {
+        throw new Error(paginationResult.error as string);
+      }
+
+      expect(paginationResult.totalPages).toBeGreaterThan(1);
+      expect(paginationResult.tableFragments).toBeGreaterThan(1);
+      expect(paginationResult.renderedRows).toEqual(paginationResult.sourceRows);
+      expect(paginationResult.colspanCells).toBeGreaterThan(0);
+    });
+
+    test('does not split an oversized table with vertically merged cells', async ({ page }) => {
       const bytes = readTestFile('HW002-Table17.docx');
       const result = await convertToHtmlWithPagination(page, bytes, 1, 1.0);
 
