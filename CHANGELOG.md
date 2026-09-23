@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Paginated view: a table taller than a page whose only merged cells are horizontal
+  (`colspan`, e.g. full-width section-header rows from `w:gridSpan`) is now split at row
+  boundaries instead of clipped, where every row past the first page-height was rendered
+  but hidden (issue #807). A colspan never crosses a row boundary, so the row-boundary
+  splitter can carry it whole. Tables with vertical merges (`rowspan`), nested tables, or
+  footnotes keep the previous whole-block fallback.
+
 ## [12.6.2] - 2026-09-16
 
 ### Fixed

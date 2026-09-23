@@ -990,7 +990,13 @@ test.describe('Docxodus WASM Tests', () => {
             tableFragments: renderedTables.length,
             sourceRows,
             renderedRows,
-            colspanCells: pageContainer.querySelectorAll('.page-content table [colspan]').length
+            columnCount,
+            // Every rendered spanning cell, so a duplicated or truncated header row is caught.
+            renderedSpans: Array.from(
+              pageContainer.querySelectorAll('.page-content table td, .page-content table th')
+            )
+              .map(cell => (cell as HTMLTableCellElement).colSpan)
+              .filter(span => span > 1)
           };
           document.body.removeChild(container);
           return outcome;
@@ -1007,7 +1013,7 @@ test.describe('Docxodus WASM Tests', () => {
       expect(paginationResult.totalPages).toBeGreaterThan(1);
       expect(paginationResult.tableFragments).toBeGreaterThan(1);
       expect(paginationResult.renderedRows).toEqual(paginationResult.sourceRows);
-      expect(paginationResult.colspanCells).toBeGreaterThan(0);
+      expect(paginationResult.renderedSpans).toEqual([paginationResult.columnCount]);
     });
 
     test('does not split an oversized table with vertically merged cells', async ({ page }) => {
