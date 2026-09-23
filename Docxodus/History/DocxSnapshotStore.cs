@@ -1,8 +1,6 @@
 // Copyright (c) John Scrudato IV. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
-#nullable enable
-
 using Docxodus.Verification;
 
 namespace Docxodus.History;
@@ -68,12 +66,17 @@ public sealed class DocxSnapshotStore
     }
 
     /// <summary>
-    /// Verify both snapshots and return the existing lazy semantic/redline comparison. DocxDiff
-    /// owns compatibility policy and limitations, including pre-existing tracked revisions.
+    /// Verify both snapshots and return the raw-engine lazy semantic/redline comparison. This is
+    /// <see cref="DocxDiff"/> semantics, not the <see cref="DocxCompare"/> front door: no input
+    /// revisions are pre-accepted unless <paramref name="settings"/> asks for it. Settings are
+    /// copied before the first await, so a caller reusing its object cannot retarget the comparison.
     /// </summary>
     public async ValueTask<DocxDiffComparison> CompareAsync(DocxSnapshotReference before,
         DocxSnapshotReference after, DocxDiffSettings? settings = null, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(before);
+        ArgumentNullException.ThrowIfNull(after);
+        settings = settings?.Clone();
         var left = await ExportAsync(before, cancellationToken).ConfigureAwait(false);
         var right = await ExportAsync(after, cancellationToken).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();

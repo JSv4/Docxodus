@@ -1,8 +1,6 @@
 // Copyright (c) John Scrudato IV. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
-#nullable enable
-
 using System.IO.Compression;
 using System.Text.Json;
 using Docxodus.History;
@@ -115,14 +113,40 @@ public class DocxSnapshotStoreTests
         Assert.Equal(after, await store.ExportAsync(right));
     }
 
+    [Fact]
+    public async Task ComparisonOwnsSettingsBeforeAwaitingHostStorage()
+    {
+        var before = DocxSession.CreateBlankDocxBytes();
+        using var session = new DocxSession(before);
+        Assert.True(session.ReplaceText(session.Project().AnchorIndex.Keys.First(), "version two").Success);
+        var blobs = new RecordingStore();
+        var store = new DocxSnapshotStore(blobs);
+        var left = await store.CaptureAsync(before);
+        var right = await store.CaptureAsync(session.Save());
+        var settings = new DocxDiffSettings { AuthorForRevisions = "History comparison" };
+        blobs.PauseReads = true;
+        var pending = store.CompareAsync(left, right, settings).AsTask();
+        await blobs.ReadStarted.Task;
+        // A caller reusing its settings object while storage is slow must not retarget this comparison.
+        settings.AuthorForRevisions = "Changed during storage read";
+        blobs.ReleaseRead.SetResult();
+        var comparison = await pending;
+        var revisions = comparison.GetRevisions();
+        Assert.NotEmpty(revisions);
+        Assert.All(revisions, revision => Assert.Equal("History comparison", revision.Author));
+    }
+
     private sealed class RecordingStore : IHistoryBlobStore
     {
         private readonly MemoryHistoryBlobStore _inner = new();
         internal bool PauseWrites { get; init; }
+        internal bool PauseReads { get; set; }
         internal int Writes { get; private set; }
         internal int Reads { get; private set; }
         internal TaskCompletionSource WriteStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource ReleaseWrite { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource ReadStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource ReleaseRead { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async ValueTask PutAsync(HistoryBlobReference reference, Stream content, CancellationToken cancellationToken)
         {
@@ -132,10 +156,12 @@ public class DocxSnapshotStoreTests
             await _inner.PutAsync(reference, content, cancellationToken);
         }
 
-        public ValueTask<Stream?> OpenReadAsync(HistoryBlobReference reference, CancellationToken cancellationToken)
+        public async ValueTask<Stream?> OpenReadAsync(HistoryBlobReference reference, CancellationToken cancellationToken)
         {
             Reads++;
-            return _inner.OpenReadAsync(reference, cancellationToken);
+            ReadStarted.TrySetResult();
+            if (PauseReads) await ReleaseRead.Task.WaitAsync(cancellationToken);
+            return await _inner.OpenReadAsync(reference, cancellationToken);
         }
     }
 }
