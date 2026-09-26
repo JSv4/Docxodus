@@ -1,0 +1,44 @@
+name: CLA
+
+# Contributors sign CLA.md once by commenting on their pull request; signatures are committed
+# to the `cla-signatures` branch of this repository. `pull_request_target` runs this file from
+# the base branch, so edits here take effect only after they merge.
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, closed, synchronize]
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+  statuses: write
+
+jobs:
+  cla:
+    # Dependabot-triggered runs get a read-only token, so the action could not comment or record
+    # anything; skip them outright (a skipped job still satisfies a required check).
+    if: |
+      github.actor != 'dependabot[bot]' && (
+        github.event_name == 'pull_request_target' ||
+        (github.event.issue.pull_request && (
+          github.event.comment.body == 'recheck' ||
+          github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA'))
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: CLA Assistant
+        # contributor-assistant/github-action v2.6.1 (repository archived upstream; pinned by SHA)
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          path-to-signatures: signatures/cla.json
+          path-to-document: https://github.com/JSv4/Docxodus/blob/main/CLA.md
+          branch: cla-signatures
+          # Commit authors are matched by GitHub login (or git author name when unlinked).
+          # `claude` is the account Claude Code's noreply@anthropic.com commits resolve to;
+          # `claude[bot]` is the Claude GitHub App. JSv4 is the licensor.
+          allowlist: dependabot[bot],claude,claude[bot],JSv4
+          lock-pullrequest-aftermerge: false

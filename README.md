@@ -313,6 +313,9 @@ install of their own.
 
 MIT — see [LICENSE](LICENSE).
 
+Contributors are asked to sign the [Contributor License Agreement](CLA.md); the CLA bot prompts
+you on your first pull request, and signing is a single comment.
+
 ---
 
 *Built on the shoulders of [Open-Xml-PowerTools](https://github.com/OfficeDev/Open-Xml-PowerTools).
