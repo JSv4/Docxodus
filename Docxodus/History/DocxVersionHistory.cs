@@ -228,6 +228,8 @@ public sealed partial class DocxVersionHistory
     public async ValueTask<DocxDiffComparison> CompareVersionsAsync(string documentId, HistoryBlobReference before,
         HistoryBlobReference after, DocxDiffSettings? settings = null, CancellationToken cancellationToken = default)
     {
+        // Own the caller's settings before the version reads yield to host storage.
+        settings = settings?.Clone();
         var left = await GetVersionAsync(documentId, before, cancellationToken).ConfigureAwait(false);
         var right = await GetVersionAsync(documentId, after, cancellationToken).ConfigureAwait(false);
         return await _snapshots.CompareAsync(left.Record.Snapshot, right.Record.Snapshot, settings, cancellationToken).ConfigureAwait(false);

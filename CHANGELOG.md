@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- `DocxSnapshotStore.CompareAsync` and `DocxVersionHistory.CompareVersionsAsync` now copy the
+  caller's `DocxDiffSettings` before awaiting host blob storage. Previously the settings object
+  was read only after the asynchronous snapshot reads (and lazily again by the returned
+  comparison), so a caller that reused and changed it mid-flight got a comparison stamped with
+  the changed values, e.g. the wrong revision author.
+
 ## [12.6.2] - 2026-09-16
 
 ### Fixed

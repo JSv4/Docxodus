@@ -194,6 +194,25 @@ public class DocxVersionHistoryTests
         Assert.Equal(saved.Head, (await history.ReadAsync("doc"))!.Head);
     }
 
+    [Fact]
+    public async Task VersionComparisonOwnsSettingsBeforeAwaitingHostStorage()
+    {
+        var blobs = new PausingBlobs();
+        var history = new DocxVersionHistory(blobs, new MemoryHistoryHeadStore());
+        var (before, after) = Documents();
+        var first = await history.CreateVersionAsync("doc", null, before, Metadata("first"));
+        var edited = await history.CreateVersionAsync("doc", first.Head, after, Metadata("edited"));
+        var settings = new DocxDiffSettings { AuthorForRevisions = "History comparison" };
+        blobs.Pause = true;
+        var pending = history.CompareVersionsAsync("doc", first.Version.Id, edited.Version.Id, settings).AsTask();
+        await blobs.Started.Task;
+        settings.AuthorForRevisions = "Changed during storage read";
+        blobs.Release.SetResult();
+        var revisions = (await pending).GetRevisions();
+        Assert.NotEmpty(revisions);
+        Assert.All(revisions, revision => Assert.Equal("History comparison", revision.Author));
+    }
+
     private static DocxVersionMetadata Metadata(string label) => new()
     {
         Author = "Host actor", CreatedAt = DateTimeOffset.UnixEpoch, Label = label, Message = "saved",
@@ -230,6 +249,24 @@ public class DocxVersionHistoryTests
             var result = await _inner.TryAdvanceAsync(documentId, expected, state, cancellationToken);
             if (result is not null) CancelAfterSuccess?.Cancel();
             return result;
+        }
+    }
+    private sealed class PausingBlobs : IHistoryBlobStore
+    {
+        private readonly MemoryHistoryBlobStore _inner = new();
+        internal bool Pause { get; set; }
+        internal TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public ValueTask PutAsync(HistoryBlobReference reference, Stream content, CancellationToken cancellationToken) =>
+            _inner.PutAsync(reference, content, cancellationToken);
+        public async ValueTask<Stream?> OpenReadAsync(HistoryBlobReference reference, CancellationToken cancellationToken)
+        {
+            if (Pause)
+            {
+                Started.TrySetResult();
+                await Release.Task.WaitAsync(cancellationToken);
+            }
+            return await _inner.OpenReadAsync(reference, cancellationToken);
         }
     }
     private sealed class PausingHeads : IHistoryHeadStore
