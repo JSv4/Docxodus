@@ -12,6 +12,11 @@ All notable changes to this project will be documented in this file.
   but hidden (issue #807). A colspan never crosses a row boundary, so the row-boundary
   splitter can carry it whole. Tables with vertical merges (`rowspan`), nested tables, or
   footnotes keep the previous whole-block fallback.
+- `DocxSnapshotStore.CompareAsync` and `DocxVersionHistory.CompareVersionsAsync` now copy the
+  caller's `DocxDiffSettings` before awaiting host blob storage. Previously the settings object
+  was read only after the asynchronous snapshot reads (and lazily again by the returned
+  comparison), so a caller that reused and changed it mid-flight got a comparison stamped with
+  the changed values, e.g. the wrong revision author.
 
 ## [12.6.2] - 2026-09-16
 
