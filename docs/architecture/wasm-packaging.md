@@ -215,62 +215,62 @@ The AOT-compiled `dotnet.native.wasm` is a different binary from the interpreter
 the trim canaries in `trim-validation.spec.ts` and the whole Playwright suite are what prove
 the tier did not change behaviour; both ran green on the AOT bundle before it shipped.
 
-### The cold path can collapse, so every comparison warms first (issues #695, #696)
+### Precise interpreter stack marking is off (issues #811, #695, #696, #779)
 
-The same collapse has a second home: the mutation preview. `OpenPreviewSession` clones the
-live package into a shadow session, and the shadow's first transaction serializes every part
-into a package snapshot — an allocation-heavy cold path that, run interpreted with the live
-package, the clone and the caller's listings already on the heap, stopped finishing in the
-browser (`previewBatch` never returned; the same preview is ~400 ms natively).
-`PreviewEngine.EnsureWarm()` is the invariant `DocxSessionBridge.OpenPreviewSession` holds
-before the first shadow: clone, begin, mutate and roll back a one-paragraph seed session once
-per module instance. A new preview entry point must hold it too.
+`DocxodusWasm.csproj` sets `MONO_INTERPRETER_OPTIONS=-precise` through a
+`WasmEnvironmentVariable`, which lands in `_framework/dotnet.boot.js`. Mono reads it once, when
+the interpreter initializes, and clears the interpreter's precise-GC option (on by default in
+.NET 10: `mono_interp_opt` reads `0x1ff` in the shipped binary, `0xff` with the setting).
+`npm/tests/wasm-runtime-config.spec.ts` pins that the runtime a page loads carries it.
 
-A stale profile costs speed, never correctness — but the *cold path* costs more than speed.
-The first comparison a module instance runs executes the engine's whole cold path (assembly
-resolution, type loads, static constructors, first-time entry into every method the diff and
-render stages touch), and a large part of that is outside any profile and therefore runs
-interpreted. **Mono's collector pins conservatively from the interpreter stack**, so a nursery
-collection taken while that cold path is live pays a root scan proportional to it. A comparison
-also allocates a package's worth of XML, so it takes many collections. On a heap that an
-earlier operation has already filled the two coincide and the comparison stops making
-meaningful progress — not "slow", but no longer finishing.
+**What the option did.** With precise marking on, every nursery collection first walks the
+thread's chain of interpreter-to-native transition records ("LMFs", *last managed frame*) and
+each record's interpreter frames, to learn which interpreter stack slots cannot hold references
+(`interp_mark_no_ref_slots`, inlined into `interp_mark_stack`). In this mixed AOT + interpreter
+build that chain can become cyclic. A native process would fault on the bad pointer
+(dotnet/runtime#123573 is the same function crashing on `lmf = 0x40`); WebAssembly does not trap
+on it, so the walk never ends. The call that happened to allocate — `previewBatch`,
+`proveRedlineReversibility`, `verifyDeliverable`, a first comparison — sits at 100% CPU with no
+exception, and because the JS thread is inside that synchronous export no timeout can fire.
+With the option off, `interp_mark_stack` scans the interpreter stack conservatively (the
+.NET 8 behaviour; .NET 9 introduced the option and made it the default) and never touches the
+chain.
 
-Measured on `WC/WC007-Unmodified.docx` against `WC/WC007-Moved-into-Table.docx` (11 KB each)
-after one `DocxSession` revision read in the same page:
+**Evidence.** The SDK's own `dotnet.native.js.symbols` is written *before* the post-link
+`wasm-opt -Oz` pass renumbers functions, so for a Release build it names the wrong functions.
+Correct names came from building with `-p:WasmRunWasmOpt=false -p:WasmEmitSymbolMap=true`,
+writing that map into the binary as a wasm `name` section, and re-running the SDK's post-link
+command by hand (`wasm-opt --enable-simd --enable-exception-handling --enable-bulk-memory -Oz
+--strip-dwarf`) with binaryen's `--symbolmap=<file>` added; the output is function-for-function
+identical to a normal build. Adding `-g` to `wasm-opt` instead changes the output (27,307 functions
+against 21,904), and that build did not hang in 48 runs, so it cannot stand in for the shipped one.
 
-| | first comparison |
-|---|---|
-| warm native (.NET 10 x64) | 25 ms |
-| browser, warm | ~0.5 s |
-| browser, cold, on a clean heap | ~0.6 s |
-| **browser, cold, after a session read** | **> 10 min (never observed to finish)** |
+- Every sample of every hang — 50 of 50 across two hangs, reached from different exports — is
+  at the header of the LMF loop, below `collect_nursery → pin_from_roots →
+  sgen_client_scan_thread_data → interp_mark_stack`. None is in the frame or slot loops inside
+  it, so it is the chain itself that cycles.
+- A two-author tracked-edit workload (twelve rounds of preview, commit, verify, accept, prove,
+  diff) hung in 6 of 276 runs with precise marking on and 0 of 330 with it off.
+- The #695/#696 sequence — one `DocxSession` revision read, then the first comparison of the
+  page — built from the commit before the comparison warm-up existed hangs every time (3 of 3,
+  over 200 s) and finishes in 0.5–0.7 s every time (3 of 3) with only this setting added.
 
-Sampling the hung page with `Debugger.pause` put **14 of 14 stacks** in
-`collect_nursery → pin_from_roots → sgen_client_scan_thread_data → interp_mark_stack`.
+**What it replaces.** #697 read the same stack as "the cold path pays a conservative root scan
+proportional to the interpreter stack" and fixed each comparison export by running a tiny seed
+comparison first; #779 applied that diagnosis to the first preview. (#779's own hang no longer
+reproduces from its parent commit, so it is attributed here by mechanism, not by a red-green
+run.) Our inference is that the seeds worked by moving the heap and code layout off a losing
+configuration, which would also explain why the hang looked non-monotone in nursery size (4m,
+6m and 12m hung; 8m and 16m did not) and why the #697 sequence no longer hangs on current builds
+even without its seed. Either way they could not reach an export that had already run warm —
+#811's hangs came rounds into a process. The per-export warm-ups are gone;
+`DocumentComparer.Warmup` (the npm worker's `prepare()`) remains, as a latency tool only
+(`ComparisonEngine`).
 
-Three things this is *not*, each ruled out by measurement rather than argument:
-
-- **Not a diff-engine regression.** The redline this pair produces is byte-identical before and
-  after the change that first exposed it (#693) — only the revision timestamp differs — and warm
-  native is 24–26 ms at both commits.
-- **Not a stale profile.** Re-recording `docxodus.aotprofile` and rebuilding does not fix it.
-  (The jiterpreter is barely involved either: the shipped tier reports 0 traces and 264 B jitted
-  across the sequence, because the profile already covers the warm path.)
-- **Not a GC tuning problem.** The collapse is **not monotone in nursery size**: with
-  `MONO_GC_PARAMS=nursery-size=`, 4m, 6m and 12m all collapse while 8m and 16m do not. A value
-  that survives today is a lottery ticket, not a fix — which is why none is set.
-
-What does hold is warming the engine on input too small to take a collection.
-`DocxodusWasm/ComparisonEngine.EnsureWarm()` compares two one-paragraph in-memory documents:
-same cold path, almost no allocation. Every comparison export in `DocxDiffBridge` and
-`DocumentComparer` calls it before touching the caller's documents, and it is latched, so it
-runs once per module instance. It fixes the sequence under every nursery size measured above,
-including the three that collapse. The cost is about 250 ms on the first comparison and nothing
-after it; `DocumentComparer.Warmup` (the npm worker's `prepare()`) still exists to move that
-250 ms off the critical path, but is no longer the difference between working and hanging.
-`npm/tests/wasm-steady-state.spec.ts` pins the sequence — session read first, comparison second,
-both in a page that has run neither before, because comparing first makes it pass trivially.
+**What it does not fix.** The cycle in the transition chain is a runtime defect; this setting
+removes the one walker of it that runs on every collection. Other walkers (exception stack
+traces) still exist, and none has been seen to hang. When the runtime is upgraded, re-check
+dotnet/runtime#123573 before dropping the setting.
 
 ## Compression and serving
 

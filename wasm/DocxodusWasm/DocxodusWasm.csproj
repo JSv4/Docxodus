@@ -68,6 +68,17 @@
 
   <Import Project="AotProfile.targets" />
 
+  <!-- Turn off the interpreter's precise stack marking (issue #811). With it on (the .NET 10
+       default), every nursery collection walks the chain of interpreter-to-native transition
+       records to find slots that hold no references. In this mixed AOT + interpreter build that
+       chain can become cyclic, and WebAssembly does not trap on the bad pointer, so the walk
+       spins forever inside whatever call happened to allocate. Conservative marking of the
+       interpreter stack is the pre-.NET 9 behaviour and never walks the chain.
+       npm/tests/wasm-runtime-config.spec.ts pins this; wasm-packaging.md has the evidence. -->
+  <ItemGroup>
+    <WasmEnvironmentVariable Include="MONO_INTERPRETER_OPTIONS" Value="-precise" />
+  </ItemGroup>
+
   <!-- Apply size optimization in the SDK's post-link Binaryen pass, before it
        generates asset hashes. Keep the default -O2 AOT compilation and link,
        the full recorded profile, and every exported API. -->
