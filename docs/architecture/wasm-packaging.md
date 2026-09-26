@@ -250,7 +250,8 @@ against 21,904), and that build did not hang in 48 runs, so it cannot stand in f
   sgen_client_scan_thread_data → interp_mark_stack`. None is in the frame or slot loops inside
   it, so it is the chain itself that cycles.
 - A two-author tracked-edit workload (twelve rounds of preview, commit, verify, accept, prove,
-  diff) hung in 6 of 276 runs with precise marking on and 0 of 330 with it off.
+  diff) hung in 6 of 276 runs with precise marking on and 0 of 330 with it off, both arms still
+  carrying the per-export warm-ups; with the warm-ups removed as well, 0 of 240.
 - The #695/#696 sequence — one `DocxSession` revision read, then the first comparison of the
   page — built from the commit before the comparison warm-up existed hangs every time (3 of 3,
   over 200 s) and finishes in 0.5–0.7 s every time (3 of 3) with only this setting added.
