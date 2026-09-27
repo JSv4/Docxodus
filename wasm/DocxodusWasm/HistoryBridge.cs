@@ -69,7 +69,6 @@ public static partial class HistoryBridge
         client.Active++;
         try
         {
-            if (HistoryClientJson.Read<HistoryClientRequest>(requestJson).Operation == "compare") ComparisonEngine.EnsureWarm();
             return await client.Ops.InvokeAsync(requestJson, bytes);
         }
         catch (Exception error) when (HistoryClientOps.IsClientError(error)) { return HistoryClientOps.Failure(error); }

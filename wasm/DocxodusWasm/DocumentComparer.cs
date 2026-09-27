@@ -13,12 +13,7 @@ namespace DocxodusWasm;
 ///
 /// <para>Also hosts the two single-document review-markup readers, <see cref="GetRevisionsJson"/>
 /// and <see cref="GetCommentsJson"/>, which read what a comparison produces and share
-/// <see cref="OpenForRead"/>. Neither runs a comparison, so the warm-up invariant below does not
-/// apply to them.</para>
-///
-/// <para><b>Invariant.</b> Every export here that runs a comparison calls
-/// <see cref="ComparisonEngine.EnsureWarm"/> first; a new one must too. See that class for why
-/// the browser cannot be left to discover the engine's cold path on a real document.</para>
+/// <see cref="OpenForRead"/>.</para>
 /// </summary>
 [SupportedOSPlatform("browser")]
 public partial class DocumentComparer
@@ -27,11 +22,9 @@ public partial class DocumentComparer
     /// Force the comparison code path fully hot.
     ///
     /// Creating the WASM runtime does not exercise the comparison engine, so the first real
-    /// comparison executes the engine's whole cold path on top of the actual diff work. Every
-    /// comparison entry point now pays that itself (see <see cref="ComparisonEngine"/>, which
-    /// explains why the browser cannot be left to discover it); this export exists so a caller
-    /// can pay it up front instead — the npm worker's <c>prepare()</c> — and keep the first
-    /// interactive comparison at steady-state latency.
+    /// comparison executes the engine's whole cold path on top of the actual diff work. This
+    /// export lets a caller pay that up front — the npm worker's <c>prepare()</c> — and keep the
+    /// first interactive comparison at steady-state latency (see <see cref="ComparisonEngine"/>).
     ///
     /// <para>Idempotent and self-contained: no caller IO, no seed fixtures to ship. Safe to call
     /// repeatedly — the warm-up work is only paid once. Returns <c>"ok"</c> on success or a JSON
@@ -67,8 +60,6 @@ public partial class DocumentComparer
         // byte-for-byte copy of the package they supplied.
         if (originalBytes.AsSpan().SequenceEqual(modifiedBytes))
             return (byte[])originalBytes.Clone();
-
-        ComparisonEngine.EnsureWarm();
 
         try
         {
@@ -130,8 +121,6 @@ public partial class DocumentComparer
         {
             return DocumentConverter.SerializeError("Missing document data");
         }
-
-        ComparisonEngine.EnsureWarm();
 
         try
         {
@@ -281,8 +270,6 @@ public partial class DocumentComparer
             return DocumentConverter.SerializeError("Missing document data");
         }
 
-        ComparisonEngine.EnsureWarm();
-
         try
         {
             var original = new WmlDocument("original.docx", originalBytes);
@@ -356,8 +343,6 @@ public partial class DocumentComparer
 
         if (originalBytes.AsSpan().SequenceEqual(modifiedBytes))
             return (byte[])originalBytes.Clone();
-
-        ComparisonEngine.EnsureWarm();
 
         try
         {

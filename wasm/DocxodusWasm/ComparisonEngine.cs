@@ -1,5 +1,3 @@
-#nullable enable
-
 using System;
 using System.IO;
 using System.Runtime.Versioning;
@@ -11,34 +9,17 @@ using DocumentFormat.OpenXml.Wordprocessing;
 namespace DocxodusWasm;
 
 /// <summary>
-/// The comparison engine's one-time warm-up, and the invariant every JSExport that runs a
-/// comparison holds: <see cref="EnsureWarm"/> before the first real comparison of a module
-/// instance (issues #695, #696).
+/// The comparison engine's one-time warm-up, behind <see cref="DocumentComparer.Warmup"/>.
 ///
-/// <para><b>Why this is mandatory in the browser and meaningless natively.</b> The first
-/// comparison a module instance runs is not merely slower than the ones after it — it executes
-/// the engine's whole cold path (assembly resolution, type loads, static constructors, and the
-/// first-time entry into every method the diff and render stages touch), and a large part of
-/// that cold path runs on the Mono interpreter rather than in AOT-compiled code. Mono's GC pins
-/// conservatively from the interpreter stack, so while that cold path is on the stack, every
-/// nursery collection pays a scan proportional to it. A comparison also allocates heavily — a
-/// package's worth of XML — so it triggers many collections. When those two coincide on a heap
-/// that some earlier operation has already filled (opening a <c>DocxSession</c> to read
-/// revisions, say), the collections stop being incidental and the comparison ceases to make
-/// meaningful progress: measured at over ten minutes for a pair that takes 25 ms natively and
-/// ~500 ms warm in the browser.</para>
-///
-/// <para>The seed comparison below is immune to that collapse because it is tiny — two
-/// one-paragraph in-memory documents allocate almost nothing — while still executing the same
-/// cold path. Paying it first therefore leaves the caller's real comparison warm, whatever its
-/// size. This holds where tuning the GC does not: the collapse is not monotone in nursery size
-/// (measured: 4m, 6m and 12m all collapse while 8m and 16m do not), so no nursery setting is a
-/// fix, whereas warming first survives every one of those configurations.</para>
-///
-/// <para><b>Not a substitute for <c>prepare()</c>.</b> The npm worker still calls
-/// <see cref="DocumentComparer.Warmup"/> up front to move this cost off the critical path.
-/// The difference is that a caller who does not can no longer land on the collapse: the cost is
-/// paid on the first comparison instead of before it, and it is paid once either way.</para>
+/// <para>The first comparison a module instance runs executes the engine's whole cold path
+/// (assembly resolution, type loads, static constructors, first entry into every method the
+/// diff and render stages touch), much of it on the interpreter, so it costs a few hundred
+/// milliseconds more than the ones after it. A seed comparison of two one-paragraph in-memory
+/// documents walks the same path while allocating almost nothing, so a caller that runs it
+/// first — the npm worker's <c>prepare()</c> — keeps its first real comparison at steady-state
+/// latency. It is a latency tool only: the first-comparison hang it was once an invariant
+/// against (issues #695, #696) was the interpreter's precise stack marking, which the build now
+/// turns off (issue #811, <c>DocxodusWasm.csproj</c>).</para>
 /// </summary>
 [SupportedOSPlatform("browser")]
 internal static class ComparisonEngine
@@ -51,9 +32,8 @@ internal static class ComparisonEngine
     /// <returns><c>"ok"</c> on success, or a JSON error object.</returns>
     /// <remarks>
     /// Best-effort: a warm-up that throws has still forced the assemblies to load and the cold
-    /// path to run, so it is latched even on failure — a caller must not pay a failing warm-up
-    /// on every comparison. The failure is reported rather than thrown so a comparison entry
-    /// point can ignore it and proceed to the caller's real work.
+    /// path to run, so it is latched even on failure. The failure is reported rather than
+    /// thrown, because warming is never a precondition of the caller's real work.
     /// </remarks>
     internal static string EnsureWarm()
     {
@@ -94,7 +74,7 @@ internal static class ComparisonEngine
     /// Build a minimal but valid DOCX package (one paragraph) in memory.
     /// Includes the parts comparison expects (styles, settings).
     /// </summary>
-    internal static byte[] BuildSeedDocx(string text)
+    private static byte[] BuildSeedDocx(string text)
     {
         using var ms = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
