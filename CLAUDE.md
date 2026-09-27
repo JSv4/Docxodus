@@ -343,9 +343,10 @@ Reference commits: `#206`, `#209`; reference tags: `v6.1.0`, `v6.2.0`.
 Pushing `vX.Y.Z` fires `publish.yml`, which derives the version from the tag and publishes
 **four NuGet packages** (`Docxodus`, `Redline`, `Docx2Html`, `Docx2OC`), **two npm packages**
 (`docxodus`, then `@docxodus/export`), and twelve self-contained CLI binaries (three tools ×
-four RIDs) as workflow artifacts. Release assets stay empty — the binaries are artifacts, not
-attachments, and have
-been for every release; an empty asset list is not a failed run.
+four RIDs). Its last job, `release-assets`, attaches those binaries plus `SHA256SUMS` to the
+tag's GitHub Release — creating the Release with a changelog pointer if step 5 has not run yet, so
+edit its notes (`gh release edit --notes-file`) rather than failing on `gh release create`. A
+Release with no assets means that job did not run.
 
 **`docx-scalpel` does not ship from a `vX.Y.Z` tag.** PyPI is driven by
 `python-publish.yml` on a separate `docx-scalpel-v<PEP440>` tag. That decoupling is

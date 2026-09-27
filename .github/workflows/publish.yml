@@ -386,3 +386,58 @@ jobs:
             'Update consumer CDN snippets only after approval and a successful CDN check. See `docs/npm-releases.md`.', '',
           ].join('\n'));
           NODE
+
+  # Attach the twelve CLI binaries and their SHA256SUMS to the tag's GitHub Release, so a
+  # release cannot go out without them (v12.6.2 did: the upload used to be a manual step). If the
+  # Release does not exist yet it is created with a pointer to the changelog, which the person
+  # cutting the release then replaces; an existing Release keeps its notes. --clobber makes a
+  # re-run (workflow_dispatch after a fix) replace the assets instead of failing.
+  release-assets:
+    needs: [build-binaries, build-docx2html-binaries, build-docx2oc-binaries]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "VERSION=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download binaries
+        uses: actions/download-artifact@v8
+        with:
+          pattern: '{redline,docx2html,docx2oc}-*'
+          path: ./downloaded
+
+      - name: Name each binary after its artifact and checksum them
+        run: |
+          mkdir -p ./assets
+          for dir in ./downloaded/*/; do
+            name=$(basename "$dir")
+            # Each artifact holds the bare binary (redline, redline.exe, ...) and its .pdb.
+            binary=$(find "$dir" -maxdepth 1 -type f ! -name '*.pdb' | head -n 1)
+            test -n "$binary" || { echo "::error::no binary in artifact $name"; exit 1; }
+            cp "$binary" "./assets/$name"
+          done
+          count=$(ls ./assets | wc -l)
+          test "$count" -eq 12 || { echo "::error::expected 12 binaries, found $count"; exit 1; }
+          (cd ./assets && sha256sum * > SHA256SUMS)
+          cat ./assets/SHA256SUMS
+
+      - name: Attach to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: v${{ steps.version.outputs.VERSION }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" --verify-tag --title "Docxodus $VERSION" \
+              --notes "Release notes are being prepared; see the [changelog](https://github.com/${GH_REPO}/blob/${TAG}/CHANGELOG.md)."
+          fi
+          gh release upload "$TAG" ./assets/* --clobber
