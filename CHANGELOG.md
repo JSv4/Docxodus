@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [12.6.3] - 2026-09-27
+
 ### Fixed
 
 - WASM calls no longer intermittently hang at 100% CPU under Node or in the browser (issue
