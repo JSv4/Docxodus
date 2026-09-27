@@ -1312,21 +1312,11 @@ public static class WmlToMarkdownConverter
     private static string ResolveListMarker(XElement p, EmitContext ctx)
     {
         if (!ctx.Settings.ResolveNumbering) return "-";
-        try
-        {
-            var resolved = ListItemRetriever.RetrieveListItem(ctx.Document, p, ctx.ListItemRetrieverSettings);
-            if (string.IsNullOrEmpty(resolved)) return "-";
-            // Bullet-format levels produce a literal bullet glyph (e.g. "·" / ""); render as "-".
-            if (resolved.Length == 1 && !char.IsLetterOrDigit(resolved, 0)) return "-";
-            return resolved.TrimEnd();
-        }
-        catch
-        {
-            // ListItemRetriever throws on malformed numbering setups (e.g. missing
-            // NumberingDefinitionsPart). Falling back to "-" matches the spec's promise
-            // that "lossy by design, honestly" — we degrade visibly, never silently.
-            return "-";
-        }
+        var resolved = ListItemRetriever.RetrieveListItem(ctx.Document, p, ctx.ListItemRetrieverSettings);
+        if (string.IsNullOrEmpty(resolved)) return "-";
+        // Bullet-format levels produce a literal bullet glyph (e.g. "·" / ""); render as "-".
+        if (resolved.Length == 1 && !char.IsLetterOrDigit(resolved, 0)) return "-";
+        return resolved.TrimEnd();
     }
 
     // ------------------------------------------------------------------

@@ -36,17 +36,10 @@ internal static class ListNumberResolver
         // numPr — and the HTML converter resolves them via ListItemRetriever just
         // fine. Letting ListItemRetriever decide (it returns null for non-list-items)
         // keeps the projector aligned with the HTML converter — see issue #141.
-        try
-        {
-            var resolved = ListItemRetriever.RetrieveListItem(doc, paragraph, settings ?? new ListItemRetrieverSettings());
-            if (string.IsNullOrWhiteSpace(resolved)) return null;
-            var trimmed = resolved.TrimEnd();
-            if (trimmed.Length == 1 && !char.IsLetterOrDigit(trimmed, 0)) return null;
-            return trimmed;
-        }
-        catch
-        {
-            return null;
-        }
+        var resolved = ListItemRetriever.RetrieveListItem(doc, paragraph, settings ?? new ListItemRetrieverSettings());
+        if (string.IsNullOrWhiteSpace(resolved)) return null;
+        var trimmed = resolved.TrimEnd();
+        if (trimmed.Length == 1 && !char.IsLetterOrDigit(trimmed, 0)) return null;
+        return trimmed;
     }
 }

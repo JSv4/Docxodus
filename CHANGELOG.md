@@ -12,6 +12,15 @@ All notable changes to this project will be documented in this file.
   each comment paragraph still paid for a throw and a full list re-initialization. It now
   returns `null` straight away. Comment paragraphs still get no list marker; that behaviour is
   now deliberate rather than a side effect of the exception.
+- Malformed list numbering no longer makes `ListItemRetriever.RetrieveListItem` throw (issue
+  #818). Examples are a `w:num` whose `w:abstractNum` is missing, a paragraph level with no
+  `w:lvl` or past the last level, a missing or non-integer numbering attribute, and a counter a
+  number format can't represent. Such a paragraph now gets no list marker. A counter outside a
+  format's range (a negative Roman numeral, say) renders as decimal. DOCX→HTML conversion used
+  to fail outright on these documents and now converts them. The IR reader, the markdown
+  projection and `ListNumberResolver` used to hide these exceptions behind a broad `catch`.
+  Those catches are gone, so a future retriever bug fails loudly instead of silently dropping
+  list markers. Numbering on the test corpus is unchanged.
 
 ## [12.6.3] - 2026-09-27
 

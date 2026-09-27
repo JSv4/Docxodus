@@ -140,4 +140,66 @@ public class ListItemRetrieverTests
         }
         return stream.ToArray();
     }
+
+    private const string DecimalLevel = """<w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/>""";
+    private const string Num2UsesAbstract1 = """<w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>""";
+    private const string Num2UsesAbstract2 = """<w:num w:numId="2"><w:abstractNumId w:val="2"/></w:num>""";
+
+    [Theory]
+    // numId 2 points at an abstractNum that doesn't exist.
+    [InlineData("""<w:num w:numId="2"><w:abstractNumId w:val="99"/></w:num>""", 0, null)]
+    // No w:lvl is defined at or below the paragraph's level.
+    [InlineData("""<w:abstractNum w:abstractNumId="2"><w:lvl w:ilvl="3">""" + DecimalLevel + "</w:lvl></w:abstractNum>" + Num2UsesAbstract2, 0, null)]
+    // The paragraph's level is past the last counter slot.
+    [InlineData(Num2UsesAbstract1, 10, null)]
+    // The only w:lvl has no w:ilvl attribute.
+    [InlineData("""<w:abstractNum w:abstractNumId="2"><w:lvl>""" + DecimalLevel + "</w:lvl></w:abstractNum>" + Num2UsesAbstract2, 0, null)]
+    // A non-integer w:start counts from the default of 0.
+    [InlineData("""<w:abstractNum w:abstractNumId="2"><w:lvl w:ilvl="0"><w:start w:val="abc"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum>""" + Num2UsesAbstract2, 0, "0.")]
+    // A negative counter can't be written in Roman numerals, so it falls back to decimal.
+    [InlineData("""<w:abstractNum w:abstractNumId="2"><w:lvl w:ilvl="0"><w:start w:val="-1"/><w:numFmt w:val="upperRoman"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum>""" + Num2UsesAbstract2, 0, "-1.")]
+    // A %0 placeholder refers to no level and stays literal.
+    [InlineData("""<w:abstractNum w:abstractNumId="2"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%0."/></w:lvl></w:abstractNum>""" + Num2UsesAbstract2, 0, "%0.")]
+    public void RetrieveListItem_MalformedNumbering_DegradesWithoutThrowing(string malformedNumbering, int ilvl, string? expectedMarker)
+    {
+        // Regression test for #818: each of these threw from RetrieveListItem, which callers
+        // either hid behind a broad catch (IR, markdown) or let escape (HTML conversion).
+        var bytes = BuildMalformedAndValidList(malformedNumbering, ilvl);
+        using (var stream = new MemoryStream(bytes))
+        using (var wordDoc = WordprocessingDocument.Open(stream, false))
+        {
+            var paragraphs = wordDoc.MainDocumentPart!.GetXDocument().Descendants(W.p).ToList();
+
+            Assert.Equal(expectedMarker, ListItemRetriever.RetrieveListItem(wordDoc, paragraphs[0]));
+            // The malformed list must not stop the valid one from being numbered.
+            Assert.Equal("1.", ListItemRetriever.RetrieveListItem(wordDoc, paragraphs[1]));
+        }
+
+        // The IR reader and HTML converter consume the same retriever with no catch around it.
+        IrReader.Read(new WmlDocument("malformed.docx", bytes));
+        WmlToHtmlConverter.ConvertToHtml(new WmlDocument("malformed.docx", bytes), new WmlToHtmlConverterSettings());
+    }
+
+    /// <summary>
+    /// A body with a numId 2 paragraph at <paramref name="ilvl"/> followed by a numId 1 paragraph,
+    /// where numId 1 is a valid decimal list and <paramref name="malformedNumbering"/> defines numId 2.
+    /// </summary>
+    private static byte[] BuildMalformedAndValidList(string malformedNumbering, int ilvl)
+    {
+        const string Ns = "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"";
+        static string ListItem(int numId, int level) =>
+            $"""<w:p><w:pPr><w:numPr><w:ilvl w:val="{level}"/><w:numId w:val="{numId}"/></w:numPr></w:pPr><w:r><w:t>item</w:t></w:r></w:p>""";
+
+        using var stream = new MemoryStream();
+        using (var wordDoc = WordprocessingDocument.Create(stream, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = wordDoc.AddMainDocumentPart();
+            main.PutXDocument(XDocument.Parse($"<w:document {Ns}><w:body>{ListItem(2, ilvl)}{ListItem(1, 0)}</w:body></w:document>"));
+            main.AddNewPart<StyleDefinitionsPart>().PutXDocument(XDocument.Parse($"<w:styles {Ns}/>"));
+            main.AddNewPart<DocumentSettingsPart>().PutXDocument(XDocument.Parse($"<w:settings {Ns}/>"));
+            main.AddNewPart<NumberingDefinitionsPart>().PutXDocument(XDocument.Parse(
+                $"""<w:numbering {Ns}><w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0">{DecimalLevel}</w:lvl></w:abstractNum>{malformedNumbering}<w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num></w:numbering>"""));
+        }
+        return stream.ToArray();
+    }
 }
