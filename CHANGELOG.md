@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- `ListItemRetriever.RetrieveListItem` no longer throws a `NullReferenceException` for a
+  paragraph outside the parts list numbering covers (issue #814). Comment paragraphs hit this on
+  every IR read (verification, diff, reversibility proof). Callers swallowed the exception, but
+  each comment paragraph still paid for a throw and a full list re-initialization. It now
+  returns `null` straight away. Comment paragraphs still get no list marker; that behaviour is
+  now deliberate rather than a side effect of the exception.
+
 ## [12.6.3] - 2026-09-27
 
 ### Fixed
