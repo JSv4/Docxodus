@@ -831,8 +831,7 @@ internal static class IrReader
 
         // Resolve the auto-number marker against the LIVE package while we have it (see
         // IrParagraph.ResolvedListMarker for the rationale). RetrieveListItem returns null for
-        // non-list-items; it is the exact string the markdown projection consumes. Tolerance-wrapped
-        // so a malformed numbering setup degrades to null (no marker) rather than aborting the read.
+        // non-list-items (malformed numbering included); it is the exact string the markdown projection consumes.
         string? resolvedMarker = ResolveListMarkerText(p, ctx);
 
         return new IrParagraph
@@ -1172,27 +1171,15 @@ internal static class IrReader
     /// Resolve the raw auto-number marker for <paramref name="p"/> via
     /// <see cref="ListItemRetriever.RetrieveListItem(WordprocessingDocument, XElement, ListItemRetrieverSettings)"/>
     /// against the live package (<see cref="ReadContext.Main"/>'s owning <see cref="WordprocessingDocument"/>).
-    /// Returns null when the document has no numbering part, the paragraph is not a list item, or any
-    /// tolerable fault occurs — matching the projection's null-on-failure contract.
+    /// Returns null when the document has no numbering part or the paragraph is not a list item
+    /// (malformed numbering included).
     /// </summary>
     private static string? ResolveListMarkerText(XElement p, ReadContext ctx)
     {
         if (ctx.Main.OpenXmlPackage is not WordprocessingDocument wdoc)
             return null;
-        try
-        {
-            var resolved = ListItemRetriever.RetrieveListItem(wdoc, p, new ListItemRetrieverSettings());
-            return string.IsNullOrEmpty(resolved) ? null : resolved;
-        }
-        catch
-        {
-            // The oracle's ResolveListMarker / ListNumberResolver.Resolve both wrap RetrieveListItem in
-            // a broad catch (it throws DocxodusException on malformed numbering setups, e.g. an ilvl set
-            // twice). We mirror that EXACT broad catch here — scoped to this single resolver call — so a
-            // pathological numbering definition degrades to "no marker", matching the projection and
-            // preserving reader totality. This is the resolver's own contract, not a reader-wide policy.
-            return null;
-        }
+        var resolved = ListItemRetriever.RetrieveListItem(wdoc, p, new ListItemRetrieverSettings());
+        return string.IsNullOrEmpty(resolved) ? null : resolved;
     }
 
     // --- inline walk (runs, hyperlinks N14, fields N9) --------------------
