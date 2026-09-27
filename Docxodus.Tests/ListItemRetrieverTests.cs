@@ -85,7 +85,7 @@ public class ListItemRetrieverTests
     [Fact]
     public void IrRead_DocumentWithComments_RaisesNoListItemRetrieverException()
     {
-        // IrReader swallows RetrieveListItem failures, so #814 surfaced only as a first-chance
+        // IrReader swallowed RetrieveListItem failures, so #814 surfaced only as a first-chance
         // exception per comment paragraph on every IR read.
         var thrown = new List<Exception>();
         var testThread = Environment.CurrentManagedThreadId;
@@ -142,6 +142,7 @@ public class ListItemRetrieverTests
     }
 
     private const string DecimalLevel = """<w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/>""";
+    private const string ValidList1 = """<w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0">""" + DecimalLevel + """</w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num>""";
     private const string Num2UsesAbstract1 = """<w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>""";
     private const string Num2UsesAbstract2 = """<w:num w:numId="2"><w:abstractNumId w:val="2"/></w:num>""";
 
@@ -160,45 +161,76 @@ public class ListItemRetrieverTests
     [InlineData("""<w:abstractNum w:abstractNumId="2"><w:lvl w:ilvl="0"><w:start w:val="-1"/><w:numFmt w:val="upperRoman"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum>""" + Num2UsesAbstract2, 0, "-1.")]
     // A %0 placeholder refers to no level and stays literal.
     [InlineData("""<w:abstractNum w:abstractNumId="2"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%0."/></w:lvl></w:abstractNum>""" + Num2UsesAbstract2, 0, "%0.")]
+    // Level 1 looks like it continues level 0, but with no level 0 there is no format to continue with.
+    [InlineData("""<w:abstractNum w:abstractNumId="2"><w:lvl w:ilvl="1"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%2."/></w:lvl></w:abstractNum>""" + Num2UsesAbstract2, 1, "1.")]
     public void RetrieveListItem_MalformedNumbering_DegradesWithoutThrowing(string malformedNumbering, int ilvl, string? expectedMarker)
     {
         // Regression test for #818: each of these threw from RetrieveListItem, which callers
         // either hid behind a broad catch (IR, markdown) or let escape (HTML conversion).
-        var bytes = BuildMalformedAndValidList(malformedNumbering, ilvl);
-        using (var stream = new MemoryStream(bytes))
-        using (var wordDoc = WordprocessingDocument.Open(stream, false))
-        {
-            var paragraphs = wordDoc.MainDocumentPart!.GetXDocument().Descendants(W.p).ToList();
+        var bytes = BuildList(ValidList1 + malformedNumbering, (NumId: 2, Ilvl: ilvl), (NumId: 1, Ilvl: 0));
 
-            Assert.Equal(expectedMarker, ListItemRetriever.RetrieveListItem(wordDoc, paragraphs[0]));
-            // The malformed list must not stop the valid one from being numbered.
-            Assert.Equal("1.", ListItemRetriever.RetrieveListItem(wordDoc, paragraphs[1]));
-        }
+        // The malformed list must not stop the valid one from being numbered.
+        Assert.Equal(new[] { expectedMarker, "1." }, RetrieveMarkers(bytes));
+        AssertConsumersRead(bytes);
+    }
 
-        // The IR reader and HTML converter consume the same retriever with no catch around it.
-        IrReader.Read(new WmlDocument("malformed.docx", bytes));
-        WmlToHtmlConverter.ConvertToHtml(new WmlDocument("malformed.docx", bytes), new WmlToHtmlConverterSettings());
+    [Fact]
+    public void RetrieveListItem_ListParagraphAtUndefinedLevel_LosesOnlyItsOwnMarker()
+    {
+        // Both paragraphs share the style|numId cache entry, so the level check must run per paragraph.
+        var bytes = BuildList(ValidList1, (NumId: 1, Ilvl: 0), (NumId: 1, Ilvl: 10));
+
+        Assert.Equal(new[] { "1.", null }, RetrieveMarkers(bytes));
+    }
+
+    [Fact]
+    public void RetrieveListItem_EmptyNumberingPart_IsNotAListItem()
+    {
+        var bytes = BuildList(numbering: null, (NumId: 1, Ilvl: 0));
+
+        Assert.Equal(new string?[] { null }, RetrieveMarkers(bytes));
+        AssertConsumersRead(bytes);
+    }
+
+    private static string?[] RetrieveMarkers(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var wordDoc = WordprocessingDocument.Open(stream, false);
+        return wordDoc.MainDocumentPart!.GetXDocument().Descendants(W.p)
+            .Select(p => ListItemRetriever.RetrieveListItem(wordDoc, p))
+            .ToArray();
+    }
+
+    /// <summary>The IR reader, markdown projection and HTML converter call the retriever with no catch around it.</summary>
+    private static void AssertConsumersRead(byte[] bytes)
+    {
+        IrReader.Read(new WmlDocument("list.docx", bytes));
+        WmlToMarkdownConverter.Convert(new WmlDocument("list.docx", bytes), new WmlToMarkdownConverterSettings());
+        WmlToHtmlConverter.ConvertToHtml(new WmlDocument("list.docx", bytes), new WmlToHtmlConverterSettings());
     }
 
     /// <summary>
-    /// A body with a numId 2 paragraph at <paramref name="ilvl"/> followed by a numId 1 paragraph,
-    /// where numId 1 is a valid decimal list and <paramref name="malformedNumbering"/> defines numId 2.
+    /// A body of list paragraphs, one per (numId, ilvl) item, over a numbering part holding
+    /// <paramref name="numbering"/> (or an empty numbering part when null).
     /// </summary>
-    private static byte[] BuildMalformedAndValidList(string malformedNumbering, int ilvl)
+    private static byte[] BuildList(string? numbering, params (int NumId, int Ilvl)[] items)
     {
         const string Ns = "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"";
-        static string ListItem(int numId, int level) =>
-            $"""<w:p><w:pPr><w:numPr><w:ilvl w:val="{level}"/><w:numId w:val="{numId}"/></w:numPr></w:pPr><w:r><w:t>item</w:t></w:r></w:p>""";
+        var body = string.Concat(items.Select(item =>
+            $"""<w:p><w:pPr><w:numPr><w:ilvl w:val="{item.Ilvl}"/><w:numId w:val="{item.NumId}"/></w:numPr></w:pPr><w:r><w:t>item</w:t></w:r></w:p>"""));
 
         using var stream = new MemoryStream();
         using (var wordDoc = WordprocessingDocument.Create(stream, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
         {
             var main = wordDoc.AddMainDocumentPart();
-            main.PutXDocument(XDocument.Parse($"<w:document {Ns}><w:body>{ListItem(2, ilvl)}{ListItem(1, 0)}</w:body></w:document>"));
+            main.PutXDocument(XDocument.Parse($"<w:document {Ns}><w:body>{body}</w:body></w:document>"));
             main.AddNewPart<StyleDefinitionsPart>().PutXDocument(XDocument.Parse($"<w:styles {Ns}/>"));
             main.AddNewPart<DocumentSettingsPart>().PutXDocument(XDocument.Parse($"<w:settings {Ns}/>"));
-            main.AddNewPart<NumberingDefinitionsPart>().PutXDocument(XDocument.Parse(
-                $"""<w:numbering {Ns}><w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0">{DecimalLevel}</w:lvl></w:abstractNum>{malformedNumbering}<w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num></w:numbering>"""));
+            var numberingPart = main.AddNewPart<NumberingDefinitionsPart>();
+            if (numbering == null)
+                numberingPart.FeedData(new MemoryStream());
+            else
+                numberingPart.PutXDocument(XDocument.Parse($"<w:numbering {Ns}>{numbering}</w:numbering>"));
         }
         return stream.ToArray();
     }

@@ -14,9 +14,10 @@ All notable changes to this project will be documented in this file.
   now deliberate rather than a side effect of the exception.
 - Malformed list numbering no longer makes `ListItemRetriever.RetrieveListItem` throw (issue
   #818). Examples are a `w:num` whose `w:abstractNum` is missing, a paragraph level with no
-  `w:lvl` or past the last level, a missing or non-integer numbering attribute, and a counter a
-  number format can't represent. Such a paragraph now gets no list marker. A counter outside a
-  format's range (a negative Roman numeral, say) renders as decimal. DOCX→HTML conversion used
+  `w:lvl` or past the last level, a missing or non-integer attribute in `numbering.xml`, an empty
+  numbering or styles part, and a counter a number format can't represent. Such a paragraph now
+  gets no list marker. A counter outside a format's range (a negative Roman numeral, say) renders
+  as decimal. DOCX→HTML conversion used
   to fail outright on these documents and now converts them. The IR reader, the markdown
   projection and `ListNumberResolver` used to hide these exceptions behind a broad `catch`.
   Those catches are gone, so a future retriever bug fails loudly instead of silently dropping

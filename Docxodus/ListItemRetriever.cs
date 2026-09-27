@@ -679,7 +679,7 @@ namespace Docxodus
                         var defaultAttribute = s.Attribute(W._default);
                         var isDefault = false;
                         if (defaultAttribute != null &&
-                            (bool)defaultAttribute.ToBoolean()!)
+                            defaultAttribute.Value.ToLowerInvariant() is "1" or "true" or "on")
                             isDefault = true;
                         return isDefault;
                     });
@@ -961,6 +961,10 @@ namespace Docxodus
                 return;
             var stylesXDoc = stylesPart.GetXDocument();
 
+            // An empty numbering or styles part defines no lists; leave the paragraphs unannotated.
+            if (numXDoc.Root == null || stylesXDoc.Root == null)
+                return;
+
             var rootNode = mainXDoc.Root!;
 
             InitializeListItemRetrieverForStory(numXDoc, stylesXDoc, rootNode);
@@ -1069,6 +1073,8 @@ namespace Docxodus
                     // recount it from that slice; the declared vector is authoritative and the
                     // paragraphs after it in the shell continue from it.
                     var declared = DeclaredLevelNumbers(paragraph);
+                    if (declared?.Count <= ilvl)
+                        declared = null;
                     var levelNumbers = declared ?? new List<int>();
 
                     for (int level = 0; declared == null && level <= ilvl; level++)
@@ -1247,13 +1253,20 @@ namespace Docxodus
         }
 
         /// <summary>The counter vector a paragraph declares through <see cref="PtOpenXml.LevelNumbers"/>
-        /// ("2,3"), or null when it carries none.</summary>
+        /// ("2,3"), or null when it carries none or it doesn't parse.</summary>
         private static List<int>? DeclaredLevelNumbers(XElement paragraph)
         {
             var declared = (string?)paragraph.Attribute(PtOpenXml.LevelNumbers);
             if (string.IsNullOrEmpty(declared))
                 return null;
-            return declared.Split(',').Select(n => int.Parse(n, CultureInfo.InvariantCulture)).ToList();
+            var numbers = new List<int>();
+            foreach (var n in declared.Split(','))
+            {
+                if (!int.TryParse(n, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number))
+                    return null;
+                numbers.Add(number);
+            }
+            return numbers;
         }
 
         /// <summary>
@@ -1335,9 +1348,10 @@ namespace Docxodus
                 }
                 catch (Exception e) when (e is ArgumentOutOfRangeException or IndexOutOfRangeException)
                 {
-                    // The text formatters cover a bounded range: Roman numerals, letters and spelled-out
-                    // numbers reject negative, zero or very large counters this way. Such a counter
-                    // renders as decimal. The catch spans only the formatter call.
+                    // The text formatters cover a bounded range: Roman numerals and letters reject
+                    // negative counters, Roman numerals very large ones, and spelled-out numbers zero,
+                    // negative or very large ones. Such a counter renders as decimal. The catch spans
+                    // only the formatter call (built-in or a caller's ListItemTextImplementations).
                     levelText = levelNumber.ToString(CultureInfo.InvariantCulture);
                 }
                 return levelText;
