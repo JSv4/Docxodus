@@ -6,6 +6,18 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- WASM calls no longer intermittently hang at 100% CPU under Node or in the browser (issue
+  #811). The hang was Mono's precise interpreter stack marking: every nursery collection walks
+  the chain of interpreter-to-native transition records, and Mono's AOT compiler omits a record
+  pop on a `ret` reached only by a backward branch, so the OpenXml SDK's `GetAllParts()`
+  iterator leaves its record behind on each `yield return` and the next call links it to itself.
+  WebAssembly does not trap on the resulting walk, so a collection inside that loop never
+  ended. The build now turns that marking off (`MONO_INTERPRETER_OPTIONS=-precise` in the boot
+  config), which scans the interpreter stack conservatively as .NET 8 did. This was also the
+  cause of the first-comparison hang of #695/#696 (reproduced, and fixed by this setting alone)
+  and very likely of the first-preview hang of #779, so the per-export warm-ups those added are
+  removed; `DocumentComparer.Warmup` (the worker's `prepare()`) remains as a latency tool.
+
 - `DocxSnapshotStore.CompareAsync` and `DocxVersionHistory.CompareVersionsAsync` now copy the
   caller's `DocxDiffSettings` before awaiting host blob storage. Previously the settings object
   was read only after the asynchronous snapshot reads (and lazily again by the returned
