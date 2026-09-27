@@ -797,12 +797,15 @@ namespace Docxodus
                 return null;
 
             var listItemInfo = paragraph.Annotation<ListItemInfo>();
-            if (listItemInfo == null)
+            if (listItemInfo == null && IsInContentPart(wordDoc, paragraph))
+            {
                 InitializeListItemRetriever(wordDoc, settings);
+                listItemInfo = paragraph.Annotation<ListItemInfo>();
+            }
 
-            // InitializeListItemRetriever always annotates the paragraph.
-            listItemInfo = paragraph.Annotation<ListItemInfo>()!;
-            if (!listItemInfo.IsListItem)
+            // Initialization numbers only ContentParts(); a paragraph anywhere else (comments,
+            // a detached element) stays unannotated and is not a list item.
+            if (listItemInfo is not { IsListItem: true })
                 return null;
 
             var numberingDefinitionsPart = wordDoc
@@ -931,6 +934,9 @@ namespace Docxodus
                 languageIdentifier = "en-US";
             return languageIdentifier;
         }
+
+        private static bool IsInContentPart(WordprocessingDocument wordDoc, XElement paragraph) =>
+            paragraph.Document is { } xDoc && wordDoc.ContentParts().Any(part => part.GetXDocument() == xDoc);
 
         private static void InitializeListItemRetriever(WordprocessingDocument wordDoc, ListItemRetrieverSettings? settings)
         {
