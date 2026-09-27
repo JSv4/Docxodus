@@ -70,10 +70,11 @@
 
   <!-- Turn off the interpreter's precise stack marking (issue #811). With it on (the .NET 10
        default), every nursery collection walks the chain of interpreter-to-native transition
-       records to find slots that hold no references. In this mixed AOT + interpreter build that
-       chain can become cyclic, and WebAssembly does not trap on the bad pointer, so the walk
-       spins forever inside whatever call happened to allocate. Conservative marking of the
-       interpreter stack is the pre-.NET 9 behaviour and never walks the chain.
+       records. Mono's AOT compiler omits the record pop on a `ret` reached only by a backward
+       branch, so the OpenXml SDK's GetAllParts() iterator leaves its record behind on every
+       `yield return` and the next MoveNext links it to itself; WebAssembly does not trap on the
+       resulting walk, so a collection inside that loop spins forever. Conservative marking of the
+       interpreter stack is the .NET 8 behaviour and never walks the chain.
        npm/tests/wasm-runtime-config.spec.ts pins this; wasm-packaging.md has the evidence. -->
   <ItemGroup>
     <WasmEnvironmentVariable Include="MONO_INTERPRETER_OPTIONS" Value="-precise" />

@@ -226,15 +226,24 @@ the interpreter initializes, and clears the interpreter's precise-GC option (on 
 **What the option did.** With precise marking on, every nursery collection first walks the
 thread's chain of interpreter-to-native transition records ("LMFs", *last managed frame*) and
 each record's interpreter frames, to learn which interpreter stack slots cannot hold references
-(`interp_mark_no_ref_slots`, inlined into `interp_mark_stack`). In this mixed AOT + interpreter
-build that chain can become cyclic. A native process would fault on the bad pointer
-(dotnet/runtime#123573 is the same function crashing on `lmf = 0x40`); WebAssembly does not trap
-on it, so the walk never ends. The call that happened to allocate — `previewBatch`,
-`proveRedlineReversibility`, `verifyDeliverable`, a first comparison — sits at 100% CPU with no
-exception, and because the JS thread is inside that synchronous export no timeout can fire.
-With the option off, `interp_mark_stack` scans the interpreter stack conservatively (the
-.NET 8 behaviour; .NET 9 introduced the option and made it the default) and never touches the
-chain.
+(`interp_mark_no_ref_slots`, inlined into `interp_mark_stack`). With it off, `interp_mark_stack`
+scans the interpreter stack conservatively (the .NET 8 behaviour; .NET 9 introduced the option
+and made it the default) and never touches the chain.
+
+**Why the chain cycles.** In this mixed AOT + interpreter build, an LLVM-compiled method that has
+exception clauses pushes an `IL_STATE` record on entry and must pop it on every return. Mono emits
+that pop at `ret` only `if (cfg->cbb->in_count ...)` (`method-to-ir.c`, unchanged on `main`), and
+because IR is built in IL order, a `ret` in a block entered *only* by a later backward branch still
+has `in_count == 0` and gets no pop. The OpenXml SDK's `OpenXmlPackageExtensions.GetAllParts()`
+iterator has exactly that shape: its `yield return` is the first block of a `while` body. The
+compiled `MoveNext` pops on both `return false` paths and branches straight past the pop on
+`return true`. So every element it yields leaves its record at the head of the chain; the next
+`MoveNext`, called from the same AOT caller at the same stack depth, pushes into the same slot and
+links it to itself. For the rest of that `foreach` — `LoadAllParts`, `SavePartContents` inside
+`OpenXmlPackage.Dispose` — the head is a self-loop, and a nursery collection there walks it
+forever: WebAssembly does not trap on the walk the way a native process faults on a bad record
+(dotnet/runtime#123573 may be the same bug). That is why the hang needed no particular export,
+input or history, only a collection landing in one of those windows.
 
 **Evidence.** The SDK's own `dotnet.native.js.symbols` is written *before* the post-link
 `wasm-opt -Oz` pass renumbers functions, so for a Release build it names the wrong functions.
@@ -245,6 +254,10 @@ command by hand (`wasm-opt --enable-simd --enable-exception-handling --enable-bu
 identical to a normal build. Adding `-g` to `wasm-opt` instead changes the output (27,307 functions
 against 21,904), and that build did not hang in 48 runs, so it cannot stand in for the shipped one.
 
+- A write watchpoint on the chain head (every `i32.store` instrumented with binaryen) caught
+  the self-loop forming 77 times in one `verifyDeliverable`, every time on `GetAllParts.MoveNext`
+  pushing over its own un-popped record. An IL scan of every method with exception clauses in
+  the shipped assemblies (4,473) finds that shape in that one method only.
 - Every sample of every hang — 50 of 50 across two hangs, reached from different exports — is
   at the header of the LMF loop, below `collect_nursery → pin_from_roots →
   sgen_client_scan_thread_data → interp_mark_stack`. None is in the frame or slot loops inside
@@ -260,18 +273,20 @@ against 21,904), and that build did not hang in 48 runs, so it cannot stand in f
 proportional to the interpreter stack" and fixed each comparison export by running a tiny seed
 comparison first; #779 applied that diagnosis to the first preview. (#779's own hang no longer
 reproduces from its parent commit, so it is attributed here by mechanism, not by a red-green
-run.) Our inference is that the seeds worked by moving the heap and code layout off a losing
-configuration, which would also explain why the hang looked non-monotone in nursery size (4m,
-6m and 12m hung; 8m and 16m did not) and why the #697 sequence no longer hangs on current builds
-even without its seed. Either way they could not reach an export that had already run warm —
-#811's hangs came rounds into a process. The per-export warm-ups are gone;
+run.) The seeds most likely worked by moving where collections fell relative to those windows,
+which would also explain why the hang looked non-monotone in nursery size (4m, 6m and 12m hung;
+8m and 16m did not) and why the #697 sequence no longer hangs on current builds even without its
+seed. Either way they could not reach an export that had already run warm — #811's hangs came
+rounds into a process. The per-export warm-ups are gone;
 `DocumentComparer.Warmup` (the npm worker's `prepare()`) remains, as a latency tool only
 (`ComparisonEngine`).
 
-**What it does not fix.** The cycle in the transition chain is a runtime defect; this setting
-removes the one walker of it that runs on every collection. Other walkers (exception stack
-traces) still exist, and none has been seen to hang. When the runtime is upgraded, re-check
-dotnet/runtime#123573 before dropping the setting.
+**What it does not fix.** The missing pop is a runtime (AOT compiler) defect; this setting removes
+the one walker that runs on every collection. The exception handler walks the same chain, so an
+exception thrown from AOT code inside a `GetAllParts` loop could still loop there. None of the
+780 exceptions the full stress workload throws starts with a cycled or dead head. When the
+runtime is upgraded, re-check whether `emit_pop_lmf` at `ret` still depends on `in_count` before
+dropping the setting.
 
 ## Compression and serving
 
