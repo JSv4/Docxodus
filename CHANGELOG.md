@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [12.6.4] - 2026-09-28
+
 ### Fixed
 
 - A negative table indent (`w:tblInd`) is no longer clamped to `margin-left: 0` (issue #827).
