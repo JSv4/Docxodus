@@ -234,4 +234,40 @@ public class ListItemRetrieverTests
         }
         return stream.ToArray();
     }
+
+    [Theory]
+    // A non-integer numId reads as a missing one: with no style numbering, not a list item.
+    [InlineData("abc", "0", null)]
+    // A non-integer ilvl reads as level 0, as ListItemRetriever reads it.
+    [InlineData("1", "abc", "1.")]
+    public void MarkdownAndIr_NonIntegerNumPrValue_ReadsLikeListItemRetriever(string numId, string ilvl, string? expectedMarker)
+    {
+        // Regression test for #820: WmlToMarkdownConverter cast these values with (int?), so the
+        // markdown projection and the IR read (via IsListItemForLayout) threw FormatException.
+        var bytes = WithNumPrValues(BuildList(ValidList1, (NumId: 1, Ilvl: 0)), numId, ilvl);
+        Assert.Equal(new[] { expectedMarker }, RetrieveMarkers(bytes));
+
+        var paragraph = IrReader.Read(new WmlDocument("list.docx", bytes)).Body.Blocks.OfType<IrParagraph>().Single();
+        Assert.Equal(expectedMarker != null, paragraph.IsListItemForLayout);
+        Assert.Equal(expectedMarker != null ? 0 : null, paragraph.List?.Ilvl);
+
+        var markdown = WmlToMarkdownConverter.Convert(new WmlDocument("list.docx", bytes), new WmlToMarkdownConverterSettings()).Markdown;
+        Assert.Equal(expectedMarker != null, markdown.Contains("1. ", StringComparison.Ordinal));
+        Assert.Contains("item", markdown, StringComparison.Ordinal);
+    }
+
+    /// <summary>Overwrites the first paragraph's <c>w:numId</c> and <c>w:ilvl</c> values with arbitrary strings.</summary>
+    private static byte[] WithNumPrValues(byte[] bytes, string numId, string ilvl)
+    {
+        using var stream = new MemoryStream();
+        stream.Write(bytes);
+        using (var wordDoc = WordprocessingDocument.Open(stream, true))
+        {
+            var numPr = wordDoc.MainDocumentPart!.GetXDocument().Descendants(W.numPr).First();
+            numPr.Element(W.numId)!.SetAttributeValue(W.val, numId);
+            numPr.Element(W.ilvl)!.SetAttributeValue(W.val, ilvl);
+            wordDoc.MainDocumentPart.PutXDocument();
+        }
+        return stream.ToArray();
+    }
 }

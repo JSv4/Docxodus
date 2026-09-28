@@ -606,9 +606,10 @@ public static class WmlToMarkdownConverter
     internal static bool IsListItem(XElement p)
     {
         // Inline w:numPr wins. numId=0 is Word's explicit "remove numbering" sentinel;
-        // a numPr containing only ilvl still falls through to the style chain.
+        // a numPr containing only ilvl still falls through to the style chain. A non-integer
+        // numId reads as absent, as it does in ListItemRetriever.
         var directNumPr = p.Element(W.pPr)?.Element(W.numPr);
-        var directNumId = (int?)directNumPr?.Element(W.numId)?.Attribute(W.val);
+        var directNumId = ListItemRetriever.IntValue(directNumPr?.Element(W.numId)?.Attribute(W.val));
         if (directNumId is not null) return directNumId != 0;
         if (directNumPr is not null && directNumPr.Element(W.ilvl) is null) return true;
         // Otherwise the paragraph is a list item if its pStyle chain contributes numPr.
@@ -1288,7 +1289,7 @@ public static class WmlToMarkdownConverter
 
     private static void EmitListItem(XElement p, EmitContext ctx)
     {
-        var ilvl = (int?)p.Element(W.pPr)?.Element(W.numPr)?.Element(W.ilvl)?.Attribute(W.val) ?? 0;
+        var ilvl = ListItemRetriever.IntValue(p.Element(W.pPr)?.Element(W.numPr)?.Element(W.ilvl)?.Attribute(W.val)) ?? 0;
         var indent = new string(' ', Math.Max(0, ilvl) * 2);
         var marker = ResolveListMarker(p, ctx);
         var anchor = AnchorPrefix(p, ctx);
