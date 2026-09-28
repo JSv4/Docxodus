@@ -530,7 +530,7 @@ namespace Docxodus
         /// An integer numbering attribute, or null when it is absent or not an integer, so malformed
         /// numbering reads as "no value" instead of throwing.
         /// </summary>
-        private static int? IntValue(XAttribute? attribute) =>
+        internal static int? IntValue(XAttribute? attribute) =>
             int.TryParse(attribute?.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : null;
 
         private static string? GetParagraphStyleName(XDocument stylesXDoc, XElement paragraph)
