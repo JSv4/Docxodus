@@ -272,6 +272,11 @@ export async function runCli(argv: readonly string[]): Promise<number> {
   }
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+// npm launches the CLI through node_modules/.bin, which is a symlink on POSIX.
+// Imports from eval/stdin can instead put a non-file argument in argv[1].
+const entryPath = process.argv[1]
+  ? await realpath(process.argv[1]).catch(() => undefined)
+  : undefined;
+if (entryPath === fileURLToPath(import.meta.url)) {
   process.exitCode = await runCli(process.argv.slice(2));
 }
