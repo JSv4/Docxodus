@@ -22,9 +22,10 @@ const PINNED_FILES = [
   // reader who pastes one gets whatever engine they name, so they move too.
   'npm/src/embed.ts',
   'npm/src/index.ts',
+  'npm/src/core.ts',
 ];
 
-// `docxodus@12.6.3`, `docxodus@12.6.3/dist/embed.bundle.js`, the bare npm URL —
+// `docxodus@12.6.4`, `docxodus@12.6.4/dist/embed.bundle.js`, the bare npm URL —
 // all of them, but never `docxodus@latest`, which the docs use deliberately in
 // one "unpinned" example.
 const PIN = /docxodus@(\d+\.\d+\.\d+)/g;
