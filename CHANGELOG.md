@@ -6,6 +6,14 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Paginated view: a table taller than one page is now split across pages when its only
+  merged cells are horizontal (`colspan`, which the converter emits for Word's `w:gridSpan`,
+  e.g. full-width section-header rows) (issue #807). Such tables used to be refused by the
+  row splitter and placed whole in one page box that clips its overflow, so every row past
+  the first page-height was rendered but invisible. The splitter only cuts between rows and
+  copies rows whole, so a `colspan` can never be cut. Tables with vertical merges (`rowspan`),
+  nested tables, or footnotes still take the previous whole-block fallback.
+
 - `SourceFileCopyrightTests` no longer fails because of gitignored files (issue #822). It used to
   walk every `*.cs` under the repository root, so a stale scratch checkout under a gitignored
   directory such as `.cache/` failed its checks locally but not in CI. It now
