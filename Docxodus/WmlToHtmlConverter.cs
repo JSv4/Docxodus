@@ -2488,7 +2488,8 @@ namespace Docxodus
             // Content area within page
             sb.AppendLine($".{prefix}content {{");
             sb.AppendLine("    position: absolute;");
-            sb.AppendLine("    overflow: hidden;");
+            sb.AppendLine("    overflow-x: visible;");
+            sb.AppendLine("    overflow-y: clip;");
             sb.AppendLine("    transform-origin: top left;");
             sb.AppendLine("}");
 
@@ -5734,8 +5735,10 @@ namespace Docxodus
                         var width = WordprocessingMLUtil.AttributeToTwips(tblInd.Attribute(W._w));
                         if (width != null)
                         {
-                            style.AddIfMissing("margin-left",
-                                width > 0m
+                            // The indent is relative to the table's leading edge. Negative
+                            // values pull it into that page margin, including RTL tables (#827).
+                            style.AddIfMissing(bidiVisual != null ? "margin-right" : "margin-left",
+                                width != 0m
                                     ? string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", width / 20m)
                                     : "0");
                         }

@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- A negative table indent (`w:tblInd`) is no longer clamped to `margin-left: 0` (issue #827).
+  Word uses a negative indent to pull an over-wide table into the left margin; the HTML now
+  carries the negative margin, and the paginated view clips page content only vertically, so
+  the table's overhang into either side margin stays visible, as in Word.
+  Right-to-left tables apply the indent on their leading (right) edge.
+
 - Paginated view: a table taller than one page is now split across pages when its only
   merged cells are horizontal (`colspan`, which the converter emits for Word's `w:gridSpan`,
   e.g. full-width section-header rows) (issue #807). Such tables used to be refused by the

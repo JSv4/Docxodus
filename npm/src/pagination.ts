@@ -4304,7 +4304,11 @@ export class PaginationEngine {
     contentArea.style.left = `${dims.marginLeft}pt`;
     contentArea.style.width = `${dims.contentWidth}pt`;
     contentArea.style.height = `${contentAreaHeight}pt`;
-    contentArea.style.overflow = "hidden";
+    // Clip only vertically: Word lets over-wide content (e.g. a table pulled left by a negative
+    // w:tblInd, issue #827) run into the side margins, clipping it only at the paper edge.
+    // `clip` rather than `hidden`, because `hidden` would force the x axis to `auto`.
+    contentArea.style.overflowX = "visible";
+    contentArea.style.overflowY = "clip";
 
     // Add content
     for (const el of content) {
@@ -4413,7 +4417,7 @@ export class PaginationEngine {
     // text on top of each other (observed on a 94-footnote document: ~134pt of superimposed,
     // illegible glyphs). Shrinking the content area to the space the notes actually left removes
     // the failure mode by construction — the worst case becomes a clean clip by the content area's
-    // existing `overflow: hidden`, which is obvious and recoverable rather than silent corruption.
+    // vertical overflow clip, which is obvious and recoverable rather than silent corruption.
     //
     // This runs AFTER the append on purpose: `getBoundingClientRect()` on a detached node is all
     // zeroes, so measuring while building the page silently did nothing.

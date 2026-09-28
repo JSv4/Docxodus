@@ -1660,6 +1660,43 @@ run but generates an **empty rule** for it, so `w:rStyle` silently loses every d
 the reduced case appears to pass without exercising suppression. This is the same requirement
 CLAUDE.md notes for programmatic .NET test documents.
 
+## Tables: a negative `w:tblInd` pulls an over-wide table into the left margin
+
+Word indents a table wider than the text column by a negative amount so it spreads across both
+margins (issue #827):
+
+```xml
+<w:tblPr>
+  <w:tblW w:w="15000" w:type="dxa"/>
+  <w:tblInd w:w="-725" w:type="dxa"/>
+</w:tblPr>
+```
+
+On US Letter landscape with 1" margins the text column is 12960 twips, so this 750pt table starts
+36.25pt left of the column and ends inside the right margin.
+
+| Renderer | Result |
+|---|---|
+| Word | Table starts 36.25pt left of the text column; fully visible, clipped only at the paper edge |
+| Docxodus (before) | `margin-left: 0`; paginated content box clipped the right-hand overhang |
+| Docxodus (after) | `margin-left: -36.25pt`; content box clips vertically only |
+
+The clamp to `0` came from the upstream OpenXmlPowerTools converter, not a Docxodus decision.
+The paginated content area now uses `overflow-x: visible; overflow-y: clip` — `hidden` on one
+axis would force the other to `auto` and clip it anyway. The page box still clips at the paper.
+
+`w:tblInd` is relative to the **leading** edge of the table. For a right-to-left table
+(`w:bidiVisual`), the same value must become `margin-right: -36.25pt`; always setting
+`margin-left` leaves its right edge at the text column. See the
+[OOXML table indentation definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.tableindentation).
+The browser regression covers both directions and zoom levels, row-split tables with horizontal
+merges, actual clipping at the paper edges and body bottom, and PageMap geometry.
+
+- Code: `Docxodus/WmlToHtmlConverter.cs` (`tblInd` in the table style; `.page-content` CSS),
+  `npm/src/pagination.ts` (content area).
+- Tests: `HCO099_TableIndent_UsesLeadingMargin`,
+  `npm/tests/pagination-negative-table-indent.spec.ts`.
+
 ## Theme Colors
 
 ### `w:color`/`w:fill` are a CACHE; `w:themeColor`/`w:themeFill` are the authority
