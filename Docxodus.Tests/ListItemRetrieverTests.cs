@@ -192,6 +192,38 @@ public class ListItemRetrieverTests
         AssertConsumersRead(bytes);
     }
 
+    [Theory]
+    // Explicit numId 0 removes numbering, and Word drops the style's indentation with it.
+    [InlineData("Indented", """<w:numId w:val="0"/>""", null)]
+    // So does a numId naming no w:num: LibreOffice's DOCX import treats it exactly like 0.
+    [InlineData("Indented", """<w:numId w:val="99"/>""", null)]
+    // A w:num whose w:abstractNum is missing, or a level past the counter slots, is malformed
+    // numbering, not a request to remove it: the style's indentation stays.
+    [InlineData("Indented", """<w:numId w:val="2"/>""", "2880")]
+    [InlineData("Indented", """<w:ilvl w:val="10"/><w:numId w:val="1"/>""", "2880")]
+    // So is a style whose own numPr names no w:num.
+    [InlineData("IndentedDanglingNum", null, "2880")]
+    public void AssembleFormatting_UnusableNumbering_StripsStyleIndentOnlyWhenNumberingIsRemoved(
+        string style, string? numPr, string? expectedLeft)
+    {
+        const string Styles = """
+            <w:style w:type="paragraph" w:styleId="Indented"><w:pPr><w:ind w:left="2880"/></w:pPr></w:style>
+            <w:style w:type="paragraph" w:styleId="IndentedDanglingNum"><w:pPr><w:numPr><w:numId w:val="99"/></w:numPr><w:ind w:left="2880"/></w:pPr></w:style>
+            """;
+        var numPrXml = numPr == null ? "" : $"<w:numPr>{numPr}</w:numPr>";
+        var bytes = BuildDocument(
+            $"""<w:p><w:pPr><w:pStyle w:val="{style}"/>{numPrXml}</w:pPr><w:r><w:t>item</w:t></w:r></w:p>""",
+            Styles,
+            ValidList1 + """<w:num w:numId="2"><w:abstractNumId w:val="7"/></w:num>""");
+
+        var assembled = FormattingAssembler.AssembleFormatting(new WmlDocument("list.docx", bytes), new FormattingAssemblerSettings());
+
+        using var stream = new MemoryStream(assembled.DocumentByteArray);
+        using var wordDoc = WordprocessingDocument.Open(stream, false);
+        var ind = wordDoc.MainDocumentPart!.GetXDocument().Descendants(W.p).Single().Elements(W.pPr).Elements(W.ind).SingleOrDefault();
+        Assert.Equal(expectedLeft, (string?)ind?.Attribute(W.left));
+    }
+
     private static string?[] RetrieveMarkers(byte[] bytes)
     {
         using var stream = new MemoryStream(bytes);
@@ -231,6 +263,22 @@ public class ListItemRetrieverTests
                 numberingPart.FeedData(new MemoryStream());
             else
                 numberingPart.PutXDocument(XDocument.Parse($"<w:numbering {Ns}>{numbering}</w:numbering>"));
+        }
+        return stream.ToArray();
+    }
+
+    /// <summary>A document with the given body, style definitions and numbering definitions.</summary>
+    private static byte[] BuildDocument(string body, string styles, string numbering)
+    {
+        const string Ns = "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"";
+        using var stream = new MemoryStream();
+        using (var wordDoc = WordprocessingDocument.Create(stream, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = wordDoc.AddMainDocumentPart();
+            main.PutXDocument(XDocument.Parse($"<w:document {Ns}><w:body>{body}</w:body></w:document>"));
+            main.AddNewPart<StyleDefinitionsPart>().PutXDocument(XDocument.Parse($"<w:styles {Ns}>{styles}</w:styles>"));
+            main.AddNewPart<DocumentSettingsPart>().PutXDocument(XDocument.Parse($"<w:settings {Ns}/>"));
+            main.AddNewPart<NumberingDefinitionsPart>().PutXDocument(XDocument.Parse($"<w:numbering {Ns}>{numbering}</w:numbering>"));
         }
         return stream.ToArray();
     }
