@@ -240,7 +240,7 @@ public class ListItemRetrieverTests
     [InlineData("abc", "0", null)]
     // A non-integer ilvl reads as level 0, as ListItemRetriever reads it.
     [InlineData("1", "abc", "1.")]
-    public void MarkdownAndIr_NonIntegerNumPrValue_ReadsLikeListItemRetriever(string numId, string ilvl, string? expectedMarker)
+    public void MarkdownAndIr_NonIntegerNumPrValue_ReadsAsMissingOrLevelZero(string numId, string ilvl, string? expectedMarker)
     {
         // Regression test for #820: WmlToMarkdownConverter cast these values with (int?), so the
         // markdown projection and the IR read (via IsListItemForLayout) threw FormatException.

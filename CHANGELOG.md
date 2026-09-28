@@ -22,12 +22,11 @@ All notable changes to this project will be documented in this file.
   projection and `ListNumberResolver` used to hide these exceptions behind a broad `catch`.
   Those catches are gone, so a future retriever bug fails loudly instead of silently dropping
   list markers. Numbering on the test corpus is unchanged.
-- A paragraph whose `w:numId` or `w:ilvl` value is not an integer (`<w:numId w:val="abc"/>`)
-  no longer makes the markdown projection or the IR read throw `FormatException` (issue #820).
-  Since the IR reader asks the markdown converter whether a paragraph is a list item, one such
-  attribute used to abort DocxDiff and verification too. These values now read the way
-  `ListItemRetriever` reads them: a non-integer `w:numId` counts as absent, and a non-integer
-  `w:ilvl` counts as level 0.
+- A non-integer paragraph `w:numId` (`<w:numId w:val="abc"/>`) no longer makes the markdown
+  projection or the IR read throw `FormatException` (issue #820). The IR reader asks the
+  markdown converter whether a paragraph is a list item, so the attribute used to abort DocxDiff
+  and verification too. It now reads the same as a `w:numId` with no value. A non-integer
+  `w:ilvl` no longer makes the markdown projection throw; it reads as level 0.
 
 ## [12.6.3] - 2026-09-27
 

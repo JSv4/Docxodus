@@ -607,7 +607,7 @@ public static class WmlToMarkdownConverter
     {
         // Inline w:numPr wins. numId=0 is Word's explicit "remove numbering" sentinel;
         // a numPr containing only ilvl still falls through to the style chain. A non-integer
-        // numId reads as absent, as it does in ListItemRetriever.
+        // numId reads the same as a numId with no value.
         var directNumPr = p.Element(W.pPr)?.Element(W.numPr);
         var directNumId = ListItemRetriever.IntValue(directNumPr?.Element(W.numId)?.Attribute(W.val));
         if (directNumId is not null) return directNumId != 0;
