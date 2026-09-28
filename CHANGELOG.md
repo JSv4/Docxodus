@@ -10,6 +10,21 @@ All notable changes to this project will be documented in this file.
   Word uses a negative indent to pull an over-wide table into the left margin; the HTML now
   carries the negative margin, and the paginated view clips page content only vertically, so
   the table's overhang into either side margin stays visible, as in Word.
+
+- Paginated view: a table taller than one page is now split across pages when its only
+  merged cells are horizontal (`colspan`, which the converter emits for Word's `w:gridSpan`,
+  e.g. full-width section-header rows) (issue #807). Such tables used to be refused by the
+  row splitter and placed whole in one page box that clips its overflow, so every row past
+  the first page-height was rendered but invisible. The splitter only cuts between rows and
+  copies rows whole, so a `colspan` can never be cut. Tables with vertical merges (`rowspan`),
+  nested tables, or footnotes still take the previous whole-block fallback.
+
+- `SourceFileCopyrightTests` no longer fails because of gitignored files (issue #822). It used to
+  walk every `*.cs` under the repository root, so a stale scratch checkout under a gitignored
+  directory such as `.cache/` failed its checks locally but not in CI. It now
+  scans the files `git ls-files` reports, both tracked files and new files not yet added. Outside
+  a git checkout, such as a source tarball, it falls back to the directory walk.
+
 - `ListItemRetriever.RetrieveListItem` no longer throws a `NullReferenceException` for a
   paragraph outside the parts list numbering covers (issue #814). Comment paragraphs hit this on
   every IR read (verification, diff, reversibility proof). Callers swallowed the exception, but
@@ -26,6 +41,17 @@ All notable changes to this project will be documented in this file.
   projection and `ListNumberResolver` used to hide these exceptions behind a broad `catch`.
   Those catches are gone, so a future retriever bug fails loudly instead of silently dropping
   list markers. Numbering on the test corpus is unchanged.
+- A paragraph whose list numbering can't be resolved no longer loses the indentation its
+  paragraph style gives it (issue #821). Examples are a `w:num` whose `w:abstractNum` is missing,
+  an out-of-range paragraph level, and a paragraph style whose own numbering names a missing
+  `w:num`. A paragraph `numId` that names no `w:num` at all, `0` included, still removes the
+  style's indentation along with the numbering, which is how LibreOffice's Word-compatible
+  import reads it. See `docs/ooxml_corner_cases.md`.
+- A non-integer paragraph `w:numId` (`<w:numId w:val="abc"/>`) no longer makes the markdown
+  projection or the IR read throw `FormatException` (issue #820). The IR reader asks the
+  markdown converter whether a paragraph is a list item, so the attribute used to abort DocxDiff
+  and verification too. It now reads the same as a `w:numId` with no value. A non-integer
+  `w:ilvl` no longer makes the markdown projection throw; it reads as level 0.
 
 ## [12.6.3] - 2026-09-27
 

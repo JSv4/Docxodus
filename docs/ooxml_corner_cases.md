@@ -7,6 +7,7 @@ This document tracks edge cases and quirks in Open XML document processing where
 1. [Numbering and Lists](#numbering-and-lists)
    - [Legal Numbering with Multi-Level Format Strings](#legal-numbering-with-multi-level-format-strings)
    - [List Numbering under Tracked Changes](#list-numbering-under-tracked-changes-deleted-paragraphs-dont-consume-numbers)
+   - [Unresolvable Numbering vs. Removed Numbering (style indentation)](#unresolvable-numbering-vs-removed-numbering-style-indentation)
 2. [Footnotes](#footnotes)
    - [Footnote Count Discrepancy in Legal Templates](#footnote-count-discrepancy-in-legal-templates)
 3. [Package Output](#package-output)
@@ -260,6 +261,65 @@ The behavior is unconditional (no setting): the default HTML render path accepts
 revisions before numbering runs, so only tracked-changes renders (and live
 tracked-changes editing sessions) can observe it, and as-if-accepted is Word's reading
 of the format.
+
+### Unresolvable Numbering vs. Removed Numbering (style indentation)
+
+**Status:** Fixed (September 2026, issue #821)
+
+A paragraph whose `w:numId` is `0` has its numbering removed, and the indentation its
+paragraph style supplies goes with it. The question is what happens when the numbering
+reference is merely broken rather than explicitly removed.
+
+#### Minimal XML reproducer
+
+```xml
+<!-- styles.xml -->
+<w:style w:type="paragraph" w:styleId="Ind"><w:pPr><w:ind w:left="2880"/></w:pPr></w:style>
+<w:style w:type="paragraph" w:styleId="IndDangling">
+  <w:pPr><w:numPr><w:numId w:val="99"/></w:numPr><w:ind w:left="2880"/></w:pPr>
+</w:style>
+<!-- numbering.xml: numId 1 is a valid list; numId 2 names an abstractNum that doesn't exist -->
+<w:num w:numId="2"><w:abstractNumId w:val="7"/></w:num>
+<!-- document.xml -->
+<w:p><w:pPr><w:pStyle w:val="Ind"/><w:numPr><w:numId w:val="0"/></w:numPr></w:pPr>...</w:p>
+<w:p><w:pPr><w:pStyle w:val="Ind"/><w:numPr><w:numId w:val="99"/></w:numPr></w:pPr>...</w:p>
+<w:p><w:pPr><w:pStyle w:val="Ind"/><w:numPr><w:numId w:val="2"/></w:numPr></w:pPr>...</w:p>
+<w:p><w:pPr><w:pStyle w:val="Ind"/><w:numPr><w:ilvl w:val="10"/><w:numId w:val="1"/></w:numPr></w:pPr>...</w:p>
+<w:p><w:pPr><w:pStyle w:val="IndDangling"/></w:pPr>...</w:p>
+```
+
+#### Comparison (left indent; the style says 2in)
+
+| Paragraph numbering | LibreOffice 25.8 | Docxodus before | Docxodus after |
+|---------------------|------------------|-----------------|----------------|
+| `numId 0` | 0 | 0 | 0 |
+| `numId 99` (no `w:num`) | 0 | 0 | 0 |
+| `numId 2` (`w:num` without its `w:abstractNum`) | numbered "1.", 0.5in | 0 | 2in |
+| `ilvl 10` (out of range) | numbered, 0.5in | 0 | 2in |
+| style's own `numId 99`, paragraph has no `numPr` | 2in | 0 | 2in |
+
+Word was not available to check. LibreOffice's DOCX import is written to match Word, and its
+rule is explicit in `writerfilter/dmapper/DomainMapper.cxx` (`LN_CT_NumPr_numId`): when a
+paragraph's `numId` names no list ("eg. disabled numbering using non-existent numId 0"), it
+zeroes the inherited left and first-line indentation. `0` is just the one numId guaranteed not
+to exist. The rule applies only to a paragraph's own `numPr`, not to a style's. When the `w:num`
+exists but its definition is broken, LibreOffice treats the paragraph as numbered and invents
+default levels; Docxodus can't render numbering it can't resolve, so it keeps the style's
+indentation, which is the part of that behaviour that is well defined.
+
+#### Relevant Code
+
+- `ListItemRetriever.NotAListItem` (sets `IsZeroNumId`) vs. `ListItemRetriever.MalformedNumbering`
+  (doesn't). `InitializeParagraphListItemSource` picks between them by whether the numId names
+  a `w:num`; a style's unresolvable numbering and a level with no `w:lvl` always get
+  `MalformedNumbering`.
+- `FormattingAssembler` removes the rolled-up style `w:ind` only when `IsZeroNumId` is set.
+
+#### Open question
+
+A style whose own `numPr` says `numId 0` still has its indentation removed. LibreOffice keeps a
+style's own `w:ind` in that case but drops one inherited through `w:basedOn`. That is well-formed
+numbering, not a malformed reference, and is left as is.
 
 ---
 

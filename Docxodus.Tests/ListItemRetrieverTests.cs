@@ -192,6 +192,38 @@ public class ListItemRetrieverTests
         AssertConsumersRead(bytes);
     }
 
+    [Theory]
+    // Explicit numId 0 removes numbering, and Word drops the style's indentation with it.
+    [InlineData("Indented", """<w:numId w:val="0"/>""", null)]
+    // So does a numId naming no w:num: LibreOffice's DOCX import treats it exactly like 0.
+    [InlineData("Indented", """<w:numId w:val="99"/>""", null)]
+    // A w:num whose w:abstractNum is missing, or a level past the counter slots, is malformed
+    // numbering, not a request to remove it: the style's indentation stays.
+    [InlineData("Indented", """<w:numId w:val="2"/>""", "2880")]
+    [InlineData("Indented", """<w:ilvl w:val="10"/><w:numId w:val="1"/>""", "2880")]
+    // So is a style whose own numPr names no w:num.
+    [InlineData("IndentedDanglingNum", null, "2880")]
+    public void AssembleFormatting_UnusableNumbering_StripsStyleIndentOnlyWhenNumberingIsRemoved(
+        string style, string? numPr, string? expectedLeft)
+    {
+        const string Styles = """
+            <w:style w:type="paragraph" w:styleId="Indented"><w:pPr><w:ind w:left="2880"/></w:pPr></w:style>
+            <w:style w:type="paragraph" w:styleId="IndentedDanglingNum"><w:pPr><w:numPr><w:numId w:val="99"/></w:numPr><w:ind w:left="2880"/></w:pPr></w:style>
+            """;
+        var numPrXml = numPr == null ? "" : $"<w:numPr>{numPr}</w:numPr>";
+        var bytes = BuildDocument(
+            $"""<w:p><w:pPr><w:pStyle w:val="{style}"/>{numPrXml}</w:pPr><w:r><w:t>item</w:t></w:r></w:p>""",
+            Styles,
+            ValidList1 + """<w:num w:numId="2"><w:abstractNumId w:val="7"/></w:num>""");
+
+        var assembled = FormattingAssembler.AssembleFormatting(new WmlDocument("list.docx", bytes), new FormattingAssemblerSettings());
+
+        using var stream = new MemoryStream(assembled.DocumentByteArray);
+        using var wordDoc = WordprocessingDocument.Open(stream, false);
+        var ind = wordDoc.MainDocumentPart!.GetXDocument().Descendants(W.p).Single().Elements(W.pPr).Elements(W.ind).SingleOrDefault();
+        Assert.Equal(expectedLeft, (string?)ind?.Attribute(W.left));
+    }
+
     private static string?[] RetrieveMarkers(byte[] bytes)
     {
         using var stream = new MemoryStream(bytes);
@@ -231,6 +263,58 @@ public class ListItemRetrieverTests
                 numberingPart.FeedData(new MemoryStream());
             else
                 numberingPart.PutXDocument(XDocument.Parse($"<w:numbering {Ns}>{numbering}</w:numbering>"));
+        }
+        return stream.ToArray();
+    }
+
+    /// <summary>A document with the given body, style definitions and numbering definitions.</summary>
+    private static byte[] BuildDocument(string body, string styles, string numbering)
+    {
+        const string Ns = "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"";
+        using var stream = new MemoryStream();
+        using (var wordDoc = WordprocessingDocument.Create(stream, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = wordDoc.AddMainDocumentPart();
+            main.PutXDocument(XDocument.Parse($"<w:document {Ns}><w:body>{body}</w:body></w:document>"));
+            main.AddNewPart<StyleDefinitionsPart>().PutXDocument(XDocument.Parse($"<w:styles {Ns}>{styles}</w:styles>"));
+            main.AddNewPart<DocumentSettingsPart>().PutXDocument(XDocument.Parse($"<w:settings {Ns}/>"));
+            main.AddNewPart<NumberingDefinitionsPart>().PutXDocument(XDocument.Parse($"<w:numbering {Ns}>{numbering}</w:numbering>"));
+        }
+        return stream.ToArray();
+    }
+
+    [Theory]
+    // A non-integer numId reads as a missing one: with no style numbering, not a list item.
+    [InlineData("abc", "0", null)]
+    // A non-integer ilvl reads as level 0, as ListItemRetriever reads it.
+    [InlineData("1", "abc", "1.")]
+    public void MarkdownAndIr_NonIntegerNumPrValue_ReadsAsMissingOrLevelZero(string numId, string ilvl, string? expectedMarker)
+    {
+        // Regression test for #820: WmlToMarkdownConverter cast these values with (int?), so the
+        // markdown projection and the IR read (via IsListItemForLayout) threw FormatException.
+        var bytes = WithNumPrValues(BuildList(ValidList1, (NumId: 1, Ilvl: 0)), numId, ilvl);
+        Assert.Equal(new[] { expectedMarker }, RetrieveMarkers(bytes));
+
+        var paragraph = IrReader.Read(new WmlDocument("list.docx", bytes)).Body.Blocks.OfType<IrParagraph>().Single();
+        Assert.Equal(expectedMarker != null, paragraph.IsListItemForLayout);
+        Assert.Equal(expectedMarker != null ? 0 : null, paragraph.List?.Ilvl);
+
+        var markdown = WmlToMarkdownConverter.Convert(new WmlDocument("list.docx", bytes), new WmlToMarkdownConverterSettings()).Markdown;
+        Assert.Equal(expectedMarker != null, markdown.Contains("1. ", StringComparison.Ordinal));
+        Assert.Contains("item", markdown, StringComparison.Ordinal);
+    }
+
+    /// <summary>Overwrites the first paragraph's <c>w:numId</c> and <c>w:ilvl</c> values with arbitrary strings.</summary>
+    private static byte[] WithNumPrValues(byte[] bytes, string numId, string ilvl)
+    {
+        using var stream = new MemoryStream();
+        stream.Write(bytes);
+        using (var wordDoc = WordprocessingDocument.Open(stream, true))
+        {
+            var numPr = wordDoc.MainDocumentPart!.GetXDocument().Descendants(W.numPr).First();
+            numPr.Element(W.numId)!.SetAttributeValue(W.val, numId);
+            numPr.Element(W.ilvl)!.SetAttributeValue(W.val, ilvl);
+            wordDoc.MainDocumentPart.PutXDocument();
         }
         return stream.ToArray();
     }
