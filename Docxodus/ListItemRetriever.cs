@@ -372,8 +372,18 @@ namespace Docxodus
             throw new DocxodusException("Attempting to retrieve ListItemInfo before initialization");
         }
 
+        /// <summary>
+        /// Numbering removed by a numId that names no <c>w:num</c> (0 is the explicit form). Word
+        /// drops the paragraph style's indentation with it, so <see cref="IsZeroNumId"/> is set.
+        /// </summary>
         private static ListItemInfo NotAListItem = new ListItemInfo(false, true);
-        private static ListItemInfo ZeroNumId = new ListItemInfo(false, false);
+
+        /// <summary>
+        /// Numbering that references a <c>w:num</c> but can't be resolved (a missing
+        /// <c>w:abstractNum</c> or level). Not a list item, but nothing asked for the numbering to
+        /// be removed, so the style's indentation stays.
+        /// </summary>
+        private static ListItemInfo MalformedNumbering = new ListItemInfo(false, false);
 
         public static void InitListItemInfo(XDocument numXDoc, XDocument stylesXDoc, XElement paragraph)
         {
@@ -457,27 +467,28 @@ namespace Docxodus
             listItemInfo = new ListItemInfo();
 
             int? style_ilvl = null;
-            bool? styleZeroNumId = null;
+            ListItemInfo? styleNotAListItem = null;
 
             if (paragraphStyleName != null)
             {
                 listItemInfo.FromStyle = InitializeStyleListItemSource(numXDoc, stylesXDoc, paragraph, paragraphStyleName,
-                        out style_ilvl, out styleZeroNumId);
+                        out style_ilvl, out styleNotAListItem);
             }
 
             int? paragraph_ilvl = null;
-            bool? paragraphZeroNumId = null;
+            ListItemInfo? paragraphNotAListItem = null;
 
             if (paragraphNumberingProperties != null && paragraphNumberingProperties.Element(W.numId) != null)
             {
-                listItemInfo.FromParagraph = InitializeParagraphListItemSource(numXDoc, stylesXDoc, paragraph, paragraphNumberingProperties, out paragraph_ilvl, out paragraphZeroNumId);
+                listItemInfo.FromParagraph = InitializeParagraphListItemSource(numXDoc, stylesXDoc, paragraph, paragraphNumberingProperties, out paragraph_ilvl, out paragraphNotAListItem);
             }
 
-            if (styleZeroNumId == true && paragraphZeroNumId == null ||
-                paragraphZeroNumId == true)
+            // The paragraph's own numbering, when it has any, overrides the style's.
+            var notAListItem = paragraphNotAListItem ?? (listItemInfo.FromParagraph == null ? styleNotAListItem : null);
+            if (notAListItem != null)
             {
-                paragraph.AddAnnotation(NotAListItem);
-                AddListItemInfoIntoCache(numXDoc, paragraphStyleName, paragraphNumId, NotAListItem);
+                paragraph.AddAnnotation(notAListItem);
+                AddListItemInfoIntoCache(numXDoc, paragraphStyleName, paragraphNumId, notAListItem);
                 return;
             }
 
@@ -516,7 +527,7 @@ namespace Docxodus
         {
             if (listItemInfo.IsListItem && (ilvl is < 0 or >= LevelCount || listItemInfo.Lvl(ilvl) == null))
             {
-                paragraph.AddAnnotation(NotAListItem);
+                paragraph.AddAnnotation(MalformedNumbering);
                 return;
             }
             SetParagraphLevel(paragraph, ilvl);
@@ -571,9 +582,9 @@ namespace Docxodus
             return false;
         }
 
-        private static ListItemSource? InitializeParagraphListItemSource(XDocument numXDoc, XDocument stylesXDoc, XElement paragraph, XElement paragraphNumberingProperties, out int? ilvl, out bool? zeroNumId)
+        private static ListItemSource? InitializeParagraphListItemSource(XDocument numXDoc, XDocument stylesXDoc, XElement paragraph, XElement paragraphNumberingProperties, out int? ilvl, out ListItemInfo? notAListItem)
         {
-            zeroNumId = null;
+            notAListItem = null;
 
             // Paragraph numbering properties must contain a numId.
             int? numId = IntValue(paragraphNumberingProperties
@@ -588,7 +599,7 @@ namespace Docxodus
 
             if (numId == null)
             {
-                zeroNumId = true;
+                notAListItem = NotAListItem;
                 return null;
             }
 
@@ -596,11 +607,9 @@ namespace Docxodus
             var listItemSource = new ListItemSource(numXDoc, stylesXDoc, (int)numId);
             if (!listItemSource.IsResolved)
             {
-                zeroNumId = true;
+                notAListItem = listItemSource.Main.Num == null ? NotAListItem : MalformedNumbering;
                 return null;
             }
-
-            zeroNumId = false;
 
             if (ilvl == null)
                 ilvl = 0;
@@ -609,9 +618,9 @@ namespace Docxodus
         }
 
         private static ListItemSource? InitializeStyleListItemSource(XDocument numXDoc, XDocument stylesXDoc, XElement paragraph, string paragraphStyleName,
-            out int? ilvl, out bool? zeroNumId)
+            out int? ilvl, out ListItemInfo? notAListItem)
         {
-            zeroNumId = null;
+            notAListItem = null;
             XElement pPr = FormattingAssembler.ParagraphStyleRollup(paragraph, stylesXDoc, GetDefaultParagraphStyleName(stylesXDoc));
             if (pPr != null)
             {
@@ -636,21 +645,21 @@ namespace Docxodus
 
                     if (numId is null or 0)
                     {
-                        zeroNumId = true;
+                        notAListItem = NotAListItem;
                         return null;
                     }
 
-                    // make sure that the numId is valid
+                    // A style's numbering that doesn't resolve numbers nothing, but unlike a
+                    // paragraph's numId 0 it doesn't cancel the style's own indentation.
                     var listItemSource = new ListItemSource(numXDoc, stylesXDoc, (int)numId);
                     if (!listItemSource.IsResolved)
                     {
-                        zeroNumId = true;
+                        notAListItem = MalformedNumbering;
                         return null;
                     }
 
                     listItemSource.Style_ilvl = (int)ilvl;
 
-                    zeroNumId = false;
                     return listItemSource;
                 }
             }
