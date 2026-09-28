@@ -2,6 +2,7 @@
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 using System.Diagnostics;
+using System.Text;
 using Xunit;
 
 namespace Docxodus.Tests;
@@ -122,8 +123,8 @@ public class SourceFileCopyrightTests
     private static string[] Header(string path) => File.ReadLines(path).Take(5).ToArray();
 
     /// <summary>
-    /// Every C# file git does not ignore — tracked, or new and not yet added — so a gitignored
-    /// scratch checkout under the root (issue #822) is not mistaken for source. Without a git
+    /// Every C# file git lists — tracked, or new and not ignored — so a gitignored scratch
+    /// checkout under the root (issue #822) is not mistaken for source. Without a git
     /// checkout (a source tarball has no ignored content) it walks the tree minus build output.
     /// </summary>
     private static IEnumerable<(string Path, string Relative)> SourceFiles()
@@ -143,16 +144,23 @@ public class SourceFileCopyrightTests
 
     private static string[] GitListedSourceFiles(string root)
     {
-        var start = new ProcessStartInfo("git") { WorkingDirectory = root, RedirectStandardOutput = true };
-        foreach (var arg in new[] { "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "*.cs" })
-            start.ArgumentList.Add(arg);
-        using var git = Process.Start(start) ?? throw new InvalidOperationException("Could not start git.");
+        var start = new ProcessStartInfo("git", new[] { "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "*.cs" })
+        {
+            WorkingDirectory = root,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8,
+        };
+        using var git = Process.Start(start)!;
+        var error = git.StandardError.ReadToEndAsync(); // drain concurrently so neither pipe blocks
         var output = git.StandardOutput.ReadToEnd();
         git.WaitForExit();
 
         // No silent fallback to the directory walk: that would bring back the bug this avoids.
-        Assert.True(git.ExitCode == 0, $"git ls-files exited {git.ExitCode} in {root}.");
-        return output.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+        Assert.True(git.ExitCode == 0, $"git ls-files exited {git.ExitCode} in {root}: {error.Result}");
+
+        // An unmerged path is listed once per conflict stage.
+        return output.Split('\0', StringSplitOptions.RemoveEmptyEntries).Distinct().ToArray();
     }
 
     private static string RepositoryRoot()
