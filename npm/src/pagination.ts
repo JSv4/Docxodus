@@ -4417,7 +4417,7 @@ export class PaginationEngine {
     // text on top of each other (observed on a 94-footnote document: ~134pt of superimposed,
     // illegible glyphs). Shrinking the content area to the space the notes actually left removes
     // the failure mode by construction — the worst case becomes a clean clip by the content area's
-    // existing `overflow: hidden`, which is obvious and recoverable rather than silent corruption.
+    // vertical overflow clip, which is obvious and recoverable rather than silent corruption.
     //
     // This runs AFTER the append on purpose: `getBoundingClientRect()` on a detached node is all
     // zeroes, so measuring while building the page silently did nothing.

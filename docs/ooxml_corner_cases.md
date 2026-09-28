@@ -1685,9 +1685,16 @@ The clamp to `0` came from the upstream OpenXmlPowerTools converter, not a Docxo
 The paginated content area now uses `overflow-x: visible; overflow-y: clip` — `hidden` on one
 axis would force the other to `auto` and clip it anyway. The page box still clips at the paper.
 
+`w:tblInd` is relative to the **leading** edge of the table. For a right-to-left table
+(`w:bidiVisual`), the same value must become `margin-right: -36.25pt`; always setting
+`margin-left` leaves its right edge at the text column. See the
+[OOXML table indentation definition](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.tableindentation).
+The browser regression covers both directions and zoom levels, row-split tables with horizontal
+merges, actual clipping at the paper edges and body bottom, and PageMap geometry.
+
 - Code: `Docxodus/WmlToHtmlConverter.cs` (`tblInd` in the table style; `.page-content` CSS),
   `npm/src/pagination.ts` (content area).
-- Tests: `HCO099_NegativeTableIndent_EmitsNegativeMarginLeft`,
+- Tests: `HCO099_TableIndent_UsesLeadingMargin`,
   `npm/tests/pagination-negative-table-indent.spec.ts`.
 
 ## Theme Colors

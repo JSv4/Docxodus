@@ -1381,10 +1381,16 @@ public class HtmlConversionOpsTests
         Assert.Contains("background: #D9EAF7", html);
     }
 
-    // Word pulls an over-wide table into the left margin with a negative w:tblInd (issue #827).
-    // The indent must survive as a negative margin-left rather than being clamped to 0.
-    [Fact]
-    public void HCO099_NegativeTableIndent_EmitsNegativeMarginLeft()
+    // w:tblInd is measured from the leading edge: left for LTR, right for RTL (issue #827).
+    [Theory]
+    [InlineData("-725", false, "margin-left: -36.25pt")]
+    [InlineData("-36.25pt", false, "margin-left: -36.25pt")]
+    [InlineData("0", false, "margin-left: 0;")]
+    [InlineData("725", false, "margin-left: 36.25pt")]
+    [InlineData("-725", true, "margin-right: -36.25pt")]
+    [InlineData("0", true, "margin-right: 0;")]
+    [InlineData("725", true, "margin-right: 36.25pt")]
+    public void HCO099_TableIndent_UsesLeadingMargin(string indent, bool rtl, string expectedMargin)
     {
         using var ms = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
@@ -1394,7 +1400,9 @@ public class HtmlConversionOpsTests
             {
                 writer.Write(
                     "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">" +
-                    "<w:body><w:tbl><w:tblPr><w:tblW w:w=\"15000\" w:type=\"dxa\"/><w:tblInd w:w=\"-725\" w:type=\"dxa\"/></w:tblPr>" +
+                    "<w:body><w:tbl><w:tblPr>" + (rtl ? "<w:bidiVisual/>" : "") +
+                    "<w:tblW w:w=\"15000\" w:type=\"dxa\"/>" +
+                    $"<w:tblInd w:w=\"{indent}\" w:type=\"dxa\"/></w:tblPr>" +
                     "<w:tblGrid><w:gridCol w:w=\"15000\"/></w:tblGrid><w:tr><w:tc>" +
                     "<w:p><w:r><w:t>HCO099 wide table</w:t></w:r></w:p></w:tc></w:tr></w:tbl>" +
                     "<w:sectPr/></w:body></w:document>");
@@ -1407,7 +1415,8 @@ public class HtmlConversionOpsTests
         string html = HtmlConversionOps.ConvertToHtml(ms.ToArray(),
             new HtmlConversionOptions { FabricateCssClasses = false });
 
-        Assert.Contains("margin-left: -36.25pt", html);
+        var table = XDocument.Parse(html).Descendants(Xhtml.table).Single();
+        Assert.Contains(expectedMargin, (string?)table.Attribute("style"));
     }
 
     // The viewer's byte-based HTML bridge must open Strict OOXML packages just as DocxDiff does.

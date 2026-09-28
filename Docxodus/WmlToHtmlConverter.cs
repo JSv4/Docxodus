@@ -5735,9 +5735,9 @@ namespace Docxodus
                         var width = WordprocessingMLUtil.AttributeToTwips(tblInd.Attribute(W._w));
                         if (width != null)
                         {
-                            // Negative indents are real: Word uses them to pull an over-wide
-                            // table out into the left margin (issue #827).
-                            style.AddIfMissing("margin-left",
+                            // The indent is relative to the table's leading edge. Negative
+                            // values pull it into that page margin, including RTL tables (#827).
+                            style.AddIfMissing(bidiVisual != null ? "margin-right" : "margin-left",
                                 width != 0m
                                     ? string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", width / 20m)
                                     : "0");
