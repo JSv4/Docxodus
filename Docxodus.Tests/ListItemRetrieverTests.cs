@@ -245,12 +245,30 @@ public class ListItemRetrieverTests
     /// A body of list paragraphs, one per (numId, ilvl) item, over a numbering part holding
     /// <paramref name="numbering"/> (or an empty numbering part when null).
     /// </summary>
-    private static byte[] BuildList(string? numbering, params (int NumId, int Ilvl)[] items) =>
-        BuildDocument(string.Concat(items.Select(item =>
-            $"""<w:p><w:pPr><w:numPr><w:ilvl w:val="{item.Ilvl}"/><w:numId w:val="{item.NumId}"/></w:numPr></w:pPr><w:r><w:t>item</w:t></w:r></w:p>""")),
-            styles: "", numbering);
+    private static byte[] BuildList(string? numbering, params (int NumId, int Ilvl)[] items)
+    {
+        const string Ns = "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"";
+        var body = string.Concat(items.Select(item =>
+            $"""<w:p><w:pPr><w:numPr><w:ilvl w:val="{item.Ilvl}"/><w:numId w:val="{item.NumId}"/></w:numPr></w:pPr><w:r><w:t>item</w:t></w:r></w:p>"""));
 
-    private static byte[] BuildDocument(string body, string styles, string? numbering)
+        using var stream = new MemoryStream();
+        using (var wordDoc = WordprocessingDocument.Create(stream, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = wordDoc.AddMainDocumentPart();
+            main.PutXDocument(XDocument.Parse($"<w:document {Ns}><w:body>{body}</w:body></w:document>"));
+            main.AddNewPart<StyleDefinitionsPart>().PutXDocument(XDocument.Parse($"<w:styles {Ns}/>"));
+            main.AddNewPart<DocumentSettingsPart>().PutXDocument(XDocument.Parse($"<w:settings {Ns}/>"));
+            var numberingPart = main.AddNewPart<NumberingDefinitionsPart>();
+            if (numbering == null)
+                numberingPart.FeedData(new MemoryStream());
+            else
+                numberingPart.PutXDocument(XDocument.Parse($"<w:numbering {Ns}>{numbering}</w:numbering>"));
+        }
+        return stream.ToArray();
+    }
+
+    /// <summary>A document with the given body, style definitions and numbering definitions.</summary>
+    private static byte[] BuildDocument(string body, string styles, string numbering)
     {
         const string Ns = "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"";
         using var stream = new MemoryStream();
@@ -260,11 +278,7 @@ public class ListItemRetrieverTests
             main.PutXDocument(XDocument.Parse($"<w:document {Ns}><w:body>{body}</w:body></w:document>"));
             main.AddNewPart<StyleDefinitionsPart>().PutXDocument(XDocument.Parse($"<w:styles {Ns}>{styles}</w:styles>"));
             main.AddNewPart<DocumentSettingsPart>().PutXDocument(XDocument.Parse($"<w:settings {Ns}/>"));
-            var numberingPart = main.AddNewPart<NumberingDefinitionsPart>();
-            if (numbering == null)
-                numberingPart.FeedData(new MemoryStream());
-            else
-                numberingPart.PutXDocument(XDocument.Parse($"<w:numbering {Ns}>{numbering}</w:numbering>"));
+            main.AddNewPart<NumberingDefinitionsPart>().PutXDocument(XDocument.Parse($"<w:numbering {Ns}>{numbering}</w:numbering>"));
         }
         return stream.ToArray();
     }

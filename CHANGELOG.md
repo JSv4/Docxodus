@@ -25,7 +25,7 @@ All notable changes to this project will be documented in this file.
 - A paragraph whose list numbering can't be resolved no longer loses the indentation its
   paragraph style gives it (issue #821). Examples are a `w:num` whose `w:abstractNum` is missing,
   an out-of-range paragraph level, and a paragraph style whose own numbering names a missing
-  `w:num`. Only a paragraph `numId` that names no `w:num` at all, `0` included, now removes the
+  `w:num`. A paragraph `numId` that names no `w:num` at all, `0` included, still removes the
   style's indentation along with the numbering, which is how LibreOffice's Word-compatible
   import reads it. See `docs/ooxml_corner_cases.md`.
 

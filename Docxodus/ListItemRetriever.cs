@@ -373,8 +373,10 @@ namespace Docxodus
         }
 
         /// <summary>
-        /// Numbering removed by a numId that names no <c>w:num</c> (0 is the explicit form). Word
-        /// drops the paragraph style's indentation with it, so <see cref="IsZeroNumId"/> is set.
+        /// Not a list item, and the style's indentation goes with the numbering
+        /// (<see cref="ListItemInfo.IsZeroNumId"/>): a paragraph numId that names no <c>w:num</c>
+        /// (0 is the explicit form), a style numId of 0, a <c>w:numPr</c> without a usable numId,
+        /// or an empty section-break paragraph.
         /// </summary>
         private static ListItemInfo NotAListItem = new ListItemInfo(false, true);
 
