@@ -6,6 +6,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- A negative table indent (`w:tblInd`) is no longer clamped to `margin-left: 0` (issue #827).
+  Word uses a negative indent to pull an over-wide table into the left margin; the HTML now
+  carries the negative margin, and the paginated view clips page content only vertically, so
+  the table's overhang into either side margin stays visible, as in Word.
 - `ListItemRetriever.RetrieveListItem` no longer throws a `NullReferenceException` for a
   paragraph outside the parts list numbering covers (issue #814). Comment paragraphs hit this on
   every IR read (verification, diff, reversibility proof). Callers swallowed the exception, but

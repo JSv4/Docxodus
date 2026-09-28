@@ -1381,6 +1381,35 @@ public class HtmlConversionOpsTests
         Assert.Contains("background: #D9EAF7", html);
     }
 
+    // Word pulls an over-wide table into the left margin with a negative w:tblInd (issue #827).
+    // The indent must survive as a negative margin-left rather than being clamped to 0.
+    [Fact]
+    public void HCO099_NegativeTableIndent_EmitsNegativeMarginLeft()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            using (var writer = new StreamWriter(main.GetStream(FileMode.Create, FileAccess.Write)))
+            {
+                writer.Write(
+                    "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">" +
+                    "<w:body><w:tbl><w:tblPr><w:tblW w:w=\"15000\" w:type=\"dxa\"/><w:tblInd w:w=\"-725\" w:type=\"dxa\"/></w:tblPr>" +
+                    "<w:tblGrid><w:gridCol w:w=\"15000\"/></w:tblGrid><w:tr><w:tc>" +
+                    "<w:p><w:r><w:t>HCO099 wide table</w:t></w:r></w:p></w:tc></w:tr></w:tbl>" +
+                    "<w:sectPr/></w:body></w:document>");
+            }
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
+            doc.Save();
+        }
+
+        string html = HtmlConversionOps.ConvertToHtml(ms.ToArray(),
+            new HtmlConversionOptions { FabricateCssClasses = false });
+
+        Assert.Contains("margin-left: -36.25pt", html);
+    }
+
     // The viewer's byte-based HTML bridge must open Strict OOXML packages just as DocxDiff does.
     // Exercise both full-document and anchor-addressed block rendering; before normalization the
     // converter sees no transitional w:body and throws on these packages.
