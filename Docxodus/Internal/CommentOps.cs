@@ -222,7 +222,7 @@ internal static class CommentOps
         // compatibility tokens while making that contract explicit before adding/using paraId.
         if (commentsRoot.GetNamespaceOfPrefix("w14") is null)
             commentsRoot.Add(new XAttribute(XNamespace.Xmlns + "w14", W14.w14));
-        EnsureIgnorablePrefix(commentsRoot, "w14", W14.w14);
+        PartNamespaces.EnsureIgnorablePrefix(commentsRoot, "w14", W14.w14);
 
         var paraId = (string?)lastPara.Attribute(W14.paraId);
         if (string.IsNullOrEmpty(paraId))
@@ -277,21 +277,6 @@ internal static class CommentOps
         exPart.PutXDocument();
         idsPart.PutXDocument();
         return paraId;
-    }
-
-    private static void EnsureIgnorablePrefix(XElement root, string prefix, XNamespace ns)
-    {
-        if (root.GetNamespaceOfPrefix("mc") != MC.mc)
-            root.SetAttributeValue(XNamespace.Xmlns + "mc", MC.mc.NamespaceName);
-        if (root.GetNamespaceOfPrefix(prefix) != ns)
-            root.SetAttributeValue(XNamespace.Xmlns + prefix, ns.NamespaceName);
-
-        var tokens = ((string?)root.Attribute(MC.Ignorable) ?? string.Empty)
-            .Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
-            .ToList();
-        if (!tokens.Contains(prefix, StringComparer.Ordinal))
-            tokens.Add(prefix);
-        root.SetAttributeValue(MC.Ignorable, string.Join(" ", tokens));
     }
 
     /// <summary>Interpret the OOXML on/off lexical forms accepted by <c>w15:done</c>.</summary>

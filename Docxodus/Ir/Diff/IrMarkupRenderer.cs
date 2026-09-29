@@ -577,6 +577,12 @@ internal static class IrMarkupRenderer
                 // (the primary family LibreOffice resolves for substitution), the stack rides through
                 // unchanged and both sides substitute it identically — the faithful behavior.
                 _ = sharedCssFontStacks;
+
+                // Everything cloned above left the namespace declarations of its source part behind;
+                // declare them on the output part roots, as Word does (issue #836). Right first: the
+                // cloned content came from it, so its prefixes win. Runs last so it sees every part
+                // the passes above wrote into.
+                PartNamespaces.Of(new[] { right, left }).DeclareIn(wDoc);
             }
             var rendered = streamDoc.GetModifiedWmlDocument();
             return settings.NormalizeRevisionAuthors

@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Content a comparison copies out of the revised document no longer loses its namespace
+  declarations (issue #836). A list definition, style, paragraph, note or comment that uses Word
+  extension markup (`w15:restartNumberingAfterBreak`, `w16cid:durableId`, `w14:paraId`, …) and lands
+  in an original part whose root does not declare those namespaces used to be written under an
+  invented prefix (`p3:durableId`) that `mc:Ignorable` did not list, and an imported
+  `mc:Choice Requires="w14"` named a prefix the output never declared. `DocxDiff.Compare`,
+  `DocxCompare.Compare` and `DocxDiff.Consolidate` now declare each such namespace on the output
+  part's root, under the prefix the input used, and keep it in `mc:Ignorable` when the input listed
+  it there, which is how Word writes these parts. The Open XML SDK validator no longer reports
+  `Sch_UndeclaredAttribute`, `Sch_InvalidElementContentExpectingComplex` or
+  `MC_InvalidRequiresAttribute` errors on these outputs when the inputs have none.
+
 ## [12.6.5] - 2026-09-28
 
 ### Fixed
