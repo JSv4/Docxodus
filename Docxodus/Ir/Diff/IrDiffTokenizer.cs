@@ -26,11 +26,11 @@ namespace Docxodus.Ir.Diff;
 /// an IR read with <c>RetainSources=false</c>.</para>
 /// <para><b>Intra-word atom interruption (§6.1-adjacent, M2.5 Task 1).</b> A word's diff identity is its
 /// atom STRUCTURE, not merely its visible characters: a word split by a zero-width content atom (a note
-/// ref / image / opaque / textbox) with NO separator on either side is a different word from its
+/// ref / image / opaque / textbox) with NO word boundary on either side is a different word from its
 /// contiguous form (a note reference relocated INTO the middle of <c>Video</c> — <c>Vi</c>⟨ref⟩<c>deo</c>
 /// — is a real edit even though the letters still spell <c>Video</c>). <see cref="InterruptionPostPass"/>
 /// frames the two flanking words' match keys with the interrupting atoms' keys to express this, while a
-/// ref BETWEEN words (separator-adjacent) and the ref token's OWN key are left exactly as the §6.1 stream
+/// ref BETWEEN words (separator- or CJK-adjacent) and the ref token's OWN key are left exactly as the §6.1 stream
 /// has them — so the change is confined to the rare intra-word case and never disturbs the common one.</para>
 /// </remarks>
 internal static class IrDiffTokenizer
@@ -148,7 +148,7 @@ internal static class IrDiffTokenizer
     /// <summary>
     /// Rewrite the MatchKeys of word tokens that flank an <b>intra-word interruption</b>: a maximal run
     /// of one or more zero-width CONTENT atoms (NoteRef / Image / Opaque / Textbox) sitting between two
-    /// Word tokens with NO separator on either side (the words touch the atoms at their char offsets).
+    /// Word tokens with NO word boundary on either side (the words touch the atoms at their char offsets).
     /// In that configuration the word's atom structure genuinely changed — a note reference relocated INTO
     /// the middle of <c>Video</c> (<c>Vi</c>[ref]<c>deo</c>) is a real structural edit the contiguous
     /// <c>Video</c> does not share — so the two flanking words must NOT be word-equal to their contiguous
@@ -197,6 +197,10 @@ internal static class IrDiffTokenizer
                 continue;
             }
             int rightWord = j;
+
+            // CJK tokens are whole text elements: an adjacent atom is BETWEEN words, not inside one.
+            if (IsCjk(tokens[leftWord].Text, 0) || IsCjk(tokens[rightWord].Text, 0))
+                continue;
 
             // Build the interruption marker from the interrupting atoms' keys (document order). Lead with
             // the AtomicSentinel so the word↔marker boundary is unambiguous: a normalized word — always
@@ -321,7 +325,8 @@ internal static class IrDiffTokenizer
 
     /// <summary>
     /// Split a text run on <see cref="IrDiffSettings.WordSeparators"/> plus WmlComparer's dynamic
-    /// punctuation rule into alternating Word and Separator tokens (one Separator token per separator char).
+    /// punctuation rule into Word and Separator tokens (one Separator token per separator char).
+    /// Han, kana, and Hangul text elements each form a Word token, even without surrounding separators.
     /// Advances <paramref name="charOffset"/> by the run's raw length.
     /// </summary>
     /// <remarks>
@@ -391,8 +396,17 @@ internal static class IrDiffTokenizer
             else
             {
                 int wordStart = i;
-                while (i < text.Length && !IsSeparator(i))
-                    i++;
+                if (IsCjk(text, i))
+                {
+                    // Keep surrogate pairs, combining marks, variation selectors, and composed Jamo
+                    // together. Offsets still count UTF-16 code units, as the source slicer requires.
+                    i += StringInfo.GetNextTextElementLength(text, i);
+                }
+                else
+                {
+                    do { i++; }
+                    while (i < text.Length && !IsSeparator(i) && !IsCjk(text, i));
+                }
                 string raw = text.Substring(wordStart, i - wordStart);
                 int start = charOffset + wordStart;
                 tokens.Add(new IrDiffToken(
@@ -401,6 +415,30 @@ internal static class IrDiffTokenizer
             }
         }
         charOffset += text.Length;
+    }
+
+    /// <summary>Han ideographs, kana, and Hangul, including supplementary and compatibility forms.</summary>
+    private static bool IsCjk(string text, int index)
+    {
+        int scalar = char.IsSurrogatePair(text, index) ? char.ConvertToUtf32(text, index) : text[index];
+        // Unicode block ranges: https://www.unicode.org/Public/17.0.0/ucd/Blocks.txt
+        return scalar is
+            >= 0x3400 and <= 0x4DBF or       // Han Extension A
+            >= 0x4E00 and <= 0x9FFF or       // Han
+            >= 0xF900 and <= 0xFAFF or       // Han compatibility
+            >= 0x20000 and <= 0x2A6DF or     // Han Extension B
+            >= 0x2A700 and <= 0x2EE5F or     // Han Extensions C–F, I
+            >= 0x2F800 and <= 0x2FA1F or     // Han compatibility supplement
+            >= 0x30000 and <= 0x3347F or     // Han Extensions G, H, J
+            >= 0x3040 and <= 0x30FF or       // Hiragana, Katakana
+            >= 0x31F0 and <= 0x31FF or       // Katakana phonetic extensions
+            >= 0xFF66 and <= 0xFF9F or       // Halfwidth Katakana
+            >= 0x1AFF0 and <= 0x1B16F or     // Kana extensions and supplement
+            >= 0x1100 and <= 0x11FF or       // Hangul Jamo
+            >= 0x3130 and <= 0x318F or       // Hangul compatibility Jamo
+            >= 0xA960 and <= 0xA97F or       // Hangul Jamo Extended-A
+            >= 0xAC00 and <= 0xD7FF or       // Hangul syllables, Jamo Extended-B
+            >= 0xFFA0 and <= 0xFFDC;         // Halfwidth Hangul
     }
 
     /// <summary>

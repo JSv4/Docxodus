@@ -142,6 +142,36 @@ public class DocxDiffTests
         Assert.True(body.Descendants<InsertedRun>().Any() || body.Descendants<DeletedRun>().Any());
     }
 
+    [Theory]
+    [InlineData("投标人不能参加同三标段投标或者未划分标段的同一招标项目投标。",
+        "投标人不能参加同一标段投标或者未划分标段的同一招标项目投标。", "三", "一")]
+    [InlineData("これはひらがなです。", "これはひらかなです。", "が", "か")]
+    [InlineData("これはテストです。", "これはテキストです。", "", "キ")]
+    [InlineData("계약금은삼만원입니다", "계약금은일만원입니다", "삼", "일")]
+    [InlineData("甲乙丙丁", "甲丙丁", "乙", "")]
+    [InlineData("甲\U00020000乙", "甲\U00020001乙", "\U00020000", "\U00020001")]
+    [InlineData("文字は\u3099列", "文字は\u309A列", "は\u3099", "は\u309A")]
+    [InlineData("姓葛\U000E0100名", "姓葛\U000E0101名", "葛\U000E0100", "葛\U000E0101")]
+    [InlineData("문\u1100\u1161\u11A8서", "문\u1100\u1161\u11AB서", "\u1100\u1161\u11A8", "\u1100\u1161\u11AB")]
+    [InlineData("第three条", "第one条", "three", "one")]
+    [InlineData("The cat sits.", "The cut sits.", "cat", "cut")]
+    public void Compare_TextEdit_TracksExpectedSpan(
+        string before, string after, string deleted, string inserted)
+    {
+        // Issue #831: assert the actual redline, since round-tripping alone permits whole-phrase churn.
+        var left = Doc(before);
+        var right = Doc(after);
+        var result = DocxCompare.Compare(left, right);
+
+        using var stream = new MemoryStream(result.DocumentByteArray);
+        using var wdoc = WordprocessingDocument.Open(stream, false);
+        var body = wdoc.MainDocumentPart!.Document.Body!;
+        Assert.Equal(deleted, string.Concat(body.Descendants<DeletedText>().Select(t => t.Text)));
+        Assert.Equal(inserted, string.Concat(body.Descendants<InsertedRun>().Select(r => r.InnerText)));
+        Assert.Equal(BodyTexts(right), BodyTexts(RevisionProcessor.AcceptRevisions(result)));
+        Assert.Equal(BodyTexts(left), BodyTexts(RevisionProcessor.RejectRevisions(result)));
+    }
+
     [Fact]
     public void Compare_DeletedTableColumn_RejectRestoresTheColumn()
     {

@@ -733,9 +733,10 @@ public sealed class DocxDiffSettings
     /// Characters that split a run's text into word vs. separator tokens; each separator character becomes
     /// its own token. <b>Null (the default)</b> uses the same default set as
     /// <see cref="WmlComparerSettings.WordSeparators"/>
-    /// (<c>{ ' ', '-', ')', '(', ';', ',', and CJK punctuation }</c>). An <b>explicit set is honored
-    /// verbatim — including an empty array</b>, which means nothing splits (the run becomes a single token,
-    /// modulo NBSP conflation); only null falls back to the default.
+    /// (<c>{ ' ', '-', ')', '(', ';', ',', and CJK punctuation }</c>). An explicit set replaces that
+    /// default, including an empty array. Independently of this set, Han, kana, and Hangul text elements
+    /// form individual word tokens, ASCII <c>:</c> and non-numeric <c>.</c>/<c>,</c> split, and NBSP splits
+    /// when <see cref="ConflateBreakingAndNonbreakingSpaces"/> is true.
     /// </summary>
     public char[]? WordSeparators { get; set; }
 
