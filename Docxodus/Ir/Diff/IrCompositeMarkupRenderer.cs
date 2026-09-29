@@ -181,6 +181,10 @@ internal static class IrCompositeMarkupRenderer
                         reviewerCommentIds.Add(id);
                 IrMarkupRenderer.NormalizeComments(main, IrMarkupRenderer.BodyCommentIds(baseIr),
                     reviewerCommentIds, state);
+
+                // Declare the namespaces the reviewers' cloned content uses on the output part roots —
+                // the two-way renderer's closing pass (issue #836), reviewers' prefixes first.
+                PartNamespaces.Of(reviewers.Select(r => r.Doc).Append(baseDoc)).DeclareIn(wDoc);
             }
             return streamDoc.GetModifiedWmlDocument();
         }

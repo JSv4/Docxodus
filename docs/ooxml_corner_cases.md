@@ -12,6 +12,7 @@ This document tracks edge cases and quirks in Open XML document processing where
    - [Footnote Count Discrepancy in Legal Templates](#footnote-count-discrepancy-in-legal-templates)
 3. [Package Output](#package-output)
    - [Misleading Deflate Hints Cause Compression Loss](#misleading-deflate-hints-cause-compression-loss)
+   - [Content cloned into another part loses its namespace declarations](#content-cloned-into-another-part-loses-its-namespace-declarations)
 4. [Paragraph Layout](#paragraph-layout)
    - [`w:lineRule="auto"` is a multiple of the FONT's line box, not of font-size](#wlineruleauto-is-a-multiple-of-the-fonts-line-box-not-of-font-size)
    - [An accumulated line-spacing error can resemble a top-margin deviation](#an-accumulated-line-spacing-error-can-resemble-a-top-margin-deviation)
@@ -1444,6 +1445,64 @@ replaces the previous separate Unix-metadata rewrite. The cost is bounded to fin
 production; editing, projection, undo, and intermediate operations are unchanged. This policy
 favors storage and transfer efficiency for batch-produced documents without paying maximum
 compression cost on every XML save.
+
+### Content cloned into another part loses its namespace declarations
+
+**Status:** Fixed<br>
+**Issue:** #836<br>
+**Tests:** `Docxodus.Tests/DocxDiffImportedNamespaceTests.cs`, `Docxodus.Tests/PartNamespacesTests.cs`
+
+#### The problem
+
+Word declares every namespace a part uses on the part's root element and lists its extension
+prefixes in the root's `mc:Ignorable`. A comparison copies content from the revised document into
+parts that came from the original: list definitions into `numbering.xml`, styles into
+`styles.xml`, paragraphs into `document.xml`, notes and comments into their parts. Copying uses
+LINQ to XML clones, which keep each element's and attribute's namespace but not the declarations
+on the ancestors they were cloned from. When the original's part root declares only `w:` (common
+for documents produced by a generator rather than by Word), the output part contains names and
+prefix lists that nothing in scope declares:
+
+```xml
+<!-- original numbering.xml declares only w:; the list definition is copied from a Word document -->
+<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:abstractNum w:abstractNumId="1" p3:restartNumberingAfterBreak="0"
+                 xmlns:p3="http://schemas.microsoft.com/office/word/2012/wordml">
+    <w:lvl w:ilvl="1">
+      <AlternateContent xmlns="http://schemas.openxmlformats.org/markup-compatibility/2006">
+        <Choice Requires="w14"><w:numFmt w:val="custom" w:format="001, 002, 003, ..."/></Choice>
+        <Fallback><w:numFmt w:val="decimal"/></Fallback>
+      </AlternateContent>
+```
+
+The XML writer invents a prefix for each undeclared attribute namespace (`p3:`) and redeclares the
+default namespace for each undeclared element namespace. Both are well-formed, but neither is in
+`mc:Ignorable`, so a consumer that does not understand the namespace must reject the content
+rather than skip it. `Requires="w14"` is plain text to LINQ to XML, and here nothing declares
+`w14`. Markup Compatibility (ECMA-376 Part 3) requires a `Requires` prefix to resolve.
+
+| Consumer | Output before the fix | Output after the fix |
+|---|---|---|
+| Open XML SDK 3.5 validator (Office 2019) | `Sch_UndeclaredAttribute` on the `w15`/`w16cid` attributes, `MC_InvalidRequiresAttribute`, and `Sch_InvalidElementContentExpectingComplex` for a `w14` element in a style's `w:rPr`; the inputs validate clean | no errors |
+| LibreOffice 24.2 (text export) | renders the `mc:Choice` branch (`001`); it does not require the prefix to resolve | same |
+| Word | not tested here | root declarations and `mc:Ignorable` match the shape of Word-authored parts |
+
+#### The fix
+
+`PartNamespaces` records the namespace declarations and `mc:Ignorable` prefixes on the part roots
+of the documents the output is built from. At the end of `IrMarkupRenderer.Render` and
+`IrCompositeMarkupRenderer.Render`, it visits every part the render loaded. On each part's root
+it declares every namespace that some name uses without a declaration in scope, and every prefix
+that an `mc:` attribute or `mc:Choice/@Requires` lists but nothing declares, using the prefix the
+input used. It then adds to `mc:Ignorable` each namespace that the part uses and an input listed
+there. It never rebinds a prefix the root already uses. A part it does not change is not
+rewritten.
+
+#### Relevant code
+
+- `Docxodus/Internal/PartNamespaces.cs` — the source declarations and the pass.
+- `Docxodus/Ir/Diff/IrMarkupRenderer.cs`, `Docxodus/Ir/Diff/IrCompositeMarkupRenderer.cs` — the
+  single call at the end of each render.
 
 ---
 

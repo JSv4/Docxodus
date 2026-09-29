@@ -199,12 +199,15 @@ internal static class IrTestDocuments
     /// <paramref name="themeFontSchemeInnerXml"/> omits the <see cref="ThemePart"/>. When a theme is
     /// supplied, <paramref name="themeFontSchemeInnerXml"/> is the inner XML of <c>a:fontScheme</c>
     /// (e.g. <c>&lt;a:majorFont&gt;&lt;a:latin typeface="Calibri Light"/&gt;&lt;/a:majorFont&gt;…</c>).
+    /// <paramref name="rootAttributes"/> is appended to the document, styles and numbering roots — the
+    /// extra namespace declarations and <c>mc:Ignorable</c> a Word-authored part root carries.
     /// </summary>
     internal static WmlDocument FromParts(
         string bodyInnerXml,
         string stylesInnerXml = "",
         string? numberingInnerXml = null,
-        string? themeFontSchemeInnerXml = null)
+        string? themeFontSchemeInnerXml = null,
+        string rootAttributes = "")
     {
         const string A = "http://schemas.openxmlformats.org/drawingml/2006/main";
 
@@ -215,12 +218,13 @@ internal static class IrTestDocuments
             var stylesPart = main.AddNewPart<StyleDefinitionsPart>();
             main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
 
-            WritePartXml(stylesPart, $"<w:styles xmlns:w=\"{W}\">{stylesInnerXml}</w:styles>");
+            WritePartXml(stylesPart, $"<w:styles xmlns:w=\"{W}\"{rootAttributes}>{stylesInnerXml}</w:styles>");
 
             if (numberingInnerXml is not null)
             {
                 var numberingPart = main.AddNewPart<NumberingDefinitionsPart>();
-                WritePartXml(numberingPart, $"<w:numbering xmlns:w=\"{W}\">{numberingInnerXml}</w:numbering>");
+                WritePartXml(numberingPart,
+                    $"<w:numbering xmlns:w=\"{W}\"{rootAttributes}>{numberingInnerXml}</w:numbering>");
             }
 
             if (themeFontSchemeInnerXml is not null)
@@ -232,7 +236,8 @@ internal static class IrTestDocuments
                     "</a:themeElements></a:theme>");
             }
 
-            WritePartXml(main, $"<w:document xmlns:w=\"{W}\"><w:body>{bodyInnerXml}</w:body></w:document>");
+            WritePartXml(main,
+                $"<w:document xmlns:w=\"{W}\"{rootAttributes}><w:body>{bodyInnerXml}</w:body></w:document>");
         }
         return new WmlDocument("ir-test.docx", ms.ToArray());
     }

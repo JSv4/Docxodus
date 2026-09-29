@@ -296,6 +296,25 @@ before you do.
 4. **Docs** — update `docs/architecture/` for significant features, and
    `docs/ooxml_corner_cases.md` for any Word-behaviour discovery (see below).
 
+## Issue Resolution Workflow
+
+An issue is a claim to verify, not a spec to implement. Work it in this order, then finish with
+the Feature Development Workflow above.
+
+1. **Prove it first.** Reproduce the reported behaviour on current `main` (a scratch program or a
+   test) before changing code. If it doesn't reproduce, say so on the issue instead of "fixing" it.
+2. **Red, then green (TDD).** Turn the reproducer into tests that fail for the reported reason,
+   then make them pass. A guard test that passes before the fix proves nothing until a mutated
+   fix makes it fail.
+3. **Fix the cause once.** When a defect has several symptoms or call sites, fix the point they
+   share rather than adding a branch per site, and take the architectural route whenever it is
+   also the smaller diff. Reuse or relocate an existing helper before writing a second one; give
+   new code one responsibility.
+4. **Tests a reviewer can read.** Pair focused unit tests with isolated integration tests through
+   the public entry point. Keep each short, named for the behaviour, and failing without the fix.
+5. **Stay in scope.** No unrelated fixes or refactors in the change; open an issue for anything
+   unrelated you find.
+
 ## OOXML Corner Cases
 
 When our output differs from Word or LibreOffice, **document the finding** in
