@@ -26,6 +26,23 @@ All notable changes to this project will be documented in this file.
   listed explicitly, each with the issue that tracks it, and the test also fails when a listed
   violation stops occurring, so the list can only shrink.
 
+- Comparison output keeps table, row and property children in the order the WordprocessingML schema
+  requires, and no longer contains a table without rows (issue #837). A whole inserted or deleted row
+  that carries row-level table property exceptions (`w:tblPrEx`) but no row properties of its own
+  received a new `w:trPr` ahead of the exceptions, which must come first in the row; the Open XML SDK
+  validator reported `Sch_UnexpectedElementContentExpectingComplex`. `DocxDiff.Compare`,
+  `DocxCompare.Compare` and `DocxDiff.Consolidate` now finish with one pass that puts the children of
+  every `w:tbl`, `w:tr`, `w:pPr` and `w:rPr` back into schema sequence — moving children only, never
+  adding or dropping one — so a property inserted at the wrong position anywhere in the renderer is
+  corrected in one place. Separately, accepting a table whose every row is tracked-deleted and whose
+  text was moved elsewhere (`w:moveFrom`) left a table shell with no rows behind — or, when a
+  move-from range covered the whole table, an entirely empty `<w:tbl/>`:
+  `RevisionProcessor.AcceptRevisions` removed those rows in its move passes, before the rule that drops
+  a wholly-deleted table could see them. Accepting now removes any table that had rows and lost all of
+  them, however they were removed (a table that arrived without rows is left alone), so
+  `DocxCompare.Compare` — which compares the accepted view of its inputs — no longer writes a rowless
+  table, a shape Word answers with its "unreadable content" prompt.
+
 ## [12.6.5] - 2026-09-28
 
 ### Fixed

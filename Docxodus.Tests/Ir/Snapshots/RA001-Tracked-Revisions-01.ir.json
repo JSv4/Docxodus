@@ -955,15 +955,6 @@
           ]
         },
         {
-          "anchor": "tbl:body:7fb34211628333ee9bdf43bc5295e2d5",
-          "type": "table",
-          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-          "formatFingerprint": "b5c26031bb7802e935123e73c6b430cee7e6810137c442f799501567494b841d",
-          "tblPrDigest": "f796fbb9ea0e5c952e4ac34545a24b69e36f352061e72469166dc2c436d0c5b4",
-          "tblGridDigest": "4daeac856fff71bf53cc6d54ec179b2fa4fdd1a6ea66672d047fbaf6d4d2571a",
-          "rows": []
-        },
-        {
           "anchor": "p:body:811b735fc8ba4e628bf6d0b47837c01d",
           "type": "paragraph",
           "contentHash": "6c179f21e6f62b629055d8ab40f454ed02e48b68563913473b857d3638e23b28",
@@ -1251,15 +1242,6 @@
             }
           },
           "inlines": []
-        },
-        {
-          "anchor": "tbl:body:87af15db45543f97d692b9cd6ec13d05",
-          "type": "table",
-          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-          "formatFingerprint": "d6c03e7ac4a65e7cc93e15b826e295514d031c7625079ef886b6a45d28005993",
-          "tblPrDigest": "563f8c757cc0ceab27c1cb7f8146f6edb5b4e654eddbe92258e091a52d5a020b",
-          "tblGridDigest": "563f8c757cc0ceab27c1cb7f8146f6edb5b4e654eddbe92258e091a52d5a020b",
-          "rows": []
         },
         {
           "anchor": "p:body:0ddd845dc18c848d194431de58727ef9",

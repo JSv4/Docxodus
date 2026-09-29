@@ -1698,6 +1698,109 @@ listSeparator
             return node;
         }
 
+        /// <summary>CT_Tbl: range markup may precede <c>w:tblPr</c>; then <c>w:tblGrid</c>, then the rows
+        /// (bare, or in a content control or custom XML wrapper).</summary>
+        private static readonly Dictionary<XName, int> Order_tbl = new Dictionary<XName, int>
+        {
+            { W.tblPr, 10 },
+            { W.tblGrid, 20 },
+            { W.tr, 30 },
+            { W.sdt, 30 },
+            { W.customXml, 30 },
+        };
+
+        /// <summary>CT_Row: <c>w:tblPrEx</c>, then <c>w:trPr</c>, then the cells (bare or wrapped).</summary>
+        private static readonly Dictionary<XName, int> Order_tr = new Dictionary<XName, int>
+        {
+            { W.tblPrEx, 10 },
+            { W.trPr, 20 },
+            { W.tc, 30 },
+            { W.sdt, 30 },
+            { W.customXml, 30 },
+        };
+
+        /// <summary>The containers <see cref="OrderChildrenPerSchema(XElement)"/> puts in schema order.
+        /// Only WordprocessingML children are ranked from these tables (so the <c>w:rPr</c> table's Word
+        /// 2010 entries are not used); see <see cref="ExtensionRanks"/> for the others.</summary>
+        private static readonly Dictionary<XName, Dictionary<XName, int>> ChildOrders = new Dictionary<XName, Dictionary<XName, int>>
+        {
+            { W.tbl, Order_tbl },
+            { W.tr, Order_tr },
+            { W.pPr, Order_pPr },
+            { W.rPr, Order_rPr },
+        };
+
+        /// <summary>Where a container's children from other namespaces go. Word 2010's run properties
+        /// (<c>w14:ligatures</c>, <c>w14:textFill</c>, …) follow every WordprocessingML run property and
+        /// precede <c>w:rPrChange</c>, which is where the Open XML SDK validator requires them. In a
+        /// container not listed here such a child moves with the ranked child before it.</summary>
+        private static readonly Dictionary<XName, int> ExtensionRanks = new Dictionary<XName, int>
+        {
+            { W.rPr, Order_rPr[W.oMath] + 5 },
+        };
+
+        /// <summary>
+        /// Put the children of every <c>w:tbl</c>, <c>w:tr</c>, <c>w:pPr</c> and <c>w:rPr</c> in each part
+        /// of <paramref name="package"/> that has been loaded as a LINQ to XML tree into their schema
+        /// sequence, and write back every part that changed.
+        /// </summary>
+        internal static void OrderChildrenPerSchema(OpenXmlPackage package)
+        {
+            foreach (var part in package.GetAllParts())
+                if (part.Annotation<XDocument>()?.Root is { } root && OrderChildrenPerSchema(root))
+                    part.PutXDocument();
+        }
+
+        /// <summary>
+        /// Put the children of every <c>w:tbl</c>, <c>w:tr</c>, <c>w:pPr</c> and <c>w:rPr</c> at or under
+        /// <paramref name="root"/> into their schema sequence. Returns whether anything moved.
+        /// <para>Only order changes: no node is added, removed or copied. A child the order table does not
+        /// rank (a bookmark, a comment, whitespace, or an extension element outside the containers
+        /// <see cref="ExtensionRanks"/> places) moves with the ranked child
+        /// before it, or stays first when no ranked child precedes it, so content the schema lets sit
+        /// between two ranked children is never separated from its neighbour. Ranked children of equal rank
+        /// keep their relative order, and a container already in order is not touched.</para>
+        /// </summary>
+        internal static bool OrderChildrenPerSchema(XElement root)
+        {
+            var changed = false;
+            foreach (var container in root.DescendantsAndSelf().Where(e => ChildOrders.ContainsKey(e.Name)).ToList())
+                changed |= OrderChildren(container, ChildOrders[container.Name],
+                    ExtensionRanks.TryGetValue(container.Name, out var extensionRank) ? extensionRank : null);
+            return changed;
+        }
+
+        private static bool OrderChildren(XElement container, Dictionary<XName, int> order, int? extensionRank)
+        {
+            var leading = new List<XNode>();
+            var groups = new List<(int Rank, List<XNode> Nodes)>();
+            foreach (var node in container.Nodes())
+            {
+                if (node is XElement element && Rank(element) is { } rank)
+                    groups.Add((rank, new List<XNode> { node }));
+                else if (groups.Count == 0)
+                    leading.Add(node);
+                else
+                    groups[groups.Count - 1].Nodes.Add(node);
+            }
+
+            var inOrder = true;
+            for (int i = 1; i < groups.Count && inOrder; i++)
+                inOrder = groups[i - 1].Rank <= groups[i].Rank;
+            if (inOrder)
+                return false;
+
+            var reordered = leading.Concat(groups.OrderBy(g => g.Rank).SelectMany(g => g.Nodes)).ToList();
+            container.RemoveNodes();
+            container.Add(reordered);
+            return true;
+
+            int? Rank(XElement element) =>
+                element.Name.Namespace != W.w ? extensionRank
+                : order.TryGetValue(element.Name, out var rank) ? rank
+                : null;
+        }
+
         /// <summary>
         /// Ensure the settings part carries <c>w:evenAndOddHeaders</c> (required for an Even
         /// header/footer story to render). The element is inserted at its CT_Settings schema

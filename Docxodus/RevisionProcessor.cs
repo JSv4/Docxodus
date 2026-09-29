@@ -1529,6 +1529,7 @@ namespace Docxodus
                 ? CapturePreexistingCleanTableRuns(documentElement)
                 : null;
             documentElement = (XElement)RemoveRsidTransform(documentElement)!;
+            MarkTablesWithRows(documentElement);
             documentElement = (XElement)FixUpDeletedOrInsertedFieldCodesTransform(documentElement)!;
             var containsMoveFromMoveTo = documentElement.Descendants(W.moveFrom).Any();
             documentElement = (XElement)AcceptMoveFromMoveToTransform(documentElement)!;
@@ -1541,15 +1542,42 @@ namespace Docxodus
                 documentElement = (XElement)RemoveRowsLeftEmptyByMoveFrom(documentElement)!;
             documentElement = (XElement)AcceptAllOtherRevisionsTransform(documentElement)!;
             documentElement = (XElement)AcceptDeletedCellsTransform(documentElement)!;
+            RemoveTablesThatLostEveryRow(documentElement);
             documentElement = (XElement)MergeAdjacentTablesTransform(documentElement)!;
             if (cleanTableRuns is { Count: > 0 })
                 RestorePreexistingCleanTableRuns(documentElement, cleanTableRuns);
             documentElement = (XElement)AddEmptyParagraphToAnyEmptyCells(documentElement)!;
-            documentElement.Descendants().Attributes().Where(a => a.Name == PT.UniqueId || a.Name == PT.RunIds).Remove();
+            documentElement.Descendants().Attributes().Where(a => a.Name == PT.UniqueId || a.Name == PT.RunIds || a.Name == PT.HadRows).Remove();
             documentElement.Descendants(W.numPr).Where(np => !np.HasElements).Remove();
             RemoveEmptyParagraphMarkShells(documentElement);
             XDocument newXDoc = new XDocument(documentElement);
             part.PutXDocument(newXDoc);
+        }
+
+        /// <summary>Mark every table that has rows before acceptance, so
+        /// <see cref="RemoveTablesThatLostEveryRow"/> can tell a table acceptance emptied from one that
+        /// came in without rows. The transforms copy attributes, so the mark survives them.</summary>
+        private static void MarkTablesWithRows(XElement documentElement)
+        {
+            foreach (var table in documentElement.Descendants(W.tbl))
+                if (WordprocessingMLUtil.TableRows(table).Any())
+                    table.SetAttributeValue(PT.HadRows, "1");
+        }
+
+        /// <summary>
+        /// Remove each table that had rows before acceptance and has none now. Accepting a deleted row
+        /// removes it, and the move passes remove rows (and, inside a <c>w:moveFromRange</c>, the table's
+        /// properties and grid too) whose content moved elsewhere; the rule that drops a wholly-deleted
+        /// table only sees rows that reach it. Whatever path emptied a table, what is left is a shell with
+        /// no rows, a known trigger for Word's unreadable-content prompt (issue #837). A table that
+        /// arrived without rows is not touched.
+        /// </summary>
+        private static void RemoveTablesThatLostEveryRow(XElement documentElement)
+        {
+            documentElement.Descendants(W.tbl)
+                .Where(table => table.Attribute(PT.HadRows) != null && !WordprocessingMLUtil.TableRows(table).Any())
+                .ToList()
+                .ForEach(table => { if (table.Parent != null) table.Remove(); });
         }
 
         /// <summary>Removing a paragraph-mark revision (<c>w:pPr/w:rPr/w:ins</c> etc.) can leave an
@@ -2267,6 +2295,7 @@ namespace Docxodus
             public static XNamespace pt = "http://www.codeplex.com/PowerTools/2009/RevisionAccepter";
             public static XName UniqueId = pt + "UniqueId";
             public static XName RunIds = pt + "RunIds";
+            public static XName HadRows = pt + "HadRows";
         }
 
         private static void AnnotateRunElementsWithId(XElement element)

@@ -583,6 +583,11 @@ internal static class IrMarkupRenderer
                 // cloned content came from it, so its prefixes win. Runs last so it sees every part
                 // the passes above wrote into.
                 PartNamespaces.Of(new[] { right, left }).DeclareIn(wDoc);
+
+                // The passes above insert and re-parent properties, rows and table shells at positions
+                // each chose locally; put every table, row, pPr and rPr the output holds back into schema
+                // sequence (issue #837). Order only — nothing is added or dropped.
+                WordprocessingMLUtil.OrderChildrenPerSchema(wDoc);
             }
             var rendered = streamDoc.GetModifiedWmlDocument();
             return settings.NormalizeRevisionAuthors
