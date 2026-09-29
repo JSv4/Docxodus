@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [12.6.5] - 2026-09-28
+
 ### Fixed
 
 - `DocxDiff` now tokenizes Han, kana, and Hangul text by character, so a one-character edit
