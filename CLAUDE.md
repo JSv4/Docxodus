@@ -353,10 +353,11 @@ Semver on `vMAJOR.MINOR.PATCH` tags, chosen from what accumulated in `[Unrelease
 3. In `CHANGELOG.md`, insert `## [X.Y.Z] - YYYY-MM-DD` under `## [Unreleased]`, leaving the
    accumulated entries beneath it and `[Unreleased]` empty above. Commit changelog-only:
    `docs(changelog): cut vX.Y.Z release notes`.
-4. Fast-forward remote `main` with the preparation commits (`git push origin HEAD:main`).
-   If it advanced, fetch and integrate the new changes, reassess notes/version/checks, and
-   retry; never force-push a release over someone else's work. Verify with
-   `git ls-remote origin refs/heads/main` that the release commit is remote `main`'s tip.
+4. Open and merge a release-preparation PR into `main`, following its required PR and
+   code-scanning rules. Fetch again and use the **merged commit on remote `main`**, not
+   the local PR head (a squash merge changes its SHA). If `main` advanced, reassess the
+   new changes, notes, version and checks before tagging; never force-push over someone
+   else's work. Verify the release SHA with `git ls-remote origin refs/heads/main`.
 5. Create annotated tags at that exact commit and push them explicitly:
 
    ```bash
@@ -401,6 +402,11 @@ sdist; install the matching wheel into a fresh environment with `DOCXODUS_HOST` 
 call `docx_scalpel.ping()` to exercise the bundled host. Verify the GitHub Release contains
 all twelve CLI binaries plus `SHA256SUMS`, and check downloaded assets against those sums.
 
+A successful NuGet push can precede public availability: validation and indexing usually
+take less than 15 minutes. Keep checking the exact versions rather than re-publishing;
+see [NuGet validation and indexing](https://learn.microsoft.com/en-us/nuget/nuget-org/publish-a-package#package-validation-and-indexing)
+if the registry remains unavailable.
+
 **Recover partial releases without rebuilding a version from moving `main`.** Inspect the
 failed job before retrying. Re-run failed jobs at the original release SHA when possible.
 NuGet uses `--skip-duplicate`; npm staged and published versions share a namespace and
@@ -433,7 +439,7 @@ DOCXODUS_CHECK_CDN=1 node ../docs/demo/tools/engine-pin.test.mjs
 npx playwright test social-demo.spec.ts --project=chromium --reporter=line
 ```
 
-Commit/push the demo and snippet updates to `main` after publication. Wait for the Pages
+Merge the demo and snippet PR into `main` after publication. Wait for the Pages
 deployment on that commit (or dispatch `pages.yml` on `main` if needed), then open
 `https://jsv4.github.io/Docxodus/demo/` and `/demo/app.html` and verify an editor boots and
 the embed dialog names the released version. Report release/package URLs, deployment
