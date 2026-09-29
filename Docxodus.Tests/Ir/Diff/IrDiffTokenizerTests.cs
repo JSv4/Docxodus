@@ -206,6 +206,62 @@ public class IrDiffTokenizerTests
         Assert.Equal(IrDiffTokenKind.Separator, punctuation.Kind);
     }
 
+    [Theory]
+    [InlineData("\u3400", "\uF900")]
+    [InlineData("\U0002F800", "\U00030000")]
+    [InlineData("\u31F0", "\U0001B000")]
+    [InlineData("\u3131", "\uA960")]
+    [InlineData("\uD7B0", "\uFFA1")]
+    [InlineData("ｶﾞ", "ｷ")]
+    public void Cjk_tokens_preserve_word_kind_format_link_and_utf16_offsets(string first, string second)
+    {
+        const string Target = "https://a.example/";
+        var p = IrReader.Read(IrTestDocuments.FromBodyXmlWithHyperlinks(
+            "<w:p><w:r><w:t>lead</w:t></w:r>" +
+            "<w:hyperlink r:id=\"r1\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">" +
+            $"<w:r><w:rPr><w:b/></w:rPr><w:t>{first}{second}</w:t></w:r></w:hyperlink>" +
+            "<w:r><w:t>tail</w:t></w:r></w:p>", ("r1", Target)), NoSources)
+            .Body.Blocks.OfType<IrParagraph>().First();
+
+        var tokens = Tok(p);
+        Assert.Equal(new[] { "lead", first, second, "tail" }, tokens.Select(t => t.Text));
+        Assert.All(tokens, t => Assert.Equal(IrDiffTokenKind.Word, t.Kind));
+        for (int i = 1; i <= 2; i++)
+        {
+            var token = tokens[i];
+            Assert.True(token.Format!.Bold);
+            Assert.Equal(token.Text + "\u0001lnk:" + Target, token.MatchKey);
+            Assert.Equal(tokens[i - 1].EndChar, token.StartChar);
+            Assert.Equal(token.Text.Length, token.EndChar - token.StartChar);
+        }
+        Assert.Equal(4 + first.Length + second.Length, tokens[3].StartChar);
+    }
+
+    [Fact]
+    public void Cjk_boundaries_apply_with_custom_separators_and_explicit_separators_keep_their_kind()
+    {
+        var settings = new DocxDiffSettings { WordSeparators = new[] { '文' } }.ToIrDiffSettings();
+        var tokens = Tok(TextPara("甲中文ab cd"), settings);
+
+        Assert.Equal(new[] { "甲", "中", "文", "ab cd" }, tokens.Select(t => t.Text));
+        Assert.Equal(new[] { IrDiffTokenKind.Word, IrDiffTokenKind.Word, IrDiffTokenKind.Separator, IrDiffTokenKind.Word },
+            tokens.Select(t => t.Kind));
+    }
+
+    [Theory]
+    [InlineData("甲", "乙")]
+    [InlineData("甲", "word")]
+    [InlineData("word", "乙")]
+    public void Note_ref_at_cjk_boundary_does_not_change_word_keys(string left, string right)
+    {
+        var withRef = Tok(Para(
+            $"<w:p><w:r><w:t>{left}</w:t></w:r><w:r><w:footnoteReference w:id=\"1\"/></w:r>" +
+            $"<w:r><w:t>{right}</w:t></w:r></w:p>"));
+
+        Assert.Equal(new[] { left, right },
+            withRef.Where(t => t.Kind == IrDiffTokenKind.Word).Select(t => t.MatchKey));
+    }
+
     // --- normalization settings ------------------------------------------
 
     [Fact]

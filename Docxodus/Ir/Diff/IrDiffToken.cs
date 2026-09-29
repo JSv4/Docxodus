@@ -19,7 +19,7 @@ namespace Docxodus.Ir.Diff;
 /// </remarks>
 internal enum IrDiffTokenKind
 {
-    /// <summary>A maximal run of non-separator characters from an <c>IrTextRun</c>.</summary>
+    /// <summary>A word of non-separator text, or one Han, kana, or Hangul text element.</summary>
     Word,
 
     /// <summary>A single separator character (one token per separator char — §6.1 atom granularity).</summary>

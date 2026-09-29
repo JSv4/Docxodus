@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- `DocxDiff` now tokenizes Han, kana, and Hangul text by character, so a one-character edit
+  produces a focused redline instead of replacing an entire unspaced phrase (issue #831).
+  Surrogate pairs and attached combining marks remain intact; other text keeps word-level diffs.
+
 ## [12.6.4] - 2026-09-28
 
 ### Fixed
