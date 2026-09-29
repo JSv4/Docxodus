@@ -7,7 +7,7 @@
  * ```html
  * <div id="doc"></div>
  * <script type="module">
- *   import { createViewer } from "https://cdn.jsdelivr.net/npm/docxodus@12.6.4/dist/embed.bundle.js";
+ *   import { createViewer } from "https://cdn.jsdelivr.net/npm/docxodus@12.6.5/dist/embed.bundle.js";
  *   await createViewer("#doc", "./contract.docx");
  * </script>
  * ```
