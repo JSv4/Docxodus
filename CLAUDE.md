@@ -307,9 +307,33 @@ analysis of why they differ, the Docxodus code involved, and the fix if known.
 
 ## Release Process
 
-A release is **a CHANGELOG section + an annotated tag + a GitHub Release**. Versions are
-injected from the tag at publish time — `Docxodus.csproj` stays at `1.0.0` and
-`npm/package.json` at `0.0.0` deliberately; do not bump them.
+A coordinated release is **release notes + tags + a GitHub Release with binaries +
+verified registry packages + updated demos**. A green Publish run alone is not enough:
+npm packages still need maintainer approval, and Python has its own workflow.
+
+### Release surfaces and versions
+
+| Surface | Version source | Publication and verification |
+|---------|----------------|------------------------------|
+| NuGet: `Docxodus`, `Redline`, `Docx2Html`, `Docx2OC` | `vX.Y.Z` | `publish.yml`; verify all four registry versions. |
+| npm: `docxodus`, `@docxodus/export` | `vX.Y.Z`; export's peer dependency is exactly `X.Y.Z` | `publish.yml` **stages** both packages; approve each with maintainer 2FA, then verify public versions and CDN assets. |
+| CLI downloads: redline, docx2html, docx2oc | `vX.Y.Z` | `publish.yml` attaches twelve binaries (three tools × four RIDs) and `SHA256SUMS` to the GitHub Release. |
+| PyPI: `docx-scalpel` | `docx-scalpel-vA.B.C` and `python/pyproject.toml` | `python-publish.yml`; verify four platform wheels and one sdist, then install a wheel and ping its bundled host. |
+| Hosted demos | Deployed source commit | `pages.yml` builds the runtime and site together; verify the Pages run and live editor. Consumer CDN snippets stay on the last publicly available npm version until approval. |
+
+.NET project versions remain `1.0.0`; both npm manifests remain `0.0.0` in source.
+CI injects release versions, including the export peer dependency. Do not bump those
+placeholders. Python's in-tree version **does** move for a Python release; its installed
+`__version__` comes from wheel metadata. MCP, delivery and development tools are built from
+source and are not additional packages published by these workflows.
+
+The tag namespaces are independent so Python-only releases remain possible. For a request
+to release all surfaces, bump and tag `docx-scalpel` too: its wheel embeds the core host, so
+a core fix needs a new wheel even when the Python wrapper itself has not changed. Use the
+same release commit for both tags. See [Python releasing](python/RELEASING.md) and
+[npm staged publishing](docs/npm-releases.md) for their detailed procedures.
+
+### Prepare and tag remote main
 
 Semver on `vMAJOR.MINOR.PATCH` tags, chosen from what accumulated in `[Unreleased]`:
 
@@ -319,15 +343,34 @@ Semver on `vMAJOR.MINOR.PATCH` tags, chosen from what accumulated in `[Unrelease
 | Minor | any `### Added` / `### Changed`, no breaking change |
 | Major | a breaking public-API change |
 
-From an up-to-date `main`:
+1. Fetch remote `main` and inspect commits since the last release, current tags, registry
+   versions and CI. Work from `origin/main`, preferably in an isolated worktree; never tag
+   the current feature branch just because it is checked out. Confirm the intended fixes
+   are merged and the relevant CI checks pass.
+2. Choose an unused core version with the table above and, for a coordinated release, an
+   unused Python version. Commit `python/pyproject.toml` and any release-process corrections
+   first. Leave consumer CDN pins alone until npm is public.
+3. In `CHANGELOG.md`, insert `## [X.Y.Z] - YYYY-MM-DD` under `## [Unreleased]`, leaving the
+   accumulated entries beneath it and `[Unreleased]` empty above. Commit changelog-only:
+   `docs(changelog): cut vX.Y.Z release notes`.
+4. Fast-forward remote `main` with the preparation commits (`git push origin HEAD:main`).
+   If it advanced, fetch and integrate the new changes, reassess notes/version/checks, and
+   retry; never force-push a release over someone else's work. Verify with
+   `git ls-remote origin refs/heads/main` that the release commit is remote `main`'s tip.
+5. Create annotated tags at that exact commit and push them explicitly:
 
-1. In `CHANGELOG.md`, insert `## [X.Y.Z] - YYYY-MM-DD` under `## [Unreleased]`, leaving the
-   accumulated entries beneath it and `[Unreleased]` empty above.
-2. Commit changelog-only: `docs(changelog): cut vX.Y.Z release notes`.
-3. Annotated tag whose message is the version: `git tag -a vX.Y.Z -m vX.Y.Z`.
-4. `git push origin main && git push origin vX.Y.Z`.
-5. `gh release create vX.Y.Z --title vX.Y.Z --notes-file <body.md> --latest --verify-tag`.
-   Every tag back to `v5.x` has a Release; a tag without one is an incomplete release.
+   ```bash
+   git tag -a vX.Y.Z -m vX.Y.Z <release-sha>
+   git tag -a docx-scalpel-vA.B.C -m docx-scalpel-vA.B.C <release-sha>
+   git push origin vX.Y.Z docx-scalpel-vA.B.C
+   ```
+
+   Omit the Python tag only when Python is deliberately outside the release scope. Never
+   move an already-published tag or reuse a registry version.
+6. Create the GitHub Release with prepared notes:
+   `gh release create vX.Y.Z --title vX.Y.Z --notes-file <body.md> --latest --verify-tag`.
+   If `release-assets` already created it, use `gh release edit` with the notes file and
+   title instead. A tag without a GitHub Release is incomplete.
 
 Release body opens with a one-line lead linking the CHANGELOG anchor
 (`…/CHANGELOG.md#XYZ---YYYY-MM-DD`, digits only). Patch/minor: the lead plus the
@@ -336,52 +379,65 @@ Release body opens with a one-line lead linking the CHANGELOG anchor
 far too long to dump (see `v7.0.0`, `v8.0.0`). `### Breaking changes` must say what silently
 changes for a caller who passes nothing, and how to pin the old behaviour.
 
-Reference commits: `#206`, `#209`; reference tags: `v6.1.0`, `v6.2.0`.
+### Verify packages and approve npm
 
-### What the tag actually publishes
+Monitor both `publish.yml` and `python-publish.yml` through completion. The core workflow
+runs the .NET tests, builds and checks both npm packages, tests the export companion, and
+runs `scripts/release-preflight.sh`. Python smoke-tests each self-contained host and runs
+lifecycle tests against each built wheel before publishing. Check every job: NuGet, npm,
+CLI assets and PyPI can succeed or fail independently.
 
-Pushing `vX.Y.Z` fires `publish.yml`, which derives the version from the tag and publishes
-**four NuGet packages** (`Docxodus`, `Redline`, `Docx2Html`, `Docx2OC`), **two npm packages**
-(`docxodus`, then `@docxodus/export`), and twelve self-contained CLI binaries (three tools ×
-four RIDs). Its last job, `release-assets`, attaches those binaries plus `SHA256SUMS` to the
-tag's GitHub Release — creating the Release with a changelog pointer if step 5 has not run yet, so
-edit its notes (`gh release edit --notes-file`) rather than failing on `gh release create`. A
-Release with no assets means that job did not run.
+**npm staging is not publication.** Read the **npm packages awaiting 2FA approval** summary
+in the Publish run, review both stage IDs, then approve `docxodus` first and the matching
+`@docxodus/export` second. Use npm's Staged Packages UI or
+`npx npm@11.19.1 stage view <stage-id>` / `stage approve <stage-id>`; a maintainer completes
+their own 2FA. If human interaction is required, provide the concrete stage IDs and continue
+the independent release checks while waiting. Do not claim either npm package is public
+until `npm view <package>@X.Y.Z version` succeeds.
 
-**`docx-scalpel` does not ship from a `vX.Y.Z` tag.** PyPI is driven by
-`python-publish.yml` on a separate `docx-scalpel-v<PEP440>` tag. That decoupling is
-deliberate (see the header comment in that workflow): a Python-only point release should not
-drag core/npm/binaries along, and a core release should not force a PyPI bump. Cut a
-`docx-scalpel-v*` tag when the wheel needs to move — not as part of every release.
+Verify all four NuGet packages, both npm versions (including export's exact peer dependency),
+and `docx-scalpel==A.B.C` on PyPI. A PyPI release must contain four platform wheels and an
+sdist; install the matching wheel into a fresh environment with `DOCXODUS_HOST` unset and
+call `docx_scalpel.ping()` to exercise the bundled host. Verify the GitHub Release contains
+all twelve CLI binaries plus `SHA256SUMS`, and check downloaded assets against those sums.
 
-**The run can partially succeed, and the order matters.** Each registry is published by a
-different job. NuGet goes first and independently; `docxodus` and `@docxodus/export` publish
-in that order in one job, because the companion peer-depends on the exact matching
-`docxodus` version, so it *cannot* go first. A failure in the companion step therefore
-leaves NuGet and `docxodus` published while `@docxodus/export` is not. Re-run with
-`gh workflow run publish.yml --ref main -f version=X.Y.Z` after fixing: NuGet pushes use
-`--skip-duplicate`, and an already-published npm version fails loudly rather than silently
-overwriting.
+**Recover partial releases without rebuilding a version from moving `main`.** Inspect the
+failed job before retrying. Re-run failed jobs at the original release SHA when possible.
+NuGet uses `--skip-duplicate`; npm staged and published versions share a namespace and
+cannot be overwritten. If only one npm package staged, preserve it and retry only the
+missing package from the release tag (see `docs/npm-releases.md`). Do not blindly dispatch
+the entire publish workflow on current `main` with an old version. Source fixes require a
+new release version; existing public artifacts stay immutable.
 
-**One-time bootstrap for `@docxodus/export`.** The companion publishes through npm OIDC
-trusted publishing, which is configured *per package* and therefore cannot be configured for
-a package that does not exist yet. Its first-ever publish fails with
-`404 Not Found - PUT https://registry.npmjs.org/@docxodus%2fexport`, which reads like a
-permissions bug and is not one. Bootstrap it once by hand — create the `@docxodus` scope,
-publish one version with a token, then configure trusted publishing on the package — after
-which CI owns it. Until that is done, expect every release to publish everything except the
-companion.
+### Finally update and verify the demos
 
-### Post-release: re-pin the demos
+The hosted pages use `docs/demo/engine.js` to import their **same-build**
+`./embed.bundle.js`. `pages.yml` runs `npm run build` and deploys `npm/dist/site`; the site
+does not wait for npm approval to receive core changes. Keep this local runtime default.
+The copyable CDN examples are separately pinned to public npm releases.
 
-`docs/demo/` loads the library from jsDelivr, so its `docxodus@X.Y.Z` pins can only move
-*after* npm publishes and the CDN serves the new bundle. Confirm with a real fetch
-(`curl -I https://cdn.jsdelivr.net/npm/docxodus@X.Y.Z/dist/embed.bundle.js`), then update the
-demo pages, `docs/demo/README.md`, `docs/npm-package.md`, `npm/README.md`,
-`npm/examples/embed.html`, and the `RELEASE_ENGINE` constant in
-`npm/tests/social-demo.spec.ts` — that spec is the guard that proves the demos load the pin
-rather than a 404, so run it. One reference in `docs/demo/README.md` is prose recounting a
-past pin-ahead-of-release; leave it alone.
+After both npm packages are approved, fetch the versioned `embed.bundle.js` and
+`embed.iife.js` from jsDelivr successfully. Then update every active `docxodus@X.Y.Z` pin
+in the demo HTML/README, `docs/npm-package.md`, `npm/README.md`, `npm/examples/embed.html`,
+the examples in `npm/src/{embed,index,core}.ts`, and `RELEASE_ENGINE` in
+`npm/tests/social-demo.spec.ts`. The inventory in `docs/demo/tools/engine-pin.test.mjs`
+guards against drift. Preserve historical prose and deliberate `@latest` examples.
+
+From `npm/`, validate and build the actual release source:
+
+```bash
+npm ci
+npm run build
+npm run pretest
+DOCXODUS_CHECK_CDN=1 node ../docs/demo/tools/engine-pin.test.mjs
+npx playwright test social-demo.spec.ts --project=chromium --reporter=line
+```
+
+Commit/push the demo and snippet updates to `main` after publication. Wait for the Pages
+deployment on that commit (or dispatch `pages.yml` on `main` if needed), then open
+`https://jsv4.github.io/Docxodus/demo/` and `/demo/app.html` and verify an editor boots and
+the embed dialog names the released version. Report release/package URLs, deployment
+status, checks performed and any outstanding human approval; staging alone is not done.
 
 ## Dependencies
 
