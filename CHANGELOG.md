@@ -10,6 +10,11 @@ All notable changes to this project will be documented in this file.
   produces a focused redline instead of replacing an entire unspaced phrase (issue #831).
   Surrogate pairs and attached combining marks remain intact; other text keeps word-level diffs.
 
+- The `@docxodus/export` CLI now runs when invoked through npm's executable symlink
+  (for example, `npx docxodus --help` on Linux or macOS). It previously exited with no
+  output because its entry-point check compared the symlink path with the resolved
+  module path. Importing `runCli` still does not execute the command.
+
 ## [12.6.4] - 2026-09-28
 
 ### Fixed
