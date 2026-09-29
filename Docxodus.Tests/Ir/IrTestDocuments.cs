@@ -201,13 +201,17 @@ internal static class IrTestDocuments
     /// (e.g. <c>&lt;a:majorFont&gt;&lt;a:latin typeface="Calibri Light"/&gt;&lt;/a:majorFont&gt;…</c>).
     /// <paramref name="rootAttributes"/> is appended to the document, styles and numbering roots — the
     /// extra namespace declarations and <c>mc:Ignorable</c> a Word-authored part root carries.
+    /// <paramref name="footnotesInnerXml"/> / <paramref name="endnotesInnerXml"/>, when supplied, add a
+    /// footnotes / endnotes part whose root holds exactly that inner XML (include the reserved separator notes).
     /// </summary>
     internal static WmlDocument FromParts(
         string bodyInnerXml,
         string stylesInnerXml = "",
         string? numberingInnerXml = null,
         string? themeFontSchemeInnerXml = null,
-        string rootAttributes = "")
+        string rootAttributes = "",
+        string? footnotesInnerXml = null,
+        string? endnotesInnerXml = null)
     {
         const string A = "http://schemas.openxmlformats.org/drawingml/2006/main";
 
@@ -235,6 +239,14 @@ internal static class IrTestDocuments
                     $"<a:fontScheme name=\"fs\">{themeFontSchemeInnerXml}</a:fontScheme>" +
                     "</a:themeElements></a:theme>");
             }
+
+            if (footnotesInnerXml is not null)
+                WritePartXml(main.AddNewPart<FootnotesPart>(),
+                    $"<w:footnotes xmlns:w=\"{W}\">{footnotesInnerXml}</w:footnotes>");
+
+            if (endnotesInnerXml is not null)
+                WritePartXml(main.AddNewPart<EndnotesPart>(),
+                    $"<w:endnotes xmlns:w=\"{W}\">{endnotesInnerXml}</w:endnotes>");
 
             WritePartXml(main,
                 $"<w:document xmlns:w=\"{W}\"{rootAttributes}><w:body>{bodyInnerXml}</w:body></w:document>");

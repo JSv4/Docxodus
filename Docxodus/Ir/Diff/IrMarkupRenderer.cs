@@ -432,9 +432,11 @@ internal static class IrMarkupRenderer
                 // reserved separator/continuation boilerplate notes keep their ids. Runs for EVERY render (cheap and
                 // idempotent when ids already coincide) so accept-by-right-order / reject-by-left-order both hold.
                 var footnoteRemap = RenumberNoteIds(main, W.footnoteReference, W.footnote, W.footnotes,
-                    main.FootnotesPart, wDocRight.MainDocumentPart?.FootnotesPart);
+                    main.FootnotesPart, wDocRight.MainDocumentPart?.FootnotesPart,
+                    ReIdMatchedNotes(script.NoteOps, IrNoteKind.Footnote));
                 var endnoteRemap = RenumberNoteIds(main, W.endnoteReference, W.endnote, W.endnotes,
-                    main.EndnotesPart, wDocRight.MainDocumentPart?.EndnotesPart);
+                    main.EndnotesPart, wDocRight.MainDocumentPart?.EndnotesPart,
+                    ReIdMatchedNotes(script.NoteOps, IrNoteKind.Endnote));
                 RemapNestedNoteReferences(main, footnoteRemap, endnoteRemap);
 
                 // Comment fidelity passes (the comment analogue of NormalizeBookmarks). A commented paragraph now
@@ -1925,9 +1927,21 @@ internal static class IrMarkupRenderer
             (leftCells == null && rowOp.CellOps.Any(c => c.RightCellAnchor == null)))
             return false;
 
+        // Only the RIGHT-sourced pieces of the row are registered for media import — never the assembled row,
+        // which also holds LEFT content (a deleted cell, the struck runs of a paired cell). Importing that
+        // against the right package resolved its left relationship ids to whatever right part shared the id
+        // (issue #840: a deleted picture became a second endnotes relationship). A paired cell's block ops
+        // register their own right clones.
+        XElement RightClone(XElement source)
+        {
+            var clone = StripUnids(new XElement(source));
+            state.RegisterMediaReferences(clone);
+            return clone;
+        }
+
         var newRow = new XElement(W.tr);
         foreach (var pre in rightRowSrc.Elements().Where(e => e.Name != W.tc))
-            newRow.Add(StripUnids(new XElement(pre)));
+            newRow.Add(RightClone(pre));
 
         int rightIndex = 0;
         int leftIndex = 0;
@@ -1966,7 +1980,7 @@ internal static class IrMarkupRenderer
 
             var newCell = new XElement(W.tc);
             foreach (var pre in cellSrc.Elements().Where(e => e.Name != W.p && e.Name != W.tbl && e.Name != W.sdt))
-                newCell.Add(StripUnids(new XElement(pre)));
+                newCell.Add(RightClone(pre));
 
             if (cellOp.BlockOps != null)
             {
@@ -1977,13 +1991,13 @@ internal static class IrMarkupRenderer
                 // cell's content verbatim so the table stays schema-valid.
                 if (cellSink.Count == 0)
                     foreach (var b in cellSrc.Elements().Where(e => e.Name == W.p || e.Name == W.tbl || e.Name == W.sdt))
-                        cellSink.Add(StripUnids(new XElement(b)));
+                        cellSink.Add(RightClone(b));
                 newCell.Add(cellSink);
             }
             else
             {
                 foreach (var b in cellSrc.Elements().Where(e => e.Name == W.p || e.Name == W.tbl || e.Name == W.sdt))
-                    newCell.Add(StripUnids(new XElement(b)));
+                    newCell.Add(RightClone(b));
             }
             // Do not compare by output ordinal: a middle cellIns shifts every later right cell.  The
             // monotone differ guarantees leftCellSrc is exactly this paired operation's source cell.
@@ -1991,7 +2005,6 @@ internal static class IrMarkupRenderer
                 ApplyPairedCellShellChange(newCell, leftCellSrc, state);
             newRow.Add(newCell);
         }
-        state.RegisterMediaReferences(newRow);
         // The paired tcPr histories were applied per cell above; row shells remain one per row.
         if (leftRowSrc != null)
             ApplyRowShellChanges(newRow, leftRowSrc, state);
@@ -3008,6 +3021,17 @@ internal static class IrMarkupRenderer
 
     // ----------------------------------------------------------------- note-id renumber (M2.6 Task 1)
 
+    /// <summary>LEFT id → RIGHT id of each matched note of <paramref name="kind"/> whose definition
+    /// <see cref="ApplyNoteDiffsToPart"/> re-ids to its right id.</summary>
+    private static Dictionary<string, string> ReIdMatchedNotes(IReadOnlyList<IrNoteDiff>? noteOps, IrNoteKind kind)
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var diff in noteOps ?? Array.Empty<IrNoteDiff>())
+            if (diff.Kind == kind && diff.LeftNoteId is { } leftId && leftId != diff.NoteId)
+                map[leftId] = diff.NoteId;
+        return map;
+    }
+
     /// <summary>
     /// Renumber footnote/endnote ids in the produced package to <b>body-reference document order</b>, mirroring
     /// <see cref="WmlComparer"/>'s <c>ChangeFootnoteEndnoteReferencesToUniqueRange</c>. Walk every body reference
@@ -3028,17 +3052,17 @@ internal static class IrMarkupRenderer
     /// covered: the cross-kind case needs the OTHER kind's remap applied to THIS kind's part, which is why the
     /// sweep runs once over both parts with both maps rather than per-pass.</para>
     /// <para><b>Known limitation (unexercised in the M2.6 corpus; documented per the T1 review).</b>
-    /// <i>Deleted EMPTY-bodied note dequeue keys on <c>w:delText</c>.</i> <c>IsDeletedOnly</c> classifies a
-    /// definition as deleted-only via "has <c>w:delText</c> and no live <c>w:t</c>"; a deleted note whose body
-    /// carries NO text at all (no <c>w:delText</c>, no <c>w:t</c>) is therefore not enqueued in <c>delDefs</c>,
-    /// so a <c>w:del</c> body reference could dequeue the wrong deleted def (or none). No corpus fixture has a
-    /// textless deleted note; a robust fix would key deletedness on the reference/definition correspondence the
-    /// builder already records rather than on body text presence.</para>
+    /// <i>Deletedness keys on <c>w:delText</c>.</i> <c>IsDeletedOnly</c> classifies a definition as deleted-only
+    /// via "has <c>w:delText</c> and no live <c>w:t</c>"; a deleted note whose body carries NO text at all (no
+    /// <c>w:delText</c>, no <c>w:t</c>) is therefore filed with the live definitions, where a right note with the
+    /// same id can shadow it. No corpus fixture has a textless deleted note.</para>
+    /// <para><paramref name="matchedLeftToRightIds"/> maps a matched note's LEFT id to the RIGHT id its definition
+    /// was re-id'd to, so a deleted reference (which still carries the left id) finds it (issue #840).</para>
     /// </summary>
     /// <returns>Each renumbered definition's OLD id → NEW id (empty when nothing renumbered), for the caller's
     /// nested-reference sweep across both note parts.</returns>
     internal static Dictionary<string, string> RenumberNoteIds(MainDocumentPart main, XName refName, XName noteName, XName rootName,
-        OpenXmlPart? notePart, OpenXmlPart? rightNotePart)
+        OpenXmlPart? notePart, OpenXmlPart? rightNotePart, IReadOnlyDictionary<string, string>? matchedLeftToRightIds = null)
     {
         var empty = new Dictionary<string, string>(StringComparer.Ordinal);
         if (notePart == null)
@@ -3078,7 +3102,15 @@ internal static class IrMarkupRenderer
             bool hasDelText = note.Descendants(W.delText).Any();
             return hasDelText && !hasLiveText;
         }
-        var delDefs = new Queue<XElement>(realNotes.Where(IsDeletedOnly));
+        // A del reference is cloned from the LEFT document, so it carries its note's LEFT id — and a deleted-only
+        // definition keeps its LEFT id too. Look it up by that id (issue #840): the former first-come dequeue of
+        // deleted-only definitions paired every del reference with the wrong note, and left the last one with no
+        // note at all, as soon as one left note was MATCHED to a right note while its own reference was deleted
+        // (the matched note is live, so the queue was one short).
+        var delById = new Dictionary<string, XElement>(StringComparer.Ordinal);
+        foreach (var note in realNotes.Where(IsDeletedOnly))
+            if ((string?)note.Attribute(W.id) is { } id)
+                delById[id] = note;
         var liveById = new Dictionary<string, XElement>(StringComparer.Ordinal);
         foreach (var note in realNotes.Where(n => !IsDeletedOnly(n)))
         {
@@ -3109,17 +3141,21 @@ internal static class IrMarkupRenderer
             var oldId = (string?)r.Attribute(W.id);
             if (oldId == null) continue;
             bool isDel = r.Ancestors().Any(a => a.Name == W.del);
-            // ins/equal → the live definition with the reference's (right) id. del → the next deleted-only
-            // definition (left-sourced, vanishes on accept); but a del reference whose note was NOT deleted —
-            // its DEFINITION is preserved (a matched note whose only reference was deleted, so the def lingers
-            // unreferenced) has no deleted-only def to consume, so fall back to the LIVE def carrying the
+            // ins/equal → the live definition with the reference's (right) id. del → the deleted-only definition
+            // with the reference's (left) id (left-sourced, vanishes on accept); but a del reference whose note was
+            // NOT deleted — its DEFINITION is preserved (a matched note whose only reference was deleted, so the
+            // def lingers unreferenced) — has no deleted-only def, so fall back to the LIVE def carrying the
             // reference's id. Without the fallback the del reference gets a fresh sequential id while its
             // preserved def keeps its original id, and reject dangles (the renumbered reference resolves to no
             // definition) whenever the original id ≠ the reference's ordinal — masked by the {1,2}-in-order
             // corpus, exposed by gapped ids (e.g. the NVCA contract's 111 footnotes).
-            XElement? def = isDel
-                ? (delDefs.Count > 0 ? delDefs.Dequeue() : liveById.GetValueOrDefault(oldId))
-                : liveById.GetValueOrDefault(oldId);
+            // A matched note re-id'd to its RIGHT id (ApplyNoteDiffsToPart) is found under that id, so a del
+            // reference to it follows the re-id first.
+            XElement? def = !isDel
+                ? liveById.GetValueOrDefault(oldId)
+                : matchedLeftToRightIds is not null && matchedLeftToRightIds.TryGetValue(oldId, out var rightId)
+                    ? liveById.GetValueOrDefault(rightId) ?? delById.GetValueOrDefault(rightId)
+                    : delById.GetValueOrDefault(oldId) ?? liveById.GetValueOrDefault(oldId);
 
             // A note referenced more than once corresponds once: the FIRST reference fixes its id; later references
             // to the same definition reuse it (mirroring the builder's first-reference-wins correspondence).
@@ -3748,7 +3784,11 @@ internal static class IrMarkupRenderer
         var starts = body.Descendants(W.bookmarkStart).Where(IsRunLevelBookmark).ToList();
         var ends = body.Descendants(W.bookmarkEnd).Where(IsRunLevelBookmark).ToList();
         if (starts.Count == 0 && ends.Count == 0)
+        {
+            // Row-level, math and other-story bookmarks can still collide (see (B)).
+            BookmarkIds.MakeUnique(main);
             return;
+        }
 
         static string? IdOf(XElement e) => (string?)e.Attribute(W.id);
 
@@ -3786,31 +3826,11 @@ internal static class IrMarkupRenderer
             if (keepEnd != null && LiftBookmarkBare(keepEnd)) changed = true;
         }
 
-        // (B) Renumber the remaining duplicate ids (bookmarks wholly inside a rewritten / whole-block span) so
-        //     each tracked copy is unique. Re-pair by document order; copy 0 keeps the id, copies 1.. get fresh.
-        var liveStarts = body.Descendants(W.bookmarkStart).Where(IsRunLevelBookmark)
-            .GroupBy(s => IdOf(s) ?? "").ToDictionary(g => g.Key, g => g.ToList());
-        var liveEnds = body.Descendants(W.bookmarkEnd).Where(IsRunLevelBookmark)
-            .GroupBy(e => IdOf(e) ?? "").ToDictionary(g => g.Key, g => g.ToList());
-        var dupIds = liveStarts.Where(kv => kv.Value.Count > 1).Select(kv => kv.Key)
-            .Union(liveEnds.Where(kv => kv.Value.Count > 1).Select(kv => kv.Key)).ToList();
-        if (dupIds.Count > 0)
-        {
-            int next = GlobalMaxBookmarkId(main) + 1;
-            foreach (var id in dupIds)
-            {
-                var ss = liveStarts.TryGetValue(id, out var sl) ? sl : new List<XElement>();
-                var es = liveEnds.TryGetValue(id, out var el) ? el : new List<XElement>();
-                int copies = Math.Max(ss.Count, es.Count);
-                for (int k = 1; k < copies; k++)
-                {
-                    string fresh = (next++).ToString();
-                    if (k < ss.Count) ss[k].SetAttributeValue(W.id, fresh);
-                    if (k < es.Count) es[k].SetAttributeValue(W.id, fresh);
-                    changed = true;
-                }
-            }
-        }
+        // (B) Renumber the remaining duplicate ids — a bookmark wholly inside a rewritten / whole-block span, and
+        //     the original's and the revised document's bookmarks that merely share a number (row-level, in
+        //     math, …) — document-wide, each start kept paired with its own end (issue #840).
+        if (BookmarkIds.MakeUnique(main))
+            changed = true;
 
         // (C) Reconcile pairing — GUARANTEE every run-level bookmarkStart has a matching bookmarkEnd and vice
         //     versa. A cross-paragraph range whose far endpoint lands in a churned span can be dropped by the
@@ -3930,26 +3950,6 @@ internal static class IrMarkupRenderer
         if (!parent.Elements().Any())
             parent.Remove();
         return true;
-    }
-
-    /// <summary>The largest integer bookmark id present in ANY part of the document (body + headers/footers +
-    /// note parts), so a freshly allocated id collides with no existing bookmark anywhere.</summary>
-    private static int GlobalMaxBookmarkId(MainDocumentPart main)
-    {
-        int max = 0;
-        void Scan(XElement? root)
-        {
-            if (root == null) return;
-            foreach (var m in root.Descendants().Where(e => e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd))
-                if (int.TryParse((string?)m.Attribute(W.id), out var v) && v > max)
-                    max = v;
-        }
-        Scan(main.GetXDocument().Root);
-        foreach (var h in main.HeaderParts) Scan(h.GetXDocument().Root);
-        foreach (var f in main.FooterParts) Scan(f.GetXDocument().Root);
-        if (main.FootnotesPart != null) Scan(main.FootnotesPart.GetXDocument().Root);
-        if (main.EndnotesPart != null) Scan(main.EndnotesPart.GetXDocument().Root);
-        return max;
     }
 
     // ----------------------------------------------------------------- field-context normalization

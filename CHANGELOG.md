@@ -17,6 +17,29 @@ All notable changes to this project will be documented in this file.
   it there, which is how Word writes these parts. The Open XML SDK validator no longer reports
   `Sch_UndeclaredAttribute`, `Sch_InvalidElementContentExpectingComplex` or
   `MC_InvalidRequiresAttribute` errors on these outputs when the inputs have none.
+- Three package-integrity defects in comparison output are fixed (issue #840).
+  - **Bookmark ids stay unique.** When a bookmark from each document survives, for example a
+    deleted paragraph's bookmark next to an inserted table's row bookmark, or a bookmark inside
+    deleted math, both kept the id their own document gave them, so the output repeated an id.
+    `DocxDiff.Compare`, `DocxCompare.Compare` and `DocxDiff.Consolidate` now renumber colliding
+    bookmarks across the body, headers, footers, notes and comments. Each start keeps its own end:
+    an end is paired with an open start of the same id on the same revision side (deleted, inserted
+    or unchanged) before the ids change. A bookmark inside math or a drawing keeps its id, because
+    that content is compared as a whole.
+  - **Note references resolve.** A deleted footnote or endnote reference was matched to a deleted
+    note by queue position rather than by id. When one original note was paired with a revised note
+    while its own reference was deleted, every later deleted reference pointed at the wrong note and
+    the last one pointed at none. Deleted references now find their note by id, following a matched
+    note to the new id it was given. A revised note with no content (`<w:footnote w:id="1"/>`) that
+    the original lacked is now written instead of dropped, so its reference no longer dangles.
+  - **The main document part keeps one relationship per singleton part.** When a table row was
+    paired and one of its cells lost a picture, the whole assembled row, including the original's
+    deleted picture, was imported as though it came from the revised document. The original's
+    relationship id was resolved in the revised package. If that id named the revised document's
+    endnotes, fontTable or webSettings part, the output got a second relationship of that type,
+    which the Open XML SDK refuses to open ("Sequence contains more than one element"), and the
+    deleted picture pointed at that part instead of its image. Only the row's revised-document
+    pieces are imported now.
 
 - A regression gate now guards comparison output validity (epic #835).
   `DocxCompareOutputValidityGateTests` compares about 375 pairs of `TestFiles` fixtures, a seeded

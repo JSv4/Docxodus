@@ -1504,6 +1504,77 @@ rewritten.
 - `Docxodus/Ir/Diff/IrMarkupRenderer.cs`, `Docxodus/Ir/Diff/IrCompositeMarkupRenderer.cs` — the
   single call at the end of each render.
 
+### Comparison output: shared bookmark ids, dangling note references, doubled singleton parts
+
+**Status:** Fixed<br>
+**Issue:** #840<br>
+**Tests:** `Docxodus.Tests/DocxDiffPackageIntegrityTests.cs`, `Docxodus.Tests/BookmarkIdsTests.cs`
+
+A comparison output combines content from two packages that each number their own bookmarks,
+notes and relationships. These are three places where those numbers met.
+
+#### Bookmark ids
+
+Both documents number bookmarks from 0. When content from each survives, as a deleted paragraph
+next to an inserted table, both copies of id 0 appear in the output:
+
+```xml
+<w:p><w:del ...><w:bookmarkStart w:id="0" w:name="LeftText"/>...<w:bookmarkEnd w:id="0"/></w:del></w:p>
+<w:tbl>...<w:tr><w:trPr><w:ins .../></w:trPr>
+  <w:bookmarkStart w:id="0" w:name="RightRow"/><w:tc>...</w:tc><w:bookmarkEnd w:id="0"/></w:tr></w:tbl>
+```
+
+The Open XML SDK validator reports `Sem_UniqueAttributeValue` on both `w:bookmarkStart` and
+`w:bookmarkEnd`. It does **not** check that bookmark *names* are unique, so two copies of
+`_GoBack` with different ids validate. Word's behaviour with repeated ids was not tested here.
+
+The two-way renderer already made ids unique, but only for run-level markers in the body. Row-
+and table-level markers (`w:tr`/`w:tbl` children), markers inside `m:oMath`, other stories, and
+the consolidate renderer were not covered. `BookmarkIds` now renumbers across every story. The id
+is an end's only link to its start, so the pass pairs markers before it renumbers them. An end
+closes the earliest open start of its id on the same revision side: inside `w:del`/`w:moveFrom`,
+a deleted paragraph mark, row or cell; inside `w:ins`/`w:moveTo`, an inserted one; or unchanged.
+If no start on its side is open, it closes the earliest open start. A bookmark inside math or a
+drawing keeps its id, because that content is hashed as an opaque whole.
+
+#### Note references
+
+The renumber pass that gives notes body-order ids took deleted notes from a queue for deleted
+references. An original note paired with a revised note, while its own reference is deleted, is
+not a deleted note. The queue was then one short, each later deleted reference took the next
+note's definition, and the last had none. Deleted references now look up their note by their
+(original) id, following a matched note to the revised id it was renumbered to. Separately, a
+revised note with no blocks (`<w:footnote w:id="1"/>`, as in `WC/WC064-Footnote-Mod.docx`)
+produced no note diff at all, so an output from an original without a footnotes part had a
+reference and no part. Such a note now yields an empty insert, and the output carries it as the
+input did.
+
+#### Doubled singleton relationships
+
+The package may relate the main document part to only one styles, settings, numbering,
+fontTable, theme, webSettings, footnotes, endnotes or comments part. With two `endnotes`
+relationships, `WordprocessingDocument.Open(...).MainDocumentPart.EndnotesPart` throws
+"Sequence contains more than one element". In our output the duplicate came from a paired table
+row. The renderer registered the whole assembled row for relationship import from the revised
+package, including the original's struck content. A deleted picture's `r:embed="rId9"` was
+resolved in the revised package. When `rId9` named the revised document's endnotes part, that
+part was copied in under a second endnotes relationship, and the picture pointed at it. The row
+now registers only the pieces it clones from the revised document.
+
+| Consumer | Before | After |
+|---|---|---|
+| Open XML SDK 3.5 validator (Office 2019) | `Sem_UniqueAttributeValue` on bookmark ids | no new errors |
+| Open XML SDK `EndnotesPart` accessor | throws "Sequence contains more than one element" | returns the part |
+| LibreOffice / Word | not verified | — |
+
+#### Relevant code
+
+- `Docxodus/Internal/BookmarkIds.cs` — pairing and renumbering; called from
+  `IrMarkupRenderer.NormalizeBookmarks` and at the end of `IrCompositeMarkupRenderer.Render`.
+- `IrMarkupRenderer.RenumberNoteIds` / `ReIdMatchedNotes`; `IrEditScriptBuilder.BuildOneStore`;
+  `IrCompositeMarkupRenderer.ApplyCompositeNoteDiffs`.
+- `IrMarkupRenderer.RenderModifyRow` — registers only right-sourced clones.
+
 ---
 
 ### Table, row and property children out of schema order, and rowless tables
