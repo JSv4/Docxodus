@@ -804,16 +804,25 @@ namespace Docxodus
             }
         }
 
+        /// <summary>
+        /// The font family a run is measured in: the run's own resolved <c>pt:FontName</c>, else
+        /// that of its enclosing paragraph, else <c>null</c>. Null is a legitimate outcome, not an
+        /// error — formatting assembly only stamps a name when the style chain resolves to one, so a
+        /// chain that names its fonts through theme references the package cannot resolve leaves
+        /// both unset (issue #847). Measurement callers also pass detached copies of runs, which
+        /// have no paragraph to consult; those carry the resolved name on themselves.
+        /// </summary>
+        internal static string? ResolveMeasurementFontName(XElement run) =>
+            (string?)run.Attribute(PtOpenXml.FontName) ??
+            (string?)run.Ancestors(W.p).FirstOrDefault()?.Attribute(PtOpenXml.FontName);
+
         public static int CalcWidthOfRunInTwips(XElement r)
         {
             var KnownFamilies = FontFamilyHelper.KnownFamilies;
 
-            var fontName = (string?)r.Attribute(PtOpenXml.pt + "FontName");
-            if (fontName == null)
-                fontName = (string?)r.Ancestors(W.p).First().Attribute(PtOpenXml.pt + "FontName");
-            if (fontName == null)
-                throw new DocxodusException("Internal Error, should have FontName attribute");
-            if (FontFamilyHelper.IsMarkedUnknown(fontName))
+            // An unresolved family measures like an unknown one (see below): no metrics, so 0.
+            var fontName = ResolveMeasurementFontName(r);
+            if (fontName == null || FontFamilyHelper.IsMarkedUnknown(fontName))
                 return 0;
 
             var rPr = r.Element(W.rPr);

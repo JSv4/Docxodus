@@ -8372,8 +8372,8 @@ namespace Docxodus
                 if (currentElement.Name == W.tab)
                 {
                     var runContainingTabToReplace = currentElement.Parent!; // a w:tab always has a w:r parent
-                    var fontNameAtt = runContainingTabToReplace.Attribute(PtOpenXml.pt + "FontName") ??
-                                      runContainingTabToReplace.Ancestors(W.p).First().Attribute(PtOpenXml.pt + "FontName");
+                    var resolvedFontName = WordprocessingMLUtil.ResolveMeasurementFontName(runContainingTabToReplace);
+                    var fontNameAtt = resolvedFontName == null ? null : new XAttribute(PtOpenXml.FontName, resolvedFontName);
 
                     var testAmount = twipCounter;
 
@@ -8667,10 +8667,10 @@ namespace Docxodus
 
         private static int CalcWidthOfRunInTwips(XElement r, bool isListMarker = false)
         {
-            var fontName = (string?)r.Attribute(PtOpenXml.pt + "FontName") ??
-                           (string?)r.Ancestors(W.p).First().Attribute(PtOpenXml.pt + "FontName");
-            if (fontName == null)
-                throw new DocxodusException("Internal Error, should have FontName attribute");
+            // Null when neither the run nor its paragraph resolved a family (issue #847). Callers
+            // pass detached copies carrying the resolved name, so the paragraph fallback inside
+            // the helper only matters for in-tree runs.
+            var fontName = WordprocessingMLUtil.ResolveMeasurementFontName(r);
 
             var rPr = r.Element(W.rPr);
             if (rPr == null)
@@ -8719,7 +8719,9 @@ namespace Docxodus
             // MetricsGetter.GetTextWidth now has estimation fallback for unavailable fonts.
             // If font is completely unknown, use estimation directly.
             int w;
-            if (FontFamilyHelper.IsMarkedUnknown(fontName) || !KnownFamilies.Contains(fontName))
+            // An unresolved family renders with no font-family at all, so the browser applies its
+            // default — exactly the case the flat estimate below models.
+            if (fontName == null || FontFamilyHelper.IsMarkedUnknown(fontName) || !KnownFamilies.Contains(fontName))
             {
                 // Character-based estimation starts in point space (w:sz is half-points), while
                 // the rest of this method consumes CSS-pixel widths. Normalize it to the same

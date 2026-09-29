@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- DOCX → HTML conversion (and the paginated PDF export built on it) no longer aborts with
+  "Sequence contains no elements" when a paragraph with tabs contains text whose font never
+  resolves to a family — for example, a style chain that names fonts only through theme
+  references (`w:asciiTheme`) with no readable theme part (issue #847). Tab-width measurement
+  runs on detached copies of runs, so its "use the paragraph's font" fallback could never find a
+  paragraph; the measurement now falls back from the run to its paragraph and, when neither
+  resolved a family, uses the same character-width estimate it applies to fonts it has no
+  metrics for. Right- and center-justified list markers had the same failure and are fixed too.
+
 ## [12.6.5] - 2026-09-28
 
 ### Fixed
