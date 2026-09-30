@@ -153,6 +153,23 @@ def test_docx_diff_settings_track_block_format_changes_to_wire() -> None:
     ] is False
 
 
+def test_docx_diff_settings_word_parity_opt_outs_to_wire() -> None:
+    """The numbering-change and cell-revision opt-outs (issue #842) only emit their
+    wire keys when disabled (default True → omitted, matching the host's default)."""
+    from docx_scalpel.types import DocxDiffSettings
+
+    defaults = DocxDiffSettings()
+    assert defaults.track_numbering_changes is True
+    assert defaults.track_cell_insertions_and_deletions is True
+    assert "trackNumberingChanges" not in defaults.to_wire()
+    assert "trackCellInsertionsAndDeletions" not in defaults.to_wire()
+    wire = DocxDiffSettings(
+        track_numbering_changes=False, track_cell_insertions_and_deletions=False
+    ).to_wire()
+    assert wire["trackNumberingChanges"] is False
+    assert wire["trackCellInsertionsAndDeletions"] is False
+
+
 def test_docx_diff_settings_input_revision_policies_to_wire() -> None:
     """Both input-revision policies must reach the shared DocxDiffOps parser.
 

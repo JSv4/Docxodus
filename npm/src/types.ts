@@ -449,6 +449,21 @@ export interface DocxDiffSettings {
    * the revision list and edit-script JSON are unaffected. Default false.
    */
   crossParagraphTokenDiff?: boolean;
+
+  /**
+   * Record a list item's previous label in `w:numberingChange` when an insertion, deletion or move
+   * elsewhere in its list renumbered it. Word's own compare never writes this; set false for output
+   * limited to the constructs Word writes. Default true. Consolidate honors it too.
+   */
+  trackNumberingChanges?: boolean;
+
+  /**
+   * Track a cell added to or removed from a paired table row with `w:cellIns`/`w:cellDel`. Word's own
+   * compare never writes cell-level revisions; set false and such a table is tracked as a whole (the
+   * original deleted, the revised inserted), in the markup and the revision list alike. Default true.
+   * Consolidate keeps cell-level revisions regardless.
+   */
+  trackCellInsertionsAndDeletions?: boolean;
 }
 
 /**

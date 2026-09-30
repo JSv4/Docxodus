@@ -4241,6 +4241,15 @@ class DocxDiffSettings:
     #: output paragraph count follows the token-level interleave). Markup (``docx_diff_compare``) only —
     #: the revision list and edit-script JSON are unaffected. Default False.
     cross_paragraph_token_diff: bool = True
+    #: Record a list item's previous label in ``w:numberingChange`` when an edit elsewhere in its list
+    #: renumbered it. Word's own compare never writes this; False limits output to the constructs Word
+    #: writes. Default True. Consolidate honors it too.
+    track_numbering_changes: bool = True
+    #: Track a cell added to or removed from a paired table row with ``w:cellIns``/``w:cellDel``. Word's
+    #: own compare never writes cell-level revisions; False tracks such a table whole instead (original
+    #: deleted, revised inserted), in the markup and the revision list alike. Default True. Consolidate
+    #: keeps cell-level revisions regardless.
+    track_cell_insertions_and_deletions: bool = True
 
     def to_wire(self) -> dict[str, Any]:
         """camelCase keys the host's ``DocxDiffOps.ParseSettings`` reads. Only
@@ -4282,6 +4291,10 @@ class DocxDiffSettings:
             wire["trackBlockFormatChanges"] = False
         if not self.cross_paragraph_token_diff:
             wire["crossParagraphTokenDiff"] = False
+        if not self.track_numbering_changes:
+            wire["trackNumberingChanges"] = False
+        if not self.track_cell_insertions_and_deletions:
+            wire["trackCellInsertionsAndDeletions"] = False
         return wire
 
 

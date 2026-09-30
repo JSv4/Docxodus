@@ -605,7 +605,8 @@ internal static class IrRevisionRenderer
             // A left-only cell (remove/merge topology) still bails the markup renderer to a whole-table
             // del(left)+ins(right) fallback. A right-only ordinary-grid insertion stays granular only while
             // table-shell tracking is enabled: tblGridChange is what makes its widened geometry reversible.
-            if (TableDiffNeedsWholeTableFallback(tableDiff, ctx.Settings.TrackTableFormatChanges))
+            if (TableDiffNeedsWholeTableFallback(tableDiff,
+                    ctx.Settings.TrackTableFormatChanges && ctx.Settings.TrackCellInsertionsAndDeletions))
             {
                 if (op.LeftAnchor is { } la)
                     sink.Add(new IrRevision(IrRevisionType.Deleted, BlockText(la, ctx.Left, ctx.Settings),
@@ -1507,13 +1508,14 @@ internal static class IrRevisionRenderer
 
     /// <summary>
     /// A table diff requires the whole-table del+ins fallback when a ModifyRow carries a LEFT-only cell.
-    /// Right-only cells are native <c>w:cellIns</c> insertions only while <c>w:tblGridChange</c> is enabled;
-    /// without table-shell tracking their accepted grid would not be reversible on reject.
+    /// Right-only cells are native <c>w:cellIns</c> insertions only while <paramref name="cellInsertionsTracked"/>:
+    /// <c>w:tblGridChange</c> must be enabled (without table-shell tracking their accepted grid would not be
+    /// reversible on reject) and the caller must not have opted out of cell-level revisions (issue #842).
     /// </summary>
-    private static bool TableDiffNeedsWholeTableFallback(IrTableDiff td, bool trackTableFormatChanges) =>
+    private static bool TableDiffNeedsWholeTableFallback(IrTableDiff td, bool cellInsertionsTracked) =>
         td.RowOps.Any(r => r.Kind == IrRowOpKind.ModifyRow && r.CellOps is { } cells
             && cells.Any(c => c.RightCellAnchor == null ||
-                (!trackTableFormatChanges && c.LeftCellAnchor == null)));
+                (!cellInsertionsTracked && c.LeftCellAnchor == null)));
 
     private static void RenderTableDiff(IrTableDiff tableDiff, in Context ctx, List<IrRevision> sink)
     {

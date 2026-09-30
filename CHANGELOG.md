@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Two comparison settings turn off revision constructs that Microsoft Word's own compare never
+  writes (issue #842). Both default to on, so existing output is unchanged.
+  - `DocxDiffSettings.TrackNumberingChanges` (`trackNumberingChanges` in the npm/WASM settings,
+    `track_numbering_changes` in `docx-scalpel`): when off, the comparison no longer records a list
+    item's previous label in `w:numberingChange` after an edit elsewhere in the list renumbered it.
+    `DocxDiff.Consolidate` honors it too.
+  - `DocxDiffSettings.TrackCellInsertionsAndDeletions` (`trackCellInsertionsAndDeletions`,
+    `track_cell_insertions_and_deletions`): when off, a table whose rows gain or lose cells is tracked
+    as a whole, the original table deleted and the revised one inserted, instead of with
+    `w:cellIns`/`w:cellDel`. The revision list reports the same whole-table change.
+    `DocxDiff.Consolidate` keeps cell-level revisions, which it needs to attribute each reviewer's
+    cells.
+
+  Accepting all changes still gives the revised document and rejecting them the original with
+  either setting off.
+
 ### Fixed
 
 - Paginated HTML and PDF export no longer fails with `pagination_failure: Page N body content is
