@@ -320,6 +320,10 @@ internal static class IrMarkupRenderer
                 // package still contains the original LEFT stories; outside that shape it returns null and
                 // style treatment remains the established general path.
                 var leftHadTheme = main.ThemePart is not null;
+                // Word's compatibilityMode rule keys on whether the ORIGINAL shipped a settings part at
+                // all (none → Word 2007 mode 12); a settings stub is backfilled into the output below,
+                // so capture the original's shape now. See WordCompareSettingsBackfill.
+                var leftHadSettingsPart = main.DocumentSettingsPart is not null;
                 // A left package with NO styles part at all takes the RIGHT's style definitions
                 // wholesale — Word's compare output for this shape carries every right style
                 // definition unchanged (a used ListParagraph's contextualSpacing is what keeps
@@ -533,7 +537,7 @@ internal static class IrMarkupRenderer
                 // compatibilityMode is rendering-relevant — it selects LibreOffice's layout-engine emulation,
                 // so an output missing it lays out under a different engine than Word's redline (which always
                 // carries one) and a rendered redline diverges from Word's compare output. See WordCompareSettingsBackfill.
-                WordCompareSettingsBackfill.Backfill(main, wDocRight.MainDocumentPart);
+                WordCompareSettingsBackfill.Backfill(main, wDocRight.MainDocumentPart, leftHadSettingsPart);
                 // Theme backfill: without a theme part, LibreOffice resolves scheme colors
                 // (bg1/tx1/accentN) to BLACK — right-sourced charts and shapes render as black
                 // boxes. Word's compare output always carries a theme, and when the ORIGINAL (left)
