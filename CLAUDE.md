@@ -12,6 +12,11 @@ duplicated description is one that will go stale.
 
 - **Never credit yourself in commits.** Do not add "Generated with Claude Code" or
   "Co-Authored-By: Claude" to commit messages.
+- **Review adversarially before opening a PR.** Every PR gets one round of adversarial review of
+  its own diff before it is opened: read it as a hostile reviewer would (missed cases, other call
+  paths, content the change could corrupt, tests that would still pass without the fix), then fix
+  every finding that is more than a nit before opening. Nits may ride along or be left, at your
+  discretion. Say in the PR description that the round happened and what it changed.
 - **Write PR descriptions for a human reviewer, not for the next agent.** Explain, in plain
   language, why the change exists, how it works at a mechanism level, and how it was
   validated. Don't invent terminology, lean on internal issue-number shorthand, or use
@@ -301,8 +306,12 @@ before you do.
 An issue is a claim to verify, not a spec to implement. Work it in this order, then finish with
 the Feature Development Workflow above.
 
-1. **Prove it first.** Reproduce the reported behaviour on current `main` (a scratch program or a
-   test) before changing code. If it doesn't reproduce, say so on the issue instead of "fixing" it.
+1. **Prove it first — for bugs and technical gaps.** When the issue reports a defect or a technical
+   gap (wrong output, a crash, a spec or validator violation, missing coverage of existing
+   behaviour), reproduce the reported behaviour on current `main` (a scratch program or a test)
+   before changing code. If it doesn't reproduce, say so on the issue instead of "fixing" it. An
+   issue that requests a new feature has no existing behaviour to reproduce; skip this step and
+   start at step 2 by writing tests for the requested behaviour that fail until it exists.
 2. **Red, then green (TDD).** Turn the reproducer into tests that fail for the reported reason,
    then make them pass. A guard test that passes before the fix proves nothing until a mutated
    fix makes it fail.
