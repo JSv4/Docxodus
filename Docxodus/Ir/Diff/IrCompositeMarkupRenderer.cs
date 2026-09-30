@@ -193,6 +193,10 @@ internal static class IrCompositeMarkupRenderer
                 // Schema child order for every table, row, pPr and rPr — the two-way renderer's closing
                 // pass (issue #837).
                 WordprocessingMLUtil.OrderChildrenPerSchema(wDoc);
+
+                // Drawings from the base and every reviewer share the story parts — the two-way renderer's
+                // drawing id pass (issue #860), after the namespace pass for the same reason.
+                DrawingIds.MakeUnique(wDoc);
             }
             return streamDoc.GetModifiedWmlDocument();
         }

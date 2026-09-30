@@ -1707,6 +1707,98 @@ itself is still not carried into the preserved output.
 
 ---
 
+### Drawings from both compared documents share one set of drawing ids
+
+**Status:** Fixed<br>
+**Issue:** #860<br>
+**Tests:** `Docxodus.Tests/DocxDiffDrawingIdTests.cs`, `Docxodus.Tests/DrawingIdsTests.cs`
+
+#### The problem
+
+Word numbers the drawings of a document through `wp:docPr/@id`, starting from 1, and keeps the ids
+distinct across the body, headers, footers, notes and comments. A comparison that replaces one
+drawing with another keeps both: the original's inside `w:del`, the revised document's inside
+`w:ins`. Each keeps the id its own document gave it, so the two usually collide:
+
+```xml
+<w:p>
+  <w:ins w:id="1" w:author="A"><w:r><w:drawing><wp:inline>…<wp:docPr id="1" name="Diagram 1"/>…</wp:inline></w:drawing></w:r></w:ins>
+  <w:del w:id="2" w:author="A"><w:r><w:drawing><wp:inline>…<wp:docPr id="1" name="Chart 1"/>…</wp:inline></w:drawing></w:r></w:del>
+</w:p>
+```
+
+VML text boxes have the same problem one level down, twice over:
+
+- Word numbers VML shapes per document too (`<v:shape id="_x0000_s1026" o:spid="_x0000_s1026">`), so
+  the deleted and the inserted text box usually carry the same `v:shape/@id`. A grouped drawing
+  brings the same collision on `v:group` and `v:rect`.
+- Word writes the shape type a text box uses (`<v:shapetype id="_x0000_t202" o:spt="202" …>`) once
+  per part, just before the first text box, and every later text box refers to it
+  (`<v:shape type="#_x0000_t202">`). The two documents each bring a copy, and the two copies usually
+  differ only in `w14:anchorId`. A text box later in the document carries no definition of its own:
+  it refers to whichever copy precedes it, and that copy may sit inside `w:del` or `w:ins`.
+
+| Consumer | Duplicate `wp:docPr/@id` | Duplicate VML `id` (`v:shape`, `v:group`, `v:rect`, `v:shapetype`, …) |
+|---|---|---|
+| Open XML SDK 3.5 validator (Office 2019) | `Sem_UniqueAttributeValue` when the duplicates are in one part and outside `mc:AlternateContent`. The SDK's constraint is part-scoped. It did not report a duplicate planted between drawings in two `mc:Choice` branches of one header. | Part-scoped uniqueness constraints on each VML element's `id`, reported as `Sem_UniqueAttributeValue` on the element. VML that Word puts in `mc:Fallback` is not checked; a `w:pict` outside `mc:AlternateContent` is. |
+| Word | not verified; Word writes ids that are unique across every story part | not verified |
+| LibreOffice | not verified | not verified |
+
+One duplicate is legitimate. Word writes the `mc:Choice` (DrawingML) and `mc:Fallback` copies of one
+drawing with the same `wp:docPr/@id`, because they are the same object. A consumer reads only one
+branch.
+
+#### The fix
+
+`DrawingIds.MakeUnique` runs once at the end of `IrMarkupRenderer.Render` and
+`IrCompositeMarkupRenderer.Render`. It covers every story part: body, headers, footers, footnotes,
+endnotes and comments.
+
+- **`wp:docPr/@id`.** The pass walks every drawing in document order. The first drawing to use an id
+  keeps it. A later drawing that uses the same id gets a new id above the highest id in use. Two
+  drawings whose nearest common ancestor is an `mc:AlternateContent` are alternative copies of one
+  object, so they keep sharing an id. Nothing in WordprocessingML refers to a `wp:docPr/@id`:
+  hyperlinks (`a:hlinkClick`), charts and diagrams reach their parts through relationship ids.
+  `pic:cNvPr/@id` inside a graphic is a separate id space, unique only within its `a:graphicData`.
+- **VML element ids.** In each part, the first VML element to use an `id` keeps it. A later
+  duplicate gets `_x0000_s` plus a number above the part's highest (for Word's `_x0000_sNNNN` form),
+  or the id with a numeric suffix. Alternative copies share an id, as for drawings. An
+  `o:OLEObject/@ShapeID` or `w:control/@w:shapeid` names the shape written just before it, and
+  follows that shape.
+- **`v:shapetype/@id`.** A definition matters only if every shape can reach one in every view of the
+  document: as redlined, with all changes accepted, and with all changes rejected. The pass acts on
+  an id that has more than one definition, or whose single definition some shape can lose. For
+  example, a text box inserted before an existing one carries the only definition, and rejecting the
+  insertion takes it away.
+  - When every definition of the id is equivalent (the same elements and attribute values, ignoring
+    `w14:anchorId` and namespace declarations), exactly one is kept. It is the first definition if
+    no revision mark, Markup Compatibility branch, text box or tracked table row encloses it.
+    Otherwise it is a copy, without `w14:anchorId`, in a new untracked `w:r/w:pict` at the start of
+    the paragraph holding the first reference, or of the part's first such paragraph. That position
+    survives every view, and the built-in `_x0000_t202` id is kept, so no shape is repointed.
+  - When the definitions differ, or no paragraph can hold the copy, the first keeps its id. Each
+    shape is bound to the nearest definition before it that is present in every view the shape is
+    in: after it if none before qualifies, and failing both, the nearest before it. A later
+    definition is removed if an equivalent kept definition is present wherever it is. Any other
+    later definition gets a new id (`_x0000_t202_1`), and its shapes are updated to match.
+
+  A simpler rule, where each shape uses the nearest definition before it and the later copy is
+  renamed, fails in the usual case. The comparison writes the deleted copy, then the inserted copy,
+  then the rest of the document. An unchanged text box further down then binds to the inserted copy
+  and loses it when the changes are rejected.
+
+#### Relevant code
+
+- `Docxodus/Internal/DrawingIds.cs` — the pass.
+- `Docxodus/Ir/Diff/IrMarkupRenderer.cs`, `Docxodus/Ir/Diff/IrCompositeMarkupRenderer.cs` — the
+  single call at the end of each render.
+- `Docxodus/Ir/IrReader.cs` — a `w:pict` that holds only `v:shapetype` definitions draws nothing,
+  so the IR treats it as non-content, like `w:lastRenderedPageBreak`. Without that, the run the pass
+  adds would count as a change, and accepting the redline would not reproduce the revised
+  document's content.
+
+---
+
 ## Paragraph Layout
 
 ### `w:lineRule="auto"` is a multiple of the FONT's line box, not of font-size
