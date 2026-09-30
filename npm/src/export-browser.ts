@@ -8,7 +8,7 @@
 
 import limitsContractJson from "./export-resource-limits-v1.json";
 import { assertWellFormedUnicode, canonicalJson } from "./canonical.js";
-import { PaginationEngine, type PageMap } from "./pagination.js";
+import { measureRenderedSource, PaginationEngine, type PageMap } from "./pagination.js";
 import {
   createWorkerDocxodus,
   workerErrorCode,
@@ -2996,36 +2996,6 @@ function storyForAnchor(anchorId: string): PageMap["fragments"][number]["story"]
   return "body";
 }
 
-function visibleRectWithinPage(
-  document: Document,
-  element: HTMLElement,
-  page: HTMLElement,
-): { left: number; top: number; right: number; bottom: number } {
-  const pageRect = page.getBoundingClientRect();
-  const rect = element.getBoundingClientRect();
-  let left = Math.max(rect.left, pageRect.left);
-  let top = Math.max(rect.top, pageRect.top);
-  let right = Math.min(rect.right, pageRect.right);
-  let bottom = Math.min(rect.bottom, pageRect.bottom);
-  const clips = (value: string) =>
-    value === "hidden" || value === "clip" || value === "scroll" || value === "auto";
-  for (let ancestor = element.parentElement;
-    ancestor && ancestor !== page;
-    ancestor = ancestor.parentElement) {
-    const style = document.defaultView!.getComputedStyle(ancestor);
-    const ancestorRect = ancestor.getBoundingClientRect();
-    if (clips(style.overflowX)) {
-      left = Math.max(left, ancestorRect.left);
-      right = Math.min(right, ancestorRect.right);
-    }
-    if (clips(style.overflowY)) {
-      top = Math.max(top, ancestorRect.top);
-      bottom = Math.min(bottom, ancestorRect.bottom);
-    }
-  }
-  return { left, top, right, bottom };
-}
-
 function assertStandaloneResourceAudit(document: Document): void {
   if (document.querySelector(
     "script, iframe, object, embed, video, audio, source, track, link, base, meta[http-equiv='refresh' i]",
@@ -3131,8 +3101,7 @@ async function verifyOfflineReopen(
       )) {
         const style = reopened.defaultView!.getComputedStyle(element);
         if (style.display === "none" || style.visibility === "hidden") continue;
-        const rect = element.getBoundingClientRect();
-        const visible = visibleRectWithinPage(reopened, element, page);
+        const { rect, visible } = measureRenderedSource(reopened.defaultView!, element, page, pageRect);
         if (rect.width <= 0 || rect.height <= 0
           || visible.right <= visible.left || visible.bottom <= visible.top) continue;
         const anchorId = element.dataset.sourceAnchorId!;

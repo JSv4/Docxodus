@@ -12,6 +12,7 @@ import {
   generateBlockPropertyRevisionDocx,
 } from './docx-review-topology-fixture.js';
 import { generateUndecodableImageDocx } from './docx-undecodable-image-fixture.js';
+import { outOfFlowDocx, textBoxRun } from './docx-out-of-flow-fixture.js';
 import { R_NS, storedZip, W_NS, xml } from './docx-zip.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -752,6 +753,24 @@ test.describe('standalone paginated HTML', () => {
       expect(second.renderReport.bindings.pageMapDigest)
         .toBe(first.renderReport.bindings.pageMapDigest);
     });
+
+  test('exports a paragraph whose only content is a floating text box', async ({ page }) => {
+    // Issue #849: the text box is promoted into the page box, leaving its host paragraph with a
+    // zero-height line; the PageMap used to find no fragment for the host and fail the export
+    // with output_verification_failure.
+    const source = outOfFlowDocx(
+      `<w:p><w:r><w:t>Before the box.</w:t></w:r></w:p>
+       <w:p>${textBoxRun('paragraph', ['Inside the text box', '', 'Last line in the box'])}</w:p>
+       <w:p><w:r><w:t>After the box.</w:t></w:r></w:p>`,
+    );
+
+    const result = await convert(page, source);
+
+    expect(result.renderReport.status).toBe('complete');
+    expect(result.pageCount).toBe(1);
+    expect(result.html).toContain('Inside the text box');
+    expect(result.html).toContain('After the box.');
+  });
 
   test('routes an undecodable image through the unsupported-content policy', async ({ page }) => {
     const source = generateUndecodableImageDocx();
