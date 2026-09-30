@@ -32,14 +32,19 @@ All notable changes to this project will be documented in this file.
     the last one pointed at none. Deleted references now find their note by id, following a matched
     note to the new id it was given. A revised note with no content (`<w:footnote w:id="1"/>`) that
     the original lacked is now written instead of dropped, so its reference no longer dangles.
-  - **The main document part keeps one relationship per singleton part.** When a table row was
-    paired and one of its cells lost a picture, the whole assembled row, including the original's
-    deleted picture, was imported as though it came from the revised document. The original's
-    relationship id was resolved in the revised package. If that id named the revised document's
-    endnotes, fontTable or webSettings part, the output got a second relationship of that type,
-    which the Open XML SDK refuses to open ("Sequence contains more than one element"), and the
-    deleted picture pointed at that part instead of its image. Only the row's revised-document
-    pieces are imported now.
+  - **The main document part keeps one relationship per singleton part.** Content from the
+    original could end up in an element registered for relationship import from the revised
+    document: a paired table row was registered only after the original's deleted cells and struck
+    runs were added to it, and a deleted paragraph's runs were fused into an already registered
+    inserted paragraph under one shared paragraph mark. The original's relationship ids were then
+    resolved in the revised package. When such an id named the revised document's styles,
+    settings, theme, fontTable, webSettings or endnotes part, the output got a second relationship
+    of that type (`Pkg_OnlyOnePartAllowed`; for endnotes the Open XML SDK throws "Sequence contains
+    more than one element"), and the deleted picture or object pointed at that part instead of its
+    image. A row now registers only its revised-document pieces, and a paragraph that is about to
+    receive fused original runs hands its registration to its current children first.
+  - A bookmark that starts in a paragraph and ends outside one (for example after a table's last
+    row) no longer gets a second, synthetic end with the same id.
 
 - A regression gate now guards comparison output validity (epic #835).
   `DocxCompareOutputValidityGateTests` compares about 375 pairs of `TestFiles` fixtures, a seeded

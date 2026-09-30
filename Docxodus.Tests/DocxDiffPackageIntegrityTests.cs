@@ -67,6 +67,17 @@ public class DocxDiffPackageIntegrityTests
             Paragraph("Shared closing line.") + TableWithRowBookmark("RightRow", "Headcount", "Plan", "Fiscal year"),
         };
 
+        // A bookmark that opens in a cell paragraph and closes after the table's last row, as Word writes a
+        // bookmark spanning to the end of a table.
+        yield return new object[]
+        {
+            "table-end",
+            Paragraph("Unrelated opening words."),
+            "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"2000\"/></w:tblGrid>" +
+            $"<w:tr>{Cell("<w:p><w:bookmarkStart w:id=\"3\" w:name=\"ToTableEnd\"/><w:r><w:t>Cell text</w:t></w:r></w:p>")}</w:tr>" +
+            "<w:bookmarkEnd w:id=\"3\"/></w:tbl>" + Paragraph("Closing words."),
+        };
+
         // A bookmark inside deleted math and a run-level bookmark on inserted text, both numbered 0.
         yield return new object[]
         {
@@ -234,37 +245,70 @@ public class DocxDiffPackageIntegrityTests
         Paragraph("Shipping is extra.", "<w:r><w:endnoteReference w:id=\"2\"/></w:r>"),
         Notes("endnote", "Prices include tax.", "Shipping is quoted per order."), endnotesId: "rId9");
 
-    [Fact]
-    public void Compare_NeverRelatesASingletonPartTwice()
+    private static WmlDocument Fixture(string name) =>
+        new(Path.Combine(new DirectoryInfo("../../../../TestFiles/").FullName, name));
+
+    public static IEnumerable<object[]> PicturePairs()
     {
-        var redline = DocxCompare.Compare(EndnotedOriginal, EndnotedRevised);
+        yield return new object[] { "table-cell", EndnotedOriginal, EndnotedRevised };
+        // The original's embedded-workbook paragraph is replaced by a SmartArt paragraph; the renderer fuses
+        // the struck object's run into the inserted paragraph under one shared paragraph mark, as Word does.
+        // The object's rId4 names the revised document's webSettings part.
+        yield return new object[]
+        {
+            "fused-paragraph", Fixture("HC044-Embedded-Workbook.docx"), Fixture("DB010-FrontMatter.docx"),
+        };
+    }
+
+    [Theory]
+    [MemberData(nameof(PicturePairs))]
+    public void Compare_NeverRelatesASingletonPartTwice(string scenario, WmlDocument left, WmlDocument right)
+    {
+        _ = scenario;
+        var redline = DocxCompare.Compare(left, right);
 
         AssertSingletonRelationshipsUnique(redline);
         using var opened = WordprocessingDocument.Open(new MemoryStream(redline.DocumentByteArray), false);
-        Assert.NotNull(opened.MainDocumentPart!.EndnotesPart);
+        var main = opened.MainDocumentPart!;
+        _ = (main.EndnotesPart, main.FootnotesPart, main.WebSettingsPart, main.FontTablePart, main.ThemePart,
+            main.StyleDefinitionsPart, main.DocumentSettingsPart);   // each throws when related twice
     }
 
-    [Fact]
-    public void Compare_DeletedPictureKeepsTheOriginalsImage()
+    [Theory]
+    [MemberData(nameof(PicturePairs))]
+    public void Compare_EveryPictureKeepsItsImage(string scenario, WmlDocument left, WmlDocument right)
     {
-        var redline = DocxCompare.Compare(EndnotedOriginal, EndnotedRevised);
+        _ = scenario;
+        var redline = DocxCompare.Compare(left, right);
 
         using var opened = WordprocessingDocument.Open(new MemoryStream(redline.DocumentByteArray), false);
         var main = opened.MainDocumentPart!;
-        var embed = main.GetXDocument().Descendants(XName.Get("blip", "http://schemas.openxmlformats.org/drawingml/2006/main"))
-            .Select(b => (string)b.Attribute(XName.Get("embed", "http://schemas.openxmlformats.org/officeDocument/2006/relationships"))!)
-            .Single();
-        Assert.IsAssignableFrom<ImagePart>(main.GetPartById(embed));
+        XNamespace r = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        var body = main.GetXDocument();
+        var embeds = body.Descendants(XName.Get("blip", "http://schemas.openxmlformats.org/drawingml/2006/main"))
+            .Select(b => (string)b.Attribute(r + "embed")!)
+            .Concat(body.Descendants(XName.Get("imagedata", "urn:schemas-microsoft-com:vml"))
+                .Select(i => (string)i.Attribute(r + "id")!))
+            .ToList();
+        Assert.NotEmpty(embeds);
+        Assert.All(embeds, embed => Assert.IsAssignableFrom<ImagePart>(main.GetPartById(embed)));
     }
 
-    [Fact]
-    public void Consolidate_NeverRelatesASingletonPartTwice() =>
-        AssertSingletonRelationshipsUnique(Consolidate(EndnotedOriginal, EndnotedRevised));
+    [Theory]
+    [MemberData(nameof(PicturePairs))]
+    public void Consolidate_NeverRelatesASingletonPartTwice(string scenario, WmlDocument left, WmlDocument right)
+    {
+        _ = scenario;
+        AssertSingletonRelationshipsUnique(Consolidate(left, right));
+    }
 
-    [Fact]
-    public void Compare_EndnotesAddedAndRemoved_AddsNoValidationErrors() =>
-        NoNewValidationErrors(EndnotedOriginal.DocumentByteArray,
-            DocxCompare.Compare(EndnotedOriginal, EndnotedRevised).DocumentByteArray);
+    [Theory]
+    [MemberData(nameof(PicturePairs))]
+    public void Compare_DeletedPicture_AddsNoValidationErrors(string scenario, WmlDocument left, WmlDocument right)
+    {
+        _ = scenario;
+        NoNewValidationErrors(left.DocumentByteArray, DocxCompare.Compare(left, right).DocumentByteArray);
+    }
 
     // ---------------------------------------------------------------- helpers
 

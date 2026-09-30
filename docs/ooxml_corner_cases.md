@@ -1552,14 +1552,27 @@ input did.
 #### Doubled singleton relationships
 
 The package may relate the main document part to only one styles, settings, numbering,
-fontTable, theme, webSettings, footnotes, endnotes or comments part. With two `endnotes`
-relationships, `WordprocessingDocument.Open(...).MainDocumentPart.EndnotesPart` throws
-"Sequence contains more than one element". In our output the duplicate came from a paired table
-row. The renderer registered the whole assembled row for relationship import from the revised
-package, including the original's struck content. A deleted picture's `r:embed="rId9"` was
-resolved in the revised package. When `rId9` named the revised document's endnotes part, that
-part was copied in under a second endnotes relationship, and the picture pointed at it. The row
-now registers only the pieces it clones from the revised document.
+fontTable, theme, webSettings, footnotes, endnotes or comments part. The validator reports a
+second one as `Pkg_OnlyOnePartAllowed`; with two `endnotes` relationships,
+`WordprocessingDocument.Open(...).MainDocumentPart.EndnotesPart` throws "Sequence contains more
+than one element". A duplicated settings part also brings `Sem_MissingReferenceElement` for the
+separator notes it names.
+
+The renderer registers each element it clones from the revised document, and after assembly
+imports the parts those elements' relationship ids name from the revised package. Two paths put
+original content inside a registered element. A paired table row was registered only after the
+original's deleted cells and struck runs were added to it. A deleted paragraph's runs were fused
+into an inserted paragraph that had already been registered (the shared-paragraph-mark shape
+Word uses when a paragraph is replaced). A deleted picture's `r:embed="rId9"` was then resolved
+in the revised package. When `rId9` named the revised document's endnotes, webSettings, theme
+or styles part, that part was copied in under a second relationship of its type, and the picture
+pointed at it. A row now registers only the pieces it clones from the revised document, and a
+paragraph that is about to receive fused original runs hands its registration to its current
+children first (`RenderState.KeepMediaRegistrationToCurrentChildren`).
+
+Separately, `NormalizeBookmarks` re-closed a run-level start whose end sat outside a paragraph
+(after a table's last row) with a synthetic end, repeating the id. It now counts an end wherever
+it sits.
 
 | Consumer | Before | After |
 |---|---|---|
@@ -1573,7 +1586,8 @@ now registers only the pieces it clones from the revised document.
   `IrMarkupRenderer.NormalizeBookmarks` and at the end of `IrCompositeMarkupRenderer.Render`.
 - `IrMarkupRenderer.RenumberNoteIds` / `ReIdMatchedNotes`; `IrEditScriptBuilder.BuildOneStore`;
   `IrCompositeMarkupRenderer.ApplyCompositeNoteDiffs`.
-- `IrMarkupRenderer.RenderModifyRow` — registers only right-sourced clones.
+- `IrMarkupRenderer.RenderModifyRow` — registers only right-sourced clones;
+  `IrMarkupRenderer.EmitGapArranged` — narrows a registration before fusing original runs in.
 
 ---
 

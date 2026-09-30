@@ -994,6 +994,7 @@ internal static class IrMarkupRenderer
                 var insEl = insGroups[ni].Paragraph!;
                 var nextPPr = DetachNextSidePPr(insEl, state);
                 var firstDel = delGroups[0].Paragraph!;
+                state.KeepMediaRegistrationToCurrentChildren(insEl);
                 if (firstDel.Element(W.pPr) is { } delPPr)
                 {
                     delPPr.Remove();
@@ -1161,6 +1162,7 @@ internal static class IrMarkupRenderer
                 var insEl = sharedIns.Paragraph!;
                 var nextPPr = DetachNextSidePPr(insEl, state);
                 var firstDel = delItems[0].Paragraph!;
+                state.KeepMediaRegistrationToCurrentChildren(insEl);
                 if (firstDel.Element(W.pPr) is { } delPPr)
                 {
                     delPPr.Remove();
@@ -1183,6 +1185,7 @@ internal static class IrMarkupRenderer
                 var nextPPr = DetachNextSidePPr(insEl, state);
                 var delEl = sharedDel.Paragraph!;
                 var basePPr = delEl.Element(W.pPr);
+                state.KeepMediaRegistrationToCurrentChildren(insEl);
                 foreach (var child in delEl.Elements().Where(e => e.Name != W.pPr).ToList())
                 {
                     child.Remove();
@@ -3840,13 +3843,19 @@ internal static class IrMarkupRenderer
         //     synthetic zero-width end in the start's own revision context (so accept/reject keep it together);
         //     an orphaned END (its START — the name carrier — was dropped) is removed (nothing can reference a
         //     nameless marker). Faithful to the structure round-trip: the bookmark NAME survives and resolves.
+        //     Only run-level markers are repaired, but a counterpart counts wherever it sits: a run-level start
+        //     closed by a row- or table-level end is paired, and re-closing it would repeat the id (issue #840).
         var startById = body.Descendants(W.bookmarkStart).Where(IsRunLevelBookmark)
             .GroupBy(s => IdOf(s) ?? "").ToDictionary(g => g.Key, g => g.ToList());
         var endById = body.Descendants(W.bookmarkEnd).Where(IsRunLevelBookmark)
             .GroupBy(e => IdOf(e) ?? "").ToDictionary(g => g.Key, g => g.ToList());
+        var anyStarts = body.Descendants(W.bookmarkStart).GroupBy(s => IdOf(s) ?? "")
+            .ToDictionary(g => g.Key, g => g.Count());
+        var anyEnds = body.Descendants(W.bookmarkEnd).GroupBy(e => IdOf(e) ?? "")
+            .ToDictionary(g => g.Key, g => g.Count());
         foreach (var (id, sl) in startById)
         {
-            int have = endById.TryGetValue(id, out var el) ? el.Count : 0;
+            int have = anyEnds.GetValueOrDefault(id);
             for (int k = have; k < sl.Count; k++)
             {
                 sl[k].AddAfterSelf(new XElement(W.bookmarkEnd, new XAttribute(W.id, id)));
@@ -3855,7 +3864,7 @@ internal static class IrMarkupRenderer
         }
         foreach (var (id, el) in endById)
         {
-            int have = startById.TryGetValue(id, out var sl) ? sl.Count : 0;
+            int have = anyStarts.GetValueOrDefault(id);
             for (int k = have; k < el.Count; k++)
             {
                 RemoveBookmarkMarker(el[k]);
@@ -8864,6 +8873,25 @@ internal static class IrMarkupRenderer
                 if (!NoteRefClonesBySource.TryGetValue(RightSourceId, out var refs))
                     NoteRefClonesBySource[RightSourceId] = refs = new List<XElement>();
                 refs.Add(clone);
+            }
+        }
+
+        /// <summary>Call before LEFT content is moved into <paramref name="clone"/> (the replace-gap fusion
+        /// of a deleted paragraph's runs into an inserted one). Where the clone is registered for media
+        /// import, its current right-sourced children take its place, so the import never walks the left
+        /// content: a left relationship id resolved in the right package names whatever right part shares the
+        /// id (issue #840 — a deleted picture or object became a second webSettings or endnotes relationship).
+        /// Positions are kept, so the per-scope registry slices stay valid.</summary>
+        public void KeepMediaRegistrationToCurrentChildren(XElement clone)
+        {            foreach (var list in RightSourcedClonesBySource.Values)
+            {
+                int index;
+                while ((index = list.FindIndex(e => ReferenceEquals(e, clone))) >= 0)
+                {
+                    list.RemoveAt(index);
+                    list.InsertRange(index, clone.Elements()
+                        .Where(e => e.DescendantsAndSelf().Attributes().Any(a => a.Name.Namespace == R.r)));
+                }
             }
         }
     }
