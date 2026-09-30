@@ -13,6 +13,7 @@ import {
 } from './docx-review-topology-fixture.js';
 import { generateUndecodableImageDocx } from './docx-undecodable-image-fixture.js';
 import { outOfFlowDocx, textBoxRun } from './docx-out-of-flow-fixture.js';
+import { bodyFillDocx } from './docx-body-fill-fixture.js';
 import { R_NS, storedZip, W_NS, xml } from './docx-zip.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -772,6 +773,42 @@ test.describe('standalone paginated HTML', () => {
     expect(result.html).toContain('After the box.');
   });
 
+  test('lays a page out again instead of failing when its last line would be clipped', async ({ page }) => {
+    // Issue #848. 54 one-line paragraphs at exact 12pt fill the 648pt body band exactly, so the
+    // placement model puts all 54 on page 1. At exact spacing below the font's own height (16pt
+    // text), CSS centres each glyph box on its 12pt line, so the last line's descenders hang ~3px
+    // past the band and the page clips them. The export withholds that overflow from page 1's
+    // budget and lays the document out again, moving the last line to page 2.
+    const source = bodyFillDocx({ paragraphs: 54, fontHalfPoints: 32, lineTwips: 240 });
+
+    const result = await convert(page, source);
+
+    expect(result.renderReport.status).toBe('complete');
+    expect(result.pageCount).toBe(2);
+    const pages = await page.evaluate((html) => {
+      const parsed = new DOMParser().parseFromString(html, 'text/html');
+      return Array.from(parsed.querySelectorAll('.page-box')).map((box) =>
+        Array.from(box.querySelectorAll('.page-content p')).map((p) => p.textContent?.trim()));
+    }, result.html);
+    expect(pages[0]).toHaveLength(53);
+    expect(pages[1]).toEqual(['Line 54 of the body, typography and spacing.']);
+    // A correction rebuilds the attempt and truncates its own entries, so the report records one
+    // pass through the render phases, in the same order as any successful render.
+    const order = result.renderReport.readiness
+      .map((entry) => entry.phase)
+      .filter((phase, index, phases) => phase !== phases[index - 1]);
+    expect(order.slice(order.indexOf('browser_launch'))).toEqual([
+      'browser_launch',
+      'font_loading',
+      'image_decoding',
+      'chart_svg_materialization',
+      'pagination',
+      'running_story_placement',
+      'page_tree_stability',
+      'output_verification',
+    ]);
+  });
+
   test('routes an undecodable image through the unsupported-content policy', async ({ page }) => {
     const source = generateUndecodableImageDocx();
     const warned = await convert(page, source);
@@ -1002,7 +1039,12 @@ test.describe('standalone paginated HTML', () => {
   });
 
   test('fails closed with a report when an indivisible body block would clip', async ({ page }, testInfo) => {
-    const source = new Uint8Array(readFileSync(join(testFiles, 'HC006-Test-01.docx')));
+    // A table row of exact height 750pt cannot split and is taller than the 648pt body band, so no
+    // page and no corrective layout pass can hold it. (This test used HC006-Test-01.docx until
+    // issue #848: that document only clipped because the paginator under-budgeted its tables.)
+    const source = bodyFillDocx({
+      paragraphs: 3, fontHalfPoints: 20, lineTwips: 240, exactRowTableTwips: 15000,
+    });
     const failure = await page.evaluate(async (bytes) => (window as any).DocxodusStandalone.convertFailure(
       bytes,
       { reviewProfile: 'final', commentProfile: 'hidden' },
@@ -1018,6 +1060,17 @@ test.describe('standalone paginated HTML', () => {
       body: Buffer.from(JSON.stringify(failure.report, null, 2)),
       contentType: 'application/json',
     });
+  });
+
+  test('exports HC006, whose tables used to push its pages past the body band', async ({ page }) => {
+    // Issue #848: each table's own top margin collapsed through its wrapper and went unbudgeted,
+    // so full pages clipped their last block and the export failed.
+    const source = new Uint8Array(readFileSync(join(testFiles, 'HC006-Test-01.docx')));
+
+    const result = await convert(page, source, false, { commentProfile: 'hidden' });
+
+    expect(result.renderReport.status).toBe('complete');
+    expect(result.pageCount).toBeGreaterThan(0);
   });
 
   test('publishes complete PageMaps when long footnote paragraphs continue', async ({

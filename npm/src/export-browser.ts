@@ -2679,7 +2679,19 @@ function finalizePageTree(
   document.head.appendChild(style);
 }
 
-function assertNoClippedContent(document: Document): void {
+/** One page whose body band clips block content, with how far past the band it runs. */
+interface ClippedBodyPage {
+  pageNumber: number;
+  overflowPx: number;
+  message: string;
+}
+
+/**
+ * Fails on a clipped footnote continuation, and reports (rather than fails on) every page whose
+ * body band clips content: the caller can still correct those by laying the document out again
+ * with a smaller budget for the page (issue #848).
+ */
+function findClippedContent(document: Document): ClippedBodyPage[] {
   for (const footnotes of Array.from(document.querySelectorAll<HTMLElement>(".page-footnotes"))) {
     if (footnotes.scrollHeight <= footnotes.clientHeight + 1) continue;
     const boundary = footnotes.getBoundingClientRect().bottom;
@@ -2691,27 +2703,48 @@ function assertNoClippedContent(document: Document): void {
         "Report the unsupported note structure; eligible text paragraphs are continued losslessly.");
     }
   }
+  const clipped: ClippedBodyPage[] = [];
   for (const content of Array.from(document.querySelectorAll<HTMLElement>(".page-content"))) {
     if (content.scrollHeight > content.clientHeight + 1) {
       const pageNumber = content.closest<HTMLElement>(".page-box")?.dataset.pageNumber ?? "unknown";
       const boundary = content.getBoundingClientRect().bottom;
-      const overflow = Array.from(content.querySelectorAll<HTMLElement>("*"))
+      const overflowing = Array.from(content.querySelectorAll<HTMLElement>("*"))
         .map((element) => ({
           element,
           bottom: element.getBoundingClientRect().bottom,
         }))
         .filter(({ bottom }) => bottom > boundary + 1)
-        .sort((left, right) => right.bottom - left.bottom)
+        .sort((left, right) => right.bottom - left.bottom);
+      // Collapsed trailing margins contribute to scrollHeight even though no
+      // descendant pixels are clipped (a common final blank Word paragraph).
+      if (overflowing.length === 0) continue;
+      const overflow = overflowing
         .slice(0, 3)
         .map(({ element, bottom }) =>
           `${element.localName}${element.className ? `.${String(element.className).trim().replace(/\s+/g, ".")}` : ""} (+${(bottom - boundary).toFixed(1)}px)`);
-      // Collapsed trailing margins contribute to scrollHeight even though no
-      // descendant pixels are clipped (a common final blank Word paragraph).
-      if (overflow.length === 0) continue;
-      fail("pagination_failure", "running_story_placement",
-        `Page ${pageNumber} body content is clipped (${content.scrollHeight}px scroll height in a ${content.clientHeight}px band; ${overflow.join(", ")}).`,
-        "Split the oversized block or reduce its dimensions before export.");
+      clipped.push({
+        pageNumber: Number.parseInt(pageNumber, 10),
+        overflowPx: overflowing[0].bottom - boundary,
+        message: `Page ${pageNumber} body content is clipped (${content.scrollHeight}px scroll height in a ${content.clientHeight}px band; ${overflow.join(", ")}).`,
+      });
     }
+  }
+  return clipped;
+}
+
+/**
+ * How many times the export may lay a document out again to correct a page that still clips its
+ * body. Each round withholds the measured overflow from that page's budget, so the clipped block
+ * moves or splits onto the next page; a round is needed only where the placement model and the
+ * finished layout disagree, so one normally suffices.
+ */
+const MAX_BODY_REFLOW_ROUNDS = 3;
+
+/** Thrown inside an attempt to restart it from pristine HTML with corrected page budgets. */
+class BodyReflowRequest extends Error {
+  constructor() {
+    super("body reflow requested");
+    this.name = "BodyReflowRequest";
   }
 }
 
@@ -3453,6 +3486,10 @@ export async function convertDocxToPaginatedHtml(
     });
     preflightConvertedHtml(convertedHtml, options);
     const attemptCheckpoint = checkpointAttemptState(state);
+    // Physical page → points withheld from its body budget; grows by one entry per corrected page
+    // and is carried into every later attempt so the stability comparison sees one layout.
+    const bodyBudgetReductionsPt: Record<number, number> = {};
+    let bodyReflowRounds = 0;
     let finalized: FinalizedTree | undefined;
     let firstAttemptSignature: string | undefined;
     let firstAttemptFontIdentity: string | undefined;
@@ -3534,6 +3571,7 @@ export async function convertDocxToPaginatedHtml(
           // restamps through normalizePageMapFragmentIdentities(); stamping inside paginate()
           // would be a second full forced-layout pass whose result is immediately overwritten.
           deferFragmentIdentities: true,
+          bodyBudgetReductionsPt,
           checkCancellation: () => {
             if (state.signal?.aborted) {
               fail("operation_cancelled", state.phase,
@@ -3565,14 +3603,31 @@ export async function convertDocxToPaginatedHtml(
             "Verify that the DOCX has a renderable main document body.");
         }
 
-        await runPhase(state, "running_story_placement", ["headers, footers, and notes"], () => {
-          finalizePageTree(renderDocument, pages, state, options);
-          // Running-story placement changes the visible fragment set. This is
-          // the sole identity-writing normalization pass; PageMap measurement
-          // below remains read-only.
-          engine.normalizePageMapFragmentIdentities();
-          assertNoClippedContent(renderDocument);
-        });
+        const clippedPages = await runPhase(
+          state, "running_story_placement", ["headers, footers, and notes"], () => {
+            finalizePageTree(renderDocument, pages, state, options);
+            // Running-story placement changes the visible fragment set. This is
+            // the sole identity-writing normalization pass; PageMap measurement
+            // below remains read-only.
+            engine.normalizePageMapFragmentIdentities();
+            const clipped = findClippedContent(renderDocument);
+            // Refusing to emit clipped content is right; refusing to emit the document is not —
+            // until the correction rounds are spent (an indivisible block taller than the page).
+            if (clipped.length > 0 && bodyReflowRounds >= MAX_BODY_REFLOW_ROUNDS) {
+              fail("pagination_failure", "running_story_placement", clipped[0].message,
+                "Split the oversized block or reduce its dimensions before export.");
+            }
+            return clipped;
+          });
+        if (clippedPages.length > 0) {
+          // Withhold each page's overflow (plus a pixel) from its budget and lay out again.
+          bodyReflowRounds++;
+          for (const page of clippedPages) {
+            bodyBudgetReductionsPt[page.pageNumber] =
+              (bodyBudgetReductionsPt[page.pageNumber] ?? 0) + (page.overflowPx + 1) * 72 / 96;
+          }
+          throw new BodyReflowRequest();
+        }
         countDomNodes(renderDocument, options.limits.domNodes, "running_story_placement");
         const automaticResources = automaticResourceCount(renderDocument);
         enforceLimit(automaticResources.count, options.limits.automaticResources,
@@ -3599,6 +3654,13 @@ export async function convertDocxToPaginatedHtml(
       } catch (error) {
         frame?.remove();
         frame = undefined;
+        if (error instanceof BodyReflowRequest) {
+          // Start over at attempt 1: both stability attempts must lay out with the same budgets.
+          restoreAttemptState(state, attemptCheckpoint);
+          firstAttemptSignature = undefined;
+          attempt = 0;
+          continue;
+        }
         if (!(error instanceof PageTreeInstabilityError) || attempt === 2) throw error;
         restoreAttemptState(state, attemptCheckpoint);
         addWarning(state, {
