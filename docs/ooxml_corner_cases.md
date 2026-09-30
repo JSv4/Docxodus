@@ -1506,6 +1506,96 @@ rewritten.
 
 ---
 
+### Table, row and property children out of schema order, and rowless tables
+
+**Status:** Fixed<br>
+**Issue:** #837<br>
+**Tests:** `Docxodus.Tests/DocxDiffSchemaOrderTests.cs`, `Docxodus.Tests/SchemaChildOrderTests.cs`
+
+#### The problem
+
+The children of `w:tbl` (CT_Tbl), `w:tr` (CT_Row), `w:pPr` (CT_PPr) and `w:rPr` (CT_RPr /
+CT_ParaRPr) form fixed sequences. The comparison renderer inserts and re-parents many of these
+children — revision markers, `*PrChange` elements, whole shells — and each insertion site chose
+its own position. One of them was wrong: marking a whole row inserted or deleted creates a
+`w:trPr` for the `w:ins`/`w:del` marker with `AddFirst`, which lands ahead of a `w:tblPrEx` the row
+already carries:
+
+```xml
+<!-- input row: property exceptions, no row properties -->
+<w:tr><w:tblPrEx><w:tblBorders>…</w:tblBorders></w:tblPrEx><w:tc>…</w:tc></w:tr>
+<!-- output before the fix: CT_Row requires tblPrEx, then trPr -->
+<w:tr><w:trPr><w:del …/></w:trPr><w:tblPrEx>…</w:tblPrEx><w:tc>…</w:tc></w:tr>
+```
+
+The Word 2010 run properties (`w14:ligatures`, `w14:textFill`, …) have a slot of their own: the
+Open XML SDK validator accepts them only after every WordprocessingML run property and before
+`w:rPrChange` (`<w:b/><w14:ligatures/><w:rPrChange/>` validates; `<w:b/><w:rPrChange/><w14:ligatures/>`
+and `<w14:textFill/><w:lang/>` do not). The `Order_rPr` table in `PtOpenXmlUtil.cs` ranks them
+between `w:sz` and `w:szCs`, which the validator rejects, so that table's extension entries are not
+used for this purpose.
+
+Separately, a table whose every row is tracked-deleted and whose text was moved elsewhere
+(`w:moveFrom` inside the deleted rows — Word writes this when a table's content is cut and pasted
+with Track Changes on) accepted to a table with no rows. `RevisionProcessor` removes such rows in its
+move passes — `RemoveRowsLeftEmptyByMoveFrom` drops a row whose cells the move emptied, and
+`AcceptMoveFromRanges` drops every element wholly inside a `w:moveFromRange` — before
+`AcceptAllOtherRevisionsTransform`, so the rows were already gone when the rule that drops a
+wholly-deleted table looked for them. When the range opens before the table and closes as its last
+child, the range also swallows `w:tblPr` and `w:tblGrid`, leaving an entirely empty `<w:tbl/>`:
+
+```xml
+<w:p>…<w:moveFromRangeStart w:id="10" w:author="A" w:name="move1"/></w:p>
+<w:tbl><w:tblPr>…</w:tblPr><w:tblGrid>…</w:tblGrid>
+  <w:tr><w:trPr><w:del …/></w:trPr><w:tc>…<w:moveFrom …>…</w:moveFrom>…</w:tc></w:tr>
+  <w:moveFromRangeEnd w:id="10"/>
+</w:tbl>
+```
+
+`DocxCompare.Compare` compares the accepted view of its inputs, so the shells reached the redline:
+`TestFiles/RA001-Tracked-Revisions-01.docx` against `-02.docx` produced one table with `w:tblPr` and
+`w:tblGrid` and no rows, and one entirely empty `<w:tbl/>`.
+
+| Consumer | Output before the fix | Output after the fix |
+|---|---|---|
+| Open XML SDK 3.5 validator (Office 2019) | `Sch_UnexpectedElementContentExpectingComplex` on `w:tblPrEx`; `Sch_IncompleteContentExpectingComplex` on the empty `w:tbl`. A shell with `w:tblPr`/`w:tblGrid` and no rows passes (CT_Tbl lets the row group be empty) | no errors, no rowless table |
+| Word | not verified here; a table with no rows is a known trigger for the "unreadable content" prompt | — |
+| LibreOffice | not verified | — |
+
+#### The fix
+
+`WordprocessingMLUtil.OrderChildrenPerSchema` runs once at the end of `IrMarkupRenderer.Render` and
+`IrCompositeMarkupRenderer.Render`, on every part the render loaded. It puts the children of each
+`w:tbl`, `w:tr`, `w:pPr` and `w:rPr` into schema sequence using the existing `Order_pPr`/`Order_rPr`
+tables and two small ones for CT_Tbl and CT_Row. It only moves nodes: a child the table does not
+rank (a bookmark, a comment, whitespace) travels with the ranked child before it, Word 2010 run
+properties go to their slot before `w:rPrChange` in their own schema sequence (`glow`, `shadow`,
+`reflection`, `textOutline`, `textFill`, `scene3d`, `props3d`, `ligatures`, `numForm`, `numSpacing`,
+`stylisticSets`, `cntxtAlts`), equal ranks keep their order, and a container already in order — and
+a part with none out of order — is not rewritten.
+`RevisionProcessor.AcceptRevisionsForPart` marks each table that has rows before accepting and, once the
+revision transforms have run, removes each marked table left with none — whichever pass removed its
+rows. A table that arrived without rows is left as it was.
+
+Removing the shell has one consequence under `PreserveInputRevisions`: the renderer pairs each
+accepted block with its original by walking both bodies in step, and the empty shell used to pair
+with the original table. Without it, the walk met the original table where the accepted body had the
+next paragraph and stopped, and every later block lost its preserved revisions. The walk now steps
+over an original table that `RevisionProcessor.AcceptRemovesTable` says accepting removes. That
+check accepts a copy of the table on its own through the same pipeline. This also fixes the older
+case of a wholly-deleted table with no moves, which stopped the walk the same way. The removed table
+itself is still not carried into the preserved output.
+
+#### Relevant code
+
+- `Docxodus/PtOpenXmlUtil.cs` — `OrderChildrenPerSchema` and its order tables.
+- `Docxodus/Ir/Diff/IrMarkupRenderer.cs` (`MarkWholeRow`), `Docxodus/Ir/Diff/IrCompositeMarkupRenderer.cs`.
+- `Docxodus/RevisionProcessor.cs` — `MarkTablesWithRows` / `RemoveTablesThatLostEveryRow`,
+  `AcceptRemovesTable`.
+- `Docxodus/Ir/Diff/IrMarkupRenderer.cs` — `AlignPreservedChildren` / `IsAcceptDiscarded`.
+
+---
+
 ## Paragraph Layout
 
 ### `w:lineRule="auto"` is a multiple of the FONT's line box, not of font-size

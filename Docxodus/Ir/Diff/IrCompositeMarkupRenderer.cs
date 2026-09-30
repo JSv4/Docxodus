@@ -185,6 +185,10 @@ internal static class IrCompositeMarkupRenderer
                 // Declare the namespaces the reviewers' cloned content uses on the output part roots —
                 // the two-way renderer's closing pass (issue #836), reviewers' prefixes first.
                 PartNamespaces.Of(reviewers.Select(r => r.Doc).Append(baseDoc)).DeclareIn(wDoc);
+
+                // Schema child order for every table, row, pPr and rPr — the two-way renderer's closing
+                // pass (issue #837).
+                WordprocessingMLUtil.OrderChildrenPerSchema(wDoc);
             }
             return streamDoc.GetModifiedWmlDocument();
         }

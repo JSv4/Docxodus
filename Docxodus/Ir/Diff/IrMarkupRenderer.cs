@@ -583,6 +583,11 @@ internal static class IrMarkupRenderer
                 // cloned content came from it, so its prefixes win. Runs last so it sees every part
                 // the passes above wrote into.
                 PartNamespaces.Of(new[] { right, left }).DeclareIn(wDoc);
+
+                // The passes above insert and re-parent properties, rows and table shells at positions
+                // each chose locally; put every table, row, pPr and rPr the output holds back into schema
+                // sequence (issue #837). Order only — nothing is added or dropped.
+                WordprocessingMLUtil.OrderChildrenPerSchema(wDoc);
             }
             var rendered = streamDoc.GetModifiedWmlDocument();
             return settings.NormalizeRevisionAuthors
@@ -8407,7 +8412,7 @@ internal static class IrMarkupRenderer
             // retains only body sectPr. Direct leaf annotations (comment/bookmark/range markers, etc.) are
             // therefore discarded. Skip only such leaves, and only when the working side does not carry the
             // same name, so a non-normalized 1:1 marker still has to match exactly.
-            while (i < original.Count && IsAcceptDiscardedLeaf(original[i], w))
+            while (i < original.Count && IsAcceptDiscarded(original[i], w))
                 i++;
             if (i >= original.Count)
                 return;   // originals exhausted early — alignment lost; keep what was verified.
@@ -8435,7 +8440,7 @@ internal static class IrMarkupRenderer
             {
                 // Cover a direct leaf that sat between a mark-deleted paragraph and the paragraph it merges
                 // into. The accept transform drops it just like a leaf before an ordinary working block.
-                while (i < original.Count && IsAcceptDiscardedLeaf(original[i], w))
+                while (i < original.Count && IsAcceptDiscarded(original[i], w))
                     i++;
                 if (i >= original.Count)
                     return;   // ran out of originals mid-group — alignment lost.
@@ -8456,6 +8461,13 @@ internal static class IrMarkupRenderer
                 map[w] = group;
         }
     }
+
+    /// <summary>True when accepting revisions leaves nothing of the original child in the working container:
+    /// an accept-discarded leaf, or a table accept removes outright (every row tracked-deleted, or emptied
+    /// by a move). Without the table case, one wholly-deleted table stopped the walk and every block after
+    /// it lost its preserved revisions (issue #837).</summary>
+    private static bool IsAcceptDiscarded(XElement original, XElement working) =>
+        IsAcceptDiscardedLeaf(original, working) || RevisionProcessor.AcceptRemovesTable(original);
 
     /// <summary>True when the original child is a direct leaf discarded by the accept transform that rebuilds
     /// body/note block containers. A wrapper with any nested paragraph/table is deliberately NOT skipped: its
