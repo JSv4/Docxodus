@@ -590,6 +590,12 @@ internal static class IrMarkupRenderer
                 // each chose locally; put every table, row, pPr and rPr the output holds back into schema
                 // sequence (issue #837). Order only — nothing is added or dropped.
                 WordprocessingMLUtil.OrderChildrenPerSchema(wDoc);
+
+                // Drawings from both documents now share the story parts, each numbered by its own
+                // source: give each its own wp:docPr id and each part one v:shapetype per id (issue #860).
+                // It adds no names, so it needs no declarations; after the namespace pass so that pass
+                // sees only the parts the render loaded, not the story parts this one reads.
+                DrawingIds.MakeUnique(wDoc);
             }
             var rendered = streamDoc.GetModifiedWmlDocument();
             return settings.NormalizeRevisionAuthors

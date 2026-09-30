@@ -1707,6 +1707,76 @@ itself is still not carried into the preserved output.
 
 ---
 
+### Drawings from both compared documents share one set of drawing ids
+
+**Status:** Fixed<br>
+**Issue:** #860<br>
+**Tests:** `Docxodus.Tests/DocxDiffDrawingIdTests.cs`, `Docxodus.Tests/DrawingIdsTests.cs`
+
+#### The problem
+
+Word numbers the drawings of a document through `wp:docPr/@id`, starting from 1, and keeps the ids
+distinct across the body, headers, footers, notes and comments. A comparison that replaces one
+drawing with another keeps both: the original's inside `w:del`, the revised document's inside
+`w:ins`. Each keeps the id its own document gave it, so the two usually collide:
+
+```xml
+<w:p>
+  <w:ins w:id="1" w:author="A"><w:r><w:drawing><wp:inline>…<wp:docPr id="1" name="Diagram 1"/>…</wp:inline></w:drawing></w:r></w:ins>
+  <w:del w:id="2" w:author="A"><w:r><w:drawing><wp:inline>…<wp:docPr id="1" name="Chart 1"/>…</wp:inline></w:drawing></w:r></w:del>
+</w:p>
+```
+
+VML text boxes have the same problem one level down. Word writes the shape type a text box uses
+(`<v:shapetype id="_x0000_t202" o:spt="202" …>`) once per part, just before the first shape that
+refers to it (`<v:shape type="#_x0000_t202">`). Two text boxes from two documents bring two
+definitions with one id into the same part. The two copies usually differ only in `w14:anchorId`.
+
+| Consumer | Duplicate `wp:docPr/@id` | Duplicate `v:shapetype/@id` |
+|---|---|---|
+| Open XML SDK 3.5 validator (Office 2019) | `Sem_UniqueAttributeValue` when the duplicates are in one part and outside `mc:AlternateContent`. The SDK's constraint is part-scoped. It did not report a duplicate planted between drawings in two `mc:Choice` branches of one header. | The SDK has a part-scoped uniqueness constraint on `v:shapetype/@id`, but Word puts VML in `mc:Fallback`, which the validator does not check. A `w:pict` outside `mc:AlternateContent` is reported: `Sem_UniqueAttributeValue` on `v:shapetype`. |
+| Word | not verified; Word writes ids that are unique across every story part | not verified |
+| LibreOffice | not verified | not verified |
+
+One duplicate is legitimate. Word writes the `mc:Choice` (DrawingML) and `mc:Fallback` copies of one
+drawing with the same `wp:docPr/@id`, because they are the same object. A consumer reads only one
+branch.
+
+#### The fix
+
+`DrawingIds.MakeUnique` runs once at the end of `IrMarkupRenderer.Render` and
+`IrCompositeMarkupRenderer.Render`. It covers every story part: body, headers, footers, footnotes,
+endnotes and comments.
+
+- **`wp:docPr/@id`.** The pass walks every drawing in document order. The first drawing to use an id
+  keeps it. A later drawing that uses the same id gets a new id above the highest id in use. Two
+  drawings whose nearest common ancestor is an `mc:AlternateContent` are alternative copies of one
+  object, so they keep sharing an id. Nothing in WordprocessingML refers to a `wp:docPr/@id`:
+  hyperlinks (`a:hlinkClick`), charts and diagrams reach their parts through relationship ids.
+  `pic:cNvPr/@id` inside a graphic is a separate id space, unique only within its `a:graphicData`.
+- **`v:shapetype/@id`.** Each shape refers to the nearest definition of its type before it, because
+  a definition and its shape arrive together from one source. The pass keeps the first definition
+  of each id. It removes a later definition only when both conditions hold:
+  - the later definition is equivalent to a kept one: the same elements and attribute values,
+    ignoring `w14:anchorId` and namespace declarations;
+  - the kept definition is present in every view that has the later one: after accepting every
+    revision, after rejecting every revision, and under the same Markup Compatibility branch
+    choices.
+
+  The shapes of a removed definition then refer to the kept one. Any other later definition gets a
+  new id (`_x0000_t202_1`), and its shapes are updated to match. The usual comparison case is
+  one definition inside `w:ins` and the other inside `w:del`. Neither survives both accepting and
+  rejecting, so collapsing them into one would leave a shape with no definition after one of the
+  two. That case is therefore renamed, not collapsed.
+
+#### Relevant code
+
+- `Docxodus/Internal/DrawingIds.cs` — the pass.
+- `Docxodus/Ir/Diff/IrMarkupRenderer.cs`, `Docxodus/Ir/Diff/IrCompositeMarkupRenderer.cs` — the
+  single call at the end of each render.
+
+---
+
 ## Paragraph Layout
 
 ### `w:lineRule="auto"` is a multiple of the FONT's line box, not of font-size

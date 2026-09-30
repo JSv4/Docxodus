@@ -84,6 +84,19 @@ All notable changes to this project will be documented in this file.
   keep their own tracked changes and authors instead of being re-attributed to the comparison author.
   The removed table itself is still not carried into the output.
 
+- A comparison that keeps a drawing from each document no longer gives both the same drawing id
+  (issue #860). The original's drawing (in `w:del`) and the revised document's drawing (in `w:ins`)
+  used to keep the ids their own documents gave them. Both documents number drawings from 1, so the
+  ids collided, and the Open XML SDK validator reported `Sem_UniqueAttributeValue` on `wp:docPr`.
+  `DocxDiff.Compare`, `DocxCompare.Compare` and `DocxDiff.Consolidate` now give each such drawing a
+  new id above the highest in use, across the body, headers, footers, notes and comments. The
+  `mc:Choice` and `mc:Fallback` copies of one drawing still share an id, as Word writes them. Two VML
+  text boxes that bring the same `v:shapetype` definition into one part no longer leave two elements
+  with one id. An equivalent copy is removed when the definition that remains is present in every
+  view that had the copy: with all changes accepted, with all rejected, and in the same Markup
+  Compatibility branches. Otherwise the copy is renamed and its shapes follow it, so every shape
+  still has a definition after accepting or rejecting.
+
 ## [12.6.5] - 2026-09-28
 
 ### Fixed
