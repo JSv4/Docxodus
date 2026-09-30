@@ -1727,14 +1727,20 @@ drawing with another keeps both: the original's inside `w:del`, the revised docu
 </w:p>
 ```
 
-VML text boxes have the same problem one level down. Word writes the shape type a text box uses
-(`<v:shapetype id="_x0000_t202" o:spt="202" …>`) once per part, just before the first shape that
-refers to it (`<v:shape type="#_x0000_t202">`). Two text boxes from two documents bring two
-definitions with one id into the same part. The two copies usually differ only in `w14:anchorId`.
+VML text boxes have the same problem one level down, twice over:
 
-| Consumer | Duplicate `wp:docPr/@id` | Duplicate `v:shapetype/@id` |
+- Word numbers VML shapes per document too (`<v:shape id="_x0000_s1026" o:spid="_x0000_s1026">`), so
+  the deleted and the inserted text box usually carry the same `v:shape/@id`. A grouped drawing
+  brings the same collision on `v:group` and `v:rect`.
+- Word writes the shape type a text box uses (`<v:shapetype id="_x0000_t202" o:spt="202" …>`) once
+  per part, just before the first text box, and every later text box refers to it
+  (`<v:shape type="#_x0000_t202">`). The two documents each bring a copy, and the two copies usually
+  differ only in `w14:anchorId`. A text box later in the document carries no definition of its own:
+  it refers to whichever copy precedes it, and that copy may sit inside `w:del` or `w:ins`.
+
+| Consumer | Duplicate `wp:docPr/@id` | Duplicate VML `id` (`v:shape`, `v:group`, `v:rect`, `v:shapetype`, …) |
 |---|---|---|
-| Open XML SDK 3.5 validator (Office 2019) | `Sem_UniqueAttributeValue` when the duplicates are in one part and outside `mc:AlternateContent`. The SDK's constraint is part-scoped. It did not report a duplicate planted between drawings in two `mc:Choice` branches of one header. | The SDK has a part-scoped uniqueness constraint on `v:shapetype/@id`, but Word puts VML in `mc:Fallback`, which the validator does not check. A `w:pict` outside `mc:AlternateContent` is reported: `Sem_UniqueAttributeValue` on `v:shapetype`. |
+| Open XML SDK 3.5 validator (Office 2019) | `Sem_UniqueAttributeValue` when the duplicates are in one part and outside `mc:AlternateContent`. The SDK's constraint is part-scoped. It did not report a duplicate planted between drawings in two `mc:Choice` branches of one header. | Part-scoped uniqueness constraints on each VML element's `id`, reported as `Sem_UniqueAttributeValue` on the element. VML that Word puts in `mc:Fallback` is not checked; a `w:pict` outside `mc:AlternateContent` is. |
 | Word | not verified; Word writes ids that are unique across every story part | not verified |
 | LibreOffice | not verified | not verified |
 
@@ -1754,26 +1760,42 @@ endnotes and comments.
   object, so they keep sharing an id. Nothing in WordprocessingML refers to a `wp:docPr/@id`:
   hyperlinks (`a:hlinkClick`), charts and diagrams reach their parts through relationship ids.
   `pic:cNvPr/@id` inside a graphic is a separate id space, unique only within its `a:graphicData`.
-- **`v:shapetype/@id`.** Each shape refers to the nearest definition of its type before it, because
-  a definition and its shape arrive together from one source. The pass keeps the first definition
-  of each id. It removes a later definition only when both conditions hold:
-  - the later definition is equivalent to a kept one: the same elements and attribute values,
-    ignoring `w14:anchorId` and namespace declarations;
-  - the kept definition is present in every view that has the later one: after accepting every
-    revision, after rejecting every revision, and under the same Markup Compatibility branch
-    choices.
+- **VML element ids.** In each part, the first VML element to use an `id` keeps it. A later
+  duplicate gets `_x0000_s` plus a number above the part's highest (for Word's `_x0000_sNNNN` form),
+  or the id with a numeric suffix. Alternative copies share an id, as for drawings. An
+  `o:OLEObject/@ShapeID` or `w:control/@w:shapeid` names the shape written just before it, and
+  follows that shape.
+- **`v:shapetype/@id`.** A definition matters only if every shape can reach one in every view of the
+  document: as redlined, with all changes accepted, and with all changes rejected. The pass acts on
+  an id that has more than one definition, or whose single definition some shape can lose. For
+  example, a text box inserted before an existing one carries the only definition, and rejecting the
+  insertion takes it away.
+  - When every definition of the id is equivalent (the same elements and attribute values, ignoring
+    `w14:anchorId` and namespace declarations), exactly one is kept. It is the first definition if
+    no revision mark, Markup Compatibility branch, text box or tracked table row encloses it.
+    Otherwise it is a copy, without `w14:anchorId`, in a new untracked `w:r/w:pict` at the start of
+    the paragraph holding the first reference, or of the part's first such paragraph. That position
+    survives every view, and the built-in `_x0000_t202` id is kept, so no shape is repointed.
+  - When the definitions differ, or no paragraph can hold the copy, the first keeps its id. Each
+    shape is bound to the nearest definition before it that is present in every view the shape is
+    in: after it if none before qualifies, and failing both, the nearest before it. A later
+    definition is removed if an equivalent kept definition is present wherever it is. Any other
+    later definition gets a new id (`_x0000_t202_1`), and its shapes are updated to match.
 
-  The shapes of a removed definition then refer to the kept one. Any other later definition gets a
-  new id (`_x0000_t202_1`), and its shapes are updated to match. The usual comparison case is
-  one definition inside `w:ins` and the other inside `w:del`. Neither survives both accepting and
-  rejecting, so collapsing them into one would leave a shape with no definition after one of the
-  two. That case is therefore renamed, not collapsed.
+  A simpler rule, where each shape uses the nearest definition before it and the later copy is
+  renamed, fails in the usual case. The comparison writes the deleted copy, then the inserted copy,
+  then the rest of the document. An unchanged text box further down then binds to the inserted copy
+  and loses it when the changes are rejected.
 
 #### Relevant code
 
 - `Docxodus/Internal/DrawingIds.cs` — the pass.
 - `Docxodus/Ir/Diff/IrMarkupRenderer.cs`, `Docxodus/Ir/Diff/IrCompositeMarkupRenderer.cs` — the
   single call at the end of each render.
+- `Docxodus/Ir/IrReader.cs` — a `w:pict` that holds only `v:shapetype` definitions draws nothing,
+  so the IR treats it as non-content, like `w:lastRenderedPageBreak`. Without that, the run the pass
+  adds would count as a change, and accepting the redline would not reproduce the revised
+  document's content.
 
 ---
 

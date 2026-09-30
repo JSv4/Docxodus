@@ -90,12 +90,17 @@ All notable changes to this project will be documented in this file.
   ids collided, and the Open XML SDK validator reported `Sem_UniqueAttributeValue` on `wp:docPr`.
   `DocxDiff.Compare`, `DocxCompare.Compare` and `DocxDiff.Consolidate` now give each such drawing a
   new id above the highest in use, across the body, headers, footers, notes and comments. The
-  `mc:Choice` and `mc:Fallback` copies of one drawing still share an id, as Word writes them. Two VML
-  text boxes that bring the same `v:shapetype` definition into one part no longer leave two elements
-  with one id. An equivalent copy is removed when the definition that remains is present in every
-  view that had the copy: with all changes accepted, with all rejected, and in the same Markup
-  Compatibility branches. Otherwise the copy is renamed and its shapes follow it, so every shape
-  still has a definition after accepting or rejecting.
+  `mc:Choice` and `mc:Fallback` copies of one drawing still share an id, as Word writes them. VML
+  text boxes are fixed the same way. Word gives both documents' text boxes the same shape id
+  (`_x0000_s1026`), and the validator reported `Sem_UniqueAttributeValue` on `v:shape`, `v:group` or
+  `v:rect`. A later duplicate of any VML element id in a part now gets a fresh id, and an
+  `o:OLEObject/@ShapeID` or `w:control/@w:shapeid` that named it is updated to match. The
+  `v:shapetype` definition that the text boxes refer to was also duplicated, one copy in the deleted
+  content and one in the inserted content. It is now kept once, in an untracked run, so every text
+  box still has a definition after accepting or rejecting the changes. Before, a text box inserted
+  ahead of an existing one took the only definition with it when the insertion was rejected.
+  Definitions that share an id but differ are renamed, and each text box points at a definition that
+  survives wherever the text box does.
 
 ## [12.6.5] - 2026-09-28
 

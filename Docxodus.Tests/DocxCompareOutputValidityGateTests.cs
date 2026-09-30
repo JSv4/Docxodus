@@ -63,40 +63,12 @@ public class DocxCompareOutputValidityGateTests
     /// </summary>
     private static readonly string[] AllowList =
     [
-        "CU004-Chart-Cached-Data-04.docx | DB010-FrontMatter.docx | Sem_UniqueAttributeValue@wp:docPr", // #860 duplicate drawing wp:docPr id
-        "HC014-RTL-Table-01.docx | WC/WC014-SmartArt-Before.docx | Sem_UniqueAttributeValue@wp:docPr", // #860 duplicate drawing wp:docPr id
         "LIR015-en-US-cardinalText.docx | Blank-altChunk.docx | Sem_AttributeValueDataTypeDetailed@w:numberingChange", // #861 w:numberingChange/@w:original over 15 chars
         "LIR015-en-US-cardinalText.docx | LIR013-en-US-001.docx | Sem_AttributeValueDataTypeDetailed@w:numberingChange", // #861 w:numberingChange/@w:original over 15 chars
         "LIR015-en-US-cardinalText.docx | RC/RC005-Before.docx | Sem_AttributeValueDataTypeDetailed@w:numberingChange", // #861 w:numberingChange/@w:original over 15 chars
         "LIR019-en-US-lowerLetter.docx | DA009-InvalidXPath.docx | Sem_AttributeValueDataTypeDetailed@w:numberingChange", // #861 w:numberingChange/@w:original over 15 chars
         "LIR019-en-US-lowerLetter.docx | RP/RP044-MERGEFORMAT-Field-Code-Rejected.docx | Sem_AttributeValueDataTypeDetailed@w:numberingChange", // #861 w:numberingChange/@w:original over 15 chars
         "LIR019-en-US-lowerLetter.docx | RP/RP048-Deleted-Inserted-Para-Mark-Rejected.docx | Sem_AttributeValueDataTypeDetailed@w:numberingChange", // #861 w:numberingChange/@w:original over 15 chars
-        "WC/WC014-SmartArt-Before.docx | CU004-Chart-Cached-Data-04.docx | Sem_UniqueAttributeValue@wp:docPr", // #860 duplicate drawing wp:docPr id
-        "WC/WC037-Textbox-Before.docx | WC/WC037-Textbox-After1.docx | Sem_UniqueAttributeValue@v:shape", // #860 duplicate VML shape id
-        "WC/WC037-Textbox-Before.docx | WC/WC037-Textbox-After1.docx | Sem_UniqueAttributeValue@v:shapetype", // #860 duplicate VML shapetype id
-        "WC/WC044-Text-Box.docx | WC/WC044-Text-Box-Mod.docx | Sem_UniqueAttributeValue@v:shape", // #860 duplicate VML shape id
-        "WC/WC044-Text-Box.docx | WC/WC044-Text-Box-Mod.docx | Sem_UniqueAttributeValue@v:shapetype", // #860 duplicate VML shapetype id
-        "WC/WC045-Text-Box.docx | WC/WC045-Text-Box-Mod.docx | Sem_UniqueAttributeValue@v:shape", // #860 duplicate VML shape id
-        "WC/WC045-Text-Box.docx | WC/WC045-Text-Box-Mod.docx | Sem_UniqueAttributeValue@v:shapetype", // #860 duplicate VML shapetype id
-        "WC/WC046-Two-Text-Box.docx | WC/WC046-Two-Text-Box-Mod.docx | Sem_UniqueAttributeValue@v:shape", // #860 duplicate VML shape id
-        "WC/WC046-Two-Text-Box.docx | WC/WC046-Two-Text-Box-Mod.docx | Sem_UniqueAttributeValue@v:shapetype", // #860 duplicate VML shapetype id
-        "WC/WC047-Two-Text-Box.docx | WC/WC047-Two-Text-Box-Mod.docx | Sem_UniqueAttributeValue@v:shape", // #860 duplicate VML shape id
-        "WC/WC047-Two-Text-Box.docx | WC/WC047-Two-Text-Box-Mod.docx | Sem_UniqueAttributeValue@v:shapetype", // #860 duplicate VML shapetype id
-        "WC/WC048-Text-Box-in-Cell.docx | WC/WC048-Text-Box-in-Cell-Mod.docx | Sem_UniqueAttributeValue@v:group", // #860 duplicate VML shape id
-        "WC/WC048-Text-Box-in-Cell.docx | WC/WC048-Text-Box-in-Cell-Mod.docx | Sem_UniqueAttributeValue@v:rect", // #860 duplicate VML shape id
-        "WC/WC048-Text-Box-in-Cell.docx | WC/WC048-Text-Box-in-Cell-Mod.docx | Sem_UniqueAttributeValue@v:shape", // #860 duplicate VML shape id
-        "WC/WC048-Text-Box-in-Cell.docx | WC/WC048-Text-Box-in-Cell-Mod.docx | Sem_UniqueAttributeValue@v:shapetype", // #860 duplicate VML shapetype id
-        "WC/WC049-Text-Box-in-Cell.docx | WC/WC049-Text-Box-in-Cell-Mod.docx | Sem_UniqueAttributeValue@v:shape", // #860 duplicate VML shape id
-        "WC/WC049-Text-Box-in-Cell.docx | WC/WC049-Text-Box-in-Cell-Mod.docx | Sem_UniqueAttributeValue@v:shapetype", // #860 duplicate VML shapetype id
-        "WC/WC050-Table-in-Text-Box.docx | WC/WC050-Table-in-Text-Box-Mod.docx | Sem_UniqueAttributeValue@v:shape", // #860 duplicate VML shape id
-        "WC/WC050-Table-in-Text-Box.docx | WC/WC050-Table-in-Text-Box-Mod.docx | Sem_UniqueAttributeValue@v:shapetype", // #860 duplicate VML shapetype id
-        "WC/WC051-Table-in-Text-Box.docx | WC/WC051-Table-in-Text-Box-Mod.docx | Sem_UniqueAttributeValue@v:shape", // #860 duplicate VML shape id
-        "WC/WC051-Table-in-Text-Box.docx | WC/WC051-Table-in-Text-Box-Mod.docx | Sem_UniqueAttributeValue@v:shapetype", // #860 duplicate VML shapetype id
-        "WC/WC065-Textbox.docx | WC/WC065-Textbox-Mod.docx | Sem_UniqueAttributeValue@v:shape", // #860 duplicate VML shape id
-        "WC/WC065-Textbox.docx | WC/WC065-Textbox-Mod.docx | Sem_UniqueAttributeValue@v:shapetype", // #860 duplicate VML shapetype id
-        "WC/WC067-Textbox-Image.docx | WC/WC067-Textbox-Image-Mod.docx | Sem_UniqueAttributeValue@v:shape", // #860 duplicate VML shape id
-        "WC/WC067-Textbox-Image.docx | WC/WC067-Textbox-Image-Mod.docx | Sem_UniqueAttributeValue@v:shapetype", // #860 duplicate VML shapetype id
-        "WC/WC067-Textbox-Image.docx | WC/WC067-Textbox-Image-Mod.docx | Sem_UniqueAttributeValue@wp:docPr", // #860 duplicate drawing wp:docPr id
     ];
 
     private static readonly DirectoryInfo TestFilesDir = new("../../../../TestFiles/");

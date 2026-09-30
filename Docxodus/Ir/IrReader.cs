@@ -1611,6 +1611,11 @@ internal static class IrReader
             AppendDrawing(child, ctx, sink); // inline image (a:blip @r:embed) or opaque fallback.
         else if (child.Name == W + "lastRenderedPageBreak")
             return; // N4: layout cache, not content.
+        else if (IsShapetypeOnlyPicture(child))
+            // A w:pict holding only v:shapetype definitions draws nothing: a shape type is a template that
+            // shapes elsewhere in the part refer to by id. A comparison moves the definition two text boxes
+            // share into such a run so every view keeps it (issue #860); it is not content.
+            return;
         else if (child.Name == W + "commentReference")
             // N15 (strip half): comment plumbing never affects ContentHash. Comment ids/targets are
             // recorded upstream by CommentTracker (via FeedRun); here the reference is only dropped.
@@ -1632,6 +1637,9 @@ internal static class IrReader
         else
             sink.Add(new IrOpaqueInline(child.Name, IrHasher.CanonicalHash(child, ctx.RelResolver)));
     }
+
+    private static bool IsShapetypeOnlyPicture(XElement child) =>
+        child.Name == W + "pict" && child.HasElements && child.Elements().All(e => e.Name == Docxodus.VML.shapetype);
 
     // --- textbox bodies (w:txbxContent inside w:drawing/wps:txbx or w:pict/v:textbox) -------------
 

@@ -62,6 +62,29 @@ public class IrNormalizationTests
         Assert.DoesNotContain(withBreak.Inlines, i => i is IrOpaqueInline);
     }
 
+    private const string VmlShapetype =
+        "<v:shapetype xmlns:v=\"urn:schemas-microsoft-com:vml\" id=\"_x0000_t202\" coordsize=\"21600,21600\"/>";
+
+    [Fact]
+    public void Read_PictureHoldingOnlyShapetypes_Dropped()
+    {
+        var clean = Para("<w:p><w:r><w:t>ab</w:t></w:r></w:p>");
+        var withDefinition = Para($"<w:p><w:r><w:pict>{VmlShapetype}</w:pict></w:r><w:r><w:t>ab</w:t></w:r></w:p>");
+
+        Assert.Equal(clean.ContentHash.ToHex(), withDefinition.ContentHash.ToHex());
+        Assert.DoesNotContain(withDefinition.Inlines, i => i is IrOpaqueInline);
+    }
+
+    [Fact]
+    public void Read_PictureHoldingAShape_StaysContent()
+    {
+        var withShape = Para(
+            $"<w:p><w:r><w:pict>{VmlShapetype}<v:shape xmlns:v=\"urn:schemas-microsoft-com:vml\" " +
+            "type=\"#_x0000_t202\"/></w:pict></w:r><w:r><w:t>ab</w:t></w:r></w:p>");
+
+        Assert.Contains(withShape.Inlines, i => i is IrOpaqueInline);
+    }
+
     [Fact]
     public void Read_SpecialHyphens_BecomeText()
     {
