@@ -225,8 +225,9 @@ evidence gathered before removal is frozen under
 regression net that replaced the differential harness.
 
 **`DocxCompare` vs `DocxDiff`.** `DocxCompare.Compare` is the front door every transport routes
-through; it always applies `PreAcceptInputRevisions` + `PreserveInputRevisions`, which the raw
-`DocxDiff` API leaves opt-in. Calling `DocxDiff.Compare` with fresh settings is NOT equivalent —
+through; it always applies `PreAcceptInputRevisions` (compare the accepted view of each input), which the
+raw `DocxDiff` API leaves opt-in. It does not preserve the inputs' own revisions — see
+`docs/ooxml_corner_cases.md`, "`DocxCompare`: the original document's own pending changes". Calling `DocxDiff.Compare` with fresh settings is NOT equivalent —
 on revision-bearing inputs it emits whole-document churn.
 
 ## Module Map
