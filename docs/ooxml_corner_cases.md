@@ -1534,8 +1534,23 @@ the consolidate renderer were not covered. `BookmarkIds` now renumbers across ev
 is an end's only link to its start, so the pass pairs markers before it renumbers them. An end
 closes the earliest open start of its id on the same revision side: inside `w:del`/`w:moveFrom`,
 a deleted paragraph mark, row or cell; inside `w:ins`/`w:moveTo`, an inserted one; or unchanged.
-If no start on its side is open, it closes the earliest open start. A bookmark inside math or a
-drawing keeps its id, because that content is hashed as an opaque whole.
+If no start on its side is open, it closes an unchanged start (or any start, when the end itself
+is unchanged): a bookmark only the revised document has can open in a paragraph both documents
+share and close in an inserted one, while the original's bookmark of the same id runs between
+two deleted paragraphs. Only then does it close the earliest open start, so a deleted end never
+closes an inserted start while a better one is open. An end with no start left is dropped.
+
+Of the bookmarks sharing an id, one the comparison left untouched keeps it. ECMA-376 makes a
+bookmark id unique per document, while the validator only checks per part, so the pass works
+across stories; but two untouched bookmarks in different stories already shared their id in the
+source and are left alone. A bookmark inside math or a drawing is renumbered like any other.
+That content is compared by hashing it whole, and the hash now leaves out bookmark ids
+(`IrHasher`), so a replaced equation whose bookmark was renumbered still reads as the original
+after reject.
+
+A bookmark only one document has can also straddle unchanged text, as above: its start bare in
+the shared paragraph, its end inside `w:ins`. Reject kept the start and dropped the end.
+`NormalizeBookmarks` now wraps the bare marker in the revision its partner is in.
 
 #### Note references
 
@@ -1548,6 +1563,17 @@ revised note with no blocks (`<w:footnote w:id="1"/>`, as in `WC/WC064-Footnote-
 produced no note diff at all, so an output from an original without a footnotes part had a
 reference and no part. Such a note now yields an empty insert, and the output carries it as the
 input did.
+
+A reference inside `w:moveFrom` is a deleted reference as much as one inside `w:del`; treating it
+as live gave two swapped paragraphs' notes the same id. And the body and the notes can pair
+differently. The body pairs references by position, so when both footnoted paragraphs are
+rewritten both references stay equal. The notes pair by content, so the original's second note
+can match the revised first, leaving the original's first note deleted and named by no reference.
+It kept its original id, which the renumbered live notes now used (`Sem_UniqueAttributeValue` in
+`footnotes.xml`). An unreferenced note whose id is taken now gets a fresh one. The equal
+reference still names the revised note in both views, so after reject the first reference reads
+the original's second note; making reject name the original's first note would take the body
+diff and the note diff agreeing on which references correspond, which they do not today.
 
 #### Doubled singleton relationships
 

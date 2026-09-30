@@ -24,14 +24,23 @@ All notable changes to this project will be documented in this file.
     `DocxDiff.Compare`, `DocxCompare.Compare` and `DocxDiff.Consolidate` now renumber colliding
     bookmarks across the body, headers, footers, notes and comments. Each start keeps its own end:
     an end is paired with an open start of the same id on the same revision side (deleted, inserted
-    or unchanged) before the ids change. A bookmark inside math or a drawing keeps its id, because
-    that content is compared as a whole.
+    or unchanged) before the ids change, and a deleted end never closes an inserted start. A
+    bookmark the comparison left untouched keeps its id, and two untouched bookmarks in different
+    stories that already shared an id in the source keep it. A bookmark inside math or a drawing is
+    renumbered like any other: bookmark ids no longer count toward the hash that compares such
+    content as a whole, so a renumbered equation still matches its source. A bookmark only the
+    revised document has, opening in unchanged text and closing in inserted text, now opens inside
+    the insertion too, so rejecting the changes no longer leaves its start without an end. An end
+    whose start was lost is dropped.
   - **Note references resolve.** A deleted footnote or endnote reference was matched to a deleted
     note by queue position rather than by id. When one original note was paired with a revised note
     while its own reference was deleted, every later deleted reference pointed at the wrong note and
     the last one pointed at none. Deleted references now find their note by id, following a matched
-    note to the new id it was given. A revised note with no content (`<w:footnote w:id="1"/>`) that
-    the original lacked is now written instead of dropped, so its reference no longer dangles.
+    note to the new id it was given. A reference inside a moved-away paragraph (`w:moveFrom`) counts
+    as deleted too, so two paragraphs that swap places no longer give both notes the same id. A
+    deleted note that no reference names any more gets a fresh id instead of keeping one another
+    note now uses. A revised note with no content (`<w:footnote w:id="1"/>`) that the original
+    lacked is now written instead of dropped, so its reference no longer dangles.
   - **The main document part keeps one relationship per singleton part.** Content from the
     original could end up in an element registered for relationship import from the revised
     document: a paired table row was registered only after the original's deleted cells and struck

@@ -46,18 +46,36 @@ public class BookmarkIdsTests
     }
 
     [Fact]
-    public void BookmarkInMath_KeepsItsId()
+    public void KeptBookmarkSplitAcrossRevisions_DeletedEndNeverClosesInsertedStart()
+    {
+        // The original's bookmark runs from a deleted paragraph to a deleted one; the revised document's opens in
+        // a paragraph both kept and closes in an inserted one. Neither end has a start on its own side.
+        var body = Body(
+            "<w:p><w:del><w:bookmarkStart w:id=\"0\" w:name=\"Old\"/></w:del></w:p>" +
+            "<w:p><w:bookmarkStart w:id=\"0\" w:name=\"New\"/><w:r><w:t>kept</w:t></w:r></w:p>" +
+            "<w:p><w:ins><w:r><w:t>new</w:t></w:r><w:bookmarkEnd w:id=\"0\"/></w:ins></w:p>" +
+            "<w:p><w:del><w:r><w:delText>old</w:delText></w:r><w:bookmarkEnd w:id=\"0\"/></w:del></w:p>");
+
+        BookmarkIds.MakeUnique(new[] { body });
+
+        Assert.Equal(IdOf(body, "bookmarkStart", "New"), IdOf(body, "bookmarkEnd", index: 0));
+        Assert.Equal(IdOf(body, "bookmarkStart", "Old"), IdOf(body, "bookmarkEnd", index: 1));
+        Assert.NotEqual(IdOf(body, "bookmarkStart", "Old"), IdOf(body, "bookmarkStart", "New"));
+    }
+
+    [Fact]
+    public void UnchangedBookmark_KeepsItsIdOverAnInsertedOne()
     {
         var body = Body(
-            "<w:p><w:ins><w:bookmarkStart w:id=\"0\" w:name=\"Text\"/><w:r><w:t>x</w:t></w:r>" +
+            "<w:p><w:ins><w:bookmarkStart w:id=\"0\" w:name=\"Inserted\"/><w:r><w:t>x</w:t></w:r>" +
             "<w:bookmarkEnd w:id=\"0\"/></w:ins></w:p>" +
-            "<w:p><m:oMath><w:bookmarkStart w:id=\"0\" w:name=\"Math\"/><m:r><m:t>y</m:t></m:r>" +
+            "<w:p><m:oMath><w:bookmarkStart w:id=\"0\" w:name=\"Kept\"/><m:r><m:t>y</m:t></m:r>" +
             "<w:bookmarkEnd w:id=\"0\"/></m:oMath></w:p>");
 
         BookmarkIds.MakeUnique(new[] { body });
 
-        Assert.Equal("0", IdOf(body, "bookmarkStart", "Math"));
-        Assert.Equal("1", IdOf(body, "bookmarkStart", "Text"));
+        Assert.Equal("0", IdOf(body, "bookmarkStart", "Kept"));
+        Assert.Equal("1", IdOf(body, "bookmarkStart", "Inserted"));
         Assert.Equal("1", IdOf(body, "bookmarkEnd"));
     }
 
@@ -65,7 +83,7 @@ public class BookmarkIdsTests
     public void BookmarksInDifferentStories_ShareOneIdSpace()
     {
         var body = Body("<w:p><w:bookmarkStart w:id=\"3\" w:name=\"A\"/><w:bookmarkEnd w:id=\"3\"/></w:p>");
-        var notes = Body("<w:p><w:bookmarkStart w:id=\"3\" w:name=\"B\"/><w:bookmarkEnd w:id=\"3\"/></w:p>");
+        var notes = Body("<w:p><w:ins><w:bookmarkStart w:id=\"3\" w:name=\"B\"/><w:bookmarkEnd w:id=\"3\"/></w:ins></w:p>");
 
         var changed = BookmarkIds.MakeUnique(new[] { body, notes });
 
@@ -73,6 +91,28 @@ public class BookmarkIdsTests
         Assert.Equal("3", IdOf(body, "bookmarkStart"));
         Assert.Equal("4", IdOf(notes, "bookmarkStart"));
         Assert.Equal("4", IdOf(notes, "bookmarkEnd"));
+    }
+
+    [Fact]
+    public void UnchangedBookmarksInDifferentStories_KeepTheIdTheySharedInTheSource()
+    {
+        var body = Body("<w:p><w:bookmarkStart w:id=\"0\" w:name=\"A\"/><w:bookmarkEnd w:id=\"0\"/></w:p>");
+        var notes = Body("<w:p><w:bookmarkStart w:id=\"0\" w:name=\"B\"/><w:bookmarkEnd w:id=\"0\"/></w:p>");
+
+        Assert.Empty(BookmarkIds.MakeUnique(new[] { body, notes }));
+        Assert.Equal("0", IdOf(notes, "bookmarkStart"));
+    }
+
+    [Fact]
+    public void EndWithoutStart_IsDropped()
+    {
+        var body = Body(
+            "<w:p><w:del><w:bookmarkStart w:id=\"0\" w:name=\"Old\"/><w:r><w:delText>old</w:delText></w:r>" +
+            "<w:bookmarkEnd w:id=\"0\"/></w:del><w:ins><w:bookmarkEnd w:id=\"1\"/></w:ins></w:p>");
+
+        BookmarkIds.MakeUnique(new[] { body });
+
+        Assert.Equal(new[] { "0" }, body.Descendants(W + "bookmarkEnd").Select(e => (string)e.Attribute(W + "id")!));
     }
 
     [Fact]

@@ -45,6 +45,10 @@ internal static class IrHasher
     private static readonly string PtNamespace = "http://powertools.codeplex.com/2011";
     private static readonly string PtInsertNamespace = "http://powertools.codeplex.com/documentbuilder/2011/insert";
 
+    private static readonly XName BookmarkStart = W + "bookmarkStart";
+    private static readonly XName BookmarkEnd = W + "bookmarkEnd";
+    private static readonly XName BookmarkId = W + "id";
+
     private static readonly XName ProofErr = W + "proofErr";
     private static readonly XName NoProof = W + "noProof";
 
@@ -81,7 +85,7 @@ internal static class IrHasher
     /// renumbered-but-content-identical drawing/image/diagram canonicalizes identically. When null, rel
     /// values pass through unchanged (the legacy, rel-numbering-sensitive behavior). Either way the
     /// renumber-prone <c>wp:docPr/@id</c> and <c>wp14:anchorId</c>/<c>editId</c> are stripped (they are
-    /// non-content drawing-object identifiers).
+    /// non-content drawing-object identifiers), as is a bookmark's <c>w:id</c> (it only pairs start and end).
     /// </summary>
     public static byte[] Canonicalize(XElement element, IrRelResolver? resolver)
     {
@@ -222,6 +226,12 @@ internal static class IrHasher
         // CloneBlockLevelContentForHashing dropping wp:docPr/@id). Two otherwise-identical drawings whose
         // docPr ids differ (the WC-1940 / WC052-SmartArt case) must canonicalize equal.
         if (attribute.Name == "id" && attribute.Parent?.Name == WpDocPr)
+            return true;
+
+        // A bookmark's w:id only links its start to its end; the comparison renumbers colliding ids (issue #840),
+        // and Word renumbers them on save. Inside hashed-whole content (an equation, a drawing's text box) a
+        // renumbered bookmark must not make the content differ from its source.
+        if (attribute.Name == BookmarkId && (attribute.Parent?.Name == BookmarkStart || attribute.Parent?.Name == BookmarkEnd))
             return true;
 
         // Word's 2010 drawing anchor/edit IDs are transient object/edit identifiers. Retaining them would turn

@@ -462,7 +462,7 @@ internal static class IrMarkupRenderer
                 // keeps its w:ins/w:del context; ids are made unique and every start↔end re-paired — so reject ≡
                 // left / accept ≡ right at the bookmark-structure level and every REF/PAGEREF/NOTEREF/HYPERLINK\l
                 // + internal hyperlink anchor still resolves.
-                NormalizeBookmarks(main, BodyBookmarkNames(state.Left), BodyBookmarkNames(state.RightSource));
+                NormalizeBookmarks(main, BodyBookmarkNames(state.Left), BodyBookmarkNames(state.RightSource), state);
 
                 // Field-context normalization: field plumbing (w:fldChar/w:instrText) is kept across edit
                 // boundaries (AlwaysKeep) so a REF/PAGEREF field is never orphaned, but a boundary may leave the
@@ -3143,7 +3143,7 @@ internal static class IrMarkupRenderer
         {
             var oldId = (string?)r.Attribute(W.id);
             if (oldId == null) continue;
-            bool isDel = r.Ancestors().Any(a => a.Name == W.del);
+            bool isDel = r.Ancestors().Any(a => a.Name == W.del || a.Name == W.moveFrom);
             // ins/equal → the live definition with the reference's (right) id. del → the deleted-only definition
             // with the reference's (left) id (left-sourced, vanishes on accept); but a del reference whose note was
             // NOT deleted — its DEFINITION is preserved (a matched note whose only reference was deleted, so the
@@ -3181,11 +3181,30 @@ internal static class IrMarkupRenderer
             }
         }
 
-        // Carry any real definitions no surviving reference named (defensive: orphaned/unreferenced notes), after
-        // the renumbered ones, preserving their relative order and existing ids.
+        // Carry any real definitions no surviving reference named (orphaned/unreferenced notes), after the
+        // renumbered ones, preserving their relative order and, where it is still free, their existing id. A
+        // deleted note can be left unreferenced while its id is reused: the body pairs references by position,
+        // the notes pair by content, so when the original's second note matches the revised first note the
+        // original's first note is deleted but both body references stay equal and name the renumbered live
+        // notes. Its old id then names another definition, so it takes a fresh one (issue #840).
+        var usedIds = new HashSet<string>(
+            reserved.Concat(assignedIdByDef.Keys).Select(n => (string?)n.Attribute(W.id)).OfType<string>(),
+            StringComparer.Ordinal);
         foreach (var note in realNotes)
-            if (!assignedIdByDef.ContainsKey(note))
-                orderedDefs.Add(note);
+        {
+            if (assignedIdByDef.ContainsKey(note))
+                continue;
+            if ((string?)note.Attribute(W.id) is not { } id || !usedIds.Add(id))
+            {
+                while (usedIds.Contains(next.ToString()))
+                    next++;
+                var fresh = next.ToString();
+                next++;
+                note.SetAttributeValue(W.id, fresh);
+                usedIds.Add(fresh);
+            }
+            orderedDefs.Add(note);
+        }
 
         // Rewrite the part: reserved boilerplate first, then notes in body-reference order.
         noteRoot.Elements(noteName).Remove();
@@ -3480,7 +3499,7 @@ internal static class IrMarkupRenderer
             var kind = rightAdded ? RevKind.Ins : RevKind.Del;
             foreach (var m in Markers().Where(m => IdOf(m) == id && IsBare(m)).ToList())
             {
-                WrapCommentMarkerInRevision(m, kind, state);
+                WrapMarkerInRevision(m, kind, state);
                 changed = true;
             }
         }
@@ -3735,11 +3754,11 @@ internal static class IrMarkupRenderer
         Clone(main.WordprocessingCommentsIdsPart, W16cidNs + "commentId", W16cidNs + "paraId");
     }
 
-    /// <summary>Wrap a BARE comment marker in a <c>w:ins</c>/<c>w:del</c> so it toggles with its revision side (a
-    /// right-added or left-deleted comment whose marker landed in equal content). The <c>commentReference</c>'s
+    /// <summary>Wrap a BARE comment or bookmark marker in a <c>w:ins</c>/<c>w:del</c> so it toggles with its
+    /// revision side (a right-added or left-deleted comment or bookmark whose marker landed in equal content). The <c>commentReference</c>'s
     /// host <c>w:r</c> is wrapped (a marker element is wrapped directly); both are valid children of
     /// <c>w:ins</c>/<c>w:del</c>.</summary>
-    private static void WrapCommentMarkerInRevision(XElement marker, RevKind kind, RenderState state)
+    private static void WrapMarkerInRevision(XElement marker, RevKind kind, RenderState state)
     {
         var target = marker;
         if (marker.Name == W.commentReference && marker.Parent?.Name == W.r)
@@ -3773,17 +3792,17 @@ internal static class IrMarkupRenderer
     /// resolves. The blessed <see cref="WmlComparer"/> oracle strips ALL bookmarks on any edit; this preserves
     /// them.
     /// </summary>
-    private static void NormalizeBookmarks(MainDocumentPart main, HashSet<string> leftNames, HashSet<string> rightNames)
+    private static void NormalizeBookmarks(
+        MainDocumentPart main, HashSet<string> leftNames, HashSet<string> rightNames, RenderState state)
     {
         var doc = main.GetXDocument();
         var body = doc.Root?.Element(W.body);
         if (body == null)
             return;
 
-        // Only RUN-LEVEL bookmarks are reconciled here. A bookmark NESTED inside opaque content (a math
-        // m:oMath, a w:drawing, a textbox) is part of that element's canonical content hash — renumbering or
-        // removing it would silently change the opaque blob and break reject ≡ left (the IR hashes the whole
-        // oMath, bookmark included). Such bookmarks round-trip WITH their opaque host untouched.
+        // Only RUN-LEVEL bookmarks are collapsed, re-homed or repaired here. A bookmark NESTED inside opaque
+        // content (a math m:oMath, a w:drawing, a textbox) moves and toggles with its host, so it is never
+        // removed or lifted; (B) may still renumber it, since the IR leaves bookmark ids out of the host's hash.
         var starts = body.Descendants(W.bookmarkStart).Where(IsRunLevelBookmark).ToList();
         var ends = body.Descendants(W.bookmarkEnd).Where(IsRunLevelBookmark).ToList();
         if (starts.Count == 0 && ends.Count == 0)
@@ -3834,6 +3853,25 @@ internal static class IrMarkupRenderer
         //     math, …) — document-wide, each start kept paired with its own end (issue #840).
         if (BookmarkIds.MakeUnique(main))
             changed = true;
+
+        // (B2) A bookmark only one document has can straddle unchanged content: the revised document's bookmark
+        //     opens in a paragraph both documents share and closes in an inserted one. Its bare start would
+        //     survive reject without its end, so it takes the tracked end's revision context.
+        var runLevelEnds = body.Descendants(W.bookmarkEnd).Where(IsRunLevelBookmark)
+            .GroupBy(e => IdOf(e) ?? "").Where(g => g.Count() == 1).ToDictionary(g => g.Key, g => g.Single());
+        foreach (var start in body.Descendants(W.bookmarkStart).Where(IsRunLevelBookmark).ToList())
+        {
+            var name = (string?)start.Attribute(W.name);
+            if (name == null || leftNames.Contains(name) == rightNames.Contains(name)
+                || !runLevelEnds.TryGetValue(IdOf(start) ?? "", out var end))
+                continue;
+            var kind = rightNames.Contains(name) ? RevKind.Ins : RevKind.Del;
+            var (startTracked, endTracked) = (IsTrackedBookmarkMarker(start), IsTrackedBookmarkMarker(end));
+            if (startTracked == endTracked)
+                continue;
+            WrapMarkerInRevision(startTracked ? end : start, kind, state);
+            changed = true;
+        }
 
         // (C) Reconcile pairing — GUARANTEE every run-level bookmarkStart has a matching bookmarkEnd and vice
         //     versa. A cross-paragraph range whose far endpoint lands in a churned span can be dropped by the
@@ -3918,8 +3956,8 @@ internal static class IrMarkupRenderer
 
     /// <summary>True iff the bookmark marker sits at the paragraph/body run level — its ancestors up to the
     /// enclosing <c>w:p</c>/<c>w:body</c> are only run-level wrappers (ins/del/hyperlink/sdt/smartTag/fldSimple).
-    /// A bookmark reached through anything else (a math <c>m:oMath</c>, a <c>w:drawing</c>, a textbox) is part of
-    /// that opaque element's content hash and must NOT be renumbered/removed by the normalizer.</summary>
+    /// A bookmark reached through anything else (a math <c>m:oMath</c>, a <c>w:drawing</c>, a textbox) belongs to
+    /// that opaque element and must NOT be removed or moved by the normalizer.</summary>
     private static bool IsRunLevelBookmark(XElement marker)
     {
         for (var a = marker.Parent; a != null; a = a.Parent)
@@ -3932,6 +3970,13 @@ internal static class IrMarkupRenderer
         }
         return false;
     }
+
+    /// <summary>True iff the run-level bookmark marker toggles with a revision: it sits in a <c>w:ins</c>/
+    /// <c>w:del</c> (or move) wrapper, or in a paragraph inserted or deleted as a whole.</summary>
+    private static bool IsTrackedBookmarkMarker(XElement marker) =>
+        IsInWholeBlockRevisedParagraph(marker)
+        || marker.Ancestors().TakeWhile(a => a.Name != W.p && a.Name != W.body && a.Name != W.tc)
+            .Any(a => a.Name == W.ins || a.Name == W.del || a.Name == W.moveFrom || a.Name == W.moveTo);
 
     /// <summary>Remove a bookmark marker, dropping the empty <c>w:ins</c>/<c>w:del</c> wrapper that held only it.
     /// No-op if the marker (or its wrapper) was already detached by an earlier reconciliation step.</summary>
@@ -8883,7 +8928,8 @@ internal static class IrMarkupRenderer
         /// id (issue #840 — a deleted picture or object became a second webSettings or endnotes relationship).
         /// Positions are kept, so the per-scope registry slices stay valid.</summary>
         public void KeepMediaRegistrationToCurrentChildren(XElement clone)
-        {            foreach (var list in RightSourcedClonesBySource.Values)
+        {
+            foreach (var list in RightSourcedClonesBySource.Values)
             {
                 int index;
                 while ((index = list.FindIndex(e => ReferenceEquals(e, clone))) >= 0)

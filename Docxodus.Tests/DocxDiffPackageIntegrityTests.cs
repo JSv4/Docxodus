@@ -88,7 +88,32 @@ public class DocxDiffPackageIntegrityTests
             "<w:p><w:bookmarkStart w:id=\"0\" w:name=\"RightText\"/><w:r><w:t>Entirely different prose here</w:t></w:r>" +
             "<w:bookmarkEnd w:id=\"0\"/></w:p>",
         };
+
+        // A replaced equation, each version carrying its own bookmark numbered 0.
+        yield return new object[]
+        {
+            "equations",
+            Paragraph("Shared opening words.") + Equation("x+1", "LeftMath") + Paragraph("Shared closing words."),
+            Paragraph("Shared opening words.") + Equation("y-2", "RightMath") + Paragraph("Shared closing words."),
+        };
+
+        // The original's bookmark runs from a deleted paragraph to a deleted one; the revised document's opens
+        // in a paragraph both keep and closes in an inserted one. Each end has no start on its own side.
+        yield return new object[]
+        {
+            "split",
+            "<w:p><w:bookmarkStart w:id=\"0\" w:name=\"Old\"/><w:r><w:t>Alpha beginning words here</w:t></w:r></w:p>" +
+            Paragraph("Shared middle paragraph text stays") +
+            "<w:p><w:r><w:t>Omega closing words here</w:t></w:r><w:bookmarkEnd w:id=\"0\"/></w:p>" + Paragraph("Tail shared"),
+            "<w:p><w:bookmarkStart w:id=\"0\" w:name=\"New\"/><w:r><w:t>Shared middle paragraph text stays</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>Brand new replacement sentence</w:t></w:r><w:bookmarkEnd w:id=\"0\"/></w:p>" + Paragraph("Tail shared"),
+        };
     }
+
+    private static string Equation(string text, string bookmarkName) =>
+        "<w:p><m:oMath xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\">" +
+        $"<w:bookmarkStart w:id=\"0\" w:name=\"{bookmarkName}\"/><m:r><m:t>{text}</m:t></m:r><w:bookmarkEnd w:id=\"0\"/>" +
+        "</m:oMath></w:p>";
 
     [Theory]
     [MemberData(nameof(BookmarkPairs))]
@@ -125,6 +150,18 @@ public class DocxDiffPackageIntegrityTests
 
     [Theory]
     [MemberData(nameof(BookmarkPairs))]
+    public void Compare_BothSidesBookmarks_RejectReadsAsTheOriginal(string scenario, string leftBody, string rightBody)
+    {
+        _ = scenario;
+        var (left, right) = (IrTestDocuments.FromParts(leftBody), IrTestDocuments.FromParts(rightBody));
+        var redline = DocxCompare.Compare(left, right);
+
+        Assert.Empty(DocxDiff.GetRevisions(left, RevisionProcessor.RejectRevisions(redline)));
+        Assert.Empty(DocxDiff.GetRevisions(right, RevisionProcessor.AcceptRevisions(redline)));
+    }
+
+    [Theory]
+    [MemberData(nameof(BookmarkPairs))]
     public void Compare_BothSidesBookmarks_AddsNoValidationErrors(string scenario, string leftBody, string rightBody)
     {
         _ = scenario;
@@ -156,11 +193,45 @@ public class DocxDiffPackageIntegrityTests
         Paragraph("Alpha clause about payment terms.", "<w:r><w:footnoteReference w:id=\"1\"/></w:r>"),
         footnotesInnerXml: string.Format(NoteBoilerplate, "footnote") + "<w:footnote w:id=\"1\"/>");
 
+    private static string FootnoteReference(int id) => $"<w:r><w:footnoteReference w:id=\"{id}\"/></w:r>";
+
+    private static readonly WmlDocument TwoFootnotes = IrTestDocuments.FromParts(
+        Paragraph("Apple one words", FootnoteReference(1)) + Paragraph("Banana two words", FootnoteReference(2)),
+        footnotesInnerXml: Notes("footnote", "Apple note", "Banana note"));
+
+    /// <summary>A new first paragraph takes the original's second note; both original references go, so the
+    /// deleted reference to the second note carries its original id while its note moved to id 1.</summary>
+    private static readonly WmlDocument SecondNoteMovedToNewParagraph = IrTestDocuments.FromParts(
+        Paragraph("Zulu brand new paragraph", FootnoteReference(1)) + Paragraph("Apple one words") +
+        Paragraph("Banana two words"),
+        footnotesInnerXml: Notes("footnote", "Banana note"));
+
+    /// <summary>The two footnoted paragraphs swap places, so one of them is a move.</summary>
+    private static readonly WmlDocument TwoFootnotesSwapped = IrTestDocuments.FromParts(
+        Paragraph("Banana two words", FootnoteReference(1)) + Paragraph("Apple one words", FootnoteReference(2)),
+        footnotesInnerXml: Notes("footnote", "Banana note", "Apple note"));
+
+    /// <summary>Both paragraphs are rewritten, so both references stay put, while the notes pair by content: the
+    /// original's second note is the revised first, and the original's first note is deleted.</summary>
+    private static readonly WmlDocument TwoFootnotesRewritten = IrTestDocuments.FromParts(
+        Paragraph("Cherry fresh words entirely", FootnoteReference(1)) +
+        Paragraph("Date more words entirely", FootnoteReference(2)),
+        footnotesInnerXml: Notes("footnote", "Banana note", "Cherry note"));
+
     public static IEnumerable<object[]> NotePairs()
     {
         yield return new object[] { "rewritten", FootnotedOriginal, FootnotedRevised };
         yield return new object[] { "empty-note", UnfootnotedOriginal, EmptyFootnoteRevised };
+        yield return new object[] { "note-to-new-paragraph", TwoFootnotes, SecondNoteMovedToNewParagraph };
+        yield return new object[] { "swapped", TwoFootnotes, TwoFootnotesSwapped };
+        yield return new object[] { "notes-paired-by-content", TwoFootnotes, TwoFootnotesRewritten };
     }
+
+    /// <summary>The pairs whose references move with their notes. In "notes-paired-by-content" the body keeps
+    /// each reference where it was while the notes pair by content, so reject cannot name the original's first
+    /// note from the first reference.</summary>
+    public static IEnumerable<object[]> NotePairsReadingInOrder() =>
+        NotePairs().Where(pair => (string)pair[0] != "notes-paired-by-content");
 
     [Theory]
     [MemberData(nameof(NotePairs))]
@@ -172,6 +243,28 @@ public class DocxDiffPackageIntegrityTests
         AssertNoteReferencesResolve(redline);
         AssertNoteReferencesResolve(RevisionProcessor.AcceptRevisions(redline));
         AssertNoteReferencesResolve(RevisionProcessor.RejectRevisions(redline));
+    }
+
+    [Theory]
+    [MemberData(nameof(NotePairs))]
+    public void Compare_NoteIdsStayUnique(string scenario, WmlDocument left, WmlDocument right)
+    {
+        _ = scenario;
+        var redline = DocxCompare.Compare(left, right);
+
+        AssertNoteIdsUnique(redline);
+        AssertNoteIdsUnique(RevisionProcessor.RejectRevisions(redline));
+    }
+
+    [Theory]
+    [MemberData(nameof(NotePairsReadingInOrder))]
+    public void Compare_NotesReadInReferenceOrder_AfterAcceptAndReject(string scenario, WmlDocument left, WmlDocument right)
+    {
+        _ = scenario;
+        var redline = DocxCompare.Compare(left, right);
+
+        Assert.Equal(FootnotesInReferenceOrder(right), FootnotesInReferenceOrder(RevisionProcessor.AcceptRevisions(redline)));
+        Assert.Equal(FootnotesInReferenceOrder(left), FootnotesInReferenceOrder(RevisionProcessor.RejectRevisions(redline)));
     }
 
     [Theory]
@@ -362,6 +455,28 @@ public class DocxDiffPackageIntegrityTests
                 .Select(r => (string)r.Attribute(W + "id")!);
             Assert.All(referenced, id => Assert.Contains(id, defined));
         }
+    }
+
+    private static void AssertNoteIdsUnique(WmlDocument document)
+    {
+        foreach (var kind in new[] { "footnote", "endnote" })
+        {
+            var ids = Part(document, $"word/{kind}s.xml").Descendants(W + kind)
+                .Select(n => (string)n.Attribute(W + "id")!).ToList();
+            Assert.Equal(ids.Distinct().Count(), ids.Count);
+        }
+    }
+
+    /// <summary>The text of the footnote each body reference names, in reference order; a reference that names
+    /// no footnote reads as <c>&lt;missing&gt;</c>.</summary>
+    private static List<string> FootnotesInReferenceOrder(WmlDocument document)
+    {
+        var notes = Part(document, "word/footnotes.xml").Descendants(W + "footnote")
+            .GroupBy(n => (string)n.Attribute(W + "id")!)
+            .ToDictionary(g => g.Key, g => string.Concat(g.First().Descendants(W + "t").Select(t => t.Value)));
+        return Part(document, "word/document.xml").Descendants(W + "footnoteReference")
+            .Select(r => notes.GetValueOrDefault((string)r.Attribute(W + "id")!, "<missing>"))
+            .ToList();
     }
 
     private static void AssertSingletonRelationshipsUnique(WmlDocument document)

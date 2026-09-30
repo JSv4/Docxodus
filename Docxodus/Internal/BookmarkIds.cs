@@ -16,15 +16,18 @@ namespace Docxodus.Internal;
 /// link from an end to its start, so the pairing has to be worked out before an id can change. A start and an
 /// end cloned from the same document share its revision side: the original's markers sit in deleted content,
 /// the revised document's in inserted content, and a bookmark both kept is bare. Each end therefore closes the
-/// earliest open start of its id on its own side, or the earliest open start of its id when none is.</para>
+/// earliest open start of its id on its own side; failing that, one it can share with a bookmark both kept (an
+/// unchanged start, or any start when the end is unchanged), so a deleted end never closes an inserted start;
+/// and failing that, the earliest open start of its id.</para>
 /// <para>Of the bookmarks that share an id, one keeps it and the others take fresh ids above every id in the
-/// document. The one that keeps it is, where there is one, a bookmark inside math or a drawing: that content
-/// is compared as an opaque whole, so renumbering it would make it differ from its source.</para>
+/// document; a bookmark the comparison left untouched keeps its id first. ECMA-376 makes an id unique per document,
+/// so every story shares one id space, but two untouched bookmarks in different stories already
+/// shared their id in the source document and are left alone. A bookmark inside math or a drawing is renumbered
+/// like any other: the IR leaves bookmark ids out of that content's hash (<see cref="Ir.IrHasher"/>).</para>
+/// <para>An end whose start is gone marks nothing and is dropped.</para>
 /// </summary>
 internal static class BookmarkIds
 {
-    private static readonly XNamespace Math = "http://schemas.openxmlformats.org/officeDocument/2006/math";
-
     private enum Side
     {
         Unchanged,
@@ -59,8 +62,29 @@ internal static class BookmarkIds
     internal static HashSet<XElement> MakeUnique(IReadOnlyList<XElement> storyRoots)
     {
         var changed = new HashSet<XElement>();
-        var bookmarks = storyRoots.SelectMany(root => Pair(root).Select(bookmark => (Root: root, Bookmark: bookmark)))
-            .ToList();
+        var bookmarks = new List<(XElement Root, Bookmark Bookmark)>();
+        foreach (var root in storyRoots)
+        {
+            var paired = Pair(root);
+            var unclosed = paired.Where(b => b.End is null).Select(IdOf).ToHashSet();
+            foreach (var bookmark in paired)
+            {
+                // An end whose start is gone (a renderer dropped the start's content) marks nothing, and its id
+                // would still collide. An end is kept while a start of its id is still open, as when a source
+                // wrote the end first.
+                if (bookmark.Start is null && !unclosed.Contains(IdOf(bookmark)))
+                {
+                    var wrapper = bookmark.End!.Parent;
+                    bookmark.End.Remove();
+                    if (wrapper is { Parent: not null, HasElements: false } && (wrapper.Name == W.ins || wrapper.Name == W.del))
+                        wrapper.Remove();
+                    changed.Add(root);
+                    continue;
+                }
+                bookmarks.Add((root, bookmark));
+            }
+        }
+
         var duplicated = bookmarks.GroupBy(b => IdOf(b.Bookmark)).Where(g => g.Count() > 1).ToList();
         if (duplicated.Count == 0)
             return changed;
@@ -69,11 +93,18 @@ internal static class BookmarkIds
             .DefaultIfEmpty(0).Max() + 1;
         foreach (var group in duplicated)
         {
-            var keeper = group.FirstOrDefault(b => b.Bookmark.Markers.Any(IsInOpaqueContent));
-            if (keeper.Bookmark is null)
-                keeper = group.First();
-            foreach (var (root, bookmark) in group.Where(b => !ReferenceEquals(b.Bookmark, keeper.Bookmark)))
+            // Bookmarks the comparison left untouched keep their ids first. Two of those in different stories
+            // already shared the id in the source document, so they stay as they are; any other two collide.
+            var kept = new List<(XElement Root, bool Unchanged)>();
+            foreach (var (root, bookmark) in group.OrderBy(b => IsUnchanged(b.Bookmark) ? 0 : 1))
             {
+                var unchanged = IsUnchanged(bookmark);
+                if (!kept.Any(k => k.Root == root || !(k.Unchanged && unchanged)))
+                {
+                    kept.Add((root, unchanged));
+                    continue;
+                }
+
                 var fresh = (next++).ToString(System.Globalization.CultureInfo.InvariantCulture);
                 foreach (var marker in bookmark.Markers)
                     marker.SetAttributeValue(W.id, fresh);
@@ -105,6 +136,10 @@ internal static class BookmarkIds
             {
                 var side = SideOf(marker);
                 var match = candidates.FindIndex(c => SideOf(c.Start) == side);
+                // A bookmark both documents kept can be split: its start in unchanged content, its end in
+                // content one side changed. It still never pairs a deleted end with an inserted start.
+                if (match < 0)
+                    match = candidates.FindIndex(c => SideOf(c.Start) == Side.Unchanged || side == Side.Unchanged);
                 if (match < 0)
                     match = 0;
                 var (start, index) = candidates[match];
@@ -119,7 +154,11 @@ internal static class BookmarkIds
         return bookmarks;
     }
 
-    private static string IdOf(Bookmark bookmark) => (string?)bookmark.Markers.First().Attribute(W.id) ?? string.Empty;
+    private static string IdOf(Bookmark bookmark) => IdOf(bookmark.Markers.First());
+
+    private static string IdOf(XElement marker) => (string?)marker.Attribute(W.id) ?? string.Empty;
+
+    private static bool IsUnchanged(Bookmark bookmark) => bookmark.Markers.All(m => SideOf(m) == Side.Unchanged);
 
     /// <summary>The revision side of the innermost tracked container of <paramref name="marker"/>: a run-level
     /// wrapper, or a paragraph mark, row or cell marked as inserted or deleted.</summary>
@@ -149,7 +188,4 @@ internal static class BookmarkIds
         }
         return Side.Unchanged;
     }
-
-    private static bool IsInOpaqueContent(XElement marker) =>
-        marker.Ancestors().Any(a => a.Name.Namespace == Math || a.Name == W.drawing || a.Name == W.pict || a.Name == W._object);
 }
