@@ -18,6 +18,14 @@ All notable changes to this project will be documented in this file.
   `Sch_UndeclaredAttribute`, `Sch_InvalidElementContentExpectingComplex` or
   `MC_InvalidRequiresAttribute` errors on these outputs when the inputs have none.
 
+- A regression gate now guards comparison output validity (epic #835).
+  `DocxCompareOutputValidityGateTests` compares about 375 pairs of `TestFiles` fixtures, a seeded
+  sample of cross-pairs plus every `X`/`X-Mod` and `X-Before`/`X-After` revision pair, through
+  `DocxCompare.Compare`. It fails when an output has an Open XML SDK validator error that neither
+  input has on the same kind of element, or cannot be opened. The violations that remain today are
+  listed explicitly, each with the issue that tracks it, and the test also fails when a listed
+  violation stops occurring, so the list can only shrink.
+
 ## [12.6.5] - 2026-09-28
 
 ### Fixed
