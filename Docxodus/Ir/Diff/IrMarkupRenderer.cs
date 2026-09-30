@@ -4930,12 +4930,38 @@ internal static class IrMarkupRenderer
         numPr.Elements(W.numberingChange).Remove();
         var numberingChange = new XElement(W.numberingChange,
             state.RevisionAttributes(),
-            new XAttribute(W.original, originalMarker));
+            new XAttribute(W.original, NumberingChangeOriginal(originalMarker)));
         var insertedNumbering = numPr.Element(W.ins);
         if (insertedNumbering is null)
             numPr.Add(numberingChange);
         else
             insertedNumbering.AddBeforeSelf(numberingChange);
+    }
+
+    /// <summary>
+    /// The schema's cap on <c>w:numberingChange/@w:original</c> (CT_TrackChangeNumbering: <c>xsd:string</c>,
+    /// <c>maxLength 15</c>).
+    /// </summary>
+    private const int NumberingChangeOriginalMaxLength = 15;
+
+    /// <summary>
+    /// The value to store in <c>w:numberingChange/@w:original</c> for a list item that displayed
+    /// <paramref name="label"/>. Word stores the displayed label itself (<c>"1)"</c>), and the redline HTML
+    /// renderer shows the stored value as the deleted old marker, so a label that fits is stored unchanged.
+    /// A longer one — a spelled-out number ("Three thousand five hundred"), a letter-repeated one, a long
+    /// <c>w:lvlText</c> — keeps its first 14 characters plus an ellipsis, so the value stays schema-valid and
+    /// the old marker still reads as its recognisable beginning, visibly shortened (issue #861). A surrogate
+    /// pair straddling the cut is dropped whole.
+    /// </summary>
+    internal static string NumberingChangeOriginal(string label)
+    {
+        if (label.Length <= NumberingChangeOriginalMaxLength)
+            return label;
+
+        int keep = NumberingChangeOriginalMaxLength - 1;
+        if (char.IsHighSurrogate(label[keep - 1]))
+            keep--;
+        return label[..keep] + "\u2026";
     }
 
     private static void InsertPPrChildInSchemaOrder(XElement pPr, XElement child)

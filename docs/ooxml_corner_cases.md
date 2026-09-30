@@ -8,6 +8,7 @@ This document tracks edge cases and quirks in Open XML document processing where
    - [Legal Numbering with Multi-Level Format Strings](#legal-numbering-with-multi-level-format-strings)
    - [List Numbering under Tracked Changes](#list-numbering-under-tracked-changes-deleted-paragraphs-dont-consume-numbers)
    - [Unresolvable Numbering vs. Removed Numbering (style indentation)](#unresolvable-numbering-vs-removed-numbering-style-indentation)
+   - [`w:numberingChange/@w:original` holds at most 15 characters](#wnumberingchangeworiginal-holds-at-most-15-characters)
 2. [Footnotes](#footnotes)
    - [Footnote Count Discrepancy in Legal Templates](#footnote-count-discrepancy-in-legal-templates)
 3. [Package Output](#package-output)
@@ -321,6 +322,67 @@ indentation, which is the part of that behaviour that is well defined.
 A style whose own `numPr` says `numId 0` still has its indentation removed. LibreOffice keeps a
 style's own `w:ind` in that case but drops one inherited through `w:basedOn`. That is well-formed
 numbering, not a malformed reference, and is left as is.
+
+### `w:numberingChange/@w:original` holds at most 15 characters
+
+**Status:** Fixed (lossy by necessity)<br>
+**Issue:** #861<br>
+**Tests:** `Docxodus.Tests/DocxDiffNumberingChangeOriginalTests.cs`
+
+#### The problem
+
+When an insertion, deletion or move shifts a list's counter, a comparison records the label each
+affected item displayed before the change in `w:numberingChange/@w:original`, so a redline can
+show the old number struck through beside the new one. The schema types `w:original` as a string
+of at most 15 characters. Labels routinely run longer: a spelled-out number (`cardinalText`,
+`ordinalText`), a letter format far into a list (`lowerLetter` repeats the letter, so item 390 is
+`zzzzzzzzzzzzzzz.`), or any level whose `w:lvlText` is itself long:
+
+```xml
+<w:lvl w:ilvl="0"><w:start w:val="3500"/><w:numFmt w:val="cardinalText"/><w:lvlText w:val="%1"/></w:lvl>
+...
+<!-- before the fix: an item was inserted above the list's first item -->
+<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/>
+  <w:numberingChange w:id="3" w:author="..." w:date="..." w:original="Three thousand five hundred"/>
+</w:numPr>
+```
+
+#### What the value holds
+
+ECMA-376 Part 1 §17.13.5.28 is cited in issue #861 as describing `w:original` as the original
+number, with `%1`-style placeholders standing in for level values (the spec text was not
+re-checked for this entry). Word-authored files do not follow that shape: the only
+Word-written examples in `TestFiles` (`RP/RP026-NumberingChange.docx`) store the displayed label
+itself (`w:original="1)"`, `"2)"`). Docxodus's own reader of the value, the tracked-change list
+marker in `FormattingAssembler`, also treats it as the literal old label and renders it as the
+deleted marker. A placeholder encoding would therefore render as `%1` in our own HTML and would
+not match what Word writes, and it cannot shorten a long literal `w:lvlText` anyway.
+
+| Consumer | Label longer than 15 characters |
+|---|---|
+| Open XML SDK 3.5 validator (Office 2019) | `Sem_AttributeValueDataTypeDetailed` on `w:numberingChange` before the fix; no error after |
+| Word | not verified |
+| LibreOffice | not verified |
+| Docxodus before the fix | stored the full label (schema-invalid) |
+| Docxodus after the fix | stores the first 14 characters and `…` |
+
+#### The fix
+
+`IrMarkupRenderer.StampOriginalNumberingMarker` is the only writer of `w:numberingChange` in the
+comparison output, and both the two-way renderer and the consolidate renderer
+(`IrCompositeMarkupRenderer`, which dispatches to the same per-op emitters) reach it for aligned,
+deleted and moved-away list items. It passes the label through
+`IrMarkupRenderer.NumberingChangeOriginal`: a label of 15 characters or fewer is stored unchanged;
+a longer one keeps its first 14 UTF-16 code units followed by `…` (U+2026), dropping a surrogate
+pair that would straddle the cut. The beginning of a label is kept because that is the part a
+reader recognises (`Three thousand…`), and the ellipsis marks the stored value as shortened rather
+than presenting a wrong label as exact.
+
+**The loss.** The rest of a long label is not recoverable from the output. In the redline HTML the
+old marker of such an item reads `Three thousand…` rather than `Three thousand five hundred`, and a
+wholly deleted or moved-away item, whose marker is taken from `w:original`, shows the shortened
+label too. Current markers, the live numbering and every label of 15 characters or fewer are
+unaffected.
 
 ---
 

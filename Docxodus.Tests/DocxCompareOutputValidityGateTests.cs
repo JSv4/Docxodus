@@ -58,17 +58,12 @@ public class DocxCompareOutputValidityGateTests
     ];
 
     /// <summary>
-    /// Known residue, <c>"left | right | key"</c>. Every entry must still occur; remove it once fixed. The
-    /// comment names the sub-issue of epic #835 that owns it.
+    /// Known residue, <c>"left | right | key"</c>. Empty since every sub-issue of epic #835 was fixed: a new
+    /// violation fails the gate. Listing one here is a last resort that needs an issue named in its comment,
+    /// and the entry must still occur; remove it once fixed.
     /// </summary>
     private static readonly string[] AllowList =
     [
-        "LIR015-en-US-cardinalText.docx | Blank-altChunk.docx | Sem_AttributeValueDataTypeDetailed@w:numberingChange", // #861 w:numberingChange/@w:original over 15 chars
-        "LIR015-en-US-cardinalText.docx | LIR013-en-US-001.docx | Sem_AttributeValueDataTypeDetailed@w:numberingChange", // #861 w:numberingChange/@w:original over 15 chars
-        "LIR015-en-US-cardinalText.docx | RC/RC005-Before.docx | Sem_AttributeValueDataTypeDetailed@w:numberingChange", // #861 w:numberingChange/@w:original over 15 chars
-        "LIR019-en-US-lowerLetter.docx | DA009-InvalidXPath.docx | Sem_AttributeValueDataTypeDetailed@w:numberingChange", // #861 w:numberingChange/@w:original over 15 chars
-        "LIR019-en-US-lowerLetter.docx | RP/RP044-MERGEFORMAT-Field-Code-Rejected.docx | Sem_AttributeValueDataTypeDetailed@w:numberingChange", // #861 w:numberingChange/@w:original over 15 chars
-        "LIR019-en-US-lowerLetter.docx | RP/RP048-Deleted-Inserted-Para-Mark-Rejected.docx | Sem_AttributeValueDataTypeDetailed@w:numberingChange", // #861 w:numberingChange/@w:original over 15 chars
     ];
 
     private static readonly DirectoryInfo TestFilesDir = new("../../../../TestFiles/");

@@ -102,6 +102,17 @@ All notable changes to this project will be documented in this file.
   Definitions that share an id but differ are renamed, and each text box points at a definition that
   survives wherever the text box does.
 
+- A list item's previous number, which a comparison records in `w:numberingChange/@w:original`
+  when an insertion, deletion or move shifts the list's counter, now fits the schema's
+  15-character limit (issue #861). Spelled-out numbers ("Three thousand five hundred"),
+  letter-repeated numbers deep into a list and long level texts ("Paragraph number %1.") used to
+  be stored whole, and the Open XML SDK validator reported `Sem_AttributeValueDataTypeDetailed`
+  on every such item. `DocxDiff.Compare`, `DocxCompare.Compare` and `DocxDiff.Consolidate` still
+  store a label of up to 15 characters unchanged (Word-authored files store the displayed label,
+  such as `1)`); a longer one keeps its first 14
+  characters followed by `…`. The shortening is lossy: the redline HTML shows such an item's old
+  marker as `Three thousand…`, and the rest of the label is not recoverable from the output.
+
 ## [12.6.5] - 2026-09-28
 
 ### Fixed
