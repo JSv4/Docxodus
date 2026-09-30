@@ -182,6 +182,10 @@ internal static class IrCompositeMarkupRenderer
                 IrMarkupRenderer.NormalizeComments(main, IrMarkupRenderer.BodyCommentIds(baseIr),
                     reviewerCommentIds, state);
 
+                // The base's and the reviewers' surviving bookmarks can share ids; renumber them unique,
+                // each start kept with its own end (issue #840).
+                BookmarkIds.MakeUnique(main);
+
                 // Declare the namespaces the reviewers' cloned content uses on the output part roots —
                 // the two-way renderer's closing pass (issue #836), reviewers' prefixes first.
                 PartNamespaces.Of(reviewers.Select(r => r.Doc).Append(baseDoc)).DeclareIn(wDoc);
@@ -384,13 +388,15 @@ internal static class IrCompositeMarkupRenderer
             }
             else
             {
-                // Reviewer-inserted: clone the reviewer's note shell under the fresh output id.
-                var shell = ReviewerNoteShell(reviewerIrs, diff.SourceReviewer, kind, diff.ReviewerNoteId);
-                if (shell == null || diff.ReviewerNoteId is not { } revId
+                // Reviewer-inserted: clone the reviewer's note shell under the fresh output id. A note with no
+                // blocks has no shell to reach (<w:footnote w:id="1"/>); it still gets its definition, or its
+                // inserted reference dangles (issue #840).
+                if (diff.ReviewerNoteId is not { } revId
                     || !freshIdByInserted.TryGetValue((kind, diff.SourceReviewer, revId), out var freshId))
                     continue;
-                noteEl = new XElement(noteName, shell.Attributes());
-                foreach (var pre in shell.Elements().Where(e => e.Name != W.p && e.Name != W.tbl))
+                var shell = ReviewerNoteShell(reviewerIrs, diff.SourceReviewer, kind, revId);
+                noteEl = new XElement(noteName, shell?.Attributes());
+                foreach (var pre in shell?.Elements().Where(e => e.Name != W.p && e.Name != W.tbl) ?? Enumerable.Empty<XElement>())
                     noteEl.Add(IrMarkupRenderer.StripUnids(new XElement(pre)));
                 noteEl.SetAttributeValue(W.id, freshId);
                 root.Add(noteEl);
@@ -464,7 +470,7 @@ internal static class IrCompositeMarkupRenderer
             if (reviewerRoot != null)
                 break;
         }
-        if (reviewerRoot == null)
+        if (reviewerRoot == null && !diffs.Any(d => d.BaseNoteId == null))
             return null;
 
         var rootName = isFootnote ? W.footnotes : W.endnotes;
@@ -472,8 +478,10 @@ internal static class IrCompositeMarkupRenderer
         var newPart = isFootnote
             ? (OpenXmlPart)main.AddDeterministicPart<FootnotesPart>("rIdFootnotes")
             : main.AddDeterministicPart<EndnotesPart>("rIdEndnotes");
-        var newRoot = new XElement(rootName, reviewerRoot.Attributes());
-        foreach (var note in reviewerRoot.Elements(noteName)
+        // Only notes without blocks were inserted: no reviewer root is reachable, so start from a bare one.
+        var newRoot = new XElement(rootName,
+            reviewerRoot?.Attributes() ?? new[] { new XAttribute(XNamespace.Xmlns + "w", W.w.NamespaceName) });
+        foreach (var note in (reviewerRoot?.Elements(noteName) ?? Enumerable.Empty<XElement>())
                      .Where(n => int.TryParse((string?)n.Attribute(W.id), out var id) && id <= 0))
             newRoot.Add(IrMarkupRenderer.StripUnids(new XElement(note)));
         var xDoc = newPart.GetXDocument();

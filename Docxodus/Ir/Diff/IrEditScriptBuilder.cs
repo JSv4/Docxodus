@@ -407,9 +407,12 @@ internal static class IrEditScriptBuilder
             // accept/reject would dangle. The all-EqualBlock ops project to NO revisions (EqualBlock is a no-op in
             // IrRevisionRenderer), so the revisions surface and its counts are unchanged; only the markup renderer
             // acts on the entry (re-id + content passthrough).
+            // Likewise an INSERTED note with no blocks (<w:footnote w:id="1"/>): it has no ops, but its reference
+            // is inserted, so the renderer must still create its definition or the reference dangles (issue #840).
             bool hasRealChange = ops.Any(o => o.Kind is not IrEditOpKind.EqualBlock);
             bool idShifted = hasLeft && hasRight && leftId != rightId;
-            if (hasRealChange || idShifted)
+            bool emptyInsert = hasRight && !hasLeft && ops.Count == 0;
+            if (hasRealChange || idShifted || emptyInsert)
                 diffs.Add(new IrNoteDiff(kind, scopeId, IrNodeList.From(ops), hasLeft ? leftId : null));
         }
         return diffs;

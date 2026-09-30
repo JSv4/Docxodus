@@ -63,34 +63,17 @@ public class DocxCompareOutputValidityGateTests
     /// </summary>
     private static readonly string[] AllowList =
     [
-        "CU001-Chart-Cached-Data-01.docx | RP/RP032-Table-Prop-Change-Rejected.docx | Sem_UniqueAttributeValue@w:bookmarkEnd", // #840 duplicate bookmark id
         "CU004-Chart-Cached-Data-04.docx | DB010-FrontMatter.docx | Sem_UniqueAttributeValue@wp:docPr", // #860 duplicate drawing wp:docPr id
-        "DA018-SmartQuotes.docx | RP/RP032-Table-Prop-Change-Rejected.docx | Sem_UniqueAttributeValue@w:bookmarkEnd", // #840 duplicate bookmark id
-        "DA264-InvalidRunLevelRepeat.docx | WC/WC064-Footnote.docx | Sem_MissingReferenceElement@w:footnoteReference", // #840 dangling footnote reference
         "HC014-RTL-Table-01.docx | WC/WC014-SmartArt-Before.docx | Sem_UniqueAttributeValue@wp:docPr", // #860 duplicate drawing wp:docPr id
-        "HW002-Table06.docx | HC005-TaskPlanTemplate.docx | Pkg_OnlyOnePartAllowed@(package)", // #840 duplicate singleton relationship (theme/fontTable/styles/settings)
-        "HW002-Table06.docx | HC005-TaskPlanTemplate.docx | Sem_MissingReferenceElement@w:endnote", // #840 duplicated settings part names separator endnotes the output lacks
-        "HW002-Table06.docx | HC005-TaskPlanTemplate.docx | Sem_MissingReferenceElement@w:footnote", // #840 duplicated settings part names separator footnotes the output lacks
-        "HW002-Table06.docx | HW002-Table13.docx | Pkg_OnlyOnePartAllowed@(package)", // #840 duplicate singleton relationship (theme/fontTable/styles/settings)
-        "HW002-Table08.docx | RP/RP032-Table-Prop-Change-Rejected.docx | Sem_UniqueAttributeValue@w:bookmarkEnd", // #840 duplicate bookmark id
         "LIR015-en-US-cardinalText.docx | Blank-altChunk.docx | Sem_AttributeValueDataTypeDetailed@w:numberingChange", // #861 w:numberingChange/@w:original over 15 chars
         "LIR015-en-US-cardinalText.docx | LIR013-en-US-001.docx | Sem_AttributeValueDataTypeDetailed@w:numberingChange", // #861 w:numberingChange/@w:original over 15 chars
         "LIR015-en-US-cardinalText.docx | RC/RC005-Before.docx | Sem_AttributeValueDataTypeDetailed@w:numberingChange", // #861 w:numberingChange/@w:original over 15 chars
         "LIR019-en-US-lowerLetter.docx | DA009-InvalidXPath.docx | Sem_AttributeValueDataTypeDetailed@w:numberingChange", // #861 w:numberingChange/@w:original over 15 chars
         "LIR019-en-US-lowerLetter.docx | RP/RP044-MERGEFORMAT-Field-Code-Rejected.docx | Sem_AttributeValueDataTypeDetailed@w:numberingChange", // #861 w:numberingChange/@w:original over 15 chars
         "LIR019-en-US-lowerLetter.docx | RP/RP048-Deleted-Inserted-Para-Mark-Rejected.docx | Sem_AttributeValueDataTypeDetailed@w:numberingChange", // #861 w:numberingChange/@w:original over 15 chars
-        "RC/RC005-Before.docx | RP/RP030-Table-Row-Props-Change.docx | Sem_UniqueAttributeValue@w:bookmarkEnd", // #840 duplicate bookmark id
-        "RP/RP014-Inserted-Math-Control-Char-Rejected.docx | HC022-Table-Of-Contents.docx | Sem_UniqueAttributeValue@w:bookmarkEnd", // #840 duplicate bookmark id
-        "RP/RP014-Inserted-Math-Control-Char-Rejected.docx | HC022-Table-Of-Contents.docx | Sem_UniqueAttributeValue@w:bookmarkStart", // #840 duplicate bookmark id
-        "WC/WC006-Table-Delete-Contests-of-Row.docx | RP/RP030-Table-Row-Props-Change.docx | Sem_UniqueAttributeValue@w:bookmarkEnd", // #840 duplicate bookmark id
         "WC/WC014-SmartArt-Before.docx | CU004-Chart-Cached-Data-04.docx | Sem_UniqueAttributeValue@wp:docPr", // #860 duplicate drawing wp:docPr id
-        "WC/WC034-Endnotes-After2.docx | WC/WC036-Endnote-With-Table-Before.docx | Sem_UniqueAttributeValue@w:bookmarkEnd", // #840 duplicate bookmark id
-        "WC/WC034-Endnotes-After2.docx | WC/WC036-Endnote-With-Table-Before.docx | Sem_UniqueAttributeValue@w:bookmarkStart", // #840 duplicate bookmark id
-        "WC/WC036-Footnote-With-Table-Before.docx | WC/WC036-Footnote-With-Table-After.docx | Sem_UniqueAttributeValue@w:bookmarkEnd", // #840 duplicate bookmark id
-        "WC/WC036-Footnote-With-Table-Before.docx | WC/WC036-Footnote-With-Table-After.docx | Sem_UniqueAttributeValue@w:bookmarkStart", // #840 duplicate bookmark id
         "WC/WC037-Textbox-Before.docx | WC/WC037-Textbox-After1.docx | Sem_UniqueAttributeValue@v:shape", // #860 duplicate VML shape id
         "WC/WC037-Textbox-Before.docx | WC/WC037-Textbox-After1.docx | Sem_UniqueAttributeValue@v:shapetype", // #860 duplicate VML shapetype id
-        "WC/WC043-Nested-Table.docx | RP/RP032-Table-Prop-Change-Rejected.docx | Sem_UniqueAttributeValue@w:bookmarkEnd", // #840 duplicate bookmark id
         "WC/WC044-Text-Box.docx | WC/WC044-Text-Box-Mod.docx | Sem_UniqueAttributeValue@v:shape", // #860 duplicate VML shape id
         "WC/WC044-Text-Box.docx | WC/WC044-Text-Box-Mod.docx | Sem_UniqueAttributeValue@v:shapetype", // #860 duplicate VML shapetype id
         "WC/WC045-Text-Box.docx | WC/WC045-Text-Box-Mod.docx | Sem_UniqueAttributeValue@v:shape", // #860 duplicate VML shape id
@@ -103,7 +86,6 @@ public class DocxCompareOutputValidityGateTests
         "WC/WC048-Text-Box-in-Cell.docx | WC/WC048-Text-Box-in-Cell-Mod.docx | Sem_UniqueAttributeValue@v:rect", // #860 duplicate VML shape id
         "WC/WC048-Text-Box-in-Cell.docx | WC/WC048-Text-Box-in-Cell-Mod.docx | Sem_UniqueAttributeValue@v:shape", // #860 duplicate VML shape id
         "WC/WC048-Text-Box-in-Cell.docx | WC/WC048-Text-Box-in-Cell-Mod.docx | Sem_UniqueAttributeValue@v:shapetype", // #860 duplicate VML shapetype id
-        "WC/WC049-Text-Box-in-Cell.docx | RP/RP032-Table-Prop-Change-Rejected.docx | Sem_UniqueAttributeValue@w:bookmarkEnd", // #840 duplicate bookmark id
         "WC/WC049-Text-Box-in-Cell.docx | WC/WC049-Text-Box-in-Cell-Mod.docx | Sem_UniqueAttributeValue@v:shape", // #860 duplicate VML shape id
         "WC/WC049-Text-Box-in-Cell.docx | WC/WC049-Text-Box-in-Cell-Mod.docx | Sem_UniqueAttributeValue@v:shapetype", // #860 duplicate VML shapetype id
         "WC/WC050-Table-in-Text-Box.docx | WC/WC050-Table-in-Text-Box-Mod.docx | Sem_UniqueAttributeValue@v:shape", // #860 duplicate VML shape id
