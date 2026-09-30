@@ -1730,14 +1730,31 @@ listSeparator
             { W.rPr, Order_rPr },
         };
 
-        /// <summary>Where a container's children from other namespaces go. Word 2010's run properties
-        /// (<c>w14:ligatures</c>, <c>w14:textFill</c>, …) follow every WordprocessingML run property and
-        /// precede <c>w:rPrChange</c>, which is where the Open XML SDK validator requires them. In a
-        /// container not listed here such a child moves with the ranked child before it.</summary>
-        private static readonly Dictionary<XName, int> ExtensionRanks = new Dictionary<XName, int>
+        /// <summary>The Word 2010 run properties in their schema sequence. They follow every
+        /// WordprocessingML run property and precede <c>w:rPrChange</c>, in this order, which is where the
+        /// Open XML SDK validator requires them.</summary>
+        private static readonly XName[] W14RunPropertySequence =
         {
-            { W.rPr, Order_rPr[W.oMath] + 5 },
+            W14.w14 + "glow", W14.w14 + "shadow", W14.w14 + "reflection", W14.w14 + "textOutline",
+            W14.w14 + "textFill", W14.w14 + "scene3d", W14.w14 + "props3d", W14.w14 + "ligatures",
+            W14.w14 + "numForm", W14.w14 + "numSpacing", W14.w14 + "stylisticSets", W14.w14 + "cntxtAlts",
         };
+
+        /// <summary>Where a container's children from other namespaces go: a known name at its own rank,
+        /// any other at <c>Other</c>. In <c>w:rPr</c> they all sit between <c>w:oMath</c> and
+        /// <c>w:rPrChange</c>. In a container not listed here such a child moves with the ranked child
+        /// before it.</summary>
+        private static readonly Dictionary<XName, (Dictionary<XName, double> Known, double Other)> ExtensionRanks =
+            new Dictionary<XName, (Dictionary<XName, double> Known, double Other)>
+            {
+                {
+                    W.rPr,
+                    (W14RunPropertySequence
+                        .Select((name, index) => (Name: name, Rank: Order_rPr[W.oMath] + (index + 1) / 20.0))
+                        .ToDictionary(x => x.Name, x => x.Rank),
+                     Order_rPr[W.oMath] + (W14RunPropertySequence.Length + 1) / 20.0)
+                },
+            };
 
         /// <summary>
         /// Put the children of every <c>w:tbl</c>, <c>w:tr</c>, <c>w:pPr</c> and <c>w:rPr</c> in each part
@@ -1766,14 +1783,16 @@ listSeparator
             var changed = false;
             foreach (var container in root.DescendantsAndSelf().Where(e => ChildOrders.ContainsKey(e.Name)).ToList())
                 changed |= OrderChildren(container, ChildOrders[container.Name],
-                    ExtensionRanks.TryGetValue(container.Name, out var extensionRank) ? extensionRank : null);
+                    ExtensionRanks.TryGetValue(container.Name, out var extensions) ? extensions : null);
             return changed;
         }
 
-        private static bool OrderChildren(XElement container, Dictionary<XName, int> order, int? extensionRank)
+        private static bool OrderChildren(
+            XElement container, Dictionary<XName, int> order,
+            (Dictionary<XName, double> Known, double Other)? extensions)
         {
             var leading = new List<XNode>();
-            var groups = new List<(int Rank, List<XNode> Nodes)>();
+            var groups = new List<(double Rank, List<XNode> Nodes)>();
             foreach (var node in container.Nodes())
             {
                 if (node is XElement element && Rank(element) is { } rank)
@@ -1795,10 +1814,14 @@ listSeparator
             container.Add(reordered);
             return true;
 
-            int? Rank(XElement element) =>
-                element.Name.Namespace != W.w ? extensionRank
-                : order.TryGetValue(element.Name, out var rank) ? rank
-                : null;
+            double? Rank(XElement element)
+            {
+                if (element.Name.Namespace == W.w)
+                    return order.TryGetValue(element.Name, out var rank) ? rank : null;
+                if (extensions is not { } known)
+                    return null;
+                return known.Known.TryGetValue(element.Name, out var extensionRank) ? extensionRank : known.Other;
+            }
         }
 
         /// <summary>

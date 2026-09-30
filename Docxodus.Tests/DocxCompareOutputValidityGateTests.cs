@@ -79,19 +79,13 @@ public class DocxCompareOutputValidityGateTests
         "LIR019-en-US-lowerLetter.docx | DA009-InvalidXPath.docx | Sem_AttributeValueDataTypeDetailed@w:numberingChange", // #861 w:numberingChange/@w:original over 15 chars
         "LIR019-en-US-lowerLetter.docx | RP/RP044-MERGEFORMAT-Field-Code-Rejected.docx | Sem_AttributeValueDataTypeDetailed@w:numberingChange", // #861 w:numberingChange/@w:original over 15 chars
         "LIR019-en-US-lowerLetter.docx | RP/RP048-Deleted-Inserted-Para-Mark-Rejected.docx | Sem_AttributeValueDataTypeDetailed@w:numberingChange", // #861 w:numberingChange/@w:original over 15 chars
-        "RA001-Tracked-Revisions-02.docx | RP/RP050-Deleted-Footnote.docx | Sch_IncompleteContentExpectingComplex@w:tbl", // #837 empty w:tbl (no tblPr, no rows)
-        "RC/RC005-Before.docx | RP/RP030-Table-Row-Props-Change.docx | Sch_UnexpectedElementContentExpectingComplex@w:tr", // #837 tblPrEx out of order in w:tr
         "RC/RC005-Before.docx | RP/RP030-Table-Row-Props-Change.docx | Sem_UniqueAttributeValue@w:bookmarkEnd", // #840 duplicate bookmark id
-        "RP/RP001-Tracked-Revisions-01.docx | RP/RP044-MERGEFORMAT-Field-Code-Rejected.docx | Sch_IncompleteContentExpectingComplex@w:tbl", // #837 empty w:tbl (no tblPr, no rows)
         "RP/RP014-Inserted-Math-Control-Char-Rejected.docx | HC022-Table-Of-Contents.docx | Sem_UniqueAttributeValue@w:bookmarkEnd", // #840 duplicate bookmark id
         "RP/RP014-Inserted-Math-Control-Char-Rejected.docx | HC022-Table-Of-Contents.docx | Sem_UniqueAttributeValue@w:bookmarkStart", // #840 duplicate bookmark id
-        "RP/RP030-Table-Row-Props-Change.docx | WC/WC053-Text-in-Cell.docx | Sch_UnexpectedElementContentExpectingComplex@w:tr", // #837 tblPrEx out of order in w:tr
         "WC/WC006-Table-Delete-Contests-of-Row.docx | RP/RP030-Table-Row-Props-Change.docx | Sem_UniqueAttributeValue@w:bookmarkEnd", // #840 duplicate bookmark id
         "WC/WC014-SmartArt-Before.docx | CU004-Chart-Cached-Data-04.docx | Sem_UniqueAttributeValue@wp:docPr", // #860 duplicate drawing wp:docPr id
         "WC/WC034-Endnotes-After2.docx | WC/WC036-Endnote-With-Table-Before.docx | Sem_UniqueAttributeValue@w:bookmarkEnd", // #840 duplicate bookmark id
         "WC/WC034-Endnotes-After2.docx | WC/WC036-Endnote-With-Table-Before.docx | Sem_UniqueAttributeValue@w:bookmarkStart", // #840 duplicate bookmark id
-        "WC/WC034-Footnotes-After1.docx | RP/RP001-Tracked-Revisions-01.docx | Sch_IncompleteContentExpectingComplex@w:tbl", // #837 empty w:tbl (no tblPr, no rows)
-        "WC/WC035-Footnote-After.docx | RA001-Tracked-Revisions-02.docx | Sch_IncompleteContentExpectingComplex@w:tbl", // #837 empty w:tbl (no tblPr, no rows)
         "WC/WC036-Footnote-With-Table-Before.docx | WC/WC036-Footnote-With-Table-After.docx | Sem_UniqueAttributeValue@w:bookmarkEnd", // #840 duplicate bookmark id
         "WC/WC036-Footnote-With-Table-Before.docx | WC/WC036-Footnote-With-Table-After.docx | Sem_UniqueAttributeValue@w:bookmarkStart", // #840 duplicate bookmark id
         "WC/WC037-Textbox-Before.docx | WC/WC037-Textbox-After1.docx | Sem_UniqueAttributeValue@v:shape", // #860 duplicate VML shape id

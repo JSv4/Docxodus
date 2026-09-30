@@ -41,24 +41,26 @@ public class DocxDiffSchemaOrderTests
 
     /// <summary>A table every row of which is tracked-deleted, the text moved out of it — as Word writes a
     /// table whose content was cut and pasted elsewhere with Track Changes on.</summary>
-    private static readonly WmlDocument MovedAwayTable = IrTestDocuments.FromBodyXml(
+    private static readonly string MovedAwayTableBody =
         "<w:p><w:r><w:t>Before</w:t></w:r></w:p>" +
         Table("<w:tr><w:trPr><w:del w:id=\"1\" w:author=\"A\"/></w:trPr><w:tc><w:tcPr><w:tcW w:w=\"2000\" w:type=\"dxa\"/></w:tcPr>" +
               "<w:p><w:pPr><w:rPr><w:del w:id=\"2\" w:author=\"A\"/></w:rPr></w:pPr>" +
               "<w:moveFrom w:id=\"3\" w:author=\"A\"><w:del w:id=\"4\" w:author=\"A\"><w:r><w:delText>Moved</w:delText></w:r>" +
-              "</w:del></w:moveFrom></w:p></w:tc></w:tr>") +
-        Tail);
+              "</w:del></w:moveFrom></w:p></w:tc></w:tr>");
+
+    private static readonly WmlDocument MovedAwayTable = IrTestDocuments.FromBodyXml(MovedAwayTableBody + Tail);
 
     /// <summary>The same table inside a move-from range that opens in the paragraph before it and closes
     /// as the table's last child, as Word wrote it in <c>RA001-Tracked-Revisions-02.docx</c> — the range
     /// covers the table's properties and grid as well as its rows, but not the table element itself.</summary>
-    private static readonly WmlDocument MovedAwayRange = IrTestDocuments.FromBodyXml(
+    private static readonly string MovedAwayRangeBody =
         "<w:p><w:r><w:t>Before</w:t></w:r><w:moveFromRangeStart w:id=\"10\" w:author=\"A\" w:name=\"move1\"/></w:p>" +
         Table("<w:tr><w:trPr><w:del w:id=\"11\" w:author=\"A\"/></w:trPr><w:tc><w:tcPr><w:tcW w:w=\"2000\" w:type=\"dxa\"/></w:tcPr>" +
               "<w:p><w:pPr><w:rPr><w:del w:id=\"12\" w:author=\"A\"/></w:rPr></w:pPr>" +
               "<w:moveFrom w:id=\"13\" w:author=\"A\"><w:r><w:t>Moved</w:t></w:r></w:moveFrom></w:p></w:tc></w:tr>",
-              "<w:moveFromRangeEnd w:id=\"10\"/>") +
-        Tail);
+              "<w:moveFromRangeEnd w:id=\"10\"/>");
+
+    private static readonly WmlDocument MovedAwayRange = IrTestDocuments.FromBodyXml(MovedAwayRangeBody + Tail);
 
     private static readonly WmlDocument NoTable =
         IrTestDocuments.FromBodyXml("<w:p><w:r><w:t>Before</w:t></w:r></w:p>" + Tail);
@@ -102,6 +104,35 @@ public class DocxDiffSchemaOrderTests
 
         Assert.DoesNotContain(Body(output).Descendants(W + "tbl"), table => !table.Elements(W + "tr").Any());
         NoNewValidationErrors(NoTable.DocumentByteArray, output.DocumentByteArray);
+    }
+
+    /// <summary>Under <see cref="DocxDiffSettings.PreserveInputRevisions"/>, a paragraph after a table that
+    /// accepting removes keeps its own tracked deletion and author: the table must not stop the walk that
+    /// pairs accepted blocks with their originals.</summary>
+    [Theory]
+    [InlineData("wholly-deleted")]
+    [InlineData("moved-away")]
+    [InlineData("moved-away-range")]
+    public void PreserveInputRevisions_BlockAfterATableAcceptRemoves_KeepsItsAuthor(string table)
+    {
+        var removedTable = table switch
+        {
+            "wholly-deleted" => "<w:p><w:r><w:t>Before</w:t></w:r></w:p>" +
+                                Table(Row("gone", "<w:trPr><w:del w:id=\"1\" w:author=\"A\"/></w:trPr>")),
+            "moved-away" => MovedAwayTableBody,
+            _ => MovedAwayRangeBody,
+        };
+        const string LaterDeletion =
+            "<w:p><w:r><w:t xml:space=\"preserve\">Kept </w:t></w:r><w:del w:id=\"20\" w:author=\"Xavier\">" +
+            "<w:r><w:delText>struck</w:delText></w:r></w:del></w:p>";
+        var right = IrTestDocuments.FromBodyXml(removedTable + LaterDeletion + Tail);
+        var left = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>Before</w:t></w:r></w:p><w:p><w:r><w:t xml:space=\"preserve\">Kept </w:t></w:r></w:p>" +
+            Tail + "<w:p><w:r><w:t>Only in the original</w:t></w:r></w:p>");
+
+        var output = DocxDiff.Compare(left, right, new DocxDiffSettings { PreserveInputRevisions = true });
+
+        Assert.Contains(Body(output).Descendants(W + "del"), del => (string?)del.Attribute(W + "author") == "Xavier");
     }
 
     [Theory]

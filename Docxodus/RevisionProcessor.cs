@@ -1524,7 +1524,30 @@ namespace Docxodus
 
         public static void AcceptRevisionsForPart(OpenXmlPart part, bool preservePreexistingCleanTableRuns = false)
         {
-            XElement documentElement = part.GetXDocument().Root!;
+            var accepted = AcceptRevisionsForRoot(part.GetXDocument().Root!, preservePreexistingCleanTableRuns);
+            part.PutXDocument(new XDocument(accepted));
+        }
+
+        /// <summary>
+        /// Whether accepting every revision removes <paramref name="table"/> outright — every row is
+        /// tracked-deleted, or the move passes empty it — judged by accepting a copy of the table on its
+        /// own. The preservation walk of the comparison renderer uses it to step over an original table the
+        /// accepted view no longer has (issue #837). A table whose rows accept keeps, or that has no rows,
+        /// returns false.
+        /// </summary>
+        internal static bool AcceptRemovesTable(XElement table)
+        {
+            if (table.Name != W.tbl || !WordprocessingMLUtil.TableRows(table).Any() ||
+                !table.Descendants().Any(e => e.Name == W.del || e.Name == W.moveFrom))
+                return false;
+            var root = new XElement(W.document, new XAttribute(XNamespace.Xmlns + "w", W.w.NamespaceName),
+                new XElement(W.body, new XElement(table)));
+            return !AcceptRevisionsForRoot(root, preservePreexistingCleanTableRuns: false)
+                .Elements(W.body).Elements(W.tbl).Any();
+        }
+
+        private static XElement AcceptRevisionsForRoot(XElement documentElement, bool preservePreexistingCleanTableRuns)
+        {
             var cleanTableRuns = preservePreexistingCleanTableRuns
                 ? CapturePreexistingCleanTableRuns(documentElement)
                 : null;
@@ -1550,8 +1573,7 @@ namespace Docxodus
             documentElement.Descendants().Attributes().Where(a => a.Name == PT.UniqueId || a.Name == PT.RunIds || a.Name == PT.HadRows).Remove();
             documentElement.Descendants(W.numPr).Where(np => !np.HasElements).Remove();
             RemoveEmptyParagraphMarkShells(documentElement);
-            XDocument newXDoc = new XDocument(documentElement);
-            part.PutXDocument(newXDoc);
+            return documentElement;
         }
 
         /// <summary>Mark every table that has rows before acceptance, so

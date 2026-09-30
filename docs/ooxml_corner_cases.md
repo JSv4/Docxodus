@@ -1569,17 +1569,30 @@ child, the range also swallows `w:tblPr` and `w:tblGrid`, leaving an entirely em
 `w:tbl`, `w:tr`, `w:pPr` and `w:rPr` into schema sequence using the existing `Order_pPr`/`Order_rPr`
 tables and two small ones for CT_Tbl and CT_Row. It only moves nodes: a child the table does not
 rank (a bookmark, a comment, whitespace) travels with the ranked child before it, Word 2010 run
-properties go to their slot before `w:rPrChange`, equal ranks keep their order, and a container
-already in order — and a part with none out of order — is not rewritten.
+properties go to their slot before `w:rPrChange` in their own schema sequence (`glow`, `shadow`,
+`reflection`, `textOutline`, `textFill`, `scene3d`, `props3d`, `ligatures`, `numForm`, `numSpacing`,
+`stylisticSets`, `cntxtAlts`), equal ranks keep their order, and a container already in order — and
+a part with none out of order — is not rewritten.
 `RevisionProcessor.AcceptRevisionsForPart` marks each table that has rows before accepting and, once the
 revision transforms have run, removes each marked table left with none — whichever pass removed its
 rows. A table that arrived without rows is left as it was.
+
+Removing the shell has one consequence under `PreserveInputRevisions`: the renderer pairs each
+accepted block with its original by walking both bodies in step, and the empty shell used to pair
+with the original table. Without it, the walk met the original table where the accepted body had the
+next paragraph and stopped, and every later block lost its preserved revisions. The walk now steps
+over an original table that `RevisionProcessor.AcceptRemovesTable` says accepting removes. That
+check accepts a copy of the table on its own through the same pipeline. This also fixes the older
+case of a wholly-deleted table with no moves, which stopped the walk the same way. The removed table
+itself is still not carried into the preserved output.
 
 #### Relevant code
 
 - `Docxodus/PtOpenXmlUtil.cs` — `OrderChildrenPerSchema` and its order tables.
 - `Docxodus/Ir/Diff/IrMarkupRenderer.cs` (`MarkWholeRow`), `Docxodus/Ir/Diff/IrCompositeMarkupRenderer.cs`.
-- `Docxodus/RevisionProcessor.cs` — `MarkTablesWithRows` / `RemoveTablesThatLostEveryRow`.
+- `Docxodus/RevisionProcessor.cs` — `MarkTablesWithRows` / `RemoveTablesThatLostEveryRow`,
+  `AcceptRemovesTable`.
+- `Docxodus/Ir/Diff/IrMarkupRenderer.cs` — `AlignPreservedChildren` / `IsAcceptDiscarded`.
 
 ---
 

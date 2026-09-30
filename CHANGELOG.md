@@ -41,7 +41,11 @@ All notable changes to this project will be documented in this file.
   a wholly-deleted table could see them. Accepting now removes any table that had rows and lost all of
   them, however they were removed (a table that arrived without rows is left alone), so
   `DocxCompare.Compare` — which compares the accepted view of its inputs — no longer writes a rowless
-  table, a shape Word answers with its "unreadable content" prompt.
+  table, a shape Word answers with its "unreadable content" prompt. With
+  `PreserveInputRevisions`, a table that accepting removes (every row tracked-deleted, or moved away)
+  no longer stops the renderer from matching later blocks to their originals, so the blocks after it
+  keep their own tracked changes and authors instead of being re-attributed to the comparison author.
+  The removed table itself is still not carried into the output.
 
 ## [12.6.5] - 2026-09-28
 

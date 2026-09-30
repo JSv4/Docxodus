@@ -72,6 +72,17 @@ public class SchemaChildOrderTests
     }
 
     [Fact]
+    public void Word2010RunProperties_TakeTheirOwnSchemaSequence()
+    {
+        var body = Parse("<w:r><w:rPr><w14:ligatures w14:val='standard'/><w14:textFill/><w14:glow/></w:rPr></w:r>");
+
+        WordprocessingMLUtil.OrderChildrenPerSchema(body);
+
+        Assert.Equal(new[] { "glow", "textFill", "ligatures" },
+            ChildNames(body.Descendants(W + "r").Single().Element(W + "rPr")!));
+    }
+
+    [Fact]
     public void UnrankedChild_TravelsWithTheRankedChildBeforeIt()
     {
         var body = Parse("<w:tbl><w:tr><w:trPr/><w:tc><w:p/></w:tc><w:bookmarkEnd w:id='0'/><w:tblPrEx/></w:tr></w:tbl>");
