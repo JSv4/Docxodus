@@ -94,18 +94,26 @@ namespace Docxodus
             }
             if (numFmt == "upperLetter")
             {
+                // Like the default formatter's % 780 (26 letters x 30), wrap after 30 repeats of the
+                // 29-letter alphabet; without it a large w:start pads a marker of millions of letters.
+                int levelNumber2 = levelNumber % 870;
+                if (levelNumber2 == 0)
+                    levelNumber2 = 870;
                 string a = "ABCÇDEFGĞHIİJKLMNOÖPRSŞTUÜVYZ";
                 //string a = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-                int c = (levelNumber - 1) / 29;
-                int n = (levelNumber - 1) % 29;
+                int c = (levelNumber2 - 1) / 29;
+                int n = (levelNumber2 - 1) % 29;
                 char x = a[n];
                 return "".PadRight(c + 1, x);
             }
             if (numFmt == "lowerLetter")
             {
+                int levelNumber3 = levelNumber % 870;
+                if (levelNumber3 == 0)
+                    levelNumber3 = 870;
                 string a = "abcçdefgğhıijklmnoöprsştuüvyz";
-                int c = (levelNumber - 1) / 29;
-                int n = (levelNumber - 1) % 29;
+                int c = (levelNumber3 - 1) / 29;
+                int n = (levelNumber3 - 1) % 29;
                 char x = a[n];
                 return "".PadRight(c + 1, x);
             }
