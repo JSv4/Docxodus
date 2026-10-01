@@ -325,6 +325,15 @@ export interface PaginationOptions {
    */
   deferFragmentIdentities?: boolean;
   /**
+   * Points to withhold from the body height available to specific physical pages (1-based page
+   * number → pt). Only the fitting budget shrinks; the page's rendered bands do not move. The
+   * standalone export uses it for its bounded corrective pass: when a finished page still clips
+   * its body — its layout ran a few points past what the placement model predicted — the export
+   * lays the document out again from pristine HTML with that page's budget reduced by the
+   * overflow, so the offending block moves or splits onto the next page (issue #848).
+   */
+  bodyBudgetReductionsPt?: Readonly<Record<number, number>>;
+  /**
    * Incremental admission check invoked immediately before each physical page is allocated.
    * Export callers use this to enforce `finalPages` without constructing an over-limit DOM first.
    */
@@ -403,6 +412,78 @@ interface ParagraphFragmentEndpoint {
 interface SectionPageNumbering {
   start?: number;
   format?: string;
+}
+
+/**
+ * The top and bottom margins a block occupies in its parent's flow, in CSS px, AFTER CSS margin
+ * collapsing through its first and last in-flow children (CSS 2.1 §8.3.1). getBoundingClientRect()
+ * excludes such a collapsed-through margin, and getComputedStyle() reports only the element's own:
+ * the converter wraps a table in an unstyled `div`, so the table's own top margin collapses
+ * through the wrapper and occupies page height that neither of those reads accounted for. The
+ * paginator's budget then fell a few pixels to a line short of the laid-out page, and the export
+ * refused the clipped page (issue #848).
+ *
+ * A margin collapses with a parent's while the parent is an ordinary block box (display block or
+ * list-item, overflow visible, not floated or absolutely positioned — anything else establishes
+ * its own formatting context) with no border or padding on that side, the child is the parent's
+ * first (last) in-flow block-level child, and no line content precedes (follows) it. For the
+ * bottom edge the parent must also have an automatic height. Positive margins combine by maximum
+ * and negative ones by minimum, as CSS collapses them.
+ */
+export function collapsedBlockMarginsPx(view: Window, element: HTMLElement): { topPx: number; bottomPx: number } {
+  return {
+    topPx: collapseMarginChain(view, element, "top"),
+    bottomPx: collapseMarginChain(view, element, "bottom"),
+  };
+}
+
+function collapseMarginChain(view: Window, element: HTMLElement, edge: "top" | "bottom"): number {
+  const margins: number[] = [];
+  let current: HTMLElement | null = element;
+  while (current) {
+    const style = view.getComputedStyle(current);
+    margins.push(parseFloat(edge === "top" ? style.marginTop : style.marginBottom) || 0);
+    current = collapsesThroughTo(view, current, style, edge);
+  }
+  const positive = Math.max(0, ...margins);
+  const negative = Math.min(0, ...margins);
+  return positive + negative;
+}
+
+/** The child whose `edge` margin collapses through `parent`'s, or null when none does. */
+function collapsesThroughTo(
+  view: Window,
+  parent: HTMLElement,
+  style: CSSStyleDeclaration,
+  edge: "top" | "bottom",
+): HTMLElement | null {
+  const ordinaryBlock = (style.display === "block" || style.display === "list-item")
+    && style.overflowX === "visible" && style.overflowY === "visible"
+    && style.float === "none" && style.position !== "absolute" && style.position !== "fixed";
+  if (!ordinaryBlock) return null;
+  const border = parseFloat(edge === "top" ? style.borderTopWidth : style.borderBottomWidth) || 0;
+  const padding = parseFloat(edge === "top" ? style.paddingTop : style.paddingBottom) || 0;
+  if (border !== 0 || padding !== 0) return null;
+  if (edge === "bottom" && parent.style.height !== "") return null;
+
+  const nodes = Array.from(parent.childNodes);
+  if (edge === "bottom") nodes.reverse();
+  for (const node of nodes) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      if ((node.textContent ?? "").trim() !== "") return null; // line content comes first
+      continue;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) continue;
+    const child = node as HTMLElement;
+    const childStyle = view.getComputedStyle(child);
+    if (childStyle.display === "none") continue;
+    if (childStyle.position === "absolute" || childStyle.position === "fixed" || childStyle.float !== "none") continue;
+    const blockLevel = childStyle.display === "block" || childStyle.display === "list-item"
+      || childStyle.display === "table" || childStyle.display === "flow-root"
+      || childStyle.display === "flex" || childStyle.display === "grid";
+    return blockLevel ? child : null; // an inline-level child starts a line box
+  }
+  return null;
 }
 
 /** A page-space box in client coordinates: left/top inclusive, right/bottom exclusive. */
@@ -524,6 +605,7 @@ export class PaginationEngine {
   private pageGap: number;
   private fragmentParagraphs: boolean;
   private deferFragmentIdentities: boolean;
+  private bodyBudgetReductionsPt: Readonly<Record<number, number>>;
   private cancellationCheckpoint?: () => void;
   private pageCountCheckpoint?: (prospectivePageCount: number) => void;
   private createdPageCount = 0;
@@ -590,6 +672,7 @@ export class PaginationEngine {
     this.pageGap = options.pageGap ?? 20;
     this.fragmentParagraphs = options.fragmentParagraphs ?? false;
     this.deferFragmentIdentities = options.deferFragmentIdentities ?? false;
+    this.bodyBudgetReductionsPt = options.bodyBudgetReductionsPt ?? {};
     this.cancellationCheckpoint = options.checkCancellation;
     this.pageCountCheckpoint = options.checkPageCount;
     this.layoutToken = options.layoutToken;
@@ -1270,9 +1353,7 @@ export class PaginationEngine {
       // Measure height and margins separately for proper margin collapsing calculation
       // getBoundingClientRect() returns content+padding+border, not margins
       const rect = child.getBoundingClientRect();
-      const style = this.view.getComputedStyle(child);
-      const marginTopPx = parseFloat(style.marginTop) || 0;
-      const marginBottomPx = parseFloat(style.marginBottom) || 0;
+      const { topPx: marginTopPx, bottomPx: marginBottomPx } = collapsedBlockMarginsPx(this.view, child);
       const heightPt = pxToPt(rect.height);
       const marginTopPt = pxToPt(marginTopPx);
       const marginBottomPt = pxToPt(marginBottomPx);
@@ -1510,13 +1591,13 @@ export class PaginationEngine {
     this.stagingElement.appendChild(measurementHost);
 
     const rect = measuredElement.getBoundingClientRect();
-    const style = this.view.getComputedStyle(measuredElement);
+    const margins = collapsedBlockMarginsPx(this.view, measuredElement);
     const measured: MeasuredBlock = {
       element,
       sectionIndex,
       heightPt: pxToPt(rect.height),
-      marginTopPt: pxToPt(parseFloat(style.marginTop) || 0),
-      marginBottomPt: pxToPt(parseFloat(style.marginBottom) || 0),
+      marginTopPt: pxToPt(margins.topPx),
+      marginBottomPt: pxToPt(margins.bottomPx),
       keepWithNext: element.dataset.keepWithNext === "true",
       keepLines: element.dataset.keepLines === "true",
       pageBreakBefore: element.dataset.pageBreakBefore === "true",
@@ -3198,6 +3279,11 @@ export class PaginationEngine {
    * Deterministic: it depends only on the section's page setup and the registry's pre-measured
    * story heights, never on the page's content, which is what keeps it lazy-loading compatible.
    */
+  /** The body height a physical page may fill: its body band less any caller-requested reduction. */
+  private bodyBudgetPt(bodyHeightPt: number, physicalPageNumber: number): number {
+    return Math.max(0, bodyHeightPt - (this.bodyBudgetReductionsPt[physicalPageNumber] ?? 0));
+  }
+
   private getPageBands(
     dims: PageDimensions,
     sectionIndex: number,
@@ -3327,9 +3413,9 @@ export class PaginationEngine {
     };
 
     // Get effective content height for first page (accounts for header/footer sizes)
-    let { bodyHeight: effectiveContentHeight } = this.getPageBands(
+    let effectiveContentHeight = this.bodyBudgetPt(this.getPageBands(
       dimensionsFor(), pageSectionIndex, pageInSection(), displayedPageNumber()
-    );
+    ).bodyHeight, pageNumber);
     let remainingHeight = effectiveContentHeight;
 
     // Track the previous block's bottom margin for margin collapsing
@@ -3368,7 +3454,7 @@ export class PaginationEngine {
         pageInSection(owner),
         displayedPageNumber(owner),
       );
-      effectiveContentHeight = bands.bodyHeight;
+      effectiveContentHeight = this.bodyBudgetPt(bands.bodyHeight, pageNumber);
       remainingHeight = effectiveContentHeight;
     };
 
@@ -3544,7 +3630,7 @@ export class PaginationEngine {
         pageInSection(),
         displayedPageNumber(),
       );
-      effectiveContentHeight = newBands.bodyHeight;
+      effectiveContentHeight = this.bodyBudgetPt(newBands.bodyHeight, pageNumber);
       remainingHeight = effectiveContentHeight;
 
       prevMarginBottomPt = 0; // Reset margin tracking for new page

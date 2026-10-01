@@ -638,6 +638,19 @@ signature; only then does it measure a fresh PageMap, serialize, and perform the
 check. Otherwise it fails `pagination_failure`. This prevents cleanup or readiness from making
 PageMap geometry stale.
 
+A finished page whose body band still clips content is corrected rather than refused outright
+(issue #848). Running-story placement reports each clipped page and by how many pixels it
+overflows. The materializer withholds that overflow (plus one pixel) from the page's fitting budget
+through `PaginationOptions.bodyBudgetReductionsPt`, discards the document, and paginates again from
+pristine HTML, starting both stability attempts over so they see one layout. The clipped block then
+moves, or splits by lines, onto the next page. After three correction rounds that still clip, the
+export fails `pagination_failure` with the clipped page's details as before. A correction truncates
+its own readiness entries, and it adds no warning or report field. Two causes are known. Tables:
+the converter's table wrapper `div` let the table's own top margin collapse through it, and the
+paginator never budgeted that margin (fixed in `collapsedBlockMarginsPx`). Exact line spacing below
+the font's height: CSS centres the glyph box on the line, so the last line's descenders hang a few
+pixels past the band (corrected by this pass).
+
 `browser_launch` appears twice in a Node export, and in different places. On the host it is
 Chromium and its isolated context, before anything is converted. In the browser materializer it is
 the isolated render realm — a script-free same-origin frame — which is created only once there is

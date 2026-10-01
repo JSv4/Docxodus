@@ -6,6 +6,19 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Paginated HTML and PDF export no longer fails with `pagination_failure: Page N body content is
+  clipped` when a full page overflows by a line or less (issue #848). Two causes are fixed.
+  - **Tables.** The converter wraps each table in a `div`. A table that follows a paragraph with no
+    space after it has a 7.5 pt top margin of its own, and that margin collapsed through the wrapper
+    where the paginator never counted it. Each such table took a few points the page's budget did not
+    know about, so the last line of a full page ran past the page. The paginator now measures a
+    block's margins as CSS actually collapses them. On a sample of 200 generated documents with
+    tables, lists and mixed spacing, this took export failures from 19 to 0.
+  - **A corrective pass.** When a finished page still clips its body, the export now lays the
+    document out again with that page's space reduced by the overflow, so the clipped block moves
+    or splits onto the next page. It fails only if three such rounds don't fix it. This catches
+    lines with exact spacing below the font's own height, whose descenders hang a few pixels past
+    their line: such a line now moves to the next page instead of failing the export.
 - Paginated HTML and PDF export no longer fails with `output_verification_failure: source anchor …
   has no measurable fragment` on a document with a paragraph whose only content is a floating text
   box or shape (issue #849). The paginator moves such a drawing out of the paragraph into the page
