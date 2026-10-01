@@ -833,7 +833,9 @@ text diff is computed over the accepted view. Verified against Word-oracle outpu
 revisions by another author keeps them in Word's compare result alongside the fresh compare revisions.
 `DocxDiffSettings.PreserveInputRevisions` reproduces this (equal blocks + whole-block inserts, in the body
 and in footnote/endnote bodies, in v1; it WINS
-over `PreAcceptInputRevisions` when both are set, and the `DocxCompare` engine-selector path enables it).
+over `PreAcceptInputRevisions` when both are set). The `DocxCompare` front door does **not** enable it: the
+oracle batch this was decoded from turned out to be Word *Combine* output, and the front door models Compare,
+so it only pre-accepts — see the next section.
 
 The Word behavior worth pinning here: **Reject All on such an output does NOT restore the left document.**
 Rejecting a preserved foreign `w:del` RESTORES its deleted text (text the left side never showed), and
@@ -858,6 +860,72 @@ the broken header round-trip), `PreAcceptInputRevisionsTests.cs` (the flag is th
 authorship, every-scope round-trip, schema validity, multi-author redline-of-a-redline), and
 `DocxDiffPreserveInputRevisionsTests.cs` (preservation of foreign ins/del in equal + inserted blocks, no
 same-kind nesting, the fully-deleted-paragraph ride-along, the pinned reject caveat, precedence).
+
+---
+
+## `DocxCompare`: the original document's own pending changes
+
+**Status:** Documented (2026-09) — a deliberate difference from Word (issue #845).
+
+### The corner case
+
+When the **original** document already carries tracked changes by another author, Word's Compare keeps
+that document's pending insertions marked as insertions in its result, so accept-all on Word's redline gives
+the revised text *plus* those retained insertions. The `DocxCompare` front door (every transport's compare)
+does not: it compares the **accepted view** of each document (`PreAcceptInputRevisions`), so an original's
+pending change is resolved as accepted before the diff, nothing by the earlier author survives, and only the
+differences between the two accepted views are marked, by the compare author.
+
+### Minimal XML reproducer
+
+```xml
+<!-- original.docx: Alice's insertion is still pending -->
+<w:p>
+  <w:r><w:t xml:space="preserve">The quick </w:t></w:r>
+  <w:ins w:id="1" w:author="Alice" w:date="2026-01-01T00:00:00Z"><w:r><w:t xml:space="preserve">brown </w:t></w:r></w:ins>
+  <w:r><w:t>fox.</w:t></w:r>
+</w:p>
+<!-- revised.docx: <w:p><w:r><w:t>The quick fox.</w:t></w:r></w:p>  (Alice's insertion rejected) -->
+```
+
+### Behavior table (Docxodus, measured; `[+x]` inserted, `[-x]` deleted, both by the compare author)
+
+| Original | Revised | Docxodus redline | accept all | reject all |
+|---|---|---|---|---|
+| `quick [+Alice: brown] fox` | `quick brown fox` (accepted) | `quick brown fox` | `quick brown fox` | `quick brown fox` |
+| `quick [+Alice: brown] fox` | `quick fox` (rejected) | `quick [-brown] fox` | `quick fox` | `quick brown fox` |
+| `quick [+Alice: brown] fox` | `quick brown fox jumps` | `quick brown fox[+ jumps]` | `… fox jumps` | `quick brown fox` |
+| `quick [+Alice: brown] fox` | same pending insertion | `quick brown fox` | `quick brown fox` | `quick brown fox` |
+| `The [-Alice: lazy] dog` | `The dog` (accepted) | `The dog` | `The dog` | `The dog` |
+| `The [-Alice: lazy] dog` | `The lazy dog` (rejected) | `The [+lazy] dog` | `The lazy dog` | `The dog` |
+
+Word, per the issue's observation of its compare output: the original's pending insertion `brown` stays a
+tracked insertion in the redline, so in the "rejected" row Word's accept-all gives `quick brown fox`, not the
+revised document's `quick fox`. (Docxodus cannot run Word; the Word column is the reported behavior, not a
+measurement made here.)
+
+### Analysis — why the difference is deliberate
+
+Every Docxodus comparison surface promises one contract: **accept all ≡ the revised document, reject all ≡
+the original** (each as accepted). The redline reversibility proof, the delivery bundle's change receipt and
+the semantic change set all rest on it. Retaining the original's pending insertions breaks both halves in the
+"rejected" rows: accept-all keeps text the revised document removed, and reject-all removes text both
+documents' accepted views contain. A redline that cannot be reversed to either input is the wrong default for
+a comparison API, so the front door keeps resolving input revisions as accepted. A caller who needs the inputs'
+own revisions carried through can use the raw `DocxDiff` API with `PreserveInputRevisions` (which preserves
+the *revised* document's pending changes; see the section above and its one-sided round trip). Reproducing
+Word's exact retention as an opt-in profile is possible later if a caller needs Word's accept-all semantics.
+
+### Relevant code
+
+- `Docxodus/DocxCompare.cs` — `ApplyFrontDoorRevisionPolicy` (pre-accept only).
+- `Docxodus/DocxDiff.cs` — `PreAcceptInputRevisions`, `PreserveInputRevisions`.
+
+### Tests
+
+`Docxodus.Tests/DocxCompareOriginalPendingRevisionsTests.cs` pins every row above through the front door
+(redline markup, accept-all, reject-all, and that no change by the earlier author survives);
+`DocxCompareTests.FrontDoorPolicy_*` pin the policy flags themselves.
 
 ---
 
