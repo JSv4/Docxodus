@@ -905,6 +905,29 @@ public sealed class DocxDiffSettings
     /// </summary>
     public bool CrossParagraphTokenDiff { get; set; } = true;
 
+    /// <summary>
+    /// When true (the DEFAULT), an aligned list item whose displayed label changed only because an insertion,
+    /// deletion or move elsewhere in its list renumbered it carries a <c>w:numberingChange</c> recording the
+    /// label it showed before (and so does a deleted or moved-away list item), so a reviewer sees the
+    /// numbering cascade. Microsoft Word's own compare never writes <c>w:numberingChange</c>, and it is a
+    /// transitional-only construct that renderers treat inconsistently; set false for output limited to the
+    /// constructs Word writes. Only this metadata is affected: the list items themselves, their numbering and
+    /// every text revision are unchanged, and <c>DocxDiff.Consolidate</c> honors it too (issue #842).
+    /// </summary>
+    public bool TrackNumberingChanges { get; set; } = true;
+
+    /// <summary>
+    /// When true (the DEFAULT), a cell added to or removed from a paired table row is tracked on its own:
+    /// <c>w:tcPr/w:cellIns</c> for an added cell, <c>w:cellDel</c> for a removed one, the rest of the row
+    /// diffed in place. Microsoft Word's own compare never writes cell-level revisions; set false and a table
+    /// whose rows gain or lose cells is instead tracked as a whole, the original table deleted and the
+    /// revised one inserted, which is the construct Word writes. Both shapes keep accept ≡ revised and
+    /// reject ≡ original. Affects <see cref="DocxDiff.Compare"/> and <see cref="DocxDiff.GetRevisions"/>;
+    /// <c>DocxDiff.Consolidate</c> keeps cell-level revisions, which its N-way table merge needs to
+    /// attribute each reviewer's cells (issue #842).
+    /// </summary>
+    public bool TrackCellInsertionsAndDeletions { get; set; } = true;
+
     /// <summary>Map this public settings object onto the internal <c>IrDiffSettings</c>.</summary>
     /// <summary>
     /// Shallow copy, so a facade can layer its own policy on top of caller-supplied settings without
@@ -968,6 +991,8 @@ public sealed class DocxDiffSettings
             TrackTableFormatChanges = TrackBlockFormatChanges,
             TrackSectionFormatChanges = TrackBlockFormatChanges,
             CrossParagraphTokenDiff = CrossParagraphTokenDiff,
+            TrackNumberingChanges = TrackNumberingChanges,
+            TrackCellInsertionsAndDeletions = TrackCellInsertionsAndDeletions,
         };
     }
 }

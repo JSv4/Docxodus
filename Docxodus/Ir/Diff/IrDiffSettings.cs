@@ -393,6 +393,23 @@ internal sealed record IrDiffSettings
     public bool TrackTableFormatChanges { get; init; } = true;
 
     /// <summary>
+    /// RENDER-TIME setting (issue #842). When true (the DEFAULT) the markup renderer records a list item's
+    /// previous label in <c>w:numberingChange</c> when an edit elsewhere renumbered it, and on deleted and
+    /// moved-away list items. When false it writes none; nothing else changes. Mirrors
+    /// <c>DocxDiffSettings.TrackNumberingChanges</c>.
+    /// </summary>
+    public bool TrackNumberingChanges { get; init; } = true;
+
+    /// <summary>
+    /// RENDER-TIME setting (issue #842). When true (the DEFAULT) the two-way renderers track a cell added to
+    /// or removed from a paired row with <c>w:cellIns</c>/<c>w:cellDel</c>. When false such a table takes the
+    /// whole-table delete + insert fallback (in the markup and in the revision list alike), which is what
+    /// Word's compare writes. The composite (Consolidate) table merge does not consult it. Mirrors
+    /// <c>DocxDiffSettings.TrackCellInsertionsAndDeletions</c>.
+    /// </summary>
+    public bool TrackCellInsertionsAndDeletions { get; init; } = true;
+
+    /// <summary>
     /// DIFF-TIME setting (Consolidate sub-project B2). The SECTION slice of
     /// <see cref="TrackBlockFormatChanges"/>: gates ONLY the section property-revision markup
     /// (<c>w:sectPrChange</c> on the trailing body section AND on an inline in-<c>w:pPr</c> section), NOT the

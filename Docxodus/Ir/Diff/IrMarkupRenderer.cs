@@ -1824,7 +1824,10 @@ internal static class IrMarkupRenderer
         // tcPrChange histories. With table-format tracking disabled, cloning the accepted (right) grid and
         // merely marking the cell w:cellIns would make Reject remove the cell but retain the widened grid and
         // widths. Bail before touching render state so the caller emits the conservative whole-table pair.
-        if (!state.Settings.TrackTableFormatChanges && tableDiff.RowOps.Any(row =>
+        // The same fallback serves a caller who opted out of cell-level revisions (issue #842): Word's compare
+        // tracks such a table whole rather than writing w:cellIns/w:cellDel.
+        if ((!state.Settings.TrackTableFormatChanges || !state.Settings.TrackCellInsertionsAndDeletions) &&
+            tableDiff.RowOps.Any(row =>
                 row.Kind == IrRowOpKind.ModifyRow && row.CellOps is { } cells &&
                 cells.Any(cell => cell.LeftCellAnchor == null || cell.RightCellAnchor == null)))
             return false;
@@ -4915,6 +4918,9 @@ internal static class IrMarkupRenderer
         string originalMarker,
         RenderState state)
     {
+        // The one writer of w:numberingChange, so the opt-out (issue #842) is decided here for every caller.
+        if (!state.Settings.TrackNumberingChanges)
+            return;
         var pPr = paragraph.Element(W.pPr);
         if (pPr is null)
         {
