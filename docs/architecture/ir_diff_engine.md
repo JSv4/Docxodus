@@ -221,6 +221,25 @@ The `IrEditScript` is an ordered list of block operations (`IrEditOpKind`), plus
 | `SplitBlock` | One left paragraph split across N≥2 right paragraphs (M2.6) | left + `splitMergeAnchors` (the N rights) |
 | `MergeBlock` | N≥2 left paragraphs fused into one right paragraph (M2.6) | right + `splitMergeAnchors` (the N lefts) |
 
+**What is reported as a move (issue #844).** Measured on hand-built reorder pairs through the front
+door:
+- **Reported as a move:**
+  - a relocated paragraph of any length, including a single word;
+  - an adjacent swap;
+  - a moved run of several paragraphs, or half the document swapped with the other half;
+  - a move next to an unrelated insertion;
+  - a moved paragraph whose formatting also changed;
+  - a moved paragraph with one or two words edited (`MoveModifyBlock`, above the 0.8 similarity
+    threshold);
+  - a relocated **table**. The table's rows are marked `w:del` at the source and `w:ins` at the
+    destination (`w:trPr`), the cell content is wrapped in `w:moveFrom`/`w:moveTo`, and a move
+    range sits inside each table. This is Word's own shape; `EmitTableMove` produces it.
+- **Still a delete + insert:**
+  - a moved paragraph edited below the similarity threshold;
+  - a table that was both moved and edited (not classified as a move by the aligner);
+  - a paragraph moved into or out of a table cell, or a reordered table row;
+  - text moved within a paragraph or between paragraphs (sub-paragraph spans).
+
 **Edited-move markup boundary.** A `MoveModifyBlock` remains rich in the edit-script and revisions
 surfaces: its destination carries the token diff describing the edit within the relocation. Produced
 OOXML deliberately does not nest that token diff inside the move range. It emits the complete left

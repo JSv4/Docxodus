@@ -4148,6 +4148,11 @@ internal static class IrMarkupRenderer
     private static void EmitMoveSource(IrEditOp op, RenderState state, List<XElement> sink)
     {
         var src = SourceElement(op.LeftAnchor, state.Left);
+        if (src?.Name == W.tbl && op.MoveGroupId is { } tableGid)
+        {
+            EmitTableMove(src, isFrom: true, state.MoveName(tableGid), state, sink);
+            return;
+        }
         if (src == null || src.Name != W.p || op.MoveGroupId is not { } gid)
         {
             // Defensive fallback: a non-paragraph or group-less move source degrades to a whole-block delete.
@@ -4178,6 +4183,11 @@ internal static class IrMarkupRenderer
     private static void EmitMoveDestination(IrEditOp op, RenderState state, List<XElement> sink)
     {
         var src = SourceElement(op.RightAnchor, state.RightSource);
+        if (src?.Name == W.tbl && op.MoveGroupId is { } tableGid)
+        {
+            EmitTableMove(src, isFrom: false, state.MoveName(tableGid), state, sink);
+            return;
+        }
         if (src == null || src.Name != W.p || op.MoveGroupId is not { } gid)
         {
             EmitWholeBlock(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
@@ -4213,22 +4223,52 @@ internal static class IrMarkupRenderer
     /// child (after pPr) and the matching <c>…RangeEnd</c> (same id) as the last child.</summary>
     private static void BracketParagraphWithMoveRange(XElement para, bool isFrom, string moveName, RenderState state)
     {
-        int rangeId = state.NextId();
-        var startName = isFrom ? W.moveFromRangeStart : W.moveToRangeStart;
-        var endName = isFrom ? W.moveFromRangeEnd : W.moveToRangeEnd;
-        var start = new XElement(startName,
-            new XAttribute(W.id, rangeId),
-            new XAttribute(W.name, moveName),
-            new XAttribute(W.author, state.AuthorOverride ?? state.Settings.AuthorForRevisions),
-            new XAttribute(W.date, state.Settings.DateTimeForRevisions));
-        var end = new XElement(endName, new XAttribute(W.id, rangeId));
-
+        var (start, end) = CreateMoveRange(isFrom, moveName, state);
         var pPr = para.Element(W.pPr);
         if (pPr != null)
             pPr.AddAfterSelf(start);
         else
             para.AddFirst(start);
         para.Add(end);
+    }
+
+    /// <summary>A move range's start (id + name + author + date) and its matching end (same id).</summary>
+    private static (XElement Start, XElement End) CreateMoveRange(bool isFrom, string moveName, RenderState state)
+    {
+        int rangeId = state.NextId();
+        var start = new XElement(isFrom ? W.moveFromRangeStart : W.moveToRangeStart,
+            new XAttribute(W.id, rangeId),
+            new XAttribute(W.name, moveName),
+            new XAttribute(W.author, state.AuthorOverride ?? state.Settings.AuthorForRevisions),
+            new XAttribute(W.date, state.Settings.DateTimeForRevisions));
+        var end = new XElement(isFrom ? W.moveFromRangeEnd : W.moveToRangeEnd, new XAttribute(W.id, rangeId));
+        return (start, end);
+    }
+
+    /// <summary>
+    /// Emit one half of a relocated TABLE as native move markup, the shape Word's own compare writes for a
+    /// table that moved (issue #844): every row marked deleted (source) or inserted (destination) in its
+    /// <c>w:trPr</c>, every cell paragraph's content wrapped in <c>w:moveFrom</c>/<c>w:moveTo</c>, and the rows
+    /// bracketed by a move range sharing the group's <c>w:name</c> (CT_Tbl admits range markup among its
+    /// rows). Accept removes the source rows and keeps the destination; reject does the reverse — the empty
+    /// table left behind is dropped by the accept/reject passes, as for a whole-table insert or delete. The
+    /// complete left and right tables are emitted even for a moved-and-edited table, for the same reason a
+    /// moved-and-edited paragraph is: nested ordinary revisions inside a move are not interoperable.
+    /// </summary>
+    private static void EmitTableMove(XElement src, bool isFrom, string moveName, RenderState state, List<XElement> sink)
+    {
+        var tbl = StripUnids(new XElement(src));
+        if (!isFrom)
+            state.RegisterMediaReferences(tbl);
+        MarkWholeTable(tbl, isFrom ? RevKind.MoveFrom : RevKind.MoveTo, state);
+
+        var (start, end) = CreateMoveRange(isFrom, moveName, state);
+        if ((tbl.Element(W.tblGrid) ?? tbl.Element(W.tblPr)) is { } shell)
+            shell.AddAfterSelf(start);
+        else
+            tbl.AddFirst(start);
+        tbl.Add(end);
+        sink.Add(tbl);
     }
 
     // ----------------------------------------------------------------- paragraph emission
@@ -4447,7 +4487,9 @@ internal static class IrMarkupRenderer
     /// EVERY row inserted/deleted (<c>w:trPr/w:ins</c> or <c>w:trPr/w:del</c>) AND every contained run +
     /// paragraph mark, so accept/reject toggle the whole table cleanly: accept of an all-rows-deleted table
     /// removes every row (RevisionProcessor's <c>w:tr/w:trPr/w:del</c> → remove-row rule) and the empty table
-    /// is dropped; reject of an all-rows-inserted table does the same after the ins→del reversal.
+    /// is dropped; reject of an all-rows-inserted table does the same after the ins→del reversal. With a move
+    /// kind the rows are still marked deleted (<see cref="RevKind.MoveFrom"/>) or inserted
+    /// (<see cref="RevKind.MoveTo"/>) while the paragraphs carry the move (see <see cref="EmitTableMove"/>).
     /// </summary>
     private static void MarkWholeTable(XElement tbl, RevKind kind, RenderState state)
     {
@@ -4473,12 +4515,20 @@ internal static class IrMarkupRenderer
                 // cnfStyle/trHeight/cantSplit/…, before only w:trPrChange) — so APPEND, never AddFirst, or a
                 // following w:trHeight becomes schema-invalid.
                 trPr.Elements().Where(e => e.Name == W.ins || e.Name == W.del).Remove();
-                trPr.Add(new XElement(kind == RevKind.Ins ? W.ins : W.del, state.RevisionAttributes()));
+                // A moved table's rows are deleted at the source and inserted at the destination; only their
+                // content carries the move (EmitTableMove).
+                bool rowInserted = kind is RevKind.Ins or RevKind.MoveTo;
+                trPr.Add(new XElement(rowInserted ? W.ins : W.del, state.RevisionAttributes()));
             }
 
             // Mark every paragraph in the row's cells (runs + paragraph mark).
             foreach (var p in tr.Descendants(W.p).ToList())
-                MarkWholeParagraph(p, kind, state);
+            {
+                if (kind is RevKind.MoveFrom or RevKind.MoveTo)
+                    MarkWholeParagraphAs(p, kind, state);
+                else
+                    MarkWholeParagraph(p, kind, state);
+            }
         }
     }
 

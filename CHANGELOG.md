@@ -6,6 +6,13 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- A table that moved elsewhere in the document is now marked as a move in comparison output, the way
+  Word marks one (issue #844). `DocxDiff.Compare` and `DocxCompare.Compare` used to draw it as a
+  deleted table and an unrelated inserted one, even though `DocxDiff.GetRevisions` already reported
+  the pair as `Moved`. The original table's rows are now marked deleted and the new copy's rows
+  inserted, with every cell's text wrapped in `w:moveFrom`/`w:moveTo` and both halves sharing one
+  move name. Accepting keeps only the moved copy and rejecting restores the original. With
+  `DetectMoves = false` the table is still a plain delete and insert.
 - Two comparison settings turn off revision constructs that Microsoft Word's own compare never
   writes (issue #842). Both default to on, so existing output is unchanged.
   - `DocxDiffSettings.TrackNumberingChanges` (`trackNumberingChanges` in the npm/WASM settings,
