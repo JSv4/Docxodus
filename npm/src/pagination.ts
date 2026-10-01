@@ -405,6 +405,114 @@ interface SectionPageNumbering {
   format?: string;
 }
 
+/** A page-space box in client coordinates: left/top inclusive, right/bottom exclusive. */
+export interface VisibleBox {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+/**
+ * Set by the paginator on a floating drawing it promotes out of its paragraph into the page box;
+ * the value is the `data-source-anchor-id` of the element that hosted it. It survives into the
+ * standalone export, whose offline re-verification measures through the same function.
+ */
+export const DRAWING_HOST_ATTRIBUTE = "data-docx-anchor-host";
+
+/**
+ * Intersect a box with the page and with every ancestor that establishes an overflow clip before
+ * the page root. getBoundingClientRect() reports layout outside those clips, which is not rendered
+ * and therefore must not satisfy PageMap completeness or inflate portable geometry.
+ */
+function visibleWithinPage(
+  view: Window,
+  element: HTMLElement,
+  page: HTMLElement,
+  pageRect: DOMRect,
+  rect: DOMRect,
+): VisibleBox {
+  let left = Math.max(rect.left, pageRect.left);
+  let top = Math.max(rect.top, pageRect.top);
+  let right = Math.min(rect.right, pageRect.right);
+  let bottom = Math.min(rect.bottom, pageRect.bottom);
+  const clips = (value: string) =>
+    value === "hidden" || value === "clip" || value === "scroll" || value === "auto";
+
+  for (let ancestor = element.parentElement;
+    ancestor && ancestor !== page;
+    ancestor = ancestor.parentElement) {
+    const style = view.getComputedStyle(ancestor);
+    const clipsX = clips(style.overflowX);
+    const clipsY = clips(style.overflowY);
+    if (!clipsX && !clipsY) continue;
+    const ancestorRect = ancestor.getBoundingClientRect();
+    if (clipsX) {
+      left = Math.max(left, ancestorRect.left);
+      right = Math.min(right, ancestorRect.right);
+    }
+    if (clipsY) {
+      top = Math.max(top, ancestorRect.top);
+      bottom = Math.min(bottom, ancestorRect.bottom);
+    }
+  }
+  return { left, top, right, bottom };
+}
+
+/**
+ * Where a source-anchored element renders on `page`: `rect` is its layout box and `visible` the
+ * part of it the page shows. Normally that is the element's own border box. A paragraph whose only
+ * content is a floating text box or shape is left with an empty, zero-height line once the
+ * paginator promotes the drawing into the page box, although its content is visibly on the page;
+ * such an element measures as the union of what it renders — its own descendants and the drawings
+ * promoted out of it (linked by {@link DRAWING_HOST_ATTRIBUTE}) — each clipped along its OWN
+ * ancestor chain, since a promoted drawing sits outside the text column that clips its host
+ * (issue #849). Returns the element's own degenerate box when none of that content renders either.
+ *
+ * Fragment-identity normalization, PageMap materialization and the standalone export's offline
+ * re-verification all measure through this one function, so they agree on which elements are
+ * measurable and where.
+ */
+export function measureRenderedSource(
+  view: Window,
+  element: HTMLElement,
+  page: HTMLElement,
+  pageRect: DOMRect = page.getBoundingClientRect(),
+): { rect: DOMRect; visible: VisibleBox } {
+  const own = element.getBoundingClientRect();
+  const ownResult = () => ({ rect: own, visible: visibleWithinPage(view, element, page, pageRect, own) });
+  if (own.width > 0 && own.height > 0) return ownResult();
+
+  const hostAnchorId = element.dataset.sourceAnchorId;
+  const promoted = hostAnchorId
+    ? Array.from(page.querySelectorAll<HTMLElement>(`[${DRAWING_HOST_ATTRIBUTE}]`))
+      .filter((drawing) => drawing.getAttribute(DRAWING_HOST_ATTRIBUTE) === hostAnchorId)
+    : [];
+  const rendered = [
+    ...Array.from(element.querySelectorAll<HTMLElement>("*")),
+    ...promoted.flatMap((drawing) => [drawing, ...Array.from(drawing.querySelectorAll<HTMLElement>("*"))]),
+  ];
+
+  let left = Infinity;
+  let top = Infinity;
+  let right = -Infinity;
+  let bottom = -Infinity;
+  for (const child of rendered) {
+    const style = view.getComputedStyle(child);
+    if (style.display === "none" || style.visibility === "hidden") continue;
+    const childRect = child.getBoundingClientRect();
+    if (childRect.width <= 0 || childRect.height <= 0) continue;
+    const visible = visibleWithinPage(view, child, page, pageRect, childRect);
+    if (visible.right <= visible.left || visible.bottom <= visible.top) continue;
+    left = Math.min(left, visible.left);
+    top = Math.min(top, visible.top);
+    right = Math.max(right, visible.right);
+    bottom = Math.max(bottom, visible.bottom);
+  }
+  if (!(left < right && top < bottom)) return ownResult();
+  return { rect: new DOMRect(left, top, right - left, bottom - top), visible: { left, top, right, bottom } };
+}
+
 export class PaginationEngine {
   private stagingElement: HTMLElement;
   private containerElement: HTMLElement;
@@ -815,12 +923,11 @@ export class PaginationEngine {
           throw new Error(`page ${page.pageNumber} contains an unqualified source anchor`);
         }
 
-        const rect = element.getBoundingClientRect();
         const style = this.view.getComputedStyle(element);
         const deliberatelyHidden = style.display === "none" || style.visibility === "hidden";
         if (deliberatelyHidden) continue;
+        const { rect, visible: visibleRect } = measureRenderedSource(this.view, element, page.element, pageRect);
         requiredAnchorIds.add(anchorId);
-        const visibleRect = this.intersectWithClippingAncestors(element, page.element, pageRect, rect);
         const left = visibleRect.left;
         const top = visibleRect.top;
         const right = visibleRect.right;
@@ -892,8 +999,7 @@ export class PaginationEngine {
         if (!anchorId) continue;
         const style = this.view.getComputedStyle(element);
         if (style.display === "none" || style.visibility === "hidden") continue;
-        const rect = element.getBoundingClientRect();
-        const visible = this.intersectWithClippingAncestors(element, page.element, pageRect, rect);
+        const { rect, visible } = measureRenderedSource(this.view, element, page.element, pageRect);
         if (rect.width <= 0 || rect.height <= 0
           || visible.right <= visible.left || visible.bottom <= visible.top) continue;
         const fragmentIndex = emittedFragmentCounts.get(anchorId) ?? 0;
@@ -903,44 +1009,6 @@ export class PaginationEngine {
         element.dataset.pageFragmentId = `p${page.pageNumber}-f${fragmentIndex}-${anchorId}`;
       }
     }
-  }
-
-  /**
-   * Intersect an element with every ancestor that establishes an overflow clip before the page
-   * root. getBoundingClientRect() reports layout outside those clips, which is not rendered and
-   * therefore must not satisfy PageMap completeness or inflate portable geometry.
-   */
-  private intersectWithClippingAncestors(
-    element: HTMLElement,
-    page: HTMLElement,
-    pageRect: DOMRect,
-    rect: DOMRect,
-  ): { left: number; top: number; right: number; bottom: number } {
-    let left = Math.max(rect.left, pageRect.left);
-    let top = Math.max(rect.top, pageRect.top);
-    let right = Math.min(rect.right, pageRect.right);
-    let bottom = Math.min(rect.bottom, pageRect.bottom);
-    const clips = (value: string) =>
-      value === "hidden" || value === "clip" || value === "scroll" || value === "auto";
-
-    for (let ancestor = element.parentElement;
-      ancestor && ancestor !== page;
-      ancestor = ancestor.parentElement) {
-      const style = this.view.getComputedStyle(ancestor);
-      const clipsX = clips(style.overflowX);
-      const clipsY = clips(style.overflowY);
-      if (!clipsX && !clipsY) continue;
-      const ancestorRect = ancestor.getBoundingClientRect();
-      if (clipsX) {
-        left = Math.max(left, ancestorRect.left);
-        right = Math.min(right, ancestorRect.right);
-      }
-      if (clipsY) {
-        top = Math.max(top, ancestorRect.top);
-        bottom = Math.min(bottom, ancestorRect.bottom);
-      }
-    }
-    return { left, top, right, bottom };
   }
 
   private storyForCanonicalAnchor(anchorId: string): PageMapStory {
@@ -4081,6 +4149,11 @@ export class PaginationEngine {
         pageNumber,
       );
 
+      // Leaving the paragraph must not orphan it: a paragraph whose only content was this drawing
+      // renders as the drawing, and measureRenderedSource finds it through this link (issue #849).
+      const hostAnchorId = anchor.parentElement
+        ?.closest<HTMLElement>('[data-source-anchor-id]')?.dataset.sourceAnchorId;
+      if (hostAnchorId) anchor.setAttribute(DRAWING_HOST_ATTRIBUTE, hostAnchorId);
       pageBox.appendChild(anchor);
       anchor.style.position = 'absolute';
       anchor.style.left = `${left}pt`;

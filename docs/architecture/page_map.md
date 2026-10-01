@@ -50,6 +50,16 @@ fragment. Producers can mark deliberately non-rendered content with
 `data-page-map-exclude="true"`; `hidden`, `aria-hidden="true"`, and inline hidden styles carry the
 same meaning.
 
+A source's fragment is where it renders, measured by `measureRenderedSource` in
+`npm/src/pagination.ts` — the one function fragment-identity normalization, PageMap materialization
+and the standalone export's offline re-verification all share. Normally that is the element's own
+box, clipped by the page and by every overflow-clipping ancestor. A paragraph whose only content is
+a floating text box or shape is different: the paginator promotes the drawing out of the text column
+into the page box (recording its host in `data-docx-anchor-host`), leaving the paragraph with a
+zero-height line. Such a paragraph measures as the union of what it renders — its own descendants
+and the drawings promoted out of it, each clipped along its own ancestor chain — so it is not
+reported as missing (issue #849).
+
 ## Source identity and clones
 
 `data-anchor` remains the bare Unid used by the editor, and an active bare value is unique across

@@ -6,6 +6,14 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Paginated HTML and PDF export no longer fails with `output_verification_failure: source anchor …
+  has no measurable fragment` on a document with a paragraph whose only content is a floating text
+  box or shape (issue #849). The paginator moves such a drawing out of the paragraph into the page
+  box, which left the paragraph with a zero-height line, and the PageMap, which measured each source
+  by its own box, reported the paragraph as missing and failed the export. A paragraph like that is
+  now measured as the area its drawing covers. All three places that measure the layout (fragment
+  numbering, PageMap construction and the export's re-check of the saved HTML) now share one
+  measuring function, so they cannot disagree about it.
 - DOCX → HTML conversion no longer fails with `Sequence contains no elements` on a document whose
   text has no resolvable font name (issue #847). When a run's fonts come only from theme references
   and the package has no theme part, neither the run nor its paragraph carries a font, and the tab
