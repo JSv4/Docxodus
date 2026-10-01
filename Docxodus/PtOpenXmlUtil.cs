@@ -804,21 +804,27 @@ namespace Docxodus
             }
         }
 
+        /// <summary>
+        /// The font a run's text is measured in: the run's own <c>pt:FontName</c>, else its nearest
+        /// paragraph's, else <c>null</c>. <c>FormattingAssembler</c> sets neither when the resolved
+        /// <c>w:rFonts</c> names no concrete font (for example theme-only fonts in a package with no
+        /// theme part), and tab layout measures DETACHED copies of runs that have no paragraph at all,
+        /// so a caller must treat <c>null</c> as "font unknown" rather than fail (issue #847).
+        /// </summary>
+        internal static string? MeasurementFontName(XElement r) =>
+            (string?)r.Attribute(PtOpenXml.FontName) ??
+            (string?)r.Ancestors(W.p).FirstOrDefault()?.Attribute(PtOpenXml.FontName);
+
         public static int CalcWidthOfRunInTwips(XElement r)
         {
             var KnownFamilies = FontFamilyHelper.KnownFamilies;
 
-            var fontName = (string?)r.Attribute(PtOpenXml.pt + "FontName");
-            if (fontName == null)
-                fontName = (string?)r.Ancestors(W.p).First().Attribute(PtOpenXml.pt + "FontName");
-            if (fontName == null)
-                throw new DocxodusException("Internal Error, should have FontName attribute");
-            if (FontFamilyHelper.IsMarkedUnknown(fontName))
+            // No resolvable font measures like an unknown font family (0), never an exception.
+            var fontName = MeasurementFontName(r);
+            if (fontName == null || FontFamilyHelper.IsMarkedUnknown(fontName))
                 return 0;
 
-            var rPr = r.Element(W.rPr);
-            if (rPr == null)
-                throw new DocxodusException("Internal Error, should have run properties");
+            var rPr = r.Element(W.rPr) ?? new XElement(W.rPr);
             var languageType = (string?)r.Attribute(PtOpenXml.LanguageType);
             decimal? szn = null;
             if (languageType == "bidi")

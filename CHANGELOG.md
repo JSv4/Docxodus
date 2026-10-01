@@ -6,6 +6,13 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- DOCX → HTML conversion no longer fails with `Sequence contains no elements` on a document whose
+  text has no resolvable font name (issue #847). When a run's fonts come only from theme references
+  and the package has no theme part, neither the run nor its paragraph carries a font, and the tab
+  and list-marker width calculation looked for a paragraph on a detached copy of the run and threw.
+  The whole conversion aborted, so `docx2html`, `convertDocxToHtml` and the paginated PDF export
+  (`conversion_failure`) all failed. Such a run is now measured with the same character-width
+  estimate used for an unknown font.
 - A comparison whose original document has no `word/settings.xml` at all now writes
   `compatibilityMode` 12 into the redline, matching Word (issue #841). Word opens such a document in
   Word 2007 mode whatever the revised document declares; `DocxDiff.Compare` and `DocxCompare.Compare`
