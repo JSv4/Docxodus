@@ -17,12 +17,14 @@ namespace Docxodus.Ir.Diff;
 /// diverges from Word's compare output even on a byte-identical body. The other three children —
 /// <c>characterSpacingControl</c>/<c>themeFontLang</c>/<c>clrSchemeMapping</c> — are inert against
 /// LibreOffice's defaults and are emitted purely for parity with what Word writes.</para>
-/// <para><b>compatibilityMode value — an articulable rule, not a per-document constant.</b> Word keeps the
-/// ORIGINAL document's mode when it has one, otherwise the revised document's, otherwise <c>12</c> (Word's
-/// default for an unmarked .docx). Since our output is cloned from the LEFT/original, a mode the left already
-/// carries is left untouched (the <c>hasMode</c> short-circuit); only when the left has none do we consult the
-/// right, then fall back to <c>12</c>. Matches Word's compare output in the common cases; the remainder are
-/// cases where Word overrides the source mode unpredictably. A genuine mode-15 document is therefore never
+/// <para><b>compatibilityMode value — an articulable rule, not a per-document constant.</b> Word's rule
+/// has three rows, keyed on the ORIGINAL package: (1) an original with NO settings part at all is opened
+/// in Word 2007 mode, so the redline carries <c>12</c> whatever the revised document declares; (2) an
+/// original whose settings part declares no mode takes the revised document's mode (or <c>12</c> when the
+/// revised declares none either); (3) an original that declares a mode keeps it. Since our output is cloned
+/// from the LEFT/original, row 3 is the <c>hasMode</c> short-circuit. Row 1 must be decided from the
+/// original's shape captured BEFORE the renderer backfills a settings stub into the output — by the time
+/// this pass runs every output has a settings part. A genuine mode-15 document is therefore never
 /// downgraded — correct production behavior, not just a test artifact.</para>
 /// </summary>
 internal static class WordCompareSettingsBackfill
@@ -32,8 +34,9 @@ internal static class WordCompareSettingsBackfill
 
     /// <summary>Ensure the output's settings part carries Word's canonical compare settings, deriving
     /// <c>compatibilityMode</c> from the left (already on <paramref name="main"/>) then
-    /// <paramref name="rightMain"/> then <c>12</c>.</summary>
-    public static void Backfill(MainDocumentPart main, MainDocumentPart? rightMain)
+    /// <paramref name="rightMain"/> then <c>12</c> — or <c>12</c> outright when
+    /// <paramref name="leftHadSettingsPart"/> is false (the original shipped no settings part).</summary>
+    public static void Backfill(MainDocumentPart main, MainDocumentPart? rightMain, bool leftHadSettingsPart)
     {
         var settingsPart = main.DocumentSettingsPart;
         if (settingsPart is null)
@@ -44,7 +47,7 @@ internal static class WordCompareSettingsBackfill
 
         var changed = false;
         // compat/compatibilityMode — the load-bearing one (see class remarks).
-        changed |= EnsureCompatibilityMode(root, rightMain);
+        changed |= EnsureCompatibilityMode(root, leftHadSettingsPart ? rightMain : null);
         // Inert-but-faithful canonical settings Word always writes.
         changed |= WordprocessingMLUtil.EnsureSettingsChildInOrder(root,
             new XElement(W + "characterSpacingControl", new XAttribute(W + "val", "doNotCompress")));
@@ -56,6 +59,8 @@ internal static class WordCompareSettingsBackfill
             settingsPart.PutXDocument();
     }
 
+    /// <summary><paramref name="rightMain"/> is null when the revised document must not be consulted
+    /// (row 1: the original had no settings part), which yields <c>12</c>.</summary>
     private static bool EnsureCompatibilityMode(XElement root, MainDocumentPart? rightMain)
     {
         var compat = root.Element(W + "compat");

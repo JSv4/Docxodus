@@ -6,6 +6,13 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- A comparison whose original document has no `word/settings.xml` at all now writes
+  `compatibilityMode` 12 into the redline, matching Word (issue #841). Word opens such a document in
+  Word 2007 mode whatever the revised document declares; `DocxDiff.Compare` and `DocxCompare.Compare`
+  used to copy the revised document's mode (14 or 15) instead, so Word and
+  LibreOffice laid the redline out with a different engine than Word's own compare output. An original
+  that has a settings part without a mode still takes the revised document's mode, and an original that
+  declares a mode still keeps it.
 - Content a comparison copies out of the revised document no longer loses its namespace
   declarations (issue #836). A list definition, style, paragraph, note or comment that uses Word
   extension markup (`w15:restartNumberingAfterBreak`, `w16cid:durableId`, `w14:paraId`, …) and lands

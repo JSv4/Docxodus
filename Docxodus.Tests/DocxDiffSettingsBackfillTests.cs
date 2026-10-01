@@ -44,6 +44,20 @@ public class DocxDiffSettingsBackfillTests
         return new WmlDocument("d.docx", stream.ToArray());
     }
 
+    /// <summary>Build a minimal doc with NO <c>word/settings.xml</c> at all — the shape tool-generated
+    /// packages ship with, and the one Word opens in Word 2007 (mode 12) layout.</summary>
+    private static WmlDocument BuildSettingslessDoc(string text)
+    {
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            mainPart.Document = new Document(new Body(new Paragraph(new Run(new Text(text)))));
+            mainPart.AddNewPart<StyleDefinitionsPart>().Styles = new Styles();
+        }
+        return new WmlDocument("d.docx", stream.ToArray());
+    }
+
     private static string CompatBlock(string mode) =>
         $"<w:compat><w:compatSetting w:name=\"compatibilityMode\" w:uri=\"{CompatUri}\" w:val=\"{mode}\"/></w:compat>";
 
@@ -102,6 +116,61 @@ public class DocxDiffSettingsBackfillTests
         var settings = OutputSettings(DocxDiff.Compare(left, right));
 
         // base(empty)||next(14)||12 -> 14.
+        Assert.Equal("14", CompatMode(settings));
+    }
+
+    // Word's three-row rule for the redline's compatibilityMode (issue #841):
+    //   original has NO settings part            -> 12, whatever the revised declares
+    //   original has settings, no compatibility  -> the revised document's mode
+    //   original declares a mode                 -> the original's mode
+    // The first row is keyed on the ORIGINAL package's shape, not on the settings stub the renderer
+    // backfills into the output before the compat pass runs.
+
+    [Theory]
+    [InlineData("14")]
+    [InlineData("15")]
+    public void LeftHasNoSettingsPart_RightHasMode_EmitsMode12(string rightMode)
+    {
+        var left = BuildSettingslessDoc("Old text here.");
+        var right = BuildDoc("New replacement words entirely.", settingsInner: CompatBlock(rightMode));
+
+        var settings = OutputSettings(DocxDiff.Compare(left, right));
+
+        Assert.Equal("12", CompatMode(settings));
+    }
+
+    [Fact]
+    public void LeftHasNoSettingsPart_ThroughFrontDoor_EmitsMode12()
+    {
+        var left = BuildSettingslessDoc("Old text here.");
+        var right = BuildDoc("New replacement words entirely.", settingsInner: CompatBlock("15"));
+
+        var settings = OutputSettings(DocxCompare.Compare(left, right));
+
+        Assert.Equal("12", CompatMode(settings));
+        Assert.Single(settings.Element(W + "compat")!.Elements(W + "compatSetting"),
+            cs => (string?)cs.Attribute(W + "name") == "compatibilityMode");
+    }
+
+    [Fact]
+    public void LeftSettingsWithoutCompat_RightHasMode15_AdoptsRightMode()
+    {
+        var left = BuildDoc("Old text here.", settingsInner: "<w:defaultTabStop w:val=\"720\"/>");
+        var right = BuildDoc("New replacement words entirely.", settingsInner: CompatBlock("15"));
+
+        var settings = OutputSettings(DocxDiff.Compare(left, right));
+
+        Assert.Equal("15", CompatMode(settings));
+    }
+
+    [Fact]
+    public void LeftDeclaresMode14_RightHasMode15_KeepsLeftMode()
+    {
+        var left = BuildDoc("Old text here.", settingsInner: CompatBlock("14"));
+        var right = BuildDoc("New replacement words entirely.", settingsInner: CompatBlock("15"));
+
+        var settings = OutputSettings(DocxDiff.Compare(left, right));
+
         Assert.Equal("14", CompatMode(settings));
     }
 
