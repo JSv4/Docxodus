@@ -930,6 +930,22 @@ namespace Docxodus
             return int.Parse(twipsOrPoints);
         }
 
+        /// <summary>
+        /// The leading-edge indent of a <c>w:ind</c>. ISO/IEC 29500 names it <c>w:start</c>; the
+        /// transitional <c>w:left</c> is the same edge. Word writes <c>w:left</c> and LibreOffice
+        /// writes <c>w:start</c>. When both are present <c>w:start</c> wins, as Word does for the
+        /// equivalent table-cell border pair (MS-OI29500, Part 4 §14.4.1).
+        /// </summary>
+        internal static XAttribute? IndStartAttribute(XElement ind) =>
+            ind.Attribute(W.start) ?? ind.Attribute(W.left);
+
+        /// <summary>
+        /// The trailing-edge indent of a <c>w:ind</c>: <c>w:end</c>, or the transitional
+        /// <c>w:right</c>. See <see cref="IndStartAttribute"/>.
+        /// </summary>
+        internal static XAttribute? IndEndAttribute(XElement ind) =>
+            ind.Attribute(W.end) ?? ind.Attribute(W.right);
+
         private static readonly List<XName> AdditionalRunContainerNames = new List<XName>
         {
             W.w + "bdo",

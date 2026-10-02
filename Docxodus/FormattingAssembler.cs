@@ -837,10 +837,8 @@ namespace Docxodus
         {
             int left = 0;
             var ind = pPr.Element(W.ind);
-
-            // todo need to handle W.start
-            if (pPr.Attribute(W.left) != null)
-                left = (int)pPr.Attribute(W.left)!;
+            if (ind != null)
+                left = WordprocessingMLUtil.AttributeToTwips(WordprocessingMLUtil.IndStartAttribute(ind)) ?? 0;
             var tabs = pPr.Element(W.tabs);
             if (tabs == null)
             {
@@ -2184,6 +2182,32 @@ namespace Docxodus
 
             if (hpe.Attribute(W.hangingChars) != null)
                 lpe.Attributes(W.firstLineChars).Remove();
+
+            // w:start and w:left name the same edge, as do w:end and w:right, so a higher-priority
+            // value in either spelling replaces a lower-priority value in the other.
+            if (hpe.Attribute(W.start) != null)
+                lpe.Attributes(W.left).Remove();
+
+            if (hpe.Attribute(W.left) != null)
+                lpe.Attributes(W.start).Remove();
+
+            if (hpe.Attribute(W.end) != null)
+                lpe.Attributes(W.right).Remove();
+
+            if (hpe.Attribute(W.right) != null)
+                lpe.Attributes(W.end).Remove();
+
+            if (hpe.Attribute(W.startChars) != null)
+                lpe.Attributes(W.leftChars).Remove();
+
+            if (hpe.Attribute(W.leftChars) != null)
+                lpe.Attributes(W.startChars).Remove();
+
+            if (hpe.Attribute(W.endChars) != null)
+                lpe.Attributes(W.rightChars).Remove();
+
+            if (hpe.Attribute(W.rightChars) != null)
+                lpe.Attributes(W.endChars).Remove();
 
             var highPriAtts = hpe
                 .Attributes()

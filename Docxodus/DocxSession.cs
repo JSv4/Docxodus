@@ -10174,15 +10174,17 @@ public sealed partial class DocxSession : IDisposable
                 // others) emit non-integer twips like w:left="12.996749877929688", which a bare
                 // (int?) cast rejects with a FormatException. AttributeToTwips is the same helper the
                 // HTML converter uses (decimal → truncate), so we read what the doc renders and write
-                // back a clean integer.
-                int cur = ind is null ? 0 : WordprocessingMLUtil.AttributeToTwips(ind.Attribute(W.left)) ?? 0;
+                // back a clean integer. The write goes to the spelling we read (w:start or w:left), so
+                // a w:start the renderer prefers can't shadow it.
+                var leading = ind is null ? null : WordprocessingMLUtil.IndStartAttribute(ind);
+                int cur = WordprocessingMLUtil.AttributeToTwips(leading) ?? 0;
                 int next = Math.Max(0, cur + delta);
                 if (ind is null)
                 {
                     ind = new XElement(W.ind);
                     SetPPrChildInOrder(pPr, ind);
                 }
-                ind.SetAttributeValue(W.left, next);
+                ind.SetAttributeValue(leading?.Name ?? W.left, next);
             }
 
             // firstLine/hanging share one w:ind slot in Word: writing either evicts the other
