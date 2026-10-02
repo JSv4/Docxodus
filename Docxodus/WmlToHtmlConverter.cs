@@ -6662,6 +6662,13 @@ namespace Docxodus
                 tabSpan = ProcessTab(tabElement);
             }
 
+            // Text longer than its line wraps, so it cannot sit in a box pinned to the tab stop:
+            // that box would be as wide as one unwrapped line and push the paragraph's container
+            // past the page (issue #891). Lay the text out in normal flow and let the tab advance
+            // from wherever its last line ends.
+            if (tabElement?.Attribute(PtOpenXml.TabAfterWrappedText) != null)
+                return txElementsPrecedingTab.Append(tabSpan).ToList();
+
             if (txElementsPrecedingTab.Count > 1 || (txElementsPrecedingTab.Count > 0 && tabSpan != null))
             {
                 var precedingSpan = new XElement(Xhtml.span, txElementsPrecedingTab);
@@ -8249,12 +8256,20 @@ namespace Docxodus
                     defaultTabStop = WordprocessingMLUtil.StringToTwips(defaultTabStopValue);
             }
 
+            // The width a paragraph's lines wrap at. Body paragraphs take their own section's
+            // text width (resolved at w:body); running stories and notes take the final section's.
+            // Other parts (comments) render outside the text column, so their width is unknown.
+            var mainBody = wordDoc.MainDocumentPart!.GetXDocument().Root?.Element(W.body);
+            int? finalSectionWidth = mainBody == null ? null : SectionTextWidthTwips(FinalSectionProperties(mainBody));
             foreach (var part in wordDoc.ContentParts())
             {
                 var root = part.GetXDocument().Root;
                 if (root == null) continue;
 
-                var newRoot = (XElement)CalculateSpanWidthTransform(root, defaultTabStop);
+                int? partLineWidth = part is HeaderPart or FooterPart or FootnotesPart or EndnotesPart
+                    ? finalSectionWidth
+                    : null;
+                var newRoot = (XElement)CalculateSpanWidthTransform(root, defaultTabStop, partLineWidth);
                 root.ReplaceWith(newRoot);
                 part.PutXDocument();
             }
@@ -8262,10 +8277,17 @@ namespace Docxodus
 
         // TODO: Refactor. This method is way too long.
         [SuppressMessage("ReSharper", "FunctionComplexityOverflow")]
-        private static object CalculateSpanWidthTransform(XNode node, int defaultTabStop)
+        private static object CalculateSpanWidthTransform(XNode node, int defaultTabStop, int? lineWidthTwips)
         {
             var element = node as XElement;
             if (element == null) return node;
+
+            if (element.Name == W.body)
+                return CalculateSpanWidthForBody(element, defaultTabStop);
+            if (element.Name == W.tc)
+                lineWidthTwips = CellTextWidthTwips(element) ?? lineWidthTwips;
+            else if (element.Name == W.txbxContent)
+                lineWidthTwips = null;
 
             // if it is not a paragraph or if there are no tabs in the paragraph,
             // then no need to continue processing.
@@ -8275,7 +8297,7 @@ namespace Docxodus
                 // TODO: Revisit. Can we just return the node if it is a paragraph that does not have any tab?
                 return new XElement(element.Name,
                     element.Attributes(),
-                    element.Nodes().Select(n => CalculateSpanWidthTransform(n, defaultTabStop)));
+                    element.Nodes().Select(n => CalculateSpanWidthTransform(n, defaultTabStop, lineWidthTwips)));
             }
 
             var clonedPara = new XElement(element);
@@ -8306,6 +8328,10 @@ namespace Docxodus
 
                 firstInTwips = leftInTwips + firstLine;
             }
+            var rightInTwips = ind == null
+                ? 0
+                : (int)(WordprocessingMLUtil.AttributeToTwips(ind.Attribute(W.right) ?? ind.Attribute(W.end)) ?? 0);
+            int? lineEndTwips = lineWidthTwips - rightInTwips;
 
             // calculate the tab stops, in twips
             // Check accumulated properties (pt:pPr) first as they include tabs from numbering levels
@@ -8374,6 +8400,15 @@ namespace Docxodus
                     var runContainingTabToReplace = currentElement.Parent!; // a w:tab always has a w:r parent
                     var fontNameAtt = runContainingTabToReplace.Attribute(PtOpenXml.pt + "FontName") ??
                                       runContainingTabToReplace.Ancestors(W.p).FirstOrDefault()?.Attribute(PtOpenXml.pt + "FontName");
+
+                    // Text that ran past the line wrapped: the tab advances from the pen on the last
+                    // line, not from where one unwrapped line would end (issue #891).
+                    if (lineEndTwips is { } lineEnd && twipCounter > lineEnd)
+                    {
+                        twipCounter = PenAfterWrapping(contentToMeasure, currentElementIdx,
+                            firstInTwips, leftInTwips, lineEnd);
+                        currentElement.SetAttributeValue(PtOpenXml.TabAfterWrappedText, true);
+                    }
 
                     var testAmount = twipCounter;
 
@@ -8619,7 +8654,151 @@ namespace Docxodus
 
             return new XElement(element.Name,
                 element.Attributes(),
-                element.Nodes().Select(n => CalculateSpanWidthTransform(n, defaultTabStop)));
+                element.Nodes().Select(n => CalculateSpanWidthTransform(n, defaultTabStop, lineWidthTwips)));
+        }
+
+        /// <summary>
+        /// Run the tab pass over a body, giving each block the text width of the section it belongs
+        /// to: a paragraph carrying <c>w:sectPr</c> closes a section, and the body's own
+        /// <c>w:sectPr</c> governs everything after the last such paragraph.
+        /// </summary>
+        private static XElement CalculateSpanWidthForBody(XElement body, int defaultTabStop)
+        {
+            var children = body.Nodes().ToList();
+            var widths = new int?[children.Count];
+            int? width = SectionTextWidthTwips(body.Element(W.sectPr));
+            for (var i = children.Count - 1; i >= 0; i--)
+            {
+                if (children[i] is XElement { } block && block.Name == W.p &&
+                    (block.Elements(W.pPr).Elements(W.sectPr).FirstOrDefault()
+                     ?? block.Elements(PtOpenXml.pPr).Elements(W.sectPr).FirstOrDefault()) is { } sectPr)
+                    width = SectionTextWidthTwips(sectPr);
+                widths[i] = width;
+            }
+            return new XElement(body.Name, body.Attributes(),
+                children.Select((n, i) => CalculateSpanWidthTransform(n, defaultTabStop, widths[i])));
+        }
+
+        private static XElement? FinalSectionProperties(XElement body) =>
+            body.Element(W.sectPr)
+            ?? body.Elements(W.p).LastOrDefault()?.Elements(W.pPr).Elements(W.sectPr).FirstOrDefault();
+
+        /// <summary>The width of one text column of a section, in twips: page width less the left and
+        /// right margins and the gutter, divided among equal-width columns. A missing
+        /// <c>w:sectPr</c> is US Letter with one-inch margins, as elsewhere in the converter.</summary>
+        private static int SectionTextWidthTwips(XElement? sectPr)
+        {
+            static int Twips(XElement? element, XName attribute, int fallback) =>
+                (int)(WordprocessingMLUtil.AttributeToTwips(element?.Attribute(attribute)) ?? fallback);
+
+            var pgMar = sectPr?.Element(W.pgMar);
+            var width = Twips(sectPr?.Element(W.pgSz), W._w, 12240)
+                        - Twips(pgMar, W.left, 1440) - Twips(pgMar, W.right, 1440) - Twips(pgMar, W.gutter, 0);
+            var cols = sectPr?.Element(W.cols);
+            var count = (int?)cols?.Attribute(W.num) ?? 1;
+            if (count > 1)
+                width = (width - Twips(cols, W.space, 720) * (count - 1)) / count;
+            return Math.Max(width, 0);
+        }
+
+        /// <summary>
+        /// The width a table cell's paragraphs wrap at, in twips: the grid columns the cell spans
+        /// (or its <c>w:tcW</c> when the grid does not cover it), less its left and right margins
+        /// from <c>w:tcMar</c>, else the table's <c>w:tblCellMar</c>, else Word's default 108.
+        /// Null when neither the grid nor an absolute <c>w:tcW</c> gives a width.
+        /// </summary>
+        private static int? CellTextWidthTwips(XElement tc)
+        {
+            var tr = tc.Ancestors(W.tr).FirstOrDefault();
+            var tbl = tc.Ancestors(W.tbl).FirstOrDefault();
+            if (tr == null || tbl == null)
+                return null;
+
+            static int Span(XElement cell) =>
+                (int?)cell.Elements(W.tcPr).Elements(W.gridSpan).Attributes(W.val).FirstOrDefault() ?? 1;
+
+            var gridColumns = tbl.Elements(W.tblGrid).Elements(W.gridCol)
+                .Select(c => (int)(WordprocessingMLUtil.AttributeToTwips(c.Attribute(W._w)) ?? 0))
+                .ToList();
+            var column = ((int?)tr.Elements(W.trPr).Elements(W.gridBefore).Attributes(W.val).FirstOrDefault() ?? 0)
+                         + tr.Descendants(W.tc)
+                             .Where(c => c.Ancestors(W.tr).First() == tr)
+                             .TakeWhile(c => c != tc)
+                             .Sum(Span);
+            var span = Span(tc);
+
+            int width;
+            var tcW = tc.Elements(W.tcPr).Elements(W.tcW).FirstOrDefault();
+            if (column + span <= gridColumns.Count && gridColumns.Skip(column).Take(span).All(w => w > 0))
+                width = gridColumns.Skip(column).Take(span).Sum();
+            else if (tcW != null && ((string?)tcW.Attribute(W.type) ?? "dxa") == "dxa"
+                     && WordprocessingMLUtil.AttributeToTwips(tcW.Attribute(W._w)) is { } absolute)
+                width = (int)absolute;
+            else
+                return null;
+
+            int Margin(XName side, XName logicalSide)
+            {
+                var margin = tc.Elements(W.tcPr).Elements(W.tcMar).Elements().FirstOrDefault(e => e.Name == side || e.Name == logicalSide)
+                             ?? tbl.Elements(W.tblPr).Elements(W.tblCellMar).Elements().FirstOrDefault(e => e.Name == side || e.Name == logicalSide);
+                return margin != null && ((string?)margin.Attribute(W.type) ?? "dxa") == "dxa"
+                    ? (int)(WordprocessingMLUtil.AttributeToTwips(margin.Attribute(W._w)) ?? 108)
+                    : 108;
+            }
+
+            return Math.Max(width - Margin(W.left, W.start) - Margin(W.right, W.end), 0);
+        }
+
+        /// <summary>
+        /// Where the pen stands when it reaches <c>contentToMeasure[tabIndex]</c>, if the text since
+        /// the line began wraps at <paramref name="lineEnd"/>: words are laid greedily, a word that
+        /// does not fit moves to a new line starting at <paramref name="leftIndent"/>, and trailing
+        /// spaces hang past the edge as they do in Word. Earlier tabs keep the advance already
+        /// resolved for them.
+        /// </summary>
+        private static int PenAfterWrapping(XElement[] contentToMeasure, int tabIndex,
+            int firstLineStart, int leftIndent, int lineEnd)
+        {
+            var start = tabIndex;
+            while (start > 0 && contentToMeasure[start - 1].Name != W.br && contentToMeasure[start - 1].Name != W.cr)
+                start--;
+            var pen = start == 0 ? firstLineStart : leftIndent;
+            var lineStart = pen;
+
+            void Place(int visibleWidth, int fullWidth)
+            {
+                if (pen + visibleWidth > lineEnd && pen > lineStart)
+                    pen = lineStart = leftIndent;
+                pen += fullWidth;
+            }
+
+            for (var i = start; i < tabIndex; i++)
+            {
+                var element = contentToMeasure[i];
+                if (element.Name == W.tab)
+                {
+                    var advance = (int)Math.Round(((decimal?)element.Attribute(PtOpenXml.TabWidth) ?? 0m) * 1440m);
+                    Place(advance, advance);
+                }
+                else if (element.Name == W.t)
+                {
+                    var run = element.Parent!;
+                    var paragraph = run.Ancestors(W.p).First();
+                    int Measure(string text) => CalcWidthOfRunInTwips(new XElement(W.r,
+                        run.Attribute(PtOpenXml.FontName) ?? paragraph.Attribute(PtOpenXml.FontName),
+                        run.Attribute(PtOpenXml.LanguageType) ?? paragraph.Attribute(PtOpenXml.LanguageType),
+                        run.Elements(W.rPr),
+                        new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), text)));
+
+                    foreach (System.Text.RegularExpressions.Match word in
+                             System.Text.RegularExpressions.Regex.Matches(element.Value, @"\s*\S+\s*"))
+                    {
+                        var visible = word.Value.TrimEnd();
+                        Place(Measure(visible), Measure(word.Value));
+                    }
+                }
+            }
+            return pen;
         }
 
         private static XAttribute? GetLeader(XElement tabAfterText)

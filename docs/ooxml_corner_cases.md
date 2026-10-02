@@ -2142,6 +2142,48 @@ run but generates an **empty rule** for it, so `w:rStyle` silently loses every d
 the reduced case appears to pass without exercising suppression. This is the same requirement
 CLAUDE.md notes for programmatic .NET test documents.
 
+### Text before a tab that is longer than its line wraps; the tab advances from the last line
+
+**Issue:** #891.
+
+A paragraph whose text before a tab is longer than the line, here a long sentence followed by a
+tab in a 3.25-inch table cell:
+
+```xml
+<w:tc><w:tcPr><w:tcW w:w="4680" w:type="dxa"/></w:tcPr>
+  <w:p>
+    <w:r><w:t>the parties agree that the supplier shall deliver the services described in the schedule within thirty days</w:t></w:r>
+    <w:r><w:tab/><w:t>12.50</w:t></w:r>
+  </w:p>
+</w:tc>
+```
+
+| Renderer | Text before the tab | Tab advance |
+|---|---|---|
+| Word (as reported in #891) | wraps inside the cell | to the next stop after the pen on the last line |
+| LibreOffice | not measured | not measured |
+| Docxodus before the fix | one unwrapped line in a `white-space: nowrap` box **9 inches** wide | to the stop after that unwrapped line |
+| Docxodus after the fix | wraps in normal flow | to the next stop after the estimated last-line pen |
+
+**Why they differed.** `CalculateSpanWidthTransform` resolves each tab from a pen position it
+accumulates by measuring the runs before it. It never knew how wide the line was, so it measured
+the sentence as one unwrapped line. `TransformElementsPrecedingTab` then pinned the text in an
+`inline-flex` box as wide as the chosen stop. The box forced the cell, and the table, past the
+page, and the paginated export failed.
+
+**Docxodus code.** `WmlToHtmlConverter.CalculateSpanWidthTransform` now carries the line width
+down the tree: the section's text width for body paragraphs (`SectionTextWidthTwips`, per section),
+the cell's grid width less its margins inside a `w:tc` (`CellTextWidthTwips`), the final section's
+width in headers, footers and notes, and none inside text boxes or comments. When the pen at a tab
+is past the line end (less the right indent), `PenAfterWrapping` lays the words out greedily to
+estimate the pen on the last line. The tab resolves from there and is marked
+`pt:TabAfterWrappedText`, which makes `TransformElementsPrecedingTab` leave the text in normal flow
+instead of pinning it. Text that fits keeps the pinned layout. Converter HTML for all 694
+`TestFiles` fixtures is byte-identical before and after the change.
+
+**Tests.** `Docxodus.Tests/TabAfterWrappingTextTests.cs`, and the `#891` case in
+`npm/tests/export-robustness.spec.ts`.
+
 ## Tables: a negative `w:tblInd` pulls an over-wide table into the left margin
 
 Word indents a table wider than the text column by a negative amount so it spreads across both

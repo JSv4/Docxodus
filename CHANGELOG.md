@@ -31,6 +31,12 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- DOCX → HTML conversion, and so the paginated export, now wraps text that comes before a tab
+  when the text is longer than its line, as Word does (issue #891). It used to measure that text
+  as one unwrapped line and pin it in a no-wrap box as wide as the tab stop it chose, 9 inches in
+  a 3.25-inch table cell. The box forced the table off the page, and the export failed with
+  `pagination_failure` or `output_verification_failure`. The tab now advances from where the
+  wrapped text's last line ends. Text that fits its line is laid out exactly as before.
 - Paginated export no longer refuses packages that Word opens but that carry a relationship file
   for a part the package does not contain, such as `word/_rels/comments.xml.rels` without
   `word/comments.xml` (issue #853). These used to fail with `invalid_document: The input is not a

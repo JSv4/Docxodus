@@ -32,10 +32,9 @@ test.describe('paginated export robustness', () => {
     expect(failures).toEqual([]);
   });
 
-  // #891: the text before a tab is measured as one unwrapped line and pinned in a no-wrap box that
-  // wide, so a long sentence + tab in a table cell forces the cell past the page. Remove `fixme`
-  // when #891 is fixed.
-  test.fixme('exports a tab that follows text longer than its line (#891)', async ({ page }) => {
+  // #891: the text before a tab used to be measured as one unwrapped line and pinned in a no-wrap
+  // box that wide, so a long sentence + tab in a table cell forced the cell past the page.
+  test('exports a tab that follows text longer than its line (#891)', async ({ page }) => {
     await ready(page);
 
     const outcome = await page.evaluate(async (bytes) => (window as any).DocxodusStandalone
