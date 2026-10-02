@@ -4161,6 +4161,9 @@ class HtmlOptions:
     render_move_operations: bool = True
     render_unsupported_content_placeholders: bool = False
     document_language: str | None = None
+    #: Emit Word lists as ``<ol>``/``<ul>``/``<li>`` instead of one ``<p>`` per
+    #: item. Ignored for paginated output.
+    semantic_lists: bool = False
 
     def to_wire(self) -> dict[str, Any]:
         """camelCase keys the host dispatcher's ``ParseHtmlOptions`` reads."""
@@ -4183,6 +4186,7 @@ class HtmlOptions:
             "showDeletedContent": self.show_deleted_content,
             "renderMoveOperations": self.render_move_operations,
             "renderUnsupportedContentPlaceholders": self.render_unsupported_content_placeholders,
+            "semanticLists": self.semantic_lists,
         }
         if self.document_language is not None:
             wire["documentLanguage"] = self.document_language

@@ -49,6 +49,7 @@ All methods return an `XElement` representing the complete HTML document (the `<
 | `RestrictToSupportedLanguages` | `bool` | `false` | Limits language processing |
 | `RestrictToSupportedNumberingFormats` | `bool` | `false` | Limits list numbering formats |
 | `ListItemImplementations` | `Dictionary<string, Func<...>>` | Default implementations | Custom list item text generators |
+| `SemanticLists` | `bool` | `false` | Emit lists as `<ol>`/`<ul>`/`<li>` instead of one `<p>` per item (see [Lists](#lists)) |
 | `ImageHandler` | `Func<ImageInfo, XElement>` | `null` | **Required for images** - callback to process embedded images |
 
 ### ImageInfo Structure
@@ -185,6 +186,56 @@ Paragraphs (`w:p`) are converted based on their style's outline level:
 | None/other | `<p>` |
 
 Style separators (`w:specVanish`) cause following paragraphs to be rendered as `<span>` within the heading.
+
+### Lists
+
+By default a list paragraph is a `<p>` like any other. `FormattingAssembler` replaces its `w:numPr`
+with two runs: the computed marker text (`1.`, `a.`, `•`, `1.2.`, …) and the level's suffix (a
+tab, a space, or nothing). They render as spans tagged `data-list-marker="true"`, and the level's
+indent becomes the paragraph's `margin-left` and a negative `text-indent`. That looks right in a
+browser, but nothing in the markup says "list".
+
+`SemanticLists` (`semanticLists` on the npm `ConversionOptions`, `semantic_lists` on the Python
+`HtmlOptions`) emits real lists instead:
+
+1. **Structure.** With `FormattingAssemblerSettings.AnnotateListStructure`, assembly stamps each
+   list paragraph with what it would otherwise discard: `pt:ListNumId` (its `w:num`),
+   `pt:ListLevel` (the level its marker is formatted at), `pt:ListValue` (the counter its marker
+   shows) and `pt:ListNumFmt`. `ProcessParagraph` copies them onto the paragraph's `<p>` as an
+   annotation; numbered headings are skipped and stay `<h1>`–`<h6>`.
+2. **Grouping.** `BuildSemanticLists` runs after the transform and before
+   `ReifyStylesAndClasses`. Within each parent element, a run of adjacent list paragraphs becomes a
+   list: items of one `w:num` at one level share an `<ol>` (numbered) or `<ul>` (bullet), and a
+   deeper level opens a list inside the preceding `<li>`. Any other sibling (a plain paragraph, a
+   heading, a table) ends the list. A list never crosses a table cell, note or bordered group.
+   Each item is its `<p>` renamed to `<li>`, so its classes and `data-anchor` carry over.
+3. **Markers.** For each list, the converter checks whether a `list-style-type` draws exactly the
+   marker text Word shows: `decimal`, `decimal-leading-zero`, `lower-/upper-alpha`,
+   `lower-/upper-roman` followed by `.`, or `disc`/`circle`/`square` (or a quoted string) for a
+   bullet glyph. Comparing against the computed text covers the level text, legal numbering,
+   continuation items and locale formatters at once. The marker must also sit where CSS puts an
+   outside marker: a tab must follow it, and the marker plus that tab must exactly fill the
+   hanging indent, so the first line's text starts where the wrapped lines do. A level with no
+   hanging indent (the number inline before a first-line tab) or a marker followed by a space
+   fails this test. If every item passes, the list gets that type, the items lose their marker
+   spans and their hanging `text-indent`, and `start` (on the list) and `value` (on an item that
+   does not follow from the one before it) carry the numbers. Otherwise the list gets
+   `list-style-type: none` and every item keeps its marker span and hanging indent. Markers with
+   a tracked change always stay spans. A glyph still in a symbol font (one `SymbolFontMapper`
+   could not map to Unicode) stays a span unless it is a known Wingdings bullet: the same code is
+   a different picture in each symbol font.
+4. **Indent and spacing.** The first item's start indent moves to the list as
+   `padding-inline-start` (measured from the item a nested list sits in); items keep only their
+   difference from it. The space after an item that a list nests in moves to that list's
+   `margin-top`, which is where it sat between the two paragraphs; on the item it would fall
+   below the whole nested list.
+
+A CSS-drawn marker takes the item's formatting, not the marker run's: a bold, colored or
+differently sized number renders like the item's text. Where the marker's font is taller than
+the text's, the item's first line can come out about a pixel shorter than with the marker span.
+
+Paginated output (`RenderPagination = Paginated`) ignores the setting: the paginator measures and
+splits paragraphs, not lists.
 
 ### Runs (Text Formatting)
 

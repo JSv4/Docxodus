@@ -300,6 +300,20 @@ export interface ConversionOptions {
    * `renderBlockHtml`. Default: false.
    */
   stampAnchors?: boolean;
+  /**
+   * Emit Word lists as HTML lists (default: false).
+   *
+   * Consecutive list paragraphs of one Word list become one `<ol>` (numbered) or
+   * `<ul>` (bulleted) of `<li>` items, and a deeper level nests inside the item
+   * before it. When CSS can draw the marker Word shows (`1.`, `a.`, `iv.`, a
+   * standard bullet), it comes from `list-style-type`, with `start`/`value`
+   * carrying restarts; otherwise the list gets `list-style-type: none` and each
+   * item keeps its rendered marker span. The level's indent moves onto the list.
+   * Numbered headings stay `<h1>`–`<h6>`. `stampAnchors` stamps each `<li>`.
+   * Ignored when `paginationMode` is `Paginated`: the paginator splits
+   * paragraphs, not lists.
+   */
+  semanticLists?: boolean;
 }
 
 /**
@@ -1525,7 +1539,8 @@ export interface DocxodusWasmExports {
       renderMoveOperations: boolean,
       renderUnsupportedContentPlaceholders: boolean,
       documentLanguage: string | null,
-      stampAnchors: boolean
+      stampAnchors: boolean,
+      semanticLists?: boolean
     ) => string;
     GetAnnotations: (bytes: Uint8Array) => string;
     AddAnnotation: (bytes: Uint8Array, requestJson: string) => string;

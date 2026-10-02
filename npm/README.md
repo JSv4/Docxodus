@@ -434,6 +434,7 @@ interface ConversionOptions {
   renderFootnotesAndEndnotes?: boolean;   // Include footnotes/endnotes sections
   renderHeadersAndFooters?: boolean;      // Include headers and footers
   renderTrackedChanges?: boolean;         // Show insertions/deletions visually
+  semanticLists?: boolean;                // Emit Word lists as <ol>/<ul>/<li> (default: false)
 }
 ```
 

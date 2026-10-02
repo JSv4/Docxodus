@@ -21,6 +21,17 @@ namespace Docxodus
         public bool RestrictToSupportedLanguages;
         public ListItemRetrieverSettings ListItemRetrieverSettings;
 
+        /// <summary>
+        /// When true, stamp every list paragraph with the list structure that assembly would
+        /// otherwise discard along with its <c>w:numPr</c>: <see cref="PtOpenXml.ListNumId"/>,
+        /// <see cref="PtOpenXml.ListLevel"/>, <see cref="PtOpenXml.ListValue"/> and
+        /// <see cref="PtOpenXml.ListNumFmt"/>. Read by the HTML converter's semantic-list output
+        /// (<c>WmlToHtmlConverterSettings.SemanticLists</c>). Takes effect only together with
+        /// <see cref="CreateHtmlConverterAnnotationAttributes"/>, which keeps the attributes.
+        /// Default: false.
+        /// </summary>
+        public bool AnnotateListStructure;
+
         public FormattingAssemblerSettings()
         {
             RemoveStyleNamesFromParagraphAndRunProperties = true;
@@ -301,6 +312,7 @@ namespace Docxodus
 
                         XElement? listItemRunProps = null;
                         List<XAttribute> listItemHtmlAttributes = new List<XAttribute>();
+                        List<XAttribute> listStructureAttributes = new List<XAttribute>();
                         int? abstractNumId = null;
                         if (listItemInfo != null)
                         {
@@ -373,6 +385,21 @@ namespace Docxodus
                                         format = (string?)choice.Elements(W.numFmt).Attributes(W.format).FirstOrDefault();
                                     }
                                 }
+                            }
+
+                            if (settings.AnnotateListStructure)
+                            {
+                                // The counter at the paragraph's DECLARED level is the number its
+                                // marker shows, also for a continuation item that is formatted
+                                // with level 0's lvlText (see ListItemRetriever.RetrieveListItem).
+                                var counters = element.Annotation<ListItemRetriever.LevelNumbers>()?.LevelNumbersArray;
+                                var declaredLevel = ListItemRetriever.GetParagraphLevel(element);
+                                listStructureAttributes.Add(new XAttribute(PtOpenXml.ListNumId, listItemInfo.NumId));
+                                listStructureAttributes.Add(new XAttribute(PtOpenXml.ListLevel, effectiveLevel));
+                                if (counters != null && declaredLevel >= 0 && declaredLevel < counters.Length)
+                                    listStructureAttributes.Add(new XAttribute(PtOpenXml.ListValue, counters[declaredLevel]));
+                                if (numFmt != null)
+                                    listStructureAttributes.Add(new XAttribute(PtOpenXml.ListNumFmt, numFmt));
                             }
 
                             if (numFmt == "bullet")
@@ -762,6 +789,7 @@ namespace Docxodus
                             // li != null implies listItemInfo != null and abstractNumId was set.
                             new XAttribute(PtOpenXml.AbstractNumId, abstractNumId!),
                             listItemHtmlAttributes,
+                            listStructureAttributes,
                             newParaProps,
                             previousListItemRun,
                             listItemRun,
@@ -862,6 +890,10 @@ namespace Docxodus
             PtOpenXml.AbstractNumId,
             PtOpenXml.HtmlStructure,
             PtOpenXml.HtmlStyle,
+            PtOpenXml.ListNumId,
+            PtOpenXml.ListLevel,
+            PtOpenXml.ListValue,
+            PtOpenXml.ListNumFmt,
             PtOpenXml.StyleName,
             PtOpenXml.LanguageType,
             PtOpenXml.ListItemRun,

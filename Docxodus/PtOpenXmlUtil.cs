@@ -6141,6 +6141,19 @@ listSeparator
         public static XName ListContinuation = pt + "ListContinuation";
         public static XName HtmlStructure = pt + "HtmlStructure";
         public static XName HtmlStyle = pt + "HtmlStyle";
+        /// <summary>The <c>w:numId</c> a list paragraph belongs to. Stamped, together with
+        /// <see cref="ListLevel"/>, <see cref="ListValue"/> and <see cref="ListNumFmt"/>, by
+        /// <c>FormattingAssembler</c> when <c>FormattingAssemblerSettings.AnnotateListStructure</c>
+        /// is set; the HTML converter's semantic-list output groups paragraphs into lists from
+        /// them, because assembly strips the paragraph's own <c>w:numPr</c>.</summary>
+        public static XName ListNumId = pt + "ListNumId";
+        /// <summary>The list level the paragraph's marker is formatted at (0-based). Level 0
+        /// for an item that continues a flat sequence at a deeper declared level.</summary>
+        public static XName ListLevel = pt + "ListLevel";
+        /// <summary>The counter value the paragraph's marker shows at its own level.</summary>
+        public static XName ListValue = pt + "ListValue";
+        /// <summary>The <c>w:numFmt</c> of the level the marker is formatted at.</summary>
+        public static XName ListNumFmt = pt + "ListNumFmt";
         public static XName StyleName = pt + "StyleName";
         public static XName TabWidth = pt + "TabWidth";
         public static XName Leader = pt + "Leader";
@@ -6196,6 +6209,7 @@ listSeparator
         public static readonly XName title = xhtml + "title";
         public static readonly XName tr = xhtml + "tr";
         public static readonly XName u = xhtml + "u";
+        public static readonly XName ul = xhtml + "ul";
     }
 
     public static class XhtmlNoNamespace

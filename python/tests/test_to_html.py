@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 from docx_scalpel import HtmlOptions, convert_docx_to_html, open_session
 
 
@@ -49,3 +52,19 @@ def test_th003_session_to_html_reflects_edit(tour_plan_bytes: bytes) -> None:
     # Stateless conversion of the ORIGINAL bytes must not contain the edit.
     original_html = convert_docx_to_html(tour_plan_bytes)
     assert marker not in original_html
+
+
+def test_th004_semantic_lists_is_off_unless_asked() -> None:
+    assert HtmlOptions().to_wire()["semanticLists"] is False
+    assert HtmlOptions(semantic_lists=True).to_wire()["semanticLists"] is True
+
+
+def test_th005_semantic_lists_render_list_items(test_files_dir: Path) -> None:
+    # Nine list paragraphs across three w:num instances.
+    docx = (test_files_dir / "DB012-Lists-With-Different-Numberings.docx").read_bytes()
+    item = re.compile(r"<li[\s>]")
+
+    assert item.search(convert_docx_to_html(docx)) is None
+    html = convert_docx_to_html(docx, HtmlOptions(semantic_lists=True))
+    assert len(item.findall(html)) == 9
+    assert len(re.findall(r"<ol[\s>]", html)) == 3

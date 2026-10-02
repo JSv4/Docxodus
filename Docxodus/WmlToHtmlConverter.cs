@@ -283,6 +283,20 @@ namespace Docxodus
         public bool StampAnchors;
 
         /// <summary>
+        /// When true, emit Word lists as HTML lists. Consecutive list paragraphs of one
+        /// <c>w:num</c> become one <c>&lt;ol&gt;</c> (numbered levels) or <c>&lt;ul&gt;</c>
+        /// (bullet levels) of <c>&lt;li&gt;</c> items, and a deeper level nests inside the
+        /// preceding item. Where CSS can draw the marker Word shows, it comes from
+        /// <c>list-style-type</c> (with <c>start</c>/<c>value</c> carrying the counter) and the
+        /// generated marker span is dropped; otherwise the list gets <c>list-style-type: none</c>
+        /// and each item keeps its computed marker span. The level's start indent moves from the
+        /// item onto its list. Headings that carry numbering stay headings. Not applied to
+        /// paginated output (<see cref="RenderPagination"/>), whose paginator splits paragraphs,
+        /// not lists. Default: false (each list paragraph renders as a <c>&lt;p&gt;</c>).
+        /// </summary>
+        public bool SemanticLists;
+
+        /// <summary>
         /// Optional canonical anchor identity provider used alongside <see cref="StampAnchors"/>.
         /// The legacy <c>data-anchor</c> value is intentionally the bare Unid for editor
         /// compatibility; this provider stamps the collision-safe full
@@ -358,6 +372,7 @@ namespace Docxodus
             ResolveThemeColors = true;
             GeneratePageCss = false;
             StampAnchors = false;
+            SemanticLists = false;
         }
 
         public WmlToHtmlConverterSettings(HtmlConverterSettings htmlConverterSettings)
@@ -1011,6 +1026,7 @@ namespace Docxodus
                 RestrictToSupportedLanguages = htmlConverterSettings.RestrictToSupportedLanguages,
                 RestrictToSupportedNumberingFormats = htmlConverterSettings.RestrictToSupportedNumberingFormats,
                 CreateHtmlConverterAnnotationAttributes = true,
+                AnnotateListStructure = htmlConverterSettings.SemanticLists,
                 OrderElementsPerStandard = false,
                 ListItemRetrieverSettings =
                     htmlConverterSettings.ListItemImplementations == null ?
@@ -1086,6 +1102,12 @@ namespace Docxodus
             // The root w:document element always transforms to a real h:html element.
             XElement xhtml = (XElement)ConvertToHtmlTransform(wordDoc, htmlConverterSettings,
                 rootElement, false, 0m)!;
+
+            // Opt-in semantic lists. Runs while styles are still per-element annotations, so an
+            // item's start indent can move onto its list before ReifyStylesAndClasses turns
+            // styles into classes.
+            if (htmlConverterSettings.SemanticLists)
+                BuildSemanticLists(xhtml);
 
             // Only a whole-document render can answer "is the target in this output?" — see
             // RendersDocumentFragment.
@@ -5484,6 +5506,14 @@ namespace Docxodus
             var paragraph = (XElement) ConvertParagraph(wordDoc, settings, element, elementName,
                 suppressTrailingWhiteSpace, currentMarginLeft, isBidi, suppressLeadingWhiteSpace);
 
+            // Only a body-text paragraph becomes a list item: a numbered heading keeps its
+            // heading element (and its marker), and ends the list around it.
+            if (settings.SemanticLists && settings.RenderPagination != PaginationMode.Paginated &&
+                elementName == Xhtml.p && ReadSemanticListItem(element) is { } semanticListItem)
+            {
+                paragraph.AddAnnotation(semanticListItem);
+            }
+
             // The paragraph conversion might have created empty spans.
             // These can and should be removed because empty spans are
             // invalid in HTML5.
@@ -9163,6 +9193,455 @@ namespace Docxodus
                 });
             return (IEnumerable<object>)newContent;
         }
+
+        /// <summary>
+        /// List structure of one converted list paragraph, read from the attributes
+        /// <c>FormattingAssembler</c> stamps under <c>AnnotateListStructure</c> and attached to the
+        /// paragraph's <c>h:p</c> as an annotation for <see cref="BuildSemanticLists"/>.
+        /// </summary>
+        private sealed class SemanticListItem
+        {
+            public SemanticListItem(int numId, int level, int? value, string? numFmt, bool markerHasRevision)
+            {
+                NumId = numId;
+                Level = level;
+                Value = value;
+                NumFmt = numFmt;
+                MarkerHasRevision = markerHasRevision;
+            }
+
+            public int NumId { get; }
+
+            public int Level { get; }
+
+            public int? Value { get; }
+
+            public string? NumFmt { get; }
+
+            /// <summary>
+            /// The marker renders as a tracked insertion or deletion (a numbering change, or an
+            /// inserted or deleted list item). CSS cannot draw that, so the item keeps its marker.
+            /// </summary>
+            public bool MarkerHasRevision { get; }
+
+            public bool IsBullet => NumFmt == "bullet";
+        }
+
+        private static SemanticListItem? ReadSemanticListItem(XElement paragraph)
+        {
+            var numId = (int?)paragraph.Attribute(PtOpenXml.ListNumId);
+            var level = (int?)paragraph.Attribute(PtOpenXml.ListLevel);
+            if (numId == null || level == null)
+                return null;
+            var markerHasRevision = paragraph
+                .Elements()
+                .Where(e => e.Name == W.ins || e.Name == W.del || e.Name == W.moveFrom || e.Name == W.moveTo)
+                .Elements(W.r)
+                .Any(r => r.Attribute(PtOpenXml.ListItemRun) != null);
+            return new SemanticListItem(numId.Value, level.Value,
+                (int?)paragraph.Attribute(PtOpenXml.ListValue),
+                (string?)paragraph.Attribute(PtOpenXml.ListNumFmt),
+                markerHasRevision);
+        }
+
+        /// <summary>One <c>ol</c>/<c>ul</c> under construction, and the items it received.</summary>
+        private sealed class SemanticListBuild
+        {
+            public SemanticListBuild(XElement list, SemanticListItem first, XElement? host, decimal parentIndent)
+            {
+                List = list;
+                Level = first.Level;
+                NumId = first.NumId;
+                IsBullet = first.IsBullet;
+                Host = host;
+                ParentIndent = parentIndent;
+            }
+
+            public XElement List { get; }
+
+            /// <summary>The item this list nests in, or null at top level.</summary>
+            public XElement? Host { get; }
+
+            public int Level { get; }
+
+            public int NumId { get; }
+
+            public bool IsBullet { get; }
+
+            /// <summary>Start indent, in inches, of the item this list nests in (0 at top level).</summary>
+            public decimal ParentIndent { get; }
+
+            /// <summary>Each item with the start indent its paragraph had before regrouping.</summary>
+            public List<(XElement Item, SemanticListItem Info, decimal Indent)> Items { get; } = new();
+        }
+
+        /// <summary>
+        /// Regroup the list paragraphs <see cref="ProcessParagraph"/> annotated with
+        /// <see cref="SemanticListItem"/> into <c>ol</c>/<c>ul</c>/<c>li</c> trees
+        /// (<see cref="WmlToHtmlConverterSettings.SemanticLists"/>). A list is a run of adjacent list
+        /// paragraphs among one parent's children, so a table cell, a note or a bordered group holds
+        /// lists of its own, and any other sibling ends the list.
+        /// </summary>
+        private static void BuildSemanticLists(XElement root)
+        {
+            // Snapshot first: the regrouping moves the paragraphs it visits.
+            var containers = root
+                .Descendants(Xhtml.p)
+                .Where(p => p.Annotation<SemanticListItem>() != null)
+                .Select(p => p.Parent!)
+                .Distinct()
+                .ToList();
+            var lists = new List<SemanticListBuild>();
+            foreach (var container in containers)
+                GroupSemanticListItems(container, lists);
+            // Style only once every list exists: a nested list's padding is measured from the
+            // indent its host item had before that item's own list moved it.
+            foreach (var list in lists)
+                StyleSemanticList(list);
+        }
+
+        private static void GroupSemanticListItems(XElement container, List<SemanticListBuild> lists)
+        {
+            var open = new List<SemanticListBuild>(); // outermost first
+            foreach (var node in container.Nodes().ToList())
+            {
+                var paragraph = node as XElement;
+                var item = paragraph != null && paragraph.Name == Xhtml.p
+                    ? paragraph.Annotation<SemanticListItem>()
+                    : null;
+                if (paragraph == null || item == null)
+                {
+                    // Insignificant whitespace between two items does not interrupt a list.
+                    if (node is not XText text || !string.IsNullOrWhiteSpace(text.Value))
+                        open.Clear();
+                    continue;
+                }
+
+                // Close the lists this item cannot join: deeper ones, and one at its own level
+                // that belongs to another w:num (or switches between numbers and bullets).
+                while (open.Count > 0 &&
+                       (open[^1].Level > item.Level ||
+                        (open[^1].Level == item.Level &&
+                         (open[^1].NumId != item.NumId || open[^1].IsBullet != item.IsBullet))))
+                {
+                    open.RemoveAt(open.Count - 1);
+                }
+
+                var indent = SemanticListItemStartIndent(paragraph);
+                if (open.Count == 0 || open[^1].Level < item.Level)
+                {
+                    var list = new XElement(item.IsBullet ? Xhtml.ul : Xhtml.ol);
+                    SemanticListBuild build;
+                    if (open.Count > 0)
+                    {
+                        // A deeper level nests inside the item before it, as HTML expects.
+                        var host = open[^1].Items[^1];
+                        host.Item.Add(list);
+                        build = new SemanticListBuild(list, item, host.Item, host.Indent);
+                    }
+                    else
+                    {
+                        paragraph.AddBeforeSelf(list);
+                        build = new SemanticListBuild(list, item, null, 0m);
+                    }
+                    open.Add(build);
+                    lists.Add(build);
+                }
+
+                paragraph.Remove();
+                paragraph.Name = Xhtml.li;
+                var current = open[^1];
+                current.List.Add(paragraph);
+                current.Items.Add((paragraph, item, indent));
+            }
+        }
+
+        private static void StyleSemanticList(SemanticListBuild build)
+        {
+            var list = build.List;
+            if ((string?)build.Items[0].Item.Attribute("dir") == "rtl")
+                list.SetAttributeValue("dir", "rtl");
+
+            // One marker style per list: CSS draws every marker, or none of them.
+            string? listStyleType = null;
+            foreach (var (item, info, _) in build.Items)
+            {
+                var type = CssListStyleTypeFor(item, info);
+                if (type == null || (listStyleType != null && type != listStyleType))
+                {
+                    listStyleType = null;
+                    break;
+                }
+                listStyleType = type;
+            }
+
+            // The level's start indent belongs to the list; an item keeps only its difference
+            // from the first item. A nested list is measured from the item it sits in.
+            var baseIndent = build.Items[0].Indent;
+            var listIndent = baseIndent - build.ParentIndent;
+
+            // The space after the item a list nests in belonged between that item's text and the
+            // list's first item when both were paragraphs. Left on the item, it would fall below
+            // the whole nested list instead. A second list nested in the same item follows the
+            // first list, not the text, so it takes nothing.
+            var marginTop = "0";
+            if (build.Host?.Annotation<Dictionary<string, string>>() is { } hostStyle &&
+                !list.ElementsBeforeSelf().Any(e => e.Name == Xhtml.ol || e.Name == Xhtml.ul) &&
+                hostStyle.TryGetValue("margin-bottom", out var hostSpaceAfter))
+            {
+                marginTop = hostSpaceAfter;
+                hostStyle["margin-bottom"] = "0";
+            }
+
+            list.AddAnnotation(new Dictionary<string, string>
+            {
+                { "margin-top", marginTop },
+                { "margin-bottom", "0" },
+                { "margin-inline-start", listIndent < 0m ? FormatSemanticListInches(listIndent) : "0" },
+                { "padding-inline-start", listIndent > 0m ? FormatSemanticListInches(listIndent) : "0" },
+                { "list-style-type", listStyleType ?? "none" },
+            });
+
+            foreach (var (item, _, indent) in build.Items)
+            {
+                var style = item.Annotation<Dictionary<string, string>>();
+                if (style == null)
+                {
+                    style = new Dictionary<string, string>();
+                    item.AddAnnotation(style);
+                }
+                var offset = indent - baseIndent;
+                style[SemanticListStartMarginProperty(item)] = offset != 0m ? FormatSemanticListInches(offset) : "0";
+                if (listStyleType != null)
+                {
+                    // CSS draws the marker in the list's start padding, where the hanging indent
+                    // used to put it.
+                    item.Elements().Where(IsListMarkerElement).Remove();
+                    style["text-indent"] = "0";
+                }
+                else
+                {
+                    // text-indent is inherited: an item without one of its own must not take the
+                    // hanging indent of the item its list is nested in.
+                    style.TryAdd("text-indent", "0");
+                }
+            }
+
+            if (!build.IsBullet)
+                NumberSemanticList(build);
+        }
+
+        /// <summary>
+        /// <c>start</c> on the list when it does not count from 1 (a restart, a
+        /// <c>w:startOverride</c>, or a list resumed after an interruption), and <c>value</c> on any
+        /// item whose number does not follow from the one before it.
+        /// </summary>
+        private static void NumberSemanticList(SemanticListBuild build)
+        {
+            int? next = null;
+            for (var i = 0; i < build.Items.Count; i++)
+            {
+                var (item, info, _) = build.Items[i];
+                if (info.Value is not int value)
+                {
+                    next = null;
+                    continue;
+                }
+                if (i == 0)
+                {
+                    if (value != 1)
+                        build.List.SetAttributeValue("start", value);
+                }
+                else if (value != next)
+                {
+                    item.SetAttributeValue("value", value);
+                }
+                next = value + 1;
+            }
+        }
+
+        private static bool IsListMarkerElement(XElement element) =>
+            element.Attribute("data-list-marker") != null;
+
+        /// <summary>
+        /// The <c>list-style-type</c> that draws exactly the marker this item shows, or null when
+        /// CSS has none (multi-level <c>%1.%2</c>, <c>Article %1</c>, <c>(a)</c>, a symbol-font
+        /// glyph, a marker with a tracked change, a marker that does not fill the hanging indent,
+        /// …). Comparing against the computed marker text covers the level text, legal numbering,
+        /// continuation items and locale formatters at once.
+        /// </summary>
+        private static string? CssListStyleTypeFor(XElement item, SemanticListItem info)
+        {
+            if (info.MarkerHasRevision)
+                return null;
+            var markers = item.Elements().Where(IsListMarkerElement).ToList();
+            if (markers.Count != 1 || !MarkerFillsHangingIndent(item, markers[0]))
+                return null;
+            var markerText = string.Concat(markers
+                    .DescendantNodes()
+                    .OfType<XText>()
+                    .Select(t => t is XEntity ? " " : t.Value))
+                .Trim();
+            if (markerText.Length == 0)
+                return null;
+            // ConvertRun drops a marker's symbol font once SymbolFontMapper maps its text to
+            // Unicode. A font still present means the glyph did not map, and only that font
+            // gives it its shape.
+            var symbolFont = markers
+                .DescendantsAndSelf()
+                .Select(e => e.Annotation<Dictionary<string, string>>()?.GetValueOrDefault("font-family"))
+                .FirstOrDefault(Internal.SymbolFontMapper.IsSymbolFont);
+            if (info.IsBullet)
+                return CssBulletListStyleType(markerText, symbolFont);
+            if (symbolFont != null)
+                return null;
+            var type = info.NumFmt switch
+            {
+                null or "decimal" => "decimal",
+                "decimalZero" => "decimal-leading-zero",
+                "lowerLetter" => "lower-alpha",
+                "upperLetter" => "upper-alpha",
+                "lowerRoman" => "lower-roman",
+                "upperRoman" => "upper-roman",
+                _ => null,
+            };
+            if (type == null || info.Value is not int value)
+                return null;
+            return CssListMarkerText(type, value) == markerText ? type : null;
+        }
+
+        private static string? CssBulletListStyleType(string glyph, string? symbolFont)
+        {
+            // The same code is a different picture in each symbol font (U+F06C is a circle in
+            // Wingdings and a lambda in Symbol), so only known pairs qualify. A symbol font
+            // stores its glyphs either as private-use codes or as the bare low byte.
+            if (symbolFont != null)
+            {
+                return (Internal.SymbolFontMapper.PrimaryFamily(symbolFont), glyph) switch
+                {
+                    ("wingdings", "\uF06C" or "l") => "disc",
+                    ("wingdings", "\uF06E" or "n") => "square",
+                    _ => null,
+                };
+            }
+
+            switch (glyph)
+            {
+                case "•":
+                case "●":
+                    return "disc";
+                case "o": // Courier New "o", Word's default second-level bullet
+                case "◦":
+                case "○":
+                    return "circle";
+                case "▪": // SymbolFontMapper's Wingdings U+F0A7, Word's default third-level bullet
+                case "■":
+                    return "square";
+            }
+
+            // Any other glyph CSS can draw as a string marker, unless it is a Private Use Area
+            // code point, which has no shape outside the font that defines it.
+            if (glyph.Any(c => c >= '\uE000' && c <= '\uF8FF'))
+                return null;
+            return "\"" + glyph.Replace("\\", "\\\\").Replace("\"", "\\\"") + " \"";
+        }
+
+        /// <summary>The marker a browser draws for <paramref name="value"/> in an
+        /// <c>ol</c> of <paramref name="listStyleType"/>, or null where CSS leaves it undefined.</summary>
+        private static string? CssListMarkerText(string listStyleType, int value)
+        {
+            var counter = listStyleType switch
+            {
+                "decimal" => value.ToString(CultureInfo.InvariantCulture),
+                "decimal-leading-zero" => value is >= 0 and < 10
+                    ? "0" + value.ToString(CultureInfo.InvariantCulture)
+                    : value.ToString(CultureInfo.InvariantCulture),
+                "lower-alpha" => CssAlphabeticCounter(value)?.ToLowerInvariant(),
+                "upper-alpha" => CssAlphabeticCounter(value),
+                "lower-roman" => CssRomanCounter(value)?.ToLowerInvariant(),
+                "upper-roman" => CssRomanCounter(value),
+                _ => null,
+            };
+            return counter == null ? null : counter + ".";
+        }
+
+        // CSS's alphabetic counter: A..Z, AA, AB, … (Word's letter formats repeat instead,
+        // AA, BB, …, which the marker-text comparison catches). Undefined below 1.
+        private static string? CssAlphabeticCounter(int value)
+        {
+            if (value < 1)
+                return null;
+            var sb = new StringBuilder();
+            while (value > 0)
+            {
+                value--;
+                sb.Insert(0, (char)('A' + (value % 26)));
+                value /= 26;
+            }
+            return sb.ToString();
+        }
+
+        // CSS's roman counters are defined for 1..3999.
+        private static string? CssRomanCounter(int value)
+        {
+            if (value < 1 || value > 3999)
+                return null;
+            var sb = new StringBuilder();
+            foreach (var (weight, symbol) in RomanNumerals)
+            {
+                while (value >= weight)
+                {
+                    sb.Append(symbol);
+                    value -= weight;
+                }
+            }
+            return sb.ToString();
+        }
+
+        private static readonly (int Weight, string Symbol)[] RomanNumerals =
+        {
+            (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"), (90, "XC"),
+            (50, "L"), (40, "XL"), (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I"),
+        };
+
+        // CreateStyleFromInd writes the start indent to margin-right for a bidi paragraph.
+        private static string SemanticListStartMarginProperty(XElement item) =>
+            (string?)item.Attribute("dir") == "rtl" ? "margin-right" : "margin-left";
+
+        private static decimal SemanticListItemStartIndent(XElement item) =>
+            ParseSemanticListInches(item.Annotation<Dictionary<string, string>>()
+                ?.GetValueOrDefault(SemanticListStartMarginProperty(item))) ?? 0m;
+
+        /// <summary>
+        /// CSS draws an outside marker in the list's start padding and starts every line of the
+        /// item at the content edge. That is Word's layout only when the marker and its tab fill
+        /// the hanging indent exactly, so the first line's text starts where the wrapped lines do.
+        /// A level with no hanging indent (the number inline before a first-line tab), a marker
+        /// followed by a space or by nothing, or a number too wide for the hang (its tab reaches
+        /// the next stop) would move the first line's text.
+        /// </summary>
+        private static bool MarkerFillsHangingIndent(XElement item, XElement marker)
+        {
+            var width = ParseSemanticListInches(marker.Annotation<Dictionary<string, string>>()?.GetValueOrDefault("width"));
+            var textIndent = ParseSemanticListInches(item.Annotation<Dictionary<string, string>>()?.GetValueOrDefault("text-indent"));
+            // The converter writes the width to thousandths of an inch and text-indent to hundredths.
+            return width > 0m && textIndent is { } indent && Math.Abs(width.Value + indent) <= 0.005m;
+        }
+
+        private static decimal? ParseSemanticListInches(string? value)
+        {
+            if (value == null)
+                return null;
+            var number = value.Trim();
+            if (number.EndsWith("in", StringComparison.Ordinal))
+                number = number.Substring(0, number.Length - 2);
+            return decimal.TryParse(number, NumberStyles.Number, CultureInfo.InvariantCulture, out var inches)
+                ? inches
+                : null;
+        }
+
+        private static string FormatSemanticListInches(decimal inches) =>
+            string.Format(NumberFormatInfo.InvariantInfo, "{0:0.00}in", inches);
 
         private class BorderMappingInfo
         {
