@@ -18,6 +18,7 @@ This document tracks edge cases and quirks in Open XML document processing where
    - [`w:lineRule="auto"` is a multiple of the FONT's line box, not of font-size](#wlineruleauto-is-a-multiple-of-the-fonts-line-box-not-of-font-size)
    - [An accumulated line-spacing error can resemble a top-margin deviation](#an-accumulated-line-spacing-error-can-resemble-a-top-margin-deviation)
    - [Cached TOC field results suppress hyperlink presentation](#cached-toc-field-results-suppress-hyperlink-presentation)
+   - [`w:ind` spells each edge two ways: `w:start`/`w:end` and `w:left`/`w:right`](#wind-spells-each-edge-two-ways-wstartwend-and-wleftwright)
 5. [Theme Colors](#theme-colors)
    - [`w:color`/`w:fill` are a CACHE; `w:themeColor`/`w:themeFill` are the authority](#wcolorwfill-are-a-cache-wthemecolorwthemefill-are-the-authority)
 6. [Contributing](#contributing)
@@ -2141,6 +2142,60 @@ to run at all. Without `word/settings.xml`, the converter still emits the style'
 run but generates an **empty rule** for it, so `w:rStyle` silently loses every declared property and
 the reduced case appears to pass without exercising suppression. This is the same requirement
 CLAUDE.md notes for programmatic .NET test documents.
+
+### `w:ind` spells each edge two ways: `w:start`/`w:end` and `w:left`/`w:right`
+
+**Status:** Fixed — Issue #894
+
+#### Symptom
+
+A document saved by LibreOffice converted with no paragraph indents, and every list drew its
+marker to the left of its text.
+
+#### Minimal XML reproducer
+
+```xml
+<!-- document.xml -->
+<w:p><w:pPr><w:ind w:start="1440"/></w:pPr><w:r><w:t>Indented one inch.</w:t></w:r></w:p>
+
+<!-- numbering.xml, the list level -->
+<w:pPr><w:ind w:start="720" w:hanging="360"/></w:pPr>
+```
+
+#### The corner case
+
+ISO/IEC 29500 Part 1 §17.3.1.12 names a paragraph's leading and trailing indents `w:start` and
+`w:end`. The transitional schema keeps `w:left` and `w:right` for the same edges. Word writes
+`w:left`/`w:right`; LibreOffice writes `w:start`/`w:end`. The converter read only `w:left`/`w:right`,
+so it dropped every indent. It still applied `w:hanging`, which pulled each list marker past the
+paragraph's left edge.
+
+Reading both spellings raises two questions.
+
+- **One `w:ind` can carry both spellings.** MS-OI29500 says nothing about this for `w:ind`. For the
+  equivalent table-cell border pair it says Word ignores `left` when a `start` sibling is present
+  (Part 4 §14.4.1). Docxodus applies the same precedence to `w:ind`.
+- **The style hierarchy merges `w:ind` one attribute at a time.** A style's `w:start` and a
+  paragraph's `w:left` both survive that merge, and "prefer `w:start`" then picks the style's value
+  over the paragraph's. The merge must treat the two spellings as one slot, so a higher-priority
+  value in either spelling replaces a lower-priority value in the other.
+
+| Docxodus | `w:left` | `w:start`, before | `w:start`, after |
+|---|---|---|---|
+| Indented paragraph | `margin-left: 1.00in` | `margin-left: 0` | `margin-left: 1.00in` |
+| List item | `margin-left: 0.50in; text-indent: -0.25in` | `margin-left: 0; text-indent: -0.25in` | `margin-left: 0.50in; text-indent: -0.25in` |
+
+#### Relevant code
+
+- `Docxodus/PtOpenXmlUtil.cs`: `WordprocessingMLUtil.IndStartAttribute`/`IndEndAttribute`, the
+  one place the precedence lives.
+- `Docxodus/FormattingAssembler.cs`: `IndMerge` (the merge rule above) and `AddTabAtLeftIndent`.
+- `Docxodus/WmlToHtmlConverter.cs`: `CreateStyleFromInd` (margins), `CalculateSpanWidthTransform`
+  (tab layout) and `CreateBorderDivs` (bordered paragraph groups).
+
+#### Tests
+
+`Docxodus.Tests/WmlIndStartEndTests.cs`.
 
 ## Tables: a negative `w:tblInd` pulls an over-wide table into the left margin
 

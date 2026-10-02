@@ -6791,7 +6791,7 @@ namespace Docxodus
         {
             if (ind == null) return;
 
-            var left = (decimal?) ind.Attribute(W.left);
+            var left = (decimal?) WordprocessingMLUtil.IndStartAttribute(ind);
             if (left != null && elementName != Xhtml.span)
             {
                 var leftInInches = (decimal) left/1440 - currentMarginLeft;
@@ -6801,7 +6801,7 @@ namespace Docxodus
                         : "0");
             }
 
-            var right = (decimal?) ind.Attribute(W.right);
+            var right = (decimal?) WordprocessingMLUtil.IndEndAttribute(ind);
             if (right != null)
             {
                 var rightInInches = (decimal) right/1440;
@@ -8289,9 +8289,7 @@ namespace Docxodus
                 ?? clonedPara.Elements(W.pPr).Elements(W.ind).FirstOrDefault();
             if (ind != null)
             {
-                // todo need to handle start and end attributes
-
-                var left = WordprocessingMLUtil.AttributeToTwips(ind.Attribute(W.left));
+                var left = WordprocessingMLUtil.AttributeToTwips(WordprocessingMLUtil.IndStartAttribute(ind));
                 if (left != null)
                     leftInTwips = (int)left;
 
@@ -9109,7 +9107,7 @@ namespace Docxodus
                     var ind = pPr.Element(W.ind);
                     if (ind != null)
                     {
-                        var leftInInches = (decimal?) ind.Attribute(W.left)/1440m ?? 0;
+                        var leftInInches = (decimal?) WordprocessingMLUtil.IndStartAttribute(ind)/1440m ?? 0;
                         var hangingInInches = -(decimal?) ind.Attribute(W.hanging)/1440m ?? 0;
                         currentMarginLeft = leftInInches + hangingInInches;
 

@@ -31,6 +31,19 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- DOCX → HTML conversion now keeps paragraph and list indents written as `w:start`/`w:end` (issue
+  #894). OOXML allows two spellings for the same edges of `w:ind`: Word writes `w:left`/`w:right`,
+  while LibreOffice and other producers write `w:start`/`w:end`. The converter read only the first,
+  so those documents converted with every indent at `margin-left: 0`. The hanging indent still
+  applied, so every list drew its marker to the left of its text. Paragraph margins, list-level
+  indents, the margin of a bordered paragraph group and tab-stop layout now read either spelling.
+  When one `w:ind` carries both, `w:start`/`w:end` win, as Word does for the equivalent table-cell
+  border pair. A paragraph's indent overrides its style's or its list level's whichever spelling
+  each uses. The same precedence now applies to `DocxSession.GetFormatting` and
+  `GetListMembership`, which preferred `w:left`. `SetParagraphFormat`'s `IndentDelta` now adjusts
+  the spelling the paragraph already has instead of always writing `w:left`. Separately,
+  `FormattingAssembler.AssembleFormatting` put the tab stop it adds at a list item's leading indent
+  at position 0 for every list; it now sits at the indent.
 - Paginated HTML and PDF export no longer fails with `pagination_failure: Page N body content is
   clipped` when a full page overflows by a line or less (issue #848). Two causes are fixed.
   - **Tables.** The converter wraps each table in a `div`. A table that follows a paragraph with no

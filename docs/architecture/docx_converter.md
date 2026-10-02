@@ -353,10 +353,14 @@ Directional marks ensure proper text rendering:
 
 | Word Property | CSS Property |
 |--------------|--------------|
-| `w:ind/@w:left` | `margin-left` (or `margin-right` for RTL) |
-| `w:ind/@w:right` | `margin-right` (or `margin-left` for RTL) |
+| `w:ind/@w:start` or `@w:left` | `margin-left` (or `margin-right` for RTL) |
+| `w:ind/@w:end` or `@w:right` | `margin-right` (or `margin-left` for RTL) |
 | `w:ind/@w:firstLine` | `text-indent` |
 | `w:ind/@w:hanging` | `text-indent` (negative) |
+
+`w:start`/`w:end` and `w:left`/`w:right` are two spellings of the same edges. When one `w:ind`
+carries both, `w:start`/`w:end` win (`WordprocessingMLUtil.IndStartAttribute`/`IndEndAttribute`).
+See [the corner case](../ooxml_corner_cases.md#wind-spells-each-edge-two-ways-wstartwend-and-wleftwright).
 
 ### Justification
 
