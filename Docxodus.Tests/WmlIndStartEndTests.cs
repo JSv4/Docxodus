@@ -7,6 +7,7 @@ using System.Linq;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using Docxodus;
+using Docxodus.Ir;
 using Xunit;
 
 namespace Docxodus.Tests;
@@ -136,6 +137,23 @@ public class WmlIndStartEndTests
         var style = StyleOf(html, "Both spellings.");
         Assert.Equal("0.50in", style["margin-left"]);
         Assert.Equal("0.50in", style["margin-right"]);
+    }
+
+    /// <summary>
+    /// <c>DocxDiff</c> reads indents through the IR, so the IR must pick the spelling the renderer
+    /// does. Otherwise an indent edit to the <c>w:start</c> of a paragraph that also carries
+    /// <c>w:left</c> would render but never show up as a formatting change.
+    /// </summary>
+    [Fact]
+    public void IrReader_StartAndEnd_Win_WhenOneIndCarriesBothSpellings()
+    {
+        var paragraph = IrReader.Read(new WmlDocument("ind.docx", BuildDoc(Paragraph(
+                "Both spellings.",
+                "<w:ind w:left=\"2880\" w:start=\"720\" w:right=\"2880\" w:end=\"720\"/>"))))
+            .Body.Blocks.OfType<IrParagraph>().Single();
+
+        Assert.Equal(720, paragraph.Format.IndentLeftTwips);
+        Assert.Equal(720, paragraph.Format.IndentRightTwips);
     }
 
     [Theory]

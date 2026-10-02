@@ -2374,8 +2374,10 @@ internal static class IrReader
             };
 
         var ind = pPr.Element(W + "ind");
-        int? indentLeft = IntAttr(ind, W + "left") ?? IntAttr(ind, W + "start");
-        int? indentRight = IntAttr(ind, W + "right") ?? IntAttr(ind, W + "end");
+        var leading = ind is null ? null : WordprocessingMLUtil.IndStartAttribute(ind);
+        var trailing = ind is null ? null : WordprocessingMLUtil.IndEndAttribute(ind);
+        int? indentLeft = leading is null ? null : IntAttr(ind, leading.Name);
+        int? indentRight = trailing is null ? null : IntAttr(ind, trailing.Name);
         int? indentFirst = IntAttr(ind, W + "firstLine");
         var hanging = IntAttr(ind, W + "hanging");
         if (hanging is not null)
