@@ -23,8 +23,9 @@ public class IgnorablePrefixConsolidationTests
     [Fact]
     public void DocumentBuilder_SourceWithoutIgnorable_ListsThePowerToolsNamespaceItKeeps()
     {
-        // A main part with no mc:Ignorable whose paragraph carries a PowerTools attribute, the shape
-        // DocxSession output has once pt:Unid stamping is persisted.
+        // A source main part with no mc:Ignorable whose paragraph carries a PowerTools attribute. The
+        // builder's output root always starts with mc:Ignorable (FreshNamespaceAttributes), so this
+        // guards the refactor rather than reproducing a defect.
         var source = Docx(
             $"<w:document xmlns:w='{WNs}' xmlns:pt='{PtOpenXml.pt.NamespaceName}'><w:body>" +
             "<w:p pt:Unid='a1'><w:r><w:t>Hello</w:t></w:r></w:p><w:sectPr/></w:body></w:document>");
