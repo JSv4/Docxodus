@@ -10,6 +10,7 @@ using System.IO;
 using System.Linq;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
+using Docxodus.Internal;
 
 namespace Docxodus
 {
@@ -2186,16 +2187,8 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
             }))
             {
                 var root = newMainXDoc.Root!;
-                if (!root.Attributes().Any(na => na.Value == PtOpenXml.pt.NamespaceName))
-                {
-                    root.Add(new XAttribute(XNamespace.Xmlns + "pt", PtOpenXml.pt.NamespaceName));
-                    AddToIgnorable(root, "pt");
-                }
-                if (!root.Attributes().Any(na => na.Value == PtOpenXml.ptOpenXml.NamespaceName))
-                {
-                    root.Add(new XAttribute(XNamespace.Xmlns + "pt14", PtOpenXml.ptOpenXml.NamespaceName));
-                    AddToIgnorable(root, "pt14");
-                }
+                PartNamespaces.EnsureIgnorablePrefix(root, "pt", PtOpenXml.pt);
+                PartNamespaces.EnsureIgnorablePrefix(root, "pt14", PtOpenXml.ptOpenXml);
             }
         }
 
@@ -2212,18 +2205,6 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
                         sourceDocument.WebExTaskpanesPart.GetIdOfPart(sourceWebExtensionPart));
                     newWebExtensionpart.GetXDocument().Add(sourceWebExtensionPart.GetXDocument().Root!);
                 }
-            }
-        }
-
-        private static void AddToIgnorable(XElement root, string v)
-        {
-            var ignorable = root.Attribute(MC.Ignorable);
-            if (ignorable != null)
-            {
-                var val = (string)ignorable;
-                val = val + " " + v;
-                ignorable.Remove();
-                root.SetAttributeValue(MC.Ignorable, val);
             }
         }
 

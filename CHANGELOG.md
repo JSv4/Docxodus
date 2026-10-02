@@ -31,6 +31,13 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `FormattingAssembler` (and so DOCX → HTML conversion) now lists `pt14` in a part's
+  `mc:Ignorable` even when the list already holds a longer token that contains it, such as `pt14x`
+  (issue #857). It used a substring test where a token comparison was needed. `DocumentBuilder` and
+  `FormattingAssembler` now make the PowerTools namespaces ignorable through the same helper the
+  comment and namespace-restoration code uses: it adds the prefix once, creates `mc:Ignorable` when the
+  part root has none, reuses the prefix the root already gives the namespace, and never rebinds a
+  prefix the root uses for another namespace.
 - Paginated HTML and PDF export no longer fails with `pagination_failure: Page N body content is
   clipped` when a full page overflows by a line or less (issue #848). Two causes are fixed.
   - **Tables.** The converter wraps each table in a `div`. A table that follows a paragraph with no
