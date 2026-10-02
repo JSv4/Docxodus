@@ -14,6 +14,7 @@ import {
 import { generateUndecodableImageDocx } from './docx-undecodable-image-fixture.js';
 import { outOfFlowDocx, textBoxRun } from './docx-out-of-flow-fixture.js';
 import { bodyFillDocx } from './docx-body-fill-fixture.js';
+import { wordToleratedPackageDocx } from './docx-tolerant-package-fixture.js';
 import { R_NS, storedZip, W_NS, xml } from './docx-zip.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -807,6 +808,15 @@ test.describe('standalone paginated HTML', () => {
       'page_tree_stability',
       'output_verification',
     ]);
+  });
+
+  test('exports a package with directory entries and an orphan relationship part', async ({ page }) => {
+    // Issue #853: Word opens this package; the export's package preflight used to refuse it as
+    // invalid_document because the orphan .rels made the package manifest invalid.
+    const result = await convert(page, wordToleratedPackageDocx('Opened the way Word opens it.'));
+
+    expect(result.renderReport.status).toBe('complete');
+    expect(result.html).toContain('Opened the way Word opens it.');
   });
 
   test('routes an undecodable image through the unsupported-content policy', async ({ page }) => {

@@ -97,7 +97,8 @@ in both identities; malformed payload cannot disappear behind directory-artifact
 
 ### Relationships
 
-`relationships` includes every readable package-level and part-level Relationship with owner URI,
+`relationships` includes every readable package-level and part-level Relationship whose owner is
+present (see `missing_relationship_owner` below), with owner URI,
 Id, type, raw target, normalized target mode, resolved internal target URI, and target presence.
 `/` is the package owner. Internal targets may be relative to the owning part or package-absolute
 (`/word/document.xml`, the form the Open XML SDK writes); neither can escape the package root, and
@@ -116,7 +117,13 @@ The generator distinguishes:
   reference would otherwise look dangling because of one unread file. When a package-wide limit
   stopped every payload read, that breach is reported once and this per-part finding is omitted;
 - duplicate or conflicting Relationship IDs within one owner;
-- a relationship part whose owner is absent or whose URI cannot identify an owner.
+- a relationship part whose URI cannot identify an owner (an error);
+- `missing_relationship_owner`, a **warning**: a relationship part whose source part is absent,
+  such as `word/_rels/comments.xml.rels` without `word/comments.xml`. Relationships are only
+  resolved through their source part, so Word opens such a package and ignores the file (issue
+  #853). The manifest does the same: its relationships are not target-checked and are left out of
+  `relationships`. (A malformed XML payload is still an XML error, as for any part.) Its bytes remain in the entry list and in both
+  content identities, so adding or removing one is still a package change.
 
 ### Facts
 

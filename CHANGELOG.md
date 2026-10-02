@@ -31,6 +31,14 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Paginated export no longer refuses packages that Word opens but that carry a relationship file
+  for a part the package does not contain, such as `word/_rels/comments.xml.rels` without
+  `word/comments.xml` (issue #853). These used to fail with `invalid_document: The input is not a
+  valid DOCX OPC package`. The package manifest now reports such a file as a
+  `missing_relationship_owner` **warning** instead of an error. Its relationships are left out of the
+  manifest's relationship list, and their targets are not checked, the way Word ignores them. Zero-length
+  ZIP directory entries (`word/`, `_rels/`) were already warnings. `DocxSession`, HTML conversion and
+  comparison already opened both shapes.
 - `FormattingAssembler` (and so DOCX → HTML conversion) now lists `pt14` in a part's
   `mc:Ignorable` even when the list already holds a longer token that contains it, such as `pt14x`
   (issue #857). It used a substring test where a token comparison was needed. `DocumentBuilder` and
