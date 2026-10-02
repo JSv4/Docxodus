@@ -56,6 +56,15 @@ All notable changes to this project will be documented in this file.
 
   The default is unchanged everywhere. An export report names `markupPresentation` only when it is
   `word`, so default reports and layout digests are byte-identical.
+- The HTML converter can emit Word lists as HTML lists (issue #895). With the new
+  `WmlToHtmlConverterSettings.SemanticLists` (`semanticLists` in the npm `ConversionOptions`,
+  `semantic_lists` in `docx-scalpel`'s `HtmlOptions`), consecutive list paragraphs of one Word list
+  become one `<ol>` or `<ul>` of `<li>` items, and a deeper level nests inside the item before it.
+  Where CSS can draw the marker Word shows (`1.`, `a.`, `iv.`, standard bullets), the marker comes
+  from `list-style-type`, with `start`/`value` for restarts and resumed lists; otherwise the list
+  gets `list-style-type: none` and each item keeps its rendered marker. The level's indent moves
+  onto the list. Numbered headings stay headings, `stampAnchors` stamps each `<li>`, and paginated
+  output is unaffected. Off by default, so existing output is unchanged.
 - A table that moved elsewhere in the document is now marked as a move in comparison output, the way
   Word marks one (issue #844). `DocxDiff.Compare` and `DocxCompare.Compare` used to draw it as a
   deleted table and an unrelated inserted one, even though `DocxDiff.GetRevisions` already reported

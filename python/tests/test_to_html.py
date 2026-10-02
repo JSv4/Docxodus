@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 from docx_scalpel import HtmlOptions, convert_docx_to_html, docx_diff_compare, open_session
 
 
@@ -70,3 +73,19 @@ def test_th004_word_revision_presentation_colours_authors(test_files_dir) -> Non
 def test_th005_revision_presentation_on_the_wire() -> None:
     assert HtmlOptions().to_wire()["revisionPresentation"] == 0
     assert HtmlOptions(revision_presentation=1).to_wire()["revisionPresentation"] == 1
+
+
+def test_th006_semantic_lists_is_off_unless_asked() -> None:
+    assert HtmlOptions().to_wire()["semanticLists"] is False
+    assert HtmlOptions(semantic_lists=True).to_wire()["semanticLists"] is True
+
+
+def test_th007_semantic_lists_render_list_items(test_files_dir: Path) -> None:
+    # Nine list paragraphs across three w:num instances.
+    docx = (test_files_dir / "DB012-Lists-With-Different-Numberings.docx").read_bytes()
+    item = re.compile(r"<li[\s>]")
+
+    assert item.search(convert_docx_to_html(docx)) is None
+    html = convert_docx_to_html(docx, HtmlOptions(semantic_lists=True))
+    assert len(item.findall(html)) == 9
+    assert len(re.findall(r"<ol[\s>]", html)) == 3
