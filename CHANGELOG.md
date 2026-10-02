@@ -31,6 +31,14 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `import ... from "docxodus"` now works in plain Node.js ESM (issue #854). It failed with
+  `ERR_UNSUPPORTED_DIR_IMPORT` before any call, because the root entry re-exports the editor, and
+  the editor imported `@atlaskit/pragmatic-drag-and-drop` by directory path, which Node's ESM resolver
+  rejects (bundlers and Bun accept it). `dist/editor.js` now inlines the two drag-and-drop
+  packages, so they move from `dependencies` to `devDependencies` and consumers no longer install
+  them. The package-boundary check that runs before tests and publishing now imports every
+  JavaScript entry point (`docxodus`, `/core`, `/react`, `/embed`, `/worker`, `/export-browser`) in
+  plain Node from a consumer holding only the packed files.
 - DOCX → HTML conversion, and so the paginated export, now wraps text that comes before a tab
   when the text is longer than its line, as Word does (issue #891). It used to measure that text
   as one unwrapped line and pin it in a no-wrap box as wide as the tab stop it chose, 9 inches in
