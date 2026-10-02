@@ -39,11 +39,11 @@ All notable changes to this project will be documented in this file.
   indents, the margin of a bordered paragraph group and tab-stop layout now read either spelling.
   When one `w:ind` carries both, `w:start`/`w:end` win, as Word does for the equivalent table-cell
   border pair. A paragraph's indent overrides its style's or its list level's whichever spelling
-  each uses. The same precedence now applies to `DocxSession.GetFormatting` and
-  `GetListMembership`, which preferred `w:left`. `SetParagraphFormat`'s `IndentDelta` now adjusts
-  the spelling the paragraph already has instead of always writing `w:left`. Separately,
-  `FormattingAssembler.AssembleFormatting` put the tab stop it adds at a list item's leading indent
-  at position 0 for every list; it now sits at the indent.
+  each uses. The same precedence now applies to `DocxSession.GetFormatting`, `GetListMembership`
+  and the indents `DocxDiff` compares, which all preferred `w:left`. `SetParagraphFormat`'s
+  `IndentDelta` now adjusts the spelling the paragraph already has instead of always writing
+  `w:left`. Separately, `FormattingAssembler.AssembleFormatting` put the tab stop it adds at a list
+  item's leading indent at position 0 for every list; it now sits at the indent.
 - Paginated HTML and PDF export no longer fails with `pagination_failure: Page N body content is
   clipped` when a full page overflows by a line or less (issue #848). Two causes are fixed.
   - **Tables.** The converter wraps each table in a `div`. A table that follows a paragraph with no

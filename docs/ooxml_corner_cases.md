@@ -2192,6 +2192,8 @@ Reading both spellings raises two questions.
 - `Docxodus/FormattingAssembler.cs`: `IndMerge` (the merge rule above) and `AddTabAtLeftIndent`.
 - `Docxodus/WmlToHtmlConverter.cs`: `CreateStyleFromInd` (margins), `CalculateSpanWidthTransform`
   (tab layout) and `CreateBorderDivs` (bordered paragraph groups).
+- `Docxodus/Ir/IrReader.cs` (the indents `DocxDiff` compares) and `DocxSession`'s formatting reads
+  and `IndentDelta` use the same helpers.
 
 #### Tests
 
