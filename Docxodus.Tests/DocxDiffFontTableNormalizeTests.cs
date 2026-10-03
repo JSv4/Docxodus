@@ -126,10 +126,6 @@ public class DocxDiffFontTableNormalizeTests
         return string.Concat(word.MainDocumentPart!.Document!.Body!.Descendants<Text>().Select(t => t.Text));
     }
 
-    private static System.Collections.Generic.IEnumerable<ValidationErrorInfo> SchemaErrors(WmlDocument doc)
-    {
-        using var stream = new MemoryStream(doc.DocumentByteArray);
-        using var word = WordprocessingDocument.Open(stream, false);
-        return new OpenXmlValidator().Validate(word).ToList();
-    }
+    private static System.Collections.Generic.IReadOnlyList<PackageValidationError> SchemaErrors(WmlDocument doc) =>
+        PackageValidation.Errors(doc, FileFormatVersions.Office2007);
 }

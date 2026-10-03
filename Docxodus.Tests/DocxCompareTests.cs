@@ -50,12 +50,8 @@ public class DocxCompareTests
         return new WmlDocument("test.docx", stream.ToArray());
     }
 
-    private static string[] SchemaErrors(WmlDocument document)
-    {
-        using var stream = new MemoryStream(document.DocumentByteArray);
-        using var wordDoc = WordprocessingDocument.Open(stream, false);
-        return new OpenXmlValidator().Validate(wordDoc).Select(error => error.Description).ToArray();
-    }
+    private static string[] SchemaErrors(WmlDocument document) =>
+        PackageValidation.Errors(document, FileFormatVersions.Office2007).Select(PackageValidation.Keys.Description).ToArray();
 
     [Fact]
     public void FrontDoor_EqualsDocxDiffWithTheFrontDoorPolicyApplied()

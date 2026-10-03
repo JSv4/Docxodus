@@ -1991,21 +1991,15 @@ public class IrMarkupRendererTests
         Assert.True(regressions.Count == 0, $"{regressions.Count} pairs introduced new validation errors (see output).");
     }
 
-    private static int SchemaErrorCount(WmlDocument doc)
-    {
-        using var ms = new MemoryStream();
-        ms.Write(doc.DocumentByteArray, 0, doc.DocumentByteArray.Length);
-        using var wd = WordprocessingDocument.Open(ms, false);
-        var validator = new OpenXmlValidator();
-        // Filter the SAME tolerated-description whitelist WmlComparer's own validation tests use
-        // (WmlComparerTests.ExpectedErrors) — Word emits a handful of tblLook/latentStyles/numbering
-        // attributes newer than the SDK's bundled schema; these are pre-existing fixture noise, not renderer
-        // regressions. Counting them on the cloned right-side content would spuriously inflate the output count
-        // over the per-document baseline.
-        return validator.Validate(wd).Count(e =>
-            e.ErrorType == DocumentFormat.OpenXml.Validation.ValidationErrorType.Schema &&
+    // Filter the SAME tolerated-description whitelist WmlComparer's own validation tests use
+    // (WmlComparerTests.ExpectedErrors) — Word emits a handful of tblLook/latentStyles/numbering
+    // attributes newer than the SDK's bundled schema; these are pre-existing fixture noise, not renderer
+    // regressions. Counting them on the cloned right-side content would spuriously inflate the output count
+    // over the per-document baseline.
+    private static int SchemaErrorCount(WmlDocument doc) =>
+        PackageValidation.Errors(doc, DocumentFormat.OpenXml.FileFormatVersions.Office2007).Count(e =>
+            PackageValidation.IsSchemaError(e) &&
             !Docxodus.Tests.CorpusValidation.ExpectedErrors.Contains(e.Description));
-    }
 
     // ----------------------------------------------------------------- header/footer story markup (2026-07-03)
 

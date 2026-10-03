@@ -79,14 +79,8 @@ public class DocxSessionTableEditTests
     private static XElement SingleTable(DocxSession session) =>
         DocumentXml(session.Save()).Descendants(W + "tbl").Single();
 
-    private static void AssertSchemaValid(byte[] bytes)
-    {
-        using var ms = new MemoryStream(bytes);
-        using var wDoc = WordprocessingDocument.Open(ms, false);
-        var errors = new OpenXmlValidator().Validate(wDoc)
-            .Select(e => $"{e.Path?.XPath}: {e.Description}").ToList();
-        Assert.True(errors.Count == 0, "OOXML schema errors:\n" + string.Join("\n", errors));
-    }
+    private static void AssertSchemaValid(byte[] bytes) =>
+        PackageValidation.AssertValid(bytes, DocumentFormat.OpenXml.FileFormatVersions.Office2007);
 
     [Fact]
     public void DT201_InsertTableRow_After_AddsRowWithSameColumnCount()

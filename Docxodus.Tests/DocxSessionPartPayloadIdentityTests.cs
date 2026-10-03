@@ -132,12 +132,8 @@ public class DocxSessionPartPayloadIdentityTests
             PartPayloads(before).Keys.OrderBy(n => n, StringComparer.Ordinal).ToList(),
             PartPayloads(after).Keys.OrderBy(n => n, StringComparer.Ordinal).ToList());
 
-        static int SchemaFindings(byte[] docx)
-        {
-            using var ms = new MemoryStream(docx);
-            using var word = WordprocessingDocument.Open(ms, false);
-            return new OpenXmlValidator().Validate(word).Count();
-        }
+        static int SchemaFindings(byte[] docx) =>
+            PackageValidation.Errors(docx, DocumentFormat.OpenXml.FileFormatVersions.Office2007).Count;
 
         // Skipping a write must not be able to leave a package that validates worse than its input.
         Assert.True(SchemaFindings(after) <= SchemaFindings(before));

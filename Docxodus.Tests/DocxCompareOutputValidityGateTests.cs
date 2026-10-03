@@ -236,19 +236,13 @@ public class DocxCompareOutputValidityGateTests
             .Select(group => (group.Key, group.First().Sample));
     }
 
-    private static IReadOnlyList<ValidatorError> Validate(byte[] bytes)
-    {
-        using var stream = new MemoryStream();
-        stream.Write(bytes, 0, bytes.Length);
-        using var document = WordprocessingDocument.Open(stream, false);
-        return new OpenXmlValidator(FileFormatVersions.Office2019)
-            .Validate(document)
+    private static IReadOnlyList<ValidatorError> Validate(byte[] bytes) =>
+        PackageValidation.Errors(bytes, FileFormatVersions.Office2019)
             .Select(error => new ValidatorError(
                 error.Id,
-                $"{error.Id}@{(error.Node is null ? "(package)" : $"{error.Node.Prefix}:{error.Node.LocalName}")}",
+                $"{error.Id}@{(error.NodeLocalName is null ? "(package)" : $"{error.NodePrefix}:{error.NodeLocalName}")}",
                 error.Description.Length <= 160 ? error.Description : error.Description[..160] + "…"))
             .ToList();
-    }
 
     /// <summary>A fixture and its validator error ids, or null when it is not an openable WordprocessingML document.</summary>
     private static CorpusInput? Input(string path) => Inputs.GetOrAdd(path, static relative =>

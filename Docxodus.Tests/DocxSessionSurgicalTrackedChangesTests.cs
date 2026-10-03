@@ -81,16 +81,8 @@ public class DocxSessionSurgicalTrackedChangesTests
     private static string Text(XElement root) =>
         string.Concat(root.Descendants(W.t).Select(t => t.Value));
 
-    private static void AssertSchemaValid(byte[] bytes)
-    {
-        using var stream = new MemoryStream(bytes);
-        using var document = WordprocessingDocument.Open(stream, false);
-        var errors = new OpenXmlValidator(FileFormatVersions.Office2019)
-            .Validate(document)
-            .Select(e => $"{e.Part?.Uri}: {e.Description} ({e.Path?.XPath})")
-            .ToArray();
-        Assert.True(errors.Length == 0, string.Join(Environment.NewLine, errors));
-    }
+    private static void AssertSchemaValid(byte[] bytes) =>
+        PackageValidation.AssertValid(bytes, FileFormatVersions.Office2019);
 
     [Theory]
     [InlineData("ZZMARK Hamburg.")]

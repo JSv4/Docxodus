@@ -761,12 +761,7 @@ public class DocxSessionCommentAuthoringTests
         Assert.Equal(new[] { parentId, replyId }, para.Descendants(W + "commentReference")
             .Select(e => (string)e.Attribute(W + "id")!).ToArray());
 
-        using var ms = new MemoryStream(saved);
-        using var doc = WordprocessingDocument.Open(ms, false);
-        var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator(
-                DocumentFormat.OpenXml.FileFormatVersions.Office2019)
-            .Validate(doc).Select(e => $"{e.Part?.Uri}: {e.Description}").ToList();
-        Assert.Empty(errors);
+        PackageValidation.AssertValid(saved, DocumentFormat.OpenXml.FileFormatVersions.Office2019);
     }
 
     [Fact]
@@ -979,12 +974,6 @@ public class DocxSessionCommentAuthoringTests
             "A **bold** claim.\n\nSecond paragraph.", initials: "AL",
             date: new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc)).Success);
 
-        using var ms = new MemoryStream(session.Save());
-        using var doc = WordprocessingDocument.Open(ms, false);
-        var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator()
-            .Validate(doc)
-            .Select(e => $"{e.Part?.Uri}: {e.Description}")
-            .ToList();
-        Assert.Empty(errors);
+        PackageValidation.AssertValid(session.Save(), DocumentFormat.OpenXml.FileFormatVersions.Office2007);
     }
 }

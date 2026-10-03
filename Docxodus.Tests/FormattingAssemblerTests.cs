@@ -8,10 +8,12 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Xml.Linq;
+using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Validation;
 using DocumentFormat.OpenXml.Wordprocessing;
 using Docxodus;
+using Docxodus.Tests;
 using Xunit;
 
 #if !ELIDE_XUNIT_TESTS
@@ -91,23 +93,8 @@ namespace OxPt
         {
             using (WordprocessingDocument wDoc = WordprocessingDocument.Open(fi.FullName, true))
             {
-                OpenXmlValidator v = new OpenXmlValidator();
-                var errors = v.Validate(wDoc).Where(ve =>
-                {
-                    var found = s_ExpectedErrors.Any(xe => ve.Description.Contains(xe));
-                    return !found;
-                });
-
-                if (errors.Count() != 0)
-                {
-                    StringBuilder sb = new StringBuilder();
-                    foreach (var item in errors)
-                    {
-                        sb.Append(item.Description).Append(Environment.NewLine);
-                    }
-                    var s = sb.ToString();
-                    Assert.True(false, s);
-                }
+                PackageValidation.AssertValid(wDoc, FileFormatVersions.Office2007,
+                    ve => !s_ExpectedErrors.Any(xe => ve.Description.Contains(xe)));
             }
         }
 

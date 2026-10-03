@@ -1915,15 +1915,11 @@ public class DocxSessionStructuralRevisionTests
         return root;
     }
 
-    private static string[] ValidationErrors(byte[] bytes)
-    {
-        using var stream = new MemoryStream(bytes);
-        using var document = WordprocessingDocument.Open(stream, false);
-        return new OpenXmlValidator().Validate(document)
-            .Select(e => $"{e.Id}|{e.Description}|{e.Path?.XPath}")
+    private static string[] ValidationErrors(byte[] bytes) =>
+        PackageValidation.Errors(bytes, DocumentFormat.OpenXml.FileFormatVersions.Office2007)
+            .Select(PackageValidation.Keys.IdDescriptionXPath)
             .OrderBy(e => e, StringComparer.Ordinal)
             .ToArray();
-    }
 
     private static string FirstDifference(XElement expected, XElement actual)
     {

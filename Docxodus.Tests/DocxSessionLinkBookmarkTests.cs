@@ -185,12 +185,7 @@ public class DocxSessionLinkBookmarkTests
         Assert.True(session.AddBookmark("Fresh", DocumentRange.In(anchor, new CharSpan(0, 1))).Success);
         Assert.Equal("100", Assert.Single(session.ListBookmarks()).BookmarkId);
         var saved = session.Save();
-        using var reopenedStream = new MemoryStream(saved);
-        using var reopened = WordprocessingDocument.Open(reopenedStream, false);
-        var realErrors = new OpenXmlValidator().Validate(reopened)
-            .Where(e => !(e.Description ?? string.Empty).Contains("powertools.codeplex.com", StringComparison.Ordinal))
-            .ToList();
-        Assert.Empty(realErrors);
+        PackageValidation.AssertValid(saved, DocumentFormat.OpenXml.FileFormatVersions.Office2007, IsRealValidationError);
     }
 
     [Fact]
@@ -851,16 +846,11 @@ public class DocxSessionLinkBookmarkTests
             document.MainDocumentPart.PutXDocument();
         });
 
-    private static void AssertPackageValidity(byte[] bytes)
-    {
-        using var stream = new MemoryStream(bytes);
-        using var document = WordprocessingDocument.Open(stream, false);
-        var realErrors = new OpenXmlValidator().Validate(document)
-            .Where(error => !(error.Description ?? string.Empty)
-                .Contains("powertools.codeplex.com", StringComparison.Ordinal))
-            .ToList();
-        Assert.Empty(realErrors);
-    }
+    private static bool IsRealValidationError(PackageValidationError error) =>
+        !error.Description.Contains("powertools.codeplex.com", StringComparison.Ordinal);
+
+    private static void AssertPackageValidity(byte[] bytes) =>
+        PackageValidation.AssertValid(bytes, DocumentFormat.OpenXml.FileFormatVersions.Office2007, IsRealValidationError);
 
     private static void AssertBookmarkPairsAndPackageValidity(byte[] bytes,
         System.Collections.Generic.IReadOnlyDictionary<string, string> expectedIds)
@@ -877,11 +867,7 @@ public class DocxSessionLinkBookmarkTests
             Assert.Equal(id, (string?)start.Attribute(W + "id"));
             Assert.True(XNode.DocumentOrderComparer.Compare(start, end) < 0);
         }
-        var realErrors = new OpenXmlValidator().Validate(document)
-            .Where(error => !(error.Description ?? string.Empty)
-                .Contains("powertools.codeplex.com", StringComparison.Ordinal))
-            .ToList();
-        Assert.Empty(realErrors);
+        PackageValidation.AssertValid(document, DocumentFormat.OpenXml.FileFormatVersions.Office2007, IsRealValidationError);
     }
 
     private static HyperlinkRelationship[] HyperlinkRelationships(

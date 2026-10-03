@@ -63,7 +63,7 @@ file that could fire them.
 **`Docxodus.csproj` and `Docxodus.Tests.csproj` both override it to `false`**, so the core
 library and the test project do *not* fail on warnings. The CLI tools, MCP server,
 python-host and WASM project do inherit it. Current baseline: the library builds with
-**175 warnings**, the test project with **788** (mostly StyleCop `SA1633` missing file headers
+**175 warnings**, the test project with **790** (mostly StyleCop `SA1633` missing file headers
 and `SA1206` modifier/using order). Don't add to either baseline. Measure with
 `--no-incremental` — a warm incremental build reports zero because nothing recompiles.
 
@@ -79,7 +79,7 @@ actually add rather than assuming one apiece.
 
 Update the two numbers here in the same commit rather than leaving them stale. They had
 drifted before (113/707 described a tree ~30 warnings behind, then 175/788, then briefly
-177/791 and 184/800); re-measure, don't extrapolate. The drop from 187/804 came from switching
+177/791 and 184/800, then 175/793 on `main` with the doc still saying 788); re-measure, don't extrapolate. The drop from 187/804 came from switching
 `SA1636` off in `rules.ruleset`: it compares every header against `stylecop.json`'s single
 `companyName`, which a repository with two legitimate copyright holders can never satisfy.
 `SourceFileCopyrightTests` enforces attribution per file instead, which is what that rule was

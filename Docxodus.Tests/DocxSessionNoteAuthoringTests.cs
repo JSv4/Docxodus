@@ -544,13 +544,7 @@ public class DocxSessionNoteAuthoringTests
         Assert.True(session.InsertFootnote(anchor, 0, "A footnote.").Success);
         Assert.True(session.InsertEndnote(anchor, 4, "An **endnote**.").Success);
 
-        using var ms = new MemoryStream(session.Save());
-        using var doc = WordprocessingDocument.Open(ms, false);
-        var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator()
-            .Validate(doc)
-            .Select(e => $"{e.Part?.Uri}: {e.Description}")
-            .ToList();
-        Assert.Empty(errors);
+        PackageValidation.AssertValid(session.Save(), DocumentFormat.OpenXml.FileFormatVersions.Office2007);
     }
 
     /// <summary>

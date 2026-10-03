@@ -533,11 +533,7 @@ public class BlockFormatChangeTests
             r => r.FormatChange is { } fc && fc.Scope == DocxDiffFormatChangeScope.Section);
         Assert.Contains("pageWidth", rev.FormatChange!.ChangedPropertyNames);
 
-        using var ms = new MemoryStream(result.DocumentByteArray);
-        using var wd = WordprocessingDocument.Open(ms, false);
-        Assert.Empty(new DocumentFormat.OpenXml.Validation.OpenXmlValidator().Validate(wd)
-            .Where(e => e.ErrorType == DocumentFormat.OpenXml.Validation.ValidationErrorType.Schema)
-            .Select(e => e.Description));
+        AssertNoSchemaErrors(result);
     }
 
     private static string? InlinePgW(WmlDocument doc) =>
@@ -562,11 +558,7 @@ public class BlockFormatChangeTests
         Assert.True(kids.IndexOf("sectPr") < kids.IndexOf("pPrChange"),
             $"sectPr must precede pPrChange; order was [{string.Join(",", kids)}]");
 
-        using (var ms = new MemoryStream(result.DocumentByteArray))
-        using (var wd = WordprocessingDocument.Open(ms, false))
-            Assert.Empty(new DocumentFormat.OpenXml.Validation.OpenXmlValidator().Validate(wd)
-                .Where(e => e.ErrorType == DocumentFormat.OpenXml.Validation.ValidationErrorType.Schema)
-                .Select(e => e.Description));
+        AssertNoSchemaErrors(result);
 
         // Both changes round-trip: reject restores left jc-absence AND left page size.
         var rejected = RevisionProcessor.RejectRevisions(result);
@@ -592,11 +584,7 @@ public class BlockFormatChangeTests
             $"tblPrEx must precede trPr; order was [{string.Join(",", kids)}]");
         Assert.Single(tr.Descendants(W + "tblPrExChange"));
 
-        using var ms = new MemoryStream(result.DocumentByteArray);
-        using var wd = WordprocessingDocument.Open(ms, false);
-        Assert.Empty(new DocumentFormat.OpenXml.Validation.OpenXmlValidator().Validate(wd)
-            .Where(e => e.ErrorType == DocumentFormat.OpenXml.Validation.ValidationErrorType.Schema)
-            .Select(e => e.Description));
+        AssertNoSchemaErrors(result);
     }
 
     [Fact]
@@ -815,15 +803,8 @@ public class BlockFormatChangeTests
         AssertNoSchemaErrors(result);
     }
 
-    private static void AssertNoSchemaErrors(WmlDocument doc)
-    {
-        using var ms = new MemoryStream(doc.DocumentByteArray);
-        using var wd = WordprocessingDocument.Open(ms, false);
-        var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator().Validate(wd)
-            .Where(e => e.ErrorType == DocumentFormat.OpenXml.Validation.ValidationErrorType.Schema)
-            .Select(e => e.Description).ToList();
-        Assert.True(errors.Count == 0, string.Join("\n", errors));
-    }
+    private static void AssertNoSchemaErrors(WmlDocument doc) =>
+        PackageValidation.AssertValid(doc, DocumentFormat.OpenXml.FileFormatVersions.Office2007, PackageValidation.IsSchemaError);
 
     [Fact]
     public void TableFamily_and_pPr_outputs_are_schema_valid()
@@ -839,14 +820,7 @@ public class BlockFormatChangeTests
         foreach (var (left, right) in pairs)
         {
             var result = DocxDiff.Compare(left, right, ModeledOnly);
-            using var ms = new MemoryStream(result.DocumentByteArray);
-            using var wd = WordprocessingDocument.Open(ms, false);
-            var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator()
-                .Validate(wd)
-                .Where(e => e.ErrorType == DocumentFormat.OpenXml.Validation.ValidationErrorType.Schema)
-                .Select(e => e.Description)
-                .ToList();
-            Assert.True(errors.Count == 0, string.Join("\n", errors));
+            AssertNoSchemaErrors(result);
         }
     }
 
@@ -933,12 +907,7 @@ public class BlockFormatChangeTests
         Assert.True(exIdx >= 0 && trPrIdx > exIdx, $"trPr must follow tblPrEx; order was [{string.Join(",", kids)}]");
         Assert.Single(body.Descendants(W + "trPrChange"));
 
-        using var ms = new MemoryStream(result.DocumentByteArray);
-        using var wd = WordprocessingDocument.Open(ms, false);
-        var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator().Validate(wd)
-            .Where(e => e.ErrorType == DocumentFormat.OpenXml.Validation.ValidationErrorType.Schema)
-            .Select(e => e.Description).ToList();
-        Assert.True(errors.Count == 0, string.Join("\n", errors));
+        AssertNoSchemaErrors(result);
     }
 
     // ------------------------------------------------------------------ trailing sectPr-only (w:pgSz)
@@ -999,14 +968,7 @@ public class BlockFormatChangeTests
     public void SectPr_family_output_is_schema_valid()
     {
         var result = DocxDiff.Compare(SectLeft, SectRight, ModeledOnly);
-        using var ms = new MemoryStream(result.DocumentByteArray);
-        using var wd = WordprocessingDocument.Open(ms, false);
-        var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator()
-            .Validate(wd)
-            .Where(e => e.ErrorType == DocumentFormat.OpenXml.Validation.ValidationErrorType.Schema)
-            .Select(e => e.Description)
-            .ToList();
-        Assert.True(errors.Count == 0, string.Join("\n", errors));
+        AssertNoSchemaErrors(result);
     }
 
     // Return a copy of <paramref name="doc"/> whose trailing sectPr has a w:pgMar with the given uniform margin.

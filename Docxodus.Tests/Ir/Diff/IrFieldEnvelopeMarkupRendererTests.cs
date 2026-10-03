@@ -901,15 +901,8 @@ public class IrFieldEnvelopeMarkupRendererTests
     private static string InlineSdtTag(WmlDocument doc) =>
         (string?)Assert.Single(MainXml(doc).Descendants(W + "tag")).Attribute(W + "val") ?? "";
 
-    private static void AssertSchemaValid(WmlDocument doc)
-    {
-        using var stream = new MemoryStream(doc.DocumentByteArray);
-        using var wdoc = WordprocessingDocument.Open(stream, false);
-        var errors = new OpenXmlValidator(FileFormatVersions.Office2019).Validate(wdoc)
-            .Select(error => $"{error.Id}@{error.Path?.XPath}: {error.Description}")
-            .ToList();
-        Assert.True(errors.Count == 0, string.Join("\n", errors));
-    }
+    private static void AssertSchemaValid(WmlDocument doc) =>
+        PackageValidation.AssertValid(doc, FileFormatVersions.Office2019);
 
     private static void AssertNoRevisionMarkup(WmlDocument doc)
     {

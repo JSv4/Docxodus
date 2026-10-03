@@ -242,11 +242,6 @@ public class DocxDiffBookmarkStructureTests
         return body is null ? "" : string.Concat(body.Descendants<Text>().Select(t => t.Text));
     }
 
-    private static HashSet<string> SchemaErrors(WmlDocument doc)
-    {
-        using var ms = new MemoryStream(doc.DocumentByteArray);
-        using var w = WordprocessingDocument.Open(ms, false);
-        var validator = new OpenXmlValidator(FileFormatVersions.Office2019);
-        return validator.Validate(w).Select(e => $"{e.Id}@{e.Path?.XPath}: {e.Description}").ToHashSet();
-    }
+    private static HashSet<string> SchemaErrors(WmlDocument doc) =>
+        PackageValidation.ErrorKeys(doc, FileFormatVersions.Office2019, PackageValidation.Keys.IdAtXPathDescription);
 }

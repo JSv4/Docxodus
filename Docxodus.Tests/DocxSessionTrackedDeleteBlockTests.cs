@@ -968,10 +968,6 @@ public class DocxSessionTrackedDeleteBlockTests
         }
         Assert.Equal(Normalize(expected), Normalize(actual));
     }
-    private static void AssertValid(byte[] bytes)
-    {
-        using var document = WordprocessingDocument.Open(new MemoryStream(bytes), false);
-        var errors = new OpenXmlValidator().Validate(document).ToList();
-        Assert.True(errors.Count == 0, string.Join("\n", errors.Select(e => e.Description)));
-    }
+    private static void AssertValid(byte[] bytes) =>
+        PackageValidation.AssertValid(bytes, FileFormatVersions.Office2007);
 }

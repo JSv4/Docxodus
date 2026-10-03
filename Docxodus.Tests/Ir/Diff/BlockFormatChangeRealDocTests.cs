@@ -191,25 +191,12 @@ public class BlockFormatChangeRealDocTests
     private static string? TrailingTopMargin(WmlDocument doc) =>
         (string?)BodyOf(doc).Elements(W + "sectPr").Last().Element(W + "pgMar")?.Attribute(W + "top");
 
-    private static System.Collections.Generic.List<string> SchemaErrors(WmlDocument doc)
-    {
-        using var ms = new MemoryStream(doc.DocumentByteArray);
-        using var wd = WordprocessingDocument.Open(ms, false);
-        return new OpenXmlValidator().Validate(wd)
-            .Where(e => e.ErrorType == DocumentFormat.OpenXml.Validation.ValidationErrorType.Schema)
-            .Select(e => e.Description)
-            .ToList();
-    }
-
     /// <summary>Assert the produced document introduces no schema-error DESCRIPTION not already present in
     /// the baseline input (so pre-existing fixture noise — e.g. HC029's w:tblLook attributes — is tolerated
     /// while any error the block-format markup introduces fails).</summary>
-    private static void AssertNoNewSchemaErrors(WmlDocument produced, WmlDocument baseline)
-    {
-        var baselineErrors = SchemaErrors(baseline).ToHashSet();
-        var newErrors = SchemaErrors(produced).Where(d => !baselineErrors.Contains(d)).ToList();
-        Assert.True(newErrors.Count == 0, "NEW schema errors:\n" + string.Join("\n", newErrors));
-    }
+    private static void AssertNoNewSchemaErrors(WmlDocument produced, WmlDocument baseline) =>
+        PackageValidation.AssertNoNewErrors(baseline, produced, DocumentFormat.OpenXml.FileFormatVersions.Office2007,
+            PackageValidation.Keys.Description, PackageValidation.IsSchemaError);
 
     /// <summary>Headless-LibreOffice LOAD backstop: an INDEPENDENT renderer must open the tracked-changes
     /// document without error (the header/footer check script reports LOAD=FAILED / RESULT: OK and, with no

@@ -329,15 +329,9 @@ public class DocxDiffCommentStructureTests
         return body is null ? "" : string.Concat(body.Descendants<Text>().Select(t => t.Text));
     }
 
-    private static HashSet<string> SchemaErrors(WmlDocument doc)
-    {
-        using var ms = new MemoryStream(doc.DocumentByteArray);
-        using var w = WordprocessingDocument.Open(ms, false);
-        var validator = new OpenXmlValidator(FileFormatVersions.Office2019);
-        // Key on Id + part + value-normalized description (numeric ids → '#') so a legitimate comment-id
-        // renumber is not miscounted as a NEW error (mirrors DocxDiffBookmarkRealDocTests.SchemaErrors).
-        return validator.Validate(w)
-            .Select(e => $"{e.Id}@{e.Part?.Uri}: {Regex.Replace(e.Description, "'[0-9]+'", "'#'")}")
-            .ToHashSet();
-    }
+    // Key on Id + part + value-normalized description (numeric ids → '#') so a legitimate comment-id
+    // renumber is not miscounted as a NEW error (mirrors DocxDiffBookmarkRealDocTests.SchemaErrors).
+    private static HashSet<string> SchemaErrors(WmlDocument doc) =>
+        PackageValidation.ErrorKeys(doc, FileFormatVersions.Office2019,
+            PackageValidation.Keys.IdAtPartNumberNormalizedDescription);
 }

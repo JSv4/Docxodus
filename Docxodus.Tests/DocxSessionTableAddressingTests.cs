@@ -43,14 +43,8 @@ public class DocxSessionTableAddressingTests
         return document.MainDocumentPart!.GetXDocument().Root!;
     }
 
-    private static void AssertSchemaValid(byte[] bytes)
-    {
-        using var stream = new MemoryStream(bytes);
-        using var document = WordprocessingDocument.Open(stream, false);
-        var errors = new OpenXmlValidator().Validate(document)
-            .Select(error => $"{error.Path?.XPath}: {error.Description}").ToList();
-        Assert.True(errors.Count == 0, "OOXML schema errors:\n" + string.Join("\n", errors));
-    }
+    private static void AssertSchemaValid(byte[] bytes) =>
+        PackageValidation.AssertValid(bytes, FileFormatVersions.Office2007);
 
     [Fact]
     public void DT250_RectangularMetadata_ExposesEveryIdentityAndRoundTripsCoordinates()

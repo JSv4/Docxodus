@@ -14,6 +14,7 @@ using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Validation;
 using DocumentFormat.OpenXml.Wordprocessing;
 using Docxodus;
+using Docxodus.Tests;
 using Xunit;
 
 namespace OxPt
@@ -282,7 +283,7 @@ namespace OxPt
                     .Select(change => (string?)change.Attribute(W.original))
                     .ToArray();
                 Assert.Equal(new[] { "1.", "2.", "3." }, originals);
-                Assert.Empty(new OpenXmlValidator(FileFormatVersions.Office2019).Validate(document));
+                PackageValidation.AssertValid(document, FileFormatVersions.Office2019);
             }
 
             var html = ConvertWithTrackedChanges(redline);

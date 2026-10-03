@@ -220,10 +220,6 @@ public class DocxDiffCssFontStackCompatibilityTests
         return string.Concat(word.MainDocumentPart!.Document!.Body!.Descendants<Text>().Select(t => t.Text));
     }
 
-    private static IEnumerable<ValidationErrorInfo> SchemaErrors(WmlDocument doc)
-    {
-        using var stream = new MemoryStream(doc.DocumentByteArray);
-        using var word = WordprocessingDocument.Open(stream, false);
-        return new OpenXmlValidator().Validate(word).ToList();
-    }
+    private static IReadOnlyList<PackageValidationError> SchemaErrors(WmlDocument doc) =>
+        PackageValidation.Errors(doc, FileFormatVersions.Office2007);
 }
