@@ -40,6 +40,7 @@ Issue #438 adds this browser/WASM surface:
 ```ts
 type Sha256Hex = string; // exactly 64 lower-case hexadecimal SHA-256 digits
 type ReviewProfile = "final" | "original" | "markup";
+type MarkupPresentation = "docxodus" | "word";
 type CommentProfile = "hidden" | "inline" | "endnotes" | "margin";
 
 interface ExportOptions {
@@ -47,6 +48,7 @@ interface ExportOptions {
   expectedSourceDigest?: Sha256Hex;
   reviewProfile: ReviewProfile;
   reviewProfileAlreadyApplied?: boolean;
+  markupPresentation?: MarkupPresentation; // markup only; default "docxodus"
   commentProfile: CommentProfile;
   title?: string;
   unsupportedContent?: "warn" | "strict";
@@ -442,6 +444,15 @@ other HTTP(S), WebSocket, service-worker, download, popup, and navigation reques
 private temporary directory when filesystem staging is necessary and removes only that directory
 after success or failure. Browser processes supplied by callers are never closed.
 
+The Node host reads and hashes the whole runtime asset graph (about 26 MB) once per process and
+serves only those verified bytes. The bootstrap module it generates attests the SHA-256 of the exact
+`export-assets.json` it verified, through `attestHostVerifiedRuntimeAssets`. When the manifest the
+page fetches has that digest, the page does not fetch and hash every runtime asset again. It still
+checks the manifest and its own materializer bundle, and each document still gets a fresh context and
+worker. Before this change (issue #852), the repeated hashing was about half a second of a one-page
+export. A page with no attestation, which covers every browser-only deployment, verifies each asset
+exactly as before.
+
 The preferred Node origin is a Playwright-routed, unresolvable HTTPS origin with no listening
 socket. Routes, WebSocket denial, service-worker blocking, permission denial, popup/download
 handlers, and the exact asset/input allowlist are installed before the first page request. Allowed
@@ -508,7 +519,7 @@ docxodus convert contract.docx --to html --output contract.html \
   --document-version 12 --review-profile final --comments endnotes
 
 docxodus convert contract.docx --to pdf --output contract.pdf \
-  --document-version 12 --review-profile markup --comments margin \
+  --document-version 12 --review-profile markup --markup-presentation word --comments margin \
   --expected-source-digest "$EXPECTED_SOURCE_DIGEST" \
   --unsupported-content strict --limit finalPages=5000 \
   --browser-executable /opt/chromium/chrome \
@@ -574,6 +585,25 @@ The caller's source bytes are immutable. Unless `reviewProfileAlreadyApplied` is
 the report records the source and derived package identities. `markup` renders the unchanged
 source. When #465 supplies an already policy-derived exact profile source, the renderer uses those
 bytes directly and never applies the policy a second time.
+
+`markupPresentation` chooses how `markup` draws revisions (issue #851). The default, `docxodus`,
+is Docxodus's own review style: insertions green and deletions red with light fills, moves purple,
+a pilcrow for a deleted paragraph mark, and a change bar beside each paragraph whose mark or
+properties changed. `word` is close to what Word prints with All Markup:
+
+- each author's insertions and deletions in that author's colour, underlined and struck through,
+  with no fills (an eight-colour built-in palette in order of each author's first revision; the
+  converter's `AuthorColors` overrides it per author);
+- moves green with double underline and double strikethrough;
+- Word's default shading for inserted, deleted and merged cells;
+- no pilcrow, and no inline marker for formatting or section changes;
+- one change bar in the left margin, 0.25in left of the text column, beside every paragraph that
+  holds a revision.
+
+The palette, the bar offset and the shading values are this implementation's choice in Word's
+style. They were not sampled from Word. `word` with any profile other than `markup` is
+`invalid_argument`. The report's options name `markupPresentation` only when it is `word`, and
+only then does it enter the layout digest, so every default report and digest is unchanged.
 
 Comments are orthogonal: `hidden`, `inline`, `endnotes`, or `margin`. A visible profile retains
 range, body, author, and date in body, headers, footers, footnotes, and endnotes, and draws the

@@ -45,19 +45,11 @@ public class DocxSessionNotePruneTests
             .First(t => t.Anchor.Scope == "body" && t.Anchor.Kind is "p" or "h"
                 && t.TextPreview.Contains(contains)).Anchor.Id;
 
-    private static List<string> SchemaFindings(byte[] bytes)
-    {
-        using var ms = new MemoryStream(bytes);
-        using var wDoc = WordprocessingDocument.Open(ms, false);
-        return new OpenXmlValidator().Validate(wDoc)
-            .Select(e => $"{e.Path?.XPath}: {e.Description}").ToList();
-    }
+    private static IReadOnlyList<PackageValidationError> SchemaFindings(byte[] bytes) =>
+        PackageValidation.Errors(bytes, DocumentFormat.OpenXml.FileFormatVersions.Office2007);
 
-    private static void AssertSchemaValid(byte[] bytes)
-    {
-        var errors = SchemaFindings(bytes);
-        Assert.True(errors.Count == 0, "OOXML schema errors:\n" + string.Join("\n", errors));
-    }
+    private static void AssertSchemaValid(byte[] bytes) =>
+        PackageValidation.AssertValid(bytes, DocumentFormat.OpenXml.FileFormatVersions.Office2007);
 
     /// <summary>
     /// Five paragraphs: one cites footnote 2 alone, two share footnote 1, one cites endnote 1,
@@ -354,6 +346,6 @@ public class DocxSessionNotePruneTests
         Assert.True(
             findings.Count <= baseline,
             $"delete added OOXML findings ({baseline} -> {findings.Count}):\n"
-            + string.Join("\n", findings));
+            + PackageValidation.Describe(findings));
     }
 }

@@ -173,13 +173,7 @@ public class DocxSessionReferenceFieldTests
         Assert.True(session.InsertTableOfFigures(anchor, Position.After).Success);
         Assert.True(session.InsertTableOfAuthorities(anchor, Position.After).Success);
 
-        using (var ms = new MemoryStream(session.Save(persistAnchorIds: false)))
-        using (var doc = WordprocessingDocument.Open(ms, false))
-        {
-            var errors = new OpenXmlValidator().Validate(doc).ToList();
-            Assert.True(errors.Count == 0,
-                string.Join(" | ", errors.Take(3).Select(e => e.Description)));
-        }
+        PackageValidation.AssertValid(session.Save(persistAnchorIds: false), DocumentFormat.OpenXml.FileFormatVersions.Office2007);
 
         // Each op is exactly one undo step, and three undos restore the original package byte for
         // byte. The comparison is on the SAVED package rather than the live checkpoint hash: an op

@@ -60,9 +60,7 @@ public class DocxSessionImageTests
         Assert.Equal(54, image.RenderedHeightPoints!.Value, 6);
 
         var saved = session.Save(true);
-        using (var stream = new MemoryStream(saved))
-        using (var document = WordprocessingDocument.Open(stream, false))
-            Assert.Empty(new OpenXmlValidator().Validate(document).Where(IsRealValidationError));
+        PackageValidation.AssertValid(saved, DocumentFormat.OpenXml.FileFormatVersions.Office2007, IsRealValidationError);
 
         Assert.True(session.RemoveImage(image.Id).Success);
         Assert.Empty(session.ListImages());
@@ -972,12 +970,8 @@ public class DocxSessionImageTests
         Assert.Equal(-23456, layout.GetProperty("verticalOffsetEmu").GetInt64());
     }
 
-    private static void AssertSchemaValid(byte[] bytes)
-    {
-        using var stream = new MemoryStream(bytes);
-        using var document = WordprocessingDocument.Open(stream, false);
-        Assert.Empty(new OpenXmlValidator().Validate(document).Where(IsRealValidationError));
-    }
+    private static void AssertSchemaValid(byte[] bytes) =>
+        PackageValidation.AssertValid(bytes, DocumentFormat.OpenXml.FileFormatVersions.Office2007, IsRealValidationError);
 
     /// <summary>CT_Anchor is a strict sequence. The validator catches order slips, but naming the
     /// expected sequence makes a failure say WHICH child moved.</summary>
@@ -996,8 +990,8 @@ public class DocxSessionImageTests
             Assert.NotNull(anchor.Attribute(required));
     }
 
-    private static bool IsRealValidationError(ValidationErrorInfo error) =>
-        !(error.Description ?? string.Empty).Contains("powertools.codeplex.com", StringComparison.Ordinal);
+    private static bool IsRealValidationError(PackageValidationError error) =>
+        !error.Description.Contains("powertools.codeplex.com", StringComparison.Ordinal);
 
     private static List<(string OwnerUri, List<(string RelId, string TargetUri)> Relationships)>
         ImageRelationships(byte[] bytes)

@@ -65,12 +65,8 @@ public class DocxSessionMoveBlockTests
     private static byte[] Reject(byte[] bytes) =>
         RevisionProcessor.RejectRevisions(new WmlDocument("rejected.docx", bytes)).DocumentByteArray;
 
-    private static void AssertValid(byte[] bytes)
-    {
-        using var stream = new MemoryStream(bytes);
-        using var document = WordprocessingDocument.Open(stream, false);
-        Assert.Empty(new OpenXmlValidator(FileFormatVersions.Office2019).Validate(document));
-    }
+    private static void AssertValid(byte[] bytes) =>
+        PackageValidation.AssertValid(bytes, FileFormatVersions.Office2019);
 
     [Fact]
     public void MoveBlock_Direct_ReordersSameElementAndUndoRedo()

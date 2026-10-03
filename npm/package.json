@@ -63,7 +63,7 @@
   ],
   "scripts": {
     "build:wasm": "../scripts/build-wasm.sh",
-    "build:ts": "tsc",
+    "build:ts": "tsc && node scripts/bundle-editor-deps.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.tests.json",
     "build:pagination-bundle": "esbuild src/pagination.ts --bundle --format=iife --global-name=DocxodusPagination --outfile=dist/pagination.bundle.js",
     "build:session-bundle": "esbuild src/session.ts --bundle --format=iife --global-name=DocxodusSession --outfile=dist/session.bundle.js",
@@ -133,6 +133,8 @@
     }
   },
   "devDependencies": {
+    "@atlaskit/pragmatic-drag-and-drop": "^2.0.2",
+    "@atlaskit/pragmatic-drag-and-drop-auto-scroll": "^3.0.0",
     "@playwright/test": "^1.57.0",
     "@types/node": "^20.10.0",
     "@types/react": "^19.2.7",
@@ -140,9 +142,5 @@
     "pdf-lib": "1.17.1",
     "pdfjs-dist": "6.2.108",
     "typescript": "^5.3.0"
-  },
-  "dependencies": {
-    "@atlaskit/pragmatic-drag-and-drop": "^2.0.2",
-    "@atlaskit/pragmatic-drag-and-drop-auto-scroll": "^3.0.0"
   }
 }

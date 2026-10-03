@@ -17,6 +17,7 @@ import {
 import {
   CommentRenderMode,
   PaginationMode,
+  RevisionPresentation,
   type PackageManifest,
   type PackageManifestInspectionLimits,
   type VersionInfo,
@@ -65,6 +66,12 @@ export type {
 } from "./font-contract.js";
 
 export type ReviewProfile = "final" | "original" | "markup";
+/**
+ * How the markup profile draws tracked changes (issue #851): `docxodus` (default) is Docxodus's own
+ * review style; `word` is close to Word's All Markup print — per-author colours, underline and
+ * strikethrough only, no fills or pilcrows, and left-margin change bars.
+ */
+export type MarkupPresentation = "docxodus" | "word";
 export type CommentProfile = "hidden" | "inline" | "endnotes" | "margin";
 export type UnsupportedContentPolicy = "warn" | "strict";
 
@@ -149,6 +156,8 @@ export interface PaginatedHtmlOptions {
   expectedSourceDigest?: string;
   reviewProfile: ReviewProfile;
   reviewProfileAlreadyApplied?: boolean;
+  /** Only with reviewProfile "markup"; default "docxodus". */
+  markupPresentation?: MarkupPresentation;
   commentProfile: CommentProfile;
   title?: string;
   unsupportedContent?: UnsupportedContentPolicy;
@@ -211,6 +220,8 @@ export interface RenderReportBase {
   options: {
     reviewProfile: ReviewProfile;
     reviewProfileAlreadyApplied: boolean;
+    /** Present only when the markup profile used the Word presentation. */
+    markupPresentation?: "word";
     commentProfile: CommentProfile;
     title: string;
     outputs: Array<"html" | "pdf">;
@@ -478,6 +489,7 @@ interface NormalizedOptions {
   expectedSourceDigest?: string;
   reviewProfile: ReviewProfile;
   reviewProfileAlreadyApplied: boolean;
+  markupPresentation: MarkupPresentation;
   commentProfile: CommentProfile;
   title: string;
   unsupportedContent: UnsupportedContentPolicy;
@@ -538,6 +550,7 @@ const REPORT_SCHEMA = "https://docxodus.dev/schemas/render/render-report/v2" as 
 const TEXT_ENCODER = new TextEncoder();
 const ALLOWED_REVIEW_PROFILES = new Set<ReviewProfile>(["final", "original", "markup"]);
 const ALLOWED_COMMENT_PROFILES = new Set<CommentProfile>(["hidden", "inline", "endnotes", "margin"]);
+const ALLOWED_MARKUP_PRESENTATIONS = new Set<MarkupPresentation>(["docxodus", "word"]);
 const ALLOWED_UNSUPPORTED_POLICIES = new Set<UnsupportedContentPolicy>(["warn", "strict"]);
 const PACKAGE_LIMIT_FINDINGS = new Set([
   "entry_count_limit_exceeded",
@@ -609,6 +622,16 @@ function normalizeOptions(options: PaginatedHtmlOptions): NormalizedOptions {
     fail("invalid_argument", "input_validation",
       "reviewProfileAlreadyApplied is invalid with the markup profile.",
       "Use unchanged source bytes for markup, or choose final/original.");
+  }
+  const markupPresentation = options.markupPresentation ?? "docxodus";
+  if (!ALLOWED_MARKUP_PRESENTATIONS.has(markupPresentation)) {
+    fail("invalid_argument", "input_validation", "markupPresentation is invalid.",
+      "Use docxodus or word.");
+  }
+  if (markupPresentation !== "docxodus" && options.reviewProfile !== "markup") {
+    fail("invalid_argument", "input_validation",
+      "markupPresentation applies only to the markup profile.",
+      "Omit markupPresentation, or use reviewProfile markup.");
   }
   const unsupportedContent = options.unsupportedContent ?? "warn";
   if (!ALLOWED_UNSUPPORTED_POLICIES.has(unsupportedContent)) {
@@ -704,6 +727,7 @@ function normalizeOptions(options: PaginatedHtmlOptions): NormalizedOptions {
     expectedSourceDigest: options.expectedSourceDigest,
     reviewProfile: options.reviewProfile,
     reviewProfileAlreadyApplied,
+    markupPresentation,
     commentProfile: options.commentProfile,
     title,
     unsupportedContent,
@@ -943,6 +967,35 @@ async function boundedResponseBytes(
   return bytes;
 }
 
+/**
+ * SHA-256 of the exact `export-assets.json` bytes a trusted Node host has already verified, with
+ * every asset that manifest names, before serving them to this page (issue #852). Set once, by the
+ * host's own bootstrap module, before any render.
+ */
+let hostVerifiedAssetManifestSha256: string | undefined;
+
+/**
+ * Host integration only — `@docxodus/export` calls this from the bootstrap module it generates and
+ * serves. The host reads and hashes the whole runtime asset graph once per process and serves exactly
+ * those verified bytes, so when the manifest this page fetches hashes to the attested digest, the page
+ * does not fetch and hash all ~26 MB of runtime assets again for every document. The manifest itself
+ * and the materializer bundle are still checked here. A page that never receives an attestation (any
+ * browser-only deployment) verifies every asset as before.
+ */
+export function attestHostVerifiedRuntimeAssets(manifestSha256: string): void {
+  if (typeof manifestSha256 !== "string" || !/^[0-9a-f]{64}$/.test(manifestSha256)) {
+    fail("unsupported_runtime", "wasm_initialization",
+      "The host runtime asset attestation is not a SHA-256 digest.",
+      "Use the bootstrap module @docxodus/export generates.");
+  }
+  if (hostVerifiedAssetManifestSha256 !== undefined && hostVerifiedAssetManifestSha256 !== manifestSha256) {
+    fail("unsupported_runtime", "wasm_initialization",
+      "The host runtime asset attestation may be set only once.",
+      "Load one host bootstrap module per page.");
+  }
+  hostVerifiedAssetManifestSha256 = manifestSha256;
+}
+
 async function loadRuntimeAssetIdentity(
   wasmBasePath: string,
   signal: AbortSignal,
@@ -1083,7 +1136,11 @@ async function loadRuntimeAssetIdentity(
       "Deploy the bundle and asset graph from the same Docxodus build.");
   }
 
-  const verifiedRuntimeAssets = assets.filter((entry) =>
+  // A host that verified this exact manifest and its assets serves only those bytes; hashing all of
+  // them again here cost roughly half a second per document (issue #852).
+  const hostVerified = hostVerifiedAssetManifestSha256 !== undefined
+    && await sha256(graphBytes) === hostVerifiedAssetManifestSha256;
+  const verifiedRuntimeAssets = hostVerified ? [] : assets.filter((entry) =>
     entry.path === "./docxodus.worker.js" || entry.path.startsWith("./wasm/_framework/"));
   const resolvedWasmBasePath = new URL(
     wasmBasePath.endsWith("/") ? wasmBasePath : `${wasmBasePath}/`,
@@ -1652,6 +1709,9 @@ function conversionOptions(options: NormalizedOptions) {
     renderFootnotesAndEndnotes: true,
     renderHeadersAndFooters: true,
     renderTrackedChanges: options.reviewProfile === "markup",
+    revisionPresentation: options.markupPresentation === "word"
+      ? RevisionPresentation.Word
+      : RevisionPresentation.Docxodus,
     showDeletedContent: true,
     renderMoveOperations: true,
     renderUnsupportedContentPlaceholders: true,
@@ -2901,11 +2961,18 @@ function automaticResourceCount(document: Document): { count: number; bytes: num
   return { count, bytes };
 }
 
+/** The report's and layout digest's record of the presentation: only the non-default one is named. */
+function markupPresentationField(options: NormalizedOptions): { markupPresentation?: "word" } {
+  return options.markupPresentation === "word" ? { markupPresentation: "word" } : {};
+}
+
 async function layoutDigestForOptions(options: NormalizedOptions): Promise<string> {
   const layoutContract = {
     title: options.title,
     reviewProfile: options.reviewProfile,
     reviewProfileAlreadyApplied: options.reviewProfileAlreadyApplied,
+    // Absent for the default, so default layouts keep the digest they had before the option.
+    ...markupPresentationField(options),
     commentProfile: options.commentProfile,
     pagination: {
       mode: "paginated",
@@ -3208,6 +3275,7 @@ function reportBase(
     options: {
       reviewProfile: options.reviewProfile,
       reviewProfileAlreadyApplied: options.reviewProfileAlreadyApplied,
+      ...markupPresentationField(options),
       commentProfile: options.commentProfile,
       title: options.title,
       outputs: ["html"],

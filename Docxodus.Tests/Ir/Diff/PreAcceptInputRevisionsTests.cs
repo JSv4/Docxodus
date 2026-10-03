@@ -25,17 +25,10 @@ namespace Docxodus.Tests.Ir.Diff;
 /// </summary>
 public class PreAcceptInputRevisionsTests
 {
-    private static int SchemaErrorCount(WmlDocument doc)
-    {
-        using var ms = new MemoryStream();
-        ms.Write(doc.DocumentByteArray, 0, doc.DocumentByteArray.Length);
-        ms.Position = 0;
-        using var wd = WordprocessingDocument.Open(ms, false);
-        var validator = new DocumentFormat.OpenXml.Validation.OpenXmlValidator();
-        return validator.Validate(wd).Count(e =>
-            e.ErrorType == DocumentFormat.OpenXml.Validation.ValidationErrorType.Schema &&
+    private static int SchemaErrorCount(WmlDocument doc) =>
+        PackageValidation.Errors(doc, DocumentFormat.OpenXml.FileFormatVersions.Office2007).Count(e =>
+            PackageValidation.IsSchemaError(e) &&
             !Docxodus.Tests.CorpusValidation.ExpectedErrors.Contains(e.Description));
-    }
 
     // ---- oracle (b): the flag IS the wrapper ----------------------------------------------------
 

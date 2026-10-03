@@ -1147,7 +1147,7 @@ function selectionHasFormat(key: FormatKey, fallback: HTMLElement): boolean {
   }
 }
 
-/** Build the full ConvertDocxToHtmlComplete arg list (stampAnchors = last arg). */
+/** Build the full ConvertDocxToHtmlComplete arg list (revisionPresentation = last arg). */
 function completeArgs(
   bytes: Uint8Array,
   cssPrefix: string,
@@ -1169,6 +1169,7 @@ function completeArgs(
     // whose output has to match this first paint byte-for-byte.
     /* renderFootnotesAndEndnotes */ true, /* renderHeadersAndFooters */ paginated,
     renderTrackedChanges, true, true, false, null, /* stampAnchors */ true,
+    /* revisionPresentation: Docxodus (block renders keep it) */ 0,
   ];
 }
 

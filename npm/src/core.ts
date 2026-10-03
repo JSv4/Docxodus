@@ -287,6 +287,7 @@ import {
   CommentRenderMode,
   PaginationMode,
   AnnotationLabelMode,
+  RevisionPresentation,
   RevisionType,
   DocxDiffRevisionGranularity,
   DocxDiffFormatComparison,
@@ -458,6 +459,7 @@ export {
   CommentRenderMode,
   PaginationMode,
   AnnotationLabelMode,
+  RevisionPresentation,
   RevisionType,
   DocxDiffRevisionGranularity,
   DocxDiffFormatComparison,
@@ -900,7 +902,8 @@ export async function convertDocxToHtml(
     options?.renderMoveOperations !== undefined ||
     options?.renderUnsupportedContentPlaceholders !== undefined ||
     options?.documentLanguage !== undefined ||
-    options?.stampAnchors !== undefined;
+    options?.stampAnchors !== undefined ||
+    options?.revisionPresentation !== undefined;
 
   // Use complete method when any new options are specified (most comprehensive)
   if (needsCompleteMethod || options?.renderAnnotations) {
@@ -925,7 +928,8 @@ export async function convertDocxToHtml(
       options?.renderMoveOperations ?? true,
       options?.renderUnsupportedContentPlaceholders ?? false,
       options?.documentLanguage ?? null,
-      options?.stampAnchors ?? false
+      options?.stampAnchors ?? false,
+      options?.revisionPresentation ?? RevisionPresentation.Docxodus
     );
   }
   // Use pagination-aware method when pagination is requested

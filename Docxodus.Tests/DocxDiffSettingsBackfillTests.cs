@@ -195,12 +195,7 @@ public class DocxDiffSettingsBackfillTests
         Assert.True(tfl < clr, $"themeFontLang not before clrSchemeMapping: [{string.Join(", ", names)}]");
 
         // The whole output validates against the Office schema (no invalid settings shape).
-        using var ms = new MemoryStream(redline.DocumentByteArray);
-        using var doc = WordprocessingDocument.Open(ms, false);
-        var errors = new OpenXmlValidator(FileFormatVersions.Office2019).Validate(doc)
-            .Where(e => e.Path?.XPath?.Contains("settings") == true)
-            .Select(e => $"{e.Id}: {e.Description}")
-            .ToList();
-        Assert.Empty(errors);
+        PackageValidation.AssertValid(redline, FileFormatVersions.Office2019,
+            e => e.XPath?.Contains("settings") == true);
     }
 }

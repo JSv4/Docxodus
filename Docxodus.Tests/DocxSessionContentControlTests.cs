@@ -101,11 +101,7 @@ public sealed class DocxSessionContentControlTests
         Assert.Equal("Beta", reopened.ListContentControls()
             .Single(control => control.NativeId == "104").Text);
         using var doc = WordprocessingDocument.Open(new MemoryStream(saved), false);
-        var validationErrors = new OpenXmlValidator(FileFormatVersions.Office2013).Validate(doc)
-            .Where(IsMaterialValidationError).ToList();
-        Assert.True(validationErrors.Count == 0, string.Join(Environment.NewLine,
-            validationErrors.Select(validation =>
-                $"{validation.Description} Node: {validation.Node?.OuterXml}")));
+        PackageValidation.AssertValid(doc, FileFormatVersions.Office2013, IsMaterialValidationError);
     }
 
     [Fact]
@@ -310,8 +306,7 @@ public sealed class DocxSessionContentControlTests
         Assert.Equal(7, Assert.Single(reopened.ListImages().Where(image =>
             image.IntrinsicWidthPixels == 7)).IntrinsicWidthPixels);
         using var document = WordprocessingDocument.Open(new MemoryStream(saved), false);
-        Assert.Empty(new OpenXmlValidator(FileFormatVersions.Office2013).Validate(document)
-            .Where(IsMaterialValidationError));
+        PackageValidation.AssertValid(document, FileFormatVersions.Office2013, IsMaterialValidationError);
     }
 
     [Fact]
@@ -1068,11 +1063,7 @@ public sealed class DocxSessionContentControlTests
         Assert.Equal("MS Gothic", (string?)checkboxFonts.Attribute(W + "ascii"));
         Assert.Equal("MS Gothic", (string?)checkboxFonts.Attribute(W + "hAnsi"));
         Assert.Single(document.MainDocumentPart!.ImageParts);
-        var validationErrors = new OpenXmlValidator(FileFormatVersions.Office2013).Validate(document)
-            .Where(IsMaterialValidationError).ToList();
-        Assert.True(validationErrors.Count == 0, string.Join(Environment.NewLine,
-            validationErrors.Select(validation =>
-                $"{validation.Description} Node: {validation.Node?.OuterXml}")));
+        PackageValidation.AssertValid(document, FileFormatVersions.Office2013, IsMaterialValidationError);
     }
 
     [Fact]
@@ -1130,11 +1121,7 @@ public sealed class DocxSessionContentControlTests
         }
 
         using var saved = WordprocessingDocument.Open(new MemoryStream(session.Save()), false);
-        var validationErrors = new OpenXmlValidator(FileFormatVersions.Office2013).Validate(saved)
-            .Where(IsMaterialValidationError).ToList();
-        Assert.True(validationErrors.Count == 0, string.Join(Environment.NewLine,
-            validationErrors.Select(validation =>
-                $"{validation.Description} Node: {validation.Node?.OuterXml}")));
+        PackageValidation.AssertValid(saved, FileFormatVersions.Office2013, IsMaterialValidationError);
     }
 
     [Fact]
@@ -1200,11 +1187,7 @@ public sealed class DocxSessionContentControlTests
             Assert.NotNull(control.Element(W + "sdtPr")!.Element(W + "placeholder"));
             Assert.Null(control.Element(W + "sdtPr")!.Element(W + "showingPlcHdr"));
             Assert.Equal(W + "r", Assert.Single(control.Element(W + "sdtContent")!.Elements()).Name);
-            var validationErrors = new OpenXmlValidator(FileFormatVersions.Office2013).Validate(saved)
-                .Where(IsMaterialValidationError).ToList();
-            Assert.True(validationErrors.Count == 0, string.Join(Environment.NewLine,
-                validationErrors.Select(validation =>
-                    $"{validation.Description} Node: {validation.Node?.OuterXml}")));
+            PackageValidation.AssertValid(saved, FileFormatVersions.Office2013, IsMaterialValidationError);
         }
 
         Assert.True(session.Undo());
@@ -1259,11 +1242,7 @@ public sealed class DocxSessionContentControlTests
             .ToList();
         Assert.Equal(new[] { "77777777", "77777777", "77777777" }, textIds);
 
-        var validationErrors = new OpenXmlValidator(FileFormatVersions.Office2013).Validate(document)
-            .Where(IsMaterialValidationError).ToList();
-        Assert.True(validationErrors.Count == 0, string.Join(Environment.NewLine,
-            validationErrors.Select(validation =>
-                $"{validation.Description} Node: {validation.Node?.OuterXml}")));
+        PackageValidation.AssertValid(document, FileFormatVersions.Office2013, IsMaterialValidationError);
     }
 
     [Fact]
@@ -1391,11 +1370,7 @@ public sealed class DocxSessionContentControlTests
         Assert.Equal(new[] { "rStyle", "rFonts" },
             runProperties.Elements().Select(element => element.Name.LocalName).ToArray());
         Assert.Equal("Wingdings", (string?)runProperties.Element(W + "rFonts")!.Attribute(W + "ascii"));
-        var validationErrors = new OpenXmlValidator(FileFormatVersions.Office2013).Validate(document)
-            .Where(IsMaterialValidationError).ToList();
-        Assert.True(validationErrors.Count == 0, string.Join(Environment.NewLine,
-            validationErrors.Select(validation =>
-                $"{validation.Description} Node: {validation.Node?.OuterXml}")));
+        PackageValidation.AssertValid(document, FileFormatVersions.Office2013, IsMaterialValidationError);
     }
 
     [Fact]
@@ -1596,7 +1571,7 @@ public sealed class DocxSessionContentControlTests
         return output.ToArray();
     }
 
-    private static bool IsMaterialValidationError(ValidationErrorInfo error) =>
+    private static bool IsMaterialValidationError(PackageValidationError error) =>
         error.Description?.Contains("The 'Ignorable' attribute", StringComparison.Ordinal) != true
         && error.Description?.Contains("http://powertools.codeplex.com/2011:Unid", StringComparison.Ordinal) != true;
 }

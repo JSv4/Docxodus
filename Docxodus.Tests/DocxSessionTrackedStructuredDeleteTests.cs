@@ -561,13 +561,6 @@ public class DocxSessionTrackedStructuredDeleteTests
         Assert.Equal(actualRemoved.Count, result.Removed.Count);
     }
 
-    private static void AssertSchemaValid(byte[] bytes)
-    {
-        using var stream = new MemoryStream(bytes);
-        using var document = WordprocessingDocument.Open(stream, false);
-        var errors = new OpenXmlValidator().Validate(document).ToList();
-        Assert.True(
-            errors.Count == 0,
-            "Unexpected schema errors:\n" + string.Join("\n", errors.Select(error => error.Description)));
-    }
+    private static void AssertSchemaValid(byte[] bytes) =>
+        PackageValidation.AssertValid(bytes, FileFormatVersions.Office2007);
 }

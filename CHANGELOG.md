@@ -6,6 +6,25 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Tracked changes can now be drawn the way Word prints them with All Markup (issue #851).
+  Docxodus's own review style draws insertions green and deletions red with light fills, moves in
+  purple, and visible pilcrows. The new Word presentation instead:
+  - colours each author's insertions and deletions in that author's colour, underlined and struck
+    through, with no fills and no pilcrows;
+  - draws moves green with double lines and keeps Word's default cell shading;
+  - puts one change bar in the left margin beside every changed paragraph.
+
+  The author palette and bar offset are in Word's style but were not sampled from Word.
+  `AuthorColors` overrides the colour per author. Ask for it with:
+  - `WmlToHtmlConverterSettings.RevisionPresentation = RevisionPresentation.Word`;
+  - `revisionPresentation: RevisionPresentation.Word` in npm `ConversionOptions`;
+  - `revision_presentation=1` in `docx-scalpel`'s `HtmlOptions`;
+  - `docx2html --track-changes --word-markup`;
+  - for the paginated export, `markupPresentation: "word"` with the `markup` review profile, or
+    `docxodus convert --review-profile markup --markup-presentation word`.
+
+  The default is unchanged everywhere. An export report names `markupPresentation` only when it is
+  `word`, so default reports and layout digests are byte-identical.
 - A table that moved elsewhere in the document is now marked as a move in comparison output, the way
   Word marks one (issue #844). `DocxDiff.Compare` and `DocxCompare.Compare` used to draw it as a
   deleted table and an unrelated inserted one, even though `DocxDiff.GetRevisions` already reported
@@ -29,6 +48,26 @@ All notable changes to this project will be documented in this file.
   Accepting all changes still gives the revised document and rejecting them the original with
   either setting off.
 
+### Changed
+
+- `@docxodus/export` spends about a quarter less time per document (issue #852). The time went to
+  per-document setup, not conversion. Each document's fresh browser page fetched and SHA-256-hashed
+  the whole runtime asset graph (about 26 MB) again, although the Node host had already verified
+  those exact bytes once for the process. The host now attests the verified manifest's digest to the
+  page, which then skips that repeat. Per-document isolation is unchanged: each document still gets
+  a fresh browser context and a fresh WASM worker.
+  - Measured on a one-page PDF export with the browser reused across a batch (median of 6 runs),
+    total time dropped from 1744 ms to 1297 ms, and WASM initialization from 897 ms to 467 ms.
+  - A browser-only deployment, with no host, still verifies every asset itself.
+- The `redline`, `docx2html` and `docx2oc` release binaries now start two to three times faster
+  (issue #855). They used to be published as compressed single files, and unpacking that
+  compressed bundle at every launch was most of a small run's time. They are now published
+  uncompressed and precompiled with ReadyToRun. On linux-x64, a one-paragraph `redline` compare
+  dropped from 663 ms to 234 ms, a one-page `docx2html` conversion from 404 ms to 212 ms, and
+  `--version` from 139 ms to 50 ms. Each binary grows from about 44 MB to about 139 MB. The npm,
+  WASM, NuGet and Python packages are unaffected. Trimming and NativeAOT, which could shrink the
+  binaries again, are tracked in #903.
+
 ### Fixed
 
 - Turkish (`tr-TR`) list numbering with `upperLetter` or `lowerLetter` now wraps after 30 repeats
@@ -37,6 +76,14 @@ All notable changes to this project will be documented in this file.
   single numbered paragraph with `w:start="2147483647"` produced a list marker about 74 million
   characters long wherever markers are resolved (comparison, markdown, HTML). Markers for counter
   values 1–870 are unchanged; larger values now wrap and stay at most 30 characters.
+- `import ... from "docxodus"` now works in plain Node.js ESM (issue #854). It failed with
+  `ERR_UNSUPPORTED_DIR_IMPORT` before any call, because the root entry re-exports the editor, and
+  the editor imported `@atlaskit/pragmatic-drag-and-drop` by directory path, which Node's ESM resolver
+  rejects (bundlers and Bun accept it). `dist/editor.js` now inlines the two drag-and-drop
+  packages, so they move from `dependencies` to `devDependencies` and consumers no longer install
+  them. The package-boundary check that runs before tests and publishing now imports every
+  JavaScript entry point (`docxodus`, `/core`, `/react`, `/embed`, `/worker`, `/export-browser`) in
+  plain Node from a consumer holding only the packed files.
 - DOCX → HTML conversion, and so the paginated export, now wraps text that comes before a tab
   when the text is longer than its line, as Word does (issue #891). It used to measure that text
   as one unwrapped line and pin it in a no-wrap box as wide as the tab stop it chose, 9 inches in

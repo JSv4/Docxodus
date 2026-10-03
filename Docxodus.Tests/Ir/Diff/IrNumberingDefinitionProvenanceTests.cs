@@ -188,15 +188,8 @@ public class IrNumberingDefinitionProvenanceTests
     private static string? ResolvedJustification(WmlDocument doc) =>
         (string?)MainBody(doc).Element(W + "p")?.Element(W + "pPr")?.Element(W + "jc")?.Attribute(W + "val");
 
-    private static void AssertSchemaValid(WmlDocument doc)
-    {
-        using var stream = new MemoryStream(doc.DocumentByteArray);
-        using var wdoc = WordprocessingDocument.Open(stream, false);
-        var errors = new OpenXmlValidator(FileFormatVersions.Office2019).Validate(wdoc)
-            .Select(error => $"{error.Id}@{error.Path?.XPath}: {error.Description}")
-            .ToList();
-        Assert.True(errors.Count == 0, string.Join("\n", errors));
-    }
+    private static void AssertSchemaValid(WmlDocument doc) =>
+        PackageValidation.AssertValid(doc, FileFormatVersions.Office2019);
 
     private static void WritePartXml(OpenXmlPart part, string xml)
     {

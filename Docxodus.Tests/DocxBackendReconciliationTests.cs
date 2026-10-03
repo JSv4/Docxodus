@@ -5,7 +5,6 @@ using System.Text;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
-using DocumentFormat.OpenXml.Validation;
 using DocumentFormat.OpenXml.Wordprocessing;
 using Docxodus.History;
 using Xunit;
@@ -243,15 +242,7 @@ public sealed class DocxBackendReconciliationTests
         var a = Entries(before); var b = Entries(after); Assert.Equal(a.Keys, b.Keys);
         foreach (var pair in a.Where(p => !changed.Contains(p.Key))) Assert.Equal(pair.Value, b[pair.Key]);
     }
-    internal static void NoNewValidationErrors(byte[] before, byte[] after)
-    {
-        static HashSet<string> Errors(byte[] bytes)
-        {
-            using var doc = WordprocessingDocument.Open(new MemoryStream(bytes), false);
-            return new OpenXmlValidator(FileFormatVersions.Office2019).Validate(doc)
-                .Select(e => e.Id + "|" + e.Part?.Uri + "|" + e.Path?.XPath).ToHashSet();
-        }
-        var baseline = Errors(before);
-        Assert.Empty(Errors(after).Except(baseline));
-    }
+    internal static void NoNewValidationErrors(byte[] before, byte[] after) =>
+        PackageValidation.AssertNoNewErrors(before, after, FileFormatVersions.Office2019,
+            PackageValidation.Keys.IdPartXPath);
 }

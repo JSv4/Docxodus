@@ -382,6 +382,8 @@ public partial class DocumentConverter
     /// <param name="renderMoveOperations">Whether to distinguish move operations from insert/delete (only when renderTrackedChanges=true)</param>
     /// <param name="renderUnsupportedContentPlaceholders">Whether to render placeholders for unsupported content (math, forms, WMF/EMF images)</param>
     /// <param name="documentLanguage">Override the document's default language for the HTML lang attribute (null = auto-detect from document)</param>
+    /// <param name="stampAnchors">Stamp block elements with data-anchor ids</param>
+    /// <param name="revisionPresentation">How tracked changes look: 0 = Docxodus style (default), 1 = Word's All Markup style</param>
     /// <returns>HTML string or JSON error object</returns>
     [JSExport]
     public static string ConvertDocxToHtmlComplete(
@@ -405,7 +407,8 @@ public partial class DocumentConverter
         bool renderMoveOperations,
         bool renderUnsupportedContentPlaceholders = false,
         string? documentLanguage = null,
-        bool stampAnchors = false)
+        bool stampAnchors = false,
+        int revisionPresentation = 0)
     {
         if (docxBytes == null || docxBytes.Length == 0)
         {
@@ -417,6 +420,7 @@ public partial class DocumentConverter
             var options = new Docxodus.Internal.HtmlConversionOptions
             {
                 StampAnchors = stampAnchors,
+                RevisionPresentation = revisionPresentation,
                 PageTitle = pageTitle ?? "Document",
                 CssClassPrefix = cssPrefix ?? "docx-",
                 FabricateCssClasses = fabricateClasses,

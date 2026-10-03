@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { build } from 'esbuild';
 
@@ -36,6 +36,23 @@ export async function checkCoreEntry(packageRoot, paths, temporaryRoot) {
   };
   copyFileSync(join(packageRoot, 'tests', 'node-core.mjs'), join(consumer, 'node-core.mjs'));
   run(['node-core.mjs'], 'plain Node ESM core consumer');
+
+  // Every JavaScript entry point must at least import in plain Node ESM, resolved through the
+  // exports map from a consumer that has only the packed files (issue #854: the root entry
+  // re-exported an editor whose drag-and-drop imports Node cannot resolve). React is a peer
+  // dependency the consumer supplies; a stub stands in for it.
+  const reactStub = join(consumer, 'node_modules', 'react');
+  mkdirSync(reactStub, { recursive: true });
+  writeFileSync(join(reactStub, 'package.json'), '{"name":"react","type":"module","exports":"./index.js"}\n');
+  writeFileSync(join(reactStub, 'index.js'), ['useState', 'useEffect', 'useCallback', 'useRef', 'createElement', 'useMemo']
+    .map((name) => `export function ${name}() { throw new Error('react stub'); }\n`).join(''));
+  const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'));
+  const specifiers = Object.entries(packageJson.exports)
+    .filter(([, target]) => typeof target === 'object' && target.import?.endsWith('.js'))
+    .map(([subpath]) => join('docxodus', subpath).replace(/\/\.$/, ''));
+  writeFileSync(join(consumer, 'node-entries.mjs'),
+    specifiers.map((specifier) => `await import(${JSON.stringify(specifier)});\n`).join(''));
+  run(['node-entries.mjs'], `plain Node ESM import of ${specifiers.join(', ')}`);
 
   // Check both modern exports-map resolution and the legacy typesVersions path.
   writeFileSync(join(consumer, 'consumer.mts'), `
