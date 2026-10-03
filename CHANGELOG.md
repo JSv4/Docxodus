@@ -31,6 +31,12 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Turkish (`tr-TR`) list numbering with `upperLetter` or `lowerLetter` now wraps after 30 repeats
+  of its 29-letter alphabet, as the default formatter wraps after 30 repeats of 26 letters (PR
+  #893). It used to repeat the letter once per pass through the alphabet with no limit, so a
+  single numbered paragraph with `w:start="2147483647"` produced a list marker about 74 million
+  characters long wherever markers are resolved (comparison, markdown, HTML). Markers for counter
+  values 1–870 are unchanged; larger values now wrap and stay at most 30 characters.
 - DOCX → HTML conversion, and so the paginated export, now wraps text that comes before a tab
   when the text is longer than its line, as Word does (issue #891). It used to measure that text
   as one unwrapped line and pin it in a no-wrap box as wide as the tab stop it chose, 9 inches in
