@@ -150,7 +150,7 @@ jobs:
           fi
 
       - name: Publish self-contained
-        run: dotnet publish tools/redline/redline.csproj -c Release -r ${{ matrix.rid }} --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:Version=${{ steps.version.outputs.VERSION }} -o ./publish
+        run: dotnet publish tools/redline/redline.csproj -c Release -r ${{ matrix.rid }} --self-contained true -p:PublishSingleFile=true -p:PublishReadyToRun=true -p:Version=${{ steps.version.outputs.VERSION }} -o ./publish
 
       - name: Upload binary
         uses: actions/upload-artifact@v7
@@ -200,7 +200,7 @@ jobs:
           fi
 
       - name: Publish self-contained
-        run: dotnet publish tools/docx2html/docx2html.csproj -c Release -r ${{ matrix.rid }} --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:Version=${{ steps.version.outputs.VERSION }} -o ./publish
+        run: dotnet publish tools/docx2html/docx2html.csproj -c Release -r ${{ matrix.rid }} --self-contained true -p:PublishSingleFile=true -p:PublishReadyToRun=true -p:Version=${{ steps.version.outputs.VERSION }} -o ./publish
 
       - name: Upload binary
         uses: actions/upload-artifact@v7
@@ -250,7 +250,7 @@ jobs:
           fi
 
       - name: Publish self-contained
-        run: dotnet publish tools/docx2oc/docx2oc.csproj -c Release -r ${{ matrix.rid }} --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:Version=${{ steps.version.outputs.VERSION }} -o ./publish
+        run: dotnet publish tools/docx2oc/docx2oc.csproj -c Release -r ${{ matrix.rid }} --self-contained true -p:PublishSingleFile=true -p:PublishReadyToRun=true -p:Version=${{ steps.version.outputs.VERSION }} -o ./publish
 
       - name: Upload binary
         uses: actions/upload-artifact@v7
