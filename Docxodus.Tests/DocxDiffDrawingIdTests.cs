@@ -174,13 +174,10 @@ public class DocxDiffDrawingIdTests
         Assert.Empty(ValidatorErrorIds(output).Except(ValidatorErrorIds(original)).Except(ValidatorErrorIds(revised)));
     }
 
-    private static string[] ValidatorErrorIds(WmlDocument document)
-    {
-        using var package = WordprocessingDocument.Open(new MemoryStream(document.DocumentByteArray), false);
-        return new OpenXmlValidator(FileFormatVersions.Office2019).Validate(package)
-            .Select(error => $"{error.Id}@{error.Node?.LocalName}")
+    private static string[] ValidatorErrorIds(WmlDocument document) =>
+        PackageValidation.Errors(document, FileFormatVersions.Office2019)
+            .Select(PackageValidation.Keys.IdAtNode)
             .ToArray();
-    }
 
     private static string[] DocPrIds(XElement root) =>
         root.Descendants(Wp + "docPr").Select(docPr => (string)docPr.Attribute("id")!).ToArray();

@@ -291,15 +291,9 @@ public class DocxDiffCommentRealDocTests
         return body is null ? "" : string.Concat(body.Descendants<Text>().Select(t => t.Text));
     }
 
-    private static HashSet<string> SchemaErrors(byte[] bytes)
-    {
-        using var ms = new MemoryStream(bytes);
-        using var w = WordprocessingDocument.Open(ms, false);
-        var v = new OpenXmlValidator(FileFormatVersions.Office2019);
-        return v.Validate(w)
-            .Select(e => $"{e.Id}@{e.Part?.Uri}: {Regex.Replace(e.Description, "'[0-9]+'", "'#'")}")
-            .ToHashSet();
-    }
+    private static HashSet<string> SchemaErrors(byte[] bytes) =>
+        PackageValidation.ErrorKeys(bytes, FileFormatVersions.Office2019,
+            PackageValidation.Keys.IdAtPartNumberNormalizedDescription);
 
     private static string Dup(IEnumerable<string> ids) =>
         string.Join(",", ids.GroupBy(x => x).Where(g => g.Count() > 1).Select(g => g.Key));

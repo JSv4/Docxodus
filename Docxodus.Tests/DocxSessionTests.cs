@@ -1908,10 +1908,7 @@ public class DocxSessionTests
         Assert.Equal(w + "numIdMacAtCleanup", root.Elements().Last().Name);
         Assert.Equal(2, root.Elements(w + "num").Count());
 
-        var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator(FileFormatVersions.Office2019)
-            .Validate(numberingPart)
-            .ToList();
-        Assert.Empty(errors);
+        PackageValidation.AssertValid(numberingPart, FileFormatVersions.Office2019);
     }
 
     // ─── SetListStartOverride / ClearListStartOverride (issue #314) ─────────
@@ -5346,12 +5343,8 @@ public class DocxSessionTests
         Assert.True(names.IndexOf("hdrShapeDefaults") < names.IndexOf("shapeDefaults"),
             $"unknown children reordered: [{string.Join(", ", names)}]");
 
-        var schemaErrors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator(FileFormatVersions.Office2019)
-            .Validate(doc.MainDocumentPart.DocumentSettingsPart)
-            .Where(e => e.ErrorType == DocumentFormat.OpenXml.Validation.ValidationErrorType.Schema)
-            .Select(e => e.Description)
-            .ToList();
-        Assert.True(schemaErrors.Count == 0, string.Join("; ", schemaErrors));
+        PackageValidation.AssertValid(doc.MainDocumentPart.DocumentSettingsPart, FileFormatVersions.Office2019,
+            PackageValidation.IsSchemaError);
     }
 
     /// <summary>Same corruption, proven on a real Word-authored fixture whose settings part
@@ -5368,12 +5361,8 @@ public class DocxSessionTests
         using var saved = new MemoryStream(s.Save());
         using var doc = WordprocessingDocument.Open(saved, false);
         Assert.NotNull(doc.MainDocumentPart!.DocumentSettingsPart!.Settings.Elements<EvenAndOddHeaders>().SingleOrDefault());
-        var schemaErrors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator(FileFormatVersions.Office2019)
-            .Validate(doc.MainDocumentPart.DocumentSettingsPart)
-            .Where(e => e.ErrorType == DocumentFormat.OpenXml.Validation.ValidationErrorType.Schema)
-            .Select(e => e.Description)
-            .ToList();
-        Assert.True(schemaErrors.Count == 0, string.Join("; ", schemaErrors));
+        PackageValidation.AssertValid(doc.MainDocumentPart.DocumentSettingsPart, FileFormatVersions.Office2019,
+            PackageValidation.IsSchemaError);
     }
 
     // The projection numbers header/footer scopes hdr1/hdr2… by part-collection order, which
@@ -5602,10 +5591,9 @@ public class DocxSessionTests
     {
         using var ms = new MemoryStream(bytes);
         using var d = WordprocessingDocument.Open(ms, false);
-        return new DocumentFormat.OpenXml.Validation.OpenXmlValidator(FileFormatVersions.Office2019)
-            .Validate(d.MainDocumentPart!)
-            .Where(e => e.ErrorType == DocumentFormat.OpenXml.Validation.ValidationErrorType.Schema)
-            .Select(e => e.Description)
+        return PackageValidation.Errors(d.MainDocumentPart!, FileFormatVersions.Office2019)
+            .Where(PackageValidation.IsSchemaError)
+            .Select(PackageValidation.Keys.Description)
             .ToList();
     }
 

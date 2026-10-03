@@ -239,18 +239,12 @@ public class DocxDiffHeaderFooterSmokeTests
             .ToList();
     }
 
-    private static List<string> SchemaErrors(byte[] bytes)
-    {
-        using var ms = new MemoryStream();
-        ms.Write(bytes, 0, bytes.Length);
-        using var wd = WordprocessingDocument.Open(ms, false);
-        var validator = new OpenXmlValidator();
-        return validator.Validate(wd)
-            .Where(e => e.ErrorType == DocumentFormat.OpenXml.Validation.ValidationErrorType.Schema &&
+    private static List<string> SchemaErrors(byte[] bytes) =>
+        PackageValidation.Errors(bytes, DocumentFormat.OpenXml.FileFormatVersions.Office2007)
+            .Where(e => PackageValidation.IsSchemaError(e) &&
                         !Docxodus.Tests.CorpusValidation.ExpectedErrors.Contains(e.Description))
-            .Select(e => $"{e.Part?.Uri}: {e.Description}")
+            .Select(PackageValidation.Keys.PartDescription)
             .ToList();
-    }
 
     /// <summary>Run the headless-LibreOffice header/footer render oracle; soft-skip when soffice/uno is
     /// unavailable (the comment-fidelity suite's portability convention). Tries python3.13 first (the

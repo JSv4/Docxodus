@@ -525,11 +525,7 @@ public class DocxSessionRevisionTests
         Assert.Equal(id, (string?)children[revisionIndex + 1].Attribute(W.id));
         Assert.Equal(id, (string?)children[revisionIndex + 2].Element(W.commentReference)!.Attribute(W.id));
 
-        var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator(
-                FileFormatVersions.Office2019)
-            .Validate(doc)
-            .ToList();
-        Assert.Empty(errors);
+        PackageValidation.AssertValid(doc, FileFormatVersions.Office2019);
     }
 
     [Fact]
@@ -649,11 +645,7 @@ public class DocxSessionRevisionTests
             Assert.Contains("B2", VisibleText(bytes));
         }
 
-        var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator(
-                FileFormatVersions.Office2019)
-            .Validate(doc)
-            .ToList();
-        Assert.Empty(errors);
+        PackageValidation.AssertValid(doc, FileFormatVersions.Office2019);
     }
 
     [Theory]
@@ -694,11 +686,7 @@ public class DocxSessionRevisionTests
         else
             Assert.Equal(startIndex + 1, endIndex);
 
-        var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator(
-                FileFormatVersions.Office2019)
-            .Validate(doc)
-            .ToList();
-        Assert.Empty(errors);
+        PackageValidation.AssertValid(doc, FileFormatVersions.Office2019);
     }
 
     [Fact]
@@ -722,11 +710,7 @@ public class DocxSessionRevisionTests
             e => e.Descendants(W.t).Any(t => t.Value == "Formatted paragraph."));
         Assert.NotNull(children[endIndex + 1].Element(W.commentReference));
 
-        var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator(
-                FileFormatVersions.Office2019)
-            .Validate(doc)
-            .ToList();
-        Assert.Empty(errors);
+        PackageValidation.AssertValid(doc, FileFormatVersions.Office2019);
     }
 
     // ─── Parity with whole-document accept/reject ─────────────────────────
@@ -869,11 +853,7 @@ public class DocxSessionRevisionTests
             Assert.Empty(changes[1].Element(W.rPr)!.Elements());
             Assert.Empty(changes.SelectMany(c => c.Element(W.rPr)!.Descendants(W.rPrChange)));
 
-            var schemaErrors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator(
-                    FileFormatVersions.Office2019)
-                .Validate(doc)
-                .ToList();
-            Assert.Empty(schemaErrors);
+            PackageValidation.AssertValid(doc, FileFormatVersions.Office2019);
         }
 
         Assert.True(s.AcceptRevision(listed.Id).Success);

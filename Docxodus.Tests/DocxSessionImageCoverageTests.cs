@@ -691,15 +691,9 @@ public class DocxSessionImageCoverageTests
             && target.Anchor.Kind is "p" or "h" or "li")
             .Select(target => target.Anchor.Id).Distinct().ToArray();
 
-    private static void AssertSchemaValid(byte[] bytes)
-    {
-        using var stream = new MemoryStream(bytes);
-        using var document = WordprocessingDocument.Open(stream, false);
-        var errors = new OpenXmlValidator().Validate(document)
-            .Where(error => !(error.Description ?? string.Empty).Contains("powertools.codeplex.com", StringComparison.Ordinal))
-            .Select(error => error.Description).ToList();
-        Assert.True(errors.Count == 0, string.Join("\n", errors));
-    }
+    private static void AssertSchemaValid(byte[] bytes) =>
+        PackageValidation.AssertValid(bytes, DocumentFormat.OpenXml.FileFormatVersions.Office2007,
+            error => !error.Description.Contains("powertools.codeplex.com", StringComparison.Ordinal));
 
     private static (string OwnerUri, string RelId, string TargetUri)[] FlatImageRelationships(byte[] bytes)
     {

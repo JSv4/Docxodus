@@ -125,10 +125,7 @@ public class DocxSessionS1FeaturesTests
         // so it must be the first rPr child — before w:b / w:sz.
         Assert.Equal(W + "rFonts", rPr.Elements().First().Name);
 
-        using var ms = new MemoryStream(bytes);
-        using var doc = WordprocessingDocument.Open(ms, false);
-        var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator().Validate(doc).ToList();
-        Assert.Empty(errors);
+        PackageValidation.AssertValid(bytes, DocumentFormat.OpenXml.FileFormatVersions.Office2007);
     }
 
     [Theory]
@@ -159,13 +156,7 @@ public class DocxSessionS1FeaturesTests
             .Concat(tracked ? new[] { "rPrChange" } : Array.Empty<string>());
         Assert.Equal(expected, changedRun.Element(W + "rPr")!.Elements().Select(e => e.Name.LocalName));
 
-        using var ms = new MemoryStream(bytes);
-        using var doc = WordprocessingDocument.Open(ms, false);
-        var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator(
-                DocumentFormat.OpenXml.FileFormatVersions.Office2019)
-            .Validate(doc)
-            .ToList();
-        Assert.Empty(errors);
+        PackageValidation.AssertValid(bytes, DocumentFormat.OpenXml.FileFormatVersions.Office2019);
     }
 
     [Fact]
@@ -426,13 +417,7 @@ public class DocxSessionS1FeaturesTests
 
         var bytes = session.Save();
 
-        using var ms = new MemoryStream(bytes);
-        using var wDoc = WordprocessingDocument.Open(ms, false);
-        var validator = new DocumentFormat.OpenXml.Validation.OpenXmlValidator();
-        var errors = validator.Validate(wDoc)
-            .Select(e => $"{e.Path?.XPath}: {e.Description}")
-            .ToList();
-        Assert.True(errors.Count == 0, "OOXML schema errors:\n" + string.Join("\n", errors));
+        PackageValidation.AssertValid(bytes, DocumentFormat.OpenXml.FileFormatVersions.Office2007);
     }
 
     [Fact]

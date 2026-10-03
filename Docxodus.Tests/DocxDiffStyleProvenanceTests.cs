@@ -286,13 +286,7 @@ public class DocxDiffStyleProvenanceTests
         using var wdoc = WordprocessingDocument.Open(stream, false);
         var styles = wdoc.MainDocumentPart!.StyleDefinitionsPart!;
         foreach (var version in new[] { FileFormatVersions.Office2010, FileFormatVersions.Office2019 })
-        {
-            var errors = new OpenXmlValidator(version).Validate(styles)
-                .Select(error => $"{error.Id}@{error.Path?.XPath}: {error.Description}")
-                .ToList();
-            Assert.True(errors.Count == 0,
-                $"styles.xml schema errors for {version}:\n{string.Join("\n", errors)}");
-        }
+            PackageValidation.AssertValid(styles, version);
     }
 
     private static void AddImplicitHeader(MainDocumentPart main, Body body)

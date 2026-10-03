@@ -123,29 +123,17 @@ public class IrCompositeCrossKindNoteTests
             $"{because}: dangling endnote refs -> {string.Join(",", UnresolvedRefs(doc, "endnoteReference", "endnote", false))}");
     }
 
-    private static HashSet<string> SchemaErrors(WmlDocument doc)
-    {
-        using var ms = new MemoryStream(doc.DocumentByteArray);
-        using var w = WordprocessingDocument.Open(ms, false);
-        return new OpenXmlValidator(FileFormatVersions.Office2019).Validate(w)
-            .Select(e => $"{e.Id}@{e.Path?.XPath}: {e.Description}").ToHashSet();
-    }
-
-    private static void AssertNoNewSchemaErrors(WmlDocument baseDoc, WmlDocument produced)
-    {
-        // Sem_MissingReferenceElement is EXCLUDED: OpenXmlValidator does not resolve a note reference that lives
-        // inside another note's definition body against the sibling notes part (a footnoteReference nested in an
-        // endnote body, or vice versa) — it false-positives on such refs even when they resolve, and the base doc
-        // already carries the same error (see DocxDiffFootnoteRobustnessTests.CrossKindNestedNoteReference_...).
-        // The base-subtraction cannot cancel it either, because the renumber legitimately changes the id embedded
-        // in the message string. Reference RESOLVABILITY is instead asserted by the structural AssertAllNoteRefsResolve
-        // oracle; every OTHER schema error (duplicate ids, malformed markup, etc.) is still caught here.
-        static HashSet<string> Real(WmlDocument d) =>
-            SchemaErrors(d).Where(e => !e.Contains("Sem_MissingReferenceElement")).ToHashSet();
-        var baseErrors = Real(baseDoc);
-        var newErrors = Real(produced).Where(e => !baseErrors.Contains(e)).ToList();
-        Assert.True(newErrors.Count == 0, $"new schema errors: {string.Join(" | ", newErrors.Take(5))}");
-    }
+    // Sem_MissingReferenceElement is EXCLUDED: OpenXmlValidator does not resolve a note reference that lives
+    // inside another note's definition body against the sibling notes part (a footnoteReference nested in an
+    // endnote body, or vice versa) — it false-positives on such refs even when they resolve, and the base doc
+    // already carries the same error (see DocxDiffFootnoteRobustnessTests.CrossKindNestedNoteReference_...).
+    // The base-subtraction cannot cancel it either, because the renumber legitimately changes the id embedded
+    // in the message string. Reference RESOLVABILITY is instead asserted by the structural AssertAllNoteRefsResolve
+    // oracle; every OTHER schema error (duplicate ids, malformed markup, etc.) is still caught here.
+    private static void AssertNoNewSchemaErrors(WmlDocument baseDoc, WmlDocument produced) =>
+        PackageValidation.AssertNoNewErrors(baseDoc, produced, FileFormatVersions.Office2019,
+            PackageValidation.Keys.IdAtXPathDescription,
+            e => !PackageValidation.Keys.IdAtXPathDescription(e).Contains("Sem_MissingReferenceElement"));
 
     // ------------------------------------------------------------------ 1. base cross-kind nesting survives N-way renumber
 

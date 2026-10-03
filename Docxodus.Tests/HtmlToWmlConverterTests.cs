@@ -9,9 +9,11 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Xml;
 using System.Xml.Linq;
+using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Validation;
 using Docxodus;
+using Docxodus.Tests;
 using Xunit;
 using System.Text.RegularExpressions;
 
@@ -424,14 +426,8 @@ namespace OxPt
                 {
                     XDocument xDoc = document.MainDocumentPart.GetXDocument();
                     document.MainDocumentPart.PutXDocumentWithFormatting();
-                    OpenXmlValidator validator = new OpenXmlValidator();
-                    var errors = validator.Validate(document);
-                    var errorsString = errors
-                        .Select(e => e.Description + Environment.NewLine)
-                        .StringConcatenate();
-
                     // Assert that there were no errors in the generated document.
-                    Assert.Equal("", errorsString);
+                    PackageValidation.AssertValid(document, FileFormatVersions.Office2007);
                 }
                 formattedDoc = new WmlDocument(destDocxFi.FullName, ms.ToArray());
             }

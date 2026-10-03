@@ -204,16 +204,8 @@ public class IrBlockSdtMarkupRendererTests
         Assert.Equal(starts.Count, starts.Distinct(StringComparer.Ordinal).Count());
     }
 
-    private static void AssertSchemaValid(WmlDocument document)
-    {
-        using var stream = new MemoryStream(document.DocumentByteArray);
-        using var wordDocument = WordprocessingDocument.Open(stream, false);
-        var errors = new OpenXmlValidator().Validate(wordDocument)
-            .Where(e => e.ErrorType == DocumentFormat.OpenXml.Validation.ValidationErrorType.Schema)
-            .ToList();
-        Assert.True(errors.Count == 0,
-            "Unexpected schema errors:\n" + string.Join("\n", errors.Select(e => e.Description)));
-    }
+    private static void AssertSchemaValid(WmlDocument document) =>
+        PackageValidation.AssertValid(document, DocumentFormat.OpenXml.FileFormatVersions.Office2007, PackageValidation.IsSchemaError);
 
     private static string? Tag(XElement sdt) =>
         (string?)sdt.Element(W.sdtPr)?.Element(W.tag)?.Attribute(W.val);

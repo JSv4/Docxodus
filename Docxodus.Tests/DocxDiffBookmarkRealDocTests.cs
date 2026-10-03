@@ -389,24 +389,18 @@ public class DocxDiffBookmarkRealDocTests
     private static string Dup(List<int> ids) =>
         string.Join(",", ids.GroupBy(x => x).Where(g => g.Count() > 1).Select(g => g.Key));
 
-    private static HashSet<string> SchemaErrors(byte[] bytes)
-    {
-        using var ms = new MemoryStream(bytes);
-        using var w = WordprocessingDocument.Open(ms, false);
-        var v = new OpenXmlValidator(FileFormatVersions.Office2019);
-        // Key = TYPE + PART + value-normalized DESCRIPTION (no XPath: the diff relocates runs, so a pre-existing
-        // source error must match input↔output by type/part, not absolute position). Numeric ids are normalized
-        // out of the description ('5' -> '#') so a LEGITIMATE footnote/endnote/bookmark RENUMBER — which changes
-        // the value a pre-existing error names — still dedups. The motivating case: the SDK's
-        // Sem_MissingReferenceElement is a documented FALSE POSITIVE on a note-in-note footnoteReference (it is
-        // reported even when the target footnote exists; see docs/ooxml_corner_cases.md). When the engine
-        // correctly compacts a gapped note id (5 -> 4) the error's value follows, and without normalization the
-        // input copy ('5') and output copy ('4') would not match, mis-counting a non-defect as a NEW error.
-        // PART stays in the key so a genuinely new dangling reference in a DIFFERENT part is still surfaced; and
-        // body/note/bookmark reference resolvability is independently guarded by the BookmarkIds, Projection
-        // .Dangling, and UnresolvedNoteRefs oracles, which do not rely on the SDK validator at all.
-        return v.Validate(w)
-            .Select(e => $"{e.Id}@{e.Part?.Uri}: {Regex.Replace(e.Description, "'[0-9]+'", "'#'")}")
-            .ToHashSet();
-    }
+    // Key = TYPE + PART + value-normalized DESCRIPTION (no XPath: the diff relocates runs, so a pre-existing
+    // source error must match input↔output by type/part, not absolute position). Numeric ids are normalized
+    // out of the description ('5' -> '#') so a LEGITIMATE footnote/endnote/bookmark RENUMBER — which changes
+    // the value a pre-existing error names — still dedups. The motivating case: the SDK's
+    // Sem_MissingReferenceElement is a documented FALSE POSITIVE on a note-in-note footnoteReference (it is
+    // reported even when the target footnote exists; see docs/ooxml_corner_cases.md). When the engine
+    // correctly compacts a gapped note id (5 -> 4) the error's value follows, and without normalization the
+    // input copy ('5') and output copy ('4') would not match, mis-counting a non-defect as a NEW error.
+    // PART stays in the key so a genuinely new dangling reference in a DIFFERENT part is still surfaced; and
+    // body/note/bookmark reference resolvability is independently guarded by the BookmarkIds, Projection
+    // .Dangling, and UnresolvedNoteRefs oracles, which do not rely on the SDK validator at all.
+    private static HashSet<string> SchemaErrors(byte[] bytes) =>
+        PackageValidation.ErrorKeys(bytes, FileFormatVersions.Office2019,
+            PackageValidation.Keys.IdAtPartNumberNormalizedDescription);
 }
