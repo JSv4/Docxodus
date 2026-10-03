@@ -804,6 +804,19 @@ namespace Docxodus
             }
         }
 
+        /// <summary>Cells owned by this row, including cells in SDT/custom-XML wrappers,
+        /// but excluding cells of nested tables inside them.</summary>
+        internal static IEnumerable<XElement> RowCells(XElement row)
+        {
+            foreach (var child in row.Elements())
+            {
+                if (child.Name == W.tc) yield return child;
+                // Stop at a cell: its content, including any nested table, is not this row's.
+                else if (child.Name != W.trPr && child.Name != W.tblPrEx)
+                    foreach (var cell in RowCells(child)) yield return cell;
+            }
+        }
+
         /// <summary>
         /// The font a run's text is measured in: the run's own <c>pt:FontName</c>, else its nearest
         /// paragraph's, else <c>null</c>. <c>FormattingAssembler</c> sets neither when the resolved
