@@ -6145,6 +6145,10 @@ listSeparator
         public static XName TabWidth = pt + "TabWidth";
         public static XName Leader = pt + "Leader";
         public static XName TabAlignment = pt + "TabAlignment";
+        /// <summary>On a <c>w:tab</c>: the text before it is longer than its line, so it wraps and
+        /// the tab advances from the pen on the last line (issue #891). The converter then lays the
+        /// segment out in normal flow instead of pinning it in a no-wrap box.</summary>
+        public static XName TabAfterWrappedText = pt + "TabAfterWrappedText";
 
         public static XName ListItemRun = pt + "ListItemRun";
         public static XName EmptyParagraph = pt + "EmptyParagraph";
