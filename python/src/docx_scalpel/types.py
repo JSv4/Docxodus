@@ -4139,7 +4139,10 @@ class HtmlOptions:
     Integer-coded modes match the wire contract:
     ``comment_render_mode`` -1=disabled,0=endnote,1=inline,2=margin;
     ``pagination_mode`` 0=none,1=paginated;
-    ``annotation_label_mode`` 0=above,1=inline,2=tooltip,3=none.
+    ``annotation_label_mode`` 0=above,1=inline,2=tooltip,3=none;
+    ``revision_presentation`` 0=docxodus,1=word (how rendered tracked changes look: Word's
+    All Markup style colours each author, underlines/strikes only, and draws left-margin
+    change bars).
     """
 
     page_title: str = "Document"
@@ -4159,6 +4162,7 @@ class HtmlOptions:
     render_tracked_changes: bool = False
     show_deleted_content: bool = True
     render_move_operations: bool = True
+    revision_presentation: int = 0
     render_unsupported_content_placeholders: bool = False
     document_language: str | None = None
 
@@ -4182,6 +4186,7 @@ class HtmlOptions:
             "renderTrackedChanges": self.render_tracked_changes,
             "showDeletedContent": self.show_deleted_content,
             "renderMoveOperations": self.render_move_operations,
+            "revisionPresentation": self.revision_presentation,
             "renderUnsupportedContentPlaceholders": self.render_unsupported_content_placeholders,
         }
         if self.document_language is not None:

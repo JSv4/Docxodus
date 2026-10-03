@@ -66,6 +66,27 @@ namespace Docxodus
     }
 
     /// <summary>
+    /// How rendered tracked changes look (issue #851). Only consulted when tracked changes are rendered.
+    /// </summary>
+    public enum RevisionPresentation
+    {
+        /// <summary>
+        /// Docxodus's own review style (default): insertions green and deletions red, each with a
+        /// light fill, moves in purple, a pilcrow for a deleted paragraph mark, and a change bar
+        /// beside each paragraph whose mark or properties changed.
+        /// </summary>
+        Docxodus,
+
+        /// <summary>
+        /// Close to what Word prints with All Markup: each author's revisions in that author's
+        /// colour, underlined when inserted and struck through when deleted, with no fills and no
+        /// pilcrows; moves in green with double underline and double strikethrough; and one change
+        /// bar in the left margin beside every paragraph that holds a revision.
+        /// </summary>
+        Word,
+    }
+
+    /// <summary>
     /// Specifies types of content that cannot be fully converted to HTML.
     /// </summary>
     public enum UnsupportedContentType
@@ -143,6 +164,13 @@ namespace Docxodus
         /// Custom colors for different authors (author name -> CSS color)
         /// </summary>
         public Dictionary<string, string>? AuthorColors;
+
+        /// <summary>
+        /// How rendered tracked changes look (default <see cref="Docxodus.RevisionPresentation.Docxodus"/>).
+        /// With <see cref="Docxodus.RevisionPresentation.Word"/>, <see cref="AuthorColors"/> overrides the
+        /// colour an author would otherwise take from the built-in author palette.
+        /// </summary>
+        public RevisionPresentation RevisionPresentation;
 
         /// <summary>
         /// If true, render move operations as separate from/to (default: true)
@@ -376,6 +404,7 @@ namespace Docxodus
             IncludeRevisionMetadata = htmlConverterSettings.IncludeRevisionMetadata;
             ShowDeletedContent = htmlConverterSettings.ShowDeletedContent;
             AuthorColors = htmlConverterSettings.AuthorColors;
+            RevisionPresentation = htmlConverterSettings.RevisionPresentation;
             RenderMoveOperations = htmlConverterSettings.RenderMoveOperations;
             RenderFootnotesAndEndnotes = htmlConverterSettings.RenderFootnotesAndEndnotes;
             RenderHeadersAndFooters = htmlConverterSettings.RenderHeadersAndFooters;
@@ -439,6 +468,13 @@ namespace Docxodus
         /// Custom colors for different authors (author name -> CSS color)
         /// </summary>
         public Dictionary<string, string>? AuthorColors;
+
+        /// <summary>
+        /// How rendered tracked changes look (default <see cref="Docxodus.RevisionPresentation.Docxodus"/>).
+        /// With <see cref="Docxodus.RevisionPresentation.Word"/>, <see cref="AuthorColors"/> overrides the
+        /// colour an author would otherwise take from the built-in author palette.
+        /// </summary>
+        public RevisionPresentation RevisionPresentation;
 
         /// <summary>
         /// If true, render move operations as separate from/to (default: true)
@@ -985,6 +1021,12 @@ namespace Docxodus
             {
                 RevisionAccepter.AcceptRevisions(wordDoc);
             }
+
+            // Word presentation colours revisions by author. Number the authors once, in document
+            // order, before later passes rewrite the trees (issue #851).
+            if (htmlConverterSettings.RenderTrackedChanges &&
+                htmlConverterSettings.RevisionPresentation == RevisionPresentation.Word)
+                wordDoc.MainDocumentPart!.AddAnnotation(RevisionAuthorIndex.Of(wordDoc));
 
             SimplifyMarkupSettings simplifyMarkupSettings = new SimplifyMarkupSettings
             {
@@ -1840,7 +1882,7 @@ namespace Docxodus
                             gc.Element.Add(new XAttribute("class", classNameToUse));
                     }
                 }
-                var revisionCss = GenerateRevisionCss(htmlConverterSettings);
+                var revisionCss = GenerateRevisionCss(htmlConverterSettings, wordDoc);
                 var footnoteCss = GenerateFootnoteCss(htmlConverterSettings);
                 var headerFooterCss = GenerateHeaderFooterCss(htmlConverterSettings);
                 var commentCss = GenerateCommentCss(htmlConverterSettings);
@@ -1856,7 +1898,7 @@ namespace Docxodus
             {
                 // Previously, the h:style element was not added at this point. However,
                 // at least the General CSS will contain important settings.
-                var revisionCss = GenerateRevisionCss(htmlConverterSettings);
+                var revisionCss = GenerateRevisionCss(htmlConverterSettings, wordDoc);
                 var footnoteCss = GenerateFootnoteCss(htmlConverterSettings);
                 var headerFooterCss = GenerateHeaderFooterCss(htmlConverterSettings);
                 var commentCss = GenerateCommentCss(htmlConverterSettings);
@@ -1903,10 +1945,143 @@ namespace Docxodus
             }
         }
 
-        private static string GenerateRevisionCss(WmlToHtmlConverterSettings settings)
+        /// <summary>
+        /// The authors of a document's revisions, numbered in the order each first appears across the
+        /// content parts, so the Word presentation can give each author a stable colour (issue #851).
+        /// </summary>
+        private sealed class RevisionAuthorIndex
+        {
+            private static readonly HashSet<XName> RevisionNames = new()
+            {
+                W.ins, W.del, W.moveFrom, W.moveTo, W.rPrChange, W.pPrChange, W.sectPrChange,
+                W.tblPrChange, W.tblPrExChange, W.trPrChange, W.tcPrChange, W.tblGridChange,
+                W.numberingChange, W.cellIns, W.cellDel, W.cellMerge,
+                W.customXmlInsRangeStart, W.customXmlDelRangeStart,
+                W.customXmlMoveFromRangeStart, W.customXmlMoveToRangeStart,
+            };
+
+            public List<string> Authors { get; } = new();
+            private readonly Dictionary<string, int> _index = new(StringComparer.Ordinal);
+
+            public static RevisionAuthorIndex Of(WordprocessingDocument wordDoc)
+            {
+                var index = new RevisionAuthorIndex();
+                foreach (var part in wordDoc.ContentParts())
+                {
+                    var root = part.GetXDocument().Root;
+                    if (root == null) continue;
+                    foreach (var element in root.Descendants())
+                    {
+                        if (!RevisionNames.Contains(element.Name)) continue;
+                        var author = (string?)element.Attribute(W.author) ?? string.Empty;
+                        if (index._index.TryAdd(author, index.Authors.Count))
+                            index.Authors.Add(author);
+                    }
+                }
+                return index;
+            }
+
+            public int? IndexOf(string? author) =>
+                _index.TryGetValue(author ?? string.Empty, out var i) ? i : null;
+        }
+
+        /// <summary>
+        /// The colours Word-style revisions take, by author number, wrapping after the last.
+        /// These are distinct dark hues in the spirit of Word's "By author" colouring; they were
+        /// not sampled from Word, and <see cref="WmlToHtmlConverterSettings.AuthorColors"/>
+        /// overrides them per author.
+        /// </summary>
+        private static readonly string[] WordAuthorPalette =
+        {
+            "#C00000", "#0070C0", "#7030A0", "#00A0A0", "#C55A11", "#2E7D32", "#BF0080", "#806000",
+        };
+
+        /// <summary>How far left of the text column the Word presentation draws its change bar.</summary>
+        private const string WordChangeBarOffset = "0.25in";
+
+        /// <summary>
+        /// In the Word presentation, give <paramref name="html"/> the class that colours it as its
+        /// author's (<c>rev-author-N</c>). Does nothing in the Docxodus presentation.
+        /// </summary>
+        private static void AddRevisionAuthorClass(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement html, XElement revision)
+        {
+            if (settings.RevisionPresentation != RevisionPresentation.Word)
+                return;
+            if (wordDoc.MainDocumentPart?.Annotation<RevisionAuthorIndex>()
+                    ?.IndexOf((string?)revision.Attribute(W.author)) is { } i)
+                AddClass(html, $"{settings.RevisionCssClassPrefix ?? "rev-"}author-{i}");
+        }
+
+        /// <summary>Add <paramref name="className"/> to <paramref name="element"/>'s class list.</summary>
+        private static void AddClass(XElement element, string className)
+        {
+            var existing = (string?)element.Attribute("class");
+            element.SetAttributeValue("class", existing != null ? existing + " " + className : className);
+        }
+
+        /// <summary>
+        /// Word presentation: CSS for revisions that look the way Word prints All Markup — author colour,
+        /// underline or strikethrough and nothing else for text; Word's default green double lines for
+        /// moves and its default cell shading; and one left-margin change bar per changed paragraph.
+        /// </summary>
+        private static string GenerateWordRevisionCss(WmlToHtmlConverterSettings settings,
+            WordprocessingDocument wordDoc)
+        {
+            var prefix = settings.RevisionCssClassPrefix ?? "rev-";
+            var sb = new StringBuilder();
+            sb.AppendLine();
+            sb.AppendLine("/* Tracked Changes CSS (Word presentation) */");
+            sb.AppendLine($"ins.{prefix}ins {{ text-decoration: underline; }}");
+            sb.AppendLine($"del.{prefix}del {{ text-decoration: line-through; }}");
+            sb.AppendLine($"ins.{prefix}move-to {{ text-decoration: underline double; color: #00B050; }}");
+            sb.AppendLine($"del.{prefix}move-from {{ text-decoration: line-through double; color: #00B050; }}");
+            sb.AppendLine($"span.{prefix}del-marker, span.{prefix}move-from-marker {{");
+            sb.AppendLine("    display: inline-block;");
+            sb.AppendLine("    width: 2px;");
+            sb.AppendLine("    height: 1em;");
+            sb.AppendLine("    background-color: currentColor;");
+            sb.AppendLine("    vertical-align: middle;");
+            sb.AppendLine("}");
+            // Word shows no inline mark for a paragraph-mark, formatting or section change: the
+            // change bar is the only trace (it shows the detail in balloons, which HTML has not).
+            sb.AppendLine($"span.{prefix}cxml-marker {{ font-weight: bold; }}");
+            sb.AppendLine($"span.{prefix}cxml-ins-start::before, span.{prefix}cxml-del-start::before,");
+            sb.AppendLine($"span.{prefix}cxml-move-from-start::before, span.{prefix}cxml-move-to-start::before {{ content: \"\\27E6\"; }}");
+            sb.AppendLine($"span.{prefix}cxml-ins-end::before, span.{prefix}cxml-del-end::before,");
+            sb.AppendLine($"span.{prefix}cxml-move-from-end::before, span.{prefix}cxml-move-to-end::before {{ content: \"\\27E7\"; }}");
+            sb.AppendLine($"tr.{prefix}row-del {{ text-decoration: line-through; }}");
+            // Word's default cell shading for cell insertions, deletions and merges.
+            sb.AppendLine($"td.{prefix}cell-ins {{ background-color: #CCECFF; }}");
+            sb.AppendLine($"td.{prefix}cell-del {{ background-color: #FFCCFF; text-decoration: line-through; }}");
+            sb.AppendLine($"td.{prefix}cell-merge {{ background-color: #FFFFCC; }}");
+            sb.AppendLine($".{prefix}changed-line {{ position: relative; }}");
+            sb.AppendLine($".{prefix}changed-line::before {{");
+            sb.AppendLine("    content: \"\";");
+            sb.AppendLine("    position: absolute;");
+            sb.AppendLine("    top: 0;");
+            sb.AppendLine("    bottom: 0;");
+            sb.AppendLine($"    left: calc(-1 * (var(--{prefix}change-bar-indent, 0px) + {WordChangeBarOffset}));");
+            sb.AppendLine("    border-left: 1px solid #000;");
+            sb.AppendLine("}");
+
+            var authors = wordDoc.MainDocumentPart?.Annotation<RevisionAuthorIndex>()?.Authors ?? new List<string>();
+            for (var i = 0; i < authors.Count; i++)
+            {
+                var color = settings.AuthorColors != null && settings.AuthorColors.TryGetValue(authors[i], out var chosen)
+                    ? chosen
+                    : WordAuthorPalette[i % WordAuthorPalette.Length];
+                sb.AppendLine($".{prefix}author-{i} {{ color: {color}; }}");
+            }
+            return sb.ToString();
+        }
+
+        private static string GenerateRevisionCss(WmlToHtmlConverterSettings settings, WordprocessingDocument wordDoc)
         {
             if (!settings.RenderTrackedChanges)
                 return string.Empty;
+            if (settings.RevisionPresentation == RevisionPresentation.Word)
+                return GenerateWordRevisionCss(settings, wordDoc);
 
             var prefix = settings.RevisionCssClassPrefix ?? "rev-";
             var sb = new StringBuilder();
@@ -3297,7 +3472,9 @@ namespace Docxodus
             if (element.Name == W.sectPr)
             {
                 var sectPrChange = element.Element(W.sectPrChange);
-                if (!settings.RenderTrackedChanges || sectPrChange == null)
+                // The Word presentation shows no inline trace of a section change (issue #851).
+                if (!settings.RenderTrackedChanges || sectPrChange == null ||
+                    settings.RevisionPresentation == RevisionPresentation.Word)
                     return null;
                 var sectPrefix = settings.RevisionCssClassPrefix ?? "rev-";
                 var sectionMarker = new XElement(Xhtml.div,
@@ -3573,6 +3750,7 @@ namespace Docxodus
             // Add CSS class
             var className = (settings.RevisionCssClassPrefix ?? "rev-") + "ins";
             ins.Add(new XAttribute("class", className));
+            AddRevisionAuthorClass(wordDoc, settings, ins, element);
 
             // Add metadata if requested
             if (settings.IncludeRevisionMetadata)
@@ -3615,6 +3793,7 @@ namespace Docxodus
                 var marker = new XElement(Xhtml.span,
                     new XAttribute("class", (settings.RevisionCssClassPrefix ?? "rev-") + "del-marker"),
                     new XAttribute("title", "Deleted content"));
+                AddRevisionAuthorClass(wordDoc, settings, marker, element);
                 return marker;
             }
 
@@ -3623,6 +3802,7 @@ namespace Docxodus
             // Add CSS class
             var className = (settings.RevisionCssClassPrefix ?? "rev-") + "del";
             del.Add(new XAttribute("class", className));
+            AddRevisionAuthorClass(wordDoc, settings, del, element);
 
             // Add metadata if requested
             if (settings.IncludeRevisionMetadata)
@@ -3671,6 +3851,7 @@ namespace Docxodus
                 var marker = new XElement(Xhtml.span,
                     new XAttribute("class", (settings.RevisionCssClassPrefix ?? "rev-") + "move-from-marker"),
                     new XAttribute("title", "Moved content (source)"));
+                AddRevisionAuthorClass(wordDoc, settings, marker, element);
                 return marker;
             }
 
@@ -3679,6 +3860,7 @@ namespace Docxodus
             // Add CSS class for move source
             var className = (settings.RevisionCssClassPrefix ?? "rev-") + "move-from";
             del.Add(new XAttribute("class", className));
+            AddRevisionAuthorClass(wordDoc, settings, del, element);
 
             // Add metadata if requested
             if (settings.IncludeRevisionMetadata)
@@ -3730,6 +3912,7 @@ namespace Docxodus
             // Add CSS class for move destination
             var className = (settings.RevisionCssClassPrefix ?? "rev-") + "move-to";
             ins.Add(new XAttribute("class", className));
+            AddRevisionAuthorClass(wordDoc, settings, ins, element);
 
             // Add metadata if requested
             if (settings.IncludeRevisionMetadata)
@@ -5588,12 +5771,14 @@ namespace Docxodus
                     var newClass = (settings.RevisionCssClassPrefix ?? "rev-") + "para-del";
                     paragraph.SetAttributeValue("class", existingClass != null ? existingClass + " " + newClass : newClass);
 
-                    // Add a pilcrow marker at the end to show the deleted paragraph mark
+                    // Add a pilcrow marker at the end to show the deleted paragraph mark. Word
+                    // prints none; its change bar is the only trace (issue #851).
                     var prefix = settings.RevisionCssClassPrefix ?? "rev-";
-                    paragraph.Add(new XElement(Xhtml.span,
-                        new XAttribute("class", prefix + "para-mark-del"),
-                        new XAttribute("title", "Paragraph mark deleted"),
-                        new XText("¶")));
+                    if (settings.RevisionPresentation != RevisionPresentation.Word)
+                        paragraph.Add(new XElement(Xhtml.span,
+                            new XAttribute("class", prefix + "para-mark-del"),
+                            new XAttribute("title", "Paragraph mark deleted"),
+                            new XText("¶")));
 
                     if (settings.IncludeRevisionMetadata)
                     {
@@ -5607,6 +5792,9 @@ namespace Docxodus
                 }
             }
 
+            if (settings.RenderTrackedChanges && settings.RevisionPresentation == RevisionPresentation.Word)
+                MarkChangedLine(settings, paragraph);
+
             // Add pagination-related data attributes when pagination is enabled
             if (settings.RenderPagination == PaginationMode.Paginated)
             {
@@ -5614,6 +5802,32 @@ namespace Docxodus
             }
 
             return paragraph;
+        }
+
+        /// <summary>
+        /// Word presentation (issue #851): a paragraph holding any revision — inserted, deleted or
+        /// moved text, a formatting change, or a change to its own mark or properties — gets one
+        /// change bar in the left margin. The bar is drawn by the stylesheet a fixed distance left of
+        /// the text column; the paragraph's own left indent is passed along so an indented
+        /// paragraph's bar lines up with its neighbours'.
+        /// </summary>
+        private static void MarkChangedLine(WmlToHtmlConverterSettings settings, XElement paragraph)
+        {
+            var prefix = settings.RevisionCssClassPrefix ?? "rev-";
+            var revisionClasses = new[]
+            {
+                "ins", "del", "move-from", "move-to", "del-marker", "move-from-marker", "format-change",
+                "cxml-marker", "para-ins", "para-del", "para-format-change", "section-format-change",
+            }.Select(c => prefix + c).ToHashSet(StringComparer.Ordinal);
+            static IEnumerable<string> Classes(XElement e) =>
+                ((string?)e.Attribute("class") ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (!paragraph.DescendantsAndSelf().Any(e => Classes(e).Any(revisionClasses.Contains)))
+                return;
+
+            AddClass(paragraph, prefix + "changed-line");
+            var style = paragraph.Annotation<Dictionary<string, string>>();
+            if (style != null && style.TryGetValue("margin-left", out var indent))
+                style[$"--{prefix}change-bar-indent"] = indent;
         }
 
         /// <summary>

@@ -6,6 +6,25 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Tracked changes can now be drawn the way Word prints them with All Markup (issue #851).
+  Docxodus's own review style draws insertions green and deletions red with light fills, moves in
+  purple, and visible pilcrows. The new Word presentation instead:
+  - colours each author's insertions and deletions in that author's colour, underlined and struck
+    through, with no fills and no pilcrows;
+  - draws moves green with double lines and keeps Word's default cell shading;
+  - puts one change bar in the left margin beside every changed paragraph.
+
+  The author palette and bar offset are in Word's style but were not sampled from Word.
+  `AuthorColors` overrides the colour per author. Ask for it with:
+  - `WmlToHtmlConverterSettings.RevisionPresentation = RevisionPresentation.Word`;
+  - `revisionPresentation: RevisionPresentation.Word` in npm `ConversionOptions`;
+  - `revision_presentation=1` in `docx-scalpel`'s `HtmlOptions`;
+  - `docx2html --track-changes --word-markup`;
+  - for the paginated export, `markupPresentation: "word"` with the `markup` review profile, or
+    `docxodus convert --review-profile markup --markup-presentation word`.
+
+  The default is unchanged everywhere. An export report names `markupPresentation` only when it is
+  `word`, so default reports and layout digests are byte-identical.
 - A table that moved elsewhere in the document is now marked as a move in comparison output, the way
   Word marks one (issue #844). `DocxDiff.Compare` and `DocxCompare.Compare` used to draw it as a
   deleted table and an unrelated inserted one, even though `DocxDiff.GetRevisions` already reported

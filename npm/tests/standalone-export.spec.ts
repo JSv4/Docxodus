@@ -632,6 +632,38 @@ test.describe('standalone paginated HTML', () => {
     expect(falseClaim.report.derivedProfileSource).toBeUndefined();
   });
 
+  test('draws markup in Word style only when asked, and records it in the report', async ({ page }) => {
+    // Issue #851: markupPresentation "word" swaps Docxodus's review colours for Word's All Markup
+    // look; the default keeps both the old drawing and the old report shape.
+    const source = generateTrackedRevisionDocx();
+    const word = await convert(page, source, false, {
+      reviewProfile: 'markup',
+      commentProfile: 'hidden',
+      markupPresentation: 'word',
+    });
+    const standard = await convert(page, source, false, {
+      reviewProfile: 'markup',
+      commentProfile: 'hidden',
+    });
+
+    expect(word.renderReport.status).toBe('complete');
+    expect((word.renderReport.options as Record<string, unknown>).markupPresentation).toBe('word');
+    expect(word.html).toContain('rev-author-0');
+    expect(word.html).toContain('rev-changed-line');
+    expect(word.renderReport.options.layoutDigest).not.toBe(standard.renderReport.options.layoutDigest);
+    expect('markupPresentation' in standard.renderReport.options).toBe(false);
+    expect(standard.html).not.toContain('rev-author-0');
+
+    const misuse = await page.evaluate(async (bytes) =>
+      (window as any).DocxodusStandalone.convertFailure(bytes, {
+        reviewProfile: 'final',
+        commentProfile: 'hidden',
+        markupPresentation: 'word',
+      }), Array.from(source));
+    expect(misuse.code).toBe('invalid_argument');
+    expect(misuse.phase).toBe('input_validation');
+  });
+
   test('fails exact source identity and caller-lowered package ceilings closed', async ({ page }) => {
     const source = new Uint8Array(readFileSync(join(testFiles, 'CA', 'CA001-Plain.docx')));
     const mismatch = await page.evaluate(async (bytes) =>

@@ -570,6 +570,34 @@ All phases completed. The tracked changes HTML rendering feature is fully implem
 - Author-specific coloring via CSS attribute selectors
 - Semantic HTML5 output (`<ins>`, `<del>`, `<header>`, `<footer>`)
 
+## Word presentation (issue #851)
+
+`WmlToHtmlConverterSettings.RevisionPresentation` selects the look of rendered revisions.
+`RevisionPresentation.Docxodus` (the default) is the style the rest of this document describes.
+`RevisionPresentation.Word` approximates Word's All Markup print:
+
+- **Author colour.** `RevisionAuthorIndex` numbers revision authors once per conversion, in the
+  order each first appears across the content parts. Inserted, deleted and moved runs, and the
+  deletion markers, get a `rev-author-N` class. The stylesheet colours each class from a built-in
+  eight-colour palette, or from `AuthorColors` when it names that author.
+- **Text.** Insertions are underlined and deletions struck through, with no background. Moves are
+  green with a double underline or double strikethrough, as in Word's defaults.
+- **No pilcrows.** A deleted paragraph mark draws no `¶`, and a section change draws no inline
+  marker; the change bar is their only trace.
+- **Change bars.** `MarkChangedLine` gives every paragraph holding any revision the
+  `rev-changed-line` class. Its `::before` draws a 1px bar 0.25in left of the text column, and the
+  paragraph's own left indent is passed in `--rev-change-bar-indent`, so indented paragraphs' bars
+  line up.
+- **Cells.** Inserted, deleted and merged cells keep Word's default light blue, pink and light
+  yellow shading.
+
+The palette, offset and shading are chosen in Word's style rather than sampled from Word. The setting
+applies to full renders. A block render numbers authors within its one block, so
+`HtmlConversionOps` leaves block renders in the default presentation. Surfaces:
+`HtmlConversionOptions.RevisionPresentation` (0/1), the WASM `ConvertDocxToHtmlComplete` trailing
+argument, `ConversionOptions.revisionPresentation` in npm, `HtmlOptions.revision_presentation` in
+`docx-scalpel`, `docx2html --word-markup`, and `markupPresentation: "word"` in the paginated export.
+
 ## API Usage Example
 
 ```csharp

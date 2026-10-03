@@ -14,7 +14,8 @@ namespace Docxodus.Internal;
 /// WASM <c>DocumentConverter.ConvertDocxToHtmlComplete</c> shell so every surface
 /// renders identically. Integer-coded modes match the existing WASM wire contract:
 /// CommentRenderMode -1=disabled,0=Endnote,1=Inline,2=Margin;
-/// PaginationMode 0=None,1=Paginated; AnnotationLabelMode 0=Above,1=Inline,2=Tooltip,3=None.
+/// PaginationMode 0=None,1=Paginated; AnnotationLabelMode 0=Above,1=Inline,2=Tooltip,3=None;
+/// RevisionPresentation 0=Docxodus,1=Word.
 /// </summary>
 internal sealed record HtmlConversionOptions
 {
@@ -35,6 +36,13 @@ internal sealed record HtmlConversionOptions
     public bool RenderTrackedChanges { get; init; }
     public bool ShowDeletedContent { get; init; } = true;
     public bool RenderMoveOperations { get; init; } = true;
+
+    /// <summary>
+    /// How rendered tracked changes look: 0 = Docxodus's own review style (default), 1 = Word's
+    /// All Markup style (issue #851). Full renders only — a block render numbers revision authors
+    /// within its one block, so it keeps the default style.
+    /// </summary>
+    public int RevisionPresentation { get; init; }
     public bool RenderUnsupportedContentPlaceholders { get; init; }
     public string? DocumentLanguage { get; init; }
 
@@ -145,6 +153,7 @@ internal static class HtmlConversionOps
             RenderTrackedChanges = options.RenderTrackedChanges,
             ShowDeletedContent = options.ShowDeletedContent,
             RenderMoveOperations = options.RenderMoveOperations,
+            RevisionPresentation = (RevisionPresentation)options.RevisionPresentation,
             IncludeRevisionMetadata = true,
             RenderUnsupportedContentPlaceholders = options.RenderUnsupportedContentPlaceholders,
             UnsupportedContentCssClassPrefix = "unsupported-",
