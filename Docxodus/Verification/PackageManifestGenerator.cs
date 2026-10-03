@@ -694,20 +694,31 @@ public static class PackageManifestGenerator
                      .OrderBy(work => work.Uri, StringComparer.Ordinal)
                      .ThenBy(work => work.Occurrence))
         {
+            var owner = RelationshipOwner(work.Uri);
+            if (owner is not null && owner != "/" && !entryUris.Contains(owner))
+            {
+                // Relationships are only ever resolved through their source part, so a .rels part
+                // whose source is absent is inert: Word opens such packages and ignores it (issue
+                // #853). Report it, but keep its relationships out of the inventory and do not
+                // check targets nothing can reach. Its bytes still count toward content identity.
+                AddFinding(findings, "missing_relationship_owner", VerificationFindingSeverity.Warning,
+                    "Relationship part owner does not exist in the package; its relationships are ignored.",
+                    new ChangeLocation { EntryUri = work.Uri, OwnerUri = owner });
+                continue;
+            }
             if (work.Xml?.Root is null)
             {
                 // The part exists but was never parsed. Say so, rather than emitting an empty
                 // relationship set that reads as "this part declares nothing" — but only when
                 // payloads were inspected at all. If a package-wide limit stopped every read,
                 // that breach is already reported once and blaming each .rels part repeats it.
-                var skippedOwner = RelationshipOwner(work.Uri);
-                if (skippedOwner is not null)
-                    unreadableOwners.Add(skippedOwner);
+                if (owner is not null)
+                    unreadableOwners.Add(owner);
                 if (payloadsInspected)
                 {
                     AddFinding(findings, "relationship_part_unreadable", VerificationFindingSeverity.Error,
                         "Relationship part could not be parsed, so its relationships are unknown.",
-                        new ChangeLocation { EntryUri = work.Uri, OwnerUri = skippedOwner });
+                        new ChangeLocation { EntryUri = work.Uri, OwnerUri = owner });
                 }
                 continue;
             }
@@ -720,19 +731,12 @@ public static class PackageManifestGenerator
                     new ChangeLocation { EntryUri = work.Uri });
                 continue;
             }
-            var owner = RelationshipOwner(work.Uri);
             if (owner is null)
             {
                 AddFinding(findings, "malformed_relationship_part", VerificationFindingSeverity.Error,
                     "Relationship part URI cannot be mapped to an owner part.",
                     new ChangeLocation { EntryUri = work.Uri });
                 continue;
-            }
-            if (owner != "/" && !entryUris.Contains(owner))
-            {
-                AddFinding(findings, "missing_relationship_owner", VerificationFindingSeverity.Error,
-                    "Relationship part owner does not exist in the package.",
-                    new ChangeLocation { EntryUri = work.Uri, OwnerUri = owner });
             }
 
             foreach (var element in work.Xml.Root.Elements()
