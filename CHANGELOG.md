@@ -70,6 +70,12 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Turkish (`tr-TR`) list numbering with `upperLetter` or `lowerLetter` now wraps after 30 repeats
+  of its 29-letter alphabet, as the default formatter wraps after 30 repeats of 26 letters (PR
+  #893). It used to repeat the letter once per pass through the alphabet with no limit, so a
+  single numbered paragraph with `w:start="2147483647"` produced a list marker about 74 million
+  characters long wherever markers are resolved (comparison, markdown, HTML). Markers for counter
+  values 1–870 are unchanged; larger values now wrap and stay at most 30 characters.
 - `import ... from "docxodus"` now works in plain Node.js ESM (issue #854). It failed with
   `ERR_UNSUPPORTED_DIR_IMPORT` before any call, because the root entry re-exports the editor, and
   the editor imported `@atlaskit/pragmatic-drag-and-drop` by directory path, which Node's ESM resolver
