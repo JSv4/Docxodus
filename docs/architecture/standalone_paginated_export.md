@@ -444,6 +444,15 @@ other HTTP(S), WebSocket, service-worker, download, popup, and navigation reques
 private temporary directory when filesystem staging is necessary and removes only that directory
 after success or failure. Browser processes supplied by callers are never closed.
 
+The Node host reads and hashes the whole runtime asset graph (about 26 MB) once per process and
+serves only those verified bytes. The bootstrap module it generates attests the SHA-256 of the exact
+`export-assets.json` it verified, through `attestHostVerifiedRuntimeAssets`. When the manifest the
+page fetches has that digest, the page does not fetch and hash every runtime asset again. It still
+checks the manifest and its own materializer bundle, and each document still gets a fresh context and
+worker. Before this change (issue #852), the repeated hashing was about half a second of a one-page
+export. A page with no attestation, which covers every browser-only deployment, verifies each asset
+exactly as before.
+
 The preferred Node origin is a Playwright-routed, unresolvable HTTPS origin with no listening
 socket. Routes, WebSocket denial, service-worker blocking, permission denial, popup/download
 handlers, and the exact asset/input allowlist are installed before the first page request. Allowed
