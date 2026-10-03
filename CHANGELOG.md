@@ -70,6 +70,15 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Paginated export no longer quantizes line pitch to whole CSS pixels (issue #850, first half).
+  Chromium rounds a `line-height: normal` line to a whole pixel (0.75 pt), and the converter uses
+  `normal` for single spacing and as the base of Word's `auto` multiples. Every line was therefore
+  off by up to 0.375 pt, and the error accumulated down the page and moved page breaks: 11 pt
+  Carlito advanced 13.50 pt per line instead of its natural 13.43 pt, and 12 pt Liberation Sans
+  13.50 pt instead of 13.80 pt. Before pagination, the export now gives each such element its own
+  font's unrounded natural line height. Exported single, 1.08, 1.15 and double spacing now match
+  the fonts' own metrics to within 0.05 pt per line. Word's baseline placement for `auto` multiples
+  is tracked in #908.
 - Turkish (`tr-TR`) list numbering with `upperLetter` or `lowerLetter` now wraps after 30 repeats
   of its 29-letter alphabet, as the default formatter wraps after 30 repeats of 26 letters (PR
   #893). It used to repeat the letter once per pass through the alphabet with no limit, so a

@@ -54,6 +54,10 @@ jobs:
       - name: Install Playwright browsers
         run: cd npm && npx playwright install --with-deps chromium firefox
 
+      # export-line-pitch.spec.ts checks line pitch against these fonts' own metrics (issue #850).
+      - name: Install metric-checked fonts
+        run: sudo apt-get install -y --no-install-recommends fonts-crosextra-carlito fonts-liberation2
+
       # The export runtime deliberately keeps Chromium's process sandbox on, so the runner has to
       # permit unprivileged user namespaces. Ubuntu 24.04 restricts them through AppArmor by
       # default, which fails every launched-browser export with browser_launch_failure.
