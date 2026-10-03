@@ -7,12 +7,11 @@ import { storedZip, W_NS, xml } from './docx-zip.js';
  * gap but rounds the result to a CSS pixel, so 11 pt Carlito advanced 18 px instead of 17.904 px and
  * the error accumulated down every page.
  *
- * The expected heights come from the fonts' own `hhea` tables (the metrics Chromium uses on Linux),
- * not from the code under test:
- * - Carlito: ascender 1950 + |descender| 550 + lineGap 0 = 2500 per 2048 units/em.
- * - Liberation Sans: ascender 1854 + |descender| 434 + lineGap 67 = 2355 per 2048 units/em.
+ * The expected height comes from Carlito's own `hhea` table (the metrics Chromium uses on Linux), not
+ * from the code under test: ascender 1950 + |descender| 550 + lineGap 0 = 2500 per 2048 units/em.
+ * CI installs exactly this font (fonts-crosextra-carlito) for these tests.
  */
-const NATURAL_EM = { Carlito: 2500 / 2048, 'Liberation Sans': 2355 / 2048 } as const;
+const NATURAL_EM = { Carlito: 2500 / 2048 } as const;
 /** Each line may differ from the model by at most this much (the issue's ~0.05 pt target). */
 const TOLERANCE_PT_PER_LINE = 0.05;
 
@@ -144,13 +143,14 @@ test.describe('exported line pitch (#850)', () => {
       .toBeLessThan(0.75);
   });
 
-  test('Liberation Sans 12pt single and double follow the font metrics', async ({ page }) => {
+  test('Carlito 12pt single and double follow the font metrics', async ({ page }) => {
+    // 12 pt is 19.531 px natural against 19 px rounded: 0.4 pt per line before the fix.
     const lines = [240, 480];
-    const pitches = await exportedPitches(page, docx('Liberation Sans', 24, lines));
+    const pitches = await exportedPitches(page, docx('Carlito', 24, lines));
 
     expect(pitches).toHaveLength(lines.length);
     lines.forEach((line, index) => {
-      const expected = NATURAL_EM['Liberation Sans'] * 12 * (line / 240);
+      const expected = NATURAL_EM.Carlito * 12 * (line / 240);
       expect(Math.abs(pitches[index] - expected), `w:line=${line}: ${pitches[index]} pt vs ${expected} pt`)
         .toBeLessThanOrEqual(TOLERANCE_PT_PER_LINE);
     });
