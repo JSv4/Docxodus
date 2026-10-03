@@ -29,6 +29,17 @@ All notable changes to this project will be documented in this file.
   Accepting all changes still gives the revised document and rejecting them the original with
   either setting off.
 
+### Changed
+
+- The `redline`, `docx2html` and `docx2oc` release binaries now start two to three times faster
+  (issue #855). They used to be published as compressed single files, and unpacking that
+  compressed bundle at every launch was most of a small run's time. They are now published
+  uncompressed and precompiled with ReadyToRun. On linux-x64, a one-paragraph `redline` compare
+  dropped from 663 ms to 234 ms, a one-page `docx2html` conversion from 404 ms to 212 ms, and
+  `--version` from 139 ms to 50 ms. Each binary grows from about 44 MB to about 139 MB. The npm,
+  WASM, NuGet and Python packages are unaffected. Trimming and NativeAOT, which could shrink the
+  binaries again, are tracked in #903.
+
 ### Fixed
 
 - `import ... from "docxodus"` now works in plain Node.js ESM (issue #854). It failed with
