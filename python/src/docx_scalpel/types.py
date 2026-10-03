@@ -4215,7 +4215,8 @@ class DocxDiffSettings:
     #: Accept every tracked revision already present in both inputs before diffing (default False).
     #: ``preserve_input_revisions`` wins when both policies are enabled.
     pre_accept_input_revisions: bool = False
-    #: Preserve the inputs' existing tracked revisions Word-style (default False).
+    #: Preserve the inputs' existing tracked revisions, as Word's Combine does (default False).
+    #: Word's Compare pre-accepts them instead (see ``pre_accept_input_revisions``).
     #: This takes precedence over ``pre_accept_input_revisions``.
     preserve_input_revisions: bool = False
     #: Collapse every tracked-revision author in the output to ``author_for_revisions`` (default False).

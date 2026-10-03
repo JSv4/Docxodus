@@ -825,12 +825,13 @@ silently:
    reviewer's intent. If the inputs' in-flight revisions must be preserved or re-adjudicated, resolve them by an
    explicit policy first, then diff — do not reach for `PreAcceptInputRevisions`.
 
-### The Word-parity alternative — `PreserveInputRevisions` and the one-sided Reject All
+### The Word-Combine alternative — `PreserveInputRevisions` and the one-sided Reject All
 
-Word's own Compare does neither the default's leak nor the flag's flatten: it **preserves** the inputs'
-pre-existing tracked revisions in the compare output verbatim (original author/date markup intact) while the
-text diff is computed over the accepted view. Verified against Word-oracle outputs: an input with 176
-revisions by another author keeps them in Word's compare result alongside the fresh compare revisions.
+Word's **Combine** does neither the default's leak nor the flag's flatten: it **preserves** the inputs'
+pre-existing tracked revisions in its output verbatim (original author/date markup intact) while the
+text diff is computed over the accepted view. Verified against Word-oracle outputs that were later identified
+as Combine-shaped: an input with 176 revisions by another author keeps them in the result alongside the fresh
+revisions. (Word's **Compare** treats them as accepted instead — the flatten above.)
 `DocxDiffSettings.PreserveInputRevisions` reproduces this (equal blocks + whole-block inserts, in the body
 and in footnote/endnote bodies, in v1; it WINS
 over `PreAcceptInputRevisions` when both are set). The `DocxCompare` front door does **not** enable it: the
@@ -839,7 +840,7 @@ so it only pre-accepts — see the next section.
 
 The Word behavior worth pinning here: **Reject All on such an output does NOT restore the left document.**
 Rejecting a preserved foreign `w:del` RESTORES its deleted text (text the left side never showed), and
-rejecting a preserved foreign `w:ins` removes text the accepted view carried. Word's Compare output behaves
+rejecting a preserved foreign `w:ins` removes text the accepted view carried. Word's Combine output behaves
 identically under Reject All — the one-sided round trip (`accept ≡ right` holds, `reject ≠ left` where
 foreign markup exists) is inherent to preserving input revisions, not a Docxodus defect. Do not "fix" it.
 
@@ -847,7 +848,7 @@ foreign markup exists) is inherent to preserving input revisions, not a Docxodus
 
 - `Docxodus/DocxDiff.cs` — `DocxDiffSettings.PreAcceptInputRevisions` + the `PreAccept(...)` pre-pass wired into
   all seven entry points; `IrMarkupRenderer.Render` clones the output on the LEFT package (the carry-over source);
-  `DocxDiffSettings.PreserveInputRevisions` (the Word-parity opt-in, precedence over the pre-accept).
+  `DocxDiffSettings.PreserveInputRevisions` (the Word-Combine opt-in, precedence over the pre-accept).
 - `Docxodus/Ir/IrReader.cs` — `ApplyRevisionView` (rule N13: `RevisionView.Accept` before IR build).
 - `Docxodus/Ir/Diff/IrMarkupRenderer.cs` — `BuildPreservedOriginalIndex` / `NormalizePreservedClone` + the
   preserve-aware `EmitVerbatim`/`EmitWholeBlock`/`MarkWholeParagraph`/`MarkParagraphMark`/`MarkWholeTable`.
@@ -1133,7 +1134,8 @@ structurally faithful.
 ### The corner case
 
 LibreOffice colors tracked changes **by author**: each distinct `w:author` gets its own color. With
-`PreserveInputRevisions` on (as the Word-parity submission profile uses), the inputs' own revisions
+`PreserveInputRevisions` on (an opt-in on the raw `DocxDiff` API; the `DocxCompare` front door leaves it
+off), the inputs' own revisions
 ride through into the output under their **original** author, and the fresh compare revisions use the
 engine's own author — so the output carries **two** authors and renders in **two** colors. Word's
 compare output, for these documents, is single-author (its oracle carries one `w:author`), hence one
@@ -1148,7 +1150,7 @@ setting**, not default behavior.
 | Renderer | Source with a preserved foreign-author revision |
 |---|---|
 | Word (compare output, these docs) | single `w:author` → one color |
-| Docxodus (default, `PreserveInputRevisions` on) | fresh author + preserved author → two colors |
+| Docxodus (`PreserveInputRevisions` on) | fresh author + preserved author → two colors |
 | Docxodus (`NormalizeRevisionAuthors` on) | all revision authors collapsed to one → one color |
 
 ### The fix
