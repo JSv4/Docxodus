@@ -50,6 +50,15 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- `@docxodus/export` spends about a quarter less time per document (issue #852). The time went to
+  per-document setup, not conversion. Each document's fresh browser page fetched and SHA-256-hashed
+  the whole runtime asset graph (about 26 MB) again, although the Node host had already verified
+  those exact bytes once for the process. The host now attests the verified manifest's digest to the
+  page, which then skips that repeat. Per-document isolation is unchanged: each document still gets
+  a fresh browser context and a fresh WASM worker.
+  - Measured on a one-page PDF export with the browser reused across a batch (median of 6 runs),
+    total time dropped from 1744 ms to 1297 ms, and WASM initialization from 897 ms to 467 ms.
+  - A browser-only deployment, with no host, still verifies every asset itself.
 - The `redline`, `docx2html` and `docx2oc` release binaries now start two to three times faster
   (issue #855). They used to be published as compressed single files, and unpacking that
   compressed bundle at every launch was most of a small run's time. They are now published

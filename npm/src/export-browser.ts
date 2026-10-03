@@ -967,6 +967,35 @@ async function boundedResponseBytes(
   return bytes;
 }
 
+/**
+ * SHA-256 of the exact `export-assets.json` bytes a trusted Node host has already verified, with
+ * every asset that manifest names, before serving them to this page (issue #852). Set once, by the
+ * host's own bootstrap module, before any render.
+ */
+let hostVerifiedAssetManifestSha256: string | undefined;
+
+/**
+ * Host integration only — `@docxodus/export` calls this from the bootstrap module it generates and
+ * serves. The host reads and hashes the whole runtime asset graph once per process and serves exactly
+ * those verified bytes, so when the manifest this page fetches hashes to the attested digest, the page
+ * does not fetch and hash all ~26 MB of runtime assets again for every document. The manifest itself
+ * and the materializer bundle are still checked here. A page that never receives an attestation (any
+ * browser-only deployment) verifies every asset as before.
+ */
+export function attestHostVerifiedRuntimeAssets(manifestSha256: string): void {
+  if (typeof manifestSha256 !== "string" || !/^[0-9a-f]{64}$/.test(manifestSha256)) {
+    fail("unsupported_runtime", "wasm_initialization",
+      "The host runtime asset attestation is not a SHA-256 digest.",
+      "Use the bootstrap module @docxodus/export generates.");
+  }
+  if (hostVerifiedAssetManifestSha256 !== undefined && hostVerifiedAssetManifestSha256 !== manifestSha256) {
+    fail("unsupported_runtime", "wasm_initialization",
+      "The host runtime asset attestation may be set only once.",
+      "Load one host bootstrap module per page.");
+  }
+  hostVerifiedAssetManifestSha256 = manifestSha256;
+}
+
 async function loadRuntimeAssetIdentity(
   wasmBasePath: string,
   signal: AbortSignal,
@@ -1107,7 +1136,11 @@ async function loadRuntimeAssetIdentity(
       "Deploy the bundle and asset graph from the same Docxodus build.");
   }
 
-  const verifiedRuntimeAssets = assets.filter((entry) =>
+  // A host that verified this exact manifest and its assets serves only those bytes; hashing all of
+  // them again here cost roughly half a second per document (issue #852).
+  const hostVerified = hostVerifiedAssetManifestSha256 !== undefined
+    && await sha256(graphBytes) === hostVerifiedAssetManifestSha256;
+  const verifiedRuntimeAssets = hostVerified ? [] : assets.filter((entry) =>
     entry.path === "./docxodus.worker.js" || entry.path.startsWith("./wasm/_framework/"));
   const resolvedWasmBasePath = new URL(
     wasmBasePath.endsWith("/") ? wasmBasePath : `${wasmBasePath}/`,

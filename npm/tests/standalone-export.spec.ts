@@ -632,6 +632,43 @@ test.describe('standalone paginated HTML', () => {
     expect(falseClaim.report.derivedProfileSource).toBeUndefined();
   });
 
+  test('skips re-hashing runtime assets only for a host-attested asset manifest', async ({ page }) => {
+    // Issue #852: the Node host has already verified every runtime asset it serves, so a page it
+    // attests to need not fetch and hash the whole ~26 MB graph again per document. Each scenario
+    // loads a fresh page because the attestation is module state.
+    const source = new Uint8Array(readFileSync(join(testFiles, 'CA', 'CA001-Plain.docx')));
+    const exportOnce = async (attestation: 'none' | 'manifest' | 'other') => {
+      let wasmRequests = 0;
+      const onRequest = (request: { url(): string }) => {
+        if (request.url().endsWith('/dotnet.native.wasm')) wasmRequests++;
+      };
+      page.context().on('request', onRequest);
+      await page.goto('/standalone-export-harness.html');
+      await page.waitForFunction(() => (window as any).DocxodusStandaloneReady === true);
+      if (attestation !== 'none') {
+        await page.evaluate(async (kind) => {
+          const bytes = await (await fetch('./export-assets.json', { cache: 'no-store' })).arrayBuffer();
+          const hex = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)),
+            (byte) => byte.toString(16).padStart(2, '0')).join('');
+          (window as any).DocxodusStandalone.attestHostVerifiedRuntimeAssets(
+            kind === 'manifest' ? hex : '0'.repeat(64));
+        }, attestation);
+      }
+      const result = await convert(page, source, false, { reviewProfile: 'final', commentProfile: 'hidden' });
+      page.context().off('request', onRequest);
+      expect(result.renderReport.status).toBe('complete');
+      return { wasmRequests, result };
+    };
+
+    const unattested = await exportOnce('none');
+    const attested = await exportOnce('manifest');
+    const mismatched = await exportOnce('other');
+
+    expect(attested.wasmRequests).toBeLessThan(unattested.wasmRequests);
+    expect(mismatched.wasmRequests).toBe(unattested.wasmRequests);
+    expect(digest(attested.result.html)).toBe(digest(unattested.result.html));
+  });
+
   test('draws markup in Word style only when asked, and records it in the report', async ({ page }) => {
     // Issue #851: markupPresentation "word" swaps Docxodus's review colours for Word's All Markup
     // look; the default keeps both the old drawing and the old report shape.

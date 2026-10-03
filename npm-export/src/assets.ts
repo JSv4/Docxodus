@@ -57,11 +57,19 @@ const BOOTSTRAP_HTML = `<!doctype html>
 <title>Docxodus export runtime</title></head><body>
 <script type="module" src="/bootstrap.js"></script></body></html>`;
 
-const BOOTSTRAP_JS = `import {
+/**
+ * The bootstrap module the host serves. It attests the SHA-256 of the asset manifest this process
+ * has verified (with every asset it names) so the page does not re-hash the whole runtime for each
+ * document (issue #852); the page still checks that the manifest it fetches has that digest.
+ */
+const bootstrapJs = (verifiedManifestSha256: string) => `import {
+  attestHostVerifiedRuntimeAssets,
   convertDocxToPaginatedHtml,
   DocxodusExportError,
   reconstructDocxodusExportError,
 } from "/export-browser.bundle.js";
+
+attestHostVerifiedRuntimeAssets(${JSON.stringify(verifiedManifestSha256)});
 
 globalThis.__docxodusExportBridge = {
   async render(inputUrl, options, includeHtml, stagePdf) {
@@ -490,7 +498,7 @@ async function loadVerifiedAssetGraphCore(): Promise<VerifiedAssetGraph> {
     },
   });
   served.set("/bootstrap.js", {
-    body: Buffer.from(BOOTSTRAP_JS),
+    body: Buffer.from(bootstrapJs(sha256(manifestBytes))),
     contentType: "text/javascript; charset=utf-8",
   });
 
