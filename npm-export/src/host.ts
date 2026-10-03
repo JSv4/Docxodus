@@ -264,6 +264,7 @@ function validateRequest(value: unknown): HostRequest {
       "expectedSourceDigest",
       "reviewProfile",
       "reviewProfileAlreadyApplied",
+      "markupPresentation",
       "commentProfile",
       "title",
       "unsupportedContent",

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from docx_scalpel import HtmlOptions, convert_docx_to_html, open_session
+from docx_scalpel import HtmlOptions, convert_docx_to_html, docx_diff_compare, open_session
 
 
 def _document_order(markdown: str, anchor_id: str) -> int:
@@ -49,3 +49,24 @@ def test_th003_session_to_html_reflects_edit(tour_plan_bytes: bytes) -> None:
     # Stateless conversion of the ORIGINAL bytes must not contain the edit.
     original_html = convert_docx_to_html(tour_plan_bytes)
     assert marker not in original_html
+
+
+def test_th004_word_revision_presentation_colours_authors(test_files_dir) -> None:
+    # Issue #851: revision_presentation=1 draws tracked changes in Word's All Markup style.
+    original = (test_files_dir / "CA" / "CA001-Plain.docx").read_bytes()
+    modified = (test_files_dir / "CA" / "CA001-Plain-Mod.docx").read_bytes()
+    redline = docx_diff_compare(original, modified)
+
+    word = convert_docx_to_html(
+        redline, HtmlOptions(render_tracked_changes=True, revision_presentation=1)
+    )
+    default = convert_docx_to_html(redline, HtmlOptions(render_tracked_changes=True))
+
+    assert "rev-author-0" in word
+    assert "rev-changed-line" in word
+    assert "rev-author-" not in default
+
+
+def test_th005_revision_presentation_on_the_wire() -> None:
+    assert HtmlOptions().to_wire()["revisionPresentation"] == 0
+    assert HtmlOptions(revision_presentation=1).to_wire()["revisionPresentation"] == 1

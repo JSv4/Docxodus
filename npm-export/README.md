@@ -106,7 +106,10 @@ docxodus convert contract.docx --to pdf --output contract.pdf \
   --page-map contract.pages.json
 ```
 
-Additional flags include `--document-version`, `--expected-source-digest`, `--title`,
+`--review-profile markup --markup-presentation word` draws tracked changes the way Word prints
+All Markup: per-author colours, underline and strikethrough only, no fills or pilcrows, and
+left-margin change bars (the API option is `markupPresentation: "word"`). Additional flags include
+`--document-version`, `--expected-source-digest`, `--title`,
 `--unsupported-content`, `--strict-fonts`, `--browser-executable`, repeatable `--limit
 name=integer`, repeatable `--font-directory`, `--font-license-attestations`, and
 `--environment-attestation`. Artifact bytes are never written to stdout. Existing destinations,

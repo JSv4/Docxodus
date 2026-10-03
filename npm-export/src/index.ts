@@ -426,6 +426,7 @@ function nodeOptionsPreflight(options: NodeExportOptions, allowOutputs: boolean)
     "expectedSourceDigest",
     "reviewProfile",
     "reviewProfileAlreadyApplied",
+    "markupPresentation",
     "commentProfile",
     "title",
     "unsupportedContent",
@@ -460,6 +461,19 @@ function nodeOptionsPreflight(options: NodeExportOptions, allowOutputs: boolean)
       "input_validation",
       "reviewProfileAlreadyApplied must be boolean.",
       "Omit it or pass true only for exact policy-derived final/original bytes.",
+    );
+  }
+  if (options.markupPresentation !== undefined
+    && options.markupPresentation !== "docxodus" && options.markupPresentation !== "word") {
+    exportError("invalid_argument", "input_validation", "markupPresentation is invalid.",
+      "Use docxodus or word.");
+  }
+  if (options.markupPresentation === "word" && options.reviewProfile !== "markup") {
+    exportError(
+      "invalid_argument",
+      "input_validation",
+      "markupPresentation applies only to the markup profile.",
+      "Omit markupPresentation, or use reviewProfile markup.",
     );
   }
   if (options.reviewProfileAlreadyApplied === true && options.reviewProfile === "markup") {
@@ -735,6 +749,7 @@ function browserOptions(options: NodeExportOptions): Omit<PaginatedHtmlOptions, 
     expectedSourceDigest: options.expectedSourceDigest,
     reviewProfile: options.reviewProfile,
     reviewProfileAlreadyApplied: options.reviewProfileAlreadyApplied,
+    markupPresentation: options.markupPresentation,
     commentProfile: options.commentProfile,
     title: options.title,
     unsupportedContent: options.unsupportedContent,

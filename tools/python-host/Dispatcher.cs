@@ -731,6 +731,7 @@ internal static class Dispatcher
             RenderTrackedChanges = BoolOpt("renderTrackedChanges", defaults.RenderTrackedChanges),
             ShowDeletedContent = BoolOpt("showDeletedContent", defaults.ShowDeletedContent),
             RenderMoveOperations = BoolOpt("renderMoveOperations", defaults.RenderMoveOperations),
+            RevisionPresentation = IntOpt("revisionPresentation", defaults.RevisionPresentation),
             RenderUnsupportedContentPlaceholders = BoolOpt("renderUnsupportedContentPlaceholders", defaults.RenderUnsupportedContentPlaceholders),
             DocumentLanguage = StrOptNullable("documentLanguage", defaults.DocumentLanguage),
         };

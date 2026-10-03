@@ -206,6 +206,20 @@ export enum PaginationMode {
 }
 
 /**
+ * How rendered tracked changes look (issue #851). Only used when `renderTrackedChanges` is on.
+ */
+export enum RevisionPresentation {
+  /** Docxodus's own review style (default): green/red text with light fills, purple moves, pilcrows. */
+  Docxodus = 0,
+  /**
+   * Close to Word's All Markup print: one colour per author for both insertions (underlined) and
+   * deletions (struck through), no fills or pilcrows, green double-lined moves, Word's default cell
+   * shading, and one left-margin change bar per changed paragraph. Full renders only.
+   */
+  Word = 1,
+}
+
+/**
  * Annotation label display mode
  */
 export enum AnnotationLabelMode {
@@ -280,6 +294,8 @@ export interface ConversionOptions {
   showDeletedContent?: boolean;
   /** Whether to distinguish move operations from regular insert/delete (only when renderTrackedChanges=true, default: true) */
   renderMoveOperations?: boolean;
+  /** How tracked changes look (only when renderTrackedChanges=true, default: RevisionPresentation.Docxodus) */
+  revisionPresentation?: RevisionPresentation;
   /**
    * Whether to render placeholders for unsupported content (default: false)
    * When enabled, unsupported content (WMF/EMF images, math equations, form fields, etc.)
@@ -1525,7 +1541,8 @@ export interface DocxodusWasmExports {
       renderMoveOperations: boolean,
       renderUnsupportedContentPlaceholders: boolean,
       documentLanguage: string | null,
-      stampAnchors: boolean
+      stampAnchors: boolean,
+      revisionPresentation: number
     ) => string;
     GetAnnotations: (bytes: Uint8Array) => string;
     AddAnnotation: (bytes: Uint8Array, requestJson: string) => string;

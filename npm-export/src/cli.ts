@@ -30,6 +30,9 @@ const HELP = `Usage:
     Exit 0 when exports are expected to launch; 1 with remediation guidance otherwise.
 
 Options:
+  --markup-presentation <docxodus|word>
+                                     How --review-profile markup draws tracked changes
+                                     (default docxodus; word = Word's All Markup style)
   --document-version <integer>       Immutable source version (default: 0)
   --expected-source-digest <sha256>  Required source digest
   --unsupported-content <warn|strict>
@@ -147,6 +150,7 @@ export async function runCli(argv: readonly string[]): Promise<number> {
         to: { type: "string" },
         output: { type: "string", short: "o" },
         "review-profile": { type: "string" },
+        "markup-presentation": { type: "string" },
         comments: { type: "string" },
         "document-version": { type: "string" },
         "expected-source-digest": { type: "string" },
@@ -223,6 +227,10 @@ export async function runCli(argv: readonly string[]): Promise<number> {
     }
     const options: NodeExportOptions = {
       reviewProfile,
+      ...(parsed.values["markup-presentation"] === undefined ? {} : {
+        markupPresentation: oneOf(parsed.values["markup-presentation"], ["docxodus", "word"] as const,
+          "--markup-presentation"),
+      }),
       commentProfile,
       documentVersion: integer(parsed.values["document-version"], "--document-version"),
       expectedSourceDigest: parsed.values["expected-source-digest"],

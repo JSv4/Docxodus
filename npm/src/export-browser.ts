@@ -17,6 +17,7 @@ import {
 import {
   CommentRenderMode,
   PaginationMode,
+  RevisionPresentation,
   type PackageManifest,
   type PackageManifestInspectionLimits,
   type VersionInfo,
@@ -65,6 +66,12 @@ export type {
 } from "./font-contract.js";
 
 export type ReviewProfile = "final" | "original" | "markup";
+/**
+ * How the markup profile draws tracked changes (issue #851): `docxodus` (default) is Docxodus's own
+ * review style; `word` is close to Word's All Markup print — per-author colours, underline and
+ * strikethrough only, no fills or pilcrows, and left-margin change bars.
+ */
+export type MarkupPresentation = "docxodus" | "word";
 export type CommentProfile = "hidden" | "inline" | "endnotes" | "margin";
 export type UnsupportedContentPolicy = "warn" | "strict";
 
@@ -149,6 +156,8 @@ export interface PaginatedHtmlOptions {
   expectedSourceDigest?: string;
   reviewProfile: ReviewProfile;
   reviewProfileAlreadyApplied?: boolean;
+  /** Only with reviewProfile "markup"; default "docxodus". */
+  markupPresentation?: MarkupPresentation;
   commentProfile: CommentProfile;
   title?: string;
   unsupportedContent?: UnsupportedContentPolicy;
@@ -211,6 +220,8 @@ export interface RenderReportBase {
   options: {
     reviewProfile: ReviewProfile;
     reviewProfileAlreadyApplied: boolean;
+    /** Present only when the markup profile used the Word presentation. */
+    markupPresentation?: "word";
     commentProfile: CommentProfile;
     title: string;
     outputs: Array<"html" | "pdf">;
@@ -478,6 +489,7 @@ interface NormalizedOptions {
   expectedSourceDigest?: string;
   reviewProfile: ReviewProfile;
   reviewProfileAlreadyApplied: boolean;
+  markupPresentation: MarkupPresentation;
   commentProfile: CommentProfile;
   title: string;
   unsupportedContent: UnsupportedContentPolicy;
@@ -538,6 +550,7 @@ const REPORT_SCHEMA = "https://docxodus.dev/schemas/render/render-report/v2" as 
 const TEXT_ENCODER = new TextEncoder();
 const ALLOWED_REVIEW_PROFILES = new Set<ReviewProfile>(["final", "original", "markup"]);
 const ALLOWED_COMMENT_PROFILES = new Set<CommentProfile>(["hidden", "inline", "endnotes", "margin"]);
+const ALLOWED_MARKUP_PRESENTATIONS = new Set<MarkupPresentation>(["docxodus", "word"]);
 const ALLOWED_UNSUPPORTED_POLICIES = new Set<UnsupportedContentPolicy>(["warn", "strict"]);
 const PACKAGE_LIMIT_FINDINGS = new Set([
   "entry_count_limit_exceeded",
@@ -609,6 +622,16 @@ function normalizeOptions(options: PaginatedHtmlOptions): NormalizedOptions {
     fail("invalid_argument", "input_validation",
       "reviewProfileAlreadyApplied is invalid with the markup profile.",
       "Use unchanged source bytes for markup, or choose final/original.");
+  }
+  const markupPresentation = options.markupPresentation ?? "docxodus";
+  if (!ALLOWED_MARKUP_PRESENTATIONS.has(markupPresentation)) {
+    fail("invalid_argument", "input_validation", "markupPresentation is invalid.",
+      "Use docxodus or word.");
+  }
+  if (markupPresentation !== "docxodus" && options.reviewProfile !== "markup") {
+    fail("invalid_argument", "input_validation",
+      "markupPresentation applies only to the markup profile.",
+      "Omit markupPresentation, or use reviewProfile markup.");
   }
   const unsupportedContent = options.unsupportedContent ?? "warn";
   if (!ALLOWED_UNSUPPORTED_POLICIES.has(unsupportedContent)) {
@@ -704,6 +727,7 @@ function normalizeOptions(options: PaginatedHtmlOptions): NormalizedOptions {
     expectedSourceDigest: options.expectedSourceDigest,
     reviewProfile: options.reviewProfile,
     reviewProfileAlreadyApplied,
+    markupPresentation,
     commentProfile: options.commentProfile,
     title,
     unsupportedContent,
@@ -1652,6 +1676,9 @@ function conversionOptions(options: NormalizedOptions) {
     renderFootnotesAndEndnotes: true,
     renderHeadersAndFooters: true,
     renderTrackedChanges: options.reviewProfile === "markup",
+    revisionPresentation: options.markupPresentation === "word"
+      ? RevisionPresentation.Word
+      : RevisionPresentation.Docxodus,
     showDeletedContent: true,
     renderMoveOperations: true,
     renderUnsupportedContentPlaceholders: true,
@@ -2901,11 +2928,18 @@ function automaticResourceCount(document: Document): { count: number; bytes: num
   return { count, bytes };
 }
 
+/** The report's and layout digest's record of the presentation: only the non-default one is named. */
+function markupPresentationField(options: NormalizedOptions): { markupPresentation?: "word" } {
+  return options.markupPresentation === "word" ? { markupPresentation: "word" } : {};
+}
+
 async function layoutDigestForOptions(options: NormalizedOptions): Promise<string> {
   const layoutContract = {
     title: options.title,
     reviewProfile: options.reviewProfile,
     reviewProfileAlreadyApplied: options.reviewProfileAlreadyApplied,
+    // Absent for the default, so default layouts keep the digest they had before the option.
+    ...markupPresentationField(options),
     commentProfile: options.commentProfile,
     pagination: {
       mode: "paginated",
@@ -3208,6 +3242,7 @@ function reportBase(
     options: {
       reviewProfile: options.reviewProfile,
       reviewProfileAlreadyApplied: options.reviewProfileAlreadyApplied,
+      ...markupPresentationField(options),
       commentProfile: options.commentProfile,
       title: options.title,
       outputs: ["html"],

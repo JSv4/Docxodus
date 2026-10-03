@@ -150,6 +150,7 @@ const html = await convertDocxToHtml(docxFile, {
 | `renderTrackedChanges` | `boolean` | `false` | Render tracked changes (redlines) |
 | `showDeletedContent` | `boolean` | `true` | Show deleted content with strikethrough |
 | `renderMoveOperations` | `boolean` | `true` | Distinguish moves from insert/delete |
+| `revisionPresentation` | `RevisionPresentation` | `Docxodus` | `Word` draws tracked changes in Word's All Markup style (author colours, no fills or pilcrows, change bars) |
 | `renderAnnotations` | `boolean` | `false` | Render custom annotations |
 | `annotationLabelMode` | `AnnotationLabelMode` | `Above` | How to display annotation labels |
 | `annotationCssClassPrefix` | `string` | `"annot-"` | CSS prefix for annotations |

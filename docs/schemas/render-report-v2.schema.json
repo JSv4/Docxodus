@@ -85,6 +85,31 @@
           ]
         }
       }
+    },
+    {
+      "if": {
+        "required": [
+          "options"
+        ],
+        "properties": {
+          "options": {
+            "required": [
+              "markupPresentation"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "options": {
+            "properties": {
+              "reviewProfile": {
+                "const": "markup"
+              }
+            }
+          }
+        }
+      }
     }
   ],
   "$defs": {
@@ -624,6 +649,10 @@
           },
           "reviewProfileAlreadyApplied": {
             "type": "boolean"
+          },
+          "markupPresentation": {
+            "description": "Present only when the markup profile drew tracked changes in Word's All Markup style (issue #851); absent means Docxodus's own style.",
+            "const": "word"
           },
           "commentProfile": {
             "enum": [

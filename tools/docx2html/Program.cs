@@ -37,6 +37,7 @@ class Program
         bool embedImages = true;
         bool inlineStyles = false;
         bool trackChanges = false;
+        var revisionPresentation = RevisionPresentation.Docxodus;
         bool renderMoves = true;
         bool renderComments = false;
         bool renderFootnotes = false;
@@ -65,6 +66,10 @@ class Program
                 else if (args[i] == "--track-changes")
                 {
                     trackChanges = true;
+                }
+                else if (args[i] == "--word-markup")
+                {
+                    revisionPresentation = RevisionPresentation.Word;
                 }
                 else if (args[i] == "--no-render-moves")
                 {
@@ -165,6 +170,7 @@ class Program
                 RestrictToSupportedNumberingFormats = false,
                 RenderTrackedChanges = trackChanges,
                 RenderMoveOperations = renderMoves,
+                RevisionPresentation = revisionPresentation,
                 RenderComments = renderComments,
                 RenderFootnotesAndEndnotes = renderFootnotes,
                 RenderHeadersAndFooters = renderHeadersFooters,
@@ -325,6 +331,8 @@ class Program
         Console.WriteLine("  --extract-images     Save images to separate files instead of embedding");
         Console.WriteLine("  --track-changes      Render tracked changes as ins/del markup instead of accepting them");
         Console.WriteLine("  --no-render-moves    Render moves as plain ins/del (only with --track-changes)");
+        Console.WriteLine("  --word-markup        Draw tracked changes in Word's All Markup style: author colours,");
+        Console.WriteLine("                       no fills or pilcrows, left-margin change bars (only with --track-changes)");
         Console.WriteLine("  --render-comments    Render document comments");
         Console.WriteLine("  --render-footnotes   Render footnotes and endnotes");
         Console.WriteLine("  --render-headers-footers  Render document headers and footers");
