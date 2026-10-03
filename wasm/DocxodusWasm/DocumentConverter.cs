@@ -382,6 +382,7 @@ public partial class DocumentConverter
     /// <param name="renderMoveOperations">Whether to distinguish move operations from insert/delete (only when renderTrackedChanges=true)</param>
     /// <param name="renderUnsupportedContentPlaceholders">Whether to render placeholders for unsupported content (math, forms, WMF/EMF images)</param>
     /// <param name="documentLanguage">Override the document's default language for the HTML lang attribute (null = auto-detect from document)</param>
+    /// <param name="semanticLists">Emit Word lists as ol/ul/li instead of one p per item (ignored for paginated output)</param>
     /// <returns>HTML string or JSON error object</returns>
     [JSExport]
     public static string ConvertDocxToHtmlComplete(
@@ -405,7 +406,8 @@ public partial class DocumentConverter
         bool renderMoveOperations,
         bool renderUnsupportedContentPlaceholders = false,
         string? documentLanguage = null,
-        bool stampAnchors = false)
+        bool stampAnchors = false,
+        bool semanticLists = false)
     {
         if (docxBytes == null || docxBytes.Length == 0)
         {
@@ -436,6 +438,7 @@ public partial class DocumentConverter
                 RenderMoveOperations = renderMoveOperations,
                 RenderUnsupportedContentPlaceholders = renderUnsupportedContentPlaceholders,
                 DocumentLanguage = documentLanguage,
+                SemanticLists = semanticLists,
             };
             return Docxodus.Internal.HtmlConversionOps.ConvertToHtml(docxBytes, options);
         }

@@ -35,7 +35,7 @@ internal static class SymbolFontMapper
     };
 
     /// <summary>The lowercased primary family of a CSS font-family value (drops quotes + fallbacks).</summary>
-    private static string PrimaryFamily(string fontFamily) =>
+    public static string PrimaryFamily(string fontFamily) =>
         fontFamily.Split(',')[0].Trim().Trim('\'', '"').ToLowerInvariant();
 
     /// <summary>True if <paramref name="fontFamily"/>'s primary family is a known symbol font.</summary>

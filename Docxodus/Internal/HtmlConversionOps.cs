@@ -46,6 +46,12 @@ internal sealed record HtmlConversionOptions
     public bool StampAnchors { get; init; }
 
     /// <summary>
+    /// Emit Word lists as <c>ol</c>/<c>ul</c>/<c>li</c> instead of one <c>p</c> per item. See
+    /// <see cref="WmlToHtmlConverterSettings.SemanticLists"/>; ignored for paginated output.
+    /// </summary>
+    public bool SemanticLists { get; init; }
+
+    /// <summary>
     /// Block renders only: wrap PAGE / NUMPAGES field results in <c>&lt;span data-field&gt;</c>
     /// (the marker the paginated full render emits) so a client that paginates the block itself
     /// can substitute each page's number. Off by default so the pinned block-render output is
@@ -152,6 +158,7 @@ internal static class HtmlConversionOps
             DocumentLanguage = options.DocumentLanguage,
             StampAnchors = options.StampAnchors,
             StampCanonicalSourceAnchors = options.StampAnchors || renderPagination,
+            SemanticLists = options.SemanticLists,
             // Embed images as base64 data URIs — no SkiaSharp needed (WASM-safe).
             ImageHandler = CreateBase64ImageHandler(),
         };

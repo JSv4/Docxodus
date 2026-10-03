@@ -900,7 +900,8 @@ export async function convertDocxToHtml(
     options?.renderMoveOperations !== undefined ||
     options?.renderUnsupportedContentPlaceholders !== undefined ||
     options?.documentLanguage !== undefined ||
-    options?.stampAnchors !== undefined;
+    options?.stampAnchors !== undefined ||
+    options?.semanticLists !== undefined;
 
   // Use complete method when any new options are specified (most comprehensive)
   if (needsCompleteMethod || options?.renderAnnotations) {
@@ -925,7 +926,8 @@ export async function convertDocxToHtml(
       options?.renderMoveOperations ?? true,
       options?.renderUnsupportedContentPlaceholders ?? false,
       options?.documentLanguage ?? null,
-      options?.stampAnchors ?? false
+      options?.stampAnchors ?? false,
+      options?.semanticLists ?? false
     );
   }
   // Use pagination-aware method when pagination is requested
