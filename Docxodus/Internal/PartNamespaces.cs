@@ -131,14 +131,28 @@ internal sealed class PartNamespaces
         return changed;
     }
 
-    /// <summary>Declare <paramref name="prefix"/> for <paramref name="ns"/> on <paramref name="root"/> and
-    /// list it in the root's <c>mc:Ignorable</c>, keeping the tokens already there.</summary>
+    /// <summary>Make <paramref name="ns"/> ignorable on <paramref name="root"/>: declare <c>mc</c> if needed,
+    /// declare <paramref name="ns"/> under <paramref name="prefix"/> unless the root already gives it a prefix
+    /// (then that prefix is the one listed), and list the prefix once in <c>mc:Ignorable</c>, creating the
+    /// attribute when absent and keeping the tokens already there. A <paramref name="prefix"/> the root binds
+    /// to another namespace is never rebound — that would change what the root's content refers to — so a
+    /// numbered variant of it is declared instead.</summary>
     internal static void EnsureIgnorablePrefix(XElement root, string prefix, XNamespace ns)
     {
         if (root.GetNamespaceOfPrefix("mc") != MC.mc)
             root.SetAttributeValue(XNamespace.Xmlns + "mc", MC.mc.NamespaceName);
-        if (root.GetNamespaceOfPrefix(prefix) != ns)
+        if (root.GetPrefixOfNamespace(ns) is { } existing)
+        {
+            prefix = existing;
+        }
+        else
+        {
+            var candidate = prefix;
+            for (var n = 1; root.GetNamespaceOfPrefix(candidate) is not null; n++)
+                candidate = prefix + n;
+            prefix = candidate;
             root.SetAttributeValue(XNamespace.Xmlns + prefix, ns.NamespaceName);
+        }
 
         var tokens = ((string?)root.Attribute(MC.Ignorable) ?? string.Empty)
             .Split(ListSeparators, StringSplitOptions.RemoveEmptyEntries)

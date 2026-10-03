@@ -8,6 +8,7 @@ using System.Linq;
 using System.Text;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
+using Docxodus.Internal;
 
 namespace Docxodus
 {
@@ -875,23 +876,7 @@ namespace Docxodus
             {
                 root.Descendants().Attributes().Where(d => d.Name.Namespace == PtOpenXml.pt &&
                     !PtNamesToKeep.Contains(d.Name)).Remove();
-                if (root.Attribute(XNamespace.Xmlns + "pt14") == null)
-                    root.Add(new XAttribute(XNamespace.Xmlns + "pt14", PtOpenXml.pt.NamespaceName));
-                if (root.Attribute(XNamespace.Xmlns + "mc") == null)
-                    root.Add(new XAttribute(XNamespace.Xmlns + "mc", MC.mc.NamespaceName));
-                XAttribute? mci = root.Attribute(MC.Ignorable);
-                if (mci != null)
-                {
-                    if (!mci.Value.Contains("pt14"))
-                    {
-                        var ig = mci.Value + " pt14";
-                        mci.Value = ig;
-                    }
-                }
-                else
-                {
-                    root.Add(new XAttribute(MC.Ignorable, "pt14"));
-                }
+                PartNamespaces.EnsureIgnorablePrefix(root, "pt14", PtOpenXml.pt);
             }
             else
             {
