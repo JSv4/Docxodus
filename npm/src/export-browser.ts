@@ -8,6 +8,7 @@
 
 import limitsContractJson from "./export-resource-limits-v1.json";
 import { assertWellFormedUnicode, canonicalJson } from "./canonical.js";
+import { applyUnroundedNormalLineHeights } from "./line-metrics.js";
 import { measureRenderedSource, PaginationEngine, type PageMap } from "./pagination.js";
 import {
   createWorkerDocxodus,
@@ -3629,6 +3630,10 @@ export async function convertDocxToPaginatedHtml(
             "Paginated conversion did not produce staging and page containers.",
             "Use the paginated converter contract and report the malformed conversion output.");
         }
+        // Chromium rounds a `normal` line height to a whole pixel, and that error accumulates
+        // down the page (issue #850). Fix each line's height before anything is measured; both
+        // attempts start from pristine HTML, so both apply it identically.
+        applyUnroundedNormalLineHeights(renderDocument.body);
         const engine = new PaginationEngine(staging, container, {
           scale: 1,
           cssPrefix: "page-",
