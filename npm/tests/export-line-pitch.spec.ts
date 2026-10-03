@@ -9,7 +9,7 @@ import { storedZip, W_NS, xml } from './docx-zip.js';
  *
  * The expected heights come from the fonts' own `hhea` tables (the metrics Chromium uses on Linux),
  * not from the code under test:
- * - Carlito: ascender 1536 + |descender| 512 + lineGap 452 = 2500 per 2048 units/em.
+ * - Carlito: ascender 1950 + |descender| 550 + lineGap 0 = 2500 per 2048 units/em.
  * - Liberation Sans: ascender 1854 + |descender| 434 + lineGap 67 = 2355 per 2048 units/em.
  */
 const NATURAL_EM = { Carlito: 2500 / 2048, 'Liberation Sans': 2355 / 2048 } as const;
@@ -18,10 +18,13 @@ const TOLERANCE_PT_PER_LINE = 0.05;
 
 const SENTENCE = 'The quick brown fox jumps over the lazy dog while the editor counts every line. ';
 
-function docx(font: keyof typeof NATURAL_EM, halfPoints: number, lines: number[]): Uint8Array {
+const CJK = '漢字テキストの行の高さを測ります。';
+
+function docx(font: keyof typeof NATURAL_EM, halfPoints: number, lines: number[],
+  rule = 'auto', text = SENTENCE): Uint8Array {
   const paragraphs = lines.map((line, index) =>
-    `<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="${line}" w:lineRule="auto"/></w:pPr>`
-    + `<w:r><w:t xml:space="preserve">CASE${index} ${SENTENCE.repeat(8)}</w:t></w:r></w:p>`).join('');
+    `<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="${line}" w:lineRule="${rule}"/></w:pPr>`
+    + `<w:r><w:t xml:space="preserve">CASE${index} ${text.repeat(8)}</w:t></w:r></w:p>`).join('');
   return storedZip([
     {
       name: '[Content_Types].xml',
@@ -67,29 +70,49 @@ function docx(font: keyof typeof NATURAL_EM, halfPoints: number, lines: number[]
   ]);
 }
 
-/** Mean distance between consecutive line tops of each CASE paragraph in the exported HTML, in pt. */
-async function exportedPitches(page: Page, source: Uint8Array): Promise<number[]> {
+/**
+ * Mean distance between consecutive line tops of each CASE paragraph in the exported HTML, in pt.
+ * With `normalReference`, each paragraph is also cloned with every line height forced back to
+ * `normal`, and that clone's pitch is returned alongside: what Chromium's own model gives the text.
+ */
+async function exportedPitches(page: Page, source: Uint8Array): Promise<number[]>;
+async function exportedPitches(page: Page, source: Uint8Array, normalReference: true): Promise<Array<[number, number]>>;
+async function exportedPitches(page: Page, source: Uint8Array, normalReference = false): Promise<unknown[]> {
   await page.goto('/standalone-export-harness.html');
   await page.waitForFunction(() => (window as any).DocxodusStandaloneReady === true);
   const result = await page.evaluate(async (bytes) => (window as any).DocxodusStandalone.convert(
     bytes, { reviewProfile: 'final', commentProfile: 'hidden' }), Array.from(source));
   expect(result.renderReport.status).toBe('complete');
   await page.setContent(result.html);
-  return page.evaluate(() => {
-    const pitches: number[] = [];
+  return page.evaluate((withReference) => {
+    const pitchOf = (element: Element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const tops = [...new Set(Array.from(range.getClientRects())
+        .filter((rect) => rect.width > 0)
+        .map((rect) => Math.round(rect.top * 64) / 64))].sort((a, b) => a - b);
+      return ((tops[tops.length - 1] - tops[0]) / (tops.length - 1)) * 0.75;
+    };
+    const pitches: unknown[] = [];
     for (let index = 0; ; index++) {
       const paragraph = Array.from(document.querySelectorAll('p'))
         .find((p) => (p.textContent ?? '').trimStart().startsWith(`CASE${index} `));
       if (!paragraph) break;
-      const range = document.createRange();
-      range.selectNodeContents(paragraph);
-      const tops = [...new Set(Array.from(range.getClientRects())
-        .filter((rect) => rect.width > 0)
-        .map((rect) => Math.round(rect.top * 64) / 64))].sort((a, b) => a - b);
-      pitches.push(((tops[tops.length - 1] - tops[0]) / (tops.length - 1)) * 0.75);
+      if (!withReference) {
+        pitches.push(pitchOf(paragraph));
+        continue;
+      }
+      const clone = paragraph.cloneNode(true) as HTMLElement;
+      for (const element of [clone, ...Array.from(clone.querySelectorAll<HTMLElement>('*'))]) {
+        element.style.setProperty('line-height', 'normal');
+      }
+      clone.style.width = `${paragraph.getBoundingClientRect().width}px`;
+      paragraph.after(clone);
+      pitches.push([pitchOf(paragraph), pitchOf(clone)]);
+      clone.remove();
     }
     return pitches;
-  });
+  }, normalReference);
 }
 
 test.describe('exported line pitch (#850)', () => {
@@ -103,6 +126,22 @@ test.describe('exported line pitch (#850)', () => {
       expect(Math.abs(pitches[index] - expected), `w:line=${line}: ${pitches[index]} pt vs ${expected} pt`)
         .toBeLessThanOrEqual(TOLERANCE_PT_PER_LINE);
     });
+  });
+
+  test('exact spacing keeps its twentieths of a point', async ({ page }) => {
+    // w:line="253" is 12.65 pt; a one-decimal CSS value made it 12.7 pt.
+    const [pitch] = await exportedPitches(page, docx('Carlito', 22, [253], 'exact'));
+
+    expect(Math.abs(pitch - 12.65), `${pitch} pt`).toBeLessThanOrEqual(0.02);
+  });
+
+  test('a line of CJK text keeps the height its fallback font gives it', async ({ page }) => {
+    // Under normal, Chromium grows a line for a taller fallback font. An explicit height taken from
+    // the primary font alone would squeeze it; the pitch must stay within a pixel of normal's.
+    const [[exported, normal]] = await exportedPitches(page, docx('Carlito', 22, [240], 'auto', CJK), true);
+
+    expect(Math.abs(exported - normal), `exported ${exported} pt vs normal ${normal} pt`)
+      .toBeLessThan(0.75);
   });
 
   test('Liberation Sans 12pt single and double follow the font metrics', async ({ page }) => {

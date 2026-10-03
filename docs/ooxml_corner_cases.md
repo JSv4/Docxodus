@@ -2027,8 +2027,25 @@ multiplies the rounded value.
 | Docxodus export before #850 | 13.500 pt |
 | Docxodus export after #850 | 13.43 pt (within 1/64 px) |
 
-The 0.07 pt per line accumulates down a page. For 12 pt Liberation Sans the error is 0.30 pt per
-line, so it moves page breaks. The paginated export now runs `applyUnroundedNormalLineHeights`
+The 0.07 pt per line accumulates down a page. For 12 pt Liberation Sans, which is metric-compatible
+with Arial, the error is 0.30 pt per line, so it moves page breaks.
+
+| 12 pt Arial / Liberation Sans, single | Line pitch |
+|---|---:|
+| Word, as measured in #850 | 13.68 pt |
+| Font metrics (`hhea`: 1854 + 434 + 67 per 2048) | 13.80 pt |
+| Docxodus export before #850 | 13.50 pt (0.18 pt short of Word) |
+| Docxodus export after #850 | 13.80 pt (0.12 pt long of Word) |
+
+The fix removes Chromium's rounding and follows the font's own metrics. For Carlito/Calibri, all three
+metric sets (`hhea`, `typo`, `win`) give the same 1.2207 em, so that is also Word's height. For Arial,
+the sets disagree: `win` gives 13.41 pt and `typo` 13.06 pt. None reproduces the 13.68 pt Word figure
+in #850, which has no recorded fixture to check against. The remaining Arial difference is tracked
+with the baseline work in #908.
+
+Exact and at-least heights had a converter-side quantization of the same kind: they were formatted
+with one decimal, so `w:line="253"` (12.65 pt) rendered as 12.7 pt. They now keep twentieths of a
+point (`{0:0.0#}pt`). The paginated export now runs `applyUnroundedNormalLineHeights`
 (`npm/src/line-metrics.ts`) before pagination. It gives every element whose computed line height is
 `normal` an explicit height for its own font, measured at 1000 px, where pixel rounding is negligible.
 The converter's output is unchanged, and so is the editor's paginated view. Word's baseline placement
