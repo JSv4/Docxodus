@@ -1,4 +1,8 @@
 import { expect, test, type Page } from '@playwright/test';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { storedZip, W_NS, xml } from './docx-zip.js';
 
 /**
@@ -7,11 +11,26 @@ import { storedZip, W_NS, xml } from './docx-zip.js';
  * gap but rounds the result to a CSS pixel, so 11 pt Carlito advanced 18 px instead of 17.904 px and
  * the error accumulated down every page.
  *
- * The expected height comes from Carlito's own `hhea` table (the metrics Chromium uses on Linux), not
- * from the code under test: ascender 1950 + |descender| 550 + lineGap 0 = 2500 per 2048 units/em.
- * CI installs exactly this font (fonts-crosextra-carlito) for these tests.
+ * The metric cases load the repository's own test font through the export's font resolver, so they
+ * do not depend on what a machine has installed (installing fonts system-wide on CI changes other
+ * screenshot tests). The expected height comes from that font's `hhea` table, the metrics Chromium
+ * uses on Linux, not from the code under test: Docxodus Canvas Mono has ascender 1901 +
+ * |descender| 483 + lineGap 0 = 2384 per 2048 units/em.
  */
-const NATURAL_EM = { Carlito: 2500 / 2048 } as const;
+const TEST_FONT = 'Docxodus Canvas Mono';
+const TEST_FONT_NATURAL_EM = 2384 / 2048;
+const testFontBytes = readFileSync(join(dirname(fileURLToPath(import.meta.url)),
+  '..', '..', 'docs', 'demo', 'fonts', 'docxodus-canvas-mono.woff2'));
+/** Serve the test font for every requested family, through the harness's configured resolver. */
+const testFontPlan = {
+  mode: 'exact',
+  format: 'woff2',
+  mediaType: 'font/woff2',
+  byteLength: testFontBytes.byteLength,
+  sha256: createHash('sha256').update(testFontBytes).digest('hex'),
+  bytesBase64: testFontBytes.toString('base64'),
+  licenseIdentity: 'a'.repeat(64),
+};
 /** Each line may differ from the model by at most this much (the issue's ~0.05 pt target). */
 const TOLERANCE_PT_PER_LINE = 0.05;
 
@@ -19,7 +38,7 @@ const SENTENCE = 'The quick brown fox jumps over the lazy dog while the editor c
 
 const CJK = '漢字テキストの行の高さを測ります。';
 
-function docx(font: keyof typeof NATURAL_EM, halfPoints: number, lines: number[],
+function docx(font: string, halfPoints: number, lines: number[],
   rule = 'auto', text = SENTENCE): Uint8Array {
   const paragraphs = lines.map((line, index) =>
     `<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="${line}" w:lineRule="${rule}"/></w:pPr>`
@@ -74,13 +93,18 @@ function docx(font: keyof typeof NATURAL_EM, halfPoints: number, lines: number[]
  * With `normalReference`, each paragraph is also cloned with every line height forced back to
  * `normal`, and that clone's pitch is returned alongside: what Chromium's own model gives the text.
  */
-async function exportedPitches(page: Page, source: Uint8Array): Promise<number[]>;
-async function exportedPitches(page: Page, source: Uint8Array, normalReference: true): Promise<Array<[number, number]>>;
-async function exportedPitches(page: Page, source: Uint8Array, normalReference = false): Promise<unknown[]> {
+async function exportedPitches(page: Page, source: Uint8Array, withTestFont?: boolean): Promise<number[]>;
+async function exportedPitches(page: Page, source: Uint8Array, withTestFont: boolean,
+  normalReference: true): Promise<Array<[number, number]>>;
+async function exportedPitches(page: Page, source: Uint8Array, withTestFont = false,
+  normalReference = false): Promise<unknown[]> {
   await page.goto('/standalone-export-harness.html');
   await page.waitForFunction(() => (window as any).DocxodusStandaloneReady === true);
-  const result = await page.evaluate(async (bytes) => (window as any).DocxodusStandalone.convert(
-    bytes, { reviewProfile: 'final', commentProfile: 'hidden' }), Array.from(source));
+  const result = await page.evaluate(async ({ bytes, plan }) => {
+    const api = (window as any).DocxodusStandalone;
+    const options = { reviewProfile: 'final', commentProfile: 'hidden' };
+    return plan ? api.convertWithFontResolver(bytes, options, plan) : api.convert(bytes, options);
+  }, { bytes: Array.from(source), plan: withTestFont ? testFontPlan : undefined });
   expect(result.renderReport.status).toBe('complete');
   await page.setContent(result.html);
   return page.evaluate((withReference) => {
@@ -115,13 +139,27 @@ async function exportedPitches(page: Page, source: Uint8Array, normalReference =
 }
 
 test.describe('exported line pitch (#850)', () => {
-  test('Carlito 11pt single, 1.08, 1.15 and double follow the font metrics', async ({ page }) => {
+  test('12pt single, 1.08, 1.15 and double follow the font metrics', async ({ page }) => {
+    // 12 pt is 18.625 px natural against 19 px rounded: 0.28 pt per line before the fix.
     const lines = [240, 259, 276, 480];
-    const pitches = await exportedPitches(page, docx('Carlito', 22, lines));
+    const pitches = await exportedPitches(page, docx(TEST_FONT, 24, lines), true);
 
     expect(pitches).toHaveLength(lines.length);
     lines.forEach((line, index) => {
-      const expected = NATURAL_EM.Carlito * 11 * (line / 240);
+      const expected = TEST_FONT_NATURAL_EM * 12 * (line / 240);
+      expect(Math.abs(pitches[index] - expected), `w:line=${line}: ${pitches[index]} pt vs ${expected} pt`)
+        .toBeLessThanOrEqual(TOLERANCE_PT_PER_LINE);
+    });
+  });
+
+  test('14pt single and double follow the font metrics', async ({ page }) => {
+    // 14 pt is 21.729 px natural against 22 px rounded: 0.20 pt per line before the fix.
+    const lines = [240, 480];
+    const pitches = await exportedPitches(page, docx(TEST_FONT, 28, lines), true);
+
+    expect(pitches).toHaveLength(lines.length);
+    lines.forEach((line, index) => {
+      const expected = TEST_FONT_NATURAL_EM * 14 * (line / 240);
       expect(Math.abs(pitches[index] - expected), `w:line=${line}: ${pitches[index]} pt vs ${expected} pt`)
         .toBeLessThanOrEqual(TOLERANCE_PT_PER_LINE);
     });
@@ -137,22 +175,9 @@ test.describe('exported line pitch (#850)', () => {
   test('a line of CJK text keeps the height its fallback font gives it', async ({ page }) => {
     // Under normal, Chromium grows a line for a taller fallback font. An explicit height taken from
     // the primary font alone would squeeze it; the pitch must stay within a pixel of normal's.
-    const [[exported, normal]] = await exportedPitches(page, docx('Carlito', 22, [240], 'auto', CJK), true);
+    const [[exported, normal]] = await exportedPitches(page, docx('Carlito', 22, [240], 'auto', CJK), false, true);
 
     expect(Math.abs(exported - normal), `exported ${exported} pt vs normal ${normal} pt`)
       .toBeLessThan(0.75);
-  });
-
-  test('Carlito 12pt single and double follow the font metrics', async ({ page }) => {
-    // 12 pt is 19.531 px natural against 19 px rounded: 0.4 pt per line before the fix.
-    const lines = [240, 480];
-    const pitches = await exportedPitches(page, docx('Carlito', 24, lines));
-
-    expect(pitches).toHaveLength(lines.length);
-    lines.forEach((line, index) => {
-      const expected = NATURAL_EM.Carlito * 12 * (line / 240);
-      expect(Math.abs(pitches[index] - expected), `w:line=${line}: ${pitches[index]} pt vs ${expected} pt`)
-        .toBeLessThanOrEqual(TOLERANCE_PT_PER_LINE);
-    });
   });
 });
