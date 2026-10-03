@@ -54,6 +54,12 @@ jobs:
       - name: Install Playwright browsers
         run: cd npm && npx playwright install --with-deps chromium firefox
 
+      # export-line-pitch.spec.ts checks line pitch against Carlito's own metrics (issue #850).
+      # Carlito only: installing Liberation changes what "Times New Roman" falls back to and with
+      # it the tabs-visual screenshots, which are recorded against this runner's default fonts.
+      - name: Install the metric-checked font
+        run: sudo apt-get install -y --no-install-recommends fonts-crosextra-carlito
+
       # The export runtime deliberately keeps Chromium's process sandbox on, so the runner has to
       # permit unprivileged user namespaces. Ubuntu 24.04 restricts them through AppArmor by
       # default, which fails every launched-browser export with browser_launch_failure.

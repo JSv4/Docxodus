@@ -7101,13 +7101,13 @@ namespace Docxodus
             if (lineRule == "exact" && line is { } exactLine)
             {
                 var points = exactLine/20m;
-                style.Add("line-height", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}pt", points));
+                style.Add("line-height", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0#}pt", points));
             }
             if (lineRule == "atLeast" && line is { } atLeastLine)
             {
                 var points = atLeastLine/20m;
                 if (points >= 14m)
-                    style.Add("line-height", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}pt", points));
+                    style.Add("line-height", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0#}pt", points));
             }
 
             var spacingAfter = suppressTrailingWhiteSpace ? 0 : WordprocessingMLUtil.AttributeToTwips(spacing.Attribute(W.after));

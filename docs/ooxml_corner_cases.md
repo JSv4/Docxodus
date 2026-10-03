@@ -2013,6 +2013,45 @@ which is what pagination parity needed at the time; populated paragraphs kept th
 fallback. Issues #396 (DrawingML textbox auto-fit height) and #397 (TOC line height) were both
 traced to that remaining fallback.
 
+#### Chromium rounds `normal` to a whole pixel (issue #850)
+
+The `lh` model above inherits one more error. Chromium sizes a `line-height: normal` line from the
+font's natural line height, but rounds it to a whole CSS pixel (0.75 pt) first. Explicit lengths keep
+Chromium's 1/64-pixel layout precision, so the rounding comes from `normal` alone. `calc(1lh * m)`
+multiplies the rounded value.
+
+| 11 pt Carlito (natural height 2500/2048 em) | Line pitch |
+|---|---:|
+| Font metrics | 13.428 pt |
+| Chromium `line-height: normal` | 13.500 pt (18 px) |
+| Docxodus export before #850 | 13.500 pt |
+| Docxodus export after #850 | 13.43 pt (within 1/64 px) |
+
+The 0.07 pt per line accumulates down a page. For 12 pt Liberation Sans, which is metric-compatible
+with Arial, the error is 0.30 pt per line, so it moves page breaks.
+
+| 12 pt Arial / Liberation Sans, single | Line pitch |
+|---|---:|
+| Word, as measured in #850 | 13.68 pt |
+| Font metrics (`hhea`: 1854 + 434 + 67 per 2048) | 13.80 pt |
+| Docxodus export before #850 | 13.50 pt (0.18 pt short of Word) |
+| Docxodus export after #850 | 13.80 pt (0.12 pt long of Word) |
+
+The fix removes Chromium's rounding and follows the font's own metrics. For Carlito/Calibri, all three
+metric sets (`hhea`, `typo`, `win`) give the same 1.2207 em, so that is also Word's height. For Arial,
+the sets disagree: `win` gives 13.41 pt and `typo` 13.06 pt. None reproduces the 13.68 pt Word figure
+in #850, which has no recorded fixture to check against. The remaining Arial difference is tracked
+with the baseline work in #908.
+
+Exact and at-least heights had a converter-side quantization of the same kind: they were formatted
+with one decimal, so `w:line="253"` (12.65 pt) rendered as 12.7 pt. They now keep twentieths of a
+point (`{0:0.0#}pt`). The paginated export now runs `applyUnroundedNormalLineHeights`
+(`npm/src/line-metrics.ts`) before pagination. It gives every element whose computed line height is
+`normal` an explicit height for its own font, measured at 1000 px, where pixel rounding is negligible.
+The converter's output is unchanged, and so is the editor's paginated view. Word's baseline placement
+for `auto` multiples (extra leading below the text, not split around it) is tracked separately in #908.
+Tests: `npm/tests/export-line-pitch.spec.ts`.
+
 ### An accumulated line-spacing error can resemble a top-margin deviation
 
 #### Symptom
