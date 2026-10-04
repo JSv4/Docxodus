@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -8,10 +8,10 @@ import {
 } from './visual-parity/build-provenance.js';
 
 test.describe('generated-PDF build provenance', () => {
-  const work = join(tmpdir(), `docxodus-build-evidence-${process.pid}`);
+  let work: string;
   test.beforeEach(() => {
-    rmSync(work, { recursive: true, force: true });
-    mkdirSync(join(work, 'nested'), { recursive: true });
+    work = mkdtempSync(join(tmpdir(), 'docxodus-build-evidence-'));
+    mkdirSync(join(work, 'nested'));
     writeFileSync(join(work, 'index.js'), 'export const value = 1;\n');
     writeFileSync(join(work, 'nested/module.js'), 'export const sibling = 2;\n');
     writeFileSync(join(work, 'index.js.map'), 'ignored source map');

@@ -3,11 +3,11 @@
 import { chromium } from '../../npm/node_modules/@playwright/test/index.mjs';
 import { createServer } from 'node:http';
 import { createReadStream } from 'node:fs';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { dirname, resolve, sep, extname } from 'node:path';
+import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve, sep, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { cpus, platform, arch } from 'node:os';
+import { cpus, platform, arch, tmpdir } from 'node:os';
 
 // Native-only diagnostic: no React, editor canvas, rendering, or registered page map.
 // Run browsers serially and keep builds/other CPU-heavy work out of the measurement.
@@ -106,10 +106,11 @@ try {
     runs.push({label,...result,errors}); console.log(JSON.stringify({label,...result,errors}));
     await context.close();
   }
-  const output=process.argv[2] || '/tmp/docxodus-atomic-typing.json';
+  const output=process.argv[2] || join(await mkdtemp(join(tmpdir(),'docxodus-atomic-typing-')),'results.json');
   await mkdir(dirname(output), {recursive:true});
   await writeFile(output,JSON.stringify({startedAt,sha256,packages,browser:browser.version(),
     machine:{cpu:cpus()[0]?.model, logicalCpus:cpus().length, platform:platform(), arch:arch()},
     workload:'Text-plus-Bold atomic batch versus replaceMatch with format; first attempt and two repeats after undo/redo, in fresh ABBA browser contexts.',
     cpuThrottling:false,runs},null,2)+'\n');
+  console.log(`wrote ${output}`);
 } finally {await browser.close();await new Promise(resolve=>server.close(resolve));}
