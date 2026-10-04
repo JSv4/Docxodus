@@ -42,7 +42,18 @@ internal static class IrEditScriptBuilder
     private readonly record struct MoveInfo(
         int GroupId, IrBlock LeftBlock, IrEditOpKind OpKind, bool RequiresWholeParagraphReplace);
 
-    public static IrEditScript Build(IrDocument left, IrDocument right, IrDiffSettings settings)
+    public static IrEditScript Build(IrDocument left, IrDocument right, IrDiffSettings settings) =>
+        Build(left, right, settings, markupFusedAnchors: null);
+
+    /// <summary>
+    /// <see cref="Build(IrDocument, IrDocument, IrDiffSettings)"/>, also recording into
+    /// <paramref name="markupFusedAnchors"/> (when given and <see cref="IrDiffSettings.CrossParagraphTokenDiff"/>
+    /// is off for this build) every body paragraph anchor a build with cross-paragraph fusion ON would draw inside
+    /// a <see cref="IrEditOpKind.CrossParagraphRunBlock"/>. The ops are unchanged; the set lets a data script
+    /// leave out of relocation pairing the paragraphs its comparison's redline cannot draw as moves.
+    /// </summary>
+    public static IrEditScript Build(
+        IrDocument left, IrDocument right, IrDiffSettings settings, ISet<string>? markupFusedAnchors)
     {
         ArgumentNullException.ThrowIfNull(left);
         ArgumentNullException.ThrowIfNull(right);
@@ -54,7 +65,8 @@ internal static class IrEditScriptBuilder
         // of ProjectAlignment (notes, headers/footers, table cells via IrTableDiffer, textbox interiors) uses
         // the default allowCrossParagraph=false, so a word-matched run in those scopes keeps today's exact
         // per-pair behavior, and RenderCrossParagraphRun only ever runs on body blocks.
-        var bodyOps = ProjectAlignment(left.Body.Blocks, alignment, settings, allowCrossParagraph: true);
+        var bodyOps = ProjectAlignment(left.Body.Blocks, alignment, settings, allowCrossParagraph: true,
+            fusedAnchors: settings.CrossParagraphTokenDiff ? null : markupFusedAnchors);
         var noteOps = BuildNoteOps(left, right, settings, KeptNoteReferences(left, right, bodyOps, settings));
         var headerFooterOps = BuildHeaderFooterOps(left, right, settings);
         return UniqueMoveGroupIds.Apply(new IrEditScript(IrNodeList.From(bodyOps),
@@ -985,7 +997,7 @@ internal static class IrEditScriptBuilder
     /// </summary>
     public static List<IrEditOp> ProjectAlignment(
         IrNodeList<IrBlock> leftBlocks, IrBlockAlignment alignment, IrDiffSettings settings,
-        bool allowCrossParagraph = false)
+        bool allowCrossParagraph = false, ISet<string>? fusedAnchors = null)
     {
         // Left block index by reference identity → used to order move-source interleaving by left position.
         var leftIndex = BuildLeftIndexMap(leftBlocks);
@@ -1051,6 +1063,7 @@ internal static class IrEditScriptBuilder
                 break;
             }
         }
+        int detectedRegionEnd = -1;
         for (int entryIndex = 0; entryIndex < alignmentEntries.Count; entryIndex++)
         {
             var entry = alignmentEntries[entryIndex];
@@ -1070,9 +1083,18 @@ internal static class IrEditScriptBuilder
             // per-entry emission below. (Every pending move source was flushed above — a Modified entry flushes
             // everything — and the streak collector stops before any member with sources staged UNDER it, so
             // the source-op interleave order is untouched.)
-            if (allowCrossParagraph && settings.CrossParagraphTokenDiff &&
+            // Detect-only mode (fusedAnchors given, fusion off here): run the same fusion decision a fused build
+            // makes at this entry, record the anchors it would absorb, and emit per entry as usual. Entries a
+            // detected region consumed are skipped, exactly as the fused build skips them.
+            bool detectOnly = fusedAnchors is not null && !settings.CrossParagraphTokenDiff;
+            if (detectOnly && entryIndex < detectedRegionEnd)
+            {
+                // Inside a region already recorded: fall through to per-entry emission below.
+            }
+            else if (allowCrossParagraph && (settings.CrossParagraphTokenDiff || detectOnly) &&
                 entry.Kind is IrAlignmentKind.Modified or IrAlignmentKind.Inserted or IrAlignmentKind.Deleted)
             {
+                var fusionSettings = detectOnly ? settings with { CrossParagraphTokenDiff = true } : settings;
                 // At a Modified entry, the word-matched pair-run collector goes first (its behavior is
                 // pinned); the story-final MIXED-region collector (2026-07-27) then covers the decoded
                 // shapes the run path cannot own — zero-pair replace regions whose one-sided paragraphs
@@ -1081,13 +1103,24 @@ internal static class IrEditScriptBuilder
                 List<IrEditOp>? trailingSectionOps = null;
                 var fused = entry.Kind == IrAlignmentKind.Modified
                     ? TryBuildCrossParagraphRunOp(
-                        alignmentEntries, entryIndex, settings, sourcesAfterLeft, leftIndex, out consumed)
+                        alignmentEntries, entryIndex, fusionSettings, sourcesAfterLeft, leftIndex, out consumed)
                     : null;
                 if (fused is null && pendingSources.Count == 0)
                     fused = TryBuildStoryFinalMixedRegionOp(
-                        alignmentEntries, entryIndex, settings, sourcesAfterLeft, leftIndex,
+                        alignmentEntries, entryIndex, fusionSettings, sourcesAfterLeft, leftIndex,
                         out consumed, out trailingSectionOps);
-                if (fused is not null)
+                if (fused is not null && detectOnly)
+                {
+                    foreach (var cell in fused.CrossParagraphCells ?? IrNodeList.Empty<IrCrossParagraphCell>())
+                    {
+                        if (cell.LeftAnchor is { } fusedLeft)
+                            fusedAnchors!.Add(fusedLeft);
+                        if (cell.RightAnchor is { } fusedRight)
+                            fusedAnchors!.Add(fusedRight);
+                    }
+                    detectedRegionEnd = entryIndex + consumed;
+                }
+                else if (fused is not null)
                 {
                     ops.Add(fused);
                     if (trailingSectionOps is not null)

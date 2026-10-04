@@ -196,6 +196,8 @@ internal static class SemanticDiffEngine
         var diffSettings = settings.ToIrDiffSettings() with { CrossParagraphTokenDiff = false };
         var leftIr = IrReader.Read(left, ReadOptions);
         var rightIr = IrReader.Read(right, ReadOptions);
+        // The builder's script, without the two-way comparison's relocation pairing (IrRelocationPairer): a
+        // paragraph moved across a table boundary is a block delete and insert in the semantic change set.
         var script = IrEditScriptBuilder.Build(leftIr, rightIr, diffSettings);
 
         var drafts = new List<SemanticChangeDraft>();

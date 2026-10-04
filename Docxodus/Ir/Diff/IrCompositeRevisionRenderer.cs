@@ -388,7 +388,7 @@ internal static class IrCompositeRevisionRenderer
 
         var oneOpScript = new IrEditScript(IrNodeList.From(miniOps));
         var perOpSettings = settings with { AuthorForRevisions = author };
-        var rendered = IrRevisionRenderer.Render(oneOpScript, baseIr, rightIr, perOpSettings);
+        var rendered = IrRevisionRenderer.Render(oneOpScript, baseIr, rightIr, perOpSettings, wholeScript: false);
 
         foreach (var rev in rendered)
         {

@@ -237,19 +237,34 @@ door:
   - a relocated table whose text was also edited, above the same 0.8 similarity threshold
     (issue #887). The table's word count is the sum of its cells', so it clears the minimum-words gate
     the fuzzy move pass applies. It is drawn with complete halves, like a moved-and-edited paragraph;
-    the edit script's destination op carries the row/cell `tableDiff`;
+    the edit script's destination op carries the row/cell `tableDiff`, and `GetRevisions` lists the
+    in-move edits after the destination (a row that moved inside the table is listed as the row deletion
+    and insertion the redline draws). The aligner is shared, so this applies to `Consolidate` too;
   - a reordered table **row** (issue #887): the row is marked deleted at its old position and inserted
     at its new one, its cell content wrapped in `w:moveFrom`/`w:moveTo`, each half in a named move range
     among the table's rows. Consolidate still draws it as a delete + insert;
   - a paragraph moved **into or out of a table cell**, or between two cells (issue #887), when the
-    cell gains or loses a whole paragraph. The aligner works one block list at a time (the body, or one
-    cell), so such a paragraph arrives as a `DeleteBlock` in one list and an `InsertBlock` in another.
-    `IrRelocationPairer` (two-way comparison only) pairs them under the fuzzy-move rule — at least
-    `MoveMinimumWordCount` words, similarity at least `MoveSimilarityThreshold` — and gives both ops a
-    shared `relocationGroupId`. The ops keep their kinds, so applying the script, accepting and
-    rejecting are unchanged; the renderers draw the pair as a move and `GetRevisions` reports a Moved pair.
+    cell gains or loses a whole paragraph and the text is unchanged. The aligner works one block list at a
+    time (the body, or one cell), so such a paragraph arrives as a `DeleteBlock` in one list and an
+    `InsertBlock` in another. `IrRelocationPairer` (two-way comparison only) pairs the two when their text
+    is identical once whitespace runs are collapsed and carries at least `MoveMinimumWordCount` words, and
+    gives both ops a shared `relocationGroupId`. The ops keep their kinds, so applying the script,
+    accepting and rejecting are unchanged; the renderers draw the pair as a whole-paragraph move, outside
+    the delete/insert gap arrangement, and `GetRevisions` reports a Moved pair.
+    - It looks only into the cells of tables both surfaces draw cell by cell
+      (`IrTableDiffer.NeedsWholeTableFallback` false); a moved table is drawn whole and is not looked into.
+    - A paragraph the redline draws inside a cross-paragraph run is not paired. The markup script has no
+      standalone op for it, and the data script (`GetRevisions`, the edit script) is built with the same
+      paragraphs recorded and left out, so both surfaces pair alike.
+    - Nothing pairs under `PreserveInputRevisions`, where the markup may draw a table whole to keep its
+      input revisions.
+    - Safety net: a move range with no partner of the other direction is lowered to plain `w:del`/`w:ins`
+      in the redline, and a Moved group missing its source or destination is reported as Deleted/Inserted.
+    - `GetSemanticChanges` does not apply this pairing: such a paragraph is a block delete + insert there.
 - **Still a delete + insert:**
   - a moved paragraph edited below the similarity threshold;
+  - a paragraph moved across a table boundary and edited, or moved next to paragraphs the redline draws as
+    one cross-paragraph stream;
   - text moved into a cell that replaces the cell's own text (a span inside a modified cell
     paragraph, not a whole paragraph), and any move below `MoveMinimumWordCount` words across a
     table boundary — Word's compare marks even a one-word move between cells;

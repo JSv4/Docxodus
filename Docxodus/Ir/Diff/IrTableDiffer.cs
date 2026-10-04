@@ -44,6 +44,22 @@ namespace Docxodus.Ir.Diff;
 /// </remarks>
 internal static class IrTableDiffer
 {
+    /// <summary>
+    /// Whether a Modified table's diff is reported as one whole-table delete + insert instead of row by row:
+    /// a ModifyRow carries a LEFT-only cell, or a right-only cell while cell insertions are not tracked —
+    /// <c>w:tblGridChange</c> must be enabled (without table-shell tracking the accepted grid would not be
+    /// reversible on reject) and the caller must not have opted out of cell-level revisions (issue #842).
+    /// The revision renderer applies it; the markup renderer's own bail is a subset of it, so a table this
+    /// returns false for is drawn cell by cell on both surfaces (the relocation pairer relies on that).
+    /// </summary>
+    internal static bool NeedsWholeTableFallback(IrTableDiff td, IrDiffSettings settings)
+    {
+        bool cellInsertionsTracked = settings.TrackTableFormatChanges && settings.TrackCellInsertionsAndDeletions;
+        return td.RowOps.Any(r => r.Kind == IrRowOpKind.ModifyRow && r.CellOps is { } cells
+            && cells.Any(c => c.RightCellAnchor == null ||
+                (!cellInsertionsTracked && c.LeftCellAnchor == null)));
+    }
+
     public static IrTableDiff Diff(IrTable left, IrTable right, IrDiffSettings settings)
     {
         ArgumentNullException.ThrowIfNull(left);

@@ -58,8 +58,11 @@ namespace Docxodus.Ir.Diff;
 /// </remarks>
 internal static class IrRevisionRenderer
 {
+    /// <param name="wholeScript">False when <paramref name="script"/> is a fragment of a larger script — Consolidate
+    /// renders one composite op at a time, so a move's two halves arrive in separate calls and must not be judged
+    /// incomplete here.</param>
     public static IrNodeList<IrRevision> Render(
-        IrEditScript script, IrDocument left, IrDocument right, IrDiffSettings settings)
+        IrEditScript script, IrDocument left, IrDocument right, IrDiffSettings settings, bool wholeScript = true)
     {
         // Pre-pass: map each MoveGroupId to its source (left) block anchor. A MoveModify destination op
         // carries only the right anchor, but its token diff's Delete spans index the SOURCE block tokens,
@@ -144,6 +147,9 @@ internal static class IrRevisionRenderer
                     LeftAnchor: lsec.Anchor.ToString(), RightAnchor: rsec.Anchor.ToString()));
         }
 
+        if (wholeScript)
+            DemoteIncompleteMoveGroups(revisions);
+
         if (settings.RevisionGranularity == RevisionGranularity.WmlComparerCompatible)
         {
             revisions.RemoveAll(IsSectionBreakZeroWidth);
@@ -156,6 +162,32 @@ internal static class IrRevisionRenderer
         }
 
         return IrNodeList.From(revisions);
+    }
+
+    /// <summary>The revision-list half of the relocation safety net (issue #887): a Moved group that lacks its
+    /// source or its destination reports its halves as a plain Deleted/Inserted, as the redline draws them.</summary>
+    private static void DemoteIncompleteMoveGroups(List<IrRevision> revisions)
+    {
+        var incomplete = revisions
+            .Where(r => r.Type == IrRevisionType.Moved && r.MoveGroupId is not null)
+            .GroupBy(r => r.MoveGroupId)
+            .Where(g => !(g.Any(r => r.IsMoveSource == true) && g.Any(r => r.IsMoveSource == false)))
+            .Select(g => g.Key)
+            .ToHashSet();
+        if (incomplete.Count == 0)
+            return;
+        for (int i = 0; i < revisions.Count; i++)
+        {
+            var r = revisions[i];
+            if (r.Type != IrRevisionType.Moved || !incomplete.Contains(r.MoveGroupId))
+                continue;
+            revisions[i] = r with
+            {
+                Type = r.IsMoveSource == true ? IrRevisionType.Deleted : IrRevisionType.Inserted,
+                MoveGroupId = null,
+                IsMoveSource = null,
+            };
+        }
     }
 
     /// <summary>An empty-text Inserted/Deleted over a section-break block (a structural-only `sec:` change
@@ -634,8 +666,7 @@ internal static class IrRevisionRenderer
             // A left-only cell (remove/merge topology) still bails the markup renderer to a whole-table
             // del(left)+ins(right) fallback. A right-only ordinary-grid insertion stays granular only while
             // table-shell tracking is enabled: tblGridChange is what makes its widened geometry reversible.
-            if (TableDiffNeedsWholeTableFallback(tableDiff,
-                    ctx.Settings.TrackTableFormatChanges && ctx.Settings.TrackCellInsertionsAndDeletions))
+            if (IrTableDiffer.NeedsWholeTableFallback(tableDiff, ctx.Settings))
             {
                 if (op.LeftAnchor is { } la)
                     sink.Add(new IrRevision(IrRevisionType.Deleted, BlockText(la, ctx.Left, ctx.Settings),
@@ -858,6 +889,24 @@ internal static class IrRevisionRenderer
             MoveGroupId: op.MoveGroupId, IsMoveSource: isSource,
             LeftAnchor: isSource ? op.LeftAnchor : null,
             RightAnchor: isSource ? null : op.RightAnchor));
+
+        // A moved-and-edited TABLE (issue #887) describes its in-move edit from its row/cell diff, after the
+        // destination, as a paragraph does from its token diff. The redline draws the table whole, so a row
+        // that moved within it is reported as the row deletion and insertion the redline shows.
+        if (!isSource && op.Kind == IrEditOpKind.MoveModifyBlock && op.TableDiff is { } movedTableDiff &&
+            !IrTableDiffer.NeedsWholeTableFallback(movedTableDiff, ctx.Settings))
+        {
+            var edits = new List<IrRevision>();
+            RenderTableDiff(movedTableDiff, ctx, edits);
+            sink.AddRange(edits.Select(r => r.Type == IrRevisionType.Moved
+                ? r with
+                {
+                    Type = r.IsMoveSource == true ? IrRevisionType.Deleted : IrRevisionType.Inserted,
+                    MoveGroupId = null,
+                    IsMoveSource = null,
+                }
+                : r));
+        }
 
         // MoveModify destination: emit the in-move token-op revisions IMMEDIATELY AFTER the destination
         // Moved revision (ordering rule: relocate, then describe the edits). The source op carries no diff.
@@ -1534,17 +1583,6 @@ internal static class IrRevisionRenderer
     }
 
     // ------------------------------------------------------------------ table recursion
-
-    /// <summary>
-    /// A table diff requires the whole-table del+ins fallback when a ModifyRow carries a LEFT-only cell.
-    /// Right-only cells are native <c>w:cellIns</c> insertions only while <paramref name="cellInsertionsTracked"/>:
-    /// <c>w:tblGridChange</c> must be enabled (without table-shell tracking their accepted grid would not be
-    /// reversible on reject) and the caller must not have opted out of cell-level revisions (issue #842).
-    /// </summary>
-    private static bool TableDiffNeedsWholeTableFallback(IrTableDiff td, bool cellInsertionsTracked) =>
-        td.RowOps.Any(r => r.Kind == IrRowOpKind.ModifyRow && r.CellOps is { } cells
-            && cells.Any(c => c.RightCellAnchor == null ||
-                (!cellInsertionsTracked && c.LeftCellAnchor == null)));
 
     private static void RenderTableDiff(IrTableDiff tableDiff, in Context ctx, List<IrRevision> sink)
     {

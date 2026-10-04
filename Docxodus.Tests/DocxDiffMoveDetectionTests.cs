@@ -501,4 +501,27 @@ public class DocxDiffMoveDetectionTests
         Assert.Equal(Text(original.DocumentByteArray), Text(DocxDiffOps.RejectRevisions(consolidated.DocumentByteArray)));
         NoNewValidationErrors(original.DocumentByteArray, consolidated.DocumentByteArray);
     }
+
+    [Fact]
+    public void RelocatedAndEditedTable_InConsolidate_CollidingWithAnotherReviewersCellEdit_RoundTrips()
+    {
+        // Reviewer 1 moves the table and edits a cell; reviewer 2 edits a different cell of it in place.
+        // Since a moved-and-edited table is a move (issue #887), the two reviewers now contest the table.
+        var original = Doc(Table(A, B) + P(C) + P(D) + P(E));
+        var mover = new DocxDiffReviewer
+        {
+            Author = "Mover",
+            Document = Doc(P(C) + P(D) + P(E) + Table(A, B.Replace("services", "consulting services"))),
+        };
+        var editor = new DocxDiffReviewer
+        {
+            Author = "Editor",
+            Document = Doc(Table(A.Replace("parties", "signatories"), B) + P(C) + P(D) + P(E)),
+        };
+
+        var consolidated = DocxDiff.Consolidate(original, new[] { mover, editor });
+
+        Assert.Equal(Text(original.DocumentByteArray), Text(DocxDiffOps.RejectRevisions(consolidated.DocumentByteArray)));
+        NoNewValidationErrors(original.DocumentByteArray, consolidated.DocumentByteArray);
+    }
 }

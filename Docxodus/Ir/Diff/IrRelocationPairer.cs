@@ -3,6 +3,7 @@
 
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using Docxodus.Ir;
 
 namespace Docxodus.Ir.Diff;
@@ -16,50 +17,85 @@ namespace Docxodus.Ir.Diff;
 /// script, and accepting or rejecting its markup, is exactly what it was. The renderers draw a tagged pair
 /// as <c>w:moveFrom</c>/<c>w:moveTo</c>, and <c>GetRevisions</c> reports it as a Moved pair, when move
 /// reporting is on.
-/// <para>A pair qualifies under the aligner's own fuzzy-move rule: both paragraphs carry at least
-/// <see cref="IrDiffSettings.MoveMinimumTokenCount"/> words and score at least
-/// <see cref="IrDiffSettings.MoveSimilarityThreshold"/>. Like a moved-and-edited paragraph, the halves are
-/// drawn whole, so a lightly edited relocation is still exact under accept and reject.</para>
+/// <para><b>What pairs.</b> The two paragraphs' text must be identical once whitespace runs are collapsed,
+/// and carry at least <see cref="IrDiffSettings.MoveMinimumTokenCount"/> words. An exact match leaves no
+/// in-move edit for either surface to describe. Each paragraph pairs at most once, the first destination in
+/// document order winning.</para>
+/// <para><b>Where it looks.</b> The body and the cells of tables drawn cell by cell on both surfaces
+/// (<see cref="IrTableDiffer.NeedsWholeTableFallback"/> false). A moved table is drawn whole, and its cells are
+/// not looked into either. A paragraph the redline draws inside a cross-paragraph run
+/// (<see cref="IrEditOpKind.CrossParagraphRunBlock"/>) is left out: the markup script has no standalone op
+/// for it, and the data script is told to leave out the same paragraphs, so the two scripts pair the same
+/// paragraphs. With <see cref="IrDiffSettings.PreserveInputRevisions"/> on, nothing pairs: the markup
+/// renderer may draw a table whole to keep its input revisions, which the revision list cannot see.</para>
 /// <para>Only the two-way comparison calls this; Consolidate's per-reviewer scripts never carry relocations.</para>
 /// </summary>
 internal static class IrRelocationPairer
 {
-    /// <summary>Above this many candidate (deleted, inserted) pairs, only exact-content pairs are scored,
-    /// keeping the pass linear on long documents with many unrelated changes.</summary>
-    private const long FuzzyPairBudget = 250_000;
+    private sealed record Candidate(IrEditOp Op, int ListId, string Text);
 
-    private sealed record Candidate(IrEditOp Op, int ListId, int Order, IrParagraph Paragraph);
-
-    public static IrEditScript Apply(IrEditScript script, IrDocument left, IrDocument right, IrDiffSettings settings)
+    /// <param name="fusedAnchors">Body paragraph anchors the redline draws inside cross-paragraph runs, when
+    /// this script is the data script of a comparison whose redline fuses runs; null otherwise.</param>
+    public static IrEditScript Apply(
+        IrEditScript script, IrDocument left, IrDocument right, IrDiffSettings settings,
+        IReadOnlySet<string>? fusedAnchors = null)
     {
+        if (settings.PreserveInputRevisions)
+            return script;
+
         var deleted = new List<Candidate>();
         var inserted = new List<Candidate>();
         int nextList = 0;
-        int order = 0;
         void Collect(IEnumerable<IrEditOp> ops)
         {
             int listId = nextList++;
             foreach (var op in ops)
             {
-                if (op.Kind == IrEditOpKind.DeleteBlock && Resolve(left, op.LeftAnchor) is IrParagraph lp)
-                    deleted.Add(new Candidate(op, listId, order++, lp));
-                else if (op.Kind == IrEditOpKind.InsertBlock && Resolve(right, op.RightAnchor) is IrParagraph rp)
-                    inserted.Add(new Candidate(op, listId, order++, rp));
-                foreach (var cellOps in CellOpLists(op))
+                if (op.Kind == IrEditOpKind.DeleteBlock && Candidate(op, op.LeftAnchor, left, listId) is { } d)
+                    deleted.Add(d);
+                else if (op.Kind == IrEditOpKind.InsertBlock && Candidate(op, op.RightAnchor, right, listId) is { } i)
+                    inserted.Add(i);
+                foreach (var cellOps in CellOpLists(op, settings))
                     Collect(cellOps);
             }
+        }
+        Candidate? Candidate(IrEditOp op, string? anchor, IrDocument doc, int listId)
+        {
+            if (anchor is null || fusedAnchors?.Contains(anchor) == true ||
+                !doc.AnchorIndex.TryGetValue(anchor, out var block) || block is not IrParagraph paragraph)
+                return null;
+            var (text, words) = Normalize(IrDiffTokenizer.Tokenize(paragraph, settings));
+            return words >= settings.MoveMinimumTokenCount ? new Candidate(op, listId, text) : null;
         }
         Collect(script.Operations);
         if (deleted.Count == 0 || inserted.Count == 0 || nextList == 1)
             return script;
 
-        var groups = Pair(deleted, inserted, settings);
-        if (groups.Count == 0)
+        // Destinations by text, in document order; each source claims the first unused one in another list.
+        var byText = inserted.GroupBy(i => i.Text, System.StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.ToList(), System.StringComparer.Ordinal);
+        var pairs = new List<(Candidate Source, Candidate Destination)>();
+        var used = new HashSet<Candidate>(ReferenceEqualityComparer.Instance);
+        foreach (var source in deleted)
+        {
+            if (!byText.TryGetValue(source.Text, out var destinations))
+                continue;
+            var destination = destinations.FirstOrDefault(d => d.ListId != source.ListId && !used.Contains(d));
+            if (destination is null)
+                continue;
+            used.Add(destination);
+            pairs.Add((source, destination));
+        }
+        if (pairs.Count == 0)
             return script;
 
+        // Ids continue above every move group and follow destination document order.
         int nextGroup = MaxMoveGroupId(script) + 1;
+        var destinationOrder = new Dictionary<Candidate, int>(ReferenceEqualityComparer.Instance);
+        for (int i = 0; i < inserted.Count; i++)
+            destinationOrder[inserted[i]] = i;
         var ids = new Dictionary<IrEditOp, int>(ReferenceEqualityComparer.Instance);
-        foreach (var (source, destination) in groups.OrderBy(g => g.Destination.Order))
+        foreach (var (source, destination) in pairs.OrderBy(p => destinationOrder[p.Destination]))
         {
             ids[source.Op] = nextGroup;
             ids[destination.Op] = nextGroup++;
@@ -67,71 +103,62 @@ internal static class IrRelocationPairer
         return script with { Operations = Rewrite(script.Operations, ids) };
     }
 
-    /// <summary>Greedy best-first pairing across DIFFERENT block lists, ties broken by document order.</summary>
-    private static List<(Candidate Source, Candidate Destination)> Pair(
-        List<Candidate> deleted, List<Candidate> inserted, IrDiffSettings settings)
-    {
-        var similarity = new IrBlockSimilarity(settings);
-        bool fuzzy = (long)deleted.Count * inserted.Count <= FuzzyPairBudget;
-        var scored = new List<(double Score, Candidate Source, Candidate Destination)>();
-        if (fuzzy)
-        {
-            foreach (var d in deleted)
-            {
-                if (similarity.WordCount(d.Paragraph) < settings.MoveMinimumTokenCount)
-                    continue;
-                foreach (var i in inserted)
-                {
-                    if (i.ListId == d.ListId || similarity.WordCount(i.Paragraph) < settings.MoveMinimumTokenCount)
-                        continue;
-                    double score = similarity.Score(d.Paragraph, i.Paragraph);
-                    if (score >= settings.MoveSimilarityThreshold)
-                        scored.Add((score, d, i));
-                }
-            }
-        }
-        else
-        {
-            var byHash = inserted.ToLookup(i => i.Paragraph.ContentHash);
-            foreach (var d in deleted)
-            {
-                if (similarity.WordCount(d.Paragraph) < settings.MoveMinimumTokenCount)
-                    continue;
-                foreach (var i in byHash[d.Paragraph.ContentHash])
-                    if (i.ListId != d.ListId)
-                        scored.Add((1.0, d, i));
-            }
-        }
+    /// <summary>Whitespace runs collapsed to one space, ends trimmed; and the Word-token count. A token with no
+    /// text of its own (image, note reference, opaque content) contributes its match key, so two paragraphs
+    /// that differ only in which image they hold never read as the same text.</summary>
+    internal static (string Text, int Words) Normalize(IReadOnlyList<IrDiffToken> tokens) =>
+        Normalize(tokens, 0, tokens.Count);
 
-        var used = new HashSet<Candidate>(ReferenceEqualityComparer.Instance);
-        var pairs = new List<(Candidate, Candidate)>();
-        foreach (var (_, source, destination) in scored
-                     .OrderByDescending(s => s.Score)
-                     .ThenBy(s => s.Source.Order)
-                     .ThenBy(s => s.Destination.Order))
+    /// <inheritdoc cref="Normalize(IReadOnlyList{IrDiffToken})"/>
+    internal static (string Text, int Words) Normalize(IReadOnlyList<IrDiffToken> tokens, int start, int end)
+    {
+        var sb = new StringBuilder();
+        int words = 0;
+        bool space = false;
+        for (int i = start; i < end; i++)
         {
-            if (used.Contains(source) || used.Contains(destination))
+            var token = tokens[i];
+            if (token.Kind == IrDiffTokenKind.Word)
+                words++;
+            if (token.Kind is IrDiffTokenKind.Image or IrDiffTokenKind.NoteRef or IrDiffTokenKind.Opaque or
+                IrDiffTokenKind.Textbox)
+            {
+                if (space)
+                    sb.Append(' ');
+                space = false;
+                sb.Append('\u0001').Append(token.MatchKey).Append('\u0001');
                 continue;
-            used.Add(source);
-            used.Add(destination);
-            pairs.Add((source, destination));
+            }
+            foreach (char c in token.Text)
+            {
+                if (char.IsWhiteSpace(c))
+                {
+                    space = sb.Length > 0;
+                    continue;
+                }
+                if (space)
+                    sb.Append(' ');
+                space = false;
+                sb.Append(c);
+            }
         }
-        return pairs;
+        return (sb.ToString(), words);
     }
 
-    private static IrBlock? Resolve(IrDocument doc, string? anchor) =>
-        anchor is not null && doc.AnchorIndex.TryGetValue(anchor, out var block) ? block : null;
+    /// <summary>The block lists of the cells inside one op's table diff that both surfaces draw cell by cell:
+    /// an in-place Modified table that does not take the whole-table fallback. A moved table is drawn whole;
+    /// rows that are themselves inserted, deleted or moved are whole-row changes with no cell lists.</summary>
+    private static IEnumerable<IrNodeList<IrEditOp>> CellOpLists(IrEditOp op, IrDiffSettings settings) =>
+        op.Kind == IrEditOpKind.ModifyBlock && op.TableDiff is { } table &&
+        !IrTableDiffer.NeedsWholeTableFallback(table, settings)
+            ? table.RowOps
+                .SelectMany(row => row.CellOps ?? Enumerable.Empty<IrCellOp>())
+                .Where(cell => cell.BlockOps is not null)
+                .Select(cell => cell.BlockOps!)
+            : Enumerable.Empty<IrNodeList<IrEditOp>>();
 
-    /// <summary>The block lists of the paired cells inside one op's table diff (rows that are themselves
-    /// inserted, deleted or moved are whole-row changes with no cell lists).</summary>
-    private static IEnumerable<IrNodeList<IrEditOp>> CellOpLists(IrEditOp op) =>
-        (op.TableDiff?.RowOps ?? Enumerable.Empty<IrRowOp>())
-            .SelectMany(row => row.CellOps ?? Enumerable.Empty<IrCellOp>())
-            .Where(cell => cell.BlockOps is not null)
-            .Select(cell => cell.BlockOps!);
-
-    /// <summary>The largest move group id anywhere in the script. Ids are unique across scopes, so
-    /// relocation ids continue above it.</summary>
+    /// <summary>The largest move group id anywhere in the script. Ids are unique across scopes (issue #924),
+    /// so relocation ids continue above it.</summary>
     private static int MaxMoveGroupId(IrEditScript script)
     {
         int max = 0;
@@ -141,9 +168,11 @@ internal static class IrRelocationPairer
             {
                 max = System.Math.Max(max, op.MoveGroupId ?? 0);
                 foreach (var row in op.TableDiff?.RowOps ?? Enumerable.Empty<IrRowOp>())
+                {
                     max = System.Math.Max(max, row.MoveGroupId ?? 0);
-                foreach (var cellOps in CellOpLists(op))
-                    Visit(cellOps);
+                    foreach (var cell in row.CellOps ?? Enumerable.Empty<IrCellOp>())
+                        Visit(cell.BlockOps ?? Enumerable.Empty<IrEditOp>());
+                }
                 foreach (var box in op.TextboxDiffs ?? Enumerable.Empty<IrTextboxDiff>())
                     Visit(box.Ops);
             }
