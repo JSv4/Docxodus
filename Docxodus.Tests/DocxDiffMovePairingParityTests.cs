@@ -94,6 +94,7 @@ public class DocxDiffMovePairingParityTests
             ("cell insertions not tracked", () => new DocxDiffSettings { TrackCellInsertionsAndDeletions = false }),
             ("input revisions preserved", () => new DocxDiffSettings { PreserveInputRevisions = true }),
             ("no cross-paragraph runs", () => new DocxDiffSettings { CrossParagraphTokenDiff = false }),
+            ("WmlComparer-compatible revisions", () => new DocxDiffSettings { RevisionGranularity = DocxDiffRevisionGranularity.WmlComparerCompatible }),
         };
         foreach (var row in Shapes)
             foreach (var (name, make) in settings)

@@ -27,7 +27,9 @@ namespace Docxodus.Ir.Diff;
 /// (<see cref="IrEditOpKind.CrossParagraphRunBlock"/>) is left out: the markup script has no standalone op
 /// for it, and the data script is told to leave out the same paragraphs, so the two scripts pair the same
 /// paragraphs. With <see cref="IrDiffSettings.PreserveInputRevisions"/> on, nothing pairs: the markup
-/// renderer may draw a table whole to keep its input revisions, which the revision list cannot see.</para>
+/// renderer may draw a table whole to keep its input revisions, which the revision list cannot see. Nor with
+/// move reporting off, or under the WmlComparer-compatible revision grain: the script is then left exactly
+/// as the builder made it.</para>
 /// <para>Only the two-way comparison calls this; Consolidate's per-reviewer scripts never carry relocations.</para>
 /// </summary>
 internal static class IrRelocationPairer
@@ -40,7 +42,11 @@ internal static class IrRelocationPairer
         IrEditScript script, IrDocument left, IrDocument right, IrDiffSettings settings,
         IReadOnlySet<string>? fusedAnchors = null)
     {
-        if (settings.PreserveInputRevisions)
+        // Pairing only labels content as moved, so it runs only where a move is drawn and reported: move
+        // reporting on, the engine's fine revision grain (the WmlComparer-compatible grain reproduces that
+        // comparer's revision set, which has no such moves), and no input revisions being preserved.
+        if (settings.PreserveInputRevisions || !settings.RenderMoves ||
+            settings.RevisionGranularity != RevisionGranularity.Fine)
             return script;
 
         var deleted = new List<Candidate>();
@@ -102,6 +108,11 @@ internal static class IrRelocationPairer
         }
         return script with { Operations = Rewrite(script.Operations, ids) };
     }
+
+    /// <summary>Whether a paired script carries a relocation on a body-level op — the only ops a
+    /// cross-paragraph run can absorb.</summary>
+    internal static bool TouchesBody(IrEditScript script) =>
+        script.Operations.Any(op => op.RelocationGroupId is not null);
 
     /// <summary>Whitespace runs collapsed to one space, ends trimmed; and the Word-token count. A token with no
     /// text of its own (image, note reference, opaque content) contributes its match key, so two paragraphs

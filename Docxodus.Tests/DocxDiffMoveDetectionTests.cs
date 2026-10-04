@@ -476,6 +476,25 @@ public class DocxDiffMoveDetectionTests
         Assert.Equal(departure.RelocationGroupId, arrival.RelocationGroupId);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public void ParagraphMovedAcrossATableBoundary_IsLeftUnpaired_WhenMovesAreNotDrawn(bool detectMoves, bool compatible)
+    {
+        // With move reporting off, or the WmlComparer-compatible revision grain, the edit script is exactly what
+        // the builder produced: no relocation id on either half.
+        var (left, right) = (Doc(P(A) + P(B) + OneCellTable(C) + P(D)), Doc(P(B) + OneCellTable(C, A) + P(D)));
+        var settings = new DocxDiffSettings
+        {
+            DetectMoves = detectMoves,
+            RevisionGranularity = compatible ? DocxDiffRevisionGranularity.WmlComparerCompatible : DocxDiffRevisionGranularity.Fine,
+        };
+
+        var json = DocxDiff.GetEditScriptJson(left, right, DocxCompare.ApplyFrontDoorRevisionPolicy(settings));
+
+        Assert.DoesNotContain("relocationGroupId", json);
+    }
+
     [Fact]
     public void ParagraphsSharingLittleText_AcrossATableBoundary_AreNotAMove()
     {

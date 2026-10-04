@@ -116,8 +116,15 @@ public sealed class DocxDiffComparison
             var (irLeft, irRight) = _ir.Value;
             // When this comparison's redline fuses cross-paragraph runs, relocations touching a fused
             // paragraph are left unpaired here too, so the revision list and the redline pair alike.
-            var fused = _settings.CrossParagraphTokenDiff ? new HashSet<string>(StringComparer.Ordinal) : null;
-            var script = IrEditScriptBuilder.Build(irLeft, irRight, diff, fused);
+            // Finding the fused paragraphs means running the fusion decision, which is costly on a long
+            // run of edited paragraphs, so it runs only when a relocation touches a body paragraph: only
+            // body paragraphs fuse, and leaving out candidates that paired nothing changes no pairing.
+            var script = IrEditScriptBuilder.Build(irLeft, irRight, diff);
+            var paired = IrRelocationPairer.Apply(script, irLeft, irRight, diff);
+            if (!_settings.CrossParagraphTokenDiff || !IrRelocationPairer.TouchesBody(paired))
+                return paired;
+            var fused = new HashSet<string>(StringComparer.Ordinal);
+            script = IrEditScriptBuilder.Build(irLeft, irRight, diff, fused);
             return IrRelocationPairer.Apply(script, irLeft, irRight, diff, fused);
         }, LazyThreadSafetyMode.ExecutionAndPublication);
 
