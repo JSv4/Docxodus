@@ -70,6 +70,12 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- The documentation for `DocxDiffSettings.PreserveInputRevisions` no longer says it is how Word's
+  Compare behaves (issue #867). It models Word's Combine, which keeps each input's own tracked changes;
+  Word's Compare treats them as accepted, which is what `PreAcceptInputRevisions` and the `DocxCompare`
+  front door do. The setting's XML documentation, its `DocxDiffCompatibility` catalog note, the npm and
+  Python docstrings, `ir_diff_engine.md` and `ooxml_corner_cases.md` now say so. CLAUDE.md was already
+  corrected with issue #845. Behaviour is unchanged.
 - Paginated export no longer quantizes line pitch to whole CSS pixels (issue #850, first half).
   Chromium rounds a `line-height: normal` line to a whole pixel (0.75 pt), and the converter uses
   `normal` for single spacing and as the base of Word's `auto` multiples. Every line was therefore

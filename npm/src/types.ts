@@ -419,7 +419,8 @@ export interface DocxDiffSettings {
    */
   preAcceptInputRevisions?: boolean;
   /**
-   * Preserve the inputs' existing tracked revisions Word-style (default false).
+   * Preserve the inputs' existing tracked revisions, as Word's Combine does (default false).
+   * Word's Compare pre-accepts them instead (see `preAcceptInputRevisions`).
    * This takes precedence over `preAcceptInputRevisions` when both are set.
    */
   preserveInputRevisions?: boolean;

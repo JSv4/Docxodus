@@ -814,8 +814,9 @@ public sealed class DocxDiffSettings
     /// When true, tracked revisions ALREADY PRESENT in the input documents are PRESERVED in the compare
     /// output — the inputs' original author/date markup rides through verbatim alongside this diff's fresh
     /// revisions — while the text diff itself is still computed over the <b>accepted view</b> of each side.
-    /// This is Word Compare's own behavior: an input's pre-existing <c>w:ins</c>/<c>w:del</c> markup is kept
-    /// intact in Word's output. Default false.
+    /// This is how Word's <b>Combine</b> treats an input's pre-existing <c>w:ins</c>/<c>w:del</c> markup; Word's
+    /// <b>Compare</b> instead treats it as accepted, which is what <see cref="PreAcceptInputRevisions"/> models
+    /// and what the <see cref="DocxCompare"/> front door applies. Default false.
     ///
     /// <para><b>V1 scope (what is preserved).</b> The RIGHT input's foreign markup is preserved in blocks
     /// the diff finds content-EQUAL (emitted verbatim from the original right element) and in whole-block
@@ -830,18 +831,18 @@ public sealed class DocxDiffSettings
     /// blocks is likewise flattened. <see cref="DocxDiff.GetRevisions"/> does not report preserved foreign
     /// revisions (they are input facts, not edits of this diff).</para>
     ///
-    /// <para><b>Round-trip contract under the flag (one-sided, exactly like Word).</b>
+    /// <para><b>Round-trip contract under the flag (one-sided, like Word's Combine).</b>
     /// <c>accept(Compare(left, right))</c> still content-equals <c>accept(right)</c> — a preserved foreign
     /// deletion vanishes on accept and a preserved foreign insertion is kept, matching the right side's own
     /// accepted view. But <c>reject(Compare(left, right))</c> does NOT equal <c>left</c> wherever foreign
     /// markup was preserved: rejecting a foreign <c>w:del</c> RESTORES its deleted text (and rejecting a
-    /// foreign <c>w:ins</c> removes text the left side never had). Word's Compare output behaves identically
+    /// foreign <c>w:ins</c> removes text the left side never had). Word's Combine output behaves identically
     /// under Reject All — this is inherent to preserving input revisions, not a defect; do not rely on
     /// reject ≡ left when enabling this flag.</para>
     ///
     /// <para><b>Precedence.</b> When both this and <see cref="PreAcceptInputRevisions"/> are set, Preserve
     /// wins: the byte-level pre-accept is skipped entirely (the two flags are opposite policies for the same
-    /// input markup; preserving is the Word-parity choice).</para>
+    /// input markup; preserving is the Word-Combine choice, pre-accepting the Word-Compare one).</para>
     ///
     /// <para>The shared WASM/npm/python wire surface exposes this as
     /// <c>preserveInputRevisions</c>.</para>
