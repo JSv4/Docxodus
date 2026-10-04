@@ -546,6 +546,12 @@ namespace Docxodus
         internal static int? IntValue(XAttribute? attribute) =>
             int.TryParse(attribute?.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : null;
 
+        /// <summary>
+        /// The counter of the next item at a level. It stops at int.MaxValue rather than wrapping
+        /// to a negative number, which no list marker can correctly show.
+        /// </summary>
+        private static int NextCounter(int counter) => counter == int.MaxValue ? counter : counter + 1;
+
         private static string? GetParagraphStyleName(XDocument stylesXDoc, XElement paragraph)
         {
             var paragraphStyleName = (string?)paragraph
@@ -1170,11 +1176,11 @@ namespace Docxodus
                                         startOverrideAlreadyUsed.Add(numId);
                                         thisNumber = (int)startOverride;
                                     }
-                                    thisNumber = previous.ElementAt(level) + 1;
+                                    thisNumber = NextCounter(previous.ElementAt(level));
                                 }
                                 else
                                 {
-                                    thisNumber = previous.ElementAt(level) + 1;
+                                    thisNumber = NextCounter(previous.ElementAt(level));
                                 }
                             }
                             else

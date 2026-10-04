@@ -224,6 +224,33 @@ public class ListItemRetrieverTests
         Assert.Equal(expectedLeft, (string?)ind?.Attribute(W.left));
     }
 
+    [Theory]
+    [InlineData("decimal", false)]
+    [InlineData("upperLetter", false)]
+    [InlineData("upperRoman", false)]
+    // The counter reaches int.MaxValue through a w:startOverride rather than w:start.
+    [InlineData("decimal", true)]
+    public void RetrieveListItem_CounterAtIntMaxValue_StopsInsteadOfWrappingNegative(string numFmt, bool viaStartOverride)
+    {
+        // Regression test for #905: the counter was the previous value plus one, unchecked, so
+        // the item after int.MaxValue numbered as int.MinValue and counted up from there.
+        var start = viaStartOverride ? 1 : int.MaxValue;
+        var lvlOverride = viaStartOverride
+            ? $"""<w:lvlOverride w:ilvl="0"><w:startOverride w:val="{int.MaxValue}"/></w:lvlOverride>"""
+            : "";
+        var numbering =
+            $"""<w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:start w:val="{start}"/><w:numFmt w:val="{numFmt}"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum>"""
+            + $"""<w:num w:numId="1"><w:abstractNumId w:val="1"/>{lvlOverride}</w:num>""";
+        var bytes = BuildList(numbering, (NumId: 1, Ilvl: 0), (NumId: 1, Ilvl: 0), (NumId: 1, Ilvl: 0));
+
+        var markers = RetrieveMarkers(bytes);
+
+        Assert.All(markers, marker => Assert.False(marker!.StartsWith('-'), $"negative marker {marker}"));
+        // The counter stays at int.MaxValue, so the later items repeat the first item's marker.
+        Assert.Equal(new[] { markers[0], markers[0], markers[0] }, markers);
+        AssertConsumersRead(bytes);
+    }
+
     private static string?[] RetrieveMarkers(byte[] bytes)
     {
         using var stream = new MemoryStream(bytes);

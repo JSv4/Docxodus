@@ -70,6 +70,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- A list counter no longer wraps to a negative number past `int.MaxValue` (issue #905). Each item's
+  number was the previous one plus one, unchecked, so a list starting at `w:start="2147483647"` numbered
+  its second item `-2147483648`. The counter now stops at `int.MaxValue`.
 - Footnote and endnote references in a redline now name the right note after both accept and reject
   (issue #865). Two causes:
   - **The body and the notes paired differently.** The body diff matches note references by position,
