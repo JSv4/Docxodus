@@ -4080,10 +4080,15 @@ internal static class IrMarkupRenderer
             if (reviewer.Reviewer < 0 || reviewer.Reviewer >= reviewerIrs.Count ||
                 SourceElement(reviewer.Anchor, reviewerIrs[reviewer.Reviewer]) is not { } reviewerParagraph)
                 continue;
-            var startNames = reviewerParagraph.Document?.Root?.Descendants(W.bookmarkStart)
-                .Where(s => s.Attribute(W.id) != null && s.Attribute(W.name) != null)
-                .GroupBy(s => (string)s.Attribute(W.id)!)
-                .ToDictionary(g => g.Key, g => (string)g.First().Attribute(W.name)!) ?? new Dictionary<string, string>();
+            // Built once per reviewer: a bookmark-heavy document has many paragraphs that reach here.
+            if (!state.ReviewerBookmarkNamesById.TryGetValue(reviewer.Reviewer, out var startNames))
+            {
+                startNames = reviewerParagraph.Document?.Root?.Descendants(W.bookmarkStart)
+                    .Where(s => s.Attribute(W.id) != null && s.Attribute(W.name) != null)
+                    .GroupBy(s => (string)s.Attribute(W.id)!)
+                    .ToDictionary(g => g.Key, g => (string)g.First().Attribute(W.name)!) ?? new Dictionary<string, string>();
+                state.ReviewerBookmarkNamesById[reviewer.Reviewer] = startNames;
+            }
             state.AuthorOverride = reviewer.Author;
             int offset = 0;
             foreach (var child in reviewerParagraph.Elements())
@@ -9086,6 +9091,9 @@ internal static class IrMarkupRenderer
 
         /// <summary>The base document's bookmark names, for <see cref="CarryReviewerOnlyBookmarks"/>.</summary>
         public HashSet<string>? BaseBookmarkNames { get; set; }
+
+        /// <summary>Each reviewer's bookmark names by id, for <see cref="CarryReviewerOnlyBookmarks"/>.</summary>
+        public Dictionary<int, Dictionary<string, string>> ReviewerBookmarkNamesById { get; } = new();
 
         /// <summary>Removed tables carried in preserved groups that are already in the output (issue #866).</summary>
         public HashSet<XElement> EmittedCarriedTables { get; } = new();
