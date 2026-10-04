@@ -70,6 +70,14 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Accepting revisions in a document that contains a move no longer deletes table rows whose cells
+  are wrapped at row level in a content control or custom XML element (`w:tr/w:sdt/w:tc`,
+  `w:tr/w:customXml/w:tc`) (issue #862). The pass that removes rows a move emptied looked only at
+  the row's direct `w:tc` children, so such a row looked empty and was removed with its text,
+  anywhere in the document. Cells are now found through wrappers, and a `w:sdt` or `w:customXml`
+  inside a cell counts as content only when it holds content itself. The cell-level
+  `w:customXml` shape the issue named was not losing its row: accept strips that wrapper
+  before the check runs, a separate defect tracked as #913.
 - The documentation for `DocxDiffSettings.PreserveInputRevisions` no longer says it is how Word's
   Compare behaves (issue #867). It models Word's Combine, which keeps each input's own tracked changes;
   Word's Compare treats them as accepted, which is what `PreAcceptInputRevisions` and the `DocxCompare`

@@ -3242,13 +3242,24 @@ namespace Docxodus
         private static XName[] BlockLevelElements = new[] {
             W.p,
             W.tbl,
-            W.sdt,
             W.del,
             W.ins,
             M.oMath,
             M.oMathPara,
             W.moveTo,
         };
+
+        /// <summary>
+        /// Whether a cell (or a block wrapper inside one) still holds content. A <c>w:sdt</c> or
+        /// <c>w:customXml</c> wrapper is looked through: it counts when it holds content itself, so a
+        /// paragraph inside a wrapper keeps its row, and a wrapper the move emptied does not
+        /// (issue #862).
+        /// </summary>
+        private static bool HasBlockContent(XElement container) =>
+            container.Elements().Any(child =>
+                BlockLevelElements.Contains(child.Name) ||
+                (child.Name == W.sdt && child.Element(W.sdtContent) is XElement sdtContent && HasBlockContent(sdtContent)) ||
+                (child.Name == W.customXml && HasBlockContent(child)));
 
         private static object? RemoveRowsLeftEmptyByMoveFrom(XNode? node)
         {
@@ -3257,7 +3268,9 @@ namespace Docxodus
             {
                 if (element.Name == W.tr)
                 {
-                    var nonEmptyCells = element.Elements(W.tc).Any(tc => tc.Elements().Any(tcc => BlockLevelElements.Contains(tcc.Name)));
+                    // Cells wrapped at row level (w:tr/w:sdt/w:tc, w:tr/w:customXml/w:tc) are the row's
+                    // cells too; missing them made every such row look empty (issue #862).
+                    var nonEmptyCells = WordprocessingMLUtil.RowCells(element).Any(HasBlockContent);
                     if (nonEmptyCells)
                     {
                         return new XElement(element.Name,
