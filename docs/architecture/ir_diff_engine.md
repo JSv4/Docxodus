@@ -244,10 +244,11 @@ door:
     at its new one, its cell content wrapped in `w:moveFrom`/`w:moveTo`, each half in a named move range
     among the table's rows. Consolidate still draws it as a delete + insert;
   - a paragraph moved **into or out of a table cell**, or between two cells (issue #887), when the
-    cell gains or loses a whole paragraph and the text is unchanged. The aligner works one block list at a
+    cell gains or loses a whole paragraph and its text and run formatting are unchanged. The aligner works one block list at a
     time (the body, or one cell), so such a paragraph arrives as a `DeleteBlock` in one list and an
     `InsertBlock` in another. `IrRelocationPairer` (two-way comparison only) pairs the two when their text
-    is identical once whitespace runs are collapsed and carries at least `MoveMinimumWordCount` words, and
+    is identical once whitespace runs are collapsed, word for word in the same run formatting, and carries
+    at least `MoveMinimumWordCount` words, and
     gives both ops a shared `relocationGroupId`. The ops keep their kinds, so applying the script,
     accepting and rejecting are unchanged; the renderers draw the pair as a whole-paragraph move, outside
     the delete/insert gap arrangement, and `GetRevisions` reports a Moved pair.

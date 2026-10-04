@@ -17,9 +17,9 @@ namespace Docxodus.Ir.Diff;
 /// script, and accepting or rejecting its markup, is exactly what it was. The renderers draw a tagged pair
 /// as <c>w:moveFrom</c>/<c>w:moveTo</c>, and <c>GetRevisions</c> reports it as a Moved pair, when move
 /// reporting is on.
-/// <para><b>What pairs.</b> The two paragraphs' text must be identical once whitespace runs are collapsed,
-/// and carry at least <see cref="IrDiffSettings.MoveMinimumTokenCount"/> words. An exact match leaves no
-/// in-move edit for either surface to describe. Each paragraph pairs at most once, the first destination in
+/// <para><b>What pairs.</b> The two paragraphs' text must be identical once whitespace runs are collapsed, word
+/// for word in the same run formatting, and carry at least <see cref="IrDiffSettings.MoveMinimumTokenCount"/>
+/// words. An exact match leaves no in-move edit — text or formatting — for either surface to describe. Each paragraph pairs at most once, the first destination in
 /// document order winning.</para>
 /// <para><b>Where it looks.</b> The body and the cells of tables drawn cell by cell on both surfaces
 /// (<see cref="IrTableDiffer.NeedsWholeTableFallback"/> false). A moved table is drawn whole, and its cells are
@@ -34,7 +34,7 @@ namespace Docxodus.Ir.Diff;
 /// </summary>
 internal static class IrRelocationPairer
 {
-    private sealed record Candidate(IrEditOp Op, int ListId, string Text);
+    private sealed record Candidate(IrEditOp Op, int ListId, string Text, IReadOnlyList<IrRunFormat?> Formats);
 
     /// <param name="fusedAnchors">Body paragraph anchors the redline draws inside cross-paragraph runs, when
     /// this script is the data script of a comparison whose redline fuses runs; null otherwise.</param>
@@ -70,8 +70,9 @@ internal static class IrRelocationPairer
             if (anchor is null || fusedAnchors?.Contains(anchor) == true ||
                 !doc.AnchorIndex.TryGetValue(anchor, out var block) || block is not IrParagraph paragraph)
                 return null;
-            var (text, words) = Normalize(IrDiffTokenizer.Tokenize(paragraph, settings));
-            return words >= settings.MoveMinimumTokenCount ? new Candidate(op, listId, text) : null;
+            var tokens = IrDiffTokenizer.Tokenize(paragraph, settings);
+            var (text, words) = Normalize(tokens);
+            return words >= settings.MoveMinimumTokenCount ? new Candidate(op, listId, text, WordFormats(tokens, 0, tokens.Count)) : null;
         }
         Collect(script.Operations);
         if (deleted.Count == 0 || inserted.Count == 0 || nextList == 1)
@@ -86,7 +87,8 @@ internal static class IrRelocationPairer
         {
             if (!byText.TryGetValue(source.Text, out var destinations))
                 continue;
-            var destination = destinations.FirstOrDefault(d => d.ListId != source.ListId && !used.Contains(d));
+            var destination = destinations.FirstOrDefault(d => d.ListId != source.ListId && !used.Contains(d) &&
+                SameFormats(source.Formats, d.Formats, settings.FormatComparison));
             if (destination is null)
                 continue;
             used.Add(destination);
@@ -113,6 +115,29 @@ internal static class IrRelocationPairer
     /// cross-paragraph run can absorb.</summary>
     internal static bool TouchesBody(IrEditScript script) =>
         script.Operations.Any(op => op.RelocationGroupId is not null);
+
+    /// <summary>The run format of each word token in [start, end).</summary>
+    internal static IReadOnlyList<IrRunFormat?> WordFormats(IReadOnlyList<IrDiffToken> tokens, int start, int end)
+    {
+        var formats = new List<IrRunFormat?>();
+        for (int i = start; i < end; i++)
+            if (tokens[i].Kind == IrDiffTokenKind.Word)
+                formats.Add(tokens[i].Format);
+        return formats;
+    }
+
+    /// <summary>Whether two halves carry the same run formatting word for word, under the token differ's own
+    /// format rule; a relocation whose formatting also changed is not an exact move.</summary>
+    internal static bool SameFormats(
+        IReadOnlyList<IrRunFormat?> a, IReadOnlyList<IrRunFormat?> b, IrFormatComparison comparison)
+    {
+        if (a.Count != b.Count)
+            return false;
+        for (int i = 0; i < a.Count; i++)
+            if (!IrModeledFormat.RunFormatEqual(a[i], b[i], comparison))
+                return false;
+        return true;
+    }
 
     /// <summary>Whitespace runs collapsed to one space, ends trimmed; and the Word-token count. A token with no
     /// text of its own (image, note reference, opaque content) contributes its match key, so two paragraphs

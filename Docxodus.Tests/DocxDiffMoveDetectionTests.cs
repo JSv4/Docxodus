@@ -496,6 +496,22 @@ public class DocxDiffMoveDetectionTests
     }
 
     [Fact]
+    public void ParagraphMovedAcrossATableBoundary_AndReformatted_IsNotAMove()
+    {
+        // The arriving paragraph is bold: an exact relocation would drop that formatting change from the
+        // revision list, so the halves stay a deletion and an insertion.
+        var bold = $"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\">{A}</w:t></w:r></w:p>";
+        var (left, right) = (Doc(P(A) + P(B) + OneCellTable(C) + P(D)),
+            Doc(P(B) + "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"5000\"/></w:tblGrid>" +
+                $"<w:tr><w:tc><w:tcPr><w:tcW w:w=\"5000\" w:type=\"dxa\"/></w:tcPr>{P(C)}{bold}</w:tc></w:tr></w:tbl>" + P(D)));
+
+        var redline = DocxCompare.Compare(left, right);
+
+        Assert.Empty(Body(redline.DocumentByteArray).Descendants(W.moveFromRangeStart));
+        AssertRoundTrip(left, right, redline);
+    }
+
+    [Fact]
     public void ParagraphsSharingLittleText_AcrossATableBoundary_AreNotAMove()
     {
         var (left, right) = (Doc(P(A) + P(B) + OneCellTable(C) + P(D)), Doc(P(B) + OneCellTable(C, E) + P(D)));
