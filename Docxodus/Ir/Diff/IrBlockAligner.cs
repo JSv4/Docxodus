@@ -775,67 +775,66 @@ internal static class IrBlockAligner
         // own position. Ranking subtracts the same penalty so near pairs beat far pairs on ties.
         var positions = GapRelativePositions(freeLeft, leftMatch, freeRight, rightMatch);
 
+        // Scores, eligibility and the locality positions are all fixed for the pass; only which blocks are
+        // still free changes as pairs form. So "repeatedly take the best still-free pair" is the same as scoring
+        // every eligible pair once, stably sorting by effective score (scan order breaks ties: smallest left,
+        // then smallest right), and taking each pair whose two blocks are both still free. Rescanning the whole
+        // grid once per pair formed was quadratic in the pairs times the grid, minutes for two long unrelated
+        // documents (issue #863).
         int GreedyRounds(bool requireContentWord)
         {
-            int formed = 0;
-            while (true)
+            var candidates = new List<(double Effective, int Left, int Right)>();
+            foreach (int li in freeLeft)
             {
-                double bestEffective = double.NegativeInfinity;
-                int bestLeft = -1, bestRight = -1;
-                foreach (int li in freeLeft)
+                if (leftMatch[li] != -1)
+                    continue;
+                foreach (int rj in freeRight)
                 {
-                    if (leftMatch[li] != -1)
+                    if (rightMatch[rj] != -1)
                         continue;
-                    foreach (int rj in freeRight)
+                    // Empty-vs-empty paragraphs score a vacuous 1.0 ("identical content") that
+                    // defeats the locality prior at any displacement — an empty freed elsewhere in
+                    // the gap would relocate here as a Modified pair. Word never fuzzy-pairs
+                    // empties; they belong to the in-order passes (which pair them monotonically)
+                    // or fall out as plain delete/insert.
+                    if (leftBlocks[li] is IrParagraph leftParagraph && rightBlocks[rj] is IrParagraph rightParagraph)
                     {
-                        if (rightMatch[rj] != -1)
+                        if (similarity.WordCount(leftParagraph) == 0 && similarity.WordCount(rightParagraph) == 0)
                             continue;
-                        // Empty-vs-empty paragraphs score a vacuous 1.0 ("identical content") that
-                        // defeats the locality prior at any displacement — an empty freed elsewhere in
-                        // the gap would relocate here as a Modified pair. Word never fuzzy-pairs
-                        // empties; they belong to the in-order passes (which pair them monotonically)
-                        // or fall out as plain delete/insert.
-                        if (leftBlocks[li] is IrParagraph leftParagraph && rightBlocks[rj] is IrParagraph rightParagraph)
-                        {
-                            if (similarity.WordCount(leftParagraph) == 0 && similarity.WordCount(rightParagraph) == 0)
-                                continue;
 
-                            // The general score includes spaces and punctuation because it deliberately
-                            // shares the downstream token model.  At the lowered similarity threshold,
-                            // two unrelated prose paragraphs can therefore clear the score merely by
-                            // having the same separator skeleton (especially numbered lists).  Weak
-                            // in-gap pairing needs actual lexical evidence; the dedicated 1×1 residue
-                            // rule below still handles unambiguous labels and atomic-only paragraphs.
-                            if (requireContentWord
-                                ? SharedContentWordCount(leftParagraph, rightParagraph, similarity) == 0
-                                : similarity.PairingWordOverlap(leftParagraph, rightParagraph).SharedWords == 0)
-                                continue;
-                        }
-                        double score = similarity.Score(leftBlocks[li], rightBlocks[rj]);
-                        double displacement = Math.Abs(positions.Left[li] - positions.Right[rj]);
-                        if (score < threshold + PairLocalityPenalty * displacement)
+                        // The general score includes spaces and punctuation because it deliberately
+                        // shares the downstream token model.  At the lowered similarity threshold,
+                        // two unrelated prose paragraphs can therefore clear the score merely by
+                        // having the same separator skeleton (especially numbered lists).  Weak
+                        // in-gap pairing needs actual lexical evidence; the dedicated 1×1 residue
+                        // rule below still handles unambiguous labels and atomic-only paragraphs.
+                        if (requireContentWord
+                            ? SharedContentWordCount(leftParagraph, rightParagraph, similarity) == 0
+                            : similarity.PairingWordOverlap(leftParagraph, rightParagraph).SharedWords == 0)
                             continue;
-                        double effective = score - PairLocalityPenalty * displacement;
-                        // Strictly-greater wins; on a tie keep the first seen (freeLeft / freeRight are in
-                        // ascending index order), which is exactly "smallest left, then smallest right".
-                        if (effective > bestEffective)
-                        {
-                            bestEffective = effective;
-                            bestLeft = li;
-                            bestRight = rj;
-                        }
                     }
+                    double score = similarity.Score(leftBlocks[li], rightBlocks[rj]);
+                    double displacement = Math.Abs(positions.Left[li] - positions.Right[rj]);
+                    if (score < threshold + PairLocalityPenalty * displacement)
+                        continue;
+                    candidates.Add((score - PairLocalityPenalty * displacement, li, rj));
                 }
+            }
 
-                if (bestLeft == -1)
-                    return formed;
-
+            int formed = 0;
+            // OrderByDescending is stable, so equal scores keep scan order: the first seen wins a tie, exactly
+            // as the strictly-greater argmax did (freeLeft / freeRight are in ascending index order).
+            foreach (var (_, bestLeft, bestRight) in candidates.OrderByDescending(c => c.Effective))
+            {
+                if (leftMatch[bestLeft] != -1 || rightMatch[bestRight] != -1)
+                    continue;
                 leftKind[bestLeft] = IrAlignmentKind.Modified;
                 rightKind[bestRight] = IrAlignmentKind.Modified;
                 leftMatch[bestLeft] = bestRight;
                 rightMatch[bestRight] = bestLeft;
                 formed++;
             }
+            return formed;
         }
 
         int contentPairs = GreedyRounds(requireContentWord: true);
@@ -1746,6 +1745,7 @@ internal static class IrBlockAligner
         // a window that only passes POST-trim is re-admitted because the trimmed window is itself
         // enumerated as a smaller (a,b) candidate by the ascending scan.
         int singularContent = ContentTokenCount(singular, settings);
+
         // The added-text path admits messier merges/splits than the coverage path (see TrimAndGate):
         // its surviving paragraph may ADD text (run smaller than singular → drop the coverage-derived
         // lower floor) AND its members may DROP text (run BIGGER than singular → widen the slack-derived
@@ -1758,6 +1758,47 @@ internal static class IrBlockAligner
         double minWindowContent = settings.SplitCoverageThreshold * singularContent;
         if (settings.MergeSplitAllowAddedText)
             minWindowContent = Math.Min(minWindowContent, 2 * MinMatchedWordsPerSplitFragment);
+
+        // Retention prefilter (exact necessary condition, pure performance; issue #863). TrimAndGate passes a
+        // window only if its edge-trimmed sub-window keeps at most effectiveSlack of its content unmatched and
+        // covers at least the lower of the two coverage floors of the singular. Every LCS-matched content token
+        // is shared by MatchKey, so a member can contribute at most its content overlap with the singular. When
+        // no contiguous sub-window of two or more members can meet both floors on that bound, TrimAndGate is
+        // certain to return null and its LCS is skipped. Two unrelated long documents otherwise scored nearly
+        // every window: their paragraphs all share a couple of common words, so the phrase prefilter admits them.
+        double minCoverage = settings.MergeSplitAllowAddedText
+            ? Math.Min(settings.SplitCoverageThreshold, settings.SplitAddedTextMinCoverage)
+            : settings.SplitCoverageThreshold;
+        var contentOverlap = new int[pluralTo - pluralFrom];
+        Array.Fill(contentOverlap, -1);
+        int ContentOverlap(int pj)
+        {
+            int idx = pj - pluralFrom;
+            if (contentOverlap[idx] < 0)
+                contentOverlap[idx] = pluralBlocks[pj] is IrParagraph pp ? similarity.ContentOverlap(singular, pp) : 0;
+            return contentOverlap[idx];
+        }
+        bool SomeSubWindowCanPass(int a, int b)
+        {
+            const double Tolerance = 1e-9;
+            for (int lo = a; lo < b; lo++)
+            {
+                int bound = 0, content = 0;
+                for (int hi = lo; hi <= b; hi++)
+                {
+                    bound += ContentOverlap(hi);
+                    content += pluralContent(hi);
+                    if (hi == lo)
+                        continue;
+                    int matched = Math.Min(bound, singularContent);
+                    double coverage = singularContent == 0 ? 0.0 : (double)matched / singularContent;
+                    double slack = content == 0 ? 0.0 : (double)(content - matched) / content;
+                    if (coverage >= minCoverage - Tolerance && slack <= effectiveSlack + Tolerance)
+                        return true;
+                }
+            }
+            return false;
+        }
 
         // A COVERAGE-path window is returned immediately (shortest-qualifying-first, ascending a then b —
         // the pre-2026-07 behavior: the smallest window already clearing the coverage bar is complete, so
@@ -1788,6 +1829,8 @@ internal static class IrBlockAligner
                     continue; // too little content to cover the singular side yet — extend the window
                 if (phraseCandidates < 2)
                     continue; // Gate 1 cannot pass: fewer than two members share ≥ Min words with the singular
+                if (!SomeSubWindowCanPass(a, b))
+                    continue; // Gates 3+4 cannot pass on any trim of this window
                 var trimmed = TrimAndGate(singular, partner, a, b, pluralBlocks, pluralMatch, settings,
                     out bool viaCoveragePath, out double coverage);
                 if (trimmed is null)

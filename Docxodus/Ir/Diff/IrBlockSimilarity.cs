@@ -98,6 +98,24 @@ internal sealed class IrBlockSimilarity
     public IReadOnlyDictionary<string, int> WordKeys(IrParagraph paragraph) => Bag(paragraph).WordCounts;
 
     /// <summary>
+    /// How many content tokens (every kind but <see cref="IrDiffTokenKind.Separator"/> and
+    /// <see cref="IrDiffTokenKind.Textbox"/>, the split scorer's content rule) the two paragraphs share by
+    /// MatchKey, counting multiplicity. No in-order matching of the two can pair more content tokens than this,
+    /// so it bounds <see cref="IrSplitSegmenter.Score"/>'s matched content from above (issue #863).
+    /// </summary>
+    public int ContentOverlap(IrParagraph a, IrParagraph b)
+    {
+        var (small, large) = Bag(a).ContentCounts.Count <= Bag(b).ContentCounts.Count
+            ? (Bag(a).ContentCounts, Bag(b).ContentCounts)
+            : (Bag(b).ContentCounts, Bag(a).ContentCounts);
+        int shared = 0;
+        foreach (var kv in small)
+            if (large.TryGetValue(kv.Key, out int other))
+                shared += System.Math.Min(kv.Value, other);
+        return shared;
+    }
+
+    /// <summary>
     /// The subset of a paragraph's word-token keys that contains lexical content (at least one
     /// letter).  The weak, corpus-calibrated junction matcher uses this rather than every
     /// word-token: a shared ordinal such as <c>17</c> is positional scaffolding, not evidence that
@@ -386,6 +404,7 @@ internal sealed class IrBlockSimilarity
 
         public Dictionary<string, int> Counts { get; }
         public Dictionary<string, int> WordCounts { get; }  // Word-kind tokens only, by MatchKey
+        public Dictionary<string, int> ContentCounts { get; } // all but Separator/Textbox tokens, by MatchKey
         public Dictionary<string, int> PairingWordCounts { get; } // Word keys containing at least one letter
         public Dictionary<string, int> JunctionWordCounts { get; } // lexical keys plus year-like values
         public IReadOnlyList<IrDiffToken> Tokens { get; }
@@ -399,9 +418,10 @@ internal sealed class IrBlockSimilarity
         private MatchKeyBag(Dictionary<string, int> counts, Dictionary<string, int> wordCounts,
             Dictionary<string, int> pairingWordCounts, Dictionary<string, int> junctionWordCounts,
             IReadOnlyList<IrDiffToken> tokens, HashSet<string> calendarYears, HashSet<string> trimmedWords,
-            int total, int wordCount, int pairingWordCount, int junctionWordCount)
+            int total, int wordCount, int pairingWordCount, int junctionWordCount, Dictionary<string, int> contentCounts)
         {
             Counts = counts;
+            ContentCounts = contentCounts;
             WordCounts = wordCounts;
             PairingWordCounts = pairingWordCounts;
             JunctionWordCounts = junctionWordCounts;
@@ -418,6 +438,7 @@ internal sealed class IrBlockSimilarity
         {
             var tokens = IrDiffTokenizer.Tokenize(paragraph, settings);
             var counts = new Dictionary<string, int>();
+            var contentCounts = new Dictionary<string, int>();
             var wordCounts = new Dictionary<string, int>();
             var pairingWordCounts = new Dictionary<string, int>();
             var junctionWordCounts = new Dictionary<string, int>();
@@ -427,6 +448,8 @@ internal sealed class IrBlockSimilarity
             foreach (var t in tokens)
             {
                 counts[t.MatchKey] = counts.TryGetValue(t.MatchKey, out int c) ? c + 1 : 1;
+                if (t.Kind is not (IrDiffTokenKind.Separator or IrDiffTokenKind.Textbox))
+                    contentCounts[t.MatchKey] = contentCounts.TryGetValue(t.MatchKey, out int k) ? k + 1 : 1;
                 if (t.Kind == IrDiffTokenKind.Word)
                 {
                     wordCounts[t.MatchKey] = wordCounts.TryGetValue(t.MatchKey, out int w) ? w + 1 : 1;
@@ -448,7 +471,7 @@ internal sealed class IrBlockSimilarity
             }
             return new MatchKeyBag(
                 counts, wordCounts, pairingWordCounts, junctionWordCounts, tokens, calendarYears, trimmedWords, tokens.Count,
-                wordCount, pairingWordCount, junctionWordCount);
+                wordCount, pairingWordCount, junctionWordCount, contentCounts);
         }
 
         private static bool ContainsLetter(string value)
@@ -515,7 +538,7 @@ internal sealed class IrBlockSimilarity
             // paragraph-only), so the word-only structures are not materialized.
             return new MatchKeyBag(
                 counts, EmptyCounts, EmptyCounts, EmptyCounts, System.Array.Empty<IrDiffToken>(), EmptyWords,
-                EmptyWords, total, wordCount, 0, 0);
+                EmptyWords, total, wordCount, 0, 0, EmptyCounts);
         }
 
         /// <summary>Add token keys from direct paragraphs and those reachable through block SDTs in a table cell.
