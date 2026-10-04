@@ -70,6 +70,21 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Comparison keeps bookmark spans in two shapes that lost them (issue #864). Accepting a redline now
+  gives the revised document's bookmarks and rejecting gives the original's:
+  - **A row-level bookmark in a row the diff modifies.** The rebuilt row put every non-cell child of the
+    source row (the bookmark's start and end included) ahead of the cells, so the bookmark enclosed
+    nothing. Both `DocxDiff`/`DocxCompare` and `DocxDiff.Consolidate` now put each one back between the
+    same cells. A row-level bookmark only one side's row has can't stay a bare row child, which would
+    survive both accept and reject, so it is placed in the first and last enclosed cells' paragraphs as
+    that side's insertion or deletion. The original row's bookmark used to be lost on reject; it now
+    comes back.
+  - **A reviewer's bookmark that opens in a paragraph the reviewer left unchanged**, through
+    `DocxDiff.Consolidate`. Bookmarks are not part of the comparison model, so the paragraph was equal
+    and emitted from the base document without the reviewer's start; the orphaned end was then dropped.
+    The merger now notes reviewer copies of equal paragraphs that hold bookmark markers, and the renderer
+    carries in each marker whose name the base document lacks, at the same text offset, as that
+    reviewer's insertion.
 - `DocxDiff` with `PreserveInputRevisions` keeps a revised-document table that accepting removes
   (every row tracked-deleted, or its content moved away) instead of dropping it from the redline
   (issue #866). The table stays in place with its rows still marked deleted, so accepting the redline

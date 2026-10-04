@@ -21,6 +21,11 @@ internal sealed record IrAuthoredTokenOp(IrTokenOp Op, string Author, int Source
 /// </summary>
 internal sealed record IrSourceRightAnchor(int Reviewer, string Anchor);
 
+/// <summary>A reviewer's paragraph that the reviewer left equal to its base block but that carries bookmark
+/// markers (<see cref="IrCompositeOp.EqualReviewerBookmarks"/>). Bookmarks are not part of the IR, so an equal
+/// block can still hold a bookmark only that reviewer added (issue #864).</summary>
+internal sealed record IrEqualReviewerBookmarks(int Reviewer, string Anchor, string Author);
+
 /// <summary>The kind of one composed table cell (see <see cref="IrAuthoredCellOp"/>).</summary>
 internal enum IrAuthoredCellKind
 {
@@ -115,6 +120,10 @@ internal sealed record IrComposedTableShell(IrComposedShellRef? TblPr = null, Ir
 /// Insert spans index that reviewer's right-token list). For all single-source ops it is null and
 /// <see cref="Op"/>'s own <c>RightAnchor</c> suffices. Additive/optional — absent from older scripts and
 /// from the JSON wire shape, so existing tests/serialization are unaffected.</para>
+/// <para><see cref="EqualReviewerBookmarks"/> is non-null ONLY on a base-sourced EqualBlock some reviewer's
+/// equal paragraph carries bookmark markers for: the renderer emits the base block and then carries in each
+/// bookmark marker whose name the base document does not have, as that reviewer's insertion (issue #864).
+/// Renderer-only, like <see cref="SourceRightAnchors"/>; absent from the JSON wire shape.</para>
 /// <para><see cref="AuthoredRows"/> is non-null ONLY on a COMPOSED multi-reviewer table (FOLLOW-ON B): the
 /// op is a ModifyBlock whose <see cref="Op"/>'s <see cref="IrEditOp.TableDiff"/> remains the MERGED
 /// apply/JSON truth (built from the composed row/cell ops' <c>.Op</c> projections) and <see cref="AuthoredRows"/>
@@ -130,7 +139,8 @@ internal sealed record IrCompositeOp(
     int? ConflictId = null,
     IrNodeList<IrSourceRightAnchor>? SourceRightAnchors = null,
     IrNodeList<IrAuthoredRowOp>? AuthoredRows = null,
-    IrComposedTableShell? TableShell = null);
+    IrComposedTableShell? TableShell = null,
+    IrNodeList<IrEqualReviewerBookmarks>? EqualReviewerBookmarks = null);
 
 /// <summary>
 /// One reviewer's competing result for a conflicted span. <see cref="Author"/> is the reviewer

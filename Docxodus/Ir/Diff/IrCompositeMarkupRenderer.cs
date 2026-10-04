@@ -552,7 +552,11 @@ internal static class IrCompositeMarkupRenderer
         state.RightSource = baseSourced ? baseIr : reviewerIrs[sourceReviewer];
         state.RightSourceId = sourceReviewer;
 
+        int emittedFrom = sink.Count;
         IrMarkupRenderer.RenderBlockOp(op, state, sink);
+        if (baseSourced && compositeOp.EqualReviewerBookmarks is { } reviewerBookmarks &&
+            sink.Count == emittedFrom + 1 && sink[emittedFrom].Name == W.p)
+            IrMarkupRenderer.CarryReviewerOnlyBookmarks(sink[emittedFrom], reviewerBookmarks, baseIr, reviewerIrs, state);
 
         // Restore the shared state so a CELL recursion does not leak its per-op source into the surrounding
         // table-row render (the body loop reassigns these every op, so the restore is inert there).
