@@ -187,4 +187,60 @@ public class DocxDiffMoveDetectionTests
         Assert.Equal(Text(original.DocumentByteArray), Text(DocxDiffOps.RejectRevisions(consolidated.DocumentByteArray)));
         NoNewValidationErrors(original.DocumentByteArray, consolidated.DocumentByteArray);
     }
+
+    // ---- moves in different scopes (issue #924) ----------------------------------------------------
+
+    /// <summary>A one-cell table whose cell holds the given paragraphs.</summary>
+    private static string OneCellTable(params string[] paragraphs) =>
+        "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"5000\"/></w:tblGrid>" +
+        $"<w:tr><w:tc><w:tcPr><w:tcW w:w=\"5000\" w:type=\"dxa\"/></w:tcPr>{string.Concat(paragraphs.Select(t => P(t)))}</w:tc></w:tr></w:tbl>";
+
+    /// <summary>A move in the body and an unrelated move inside a table cell, each the first of its scope.</summary>
+    private static (WmlDocument Left, WmlDocument Right) BodyAndCellMoves(string cellMoverArrivesAs = E) =>
+        (Doc(P(A) + P(B) + P(C) + OneCellTable(D, E, F)),
+         Doc(P(B) + P(C) + P(A) + OneCellTable(D, F, cellMoverArrivesAs)));
+
+    [Fact]
+    public void MovesInDifferentScopes_HaveDistinctMoveNames()
+    {
+        var (left, right) = BodyAndCellMoves();
+
+        var redline = DocxCompare.Compare(left, right);
+
+        var body = Body(redline.DocumentByteArray);
+        AssertMoved(redline, A);
+        AssertMoved(redline, E);
+        string NameOf(XName rangeStart, bool inTable) => (string)body.Descendants(rangeStart)
+            .Single(e => e.Ancestors(W.tbl).Any() == inTable).Attribute(W.name)!;
+        Assert.Equal(NameOf(W.moveFromRangeStart, inTable: false), NameOf(W.moveToRangeStart, inTable: false));
+        Assert.Equal(NameOf(W.moveFromRangeStart, inTable: true), NameOf(W.moveToRangeStart, inTable: true));
+        Assert.NotEqual(NameOf(W.moveFromRangeStart, inTable: false), NameOf(W.moveFromRangeStart, inTable: true));
+        AssertRoundTrip(left, right, redline);
+    }
+
+    [Fact]
+    public void MovesInDifferentScopes_HaveDistinctMoveGroupIds()
+    {
+        var (left, right) = BodyAndCellMoves();
+
+        var moved = DocxDiff.GetRevisions(left, right).Where(r => r.Type == DocxDiffRevisionType.Moved).ToList();
+
+        Assert.Equal(4, moved.Count);
+        Assert.Equal(2, moved.Select(r => r.MoveGroupId).Distinct().Count());
+        Assert.All(moved.GroupBy(r => r.MoveGroupId), group =>
+            Assert.Single(group.Select(r => r.Text.Trim()).Distinct()));
+    }
+
+    [Fact]
+    public void MovedAndEditedCellParagraph_ReportsItsOwnDeletedWord()
+    {
+        // The cell paragraph moves and one word changes. Its deleted word must be read from the cell's own
+        // source paragraph, not from the body paragraph that moved under the same scope-local group id.
+        var (left, right) = BodyAndCellMoves(cellMoverArrivesAs: E.Replace("liability", "exposure"));
+
+        var revisions = DocxDiff.GetRevisions(left, right);
+
+        Assert.Contains(revisions, r => r.Type == DocxDiffRevisionType.Deleted && r.Text.Trim() == "liability");
+        Assert.Contains(revisions, r => r.Type == DocxDiffRevisionType.Inserted && r.Text.Trim() == "exposure");
+    }
 }

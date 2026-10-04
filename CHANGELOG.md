@@ -79,6 +79,13 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Moves in different parts of a document no longer share a move name or `MoveGroupId` (issue #924).
+  Move groups were numbered separately in the body, in each table cell, row list, note and header/footer
+  story, so a move in the body and an unrelated move inside a table cell were written under the same
+  `w:name` (Word pairs move ranges by that name) and reported under the same `MoveGroupId`. A moved and
+  edited cell paragraph could also have its deleted words read from the wrong paragraph in `GetRevisions`.
+  Every move group now has an id of its own across the comparison; documents whose moves are all in the
+  body are unchanged.
 - Comparisons no longer fail with "Index was out of range" when the redline renderer runs as optimized
   code (issue #925). The .NET 10 JIT's induction-variable optimization miscompiles
   `IrMarkupRenderer.EmitGapArranged`, the method that lays out a run of deleted and inserted paragraphs.

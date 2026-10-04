@@ -64,11 +64,27 @@ internal static class IrRevisionRenderer
         // Pre-pass: map each MoveGroupId to its source (left) block anchor. A MoveModify destination op
         // carries only the right anchor, but its token diff's Delete spans index the SOURCE block tokens,
         // so the destination needs the source anchor to resolve deleted-token text. The source op (emitted
-        // separately, IsMoveSource=true) carries that left anchor.
+        // separately, IsMoveSource=true) carries that left anchor. Group ids are unique across the script
+        // (issue #924), so one map serves the moves of every scope: cells, textboxes, notes, headers/footers.
         var moveSourceAnchor = new Dictionary<int, string>();
-        foreach (var op in script.Operations)
-            if (op.IsMoveSource == true && op.MoveGroupId is { } gid && op.LeftAnchor is { } la)
-                moveSourceAnchor[gid] = la;
+        void MapSources(IEnumerable<IrEditOp> ops)
+        {
+            foreach (var op in ops)
+            {
+                if (op.IsMoveSource == true && op.MoveGroupId is { } gid && op.LeftAnchor is { } la)
+                    moveSourceAnchor[gid] = la;
+                foreach (var row in op.TableDiff?.RowOps ?? Enumerable.Empty<IrRowOp>())
+                    foreach (var cell in row.CellOps ?? Enumerable.Empty<IrCellOp>())
+                        MapSources(cell.BlockOps ?? Enumerable.Empty<IrEditOp>());
+                foreach (var box in op.TextboxDiffs ?? Enumerable.Empty<IrTextboxDiff>())
+                    MapSources(box.Ops);
+            }
+        }
+        MapSources(script.Operations);
+        foreach (var note in script.NoteOps ?? Enumerable.Empty<IrNoteDiff>())
+            MapSources(note.Ops);
+        foreach (var story in script.HeaderFooterOps ?? Enumerable.Empty<IrHeaderFooterDiff>())
+            MapSources(story.Ops);
 
         var ctx = new Context(left, right, settings, moveSourceAnchor);
         var revisions = new List<IrRevision>();

@@ -57,9 +57,79 @@ internal static class IrEditScriptBuilder
         var bodyOps = ProjectAlignment(left.Body.Blocks, alignment, settings, allowCrossParagraph: true);
         var noteOps = BuildNoteOps(left, right, settings, KeptNoteReferences(left, right, bodyOps, settings));
         var headerFooterOps = BuildHeaderFooterOps(left, right, settings);
-        return new IrEditScript(IrNodeList.From(bodyOps),
+        return UniqueMoveGroupIds.Apply(new IrEditScript(IrNodeList.From(bodyOps),
             noteOps.Count == 0 ? null : IrNodeList.From(noteOps),
-            headerFooterOps);
+            headerFooterOps));
+    }
+
+    /// <summary>
+    /// Renumbers move groups so that every id is unique across the whole script (issue #924).
+    /// <see cref="ProjectAlignment"/> numbers moves 1..N per op list and <see cref="IrTableDiffer"/>
+    /// numbers moved rows per table, but the markup renderer names a move range after its group id and
+    /// <c>GetRevisions</c> reports the id as-is, so two scopes' moves sharing a number read as one move.
+    /// Body ids are kept, so a script whose moves are all in the body is unchanged; every nested scope
+    /// (cells, rows, textboxes, notes, header/footer stories) takes fresh ids above them, in document order.
+    /// </summary>
+    private sealed class UniqueMoveGroupIds
+    {
+        private int _next;
+
+        private UniqueMoveGroupIds(int next) => _next = next;
+
+        public static IrEditScript Apply(IrEditScript script)
+        {
+            int maxBody = script.Operations.Max(op => op.MoveGroupId) ?? 0;
+            var renumber = new UniqueMoveGroupIds(maxBody + 1);
+            return script with
+            {
+                Operations = IrNodeList.From(script.Operations.Select(renumber.Nested)),
+                NoteOps = script.NoteOps is { } notes
+                    ? IrNodeList.From(notes.Select(n => n with { Ops = renumber.Scope(n.Ops) }))
+                    : null,
+                HeaderFooterOps = script.HeaderFooterOps is { } stories
+                    ? IrNodeList.From(stories.Select(h => h with { Ops = renumber.Scope(h.Ops) }))
+                    : null,
+            };
+        }
+
+        private int Fresh(Dictionary<int, int> scope, int id)
+        {
+            if (!scope.TryGetValue(id, out var fresh))
+                scope[id] = fresh = _next++;
+            return fresh;
+        }
+
+        /// <summary>One nested op list: its ids map to fresh ones, consistently within the list.</summary>
+        private IrNodeList<IrEditOp> Scope(IrNodeList<IrEditOp> ops)
+        {
+            var scope = new Dictionary<int, int>();
+            return IrNodeList.From(ops.Select(op => Nested(
+                op.MoveGroupId is { } id ? op with { MoveGroupId = Fresh(scope, id) } : op)));
+        }
+
+        /// <summary>The scopes nested inside one op: its table's rows and cells, and its textboxes.</summary>
+        private IrEditOp Nested(IrEditOp op)
+        {
+            var tableDiff = op.TableDiff is { } table ? Table(table) : null;
+            var textboxes = op.TextboxDiffs is { } boxes
+                ? IrNodeList.From(boxes.Select(b => b with { Ops = Scope(b.Ops) }))
+                : null;
+            return tableDiff is null && textboxes is null
+                ? op
+                : op with { TableDiff = tableDiff ?? op.TableDiff, TextboxDiffs = textboxes ?? op.TextboxDiffs };
+        }
+
+        private IrTableDiff Table(IrTableDiff table)
+        {
+            var rows = new Dictionary<int, int>();
+            return new IrTableDiff(IrNodeList.From(table.RowOps.Select(row => row with
+            {
+                MoveGroupId = row.MoveGroupId is { } id ? Fresh(rows, id) : null,
+                CellOps = row.CellOps is { } cells
+                    ? IrNodeList.From(cells.Select(c => c.BlockOps is { } ops ? c with { BlockOps = Scope(ops) } : c))
+                    : null,
+            })));
+        }
     }
 
     // ------------------------------------------------------------------ header/footer scopes (2026-07-03)
