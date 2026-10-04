@@ -251,14 +251,17 @@ internal static class IrMarkupRenderer
         // right Equal/Insert emissions carry the RIGHT input's foreign markup verbatim. When LEFT itself is
         // dirty, do NOT preserve the RIGHT half alone (that is asymmetric); instead retain a narrowly safe
         // LEFT map for delete-side projection. A pre-existing left w:ins that the comparison deletes must be
-        // emitted as deletion-grade markup, not flattened then re-deleted as a fresh unrelated change. More
-        // complex two-sided cases (left moves/property revisions and Modify spans) deliberately stay on the
-        // accepted-view renderer until they have source-provenance-aware handling.
+        // emitted as deletion-grade markup, not flattened then re-deleted as a fresh unrelated change. An
+        // equal block whose two originals carry the SAME markup is a pending change both inputs share, not an
+        // asymmetry, so it keeps that markup too (issue #885). More complex two-sided cases (left
+        // moves/property revisions and Modify spans) deliberately stay on the accepted-view renderer until
+        // they have source-provenance-aware handling.
         if (settings.PreserveInputRevisions)
         {
             if (HasTrackedRevisionMarkup(left))
             {
                 state.LeftPreservedOriginals = BuildPreservedOriginalIndex(irLeft, left, carryRemovedTables: false);
+                state.SharedRightPreservedOriginals = BuildPreservedOriginalIndex(irRight, right, carryRemovedTables: false);
                 // A raw LEFT deletion can be the historical counterpart of a right-only accepted block.
                 // Do not try to infer this generally: only direct body ordinal matches with a fully deleted
                 // source block are safe enough to project as the source author's insertion.
@@ -1360,7 +1363,7 @@ internal static class IrMarkupRenderer
                 // Content-equal: emit the RIGHT block verbatim (accepted-state continuity). In a composite render
                 // an EqualBlock is base-sourced — the composite renderer points RightSource at the base for it.
                 var equalStart = sink.Count;
-                EmitVerbatim(op.RightAnchor, state.RightSource, state, sink, fromRight: true);
+                EmitVerbatim(op.RightAnchor, state.RightSource, state, sink, fromRight: true, op.LeftAnchor);
                 if (sink.Count == equalStart + 1 && sink[equalStart].Name == W.p)
                     StampResolvedNumberingChange(sink[equalStart], op.LeftAnchor, op.RightAnchor, state);
                 break;
@@ -1461,6 +1464,9 @@ internal static class IrMarkupRenderer
         switch (op.Kind)
         {
             case IrEditOpKind.EqualBlock:
+                EmitVerbatim(op.RightAnchor, state.RightSource, state, sink, fromRight: true, op.LeftAnchor);
+                return;
+
             case IrEditOpKind.FormatOnlyBlock:
                 EmitVerbatim(op.RightAnchor, state.RightSource, state, sink, fromRight: true);
                 return;
@@ -4494,9 +4500,12 @@ internal static class IrMarkupRenderer
     /// <summary>
     /// Emit a block (paragraph or table) verbatim — no revision markup — cloned from its source element.
     /// Right-side runs may reference right-only media; their relationship ids are remapped on import.
+    /// <paramref name="equalLeftAnchor"/> names the LEFT block of a content-equal pair, whose original
+    /// decides whether a dirty-left render may still keep the right original's markup.
     /// </summary>
     private static void EmitVerbatim(
-        string? anchor, IrDocument doc, RenderState state, List<XElement> sink, bool fromRight)
+        string? anchor, IrDocument doc, RenderState state, List<XElement> sink, bool fromRight,
+        string? equalLeftAnchor = null)
     {
         var src = SourceElement(anchor, doc);
         if (src == null)
@@ -4506,8 +4515,10 @@ internal static class IrMarkupRenderer
         // accepted working element exactly as before. A multi-member group carries the mark-deleted
         // paragraphs the document-level accept merged away; they vanish again on accept, so the accept
         // round-trip is unchanged. (The map only ever holds right-body elements, so left-side and
-        // composite lookups are no-ops.)
-        if (state.PreservedGroup(src) is { } group)
+        // composite lookups are no-ops.) With a dirty LEFT, only a pending change both inputs share is kept.
+        var group = state.PreservedGroup(src) ??
+            (SourceElement(equalLeftAnchor, state.Left) is { } equalLeft ? state.SharedPreservedGroup(equalLeft, src) : null);
+        if (group != null)
         {
             foreach (var member in group)
             {
@@ -9109,6 +9120,44 @@ internal static class IrMarkupRenderer
         /// the comparison deletes that block.</summary>
         public Dictionary<XElement, List<XElement>>? LeftPreservedOriginals { get; set; }
 
+        /// <summary>Accepted-working-element → ORIGINAL RIGHT body element(s), built only when the LEFT input
+        /// carries revisions of its own. Unlike <see cref="PreservedOriginals"/> it is never read on its own:
+        /// <see cref="SharedPreservedGroup"/> returns an entry only for a content-equal pair whose LEFT original
+        /// carries the same markup (issue #885).</summary>
+        public Dictionary<XElement, List<XElement>>? SharedRightPreservedOriginals { get; set; }
+
+        /// <summary>The ORIGINAL right group of a content-equal pair when both inputs' originals carry the
+        /// same revision markup — a pending change the two documents share — or null. Keeping it is
+        /// symmetric, unlike keeping a revision only the right input has. The comparison ignores what each
+        /// package numbers independently: revision ids, rsids and paragraph ids.</summary>
+        internal List<XElement>? SharedPreservedGroup(XElement leftSrc, XElement rightSrc)
+        {
+            if (SharedRightPreservedOriginals == null || LeftPreservedOriginals == null ||
+                !SharedRightPreservedOriginals.TryGetValue(rightSrc, out var rightGroup) ||
+                !LeftPreservedOriginals.TryGetValue(leftSrc, out var leftGroup) ||
+                rightGroup.Count != leftGroup.Count)
+                return null;
+            return rightGroup.Zip(leftGroup)
+                .All(pair => XNode.DeepEquals(SharedRevisionIdentity(pair.First), SharedRevisionIdentity(pair.Second)))
+                ? rightGroup
+                : null;
+        }
+
+        private static XElement SharedRevisionIdentity(XElement original)
+        {
+            var clone = new XElement(original);
+            foreach (var e in clone.DescendantsAndSelf())
+            {
+                bool tracked = TrackedRevisionNames.Contains(e.Name);
+                e.Attributes()
+                    .Where(a => a.Name.LocalName.StartsWith("rsid", StringComparison.Ordinal) ||
+                                a.Name == W14.paraId || a.Name == W14.textId ||
+                                (tracked && (a.Name == W.id || (!a.IsNamespaceDeclaration && a.Name.Namespace != W.w))))
+                    .Remove();
+            }
+            return clone;
+        }
+
         /// <summary>Accepted RIGHT main-body block → raw LEFT whole-block deletion for the narrow inverse
         /// projection. Entries are populated only for direct-body, same-ordinal, fully deleted p/tbl matches;
         /// unlike <see cref="PreservedOriginals"/> this map is consulted only by a literal
@@ -9163,6 +9212,7 @@ internal static class IrMarkupRenderer
         {
             var groups = (PreservedOriginals?.Values ?? Enumerable.Empty<List<XElement>>())
                 .Concat(LeftPreservedOriginals?.Values ?? Enumerable.Empty<List<XElement>>())
+                .Concat(SharedRightPreservedOriginals?.Values ?? Enumerable.Empty<List<XElement>>())
                 .SelectMany(g => g)
                 .Concat(LeftDeletedInsertionOriginals?.Values ?? Enumerable.Empty<XElement>());
             foreach (var member in groups)

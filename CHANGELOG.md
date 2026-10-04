@@ -70,6 +70,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `DocxDiffSettings.PreserveInputRevisions` keeps a pending change that both documents share (issue
+  #885). When the original document had tracked changes of its own, preservation of the revised document's
+  changes was switched off entirely, so a change both documents carried showed as plain text with no
+  revision. A content-equal block whose two originals carry the same revision markup (revision ids aside)
+  now keeps it. A change only the revised document carries is still flattened in that case, as before.
 - A list counter no longer wraps to a negative number past `int.MaxValue` (issue #905). Each item's
   number was the previous one plus one, unchecked, so a list starting at `w:start="2147483647"` numbered
   its second item `-2147483648`. The counter now stops at `int.MaxValue`.

@@ -828,6 +828,10 @@ public sealed class DocxDiffSettings
     /// or modified (not when it moves, splits or merges, where the table is dropped as before).
     /// The LEFT package's carried-over parts (headers/footers, unchanged notes, styles, comments) keep
     /// their markup because no pre-accept runs.
+    /// When the LEFT input carries tracked revisions of its own, the right input's markup is NOT preserved
+    /// on its own, which would keep one side's history and flatten the other's. The exception is a
+    /// content-equal block whose two originals carry the same markup (revision ids aside): that is a pending
+    /// change both documents share, and it is preserved.
     /// NOT preserved (flattened to the accepted view, attributable to this diff only): foreign markup inside
     /// MODIFIED/format-only/split/merge/moved blocks and inside changed header/footer stories — the
     /// char-precise renderers there require accept-view sources; the LEFT side's foreign markup in deleted
