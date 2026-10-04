@@ -48,13 +48,15 @@ public sealed class IrSdtDiffWalkerTests
     {
         // The content-based residue matcher must select 1 → 4. The reverse-order banana match then
         // cannot cross it, so it remains a delete+insert. Without SDT descent every note bag is empty,
-        // ties are positional, and the incorrect 1 → 3 pairing wins instead.
+        // ties are positional, and the incorrect 1 → 3 pairing wins instead. The body paragraphs share
+        // no words, so the diff deletes and inserts them and keeps none of the references: note pairing
+        // falls to the content matcher this test is about, not to the references the body keeps (#865).
         var left = Read(FootnoteDoc(
-            Paragraph(FootnoteReference("1")) + Paragraph(FootnoteReference("2")),
+            Paragraph(Text("quartz") + FootnoteReference("1")) + Paragraph(Text("zephyr") + FootnoteReference("2")),
             ("1", Sdt(Paragraph(Text("orange apple pear")))),
             ("2", Sdt(Paragraph(Text("banana"))))));
         var right = Read(FootnoteDoc(
-            Paragraph(FootnoteReference("3")) + Paragraph(FootnoteReference("4")),
+            Paragraph(Text("violin") + FootnoteReference("3")) + Paragraph(Text("marble") + FootnoteReference("4")),
             ("3", Sdt(Paragraph(Text("banana changed")))),
             ("4", Sdt(Paragraph(Text("orange apple pear changed"))))));
 
