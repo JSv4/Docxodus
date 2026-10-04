@@ -89,7 +89,7 @@ internal static class IrCompositeMarkupRenderer
         // One shared RenderState (single ascending id counter, single move-name allocator). Left = base. The
         // RightSource / AuthorOverride / RightSourceId are switched per op below. RightSourcedClones are bucketed
         // by RightSourceId so each reviewer's media-bearing clones import from that reviewer's package.
-        var state = new IrMarkupRenderer.RenderState(baseIr, baseIr, settings);
+        var state = new IrMarkupRenderer.RenderState(baseIr, baseIr, settings) { IsComposite = true };
 
         var bodyBlocks = new List<XElement>();
         foreach (var op in script.Operations)

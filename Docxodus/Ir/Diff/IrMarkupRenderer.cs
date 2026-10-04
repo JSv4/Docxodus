@@ -1904,24 +1904,34 @@ internal static class IrMarkupRenderer
                     break;
                 }
                 case IrRowOpKind.MovedRow:
-                    // A relocated exact-content row: render as DeleteRow at source + InsertRow at destination
-                    // (the two MovedRow ops carry the left/right anchors respectively). This keeps the content
-                    // round-trip without native row-move markup (out of Task-4 scope).
-                    if (rowOp.IsMoveSource == true && rowOp.LeftRowAnchor is { } lr && leftRowsByAnchor.TryGetValue(lr, out var ms))
-                    {
-                        var row = StripUnids(new XElement(ms));
-                        MarkWholeRow(row, RevKind.Del, state);
-                        newTbl.Add(row);
-                    }
-                    else if (rowOp.RightRowAnchor is { } rr && rightRowsByAnchor.TryGetValue(rr, out var md))
-                    {
-                        var row = StripUnids(new XElement(md));
+                {
+                    // A relocated exact-content row (the two MovedRow ops carry the left/right anchors). Drawn
+                    // the way Word draws a moved row (issue #887): the row deleted at the source and inserted
+                    // at the destination, its content moved from / moved to, each half in a named move range
+                    // among the table's rows. Without move reporting (or in Consolidate) it is a plain
+                    // DeleteRow + InsertRow pair.
+                    bool isSource = rowOp.IsMoveSource == true;
+                    XElement? src = isSource
+                        ? rowOp.LeftRowAnchor is { } lr && leftRowsByAnchor.TryGetValue(lr, out var ms) ? ms : null
+                        : rowOp.RightRowAnchor is { } rr && rightRowsByAnchor.TryGetValue(rr, out var md) ? md : null;
+                    if (src == null)
+                        return false;
+                    var row = StripUnids(new XElement(src));
+                    if (!isSource)
                         state.RegisterMediaReferences(row);
-                        MarkWholeRow(row, RevKind.Ins, state);
+                    if (state.Settings.RenderMoves && !state.IsComposite && rowOp.MoveGroupId is { } rowGid)
+                    {
+                        MarkWholeRow(row, isSource ? RevKind.MoveFrom : RevKind.MoveTo, state);
+                        var (start, end) = CreateMoveRange(isSource, state.MoveName(rowGid), state);
+                        newTbl.Add(start, row, end);
+                    }
+                    else
+                    {
+                        MarkWholeRow(row, isSource ? RevKind.Del : RevKind.Ins, state);
                         newTbl.Add(row);
                     }
-                    else return false;
                     break;
+                }
             }
         }
 
@@ -2210,9 +2220,15 @@ internal static class IrMarkupRenderer
             tr.AddFirst(trPr);
         }
         trPr.Elements().Where(e => e.Name == W.ins || e.Name == W.del).Remove();
-        trPr.Add(new XElement(kind == RevKind.Ins ? W.ins : W.del, state.RevisionAttributes()));
+        // A moved row is deleted at its source and inserted at its destination; its content carries the move.
+        trPr.Add(new XElement(kind is RevKind.Ins or RevKind.MoveTo ? W.ins : W.del, state.RevisionAttributes()));
         foreach (var p in tr.Descendants(W.p).ToList())
-            MarkWholeParagraph(p, kind, state);
+        {
+            if (kind is RevKind.MoveFrom or RevKind.MoveTo)
+                MarkWholeParagraphAs(p, kind, state);
+            else
+                MarkWholeParagraph(p, kind, state);
+        }
     }
 
     // ----------------------------------------------------------------- composed multi-reviewer table (FOLLOW-ON B)
@@ -9070,6 +9086,11 @@ internal static class IrMarkupRenderer
         public IrDocument Left { get; }
         public IrDocument Right { get; }
         public IrDiffSettings Settings { get; }
+
+        /// <summary>True for a Consolidate render. A reviewer's row-move group ids are unique within that
+        /// reviewer's script only, so a moved row is drawn as a delete + insert there rather than as a
+        /// named move range.</summary>
+        public bool IsComposite { get; init; }
 
         /// <summary>The document the CURRENTLY-emitting op draws inserted/modified ("right-side") block elements
         /// and token text from. In a two-way render this is always <see cref="Right"/> (set once in the ctor and
