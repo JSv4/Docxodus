@@ -6,6 +6,15 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- The comparison reports text moved within a paragraph, between paragraphs, or into or out of a table cell
+  as a move (issue #888). A sentence that leaves one place and reappears unchanged elsewhere is wrapped in
+  `w:moveFrom`/`w:moveTo` under one move name, instead of being drawn as a deletion and an unrelated
+  insertion. That includes a whole paragraph merged into the middle of another, and a sentence split out
+  into a paragraph of its own. `GetRevisions` reports it as a Moved pair. The moved text must match exactly
+  (whitespace aside) and carry at least `MoveMinimumWordCount` words. Word's compare marks even shorter
+  moves; see `docs/ooxml_corner_cases.md`. Text that also changed formatting is not paired, and nothing
+  is paired with `DetectMoves` off or the WmlComparer-compatible revision grain. The edit script tags each
+  half, a token span or a whole paragraph, with a `relocationGroupId`. Consolidate is unchanged.
 - The comparison reports three more kinds of relocation inside documents with tables as moves rather
   than an unrelated delete and insert (issue #887):
   - a reordered table row: deleted at its old position and inserted at its new one, its content in

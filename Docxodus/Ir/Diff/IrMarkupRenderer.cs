@@ -4448,6 +4448,14 @@ internal static class IrMarkupRenderer
 
     // ----------------------------------------------------------------- native move markup
 
+    /// <summary>The move name a relocated token span (<see cref="IrTokenOp.RelocationGroupId"/>, issue #888) is
+    /// drawn under, or null when it is drawn as a plain deletion or insertion: move reporting off, or a
+    /// Consolidate render.</summary>
+    private static string? RelocatedSpanName(IrTokenOp op, RenderState state) =>
+        op.RelocationGroupId is { } relocation && state.Settings.RenderMoves && !state.IsComposite
+            ? state.MoveName(relocation)
+            : null;
+
     /// <summary>A relocated whole-block delete or insert (<see cref="IrEditOp.RelocationGroupId"/>) seen as
     /// the move half it is, or null when it is drawn as a plain delete or insert: move reporting off, or a
     /// Consolidate render (whose scripts never carry relocations).</summary>
@@ -5411,6 +5419,28 @@ internal static class IrMarkupRenderer
         IrFormatComparison formatComparison,
         SourceRunModel leftRuns, SourceRunModel rightRuns)
     {
+        // A relocated span (issue #888) is drawn exactly where the pairer placed it: it is a boundary the
+        // word-shaped regrouping below never reaches across, so each stretch between relocated spans is
+        // shaped on its own and the relocated spans keep their extent and their relocation id.
+        if (ops.Any(o => o.RelocationGroupId is not null))
+        {
+            var shaped = new List<IrTokenOp>(ops.Count);
+            int start = 0;
+            for (int k = 0; k <= ops.Count; k++)
+            {
+                if (k < ops.Count && ops[k].RelocationGroupId is null)
+                    continue;
+                if (k > start)
+                    shaped.AddRange(CoalesceTokenOpsWordShaped(
+                        ops.Skip(start).Take(k - start).ToList(), leftTokens, rightTokens, formatComparison,
+                        leftRuns, rightRuns));
+                if (k < ops.Count)
+                    shaped.Add(ops[k]);
+                start = k + 1;
+            }
+            return shaped;
+        }
+
         // Re-pairing an otherwise transparent token match is safe only when both source paragraphs
         // are ordinary direct text runs. Fields, content controls, hyperlinks, revision containers,
         // and zero-width inline plumbing are deliberately transparent to the tokenizer, but their
@@ -5790,16 +5820,28 @@ internal static class IrMarkupRenderer
                 {
                     var (s, e) = RightSpanChars(rightTokens, tokenOp);
                     var (zs, ze) = ZeroWidthBoundaries(rightTokens, tokenOp.RightStart, tokenOp.RightEnd);
+                    var arrival = RelocatedSpanName(tokenOp, state);
+                    var range = arrival is null ? default : CreateMoveRange(isFrom: false, arrival, state);
+                    if (arrival is not null)
+                        content.Add(range.Start);
                     foreach (var r in rightRuns.Slice(s, e, zs, ze))
-                        content.AddRange(WrapFieldAware(r, RevKind.Ins, state));   // registers media on its clone
+                        content.AddRange(WrapFieldAware(r, arrival is null ? RevKind.Ins : RevKind.MoveTo, state));   // registers media on its clone
+                    if (arrival is not null)
+                        content.Add(range.End);
                     break;
                 }
                 case IrTokenOpKind.Delete:
                 {
                     var (s, e) = LeftSpanChars(leftTokens, tokenOp);
                     var (zs, ze) = ZeroWidthBoundaries(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd);
+                    var departure = RelocatedSpanName(tokenOp, state);
+                    var range = departure is null ? default : CreateMoveRange(isFrom: true, departure, state);
+                    if (departure is not null)
+                        content.Add(range.Start);
                     foreach (var r in leftRuns.Slice(s, e, zs, ze))
-                        content.AddRange(WrapFieldAware(r, RevKind.Del, state));
+                        content.AddRange(WrapFieldAware(r, departure is null ? RevKind.Del : RevKind.MoveFrom, state));
+                    if (departure is not null)
+                        content.Add(range.End);
                     break;
                 }
             }

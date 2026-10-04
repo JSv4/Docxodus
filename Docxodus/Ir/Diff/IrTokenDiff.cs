@@ -53,9 +53,14 @@ internal enum IrTokenOpKind
 /// <item><see cref="IrTokenOpKind.Delete"/>: <c>RightStart == RightEnd</c> (empty right span at the
 /// anchored position); left span non-empty.</item>
 /// </list>
+/// <para><see cref="RelocationGroupId"/> is set only by the two-way comparison's <see cref="IrRelocationPairer"/>,
+/// on a <see cref="IrTokenOpKind.Delete"/> or <see cref="IrTokenOpKind.Insert"/> span whose text reappears
+/// elsewhere — moved within a paragraph, between paragraphs, or into or out of a table cell (issue #888). The
+/// other half is a span, or a whole <see cref="IrEditOpKind.DeleteBlock"/>/<see cref="IrEditOpKind.InsertBlock"/>
+/// paragraph, carrying the same id. The span keeps its kind, so it applies exactly as before.</para>
 /// </remarks>
 internal sealed record IrTokenOp(
-    IrTokenOpKind Kind, int LeftStart, int LeftEnd, int RightStart, int RightEnd)
+    IrTokenOpKind Kind, int LeftStart, int LeftEnd, int RightStart, int RightEnd, int? RelocationGroupId = null)
 {
     /// <summary>Number of left tokens covered by this op.</summary>
     public int LeftLength => LeftEnd - LeftStart;

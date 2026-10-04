@@ -294,7 +294,8 @@ internal static class IrCompositeScriptJson
     }
 
     /// <summary>The compact 5-element token-op array <c>[kindCode, leftStart, leftEnd, rightStart, rightEnd]</c>,
-    /// identical in encoding to <see cref="IrEditScriptJson"/>.</summary>
+    /// the encoding <see cref="IrEditScriptJson"/> uses for an untagged op. Consolidate's scripts never carry the
+    /// two-way relocation id that <see cref="IrEditScriptJson"/> writes as a sixth element.</summary>
     private static void WriteTokenOpArray(Utf8JsonWriter writer, IrTokenOp tokenOp)
     {
         writer.WriteStartArray();
