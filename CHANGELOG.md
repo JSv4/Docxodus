@@ -70,6 +70,13 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- In the paginated view, a paragraph whose only content is a floating text box, shape or picture keeps
+  its line, as Word and LibreOffice lay it out (issue #880). It collapsed to zero height once the
+  paginator lifted the drawing into the page box, so the text after it moved up one line. The HTML
+  converter now treats a floating drawing as out of the text flow when deciding whether a paragraph is
+  empty, so such a paragraph gets the placeholder line an empty paragraph already gets. Its PageMap
+  fragment still encloses the drawing (the #849 contract): a host left with only that line measures as
+  its line plus the drawings promoted out of it. The finding is recorded in `docs/ooxml_corner_cases.md`.
 - Comparing two long, unrelated documents no longer takes minutes (issue #863). The reported pair, a
   235-paragraph charter against a 3,113-paragraph document, ran for over six minutes and now takes
   about 8 s. Pairs with `HC031` that used to time out at 60 s take 1–5 s. Two causes, both in block
