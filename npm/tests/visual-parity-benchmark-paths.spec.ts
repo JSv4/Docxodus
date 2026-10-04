@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -9,14 +9,16 @@ import {
 } from './visual-parity/benchmark-paths.js';
 
 test.describe('generated-PDF benchmark path confinement', () => {
-  const work = join(tmpdir(), `docxodus-benchmark-paths-${process.pid}`);
-  const repository = join(work, 'repository');
-  const outside = join(work, 'outside');
+  let work: string;
+  let repository: string;
+  let outside: string;
 
   test.beforeEach(() => {
-    rmSync(work, { recursive: true, force: true });
-    mkdirSync(repository, { recursive: true });
-    mkdirSync(outside, { recursive: true });
+    work = mkdtempSync(join(tmpdir(), 'docxodus-benchmark-paths-'));
+    repository = join(work, 'repository');
+    outside = join(work, 'outside');
+    mkdirSync(repository);
+    mkdirSync(outside);
   });
   test.afterEach(() => rmSync(work, { recursive: true, force: true }));
 

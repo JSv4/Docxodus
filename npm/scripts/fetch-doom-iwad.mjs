@@ -19,7 +19,7 @@
 // Cached by existence: it costs one 24 MB download the first time and nothing
 // afterwards, so a local `npm test` pays it once.
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { gzipSync, inflateRawSync } from 'node:zlib';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -106,7 +106,8 @@ if (wad.subarray(0, 4).toString('latin1') !== 'IWAD') {
 }
 
 mkdirSync(OUT_DIR, { recursive: true });
-writeFileSync(OUT, gzipSync(wad, { level: 9 }));
+const gzipped = gzipSync(wad, { level: 9 });
+writeFileSync(OUT, gzipped);
 console.log(
-  `doom iwad: wrote ${OUT} (${wad.length} bytes → ${readFileSync(OUT).length} gzipped)`,
+  `doom iwad: wrote ${OUT} (${wad.length} bytes → ${gzipped.length} gzipped)`,
 );
