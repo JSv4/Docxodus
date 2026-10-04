@@ -97,7 +97,7 @@ usually ripple through all of it.
 | Delivery | `Docxodus/Delivery/` | Delivery bundles: manifest, publisher, revision policy, host renderer. See `delivery_bundle.md`. |
 | Verification | `Docxodus/Verification/` | Package manifests, semantic diff, redline-reversibility proof, deliverable inspection. See `deliverable_verification.md`, `package_manifests.md`, `semantic_diff.md`, `redline_reversibility_proof.md`. |
 | Unit tests | `Docxodus.Tests/` | xUnit, **~3,900 tests**, ~4 min. |
-| CLI tools | `tools/redline/`, `tools/docx2html/`, `tools/docx2oc/` | Thin `dotnet tool` wrappers. |
+| CLI tools | `tools/redline/`, `tools/docx2html/`, `tools/docx2oc/` | Thin `dotnet tool` wrappers. Release binaries are trimmed; see `cli_trimming_and_native_aot.md`. |
 | WASM bridge | `wasm/DocxodusWasm/` | `[JSExport]` shells over the facades. |
 | Stdio host | `tools/python-host/` | NDJSON-over-stdin host (`docxodus-pyhost`) that the `docx-scalpel` pip package subprocesses. |
 | Agent server | `tools/mcp-server/` | JSON-RPC 2.0 / MCP stdio server (`docxodus-mcp`): lifecycle, grouped-intent, and sessionless tools. See `docs/architecture/docx_agent_server.md`. |

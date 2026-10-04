@@ -203,3 +203,17 @@ jobs:
           dotnet build tools/redline/redline.csproj -c Release --no-restore
           dotnet build tools/docx2html/docx2html.csproj -c Release --no-restore
           dotnet build tools/docx2oc/docx2oc.csproj -c Release --no-restore
+
+      # The release publishes the CLIs trimmed (issue #903), and a trim analysis warning fails
+      # that publish (the CLI projects build with TreatWarningsAsErrors). But publish.yml runs
+      # only at release time, after NuGet has shipped, so run the same trimmed publish here on
+      # each OS and smoke every binary: a trim break then fails the pull request, not a release.
+      - name: Publish trimmed CLI tools and smoke them
+        shell: bash
+        run: |
+          for t in redline docx2html docx2oc; do
+            dotnet publish tools/$t/$t.csproj -c Release --use-current-runtime --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=true -o ./trimmed/$t
+          done
+          ./trimmed/redline/redline TestFiles/WC/WC001-Digits.docx TestFiles/WC/WC001-Digits-Mod.docx ./trimmed/redline.docx
+          ./trimmed/docx2html/docx2html TestFiles/HC042-Image-Png.docx ./trimmed/out.html --extract-images
+          ./trimmed/docx2oc/docx2oc TestFiles/HC006-Test-01.docx ./trimmed/out.json

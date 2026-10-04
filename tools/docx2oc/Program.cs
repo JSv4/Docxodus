@@ -11,13 +11,6 @@ class Program
 {
     const string Version = "1.0.0";
 
-    static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-    };
-
     static int Main(string[] args)
     {
         if (args.Length == 0 || args[0] is "-h" or "--help")
@@ -76,7 +69,7 @@ class Program
 
             var export = OpenContractExporter.Export(wmlDocument);
 
-            var json = JsonSerializer.Serialize(export, JsonOptions);
+            var json = JsonSerializer.Serialize(export, ExportJsonContext.Default.OpenContractDocExport);
             File.WriteAllText(outputFilePath, json);
 
             Console.WriteLine($"  Output: {outputFilePath}");
@@ -136,4 +129,20 @@ class Program
         Console.WriteLine("Environment Variables:");
         Console.WriteLine("  DOCX2OC_DEBUG=1  Show detailed error information");
     }
+}
+
+// Source-generated serializer for the export (issue #903). Reflection-based System.Text.Json is
+// disabled in trimmed and NativeAOT builds, so the export's shape is declared here at compile time.
+// The options match the reflection-based ones this replaced: indented, camelCase, nulls omitted.
+// OpenContractsAnnotation.AnnotationJson is typed `object`; the runtime types the exporter can put
+// there are registered so the generated resolver can serialize them polymorphically.
+[JsonSourceGenerationOptions(
+    WriteIndented = true,
+    PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
+    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
+[JsonSerializable(typeof(OpenContractDocExport))]
+[JsonSerializable(typeof(TextSpan))]
+[JsonSerializable(typeof(Dictionary<string, OpenContractsSinglePageAnnotation>))]
+internal sealed partial class ExportJsonContext : JsonSerializerContext
+{
 }
