@@ -797,4 +797,91 @@ public class DocxDiffPreserveInputRevisionsTests
         Assert.False(applied.PreserveInputRevisions);
         Assert.False(new DocxDiffSettings().PreserveInputRevisions);
     }
+
+    // ----------------------------------------------------------------- 5: a pending change both inputs share
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Equal_paragraph_preserves_an_insertion_both_inputs_share(bool secondParagraphDiffers)
+    {
+        // Issue #885: the left input's own revision switched right-side preservation off entirely, so a
+        // pending insertion BOTH inputs carry was flattened to plain text. The ids differ on purpose: the
+        // two copies are the same change even though each package numbered it independently.
+        var left = BodyDoc(R("The quick ") + Ins("Alice", "brown ", id: 1) + R("fox."), R("Alpha"));
+        var right = BodyDoc(R("The quick ") + Ins("Alice", "brown ", id: 7) + R("fox."),
+            R(secondParagraphDiffers ? "Beta" : "Alpha"));
+
+        var result = DocxDiff.Compare(left, right, Preserve());
+
+        Assert.Contains(RevisionWrappersBy(result, "Alice"), e => e.Name == W + "ins" &&
+            string.Concat(e.Descendants(W + "t").Select(t => t.Value)) == "brown ");
+        AssertNoSameKindNesting(result);
+        Assert.Equal(AcceptedBodyText(right), AcceptedBodyText(result));
+        Assert.Empty(SchemaErrors(result).Except(SchemaErrors(right)));
+    }
+
+    private static string[] SchemaErrors(WmlDocument d)
+    {
+        using var ms = new MemoryStream(d.DocumentByteArray);
+        using var doc = WordprocessingDocument.Open(ms, false);
+        return new DocumentFormat.OpenXml.Validation.OpenXmlValidator()
+            .Validate(doc).Select(e => e.Description).Distinct().ToArray();
+    }
+
+    [Fact]
+    public void Equal_paragraph_preserves_a_deletion_both_inputs_share()
+    {
+        var left = BodyDoc(R("Keep ") + Del("Alice", "GONE", id: 3) + R("tail"), R("Alpha"));
+        var right = BodyDoc(R("Keep ") + Del("Alice", "GONE", id: 4) + R("tail"), R("Beta"));
+
+        var result = DocxDiff.Compare(left, right, Preserve());
+
+        Assert.Contains(RevisionWrappersBy(result, "Alice"), e => e.Name == W + "del" &&
+            string.Concat(e.Descendants(W + "delText").Select(t => t.Value)) == "GONE");
+        Assert.Equal(AcceptedBodyText(right), AcceptedBodyText(result));
+    }
+
+    [Fact]
+    public void Equal_paragraph_whose_inputs_carry_different_revisions_still_flattens()
+    {
+        // Same accepted text, but the two inputs disagree about who inserted what: preserving the right
+        // half alone is the asymmetry the left-dirty guard exists to prevent.
+        var left = BodyDoc(R("The quick ") + Ins("Alice", "brown ") + R("fox."), R("Alpha"));
+        var right = BodyDoc(R("The quick ") + Ins("Bob", "brown ") + R("fox."), R("Beta"));
+
+        var result = DocxDiff.Compare(left, right, Preserve());
+
+        Assert.Empty(RevisionWrappersBy(result, "Alice"));
+        Assert.Empty(RevisionWrappersBy(result, "Bob"));
+        Assert.Equal(AcceptedBodyText(right), AcceptedBodyText(result));
+    }
+
+    [Fact]
+    public void Shared_revision_is_preserved_while_a_right_only_revision_still_flattens()
+    {
+        var left = BodyDoc(R("The quick ") + Ins("Alice", "brown ") + R("fox."), R("Shared lead REVTEXT end"));
+        var right = BodyDoc(R("The quick ") + Ins("Alice", "brown ") + R("fox."),
+            R("Shared lead ") + Ins("Reviewer B", "REVTEXT") + R(" end"));
+
+        var result = DocxDiff.Compare(left, right, Preserve());
+
+        Assert.NotEmpty(RevisionWrappersBy(result, "Alice"));
+        Assert.Empty(RevisionWrappersBy(result, "Reviewer B"));
+        Assert.Equal(AcceptedBodyText(right), AcceptedBodyText(result));
+    }
+
+    [Fact]
+    public void Equal_note_paragraph_preserves_an_insertion_both_inputs_share()
+    {
+        // Note bodies dispatch through the same equal-block emission as the body. The note's second
+        // paragraph differs, so the note is compared rather than carried over from the left package.
+        var left = NoteDoc("Text", R("Note lead ") + Ins("Alice", "NOTEADD", 1) + "</w:p><w:p>" + R("Alpha"));
+        var right = NoteDoc("Text", R("Note lead ") + Ins("Alice", "NOTEADD", 5) + "</w:p><w:p>" + R("Beta"));
+
+        var result = DocxDiff.Compare(left, right, Preserve());
+
+        Assert.Contains("w:author=\"Alice\"", FootnotesXml(result));
+        Assert.Contains("NOTEADD", FootnotesXml(RevisionProcessor.AcceptRevisions(result)));
+    }
 }
