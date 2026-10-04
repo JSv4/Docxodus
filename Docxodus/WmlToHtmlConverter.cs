@@ -9200,10 +9200,14 @@ namespace Docxodus
                     // strict PageMap rejecting an otherwise-valid document. The emptied span itself
                     // is removed in ProcessParagraph, so both spellings of "blank paragraph" reach
                     // the browser as exactly one placeholder span.
+                    //
+                    // A floating (wp:anchor) drawing is not content either: it leaves the text flow, and
+                    // the paginated view lifts it into the page box, so a paragraph holding nothing else
+                    // lost its line. Word and LibreOffice keep the paragraph mark's line (issue #880).
                     bool hasContent = element
                         .Elements()
                         .Where(e => e.Name != W.pPr)
-                        .DescendantsAndSelf()
+                        .SelectMany(InFlowDescendantsAndSelf)
                         .Any(e =>
                             e.Name == W.dayLong ||
                             e.Name == W.dayShort ||
@@ -9237,6 +9241,18 @@ namespace Docxodus
                     element.Nodes().Select(n => InsertAppropriateNonbreakingSpacesTransform(n)));
             }
             return node;
+        }
+
+        /// <summary><paramref name="element"/> and its descendants, leaving out every floating
+        /// (<c>wp:anchor</c>) drawing together with its content, such as a text box's paragraphs.</summary>
+        private static IEnumerable<XElement> InFlowDescendantsAndSelf(XElement element)
+        {
+            if (element.Name == W.drawing && element.Elements(WP.anchor).Any())
+                yield break;
+            yield return element;
+            foreach (var child in element.Elements())
+                foreach (var descendant in InFlowDescendantsAndSelf(child))
+                    yield return descendant;
         }
 
         private class SectionAnnotation

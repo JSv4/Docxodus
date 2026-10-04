@@ -502,6 +502,12 @@ export interface VisibleBox {
 export const DRAWING_HOST_ATTRIBUTE = "data-docx-anchor-host";
 
 /**
+ * Set on a source-anchored element a floating drawing was promoted out of, so
+ * {@link measureRenderedSource} looks up promoted drawings only for elements that have them.
+ */
+export const HOSTS_PROMOTED_DRAWING_ATTRIBUTE = "data-docx-hosts-promoted-drawing";
+
+/**
  * Intersect a box with the page and with every ancestor that establishes an overflow clip before
  * the page root. getBoundingClientRect() reports layout outside those clips, which is not rendered
  * and therefore must not satisfy PageMap completeness or inflate portable geometry.
@@ -540,15 +546,21 @@ function visibleWithinPage(
   return { left, top, right, bottom };
 }
 
+/** True when `element` shows no text (beyond white space) and no image, SVG or canvas. */
+function rendersOnlyItsLine(element: HTMLElement): boolean {
+  return (element.textContent ?? '').replace(/[\s\u00a0]/g, '') === ''
+    && element.querySelector('img, svg, canvas, [data-docx-drawing-anchor]') === null;
+}
+
 /**
  * Where a source-anchored element renders on `page`: `rect` is its layout box and `visible` the
- * part of it the page shows. Normally that is the element's own border box. A paragraph whose only
- * content is a floating text box or shape is left with an empty, zero-height line once the
- * paginator promotes the drawing into the page box, although its content is visibly on the page;
- * such an element measures as the union of what it renders — its own descendants and the drawings
- * promoted out of it (linked by {@link DRAWING_HOST_ATTRIBUTE}) — each clipped along its OWN
- * ancestor chain, since a promoted drawing sits outside the text column that clips its host
- * (issue #849). Returns the element's own degenerate box when none of that content renders either.
+ * part of it the page shows. Normally that is the element's own border box. An element the
+ * paginator promoted floating drawings out of measures as the union of what it renders — its own
+ * box (or, when that is empty, its descendants) and the drawings promoted out of it (linked by
+ * {@link DRAWING_HOST_ATTRIBUTE}) — each clipped along its OWN ancestor chain, since a promoted
+ * drawing sits outside the text column that clips its host (issue #849). Such a paragraph keeps a
+ * line of its own when the drawing was its only content (issue #880), and its fragment still
+ * encloses the drawing. Returns the element's own degenerate box when none of that renders.
  *
  * Fragment-identity normalization, PageMap materialization and the standalone export's offline
  * re-verification all measure through this one function, so they agree on which elements are
@@ -562,15 +574,18 @@ export function measureRenderedSource(
 ): { rect: DOMRect; visible: VisibleBox } {
   const own = element.getBoundingClientRect();
   const ownResult = () => ({ rect: own, visible: visibleWithinPage(view, element, page, pageRect, own) });
-  if (own.width > 0 && own.height > 0) return ownResult();
+  const ownMeasurable = own.width > 0 && own.height > 0;
+  const hostsPromotedDrawing = element.hasAttribute(HOSTS_PROMOTED_DRAWING_ATTRIBUTE);
+  if (ownMeasurable && !hostsPromotedDrawing) return ownResult();
 
   const hostAnchorId = element.dataset.sourceAnchorId;
   const promoted = hostAnchorId
     ? Array.from(page.querySelectorAll<HTMLElement>(`[${DRAWING_HOST_ATTRIBUTE}]`))
       .filter((drawing) => drawing.getAttribute(DRAWING_HOST_ATTRIBUTE) === hostAnchorId)
     : [];
+  if (ownMeasurable && promoted.length === 0) return ownResult();
   const rendered = [
-    ...Array.from(element.querySelectorAll<HTMLElement>("*")),
+    ...(ownMeasurable ? [element] : Array.from(element.querySelectorAll<HTMLElement>("*"))),
     ...promoted.flatMap((drawing) => [drawing, ...Array.from(drawing.querySelectorAll<HTMLElement>("*"))]),
   ];
 
@@ -4237,10 +4252,14 @@ export class PaginationEngine {
 
       // Leaving the paragraph must not orphan it: a paragraph whose only content was this drawing
       // renders as the drawing, and measureRenderedSource finds it through this link (issue #849).
-      const hostAnchorId = anchor.parentElement
-        ?.closest<HTMLElement>('[data-source-anchor-id]')?.dataset.sourceAnchorId;
+      const hostElement = anchor.parentElement?.closest<HTMLElement>('[data-source-anchor-id]');
+      const hostAnchorId = hostElement?.dataset.sourceAnchorId;
       if (hostAnchorId) anchor.setAttribute(DRAWING_HOST_ATTRIBUTE, hostAnchorId);
       pageBox.appendChild(anchor);
+      // A host left with nothing but its paragraph-mark line (issue #880) renders as that line plus
+      // the drawing; one with text of its own keeps measuring as its own box.
+      if (hostElement && rendersOnlyItsLine(hostElement))
+        hostElement.setAttribute(HOSTS_PROMOTED_DRAWING_ATTRIBUTE, 'true');
       anchor.style.position = 'absolute';
       anchor.style.left = `${left}pt`;
       anchor.style.top = `${top}pt`;

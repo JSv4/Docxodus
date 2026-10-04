@@ -2225,6 +2225,60 @@ instead of pinning it. Text that fits keeps the pinned layout. Converter HTML fo
 **Tests.** `Docxodus.Tests/TabAfterWrappingTextTests.cs`, and the `#891` case in
 `npm/tests/export-robustness.spec.ts`.
 
+## Paragraph layout: a paragraph holding only a floating drawing keeps its line
+
+**Status:** Fixed (2026-10) — issue #880.
+
+### The corner case
+
+A paragraph whose only content is an anchored (floating, `wp:anchor`) text box, shape or picture still
+occupies one line: its paragraph mark's line, at the paragraph's font size and spacing. Only the drawing
+leaves the text flow. The paginated view had lifted the drawing into the page box and left the paragraph
+with a zero-height line, so everything after it moved up by one line.
+
+### Minimal XML reproducer
+
+```xml
+<w:p><w:r><w:t>Before</w:t></w:r></w:p>
+<w:p><w:r><w:drawing><wp:anchor …><wp:positionV relativeFrom="page">…</wp:positionV>
+  <wp:wrapNone/>… a wps text box …</wp:anchor></w:drawing></w:r></w:p>
+<w:p><w:r><w:t>After</w:t></w:r></w:p>
+```
+
+### Behavior table (top of "After", points from the top of the page; 72 pt top margin)
+
+| Middle paragraph | LibreOffice 26.2 (measured, PDF text box) | Docxodus before | Docxodus after |
+|---|---|---|---|
+| floating text box only | 98.93 | one line higher than the empty case | same as the empty case |
+| empty `<w:p/>` | 98.93 | — | — |
+| none | 85.48 | — | — |
+
+LibreOffice puts "After" exactly where it puts it after an empty paragraph. Word lays the paragraph mark
+out the same way, per the issue's report; Word was not measured here, so its column is the reported
+behavior rather than a measurement.
+
+### Analysis
+
+The converter gives a visually empty paragraph a placeholder run (a no-break space in the paragraph
+mark's run properties) so it keeps a line box. Its content test counted any `w:drawing`, including a
+floating one, as content, so an anchor-only paragraph got no placeholder. Floating drawings are now
+excluded from that test together with their contents (a text box's own paragraphs). An inline drawing
+still counts: it is in the flow.
+
+PageMap measurement keeps its issue #849 contract: a paragraph left with nothing but that line measures
+as the union of its line and the drawings promoted out of it, so its fragment still encloses the box.
+
+### Relevant code
+
+- `Docxodus/WmlToHtmlConverter.cs` — `InsertAppropriateNonbreakingSpacesTransform`, `InFlowDescendantsAndSelf`.
+- `npm/src/pagination.ts` — `positionDrawingAnchors` (marks the host), `measureRenderedSource`.
+
+### Tests
+
+`Docxodus.Tests/HtmlAnchorOnlyParagraphTests.cs` (placeholder for anchored, none for inline or for a
+paragraph with text) and `npm/tests/anchor-only-paragraph-line.spec.ts` (paginated layout matches the
+empty-paragraph case).
+
 ## Tables: a negative `w:tblInd` pulls an over-wide table into the left margin
 
 Word indents a table wider than the text column by a negative amount so it spreads across both
