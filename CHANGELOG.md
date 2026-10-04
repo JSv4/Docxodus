@@ -70,6 +70,19 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Comparing two long, unrelated documents no longer takes minutes (issue #863). The reported pair, a
+  235-paragraph charter against a 3,113-paragraph document, ran for over six minutes and now takes
+  about 8 s. Pairs with `HC031` that used to time out at 60 s take 1–5 s. Two causes, both in block
+  alignment:
+  - **The split/merge scan.** It scored windows of neighbouring paragraphs with a full in-order
+    token match against each candidate paragraph. Between unrelated documents its cheap filters
+    passed almost every window, because ordinary words like "the" are shared. A new exact
+    prefilter skips the scoring when no edge-trimmed sub-window of the window could meet the
+    retention and coverage thresholds even if every shared content token matched.
+  - **The similarity pairing.** It rescanned its whole grid once for every pair it formed. It now
+    scores each candidate pair once and takes them best-first.
+
+  Both changes are exact: comparison output is unchanged.
 - Comparison keeps bookmark spans in two shapes that lost them (issue #864). Accepting a redline now
   gives the revised document's bookmarks and rejecting gives the original's:
   - **A row-level bookmark in a row the diff modifies.** The rebuilt row put every non-cell child of the
