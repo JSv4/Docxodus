@@ -964,6 +964,11 @@ internal static class IrMarkupRenderer
     /// story end, empty-opening chain), then per-pair emission with fusion and shared unmarked
     /// pilcrows; everything outside a pair stays a fully marked ¶INS / ¶DEL block, inserts first.
     /// </summary>
+    // Never JIT-optimized (issue #925): with the .NET 10 JIT's induction-variable optimization on, this method's
+    // index arithmetic is miscompiled — it throws ArgumentOutOfRangeException or arranges the gap wrongly on
+    // inputs it handles correctly unoptimized. ReadyToRun images and any host that keeps the method hot run it
+    // fully optimized, so the release CLI and long-running servers broke while tier-0 test runs passed.
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoOptimization)]
     private static void EmitGapArranged(
         List<GapGroup> insGroups, List<GapGroup> delGroups, bool storyEnd,
         RenderState state, List<XElement> sink)

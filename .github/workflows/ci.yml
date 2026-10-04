@@ -68,6 +68,16 @@ jobs:
           DOCXODUS_EVAL_ARTIFACTS: ${{ github.workspace }}/eval-artifacts
         run: dotnet test Docxodus.Tests/Docxodus.Tests.csproj -c Release --verbosity normal --logger "trx;LogFileName=test-results.trx"
 
+      # A test run executes most methods as unoptimized tier-0 code, while the ReadyToRun release CLIs
+      # and any long-running host run them fully optimized. Run the comparison tests once more with every
+      # method optimized from its first call, so a failure that only optimized code shows fails the pull
+      # request. Issue #925: a JIT miscompile of IrMarkupRenderer.EmitGapArranged broke the release
+      # redline while every test passed. About half a minute.
+      - name: Run comparison tests fully JIT-optimized
+        env:
+          DOTNET_TieredCompilation: '0'
+        run: dotnet test Docxodus.Tests/Docxodus.Tests.csproj -c Release --no-build --filter "FullyQualifiedName~DocxDiff"
+
       - name: Run Python history binding integration tests
         run: |
           dotnet build tools/python-host/pyhost.csproj -c Release
