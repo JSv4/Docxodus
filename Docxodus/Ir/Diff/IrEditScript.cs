@@ -63,8 +63,9 @@ internal enum IrEditOpKind
     /// <summary>
     /// One side of a fuzzy move-and-edit (projects HALF of an <see cref="IrAlignmentKind.MovedModified"/>
     /// entry). Structurally identical to <see cref="MoveBlock"/> (source + destination op sharing a
-    /// <see cref="IrEditOp.MoveGroupId"/>) but the DESTINATION op carries a non-null
-    /// <see cref="IrEditOp.TokenDiff"/> describing the in-move edit.
+    /// <see cref="IrEditOp.MoveGroupId"/>) but the DESTINATION op describes the in-move edit: a paragraph's
+    /// carries a non-null <see cref="IrEditOp.TokenDiff"/>, a table's a non-null <see cref="IrEditOp.TableDiff"/>
+    /// (issue #887), as for an in-place <see cref="ModifyBlock"/>.
     /// <para><b>Reachability.</b> Emitted: the similarity-based cross-gap fuzzy-move detection
     /// (<see cref="IrBlockAligner"/>'s <c>DetectCrossGapMoves</c>) produces
     /// <see cref="IrAlignmentKind.MovedModified"/> for a relocated-and-edited block, which the builder
@@ -131,7 +132,8 @@ internal enum IrEditOpKind
 /// <item><see cref="IrEditOpKind.MoveBlock"/> / <see cref="IrEditOpKind.MoveModifyBlock"/>:
 /// <see cref="MoveGroupId"/> and <see cref="IsMoveSource"/> set. The SOURCE op (<see cref="IsMoveSource"/>
 /// = true) sets <see cref="LeftAnchor"/>; the DESTINATION op (<see cref="IsMoveSource"/> = false) sets
-/// <see cref="RightAnchor"/>. A MoveModify DESTINATION additionally carries <see cref="TokenDiff"/>.</item>
+/// <see cref="RightAnchor"/>. A MoveModify DESTINATION additionally carries <see cref="TokenDiff"/>
+/// (a paragraph) or <see cref="TableDiff"/> (a table).</item>
 /// <item><see cref="IrEditOpKind.SplitBlock"/>: <see cref="LeftAnchor"/> set, <see cref="RightAnchor"/> null;
 /// <see cref="SplitMergeAnchors"/> carries the N≥2 right-doc anchors in document order; <see cref="SegmentDiffs"/>
 /// carries one <see cref="IrTokenDiff"/> per right segment (same count), with slice-local left spans that tile

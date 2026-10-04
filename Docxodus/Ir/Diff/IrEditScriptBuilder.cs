@@ -1212,12 +1212,18 @@ internal static class IrEditScriptBuilder
                     // MoveModifyBlock (from a MovedModified alignment, M2.2 Task 3) carries the in-move
                     // token diff on its destination — tokenize source (left) vs destination (right) so the
                     // op describes "relocated AND edited"; a plain Moved destination carries none.
-                    var tokenDiff = move.OpKind == IrEditOpKind.MoveModifyBlock
+                    // A moved-and-edited TABLE carries the nested row/cell diff instead, as an in-place
+                    // Modified table does (issue #887).
+                    bool movedTable = entry.Left is IrTable && entry.Right is IrTable;
+                    var tokenDiff = move.OpKind == IrEditOpKind.MoveModifyBlock && !movedTable
                         ? TokenDiffFor(entry.Left!, entry.Right!, settings)
+                        : null;
+                    var tableDiff = move.OpKind == IrEditOpKind.MoveModifyBlock && movedTable
+                        ? IrTableDiffer.Diff((IrTable)entry.Left!, (IrTable)entry.Right!, settings)
                         : null;
                     ops.Add(new IrEditOp(
                         move.OpKind, null, entry.Right!.Anchor.ToString(),
-                        tokenDiff, move.GroupId, IsMoveSource: false,
+                        tokenDiff, move.GroupId, IsMoveSource: false, TableDiff: tableDiff,
                         RequiresWholeParagraphReplace: move.RequiresWholeParagraphReplace));
                     break;
                 }

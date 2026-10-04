@@ -352,4 +352,39 @@ public class DocxDiffMoveDetectionTests
         Assert.Empty(body.Descendants(W.moveTo));
         AssertRoundTrip(left, right, redline);
     }
+
+    [Fact]
+    public void RelocatedAndEditedTable_EditScriptCarriesTheTableDiff()
+    {
+        var edited = B.Replace("services", "consulting services");
+        var left = Doc(Table(A, B) + P(C) + P(D) + P(E));
+        var right = Doc(P(C) + P(D) + P(E) + Table(A, edited));
+        var settings = new DocxDiffSettings().ToIrDiffSettings();
+        var (irLeft, irRight) = (Docxodus.Ir.IrReader.Read(left, DocxDiff.ReadOpts), Docxodus.Ir.IrReader.Read(right, DocxDiff.ReadOpts));
+
+        var script = Docxodus.Ir.Diff.IrEditScriptBuilder.Build(irLeft, irRight, settings);
+
+        // The destination describes the in-move edit the way an in-place edited table does.
+        var destination = Assert.Single(script.Operations, op =>
+            op.Kind == Docxodus.Ir.Diff.IrEditOpKind.MoveModifyBlock && op.IsMoveSource == false);
+        Assert.Null(destination.TokenDiff);
+        Assert.Contains(destination.TableDiff!.RowOps, row => row.Kind == Docxodus.Ir.Diff.IrRowOpKind.ModifyRow);
+        Ir.Diff.IrEditScriptVerifier.Verify(irLeft, irRight, script, settings);
+        var json = Docxodus.Ir.Diff.IrEditScriptJson.Write(script);
+        Assert.Equal(script, Docxodus.Ir.Diff.IrEditScriptJson.Read(json));
+    }
+
+    [Fact]
+    public void RelocatedAndEditedTable_InConsolidate_RoundTrips()
+    {
+        var edited = B.Replace("services", "consulting services");
+        var original = Doc(Table(A, B) + P(C) + P(D) + P(E));
+        var reviewer = new DocxDiffReviewer { Author = "Reviewer", Document = Doc(P(C) + P(D) + P(E) + Table(A, edited)) };
+
+        var consolidated = DocxDiff.Consolidate(original, new[] { reviewer });
+
+        Assert.Equal(Text(reviewer.Document.DocumentByteArray), Text(DocxDiffOps.AcceptRevisions(consolidated.DocumentByteArray)));
+        Assert.Equal(Text(original.DocumentByteArray), Text(DocxDiffOps.RejectRevisions(consolidated.DocumentByteArray)));
+        NoNewValidationErrors(original.DocumentByteArray, consolidated.DocumentByteArray);
+    }
 }
