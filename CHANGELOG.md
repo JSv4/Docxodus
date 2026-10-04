@@ -102,6 +102,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- DOCX→HTML with tracked changes rendered no longer throws "Duplicate attribute" on a table row that is
+  both inserted or deleted and carries a tracked property change (`w:trPrChange` or `w:tblPrExChange`)
+  (issue #927). The row now gets both classes, for example `rev-row-ins rev-row-format-change`, and its
+  `data-author`/`data-date` come from the row insertion or deletion, the way cells already combine
+  `w:tcPrChange` with a cell revision. `TestFiles/RA001-Tracked-Revisions-01.docx` and `-02.docx` hit it.
 - Moves in different parts of a document no longer share a move name or `MoveGroupId` (issue #924).
   Move groups were numbered separately in the body, in each table cell, row list, note and header/footer
   story, so a move in the body and an unrelated move inside a table cell were written under the same
