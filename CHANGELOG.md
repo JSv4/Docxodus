@@ -65,8 +65,17 @@ All notable changes to this project will be documented in this file.
   uncompressed and precompiled with ReadyToRun. On linux-x64, a one-paragraph `redline` compare
   dropped from 663 ms to 234 ms, a one-page `docx2html` conversion from 404 ms to 212 ms, and
   `--version` from 139 ms to 50 ms. Each binary grows from about 44 MB to about 139 MB. The npm,
-  WASM, NuGet and Python packages are unaffected. Trimming and NativeAOT, which could shrink the
-  binaries again, are tracked in #903.
+  WASM, NuGet and Python packages are unaffected. Trimming then shrinks them again (next entry).
+- The `redline`, `docx2html` and `docx2oc` release binaries are now trimmed, which shrinks each
+  from about 139 MB to 52–58 MB on linux-x64 (issue #903). They are still ReadyToRun single files,
+  and they start as fast as before or slightly faster. Trimming needed one change: `docx2oc` now
+  writes its JSON with a source-generated serializer, because trimmed apps switch off
+  reflection-based JSON. Its output is byte-identical on all 252 test documents. Over a 957-run
+  corpus, the trimmed binaries' output matched the untrimmed ones byte for byte. CI now publishes
+  and runs the trimmed CLIs on Linux, Windows and macOS for every pull request. NativeAOT was also
+  measured, at 28–32 MB and three to four times faster startup, but is not used yet: its Linux
+  binaries need glibc 2.34, and the other platforms are untested. Findings and measurements are
+  in `docs/architecture/cli_trimming_and_native_aot.md`.
 
 ### Fixed
 
