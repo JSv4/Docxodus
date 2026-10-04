@@ -1031,7 +1031,7 @@ internal static class IrCompositeMerger
         if (!byBase.TryGetValue(anchor, out var entries) ||
             entries.All(e => e.Op.Kind == IrEditOpKind.EqualBlock))
         {
-            ops.Add(EqualOp(anchor));
+            ops.Add(EqualOp(anchor, entries, reviewers));
             return;
         }
         var touched = entries.Where(e => e.Op.Kind != IrEditOpKind.EqualBlock).ToList();
@@ -1266,6 +1266,24 @@ internal static class IrCompositeMerger
     /// <summary>A base-sourced EqualBlock op for <paramref name="anchor"/> (Author "", reviewer -1).</summary>
     private static IrCompositeOp EqualOp(string anchor) =>
         new(new IrEditOp(IrEditOpKind.EqualBlock, anchor, anchor, null, null, null), "", -1);
+
+    /// <summary>A base-sourced EqualBlock for a block every reviewer left equal, noting each reviewer paragraph
+    /// that carries bookmark markers: the IR leaves bookmarks out, so one only that reviewer added would
+    /// otherwise be lost with the reviewer's copy of the block (issue #864).</summary>
+    private static IrCompositeOp EqualOp(
+        string anchor, List<(int Reviewer, IrEditOp Op)>? entries, IReadOnlyList<(string Author, IrDocument Ir)> reviewers)
+    {
+        var withBookmarks = (entries ?? new List<(int Reviewer, IrEditOp Op)>())
+            .Where(e => e.Op.RightAnchor is { } right &&
+                reviewers[e.Reviewer].Ir.AnchorIndex.TryGetValue(right, out var block) &&
+                block is IrParagraph &&
+                block.Source.Element?.Elements().Any(c => c.Name == W.bookmarkStart || c.Name == W.bookmarkEnd) == true)
+            .Select(e => new IrEqualReviewerBookmarks(e.Reviewer, e.Op.RightAnchor!, reviewers[e.Reviewer].Author))
+            .ToList();
+        return withBookmarks.Count == 0
+            ? EqualOp(anchor)
+            : EqualOp(anchor) with { EqualReviewerBookmarks = IrNodeList.From(withBookmarks) };
+    }
 
     /// <summary>
     /// Build the FINAL emitted <see cref="IrCompositeOp"/> for a base-block dispatch, stripping the

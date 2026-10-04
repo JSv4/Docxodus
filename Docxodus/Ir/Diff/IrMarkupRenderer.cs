@@ -1964,9 +1964,28 @@ internal static class IrMarkupRenderer
             return clone;
         }
 
+        // The row's properties lead; every other non-cell child (a row-level bookmark, say) goes back between
+        // the same cells it sat between in the source row, or its span collapses (issue #864). A row-level
+        // bookmark only one document's row has cannot stay a bare row child, which would survive both accept
+        // and reject; it is placed in the cells' paragraphs instead, as that side's revision.
+        var rightShell = SplitRowShell(rightRowSrc);
+        var leftShell = leftRowSrc != null ? SplitRowShell(leftRowSrc) : null;
+        var leftOnlyBookmarks = leftShell?.OneSidedBookmarks(rightShell) ?? new List<RowBookmark>();
+        var rightOnlyBookmarks = leftShell != null ? rightShell.OneSidedBookmarks(leftShell) : new List<RowBookmark>();
+        var relocated = new HashSet<XElement>(rightOnlyBookmarks.SelectMany(b => new[] { b.Start, b.End }));
+
         var newRow = new XElement(W.tr);
-        foreach (var pre in rightRowSrc.Elements().Where(e => e.Name != W.tc))
+        foreach (var pre in rightShell.Properties)
             newRow.Add(RightClone(pre));
+        int markersPlaced = 0;
+        void PlaceRightMarkersBefore(int rightCellIndex)
+        {
+            for (; markersPlaced < rightShell.Markers.Count && rightShell.Markers[markersPlaced].CellsBefore <= rightCellIndex; markersPlaced++)
+                if (!relocated.Contains(rightShell.Markers[markersPlaced].Element))
+                    newRow.Add(RightClone(rightShell.Markers[markersPlaced].Element));
+        }
+        var cellByRightIndex = new Dictionary<int, XElement>();
+        var cellByLeftIndex = new Dictionary<int, XElement>();
 
         int rightIndex = 0;
         int leftIndex = 0;
@@ -1978,19 +1997,22 @@ internal static class IrMarkupRenderer
                 // content). leftCells is non-null here — the guard above rejects this op without a left row.
                 if (leftIndex >= leftCells!.Count)
                     return false;
-                var deletedCell = StripUnids(new XElement(leftCells[leftIndex++]));
+                var deletedCell = StripUnids(new XElement(leftCells[leftIndex]));
                 MarkWholeCell(deletedCell, RevKind.Del, state);
+                cellByLeftIndex[leftIndex++] = deletedCell;
                 newRow.Add(deletedCell);
                 continue;
             }
             if (rightIndex >= rightCells.Count)
                 return false;
+            PlaceRightMarkersBefore(rightIndex);
             var cellSrc = rightCells[rightIndex++];
             if (cellOp.LeftCellAnchor == null)
             {
                 var insertedCell = StripUnids(new XElement(cellSrc));
                 state.RegisterMediaReferences(insertedCell);
                 MarkWholeCell(insertedCell, RevKind.Ins, state);
+                cellByRightIndex[rightIndex - 1] = insertedCell;
                 newRow.Add(insertedCell);
                 continue;
             }
@@ -2027,14 +2049,95 @@ internal static class IrMarkupRenderer
             // Do not compare by output ordinal: a middle cellIns shifts every later right cell.  The
             // monotone differ guarantees leftCellSrc is exactly this paired operation's source cell.
             if (leftCellSrc != null)
+            {
                 ApplyPairedCellShellChange(newCell, leftCellSrc, state);
+                cellByLeftIndex[leftIndex - 1] = newCell;
+            }
+            cellByRightIndex[rightIndex - 1] = newCell;
             newRow.Add(newCell);
         }
+        PlaceRightMarkersBefore(int.MaxValue);
+        foreach (var bookmark in rightOnlyBookmarks)
+            PlaceBookmarkInCells(RightClone(bookmark.Start), RightClone(bookmark.End),
+                cellByRightIndex.GetValueOrDefault(bookmark.FirstCell), cellByRightIndex.GetValueOrDefault(bookmark.LastCell),
+                RevKind.Ins, state);
+        foreach (var bookmark in leftOnlyBookmarks)
+            PlaceBookmarkInCells(StripUnids(new XElement(bookmark.Start)), StripUnids(new XElement(bookmark.End)),
+                cellByLeftIndex.GetValueOrDefault(bookmark.FirstCell), cellByLeftIndex.GetValueOrDefault(bookmark.LastCell),
+                RevKind.Del, state);
         // The paired tcPr histories were applied per cell above; row shells remain one per row.
         if (leftRowSrc != null)
             ApplyRowShellChanges(newRow, leftRowSrc, state);
         newTbl.Add(newRow);
         return true;
+    }
+
+    /// <summary>A source row's non-cell children: its properties (<c>w:tblPrEx</c>, <c>w:trPr</c>), and every
+    /// other child with the number of <c>w:tc</c> before it, so a rebuilt row can put it back between the same
+    /// cells (issue #864).</summary>
+    private sealed record RowShell(List<XElement> Properties, List<(XElement Element, int CellsBefore)> Markers)
+    {
+        /// <summary>Row-level bookmarks of this row whose name the <paramref name="other"/> row has no row-level
+        /// bookmark for, with the cells their start and end enclose. A bookmark that does not open and close in
+        /// this row, or encloses no cell, is left out: it stays where <see cref="Markers"/> puts it.</summary>
+        public List<RowBookmark> OneSidedBookmarks(RowShell other)
+        {
+            var otherNames = new HashSet<string>(other.Markers
+                .Where(m => m.Element.Name == W.bookmarkStart)
+                .Select(m => (string?)m.Element.Attribute(W.name) ?? ""));
+            var result = new List<RowBookmark>();
+            foreach (var (start, startCells) in Markers.Where(m => m.Element.Name == W.bookmarkStart))
+            {
+                var name = (string?)start.Attribute(W.name);
+                var id = (string?)start.Attribute(W.id);
+                if (name == null || otherNames.Contains(name))
+                    continue;
+                var end = Markers.FirstOrDefault(m => m.Element.Name == W.bookmarkEnd && (string?)m.Element.Attribute(W.id) == id);
+                if (end.Element != null && end.CellsBefore > startCells)
+                    result.Add(new RowBookmark(start, end.Element, startCells, end.CellsBefore - 1));
+            }
+            return result;
+        }
+    }
+
+    /// <summary>A row-level bookmark and the first and last cell (by source ordinal) it encloses.</summary>
+    private sealed record RowBookmark(XElement Start, XElement End, int FirstCell, int LastCell);
+
+    private static RowShell SplitRowShell(XElement row)
+    {
+        var shell = new RowShell(new List<XElement>(), new List<(XElement, int)>());
+        int cells = 0;
+        foreach (var child in row.Elements())
+        {
+            if (child.Name == W.tc)
+                cells++;
+            else if (child.Name == W.tblPrEx || child.Name == W.trPr)
+                shell.Properties.Add(child);
+            else
+                shell.Markers.Add((child, cells));
+        }
+        return shell;
+    }
+
+    /// <summary>Put a one-sided row-level bookmark into the paragraphs of the cells it enclosed — its start
+    /// opening the first cell's first paragraph and its end closing the last cell's last paragraph — each
+    /// wrapped as <paramref name="kind"/>, so the bookmark encloses the same cells and resolves with its side:
+    /// accept keeps the revised document's and drops the original's, reject the reverse (issue #864). With
+    /// either cell missing from the output the bookmark is dropped, as a bare row-level copy would survive
+    /// the wrong resolution.</summary>
+    private static void PlaceBookmarkInCells(
+        XElement start, XElement end, XElement? firstCell, XElement? lastCell, RevKind kind, RenderState state)
+    {
+        var firstParagraph = firstCell?.Descendants(W.p).FirstOrDefault();
+        var lastParagraph = lastCell?.Descendants(W.p).LastOrDefault();
+        if (firstParagraph == null || lastParagraph == null)
+            return;
+        var openRevision = new XElement(RevElementName(kind), state.RevisionAttributes(), start);
+        if (firstParagraph.Element(W.pPr) is { } pPr)
+            pPr.AddAfterSelf(openRevision);
+        else
+            firstParagraph.AddFirst(openRevision);
+        lastParagraph.Add(new XElement(RevElementName(kind), state.RevisionAttributes(), end));
     }
 
     /// <summary>Emit a composed INSERTED cell (column add): clone the inserting reviewer's whole <c>w:tc</c>
@@ -2309,9 +2412,20 @@ internal static class IrMarkupRenderer
         if (rowOp.BaseRowAnchor is not { } rowAnchor || !baseRowsByAnchor.TryGetValue(rowAnchor, out var baseRowSrc))
             return;
 
+        // Properties lead; the base row's other non-cell children (a row-level bookmark, say) go back between
+        // the same base cells, as in the two-way RenderModifyRow (issue #864).
+        var baseShell = SplitRowShell(baseRowSrc);
+        var baseCellOrdinal = baseRowSrc.Elements(W.tc).Select((cell, index) => (cell, index))
+            .ToDictionary(pair => pair.cell, pair => pair.index);
         var newRow = new XElement(W.tr);
-        foreach (var pre in baseRowSrc.Elements().Where(e => e.Name != W.tc))
+        foreach (var pre in baseShell.Properties)
             newRow.Add(StripUnids(new XElement(pre)));
+        int markersPlaced = 0;
+        void PlaceBaseMarkersBefore(int baseCellIndex)
+        {
+            for (; markersPlaced < baseShell.Markers.Count && baseShell.Markers[markersPlaced].CellsBefore <= baseCellIndex; markersPlaced++)
+                newRow.Add(StripUnids(new XElement(baseShell.Markers[markersPlaced].Element)));
+        }
 
         // B2: swap in the composed winner's trPr/tblPrEx and stamp the row-level marker (inner = base), so a
         // row-shell edit that rides alongside cell edits round-trips.
@@ -2338,6 +2452,8 @@ internal static class IrMarkupRenderer
                 && baseCellsByAnchor.TryGetValue(cellOp.BaseCellAnchor, out var bc) ? bc : null;
             if (baseCellSrc == null)
                 continue;
+            if (baseCellOrdinal.TryGetValue(baseCellSrc, out var baseCellIndex))
+                PlaceBaseMarkersBefore(baseCellIndex);
 
             // A reviewer-DELETED base cell (column remove): the base cell marked w:tcPr/w:cellDel +
             // del-marked content — accept removes it, reject restores it.
@@ -2407,6 +2523,7 @@ internal static class IrMarkupRenderer
         // those reviewer clones and (b) bucket them under whatever RightSourceId is left over after the per-cell
         // restore (typically base/-1 or an unrelated reviewer), so a cell image could be skipped or imported from
         // the WRONG reviewer's package on an r:id collision.
+        PlaceBaseMarkersBefore(int.MaxValue);
         newTbl.Add(newRow);
     }
 
@@ -3940,6 +4057,94 @@ internal static class IrMarkupRenderer
     /// source element (bookmarks are dropped from the IR model by rule N3 but retained on the source XML). Used
     /// to classify a rendered bookmark as common (in both sources) / inserted / deleted for round-trip-correct
     /// normalization.</summary>
+    /// <summary>
+    /// Carry into <paramref name="emittedBase"/> — a base paragraph every reviewer left equal — each bookmark
+    /// marker a reviewer's copy of that paragraph holds for a bookmark the base document does not have, at the
+    /// same text offset, wrapped as that reviewer's insertion. The IR leaves bookmarks out (rule N3), so such a
+    /// paragraph is equal and the base copy is emitted; without this, a reviewer's bookmark that opens here
+    /// and closes in an inserted paragraph lost its start and then, as an orphan, its end (issue #864).
+    /// Accept keeps the carried marker and reject drops it, as with the reviewer's other insertions.
+    /// </summary>
+    internal static void CarryReviewerOnlyBookmarks(
+        XElement emittedBase,
+        IReadOnlyList<IrEqualReviewerBookmarks> reviewers,
+        IrDocument baseIr,
+        IReadOnlyList<IrDocument> reviewerIrs,
+        RenderState state)
+    {
+        state.BaseBookmarkNames ??= BodyBookmarkNames(baseIr);
+        var carried = new HashSet<string>();
+        var savedAuthor = state.AuthorOverride;
+        foreach (var reviewer in reviewers)
+        {
+            if (reviewer.Reviewer < 0 || reviewer.Reviewer >= reviewerIrs.Count ||
+                SourceElement(reviewer.Anchor, reviewerIrs[reviewer.Reviewer]) is not { } reviewerParagraph)
+                continue;
+            // Built once per reviewer: a bookmark-heavy document has many paragraphs that reach here.
+            if (!state.ReviewerBookmarkNamesById.TryGetValue(reviewer.Reviewer, out var startNames))
+            {
+                startNames = reviewerParagraph.Document?.Root?.Descendants(W.bookmarkStart)
+                    .Where(s => s.Attribute(W.id) != null && s.Attribute(W.name) != null)
+                    .GroupBy(s => (string)s.Attribute(W.id)!)
+                    .ToDictionary(g => g.Key, g => (string)g.First().Attribute(W.name)!) ?? new Dictionary<string, string>();
+                state.ReviewerBookmarkNamesById[reviewer.Reviewer] = startNames;
+            }
+            state.AuthorOverride = reviewer.Author;
+            int offset = 0;
+            foreach (var child in reviewerParagraph.Elements())
+            {
+                if (child.Name == W.bookmarkStart || child.Name == W.bookmarkEnd)
+                {
+                    var name = child.Name == W.bookmarkStart
+                        ? (string?)child.Attribute(W.name)
+                        : startNames.GetValueOrDefault((string?)child.Attribute(W.id) ?? "");
+                    // One reviewer's copy of a name is enough; a second reviewer's would duplicate it.
+                    var key = $"{child.Name.LocalName}:{name}";
+                    if (name != null && !state.BaseBookmarkNames.Contains(name) && carried.Add(key))
+                    {
+                        var marker = StripUnids(new XElement(child));
+                        InsertAtTextOffset(emittedBase, marker, offset);
+                        WrapMarkerInRevision(marker, RevKind.Ins, state);
+                    }
+                }
+                offset += child.Descendants(W.t).Sum(t => t.Value.Length);
+            }
+        }
+        state.AuthorOverride = savedAuthor;
+    }
+
+    /// <summary>Insert <paramref name="marker"/> among <paramref name="paragraph"/>'s children where
+    /// <paramref name="offset"/> characters of its text precede it, splitting a plain one-text run the offset
+    /// falls inside.</summary>
+    private static void InsertAtTextOffset(XElement paragraph, XElement marker, int offset)
+    {
+        int seen = 0;
+        foreach (var child in paragraph.Elements().Where(e => e.Name != W.pPr).ToList())
+        {
+            if (offset <= seen)
+            {
+                child.AddBeforeSelf(marker);
+                return;
+            }
+            int length = child.Descendants(W.t).Sum(t => t.Value.Length);
+            var runContent = child.Elements().Where(e => e.Name != W.rPr).ToList();
+            if (offset < seen + length && child.Name == W.r && runContent.Count == 1 && runContent[0].Name == W.t)
+            {
+                var text = runContent[0];
+                int split = offset - seen;
+                var tail = new XElement(child);
+                text.Value = text.Value[..split];
+                tail.Element(W.t)!.Value = tail.Element(W.t)!.Value[split..];
+                foreach (var t in new[] { text, tail.Element(W.t)! })
+                    t.SetAttributeValue(XNamespace.Xml + "space", "preserve");
+                child.AddAfterSelf(marker, tail);
+                return;
+            }
+            seen += length;
+        }
+        paragraph.Add(marker);
+    }
+
     private static HashSet<string> BodyBookmarkNames(IrDocument? source)
     {
         var names = new HashSet<string>();
@@ -8884,6 +9089,12 @@ internal static class IrMarkupRenderer
         /// off, when the original body could not be paired, or in a composite render (Consolidate does
         /// not preserve input revisions in v1) — a null map means zero behavior change.</summary>
         public Dictionary<XElement, List<XElement>>? PreservedOriginals { get; set; }
+
+        /// <summary>The base document's bookmark names, for <see cref="CarryReviewerOnlyBookmarks"/>.</summary>
+        public HashSet<string>? BaseBookmarkNames { get; set; }
+
+        /// <summary>Each reviewer's bookmark names by id, for <see cref="CarryReviewerOnlyBookmarks"/>.</summary>
+        public Dictionary<int, Dictionary<string, string>> ReviewerBookmarkNamesById { get; } = new();
 
         /// <summary>Removed tables carried in preserved groups that are already in the output (issue #866).</summary>
         public HashSet<XElement> EmittedCarriedTables { get; } = new();
