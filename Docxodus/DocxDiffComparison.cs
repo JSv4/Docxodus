@@ -114,7 +114,18 @@ public sealed class DocxDiffComparison
         {
             var diff = _settings.ToIrDiffSettings() with { CrossParagraphTokenDiff = false };
             var (irLeft, irRight) = _ir.Value;
-            return IrEditScriptBuilder.Build(irLeft, irRight, diff);
+            // When this comparison's redline fuses cross-paragraph runs, relocations touching a fused
+            // paragraph are left unpaired here too, so the revision list and the redline pair alike.
+            // Finding the fused paragraphs means running the fusion decision, which is costly on a long
+            // run of edited paragraphs, so it runs only when a relocation touches a body paragraph: only
+            // body paragraphs fuse, and leaving out candidates that paired nothing changes no pairing.
+            var script = IrEditScriptBuilder.Build(irLeft, irRight, diff);
+            var paired = IrRelocationPairer.Apply(script, irLeft, irRight, diff);
+            if (!_settings.CrossParagraphTokenDiff || !IrRelocationPairer.TouchesBody(paired))
+                return paired;
+            var fused = new HashSet<string>(StringComparer.Ordinal);
+            script = IrEditScriptBuilder.Build(irLeft, irRight, diff, fused);
+            return IrRelocationPairer.Apply(script, irLeft, irRight, diff, fused);
         }, LazyThreadSafetyMode.ExecutionAndPublication);
 
         _redline = new(BuildRedline, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -249,6 +260,11 @@ public sealed class DocxDiffComparison
     private IrEditScript BuildFusedScript(IrDiffSettings diff)
     {
         var (irLeft, irRight) = _ir.Value;
-        return IrEditScriptBuilder.Build(irLeft, irRight, diff);
+        return BuildTwoWayScript(irLeft, irRight, diff);
     }
+
+    /// <summary>A two-way markup script: the builder's, plus the relocations that cross a table boundary
+    /// (<see cref="IrRelocationPairer"/>). Consolidate builds its per-reviewer scripts without them.</summary>
+    private static IrEditScript BuildTwoWayScript(IrDocument irLeft, IrDocument irRight, IrDiffSettings diff) =>
+        IrRelocationPairer.Apply(IrEditScriptBuilder.Build(irLeft, irRight, diff), irLeft, irRight, diff);
 }

@@ -656,9 +656,11 @@ internal static class IrEditScriptVerifier
             {
                 Assert.Null(op.LeftAnchor);
                 Assert.NotNull(op.RightAnchor);
-                // A MoveModify DESTINATION must carry its in-move token diff; a plain Move destination must not.
+                // A MoveModify DESTINATION must carry its in-move diff — a token diff for a paragraph, a table
+                // diff for a table (issue #887); a plain Move destination must not.
                 if (op.Kind == IrEditOpKind.MoveModifyBlock)
-                    Assert.NotNull(op.TokenDiff);
+                    Assert.True((op.TokenDiff == null) != (op.TableDiff == null),
+                        $"move-modify destination for group {group} must carry exactly one of a token or table diff.");
                 else
                     Assert.Null(op.TokenDiff);
                 Assert.False(destinations.ContainsKey(group), $"duplicate move destination for group {group}.");

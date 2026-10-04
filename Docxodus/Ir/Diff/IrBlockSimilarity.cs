@@ -71,8 +71,15 @@ internal sealed class IrBlockSimilarity
         return left.ContentHash.Equals(right.ContentHash) ? 1.0 : 0.0;
     }
 
-    /// <summary>Number of <see cref="IrDiffTokenKind.Word"/> tokens in a block (0 for non-paragraphs).</summary>
-    public int WordCount(IrBlock block) => block is IrParagraph p ? Bag(p).WordCount : 0;
+    /// <summary>Number of <see cref="IrDiffTokenKind.Word"/> tokens in a block: a paragraph's own, a table's
+    /// across all of its cell paragraphs (so a moved-and-edited table can qualify as a move, issue #887), and
+    /// 0 for any other block.</summary>
+    public int WordCount(IrBlock block) => block switch
+    {
+        IrParagraph p => Bag(p).WordCount,
+        IrTable t => TableBag(t).WordCount,
+        _ => 0,
+    };
 
     /// <summary>
     /// True iff <paramref name="block"/> is a FUNGIBLE blank-spacer paragraph: an

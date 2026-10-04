@@ -276,6 +276,7 @@ internal static class IrMarkupRenderer
         // replace-gap arrangement (inserted blocks before deleted ones inside each gap).
         var bodyBlocks = new List<XElement>();
         RenderBlockOpsWordShaped(script.Operations, state, bodyBlocks);
+        LowerUnpairedMoveRanges(bodyBlocks, state.GeneratedMoveNames);
 
         // SimplifyMoveMarkup (Task 4): rewrite native move markup as del/ins + strip range markers, a
         // post-pass mirroring WmlComparer.SimplifyMoveMarkupToDelIns (a Word-compat workaround). Operates on
@@ -886,7 +887,10 @@ internal static class IrMarkupRenderer
         for (int i = 0; i < opList.Count; i++)
         {
             var op = opList[i];
-            if (op.Kind == IrEditOpKind.DeleteBlock || op.Kind == IrEditOpKind.InsertBlock)
+            // A relocated half (issue #887) is drawn as a whole-paragraph move, outside the gap arrangement,
+            // exactly as an aligner move is: the pilcrow pairing must not fuse it into a neighbouring change.
+            if ((op.Kind == IrEditOpKind.DeleteBlock || op.Kind == IrEditOpKind.InsertBlock) &&
+                DrawsRelocation(op, state) is null)
             {
                 if (op.Kind == IrEditOpKind.DeleteBlock)
                     pendingDeletes.Add(op);
@@ -1384,6 +1388,13 @@ internal static class IrMarkupRenderer
                 break;
 
             case IrEditOpKind.InsertBlock:
+                // A paragraph that arrived from another block list (into or out of a table cell, issue #887)
+                // is the destination half of a relocation: drawn as a native move when moves are reported.
+                if (DrawsRelocation(op, state) is { } arrival)
+                {
+                    EmitMoveDestination(arrival, state, sink);
+                    break;
+                }
                 // A very narrow dirty-left projection is supported here only. Its raw-left candidate is
                 // keyed to this exact main-body InsertBlock target; other right-side insert emissions (a
                 // replacement half, move destination, split member, note/header block, etc.) must remain on
@@ -1393,6 +1404,11 @@ internal static class IrMarkupRenderer
                 break;
 
             case IrEditOpKind.DeleteBlock:
+                if (DrawsRelocation(op, state) is { } departure)
+                {
+                    EmitMoveSource(departure, state, sink);
+                    break;
+                }
                 EmitWholeBlock(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
                 break;
 
@@ -1904,24 +1920,34 @@ internal static class IrMarkupRenderer
                     break;
                 }
                 case IrRowOpKind.MovedRow:
-                    // A relocated exact-content row: render as DeleteRow at source + InsertRow at destination
-                    // (the two MovedRow ops carry the left/right anchors respectively). This keeps the content
-                    // round-trip without native row-move markup (out of Task-4 scope).
-                    if (rowOp.IsMoveSource == true && rowOp.LeftRowAnchor is { } lr && leftRowsByAnchor.TryGetValue(lr, out var ms))
-                    {
-                        var row = StripUnids(new XElement(ms));
-                        MarkWholeRow(row, RevKind.Del, state);
-                        newTbl.Add(row);
-                    }
-                    else if (rowOp.RightRowAnchor is { } rr && rightRowsByAnchor.TryGetValue(rr, out var md))
-                    {
-                        var row = StripUnids(new XElement(md));
+                {
+                    // A relocated exact-content row (the two MovedRow ops carry the left/right anchors). Drawn
+                    // the way Word draws a moved row (issue #887): the row deleted at the source and inserted
+                    // at the destination, its content moved from / moved to, each half in a named move range
+                    // among the table's rows. Without move reporting (or in Consolidate) it is a plain
+                    // DeleteRow + InsertRow pair.
+                    bool isSource = rowOp.IsMoveSource == true;
+                    XElement? src = isSource
+                        ? rowOp.LeftRowAnchor is { } lr && leftRowsByAnchor.TryGetValue(lr, out var ms) ? ms : null
+                        : rowOp.RightRowAnchor is { } rr && rightRowsByAnchor.TryGetValue(rr, out var md) ? md : null;
+                    if (src == null)
+                        return false;
+                    var row = StripUnids(new XElement(src));
+                    if (!isSource)
                         state.RegisterMediaReferences(row);
-                        MarkWholeRow(row, RevKind.Ins, state);
+                    if (state.Settings.RenderMoves && !state.IsComposite && rowOp.MoveGroupId is { } rowGid)
+                    {
+                        MarkWholeRow(row, isSource ? RevKind.MoveFrom : RevKind.MoveTo, state);
+                        var (start, end) = CreateMoveRange(isSource, state.MoveName(rowGid), state);
+                        newTbl.Add(start, row, end);
+                    }
+                    else
+                    {
+                        MarkWholeRow(row, isSource ? RevKind.Del : RevKind.Ins, state);
                         newTbl.Add(row);
                     }
-                    else return false;
                     break;
+                }
             }
         }
 
@@ -2210,9 +2236,15 @@ internal static class IrMarkupRenderer
             tr.AddFirst(trPr);
         }
         trPr.Elements().Where(e => e.Name == W.ins || e.Name == W.del).Remove();
-        trPr.Add(new XElement(kind == RevKind.Ins ? W.ins : W.del, state.RevisionAttributes()));
+        // A moved row is deleted at its source and inserted at its destination; its content carries the move.
+        trPr.Add(new XElement(kind is RevKind.Ins or RevKind.MoveTo ? W.ins : W.del, state.RevisionAttributes()));
         foreach (var p in tr.Descendants(W.p).ToList())
-            MarkWholeParagraph(p, kind, state);
+        {
+            if (kind is RevKind.MoveFrom or RevKind.MoveTo)
+                MarkWholeParagraphAs(p, kind, state);
+            else
+                MarkWholeParagraph(p, kind, state);
+        }
     }
 
     // ----------------------------------------------------------------- composed multi-reviewer table (FOLLOW-ON B)
@@ -2565,6 +2597,54 @@ internal static class IrMarkupRenderer
                 map[row.Anchor.ToString()] = src;
         }
         return map;
+    }
+
+    /// <summary>
+    /// Safety net for relocations (issue #887): a move range this render generated whose <c>w:name</c> has no
+    /// range of the other direction anywhere in the body is lowered to plain <c>w:del</c>/<c>w:ins</c>, and its
+    /// range markers are dropped. A move range an input carries (kept by <c>PreserveInputRevisions</c>) is the
+    /// input's own and is never touched. Word pairs move ranges by name, so a lone half would read as a move to nowhere. The pairer only
+    /// pairs content both surfaces draw finely, but a renderer fallback the pairer cannot foresee (a table
+    /// row whose cells cannot be paired, say) can still draw one half whole. Accept and reject are unaffected:
+    /// a moved-from run deletes like a deletion and a moved-to run inserts like an insertion.
+    /// </summary>
+    private static void LowerUnpairedMoveRanges(List<XElement> blocks, IReadOnlySet<string> generatedNames)
+    {
+        var starts = blocks.SelectMany(b => b.DescendantsAndSelf())
+            .Where(e => e.Name == W.moveFromRangeStart || e.Name == W.moveToRangeStart)
+            .ToList();
+        if (starts.Count == 0)
+            return;
+        var fromNames = starts.Where(e => e.Name == W.moveFromRangeStart)
+            .Select(e => (string?)e.Attribute(W.name)).ToHashSet(StringComparer.Ordinal);
+        var toNames = starts.Where(e => e.Name == W.moveToRangeStart)
+            .Select(e => (string?)e.Attribute(W.name)).ToHashSet(StringComparer.Ordinal);
+        foreach (var start in starts)
+        {
+            bool isFrom = start.Name == W.moveFromRangeStart;
+            var name = (string?)start.Attribute(W.name);
+            if (name is null || !generatedNames.Contains(name) || (isFrom ? toNames : fromNames).Contains(name))
+                continue;
+            var id = (string?)start.Attribute(W.id);
+            var endName = isFrom ? W.moveFromRangeEnd : W.moveToRangeEnd;
+            var wrapperName = isFrom ? W.moveFrom : W.moveTo;
+            XElement? end = null;
+            var wrappers = new List<XElement>();
+            foreach (var e in start.AncestorsAndSelf().Last().Descendants().SkipWhile(e => e != start).Skip(1))
+            {
+                if (e.Name == endName && (string?)e.Attribute(W.id) == id)
+                {
+                    end = e;
+                    break;
+                }
+                if (e.Name == wrapperName)
+                    wrappers.Add(e);
+            }
+            foreach (var wrapper in wrappers)
+                wrapper.Name = isFrom ? W.del : W.ins;
+            start.Remove();
+            end?.Remove();
+        }
     }
 
     /// <summary>In-place rewrite of native move markup under one block to plain del/ins (mirrors
@@ -4367,6 +4447,14 @@ internal static class IrMarkupRenderer
     }
 
     // ----------------------------------------------------------------- native move markup
+
+    /// <summary>A relocated whole-block delete or insert (<see cref="IrEditOp.RelocationGroupId"/>) seen as
+    /// the move half it is, or null when it is drawn as a plain delete or insert: move reporting off, or a
+    /// Consolidate render (whose scripts never carry relocations).</summary>
+    private static IrEditOp? DrawsRelocation(IrEditOp op, RenderState state) =>
+        op.RelocationGroupId is { } relocation && state.Settings.RenderMoves && !state.IsComposite
+            ? op with { MoveGroupId = relocation, IsMoveSource = op.Kind == IrEditOpKind.DeleteBlock }
+            : null;
 
     /// <summary>
     /// Emit the SOURCE half of a move: the LEFT paragraph bracketed by <c>w:moveFromRangeStart</c>/
@@ -8056,7 +8144,8 @@ internal static class IrMarkupRenderer
 
         void WalkOps(IEnumerable<IrEditOp> ops)
         {
-            // Move-group ids are scope-local, so source/destination joining stays per op list.
+            // An aligner move never leaves its op list, so source/destination joining stays per list (ids are
+            // unique across the script since issue #924). Relocations across lists are not joined here.
             var moveSources = new Dictionary<int, string>();
             var moveDests = new Dictionary<int, string>();
             foreach (var op in ops)
@@ -9071,6 +9160,11 @@ internal static class IrMarkupRenderer
         public IrDocument Right { get; }
         public IrDiffSettings Settings { get; }
 
+        /// <summary>True for a Consolidate render. A reviewer's row-move group ids are unique within that
+        /// reviewer's script only, so a moved row is drawn as a delete + insert there rather than as a
+        /// named move range.</summary>
+        public bool IsComposite { get; init; }
+
         /// <summary>The document the CURRENTLY-emitting op draws inserted/modified ("right-side") block elements
         /// and token text from. In a two-way render this is always <see cref="Right"/> (set once in the ctor and
         /// never reassigned), so behavior is byte-identical to before this field existed. The composite renderer
@@ -9312,9 +9406,15 @@ internal static class IrMarkupRenderer
             {
                 name = "move" + _nextMoveName++;
                 _moveNames[moveGroupId] = name;
+                _generatedMoveNames.Add(name);
             }
             return name;
         }
+
+        private readonly HashSet<string> _generatedMoveNames = new(StringComparer.Ordinal);
+
+        /// <summary>Every move-range name this render has generated through <see cref="MoveName"/>.</summary>
+        public IReadOnlySet<string> GeneratedMoveNames => _generatedMoveNames;
 
         /// <summary>RIGHT-sourced clone roots that carry a footnote/endnote REFERENCE, bucketed by
         /// <see cref="RightSourceId"/> — the composite renderer's note-id rewrite pass walks these to remap

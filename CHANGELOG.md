@@ -6,6 +6,20 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- The comparison reports three more kinds of relocation inside documents with tables as moves rather
+  than an unrelated delete and insert (issue #887):
+  - a reordered table row: deleted at its old position and inserted at its new one, its content in
+    `w:moveFrom`/`w:moveTo` under a named move range, the shape Word's compare writes;
+  - a table that was moved and also edited, drawn whole at both ends like a moved-and-edited paragraph.
+    `GetRevisions` lists the edit after the move. This also applies in `Consolidate`, which shares the
+    aligner;
+  - a paragraph moved, unchanged, into or out of a table cell, or between cells. The edit script marks the
+    two halves with a shared `relocationGroupId` and keeps their delete/insert kinds. Such a paragraph is
+    not paired when the redline draws it inside a stretch of adjacent edited paragraphs, or under
+    `PreserveInputRevisions`.
+  `GetRevisions` reports each as a Moved pair, consistently with the redline. A redline never contains
+  half a move: a move range without its partner is drawn as a plain deletion or insertion. Setting
+  `DetectMoves` to false still draws all three as a delete and an insert.
 - Tracked changes can now be drawn the way Word prints them with All Markup (issue #851).
   Docxodus's own review style draws insertions green and deletions red with light fills, moves in
   purple, and visible pilcrows. The new Word presentation instead:
@@ -79,6 +93,13 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Moves in different parts of a document no longer share a move name or `MoveGroupId` (issue #924).
+  Move groups were numbered separately in the body, in each table cell, row list, note and header/footer
+  story, so a move in the body and an unrelated move inside a table cell were written under the same
+  `w:name` (Word pairs move ranges by that name) and reported under the same `MoveGroupId`. A moved and
+  edited cell paragraph could also have its deleted words read from the wrong paragraph in `GetRevisions`.
+  Every move group now has an id of its own across the comparison; documents whose moves are all in the
+  body are unchanged.
 - Comparisons no longer fail with "Index was out of range" when the redline renderer runs as optimized
   code (issue #925). The .NET 10 JIT's induction-variable optimization miscompiles
   `IrMarkupRenderer.EmitGapArranged`, the method that lays out a run of deleted and inserted paragraphs.
