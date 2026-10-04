@@ -258,14 +258,14 @@ internal static class IrMarkupRenderer
         {
             if (HasTrackedRevisionMarkup(left))
             {
-                state.LeftPreservedOriginals = BuildPreservedOriginalIndex(irLeft, left);
+                state.LeftPreservedOriginals = BuildPreservedOriginalIndex(irLeft, left, carryRemovedTables: false);
                 // A raw LEFT deletion can be the historical counterpart of a right-only accepted block.
                 // Do not try to infer this generally: only direct body ordinal matches with a fully deleted
                 // source block are safe enough to project as the source author's insertion.
                 state.LeftDeletedInsertionOriginals = BuildLeftDeletedInsertionIndex(irLeft, irRight, left);
             }
             else
-                state.PreservedOriginals = BuildPreservedOriginalIndex(irRight, right);
+                state.PreservedOriginals = BuildPreservedOriginalIndex(irRight, right, carryRemovedTables: true);
             state.SeedGeneratedIdsAbovePreservedOriginals();
         }
 
@@ -1773,9 +1773,18 @@ internal static class IrMarkupRenderer
         // final's review state. Lower to the conservative whole-block pair, whose insert side emits
         // the ORIGINAL right element(s) with the foreign markup intact. (PreservedGroup is non-null
         // exactly when the flag is on, LEFT is clean, and this right block's original carries markup.)
-        bool lowerToPreservedReplace =
-            SourceElement(op.RightAnchor, state.RightSource) is { } preservedRight &&
-            state.PreservedGroup(preservedRight) != null;
+        //
+        // A group whose only markup is a removed table carried in front of a clean block (issue #866) does not
+        // lower: the table is emitted on its own and the block keeps its fine redline.
+        var preservedGroup = SourceElement(op.RightAnchor, state.RightSource) is { } preservedRight
+            ? state.PreservedGroup(preservedRight)
+            : null;
+        bool lowerToPreservedReplace = preservedGroup != null &&
+            preservedGroup.Any(member => !IsCarriedRemovedTable(member) &&
+                member.DescendantsAndSelf().Any(e => TrackedRevisionNames.Contains(e.Name)));
+        if (preservedGroup != null && !lowerToPreservedReplace)
+            foreach (var carried in preservedGroup.Where(IsCarriedRemovedTable))
+                EmitCarriedRemovedTable(carried, state, sink);
 
         if (!lowerToPreservedReplace &&
             !op.RequiresWholeParagraphReplace && op.TokenDiff is { } tokenDiff && leftIsPara && rightIsPara &&
@@ -4293,6 +4302,11 @@ internal static class IrMarkupRenderer
         {
             foreach (var member in group)
             {
+                if (IsCarriedRemovedTable(member))
+                {
+                    EmitCarriedRemovedTable(member, state, sink);
+                    continue;
+                }
                 var preserved = NormalizePreservedClone(new XElement(member), state);
                 if (fromRight)
                     state.RegisterMediaReferences(preserved);
@@ -4343,6 +4357,13 @@ internal static class IrMarkupRenderer
         {
             foreach (var member in group)
             {
+                if (fromRight && !projectsLeftDeletionAsInsertion && IsCarriedRemovedTable(member))
+                {
+                    // Already deleted in the input: emitted as it stands, never re-marked as this diff's
+                    // insertion (issue #866).
+                    EmitCarriedRemovedTable(member, state, sink);
+                    continue;
+                }
                 var preserved = NormalizePreservedClone(new XElement(member), state);
                 if (!fromRight)
                     ProjectLeftInsertionsAsDeletions(preserved);
@@ -8372,7 +8393,8 @@ internal static class IrMarkupRenderer
     /// renderer dispatches through the shared <see cref="RenderBlockOp"/>, so Equal/Insert note blocks then
     /// preserve through the same two emit hooks with zero extra plumbing.</para>
     /// </summary>
-    private static Dictionary<XElement, List<XElement>>? BuildPreservedOriginalIndex(IrDocument irRight, WmlDocument right)
+    private static Dictionary<XElement, List<XElement>>? BuildPreservedOriginalIndex(
+        IrDocument irRight, WmlDocument right, bool carryRemovedTables)
     {
         // The working (accepted) part trees: the IR read pins each part's parsed XDocument in Sources;
         // every body block's Source.Element lives in the w:document tree, note blocks in w:footnotes/w:endnotes.
@@ -8391,12 +8413,12 @@ internal static class IrMarkupRenderer
             var originalBody = main?.GetXDocument().Root?.Element(W.body);
             if (originalBody == null)
                 return null;
-            AlignPreservedChildren(workingBody, originalBody, map);
+            AlignPreservedChildren(workingBody, originalBody, map, carryRemovedTables);
 
             AlignPreservedNoteScope(WorkingRoot(W.footnotes),
-                main?.FootnotesPart?.GetXDocument().Root, W.footnote, map);
+                main?.FootnotesPart?.GetXDocument().Root, W.footnote, map, carryRemovedTables);
             AlignPreservedNoteScope(WorkingRoot(W.endnotes),
-                main?.EndnotesPart?.GetXDocument().Root, W.endnote, map);
+                main?.EndnotesPart?.GetXDocument().Root, W.endnote, map, carryRemovedTables);
         }
         return map.Count == 0 ? null : map;
     }
@@ -8529,7 +8551,8 @@ internal static class IrMarkupRenderer
     /// untouched by the accept normalization) and align their child blocks — the note-scope leg of
     /// <see cref="BuildPreservedOriginalIndex"/>. Null roots (scope absent on either side) are a no-op.</summary>
     private static void AlignPreservedNoteScope(
-        XElement? workingRoot, XElement? originalRoot, XName noteName, Dictionary<XElement, List<XElement>> map)
+        XElement? workingRoot, XElement? originalRoot, XName noteName, Dictionary<XElement, List<XElement>> map,
+        bool carryRemovedTables)
     {
         if (workingRoot == null || originalRoot == null)
             return;
@@ -8539,14 +8562,21 @@ internal static class IrMarkupRenderer
                 originalById[id] = note;
         foreach (var workingNote in workingRoot.Elements(noteName))
             if ((string?)workingNote.Attribute(W.id) is { } id && originalById.TryGetValue(id, out var originalNote))
-                AlignPreservedChildren(workingNote, originalNote, map);
+                AlignPreservedChildren(workingNote, originalNote, map, carryRemovedTables);
     }
 
     /// <summary>The container-level two-pointer alignment walk of <see cref="BuildPreservedOriginalIndex"/>
     /// (see there for the model and the conservative-bail rules). Adds verified markup-bearing groups to
-    /// <paramref name="map"/>; a divergence stops THIS container's walk only (entries already added stand).</summary>
+    /// <paramref name="map"/>; a divergence stops THIS container's walk only (entries already added stand).
+    ///
+    /// <para>With <paramref name="carryRemovedTables"/>, a table that accepting removes (every row
+    /// tracked-deleted, or emptied by a move) joins the group of the block that follows it, as a leading
+    /// member, so the redline keeps it in place with its rows still deleted (issue #866). Such a table
+    /// contributes no accepted text, so it never takes part in the group's identity check. The LEFT map
+    /// does not carry them: its delete-side projection accepts only groups of insertions.</para></summary>
     private static void AlignPreservedChildren(
-        XElement workingContainer, XElement originalContainer, Dictionary<XElement, List<XElement>> map)
+        XElement workingContainer, XElement originalContainer, Dictionary<XElement, List<XElement>> map,
+        bool carryRemovedTables)
     {
         var working = workingContainer.Elements().ToList();
         var original = originalContainer.Elements().ToList();
@@ -8554,12 +8584,13 @@ internal static class IrMarkupRenderer
         int i = 0;
         foreach (var w in working)
         {
+            var group = new List<XElement>();
+
             // AcceptDeletedAndMoveFromParagraphMarks rebuilds body/note containers from p/tbl blocks and
             // retains only body sectPr. Direct leaf annotations (comment/bookmark/range markers, etc.) are
             // therefore discarded. Skip only such leaves, and only when the working side does not carry the
             // same name, so a non-normalized 1:1 marker still has to match exactly.
-            while (i < original.Count && IsAcceptDiscarded(original[i], w))
-                i++;
+            SkipAcceptDiscarded(w);
             if (i >= original.Count)
                 return;   // originals exhausted early — alignment lost; keep what was verified.
 
@@ -8580,14 +8611,12 @@ internal static class IrMarkupRenderer
             }
 
             string target = VisibleText(w);
-            var group = new List<XElement>();
             var acc = new System.Text.StringBuilder();
             while (true)
             {
                 // Cover a direct leaf that sat between a mark-deleted paragraph and the paragraph it merges
                 // into. The accept transform drops it just like a leaf before an ordinary working block.
-                while (i < original.Count && IsAcceptDiscarded(original[i], w))
-                    i++;
+                SkipAcceptDiscarded(w);
                 if (i >= original.Count)
                     return;   // ran out of originals mid-group — alignment lost.
                 var o = original[i];
@@ -8605,7 +8634,37 @@ internal static class IrMarkupRenderer
 
             if (group.Any(g => g.Descendants().Any(d => TrackedRevisionNames.Contains(d.Name))))
                 map[w] = group;
+
+            // Step over what accept discards. A removed table is carried in the group when asked for; it is
+            // dropped with the group if the walk then bails or resynchronizes, exactly as before.
+            void SkipAcceptDiscarded(XElement workingBlock)
+            {
+                while (i < original.Count && IsAcceptDiscarded(original[i], workingBlock))
+                {
+                    if (carryRemovedTables && original[i].Name == W.tbl)
+                        group.Add(original[i]);
+                    i++;
+                }
+            }
         }
+    }
+
+    /// <summary>A member of a preserved group that is a table accepting removes: it was carried in front of
+    /// its group's block by <see cref="AlignPreservedChildren"/> and is emitted verbatim, rows still deleted,
+    /// by the equal, inserted and modified emitters (issue #866). Move, split and merge renderers do not read
+    /// preserved groups, so there it is still dropped.</summary>
+    private static bool IsCarriedRemovedTable(XElement member) =>
+        member.Name == W.tbl && RevisionProcessor.AcceptRemovesTable(member);
+
+    /// <summary>Emit a carried removed table verbatim, once: a Modify that falls back to whole-block
+    /// replacement reaches its group a second time.</summary>
+    private static void EmitCarriedRemovedTable(XElement table, RenderState state, List<XElement> sink)
+    {
+        if (!state.EmittedCarriedTables.Add(table))
+            return;
+        var preserved = NormalizePreservedClone(new XElement(table), state);
+        state.RegisterMediaReferences(preserved);
+        sink.Add(StripUnids(preserved));
     }
 
     /// <summary>True when accepting revisions leaves nothing of the original child in the working container:
@@ -8825,6 +8884,9 @@ internal static class IrMarkupRenderer
         /// off, when the original body could not be paired, or in a composite render (Consolidate does
         /// not preserve input revisions in v1) — a null map means zero behavior change.</summary>
         public Dictionary<XElement, List<XElement>>? PreservedOriginals { get; set; }
+
+        /// <summary>Removed tables carried in preserved groups that are already in the output (issue #866).</summary>
+        public HashSet<XElement> EmittedCarriedTables { get; } = new();
 
         /// <summary>Accepted-working-element → ORIGINAL LEFT body element(s) for the narrowly supported
         /// dirty-left delete projection. Unlike <see cref="PreservedOriginals"/>, this map is never used to

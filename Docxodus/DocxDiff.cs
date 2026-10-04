@@ -823,6 +823,9 @@ public sealed class DocxDiffSettings
     /// INSERTED content (the diff's <c>w:ins</c> wraps only the plain runs; a foreign <c>w:ins</c>/<c>w:del</c>
     /// child is left as-is, so no same-kind wrapper ever nests) — in the BODY and in footnote/endnote
     /// bodies (note definitions pair by id and their blocks preserve through the same emission paths).
+    /// A right table that accepting removes (every row tracked-deleted, or its content moved away) is
+    /// carried in front of the block that follows it, rows still deleted, when that block is equal, inserted
+    /// or modified (not when it moves, splits or merges, where the table is dropped as before).
     /// The LEFT package's carried-over parts (headers/footers, unchanged notes, styles, comments) keep
     /// their markup because no pre-accept runs.
     /// NOT preserved (flattened to the accepted view, attributable to this diff only): foreign markup inside
