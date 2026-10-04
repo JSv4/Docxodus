@@ -70,6 +70,15 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `DocxDiff` with `PreserveInputRevisions` keeps a revised-document table that accepting removes
+  (every row tracked-deleted, or its content moved away) instead of dropping it from the redline
+  (issue #866). The table stays in place with its rows still marked deleted, so accepting the redline
+  removes it and rejecting restores it, as the input's own deletion does. The walk that pairs accepted
+  blocks with their originals now carries such a table into the next block's preserved group, and every
+  emitter for an equal, inserted or modified block writes it out once, verbatim (a block that moves,
+  splits or merges still loses it). A clean paragraph after the table keeps its word-level redline;
+  it is not lowered to a whole-paragraph replacement. The original-document side is unchanged: its
+  delete-side projection still accepts only groups of insertions.
 - Accepting revisions in a document that contains a move no longer deletes table rows whose cells
   are wrapped at row level in a content control or custom XML element (`w:tr/w:sdt/w:tc`,
   `w:tr/w:customXml/w:tc`) (issue #862). The pass that removes rows a move emptied looked only at
