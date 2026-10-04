@@ -4127,9 +4127,10 @@ internal static class IrMarkupRenderer
                 return;
             }
             int length = child.Descendants(W.t).Sum(t => t.Value.Length);
-            if (offset < seen + length && child.Name == W.r &&
-                child.Elements().Where(e => e.Name != W.rPr).ToList() is [{ } text] && text.Name == W.t)
+            var runContent = child.Elements().Where(e => e.Name != W.rPr).ToList();
+            if (offset < seen + length && child.Name == W.r && runContent.Count == 1 && runContent[0].Name == W.t)
             {
+                var text = runContent[0];
                 int split = offset - seen;
                 var tail = new XElement(child);
                 text.Value = text.Value[..split];
