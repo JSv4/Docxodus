@@ -243,4 +243,113 @@ public class DocxDiffMoveDetectionTests
         Assert.Contains(revisions, r => r.Type == DocxDiffRevisionType.Deleted && r.Text.Trim() == "liability");
         Assert.Contains(revisions, r => r.Type == DocxDiffRevisionType.Inserted && r.Text.Trim() == "exposure");
     }
+
+    // ---- table rows and cells (issue #887) ---------------------------------------------------------
+
+    [Fact]
+    public void ReorderedTableRow_IsAMove_DrawnTheWayWordDrawsIt()
+    {
+        var left = Doc(Table(A, B, C) + P(D));
+        var right = Doc(Table(B, C, A) + P(D));
+
+        var redline = DocxCompare.Compare(left, right);
+
+        // One table: the row leaves its old position (row deleted, content moved from) and arrives at
+        // its new one (row inserted, content moved to); the other rows are untouched.
+        var table = Assert.Single(Body(redline.DocumentByteArray).Elements(W.tbl));
+        var rows = table.Elements(W.tr).ToList();
+        Assert.Equal(4, rows.Count);
+        var source = Assert.Single(rows, r => r.Element(W.trPr)?.Element(W.del) != null);
+        var destination = Assert.Single(rows, r => r.Element(W.trPr)?.Element(W.ins) != null);
+        Assert.True(rows.IndexOf(source) < rows.IndexOf(destination));
+        Assert.Empty(source.Descendants(W.t));
+        Assert.Equal(new[] { A }, source.Descendants(W.moveFrom).Select(m => string.Concat(m.Descendants(W.delText).Select(t => t.Value))));
+        Assert.Equal(new[] { A }, destination.Descendants(W.moveTo).Select(m => string.Concat(m.Descendants(W.t).Select(t => t.Value))));
+        // Each half sits in its own move range, among the table's rows, and both share one name.
+        var from = Assert.Single(table.Elements(W.moveFromRangeStart));
+        var to = Assert.Single(table.Elements(W.moveToRangeStart));
+        Assert.Same(source, from.ElementsAfterSelf().First());
+        Assert.Same(destination, to.ElementsAfterSelf().First());
+        Assert.Equal((string?)from.Attribute(W.id), (string?)source.ElementsAfterSelf().First().Attribute(W.id));
+        Assert.Equal(W.moveFromRangeEnd, source.ElementsAfterSelf().First().Name);
+        Assert.Equal(W.moveToRangeEnd, destination.ElementsAfterSelf().First().Name);
+        Assert.Equal((string?)from.Attribute(W.name), (string?)to.Attribute(W.name));
+
+        AssertRoundTrip(left, right, redline);
+        NoNewValidationErrors(left.DocumentByteArray, redline.DocumentByteArray);
+    }
+
+    [Fact]
+    public void ReorderedTableRow_AgreesWithTheRevisionList()
+    {
+        var left = Doc(Table(A, B, C) + P(D));
+        var right = Doc(Table(B, C, A) + P(D));
+
+        var redline = DocxCompare.Compare(left, right);
+        var revisions = DocxDiff.GetRevisions(left, right, DocxCompare.ApplyFrontDoorRevisionPolicy(null));
+
+        var moved = revisions.Where(r => r.Type == DocxDiffRevisionType.Moved).ToList();
+        Assert.Equal(2, moved.Count);
+        Assert.Single(moved.Select(r => r.MoveGroupId).Distinct());
+        Assert.All(moved, r => Assert.Equal(A, r.Text.Trim()));
+        Assert.Single(Body(redline.DocumentByteArray).Descendants(W.moveFromRangeStart));
+    }
+
+    [Fact]
+    public void ReorderedTableRow_WithMovesNotReported_IsADeleteAndAnInsert()
+    {
+        var left = Doc(Table(A, B, C) + P(D));
+        var right = Doc(Table(B, C, A) + P(D));
+
+        var redline = DocxCompare.Compare(left, right, new DocxDiffSettings { DetectMoves = false });
+
+        var body = Body(redline.DocumentByteArray);
+        Assert.Empty(body.Descendants(W.moveFrom));
+        Assert.Empty(body.Descendants(W.moveTo));
+        Assert.Empty(body.Descendants(W.moveFromRangeStart));
+        AssertRoundTrip(left, right, redline);
+    }
+
+    [Fact]
+    public void RelocatedAndEditedTable_IsAMove_WithCompleteHalves()
+    {
+        // The table moves to the end and one cell gains a word. Like a moved-and-edited paragraph, the old
+        // table leaves whole and the edited table arrives whole (nested revisions inside a move range are
+        // not interoperable).
+        var edited = B.Replace("services", "consulting services");
+        var left = Doc(Table(A, B) + P(C) + P(D) + P(E));
+        var right = Doc(P(C) + P(D) + P(E) + Table(A, edited));
+
+        var redline = DocxCompare.Compare(left, right);
+
+        var tables = Body(redline.DocumentByteArray).Elements(W.tbl).ToList();
+        Assert.Equal(2, tables.Count);
+        Assert.Equal(new[] { A, B }, tables[0].Descendants(W.moveFrom).Select(m => string.Concat(m.Descendants(W.delText).Select(t => t.Value))));
+        Assert.Equal(new[] { A, edited }, tables[1].Descendants(W.moveTo).Select(m => string.Concat(m.Descendants(W.t).Select(t => t.Value))));
+        Assert.Equal((string?)tables[0].Element(W.moveFromRangeStart)?.Attribute(W.name),
+            (string?)tables[1].Element(W.moveToRangeStart)?.Attribute(W.name));
+        AssertRoundTrip(left, right, redline);
+        NoNewValidationErrors(left.DocumentByteArray, redline.DocumentByteArray);
+
+        var moved = DocxDiff.GetRevisions(left, right, DocxCompare.ApplyFrontDoorRevisionPolicy(null))
+            .Where(r => r.Type == DocxDiffRevisionType.Moved).ToList();
+        Assert.Equal(2, moved.Count);
+        Assert.Single(moved.Select(r => r.MoveGroupId).Distinct());
+    }
+
+    [Fact]
+    public void ReplacedTable_IsNotAMove()
+    {
+        // A table in the same place whose text is mostly rewritten stays a table edit, and a table elsewhere
+        // sharing little text with a removed one is not taken for it.
+        var left = Doc(Table(A, B) + P(C) + P(D));
+        var right = Doc(P(C) + P(D) + Table(E, F));
+
+        var redline = DocxCompare.Compare(left, right);
+
+        var body = Body(redline.DocumentByteArray);
+        Assert.Empty(body.Descendants(W.moveFrom));
+        Assert.Empty(body.Descendants(W.moveTo));
+        AssertRoundTrip(left, right, redline);
+    }
 }
