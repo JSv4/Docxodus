@@ -79,6 +79,14 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Comparisons no longer fail with "Index was out of range" when the redline renderer runs as optimized
+  code (issue #925). The .NET 10 JIT's induction-variable optimization miscompiles
+  `IrMarkupRenderer.EmitGapArranged`, the method that lays out a run of deleted and inserted paragraphs.
+  It then threw, or arranged the run wrongly, on inputs it handles correctly unoptimized. The ReadyToRun
+  `redline` binaries released since #855 failed on about a fifth of the `TestFiles/WC` comparisons, and a
+  long-running host could start failing once the method became hot. Tests missed it because they run
+  most code unoptimized. The method is now never JIT-optimized, and CI runs the comparison tests a second
+  time fully optimized.
 - `DocxDiffSettings.PreserveInputRevisions` keeps a pending change that both documents share (issue
   #885). When the original document had tracked changes of its own, preservation of the revised document's
   changes was switched off entirely, so a change both documents carried showed as plain text with no
