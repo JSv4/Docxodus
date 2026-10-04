@@ -221,13 +221,16 @@ internal static class IrEditScriptJson
         writer.WriteStartArray("ops");
         foreach (var tokenOp in diff.Ops)
         {
-            // Compact 5-element array: [kindCode, leftStart, leftEnd, rightStart, rightEnd].
+            // Compact 5-element array: [kindCode, leftStart, leftEnd, rightStart, rightEnd], plus a sixth
+            // element, the relocation group id, on a relocated span only (issue #888).
             writer.WriteStartArray();
             writer.WriteNumberValue(TokenKindCode(tokenOp.Kind));
             writer.WriteNumberValue(tokenOp.LeftStart);
             writer.WriteNumberValue(tokenOp.LeftEnd);
             writer.WriteNumberValue(tokenOp.RightStart);
             writer.WriteNumberValue(tokenOp.RightEnd);
+            if (tokenOp.RelocationGroupId is { } relocation)
+                writer.WriteNumberValue(relocation);
             writer.WriteEndArray();
         }
         writer.WriteEndArray();
@@ -424,7 +427,8 @@ internal static class IrEditScriptJson
         foreach (var arr in element.GetProperty("ops").EnumerateArray())
         {
             var kind = TokenKindFromCode(arr[0].GetInt32());
-            tokenOps.Add(new IrTokenOp(kind, arr[1].GetInt32(), arr[2].GetInt32(), arr[3].GetInt32(), arr[4].GetInt32()));
+            tokenOps.Add(new IrTokenOp(kind, arr[1].GetInt32(), arr[2].GetInt32(), arr[3].GetInt32(), arr[4].GetInt32(),
+                arr.GetArrayLength() > 5 ? arr[5].GetInt32() : null));
         }
         return new IrTokenDiff(IrNodeList.From(tokenOps));
     }

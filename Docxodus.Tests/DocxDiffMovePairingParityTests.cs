@@ -107,8 +107,15 @@ public class DocxDiffMovePairingParityTests
         string shape, string settingsName, string originalBody, string revisedBody, Func<DocxDiffSettings> settings)
     {
         _ = (shape, settingsName);
-        var (left, right) = (IrTestDocuments.FromParts(originalBody), IrTestDocuments.FromParts(revisedBody));
-        var applied = DocxCompare.ApplyFrontDoorRevisionPolicy(settings());
+        AssertMovesWholeAndAgreeing(
+            IrTestDocuments.FromParts(originalBody), IrTestDocuments.FromParts(revisedBody), settings());
+    }
+
+    /// <summary>The parity rule every reported move must satisfy (see the class summary), plus accept ≡ revised,
+    /// reject ≡ original and no new schema errors. Shared with <see cref="DocxDiffTextMoveTests"/>.</summary>
+    internal static void AssertMovesWholeAndAgreeing(WmlDocument left, WmlDocument right, DocxDiffSettings settings)
+    {
+        var applied = DocxCompare.ApplyFrontDoorRevisionPolicy(settings);
 
         var redline = DocxDiff.Compare(left, right, applied);
         var revisions = DocxDiff.GetRevisions(left, right, applied);

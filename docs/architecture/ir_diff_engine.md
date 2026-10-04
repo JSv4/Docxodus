@@ -262,14 +262,27 @@ door:
     - Safety net: a move range with no partner of the other direction is lowered to plain `w:del`/`w:ins`
       in the redline, and a Moved group missing its source or destination is reported as Deleted/Inserted.
     - `GetSemanticChanges` does not apply this pairing: such a paragraph is a block delete + insert there.
+  - **text moved within a paragraph, between paragraphs, or into or out of a table cell** (issue #888): a
+    deleted span inside a modified paragraph whose text reappears as an inserted span elsewhere, or as a
+    whole inserted paragraph (a sentence split out), and the reverse (a whole paragraph merged into the
+    middle of another). `IrRelocationPairer` pairs the halves under the same rule as whole paragraphs —
+    identical text once whitespace runs collapse, at least `MoveMinimumWordCount` words — and tags each
+    span's token op with a `relocationGroupId` (the sixth element of its JSON array). Two spans in the same
+    paragraph pair only when retained words separate them. A token diff may put a span's edge somewhere
+    else than where the moved text starts ("first sentence. The " after a retained "The "), so each span is
+    also tried at every position it can slide to without changing the text it covers, and the chosen
+    position is written back. The redline wraps a tagged span in `w:moveFrom`/`w:moveTo` inside a move
+    range in its paragraph; the word-shaped regrouping of ins/del never reaches across it. The same
+    exclusions apply as for whole paragraphs (fused cross-paragraph runs, tables drawn whole,
+    `PreserveInputRevisions`), plus paragraphs the renderer always draws whole. Consolidate and the
+    WmlComparer-compatible revision granularity report these as a delete + insert.
 - **Still a delete + insert:**
   - a moved paragraph edited below the similarity threshold;
   - a paragraph moved across a table boundary and edited, or moved next to paragraphs the redline draws as
     one cross-paragraph stream;
-  - text moved into a cell that replaces the cell's own text (a span inside a modified cell
-    paragraph, not a whole paragraph), and any move below `MoveMinimumWordCount` words across a
-    table boundary — Word's compare marks even a one-word move between cells;
-  - text moved within a paragraph or between paragraphs (sub-paragraph spans).
+  - moved text that was also reworded, or that is shorter than `MoveMinimumWordCount` words. Word's
+    compare marks much shorter moves, down to a single word or a list number carried with a paragraph
+    mark (see `docs/ooxml_corner_cases.md`, "Compare: Word marks moves below the paragraph level").
 
 **Move group ids are unique across scopes (issue #924).** The builder numbers moves per block list, so
 `Build` renumbers every nested scope (cells, rows, textboxes, notes, header/footer stories) above the

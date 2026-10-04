@@ -959,6 +959,15 @@ internal static class IrRevisionRenderer
                     // tokens (Image/Opaque/math) are NOT suppressed — WmlComparer reports those as revisions.
                     if (IsMaskedTextboxSpan(rightTokens, tokenOp.RightStart, tokenOp.RightEnd))
                         break;
+                    // A relocated span (issue #888) is the destination half of a Moved pair. Like a block
+                    // move's destination, it carries only the right anchor.
+                    if (tokenOp.RelocationGroupId is { } arrival && ctx.Settings.RenderMoves)
+                    {
+                        sink.Add(new IrRevision(IrRevisionType.Moved,
+                            RawText(rightTokens, tokenOp.RightStart, tokenOp.RightEnd), ctx.Author, ctx.Date,
+                            MoveGroupId: arrival, IsMoveSource: false, RightAnchor: rightAnchor));
+                        break;
+                    }
                     sink.Add(new IrRevision(IrRevisionType.Inserted,
                         RawText(rightTokens, tokenOp.RightStart, tokenOp.RightEnd), ctx.Author, ctx.Date,
                         LeftAnchor: leftAnchor, RightAnchor: rightAnchor));
@@ -969,6 +978,13 @@ internal static class IrRevisionRenderer
                 {
                     if (IsMaskedTextboxSpan(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd))
                         break;
+                    if (tokenOp.RelocationGroupId is { } departure && ctx.Settings.RenderMoves)
+                    {
+                        sink.Add(new IrRevision(IrRevisionType.Moved,
+                            RawText(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd), ctx.Author, ctx.Date,
+                            MoveGroupId: departure, IsMoveSource: true, LeftAnchor: leftAnchor));
+                        break;
+                    }
                     sink.Add(new IrRevision(IrRevisionType.Deleted,
                         RawText(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd), ctx.Author, ctx.Date,
                         LeftAnchor: leftAnchor, RightAnchor: rightAnchor));

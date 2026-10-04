@@ -2279,6 +2279,61 @@ as the union of its line and the drawings promoted out of it, so its fragment st
 paragraph with text) and `npm/tests/anchor-only-paragraph-line.spec.ts` (paginated layout matches the
 empty-paragraph case).
 
+## Compare: Word marks moves below the paragraph level
+
+### The corner case
+
+Word's Compare marks moved text inside paragraphs, not only whole moved paragraphs, and it marks very short
+spans. Docxodus reports a sub-paragraph move only when the moved text carries at least
+`MoveMinimumWordCount` words (3 by default; issue #888), so Word reports moves that Docxodus draws as a
+deletion and an insertion.
+
+### What Word writes (shape observed in Word Compare output; content illustrative)
+
+```xml
+<!-- a single word moved from one table cell to another, rows left in place -->
+<w:p><w:moveFromRangeStart w:id="1" w:name="move1" .../>
+  <w:moveFrom w:id="2" ...><w:r><w:t>Subtotal</w:t></w:r></w:moveFrom>
+  <w:moveFromRangeEnd w:id="1"/>
+  <w:ins ...><w:r><w:t>Region</w:t></w:r></w:ins></w:p>
+
+<!-- a list number moved together with the preceding paragraph mark: the range opens in the previous
+     paragraph, whose mark is w:moveTo, and closes after "1. " in the next -->
+<w:p><w:pPr><w:rPr><w:moveTo .../></w:rPr></w:pPr> … <w:moveToRangeStart w:id="5" w:name="move2" .../></w:p>
+<w:p><w:pPr><w:rPr><w:ins .../></w:rPr></w:pPr>
+  <w:moveTo ...><w:r><w:t xml:space="preserve">1. </w:t></w:r></w:moveTo><w:moveToRangeEnd w:id="5"/>
+  <w:ins ...><w:r><w:t>Scope</w:t></w:r></w:ins></w:p>
+```
+
+### Behavior table
+
+| Shape | Word | Docxodus |
+|---|---|---|
+| A sentence of 3+ words moved within or between paragraphs | move | move (issue #888) |
+| A single word moved between table cells | move (`w:moveFrom`/`w:moveTo` in the cells) | deletion + insertion |
+| A list number (`1. `) carried with the previous paragraph mark | move, the range spanning the mark | deletion + insertion |
+| Identical text the two sides align differently (one side keeps it in place) | insertion | insertion |
+
+### Analysis
+
+Word's move detection runs over its own whole-document token stream, paragraph marks included, so a short
+run of tokens that left one place and reappears in another is a move however short it is, and a move
+range can open in one paragraph and close in the next. Docxodus pairs moves after a block alignment: whole
+blocks by the aligner, spans inside modified paragraphs by `IrRelocationPairer`, which requires
+`MoveMinimumWordCount` words so that common short phrases ("of the", a list number) are not paired
+across a document. Lowering `MoveMinimumWordCount` makes shorter spans pair. A move range never spans a
+paragraph mark in Docxodus output.
+
+### Relevant code
+
+- `Docxodus/Ir/Diff/IrRelocationPairer.cs` — span pairing and boundary slides.
+- `Docxodus/Ir/Diff/IrMarkupRenderer.cs` — `BuildTokenOpContent` draws a relocated span as a move.
+
+### Tests
+
+`Docxodus.Tests/DocxDiffTextMoveTests.cs` (`TextBelowTheMinimumWordCount_IsNotAMove`,
+`TextBelowTheMinimum_IsAMove_WhenTheMinimumIsLowered`).
+
 ## Tables: a negative `w:tblInd` pulls an over-wide table into the left margin
 
 Word indents a table wider than the text column by a negative amount so it spreads across both
