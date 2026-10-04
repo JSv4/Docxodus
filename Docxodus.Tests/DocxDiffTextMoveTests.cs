@@ -86,6 +86,8 @@ public class DocxDiffTextMoveTests
         Assert.Single(group, r => r.IsMoveSource == false && r.Text.Trim() == moved);
         DocxDiffMovePairingParityTests.AssertMovesWholeAndAgreeing(left, right, new DocxDiffSettings());
         DocxDiffMovePairingParityTests.AssertMovesWholeAndAgreeing(left, right, new DocxDiffSettings { CrossParagraphTokenDiff = false });
+        DocxDiffMovePairingParityTests.AssertMovesWholeAndAgreeing(left, right,
+            new DocxDiffSettings { RevisionGranularity = DocxDiffRevisionGranularity.WmlComparerCompatible });
     }
 
     [Theory]
@@ -134,6 +136,54 @@ public class DocxDiffTextMoveTests
         var redline = DocxCompare.Compare(left, right);
 
         Assert.Empty(Body(redline.DocumentByteArray).Descendants(W.moveFromRangeStart));
+    }
+
+    [Fact]
+    public void MovedAndReformattedText_IsNotAMove()
+    {
+        // The sentence arrives bold. Drawn as a move, the bold would sit inside w:moveTo with no w:rPrChange and
+        // the revision list would report no formatting change, so it stays a deletion and an insertion.
+        var left = Doc(P($"{First} {Second} {Third}"));
+        var right = Doc($"<w:p><w:r><w:t xml:space=\"preserve\">{Second} {Third} </w:t></w:r>" +
+            $"<w:r><w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\">{First}</w:t></w:r></w:p>");
+
+        var redline = DocxCompare.Compare(left, right);
+
+        Assert.Empty(Body(redline.DocumentByteArray).Descendants(W.moveFromRangeStart));
+    }
+
+    [Fact]
+    public void MovedText_IsReportedFromASentenceStart_WhenBothHalvesCouldSlide()
+    {
+        // Both halves can be read as "second sentence covers payment terms. The" or as "The second sentence
+        // covers payment terms."; the move is reported as the sentence.
+        var (left, right) = (Doc(P($"{First} {Second} {Third}")), Doc(P($"{Second} {First} {Third} {First}")));
+
+        var revisions = DocxDiff.GetRevisions(left, right, DocxCompare.ApplyFrontDoorRevisionPolicy(null));
+
+        Assert.All(revisions.Where(r => r.Type == DocxDiffRevisionType.Moved), r => Assert.Equal(Second, r.Text.Trim()));
+        Assert.Contains(revisions, r => r.Type == DocxDiffRevisionType.Moved);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public void MovedText_EditScriptIsUntouched_WhenMovesAreNotDrawn(bool detectMoves, bool compatible)
+    {
+        var (left, right) = (Doc(P($"{First} {Second} {Third}")), Doc(P($"{Second} {Third} {First}")));
+        var settings = DocxCompare.ApplyFrontDoorRevisionPolicy(new DocxDiffSettings
+        {
+            DetectMoves = detectMoves,
+            RevisionGranularity = compatible ? DocxDiffRevisionGranularity.WmlComparerCompatible : DocxDiffRevisionGranularity.Fine,
+        });
+        var irSettings = settings.ToIrDiffSettings() with { CrossParagraphTokenDiff = false };
+        var irLeft = Docxodus.Ir.IrReader.Read(DocxDiff.PreAccept(settings, left), DocxDiff.ReadOpts);
+        var irRight = Docxodus.Ir.IrReader.Read(DocxDiff.PreAccept(settings, right), DocxDiff.ReadOpts);
+
+        var json = DocxDiff.GetEditScriptJson(left, right, settings);
+
+        // Token boundaries are the builder's own; no span was slid or tagged.
+        Assert.Equal(IrEditScriptJson.Write(IrEditScriptBuilder.Build(irLeft, irRight, irSettings)), json);
     }
 
     [Fact]

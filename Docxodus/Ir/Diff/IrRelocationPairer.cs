@@ -25,9 +25,9 @@ namespace Docxodus.Ir.Diff;
 /// Tagged with <see cref="IrTokenOp.RelocationGroupId"/> on a span, and <see cref="IrEditOp.RelocationGroupId"/>
 /// on a whole-paragraph half.</item>
 /// </list>
-/// <para><b>What pairs.</b> The two texts must be identical once whitespace runs are collapsed, and carry at
-/// least <see cref="IrDiffSettings.MoveMinimumTokenCount"/> words. An exact match leaves no in-move edit for
-/// either surface to describe. A deleted and an inserted span in the same paragraph pair only when retained
+/// <para><b>What pairs.</b> The two texts must be identical once whitespace runs are collapsed, word for word in
+/// the same run formatting, and carry at least <see cref="IrDiffSettings.MoveMinimumTokenCount"/> words. An
+/// exact match leaves no in-move edit — text or formatting — for either surface to describe. A deleted and an inserted span in the same paragraph pair only when retained
 /// words separate them; adjacent, they are a replacement. Each half pairs at most once.</para>
 /// <para><b>Boundary slides.</b> A token diff may place a span's edge differently from where the moved text
 /// begins: deleting "first sentence. The " after a retained "The " deletes the same text as "The first
@@ -51,7 +51,7 @@ internal static class IrRelocationPairer
     private const int MaxSlide = 32;
 
     /// <summary>A whole deleted or inserted paragraph.</summary>
-    private sealed record Candidate(IrEditOp Op, int ListId, string Text, bool IsSource);
+    private sealed record Candidate(IrEditOp Op, int ListId, string Text, IReadOnlyList<IrRunFormat?> Formats, bool IsSource);
 
     /// <summary>One token-level step of a diff: an aligned pair (Equal/FormatChanged), a deleted left token
     /// or an inserted right token. Index -1 = the side the step does not consume.</summary>
@@ -80,7 +80,7 @@ internal static class IrRelocationPairer
         public Candidate? Block { get; init; }
         public bool IsSource { get; init; }
         public int Order { get; init; }
-        public List<(int Offset, string Text)> Variants { get; } = new();
+        public List<(int Offset, string Text, IReadOnlyList<IrRunFormat?> Formats)> Variants { get; } = new();
         public bool Used { get; set; }
     }
 
@@ -128,9 +128,10 @@ internal static class IrRelocationPairer
             block is IrParagraph paragraph ? paragraph : null;
         void AddBlock(IrEditOp op, IrParagraph paragraph, int listId, bool isSource)
         {
-            var (text, words) = Normalize(IrDiffTokenizer.Tokenize(paragraph, settings));
+            var tokens = IrDiffTokenizer.Tokenize(paragraph, settings);
+            var (text, words) = Normalize(tokens);
             if (words >= min)
-                blocks.Add(new Candidate(op, listId, text, isSource));
+                blocks.Add(new Candidate(op, listId, text, WordFormats(tokens, 0, tokens.Count), isSource));
         }
         Collect(script.Operations);
         if (blocks.Count == 0 && hosts.Count == 0)
@@ -148,7 +149,8 @@ internal static class IrRelocationPairer
         {
             if (!byText.TryGetValue(source.Text, out var destinations))
                 continue;
-            var destination = destinations.FirstOrDefault(d => d.ListId != source.ListId && !paired.Contains(d));
+            var destination = destinations.FirstOrDefault(d => d.ListId != source.ListId && !paired.Contains(d) &&
+                SameFormats(source.Formats, d.Formats, settings.FormatComparison));
             if (destination is null)
                 continue;
             paired.Add(source);
@@ -165,7 +167,7 @@ internal static class IrRelocationPairer
         }
 
         // 2. Text spans, against each other and against the whole paragraphs still unpaired (issue #888).
-        PairSpans(hosts, blocks.Where(b => !paired.Contains(b)).ToList(), groupOf, nextGroup, min);
+        PairSpans(hosts, blocks.Where(b => !paired.Contains(b)).ToList(), groupOf, nextGroup, min, settings.FormatComparison);
 
         var replaced = new Dictionary<IrEditOp, IrEditOp>(ReferenceEqualityComparer.Instance);
         foreach (var host in hosts.Where(h => h.Changed))
@@ -178,7 +180,8 @@ internal static class IrRelocationPairer
     // ------------------------------------------------------------------ text spans (issue #888)
 
     private static void PairSpans(
-        List<Host> hosts, List<Candidate> blocks, Dictionary<IrEditOp, int> groupOf, int nextGroup, int min)
+        List<Host> hosts, List<Candidate> blocks, Dictionary<IrEditOp, int> groupOf, int nextGroup, int min,
+        IrFormatComparison formatComparison)
     {
         var spans = new List<Span>();
         int order = 0;
@@ -207,38 +210,42 @@ internal static class IrRelocationPairer
         foreach (var block in blocks)
         {
             var span = new Span { Block = block, IsSource = block.IsSource, Order = order++ };
-            span.Variants.Add((0, block.Text));
+            span.Variants.Add((0, block.Text, block.Formats));
             spans.Add(span);
         }
 
-        // Destinations by text; each source, in document order, claims the unused destination needing the
-        // smallest total slide, the earliest winning a tie.
-        var destinations = new Dictionary<string, List<(Span Span, int Offset)>>(System.StringComparer.Ordinal);
+        // Destinations by text; each source, in document order, claims an unused destination with the same
+        // text in the same formatting. Preferred, in order: edges on a sentence end (so a move reads "The second
+        // sentence." rather than "second sentence. The" when both halves can slide), the smallest total slide,
+        // the earliest destination.
+        var destinations = new Dictionary<string, List<(Span Span, int Offset, IReadOnlyList<IrRunFormat?> Formats)>>(
+            System.StringComparer.Ordinal);
         foreach (var span in spans.Where(s => !s.IsSource))
-            foreach (var (offset, text) in span.Variants)
+            foreach (var (offset, text, formats) in span.Variants)
             {
                 if (!destinations.TryGetValue(text, out var list))
-                    destinations[text] = list = new List<(Span, int)>();
-                list.Add((span, offset));
+                    destinations[text] = list = new List<(Span, int, IReadOnlyList<IrRunFormat?>)>();
+                list.Add((span, offset, formats));
             }
 
         foreach (var source in spans.Where(s => s.IsSource).OrderBy(s => s.Order))
         {
-            (Span Span, int SourceOffset, int DestinationOffset, int Cost)? best = null;
-            foreach (var (offset, text) in source.Variants)
+            (Span Span, int SourceOffset, int DestinationOffset, (int Edge, int Slide, int Order) Key)? best = null;
+            foreach (var (offset, text, formats) in source.Variants)
             {
                 if (!destinations.TryGetValue(text, out var candidates))
                     continue;
-                foreach (var (destination, destinationOffset) in candidates)
+                int edge = EndsSentence(text) ? 0 : 1;
+                foreach (var (destination, destinationOffset, destinationFormats) in candidates)
                 {
                     if (destination.Used || (source.Block != null && destination.Block != null) ||
+                        !SameFormats(formats, destinationFormats, formatComparison) ||
                         !Separated(source, offset, destination, destinationOffset) ||
                         !CanClaim(source, offset) || !CanClaim(destination, destinationOffset))
                         continue;
-                    int cost = System.Math.Abs(offset) + System.Math.Abs(destinationOffset);
-                    if (best is null || cost < best.Value.Cost ||
-                        (cost == best.Value.Cost && destination.Order < best.Value.Span.Order))
-                        best = (destination, offset, destinationOffset, cost);
+                    var key = (edge, System.Math.Abs(offset) + System.Math.Abs(destinationOffset), destination.Order);
+                    if (best is null || key.CompareTo(best.Value.Key) < 0)
+                        best = (destination, offset, destinationOffset, key);
                 }
             }
             if (best is not { } chosen)
@@ -316,7 +323,7 @@ internal static class IrRelocationPairer
         {
             var (text, words) = Normalize(tokens, s + offset, e + offset);
             if (words >= min)
-                span.Variants.Add((offset, text));
+                span.Variants.Add((offset, text, WordFormats(tokens, s + offset, e + offset)));
         }
         Add(0);
         for (int k = 1; k <= MaxSlide; k++)
@@ -433,6 +440,31 @@ internal static class IrRelocationPairer
     }
 
     // ------------------------------------------------------------------ shared plumbing
+
+    private static bool EndsSentence(string text) => text.Length > 0 && text[^1] is '.' or '!' or '?' or ';' or ':';
+
+    /// <summary>The run format of each word token in [start, end).</summary>
+    internal static IReadOnlyList<IrRunFormat?> WordFormats(IReadOnlyList<IrDiffToken> tokens, int start, int end)
+    {
+        var formats = new List<IrRunFormat?>();
+        for (int i = start; i < end; i++)
+            if (tokens[i].Kind == IrDiffTokenKind.Word)
+                formats.Add(tokens[i].Format);
+        return formats;
+    }
+
+    /// <summary>Whether two halves carry the same run formatting word for word, under the token differ's own
+    /// format rule; a relocation whose formatting also changed is not an exact move.</summary>
+    internal static bool SameFormats(
+        IReadOnlyList<IrRunFormat?> a, IReadOnlyList<IrRunFormat?> b, IrFormatComparison comparison)
+    {
+        if (a.Count != b.Count)
+            return false;
+        for (int i = 0; i < a.Count; i++)
+            if (!IrModeledFormat.RunFormatEqual(a[i], b[i], comparison))
+                return false;
+        return true;
+    }
 
     /// <summary>Whether a paired script carries a relocation on a body-level op or span — the only content a
     /// cross-paragraph run can absorb.</summary>
