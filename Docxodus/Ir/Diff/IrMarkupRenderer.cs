@@ -2652,14 +2652,19 @@ internal static class IrMarkupRenderer
         // main document part (OOXML relationship ids are part-scoped).
         int clonesBefore = state.RightSourcedClones.Count;
         bool changed = false;
+        // Resolve every note by its LEFT id before any is re-id'd below: when an inserted reference shifts the
+        // numbering, matched notes move along a chain (1→2, 2→3), and looking up left id 2 after note 1 took
+        // id 2 found the wrong note, so two definitions ended up with one note's text.
+        var leftNotesById = root.Elements(noteName)
+            .Where(e => e.Attribute(W.id) != null)
+            .GroupBy(e => (string)e.Attribute(W.id)!)
+            .ToDictionary(g => g.Key, g => g.First());
         foreach (var diff in diffs)
         {
             // M2.5 Task 3: the output part is seeded from the LEFT document, so a MATCHED note is located by its
             // LEFT id (which may differ from the right/scope id under reference-order correspondence). A
             // wholly-inserted note has no LeftNoteId and is built from the right note's shell.
-            var noteEl = diff.LeftNoteId is { } lid
-                ? root.Elements(noteName).FirstOrDefault(e => (string?)e.Attribute(W.id) == lid)
-                : null;
+            var noteEl = diff.LeftNoteId is { } lid ? leftNotesById.GetValueOrDefault(lid) : null;
             if (noteEl == null)
             {
                 // The note is absent in the LEFT part (a wholly-inserted note). Create its wrapper by cloning
@@ -2696,9 +2701,8 @@ internal static class IrMarkupRenderer
             // diverge whenever an inserted note shifts the numbering (WC034-After3: matched left-en#1 → right-en#2).
             // Without this, the equal body reference (right id) and its definition (left id) disagree and the
             // RenumberNoteIds pass below cannot link them. Del-only notes (no diff, left content only) keep their
-            // LEFT id and are reconciled by the renumber pass via their del reference. Right ids never collide with
-            // a kept left id here because matched notes move OUT of the left space and inserted notes were created
-            // in the right space.
+            // LEFT id and are reconciled by the renumber pass via their del reference. A new id CAN equal another
+            // note's left id (a chain of shifted ids), which is why notes are resolved up front.
             if (diff.LeftNoteId != null && diff.NoteId != diff.LeftNoteId)
                 noteEl.SetAttributeValue(W.id, diff.NoteId);
             changed = true;
