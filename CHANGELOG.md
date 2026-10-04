@@ -70,6 +70,18 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Footnote and endnote references in a redline now name the right note after both accept and reject
+  (issue #865). Two causes:
+  - **The body and the notes paired differently.** The body diff matches note references by position,
+    while the note diff paired the notes by their text. When paragraphs were rewritten, a reference the
+    body kept could be paired with a different note, and rejecting the redline then pointed the original's
+    reference at the revised note's text. The note diff now pairs first the notes behind every reference
+    the body keeps (in equal blocks, in the unchanged words of modified paragraphs, and in modified
+    tables' cells), and pairs the rest by content as before.
+  - **A chain of shifted note ids.** When an inserted reference shifts the numbering, matched notes are
+    renamed along a chain (1→2, 2→3). Each was found by its old id after earlier ones were already
+    renamed, so a note could be found under another's id, and two definitions ended up with one note's
+    text, even after accept. Notes are now resolved before any is renamed.
 - In the paginated view, a paragraph whose only content is a floating text box, shape or picture keeps
   its line, as Word and LibreOffice lay it out (issue #880). It collapsed to zero height once the
   paginator lifted the drawing into the page box, so the text after it moved up one line. The HTML
