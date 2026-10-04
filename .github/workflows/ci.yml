@@ -4,8 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
-    # Validate each layer of the collaboration/history PR stack before it targets main.
-    branches: [main, 'feat/package-change-*', 'feat/history-*', 'feat/collaboration-*']
+    # Every pull request, whatever its base: a PR stacked on another PR's branch gets the same checks
+    # as one into main, instead of waiting until it is retargeted to main to find a failure.
 
 permissions:
   contents: read
