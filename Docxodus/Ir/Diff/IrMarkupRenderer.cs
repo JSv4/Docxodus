@@ -1384,6 +1384,13 @@ internal static class IrMarkupRenderer
                 break;
 
             case IrEditOpKind.InsertBlock:
+                // A paragraph that arrived from another block list (into or out of a table cell, issue #887)
+                // is the destination half of a relocation: drawn as a native move when moves are reported.
+                if (DrawsRelocation(op, state) is { } arrival)
+                {
+                    EmitMoveDestination(arrival, state, sink);
+                    break;
+                }
                 // A very narrow dirty-left projection is supported here only. Its raw-left candidate is
                 // keyed to this exact main-body InsertBlock target; other right-side insert emissions (a
                 // replacement half, move destination, split member, note/header block, etc.) must remain on
@@ -1393,6 +1400,11 @@ internal static class IrMarkupRenderer
                 break;
 
             case IrEditOpKind.DeleteBlock:
+                if (DrawsRelocation(op, state) is { } departure)
+                {
+                    EmitMoveSource(departure, state, sink);
+                    break;
+                }
                 EmitWholeBlock(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
                 break;
 
@@ -4383,6 +4395,14 @@ internal static class IrMarkupRenderer
     }
 
     // ----------------------------------------------------------------- native move markup
+
+    /// <summary>A relocated whole-block delete or insert (<see cref="IrEditOp.RelocationGroupId"/>) seen as
+    /// the move half it is, or null when it is drawn as a plain delete or insert: move reporting off, or a
+    /// Consolidate render (whose scripts never carry relocations).</summary>
+    private static IrEditOp? DrawsRelocation(IrEditOp op, RenderState state) =>
+        op.RelocationGroupId is { } relocation && state.Settings.RenderMoves && !state.IsComposite
+            ? op with { MoveGroupId = relocation, IsMoveSource = op.Kind == IrEditOpKind.DeleteBlock }
+            : null;
 
     /// <summary>
     /// Emit the SOURCE half of a move: the LEFT paragraph bracketed by <c>w:moveFromRangeStart</c>/

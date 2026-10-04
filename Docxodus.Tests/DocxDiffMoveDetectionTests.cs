@@ -387,4 +387,118 @@ public class DocxDiffMoveDetectionTests
         Assert.Equal(Text(original.DocumentByteArray), Text(DocxDiffOps.RejectRevisions(consolidated.DocumentByteArray)));
         NoNewValidationErrors(original.DocumentByteArray, consolidated.DocumentByteArray);
     }
+
+    // ---- paragraphs crossing a table boundary (issue #887) ------------------------------------------
+
+    public static TheoryData<string, string, string> CrossBoundaryMoves => new()
+    {
+        // The cell keeps a paragraph of its own, so the arrival is a whole inserted paragraph there.
+        { "into a cell", P(A) + P(B) + OneCellTable(C) + P(D), P(B) + OneCellTable(C, A) + P(D) },
+        { "out of a cell", P(B) + OneCellTable(C, A) + P(D), P(B) + OneCellTable(C) + P(D) + P(A) },
+        { "between two tables' cells", OneCellTable(C, A) + P(B) + OneCellTable(D), OneCellTable(C) + P(B) + OneCellTable(D, A) },
+    };
+
+    [Theory]
+    [MemberData(nameof(CrossBoundaryMoves))]
+    public void ParagraphMovedAcrossATableBoundary_IsAMove(string shape, string originalBody, string revisedBody)
+    {
+        _ = shape;
+        var (left, right) = (Doc(originalBody), Doc(revisedBody));
+
+        var redline = DocxCompare.Compare(left, right);
+
+        AssertMoved(redline, A);
+        var body = Body(redline.DocumentByteArray);
+        var from = Assert.Single(body.Descendants(W.moveFromRangeStart));
+        var to = Assert.Single(body.Descendants(W.moveToRangeStart));
+        Assert.Equal((string?)from.Attribute(W.name), (string?)to.Attribute(W.name));
+        Assert.DoesNotContain(body.Descendants(W.del), d => d.Parent?.Name == W.p);
+        Assert.DoesNotContain(body.Descendants(W.ins), i => i.Parent?.Name == W.p);
+        AssertRoundTrip(left, right, redline);
+        NoNewValidationErrors(left.DocumentByteArray, redline.DocumentByteArray);
+    }
+
+    [Theory]
+    [MemberData(nameof(CrossBoundaryMoves))]
+    public void ParagraphMovedAcrossATableBoundary_AgreesWithTheRevisionList(string shape, string originalBody, string revisedBody)
+    {
+        _ = shape;
+        var (left, right) = (Doc(originalBody), Doc(revisedBody));
+
+        var revisions = DocxDiff.GetRevisions(left, right, DocxCompare.ApplyFrontDoorRevisionPolicy(null));
+
+        var moved = revisions.Where(r => r.Type == DocxDiffRevisionType.Moved).ToList();
+        Assert.Equal(2, moved.Count);
+        Assert.Single(moved.Select(r => r.MoveGroupId).Distinct());
+        Assert.All(moved, r => Assert.Equal(A, r.Text.Trim()));
+        Assert.Single(moved, r => r.IsMoveSource == true);
+        Assert.DoesNotContain(revisions, r => r.Type is DocxDiffRevisionType.Inserted or DocxDiffRevisionType.Deleted);
+    }
+
+    [Theory]
+    [MemberData(nameof(CrossBoundaryMoves))]
+    public void ParagraphMovedAcrossATableBoundary_WithMovesNotReported_IsADeleteAndAnInsert(
+        string shape, string originalBody, string revisedBody)
+    {
+        _ = shape;
+        var (left, right) = (Doc(originalBody), Doc(revisedBody));
+        var settings = new DocxDiffSettings { DetectMoves = false };
+
+        var redline = DocxCompare.Compare(left, right, settings);
+        var revisions = DocxDiff.GetRevisions(left, right, DocxCompare.ApplyFrontDoorRevisionPolicy(settings));
+
+        var body = Body(redline.DocumentByteArray);
+        Assert.Empty(body.Descendants(W.moveFrom));
+        Assert.Empty(body.Descendants(W.moveTo));
+        Assert.DoesNotContain(revisions, r => r.Type == DocxDiffRevisionType.Moved);
+        AssertRoundTrip(left, right, redline);
+    }
+
+    [Fact]
+    public void ParagraphMovedAcrossATableBoundary_EditScriptPairsTheTwoHalves()
+    {
+        var (left, right) = (Doc(P(A) + P(B) + OneCellTable(C) + P(D)), Doc(P(B) + OneCellTable(C, A) + P(D)));
+
+        var json = DocxDiff.GetEditScriptJson(left, right, DocxCompare.ApplyFrontDoorRevisionPolicy(null));
+
+        // The halves keep their delete/insert kinds (applying the script is unchanged) and share one
+        // relocation id, distinct from every move group.
+        var script = Docxodus.Ir.Diff.IrEditScriptJson.Read(json);
+        Assert.Equal(json, Docxodus.Ir.Diff.IrEditScriptJson.Write(script));
+        var departure = Assert.Single(script.Operations, op => op.RelocationGroupId is not null);
+        Assert.Equal(Docxodus.Ir.Diff.IrEditOpKind.DeleteBlock, departure.Kind);
+        var arrival = Assert.Single(script.Operations
+            .SelectMany(op => op.TableDiff?.RowOps ?? Enumerable.Empty<Docxodus.Ir.Diff.IrRowOp>())
+            .SelectMany(row => row.CellOps ?? Enumerable.Empty<Docxodus.Ir.Diff.IrCellOp>())
+            .SelectMany(cell => cell.BlockOps ?? Enumerable.Empty<Docxodus.Ir.Diff.IrEditOp>()),
+            op => op.RelocationGroupId is not null);
+        Assert.Equal(Docxodus.Ir.Diff.IrEditOpKind.InsertBlock, arrival.Kind);
+        Assert.Equal(departure.RelocationGroupId, arrival.RelocationGroupId);
+    }
+
+    [Fact]
+    public void ParagraphsSharingLittleText_AcrossATableBoundary_AreNotAMove()
+    {
+        var (left, right) = (Doc(P(A) + P(B) + OneCellTable(C) + P(D)), Doc(P(B) + OneCellTable(C, E) + P(D)));
+
+        var redline = DocxCompare.Compare(left, right);
+
+        var body = Body(redline.DocumentByteArray);
+        Assert.Empty(body.Descendants(W.moveFrom));
+        Assert.Empty(body.Descendants(W.moveTo));
+        AssertRoundTrip(left, right, redline);
+    }
+
+    [Fact]
+    public void ParagraphMovedAcrossATableBoundary_InConsolidate_RoundTrips()
+    {
+        var original = Doc(P(A) + P(B) + OneCellTable(C) + P(D));
+        var reviewer = new DocxDiffReviewer { Author = "Reviewer", Document = Doc(P(B) + OneCellTable(C, A) + P(D)) };
+
+        var consolidated = DocxDiff.Consolidate(original, new[] { reviewer });
+
+        Assert.Equal(Text(reviewer.Document.DocumentByteArray), Text(DocxDiffOps.AcceptRevisions(consolidated.DocumentByteArray)));
+        Assert.Equal(Text(original.DocumentByteArray), Text(DocxDiffOps.RejectRevisions(consolidated.DocumentByteArray)));
+        NoNewValidationErrors(original.DocumentByteArray, consolidated.DocumentByteArray);
+    }
 }

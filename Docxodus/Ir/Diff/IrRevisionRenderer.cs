@@ -346,6 +346,19 @@ internal static class IrRevisionRenderer
                 break;
 
             case IrEditOpKind.InsertBlock:
+            case IrEditOpKind.DeleteBlock when op.RelocationGroupId is not null:
+                // A paragraph relocated into or out of a table cell (issue #887) reports as the matching half
+                // of a Moved pair, demoted to Inserted/Deleted exactly as an aligner move is.
+                if (op.RelocationGroupId is { } relocation)
+                {
+                    RenderMoveOp(op with
+                    {
+                        Kind = IrEditOpKind.MoveBlock,
+                        MoveGroupId = relocation,
+                        IsMoveSource = op.Kind == IrEditOpKind.DeleteBlock,
+                    }, ctx, sink);
+                    break;
+                }
                 // Empty-paragraph-mark prune (M2.4b Workstream B). A whole-block insert of a paragraph that
                 // carries NO content tokens (a bare paragraph mark — e.g. the empty cell paragraph a
                 // moved-into-table block leaves behind, WC-1190) has empty surface text; WmlComparer reports

@@ -6,6 +6,15 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- The comparison reports three more kinds of relocation inside documents with tables as moves rather
+  than an unrelated delete and insert (issue #887):
+  - a reordered table row: deleted at its old position and inserted at its new one, its content in
+    `w:moveFrom`/`w:moveTo` under a named move range, the shape Word's compare writes;
+  - a table that was moved and also edited, drawn whole at both ends like a moved-and-edited paragraph;
+  - a paragraph moved into or out of a table cell, or between cells. The edit script marks the two halves
+    with a shared `relocationGroupId` and keeps their delete/insert kinds.
+  `GetRevisions` reports each as a Moved pair, consistently with the markup. Setting `DetectMoves` to
+  false still draws all three as a delete and an insert. Consolidate is unchanged.
 - Tracked changes can now be drawn the way Word prints them with All Markup (issue #851).
   Docxodus's own review style draws insertions green and deletions red with light fills, moves in
   purple, and visible pilcrows. The new Word presentation instead:

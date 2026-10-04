@@ -233,12 +233,32 @@ door:
     threshold);
   - a relocated **table**. The table's rows are marked `w:del` at the source and `w:ins` at the
     destination (`w:trPr`), the cell content is wrapped in `w:moveFrom`/`w:moveTo`, and a move
-    range sits inside each table. This is Word's own shape; `EmitTableMove` produces it.
+    range sits inside each table. This is Word's own shape; `EmitTableMove` produces it;
+  - a relocated table whose text was also edited, above the same 0.8 similarity threshold
+    (issue #887). The table's word count is the sum of its cells', so it clears the minimum-words gate
+    the fuzzy move pass applies. It is drawn with complete halves, like a moved-and-edited paragraph;
+    the edit script's destination op carries the row/cell `tableDiff`;
+  - a reordered table **row** (issue #887): the row is marked deleted at its old position and inserted
+    at its new one, its cell content wrapped in `w:moveFrom`/`w:moveTo`, each half in a named move range
+    among the table's rows. Consolidate still draws it as a delete + insert;
+  - a paragraph moved **into or out of a table cell**, or between two cells (issue #887), when the
+    cell gains or loses a whole paragraph. The aligner works one block list at a time (the body, or one
+    cell), so such a paragraph arrives as a `DeleteBlock` in one list and an `InsertBlock` in another.
+    `IrRelocationPairer` (two-way comparison only) pairs them under the fuzzy-move rule — at least
+    `MoveMinimumWordCount` words, similarity at least `MoveSimilarityThreshold` — and gives both ops a
+    shared `relocationGroupId`. The ops keep their kinds, so applying the script, accepting and
+    rejecting are unchanged; the renderers draw the pair as a move and `GetRevisions` reports a Moved pair.
 - **Still a delete + insert:**
   - a moved paragraph edited below the similarity threshold;
-  - a table that was both moved and edited (not classified as a move by the aligner);
-  - a paragraph moved into or out of a table cell, or a reordered table row;
+  - text moved into a cell that replaces the cell's own text (a span inside a modified cell
+    paragraph, not a whole paragraph), and any move below `MoveMinimumWordCount` words across a
+    table boundary — Word's compare marks even a one-word move between cells;
   - text moved within a paragraph or between paragraphs (sub-paragraph spans).
+
+**Move group ids are unique across scopes (issue #924).** The builder numbers moves per block list, so
+`Build` renumbers every nested scope (cells, rows, textboxes, notes, header/footer stories) above the
+body's ids. A move's `w:name` and its `MoveGroupId` therefore identify one move in the whole document;
+relocation ids continue above them.
 
 **Edited-move markup boundary.** A `MoveModifyBlock` remains rich in the edit-script and revisions
 surfaces: its destination carries the token diff describing the edit within the relocation. Produced

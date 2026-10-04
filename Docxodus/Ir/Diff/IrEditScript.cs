@@ -144,6 +144,11 @@ internal enum IrEditOpKind
 /// <item><see cref="BodyFullRewriteGroupId"/>: set only on the matching InsertBlock/DeleteBlock pair
 /// emitted from one BODY-level 1×1 full-lexical-rewrite gap. It is renderer-only provenance; nested
 /// scopes and every other operation leave it null.</item>
+/// <item><see cref="RelocationGroupId"/>: set only by the two-way comparison's
+/// <see cref="IrRelocationPairer"/>, on a <see cref="IrEditOpKind.DeleteBlock"/> and an
+/// <see cref="IrEditOpKind.InsertBlock"/> paragraph in DIFFERENT block lists (the body and a table cell, or
+/// two cells) that are one relocation (issue #887). The ops keep their kind and apply semantics; renderers
+/// draw the pair as a move when move reporting is on. Ids continue above every <see cref="MoveGroupId"/>.</item>
 /// <item><see cref="RequiresWholeParagraphReplace"/>: set only on a paired paragraph operation whose
 /// non-tokenizable structural carrier differs (an inline <c>w:sdt</c>/<c>w:smartTag</c> envelope or a
 /// non-hyperlink field code/state carrier). Its token diff remains available for apply/diagnostics, but renderers
@@ -163,7 +168,8 @@ internal sealed record IrEditOp(
     IrNodeList<IrTokenDiff>? SegmentDiffs = null,
     int? BodyFullRewriteGroupId = null,
     bool RequiresWholeParagraphReplace = false,
-    IrNodeList<IrCrossParagraphCell>? CrossParagraphCells = null);
+    IrNodeList<IrCrossParagraphCell>? CrossParagraphCells = null,
+    int? RelocationGroupId = null);
 
 /// <summary>
 /// One output-paragraph "cell" of a <see cref="IrEditOpKind.CrossParagraphRunBlock"/> — the factoring of

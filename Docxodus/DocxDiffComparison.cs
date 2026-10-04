@@ -114,7 +114,7 @@ public sealed class DocxDiffComparison
         {
             var diff = _settings.ToIrDiffSettings() with { CrossParagraphTokenDiff = false };
             var (irLeft, irRight) = _ir.Value;
-            return IrEditScriptBuilder.Build(irLeft, irRight, diff);
+            return BuildTwoWayScript(irLeft, irRight, diff);
         }, LazyThreadSafetyMode.ExecutionAndPublication);
 
         _redline = new(BuildRedline, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -249,6 +249,11 @@ public sealed class DocxDiffComparison
     private IrEditScript BuildFusedScript(IrDiffSettings diff)
     {
         var (irLeft, irRight) = _ir.Value;
-        return IrEditScriptBuilder.Build(irLeft, irRight, diff);
+        return BuildTwoWayScript(irLeft, irRight, diff);
     }
+
+    /// <summary>A two-way script: the builder's, plus the relocations that cross a table boundary
+    /// (<see cref="IrRelocationPairer"/>). Consolidate builds its per-reviewer scripts without them.</summary>
+    private static IrEditScript BuildTwoWayScript(IrDocument irLeft, IrDocument irRight, IrDiffSettings diff) =>
+        IrRelocationPairer.Apply(IrEditScriptBuilder.Build(irLeft, irRight, diff), irLeft, irRight, diff);
 }
