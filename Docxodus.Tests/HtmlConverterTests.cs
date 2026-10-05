@@ -4854,6 +4854,76 @@ namespace OxPt
             }
         }
 
+        [Theory]
+        [InlineData("ins", "<w:trPrChange w:id=\"2\" w:author=\"Formatter\" w:date=\"2026-02-02T00:00:00Z\"><w:trPr/></w:trPrChange>", "")]
+        [InlineData("del", "<w:trPrChange w:id=\"2\" w:author=\"Formatter\" w:date=\"2026-02-02T00:00:00Z\"><w:trPr/></w:trPrChange>", "")]
+        [InlineData("ins", "", "<w:tblPrEx><w:tblPrExChange w:id=\"2\" w:author=\"Formatter\" w:date=\"2026-02-02T00:00:00Z\"><w:tblPrEx/></w:tblPrExChange></w:tblPrEx>")]
+        public void HC074_RowWithStructuralAndPropertyRevision_CombinesClassesOnce(
+            string structural, string trPrChange, string tblPrEx)
+        {
+            // Issue #927: a row that is both inserted (or deleted) and carries a tracked property
+            // change threw "Duplicate attribute" — each revision added its own class attribute.
+            const string w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+            var body =
+                $"<w:body xmlns:w=\"{w}\"><w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"4000\"/></w:tblGrid>" +
+                $"<w:tr>{tblPrEx}<w:trPr><w:{structural} w:id=\"1\" w:author=\"Inserter\" w:date=\"2026-01-01T00:00:00Z\"/>" +
+                $"{trPrChange}</w:trPr><w:tc><w:p><w:r><w:t>Both revisions.</w:t></w:r></w:p></w:tc></w:tr>" +
+                "</w:tbl><w:p/></w:body>";
+            var settings = new WmlToHtmlConverterSettings
+            {
+                RenderTrackedChanges = true,
+                IncludeRevisionMetadata = true,
+            };
+
+            XElement xhtml = ConvertBodyToHtml(body, settings);
+
+            var row = xhtml.Descendants().Single(e => e.Name.LocalName == "tr");
+            var classes = ((string?)row.Attribute("class") ?? "").Split(' ');
+            Assert.Contains($"rev-row-{structural}", classes);
+            Assert.Contains("rev-row-format-change", classes);
+            // The row's own insertion or deletion is the revision it is attributed to.
+            Assert.Equal("Inserter", (string?)row.Attribute("data-author"));
+            Assert.Equal("2026-01-01T00:00:00Z", (string?)row.Attribute("data-date"));
+            Assert.Contains("Both revisions.", row.Value);
+        }
+
+        [Theory]
+        [InlineData("RA001-Tracked-Revisions-01.docx")]
+        [InlineData("RA001-Tracked-Revisions-02.docx")]
+        public void HC075_TrackedRevisionFixtures_ConvertWithTrackedChangesRendered(string fileName)
+        {
+            // Issue #927: both fixtures hold a row with a property change and a row revision.
+            var wml = new WmlDocument(Path.Combine(new DirectoryInfo("../../../../TestFiles/").FullName, fileName));
+            using var ms = new MemoryStream();
+            ms.Write(wml.DocumentByteArray, 0, wml.DocumentByteArray.Length);
+            using var wDoc = WordprocessingDocument.Open(ms, true);
+
+            XElement xhtml = WmlToHtmlConverter.ConvertToHtml(wDoc, new WmlToHtmlConverterSettings
+            {
+                RenderTrackedChanges = true,
+                IncludeRevisionMetadata = true,
+            });
+
+            Assert.Contains(xhtml.Descendants(), e => e.Name.LocalName == "tr"
+                && ((string?)e.Attribute("class") ?? "").Contains("rev-row-format-change"));
+        }
+
+        private static XElement ConvertBodyToHtml(string body, WmlToHtmlConverterSettings settings)
+        {
+            using var ms = new MemoryStream();
+            using (var wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+            {
+                var main = wDoc.AddMainDocumentPart();
+                main.Document = new Document(new Body());
+                main.Document.Save();
+                main.GetXDocument().Root!.Element(W.body)!.ReplaceWith(XElement.Parse(body));
+                main.PutXDocument();
+            }
+
+            using var wDocRead = WordprocessingDocument.Open(ms, true);
+            return WmlToHtmlConverter.ConvertToHtml(wDocRead, settings);
+        }
+
         private static byte[] BuildDocWithCommentSpanningRevisions()
         {
             using (MemoryStream ms = new MemoryStream())

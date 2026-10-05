@@ -6359,33 +6359,6 @@ namespace Docxodus
                 var rowIns = trPr?.Element(W.ins);
                 var rowDel = trPr?.Element(W.del);
 
-                // Tracked row-property revisions (issue #539): w:trPrChange, and the row's
-                // table-property exceptions via w:tblPrExChange.
-                var trPrChange = trPr?.Element(W.trPrChange);
-                var tblPrExChange = element.Elements(W.tblPrEx)
-                    .Elements(W.tblPrExChange).FirstOrDefault();
-                if (trPrChange != null || tblPrExChange != null)
-                {
-                    var revisionPrefix = settings.RevisionCssClassPrefix ?? "rev-";
-                    var existingClass = (string?)htmlRow.Attribute("class");
-                    var className = revisionPrefix + "row-format-change";
-                    htmlRow.SetAttributeValue("class",
-                        existingClass != null ? existingClass + " " + className : className);
-                    if (htmlRow.Attribute("title") == null)
-                        htmlRow.Add(new XAttribute("title", "Row properties changed"));
-                    // Non-null: this block only runs when at least one of the two is set.
-                    var marker = (trPrChange ?? tblPrExChange)!;
-                    if (settings.IncludeRevisionMetadata)
-                    {
-                        var changeAuthor = (string?)marker.Attribute(W.author);
-                        var changeDate = (string?)marker.Attribute(W.date);
-                        if (changeAuthor != null && htmlRow.Attribute("data-author") == null)
-                            htmlRow.Add(new XAttribute("data-author", changeAuthor));
-                        if (changeDate != null && htmlRow.Attribute("data-date") == null)
-                            htmlRow.Add(new XAttribute("data-date", changeDate));
-                    }
-                }
-
                 if (rowIns != null)
                 {
                     var className = (settings.RevisionCssClassPrefix ?? "rev-") + "row-ins";
@@ -6414,6 +6387,35 @@ namespace Docxodus
                             htmlRow.Add(new XAttribute("data-author", author));
                         if (date != null)
                             htmlRow.Add(new XAttribute("data-date", date));
+                    }
+                }
+
+                // Tracked row-property revisions (issue #539): w:trPrChange, and the row's
+                // table-property exceptions via w:tblPrExChange. Composes with the structural
+                // row revisions above by appending to whatever class they set, and keeps their
+                // metadata (issue #927), the way cells compose w:tcPrChange.
+                var trPrChange = trPr?.Element(W.trPrChange);
+                var tblPrExChange = element.Elements(W.tblPrEx)
+                    .Elements(W.tblPrExChange).FirstOrDefault();
+                if (trPrChange != null || tblPrExChange != null)
+                {
+                    var revisionPrefix = settings.RevisionCssClassPrefix ?? "rev-";
+                    var existingClass = (string?)htmlRow.Attribute("class");
+                    var className = revisionPrefix + "row-format-change";
+                    htmlRow.SetAttributeValue("class",
+                        existingClass != null ? existingClass + " " + className : className);
+                    if (htmlRow.Attribute("title") == null)
+                        htmlRow.Add(new XAttribute("title", "Row properties changed"));
+                    // Non-null: this block only runs when at least one of the two is set.
+                    var marker = (trPrChange ?? tblPrExChange)!;
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var changeAuthor = (string?)marker.Attribute(W.author);
+                        var changeDate = (string?)marker.Attribute(W.date);
+                        if (changeAuthor != null && htmlRow.Attribute("data-author") == null)
+                            htmlRow.Add(new XAttribute("data-author", changeAuthor));
+                        if (changeDate != null && htmlRow.Attribute("data-date") == null)
+                            htmlRow.Add(new XAttribute("data-date", changeDate));
                     }
                 }
             }
