@@ -2184,31 +2184,42 @@ namespace Docxodus
         /// boundary in that stream: its descendants must be processed inside its own <c>w:sdtContent</c>, never
         /// paired with a deleted paragraph immediately outside the control. Treating the wrapper as transparent
         /// turns a block SDT into an inline <c>w:p/w:sdt</c> during accept/reject (and drops <c>w:sdtPr</c>
-        /// ownership metadata).
+        /// ownership metadata). A block-level <c>w:customXml</c> wrapper is the same kind of boundary
+        /// (issue #913): its paragraphs are processed inside the wrapper, which keeps the wrapper and its
+        /// <c>w:customXmlPr</c> instead of rebuilding the container from the paragraphs alone.
         /// </summary>
         private static bool IsBlockContentElement(XElement candidate, XElement contentContainer) =>
             candidate.Name == W.p || candidate.Name == W.tbl ||
-            (candidate.Name == W.sdt && candidate.Parent == contentContainer &&
-             IsBlockSdt(candidate));
+            (candidate.Parent == contentContainer && (IsBlockSdt(candidate) || IsBlockCustomXml(candidate)));
 
         /// <summary>
         /// True for an SDT that occupies a block stream (body/cell/header/footer/note), including a nested
         /// block SDT. Inline controls are children of a paragraph/run container and deliberately return false.
         /// </summary>
-        private static bool IsBlockSdt(XElement sdt)
-        {
-            if (sdt.Name != W.sdt || sdt.Parent is not XElement parent)
-                return false;
-            if (W.BlockLevelContentContainers.Contains(parent.Name))
-                return true;
-            return parent.Name == W.sdtContent && parent.Parent is XElement outer && IsBlockSdt(outer);
-        }
+        private static bool IsBlockSdt(XElement sdt) =>
+            sdt.Name == W.sdt && sdt.Parent is XElement parent && IsBlockStream(parent);
 
         /// <summary>
-        /// Whether an SDT content container carries BLOCK children rather than inline run content. The recursive
-        /// check distinguishes an outer block SDT whose only direct child is another block SDT from an inline
-        /// nested control whose content ultimately contains runs. Paragraph-mark processing must never rebuild the
-        /// latter as a block container.
+        /// True for a <c>w:customXml</c> that wraps block content. Row-level (parent <c>w:tbl</c>), cell-level
+        /// (parent <c>w:tr</c>) and run-level (parent <c>w:p</c>) wrappers return false.
+        /// </summary>
+        private static bool IsBlockCustomXml(XElement customXml) =>
+            customXml.Name == W.customXml && customXml.Parent is XElement parent && IsBlockStream(parent);
+
+        /// <summary>
+        /// An element whose children form a block stream: a block content container, a block SDT's
+        /// <c>w:sdtContent</c>, or a block <c>w:customXml</c>.
+        /// </summary>
+        private static bool IsBlockStream(XElement element) =>
+            W.BlockLevelContentContainers.Contains(element.Name) ||
+            (element.Name == W.sdtContent && element.Parent is XElement owner && IsBlockSdt(owner)) ||
+            IsBlockCustomXml(element);
+
+        /// <summary>
+        /// Whether an SDT content container or a custom-XML wrapper carries BLOCK children rather than inline run
+        /// content. The recursive check distinguishes an outer block wrapper whose only direct child is another
+        /// block wrapper from an inline nested control whose content ultimately contains runs. Paragraph-mark
+        /// processing must never rebuild the latter as a block container.
         /// </summary>
         private static bool IsBlockSdtContent(XElement content)
         {
@@ -2219,25 +2230,29 @@ namespace Docxodus
                 if (child.Name == W.sdt && child.Element(W.sdtContent) is { } nested &&
                     IsBlockSdtContent(nested))
                     return true;
+                if (child.Name == W.customXml && IsBlockSdtContent(child))
+                    return true;
             }
             return false;
         }
 
         /// <summary>
-        /// A block-level <c>w:sdtContent</c> needs the same deleted-paragraph-mark processing as a body/cell,
-        /// while an inline SDT's content contains runs and must remain on the ordinary identity-clone path.
+        /// A block-level <c>w:sdtContent</c> or <c>w:customXml</c> needs the same deleted-paragraph-mark
+        /// processing as a body/cell, while an inline wrapper's content contains runs and must remain on the
+        /// ordinary identity-clone path.
         /// </summary>
         private static bool IsParagraphMarkContentContainer(XElement element) =>
             W.BlockLevelContentContainers.Contains(element.Name) ||
             (element.Name == W.sdtContent && element.Parent is XElement owner &&
-             IsBlockSdt(owner) && IsBlockSdtContent(element));
+             IsBlockSdt(owner) && IsBlockSdtContent(element)) ||
+            (IsBlockCustomXml(element) && IsBlockSdtContent(element));
 
         private static void AnnotateBlockContentElements(XElement contentContainer)
         {
             // For convenience, there is a ParagraphInfo annotation on the contentContainer.
             // It contains the same information as the ParagraphInfo annotation on the first
             //   paragraph.
-            if (contentContainer.Annotation<BlockContentInfo>() != null)
+            if (contentContainer.Annotation<BlockContentHead>() != null)
                 return;
             XElement? firstContentElement = contentContainer
                 .Elements()
@@ -2253,8 +2268,10 @@ namespace Docxodus
                 ThisBlockContentElement = firstContentElement,
                 NextBlockContentElement = null
             };
-            // Add as annotation even though NextParagraph is not set yet.
-            contentContainer.AddAnnotation(currentContentInfo);
+            // Add as annotation even though NextParagraph is not set yet. The head has its own annotation
+            // type: a block w:customXml is both an item in its parent's stream (carrying that stream's
+            // BlockContentInfo) and a container of its own.
+            contentContainer.AddAnnotation(new BlockContentHead(currentContentInfo));
             while (true)
             {
                 // Set below, either from firstContentElement above or nextContentElement's
@@ -2296,7 +2313,7 @@ namespace Docxodus
             if (current == null)
                 yield break;
             AnnotateBlockContentElements(element);
-            BlockContentInfo? currentBlockContentInfo = element.Annotation<BlockContentInfo>();
+            BlockContentInfo? currentBlockContentInfo = element.Annotation<BlockContentHead>()?.First;
             if (currentBlockContentInfo != null)
             {
                 while (true)
@@ -2311,6 +2328,9 @@ namespace Docxodus
                 }
             }
         }
+
+        /// <summary>The first <see cref="BlockContentInfo"/> of a block container's stream.</summary>
+        private sealed record BlockContentHead(BlockContentInfo First);
 
         public static class PT
         {
@@ -2615,6 +2635,7 @@ namespace Docxodus
                         }
                         else if (c.ThisBlockContentElement!.Name == W.tbl ||
                                  c.ThisBlockContentElement!.Name == W.sdt ||
+                                 c.ThisBlockContentElement!.Name == W.customXml ||
                                  c.ThisBlockContentElement!.Name.Namespace == M.m)
                         {
                             // A table that accept REMOVES ENTIRELY (every row deleted, no surviving
@@ -2673,7 +2694,7 @@ namespace Docxodus
                     // Create a new block level content container.
                     XElement newBlockLevelContentContainer = new XElement(element.Name,
                         element.Attributes(),
-                        element.Elements().Where(e => e.Name == W.tcPr),
+                        element.Elements().Where(e => e.Name == W.tcPr || e.Name == W.customXmlPr),
                         groupedParagraphs.Select((g, i) =>
                         {
                             if (g.First().GroupingInfo.GroupingType == GroupingType.DeletedRange)
@@ -2718,7 +2739,8 @@ namespace Docxodus
                                     paragraphMembers.Last().BlockLevelContent.ThisBlockContentElement!.Elements(W.pPr).Elements(W.rPr).Elements(W.del).Any() &&
                                     (g.Last().BlockLevelContent.NextBlockContentElement == null ||
                                      g.Last().BlockLevelContent.NextBlockContentElement?.Name == W.tbl ||
-                                     g.Last().BlockLevelContent.NextBlockContentElement?.Name == W.sdt))
+                                     g.Last().BlockLevelContent.NextBlockContentElement?.Name == W.sdt ||
+                                     g.Last().BlockLevelContent.NextBlockContentElement?.Name == W.customXml))
                                     return tableMembers.Count > 0 ? (object)tableMembers : null;
 
                                 if (tableMembers.Count == 0)
@@ -2730,6 +2752,12 @@ namespace Docxodus
                             {
                                 return g.Select(z =>
                                 {
+                                    // A block custom-XML wrapper is a block container itself: transform the
+                                    // wrapper, not just its children, so its paragraph marks are processed
+                                    // inside it and its w:customXmlPr is kept.
+                                    if (z.BlockLevelContent.ThisBlockContentElement!.Name == W.customXml)
+                                        return (XElement)AcceptDeletedAndMoveFromParagraphMarksTransform(
+                                            z.BlockLevelContent.ThisBlockContentElement!)!;
                                     var newEle = new XElement(z.BlockLevelContent.ThisBlockContentElement!.Name,
                                         z.BlockLevelContent.ThisBlockContentElement!.Attributes(),
                                         z.BlockLevelContent.ThisBlockContentElement!.Nodes().Select(n => AcceptDeletedAndMoveFromParagraphMarksTransform(n)));

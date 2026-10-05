@@ -102,6 +102,14 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Accepting or rejecting revisions no longer strips block-level `w:customXml` wrappers (issue #913).
+  The pass that joins paragraphs across deleted paragraph marks rebuilt each body, cell and content
+  control from the paragraphs it found and put back only content controls, so every block custom-XML
+  wrapper and its `w:customXmlPr` disappeared from `RevisionProcessor.AcceptRevisions`/`RejectRevisions`
+  output, even in a document with no revisions at all. That output feeds the IR reader's accepted
+  view, `PreAcceptInputRevisions` / `DocxCompare`, and delivery accept. A block wrapper is now a
+  boundary in that pass, the way a block content control already is: its paragraphs are joined inside
+  it and it keeps its properties. A wrapper whose tracked deletion is accepted is still removed.
 - DOCX→HTML with tracked changes rendered no longer throws "Duplicate attribute" on a table row that is
   both inserted or deleted and carries a tracked property change (`w:trPrChange` or `w:tblPrExChange`)
   (issue #927). The row now gets both classes, for example `rev-row-ins rev-row-format-change`, and its
