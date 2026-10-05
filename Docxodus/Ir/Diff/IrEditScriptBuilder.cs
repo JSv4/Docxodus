@@ -1064,6 +1064,12 @@ internal static class IrEditScriptBuilder
             }
         }
         int detectedRegionEnd = -1;
+        // Entry indexes below these are already proven to decline (issue #931): a run that declined at its
+        // structure gate makes later starts in the same run decline too, and a mixed region of pairs alone
+        // never fuses from any start inside it. Skipping them keeps a long run linear instead of
+        // re-segmenting it once per paragraph; the decisions, and so the ops, are unchanged.
+        int runDeclinedUntil = -1;
+        int mixedDeclinedUntil = -1;
         for (int entryIndex = 0; entryIndex < alignmentEntries.Count; entryIndex++)
         {
             var entry = alignmentEntries[entryIndex];
@@ -1101,14 +1107,22 @@ internal static class IrEditScriptBuilder
                 // share words, and regions where one-sided members PRECEDE the word-matched pair.
                 int consumed = 0;
                 List<IrEditOp>? trailingSectionOps = null;
-                var fused = entry.Kind == IrAlignmentKind.Modified
-                    ? TryBuildCrossParagraphRunOp(
-                        alignmentEntries, entryIndex, fusionSettings, sourcesAfterLeft, leftIndex, out consumed)
-                    : null;
-                if (fused is null && pendingSources.Count == 0)
+                IrEditOp? fused = null;
+                if (entry.Kind == IrAlignmentKind.Modified && entryIndex >= runDeclinedUntil)
+                {
+                    fused = TryBuildCrossParagraphRunOp(
+                        alignmentEntries, entryIndex, fusionSettings, sourcesAfterLeft, leftIndex, out consumed,
+                        out int runDeclinedStarts);
+                    if (fused is null)
+                        runDeclinedUntil = entryIndex + 1 + runDeclinedStarts;
+                }
+                if (fused is null && pendingSources.Count == 0 && entryIndex >= mixedDeclinedUntil)
+                {
                     fused = TryBuildStoryFinalMixedRegionOp(
                         alignmentEntries, entryIndex, fusionSettings, sourcesAfterLeft, leftIndex,
-                        out consumed, out trailingSectionOps);
+                        out consumed, out trailingSectionOps, out int pairsOnlyRegionEnd);
+                    mixedDeclinedUntil = Math.Max(mixedDeclinedUntil, pairsOnlyRegionEnd);
+                }
                 if (fused is not null && detectOnly)
                 {
                     foreach (var cell in fused.CrossParagraphCells ?? IrNodeList.Empty<IrCrossParagraphCell>())
@@ -1301,12 +1315,22 @@ internal static class IrEditScriptBuilder
     /// stream declines, the pure pair run is retried exactly as the tail-less path would have (the
     /// ordinary replace-gap / split / merge grammar then renders the tail). On success
     /// <paramref name="consumed"/> is the total ENTRY count the op replaces (pairs + tail entries).
+    /// On a decline, <paramref name="declinedStarts"/> counts the entries after <paramref name="start"/> from
+    /// which this collector is proven to decline too (issue #931). Every suffix of the streak has the same
+    /// end, tail, and per-pair pass-1 anchors, and the pass-2 windows after pair k's first anchor are the
+    /// same windows. When every attempt declined at the segmenter's structure gate (no boundary-crossing
+    /// match), a start at pair k with at least one in-slot anchor sees exactly the matches the longer run
+    /// saw from that anchor on, plus matches confined to pair k itself, which count equally on both sides
+    /// of every later boundary — so it declines at the same gate. The proof chains pair by pair and stops
+    /// at the first pair without an anchor, where the collector runs for real.
     /// </summary>
     private static IrEditOp? TryBuildCrossParagraphRunOp(
         IrNodeList<IrAlignedBlock> entries, int start, IrDiffSettings settings,
-        Dictionary<int, List<int>> sourcesAfterLeft, Dictionary<IrBlock, int> leftIndex, out int consumed)
+        Dictionary<int, List<int>> sourcesAfterLeft, Dictionary<IrBlock, int> leftIndex, out int consumed,
+        out int declinedStarts)
     {
         consumed = 0;
+        declinedStarts = 0;
 
         var leftParas = new List<IrParagraph>();
         var rightParas = new List<IrParagraph>();
@@ -1349,27 +1373,49 @@ internal static class IrEditScriptBuilder
         // retained tokens arrive only by forward cross-flow), per the decoded grammar.
         bool runEndsStory = OnlySectionBreakEntriesFrom(entries, start + pairCount + tailEntries);
 
-        var cells = IrCrossParagraphSegmenter.Segment(leftParas, rightParas, settings, runEndsStory, pairedCount);
-        if (cells is null && hasTail)
+        var firstDecline = new IrCrossParagraphSegmenter.Decline();
+        var cells = IrCrossParagraphSegmenter.Segment(
+            leftParas, rightParas, settings, runEndsStory, pairedCount, firstDecline);
+        IrCrossParagraphSegmenter.Decline? retryDecline = null;
+        if (cells is null && hasTail && pairCount >= 2)
         {
             // The tail stream declined (zero crossings, or a bail): retry the PURE pair run exactly as
             // the tail-less path would have; the ordinary grammar renders the tail entries.
-            if (pairCount < 2)
-                return null;
             leftParas.RemoveRange(pairCount, leftParas.Count - pairCount);
             rightParas.RemoveRange(pairCount, rightParas.Count - pairCount);
             tailEntries = 0;
             runEndsStory = OnlySectionBreakEntriesFrom(entries, start + pairCount);
-            cells = IrCrossParagraphSegmenter.Segment(leftParas, rightParas, settings, runEndsStory, pairCount);
+            retryDecline = new IrCrossParagraphSegmenter.Decline();
+            cells = IrCrossParagraphSegmenter.Segment(
+                leftParas, rightParas, settings, runEndsStory, pairCount, retryDecline);
         }
         if (cells is null)
+        {
+            declinedStarts = ProvenDeclinedStarts(pairCount, firstDecline, retryDecline);
             return null;
+        }
 
         consumed = pairCount + tailEntries;
         return new IrEditOp(IrEditOpKind.CrossParagraphRunBlock,
             leftParas[0].Anchor.ToString(), rightParas[0].Anchor.ToString(),
             TokenDiff: null, MoveGroupId: null, IsMoveSource: null,
             CrossParagraphCells: IrNodeList.From(cells));
+    }
+
+    /// <summary>
+    /// How many streak entries after the declined start are proven to decline as well (see
+    /// <see cref="TryBuildCrossParagraphRunOp"/>): every attempt must have declined at the structure gate,
+    /// and each skipped pair needs an in-slot anchor in every attempt.
+    /// </summary>
+    private static int ProvenDeclinedStarts(
+        int pairCount, IrCrossParagraphSegmenter.Decline first, IrCrossParagraphSegmenter.Decline? retry)
+    {
+        if (!first.AtStructureGate || (retry is not null && !retry.AtStructureGate))
+            return 0;
+        int k = 1;
+        while (k < pairCount && first.PairAnchored[k] && (retry is null || retry.PairAnchored[k]))
+            k++;
+        return k - 1;
     }
 
     /// <summary>True iff every entry from <paramref name="from"/> on carries only section-break
@@ -1501,10 +1547,11 @@ internal static class IrEditScriptBuilder
     private static IrEditOp? TryBuildStoryFinalMixedRegionOp(
         IrNodeList<IrAlignedBlock> entries, int start, IrDiffSettings settings,
         Dictionary<int, List<int>> sourcesAfterLeft, Dictionary<IrBlock, int> leftIndex, out int consumed,
-        out List<IrEditOp>? trailingSectionOps)
+        out List<IrEditOp>? trailingSectionOps, out int pairsOnlyRegionEnd)
     {
         consumed = 0;
         trailingSectionOps = null;
+        pairsOnlyRegionEnd = -1;
 
         var leftParas = new List<IrParagraph>();
         var rightParas = new List<IrParagraph>();
@@ -1568,6 +1615,14 @@ internal static class IrEditScriptBuilder
             return null;
         if (leftParas.Count == 0 || rightParas.Count == 0)
             return null;
+        // A region of word-matched pairs alone has no one-sided member: it is a pure run, which the checks
+        // below always refuse (no leading one-sided member at the story end, no deleted member inside it).
+        // Every later start up to j collects a sub-region of the same kind, so it declines too (issue #931).
+        if (pairs.Count == leftParas.Count && pairs.Count == rightParas.Count)
+        {
+            pairsOnlyRegionEnd = j;
+            return null;
+        }
         // MAXIMALITY: the stream owns whole regions, never fragments. If more one-sided gap matter
         // directly precedes the start (an upstream non-streamable/table break) or the collection
         // broke ON a one-sided entry (a mid-gap table or non-streamable paragraph), this run is a
@@ -1619,11 +1674,18 @@ internal static class IrEditScriptBuilder
             // Only shapes the pair-run collector cannot own: ≥1 one-sided member BEFORE the last
             // pair (the run path already handles pairs + a trailing story-final tail).
             var (lastL, lastR) = pairs[^1];
+            var pairedLeft = new bool[leftParas.Count];
+            var pairedRight = new bool[rightParas.Count];
+            foreach (var (pl, pr) in pairs)
+            {
+                pairedLeft[pl] = true;
+                pairedRight[pr] = true;
+            }
             bool leadingOneSided = false;
             for (int i = 0; i < lastL && !leadingOneSided; i++)
-                leadingOneSided = !pairs.Exists(pr => pr.L == i);
+                leadingOneSided = !pairedLeft[i];
             for (int i = 0; i < lastR && !leadingOneSided; i++)
-                leadingOneSided = !pairs.Exists(pr => pr.R == i);
+                leadingOneSided = !pairedRight[i];
             if (!leadingOneSided)
                 return null;
         }

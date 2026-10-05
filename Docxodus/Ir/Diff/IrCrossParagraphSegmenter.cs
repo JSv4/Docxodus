@@ -86,6 +86,29 @@ internal static class IrCrossParagraphSegmenter
     /// per-pair path rather than risk pathological cost.</summary>
     private const long LcsCellCap = 1_000_000;
 
+    /// <summary>Number of <see cref="SegmentRegion"/> calls made on the current thread — lets tests check
+    /// that the builder's attempt count stays bounded on long runs (issue #931).</summary>
+    [ThreadStatic]
+    private static int attemptsOnThisThread;
+
+    internal static int AttemptsOnThisThread => attemptsOnThisThread;
+
+    /// <summary>
+    /// Why a region declined, for a caller that can reuse the answer (issue #931). Filled only when the
+    /// region has word-matched pairs.
+    /// </summary>
+    internal sealed class Decline
+    {
+        /// <summary>True when the region computed every match and then declined at its structure gate:
+        /// without one-sided members, every interior boundary paired; with them, no match crossed out of
+        /// its own pair in a story-ending region. A bail (DP cap, cell invariant) leaves this false.</summary>
+        public bool AtStructureGate { get; set; }
+
+        /// <summary>Per pair, in the order of the region's pairs: whether pass 1 anchored at least one unit
+        /// in the pair's own slot.</summary>
+        public bool[] PairAnchored { get; set; } = Array.Empty<bool>();
+    }
+
     /// <summary>
     /// A paragraph is streamable iff it is plain, sliceable text with no structural carrier: every inline is
     /// an <see cref="IrTextRun"/> (so a slice boundary can only ever fall between plain text tokens, which the
@@ -139,7 +162,7 @@ internal static class IrCrossParagraphSegmenter
     /// </summary>
     public static List<IrCrossParagraphCell>? Segment(
         IReadOnlyList<IrParagraph> left, IReadOnlyList<IrParagraph> right, IrDiffSettings settings,
-        bool runEndsStory = false, int pairedCount = -1)
+        bool runEndsStory = false, int pairedCount = -1, Decline? decline = null)
     {
         int kl = left.Count, kr = right.Count;
         int p = pairedCount >= 0 ? pairedCount : (kl == kr ? kl : -1);
@@ -148,7 +171,7 @@ internal static class IrCrossParagraphSegmenter
         var prefixPairs = new List<(int L, int R)>(p);
         for (int i = 0; i < p; i++)
             prefixPairs.Add((i, i));
-        return SegmentRegion(left, right, prefixPairs, settings, runEndsStory);
+        return SegmentRegion(left, right, prefixPairs, settings, runEndsStory, decline);
     }
 
     /// <summary>
@@ -166,8 +189,10 @@ internal static class IrCrossParagraphSegmenter
     /// </summary>
     public static List<IrCrossParagraphCell>? SegmentRegion(
         IReadOnlyList<IrParagraph> left, IReadOnlyList<IrParagraph> right,
-        IReadOnlyList<(int L, int R)> pairs, IrDiffSettings settings, bool runEndsStory)
+        IReadOnlyList<(int L, int R)> pairs, IrDiffSettings settings, bool runEndsStory,
+        Decline? decline = null)
     {
+        attemptsOnThisThread++;
         int kl = left.Count, kr = right.Count;
         if (kl == 0 || kr == 0)
             return null;
@@ -221,9 +246,13 @@ internal static class IrCrossParagraphSegmenter
         // ---- Pass 1: per-pair anchor units, token-count LCS (earliest tie-break), density gate.
         var all = new List<(int Lf, int Rf)>(); // matched TOKEN pairs, stream order (both sides monotone)
         var pass1 = new List<(int Lf, int Rf)>();
+        var pairAnchored = new bool[pairs.Count];
+        if (decline is not null)
+            decline.PairAnchored = pairAnchored;
         for (int pi = 0; pi < pairs.Count; pi++)
         {
             var (li, ri) = pairs[pi];
+            int anchoredBefore = pass1.Count;
             // The STORY-FINAL pair is the tail-FUSION construct — decoded from Word's compare
             // output, its content is mostly replaced and full in-slot anchoring would both invent
             // retentions Word does not make there and seal the window the legitimate cross-flow
@@ -240,6 +269,7 @@ internal static class IrCrossParagraphSegmenter
                 int np = Math.Min(pUnitsL.Count, pUnitsR.Count);
                 for (int k = 0; k < np && pUnitsL[k].Key == pUnitsR[k].Key; k++)
                     AddUnitMatchTokens(pUnitsL[k], pUnitsR[k], flatL, flatR, pass1);
+                pairAnchored[pi] = pass1.Count > anchoredBefore;
                 continue;
             }
             var unitsL = BuildUnits(flatL, offL[li], offL[li + 1]);
@@ -257,6 +287,7 @@ internal static class IrCrossParagraphSegmenter
             var matches = UnitLcs(unitsL, unitsR, charWeighted: true, allowPartial: false);
             foreach (var (a, b) in matches)
                 AddUnitMatchTokens(unitsL[a], unitsR[b], flatL, flatR, pass1);
+            pairAnchored[pi] = pass1.Count > anchoredBefore;
         }
 
         // ---- Pass 2: residues between consecutive pass-1 anchors re-match across the whole run
@@ -265,18 +296,8 @@ internal static class IrCrossParagraphSegmenter
         bool bail = false;
         int crossUnitMatches = 0; // pass-2 unit matches (words; separator extensions excluded)
         string? firstCrossKey = null; // the first pass-2 match's unit key (the c=1 construct evidence)
-        int MemberOfL(int flat)
-        {
-            int m = 0;
-            while (m + 1 < kl + 1 && offL[m + 1] <= flat) m++;
-            return m;
-        }
-        int MemberOfR(int flat)
-        {
-            int m = 0;
-            while (m + 1 < kr + 1 && offR[m + 1] <= flat) m++;
-            return m;
-        }
+        int MemberOfL(int flat) => FirstMemberEndingAfter(offL, kl, flat);
+        int MemberOfR(int flat) => FirstMemberEndingAfter(offR, kr, flat);
         // NB (decoded boundary, resolved 2026-07-27): a same-ordinal pass-2 match INSIDE the sealed
         // story-final pair can outweigh a genuine crossing chain in the window LCS and seal the run
         // ("centered bold" class), yet UNCONDITIONALLY weight-zeroing those pairs was measured
@@ -403,6 +424,17 @@ internal static class IrCrossParagraphSegmenter
         var pairedL = new bool[kl];
         var pairedR = new bool[kr];
         var pairedBounds = new List<(int Bl, int Br)>();
+        // Matched positions per side, sorted, so "how many matches precede this boundary" is a binary
+        // search rather than a scan of every match per boundary (issue #931).
+        var matchedL = new int[all.Count];
+        var matchedR = new int[all.Count];
+        for (int i = 0; i < all.Count; i++)
+        {
+            matchedL[i] = all[i].Lf;
+            matchedR[i] = all[i].Rf;
+        }
+        Array.Sort(matchedL);
+        Array.Sort(matchedR);
         // A boundary is a pairing CANDIDATE only between two members that are paired TOGETHER (the
         // pair's own terminating pilcrows — at their OWN ordinals, which may be skewed when
         // one-sided members precede the pair on one side only); a boundary owned by a one-sided
@@ -413,12 +445,7 @@ internal static class IrCrossParagraphSegmenter
             if (forceFinal && (finalL || finalR))
                 continue; // owned by (or junction to) the final structural pair appended below.
             int posL = offL[li + 1], posR = offR[ri + 1];
-            int cl = 0, cr = 0;
-            foreach (var (lf, rf) in all)
-            {
-                if (lf < posL) cl++;
-                if (rf < posR) cr++;
-            }
+            int cl = CountBelow(matchedL, posL), cr = CountBelow(matchedR, posR);
             if (cl == cr)
             {
                 pairedL[li] = true;
@@ -565,7 +592,11 @@ internal static class IrCrossParagraphSegmenter
                 }
             }
             if (!crossing && (runEndsStory || all.Count == 0))
+            {
+                if (decline is not null)
+                    decline.AtStructureGate = runEndsStory;
                 return null;
+            }
         }
         else
         {
@@ -577,7 +608,11 @@ internal static class IrCrossParagraphSegmenter
                     break;
                 }
             if (!anyUnpaired)
+            {
+                if (decline is not null)
+                    decline.AtStructureGate = true;
                 return null;
+            }
         }
 
         // ---- Master anchor chain: matched tokens + paired boundaries, in stream order. A paired
@@ -964,13 +999,39 @@ internal static class IrCrossParagraphSegmenter
         sink.Add((ua.Start, ub.Start));
     }
 
-    private static int ParaOf(int[] off, int k, int flat)
+    private static int ParaOf(int[] off, int k, int flat) => Math.Min(FirstMemberEndingAfter(off, k, flat), k - 1);
+
+    /// <summary>The first member <c>i</c> in <c>[0, k)</c> with <c>off[i + 1] &gt; flat</c> — the member holding
+    /// flat token <paramref name="flat"/>, skipping empty members — or <paramref name="k"/> when there is none.
+    /// <paramref name="off"/> is nondecreasing, so this is a binary search: runs can be thousands of
+    /// paragraphs long (issue #931).</summary>
+    private static int FirstMemberEndingAfter(int[] off, int k, int flat)
     {
-        // k is tiny (a run of adjacent pairs); the linear scan is clearest.
-        for (int i = 0; i < k; i++)
-            if (flat < off[i + 1])
-                return i;
-        return k - 1;
+        int lo = 0, hi = k;
+        while (lo < hi)
+        {
+            int mid = (lo + hi) >>> 1;
+            if (off[mid + 1] > flat)
+                hi = mid;
+            else
+                lo = mid + 1;
+        }
+        return lo;
+    }
+
+    /// <summary>How many entries of the ascending <paramref name="sorted"/> are below <paramref name="bound"/>.</summary>
+    private static int CountBelow(int[] sorted, int bound)
+    {
+        int lo = 0, hi = sorted.Length;
+        while (lo < hi)
+        {
+            int mid = (lo + hi) >>> 1;
+            if (sorted[mid] < bound)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        return lo;
     }
 
     private static List<IrDiffToken> SubTokens(IReadOnlyList<IrDiffToken> tokens, int offset, int len)
