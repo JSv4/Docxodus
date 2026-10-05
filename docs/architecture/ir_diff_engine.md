@@ -254,9 +254,17 @@ door:
     the delete/insert gap arrangement, and `GetRevisions` reports a Moved pair.
     - It looks only into the cells of tables both surfaces draw cell by cell
       (`IrTableDiffer.NeedsWholeTableFallback` false); a moved table is drawn whole and is not looked into.
-    - A paragraph the redline draws inside a cross-paragraph run is not paired. The markup script has no
-      standalone op for it, and the data script (`GetRevisions`, the edit script) is built with the same
-      paragraphs recorded and left out, so both surfaces pair alike.
+    - A half in a paragraph the redline draws inside a cross-paragraph run (issue #930) has no standalone
+      op in the markup script. `IrRelocationPairer.ApplyToBoth` pairs the comparison's two scripts at once:
+      it pairs on the data script (`GetRevisions`, the edit script), where every paragraph has its own op,
+      and admits such a half only when the run holds it as one contiguous deleted (or inserted) stretch of
+      one output paragraph — a whole paragraph must have an output paragraph of its own whose mark is
+      deleted (or inserted) — choosing among slide positions only those the run can draw. It then tags that
+      stretch of the run's cell with the same id, and carries every other rewrite over to the markup ops the
+      two scripts share value for value. Two halves in one output paragraph pair only when a retained word
+      separates them. A half the run draws any other way (retained across a pilcrow, split over two output
+      paragraphs) pairs on neither surface. `DocxDiffComparison` aligns once and serves both builds from
+      that alignment; the aligner never reads `CrossParagraphTokenDiff`.
     - Nothing pairs under `PreserveInputRevisions`, where the markup may draw a table whole to keep its
       input revisions.
     - Safety net: a move range with no partner of the other direction is lowered to plain `w:del`/`w:ins`

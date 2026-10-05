@@ -52,14 +52,19 @@ internal static class IrEditScriptBuilder
     /// a <see cref="IrEditOpKind.CrossParagraphRunBlock"/>. The ops are unchanged; the set lets a data script
     /// leave out of relocation pairing the paragraphs its comparison's redline cannot draw as moves.
     /// </summary>
+    /// <param name="alignment">The block alignment of <paramref name="left"/> and <paramref name="right"/> under
+    /// these settings, when the caller already has it: the aligner never reads
+    /// <see cref="IrDiffSettings.CrossParagraphTokenDiff"/>, so one alignment serves a comparison's data and
+    /// markup builds. Computed here when null.</param>
     public static IrEditScript Build(
-        IrDocument left, IrDocument right, IrDiffSettings settings, ISet<string>? markupFusedAnchors)
+        IrDocument left, IrDocument right, IrDiffSettings settings, ISet<string>? markupFusedAnchors = null,
+        IrBlockAlignment? alignment = null)
     {
         ArgumentNullException.ThrowIfNull(left);
         ArgumentNullException.ThrowIfNull(right);
         ArgumentNullException.ThrowIfNull(settings);
 
-        var alignment = IrBlockAligner.Align(left, right, settings);
+        alignment ??= IrBlockAligner.Align(left, right, settings);
         // Cross-paragraph token-stream fusion (IrDiffSettings.CrossParagraphTokenDiff) is enabled ONLY for
         // the top-level BODY projection — the sole scope where it is round-trip-verified. Every OTHER caller
         // of ProjectAlignment (notes, headers/footers, table cells via IrTableDiffer, textbox interiors) uses

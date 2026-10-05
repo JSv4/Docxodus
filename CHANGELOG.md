@@ -6,6 +6,15 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Relocated text next to paragraphs the redline draws as one cross-paragraph stream is reported as a move
+  (issue #930). With `CrossParagraphTokenDiff` on (the default), the redline draws a stretch of adjacent
+  edited paragraphs as one flat word stream. A moved sentence or paragraph touching that stretch used to be
+  reported as a deletion plus an insertion on both surfaces, because the redline had no per-paragraph op to
+  draw a move half on. The comparison now pairs both surfaces at once. It pairs a half inside the stream when
+  the stream holds it as one deleted (or inserted) stretch of one output paragraph, and draws that stretch
+  as `w:moveFrom`/`w:moveTo`. `GetRevisions` reports the same Moved pair. A half the stream draws any other
+  way, such as text the stream keeps in place while it moves a paragraph mark, stays a deletion and an
+  insertion on both surfaces. One block alignment now serves the comparison's redline and its revision list.
 - The comparison reports text moved within a paragraph, between paragraphs, or into or out of a table cell
   as a move (issue #888). A sentence that leaves one place and reappears unchanged elsewhere is wrapped in
   `w:moveFrom`/`w:moveTo` under one move name, instead of being drawn as a deletion and an unrelated
@@ -24,8 +33,7 @@ All notable changes to this project will be documented in this file.
     aligner;
   - a paragraph moved, unchanged, into or out of a table cell, or between cells. The edit script marks the
     two halves with a shared `relocationGroupId` and keeps their delete/insert kinds. Such a paragraph is
-    not paired when the redline draws it inside a stretch of adjacent edited paragraphs, or under
-    `PreserveInputRevisions`.
+    not paired under `PreserveInputRevisions`.
   `GetRevisions` reports each as a Moved pair, consistently with the redline. A redline never contains
   half a move: a move range without its partner is drawn as a plain deletion or insertion. Setting
   `DetectMoves` to false still draws all three as a delete and an insert.

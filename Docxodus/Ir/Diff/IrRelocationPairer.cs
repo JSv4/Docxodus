@@ -36,9 +36,10 @@ namespace Docxodus.Ir.Diff;
 /// back into the token diff.</para>
 /// <para><b>Where it looks.</b> The body and the cells of tables drawn cell by cell on both surfaces
 /// (<see cref="IrTableDiffer.NeedsWholeTableFallback"/> false); never a moved table. A paragraph the redline
-/// draws inside a cross-paragraph run (<see cref="IrEditOpKind.CrossParagraphRunBlock"/>) is left out — the
-/// markup script has no per-paragraph diff for it, and the data script is told to leave out the same
-/// paragraphs — so the two scripts pair alike. A paragraph the markup renderer always draws whole (an
+/// draws inside a cross-paragraph run (<see cref="IrEditOpKind.CrossParagraphRunBlock"/>) has no per-paragraph
+/// op in the markup script; <see cref="ApplyToBoth"/> pairs a half there only when the run holds it as one
+/// deleted (or inserted) stretch of one output paragraph, and tags that stretch in the markup script with the
+/// same id, so the two scripts pair alike (issue #930). A paragraph the markup renderer always draws whole (an
 /// inseparable carrier, a textbox interior) offers no spans. With
 /// <see cref="IrDiffSettings.PreserveInputRevisions"/> on, nothing pairs: the markup renderer may draw a block
 /// whole to keep its input revisions, which the revision list cannot see. Nor with move reporting off, or under
@@ -51,7 +52,8 @@ internal static class IrRelocationPairer
     private const int MaxSlide = 32;
 
     /// <summary>A whole deleted or inserted paragraph.</summary>
-    private sealed record Candidate(IrEditOp Op, int ListId, string Text, IReadOnlyList<IrRunFormat?> Formats, bool IsSource);
+    private sealed record Candidate(
+        IrEditOp Op, int ListId, string Text, IReadOnlyList<IrRunFormat?> Formats, bool IsSource, CellSpan? Cell = null);
 
     /// <summary>One token-level step of a diff: an aligned pair (Equal/FormatChanged), a deleted left token
     /// or an inserted right token. Index -1 = the side the step does not consume.</summary>
@@ -68,6 +70,10 @@ internal static class IrRelocationPairer
         public IrFormatComparison FormatComparison { get; init; }
         public HashSet<int> Claimed { get; } = new();
         public bool Changed { get; set; }
+
+        /// <summary>Set when the markup script draws this paragraph pair inside a cross-paragraph run: each
+        /// span variant must then map onto one stretch of that run's cells (issue #930).</summary>
+        public RedlineView? FusedIn { get; init; }
     }
 
     /// <summary>A span half: a Delete/Insert run of atoms [AtomStart, AtomEnd) in a host, or a whole
@@ -80,60 +86,119 @@ internal static class IrRelocationPairer
         public Candidate? Block { get; init; }
         public bool IsSource { get; init; }
         public int Order { get; init; }
-        public List<(int Offset, string Text, IReadOnlyList<IrRunFormat?> Formats)> Variants { get; } = new();
+        public List<(int Offset, string Text, IReadOnlyList<IrRunFormat?> Formats, CellSpan? Cell)> Variants { get; } = new();
         public bool Used { get; set; }
     }
 
-    /// <param name="fusedAnchors">Body paragraph anchors the redline draws inside cross-paragraph runs, when
-    /// this script is the data script of a comparison whose redline fuses runs; null otherwise.</param>
+    /// <param name="fusedAnchors">Body paragraph anchors to leave out of pairing; null leaves none out.
+    /// <see cref="ApplyToBoth"/> uses it to fall back to leaving fused paragraphs unpaired on both surfaces
+    /// when the two scripts disagree on their move group ids.</param>
     public static IrEditScript Apply(
         IrEditScript script, IrDocument left, IrDocument right, IrDiffSettings settings,
-        IReadOnlySet<string>? fusedAnchors = null)
+        IReadOnlySet<string>? fusedAnchors = null) =>
+        Pair(script, left, right, settings, fusedAnchors, view: null);
+
+    /// <summary>
+    /// Pair the relocations of a comparison whose redline fuses cross-paragraph runs (issue #930), once, for both
+    /// of its scripts: <paramref name="data"/> (built without fusion; the revision list and edit script) and
+    /// <paramref name="markup"/> (the fused build the redline draws). Pairing runs on the data script, where every
+    /// paragraph has its own op. A half in a paragraph the markup script draws inside a cross-paragraph run is
+    /// admitted only when the run holds it as one deleted (or inserted) stretch of one output paragraph — for a
+    /// whole paragraph, an output paragraph of its own whose mark is deleted (or inserted) — and that stretch is
+    /// tagged with the same id. Every other half must sit in an op the two scripts share value-for-value, whose
+    /// rewrite is then carried over. A half either script could not draw as a move pairs on neither.
+    /// </summary>
+    public static (IrEditScript Data, IrEditScript Markup) ApplyToBoth(
+        IrEditScript data, IrEditScript markup, IrDocument left, IrDocument right, IrDiffSettings settings)
     {
-        // Pairing only labels content as moved, so it runs only where a move is drawn and reported: move
-        // reporting on, the engine's fine revision grain (the WmlComparer-compatible grain reproduces that
-        // comparer's revision set, which has no such moves), and no input revisions being preserved.
-        if (settings.PreserveInputRevisions || !settings.RenderMoves ||
-            settings.RevisionGranularity != RevisionGranularity.Fine)
+        if (!PairsAnything(settings))
+            return (data, markup);
+        // Relocation ids continue above the move groups; the scripts must agree on where that is.
+        if (MaxMoveGroupId(data) != MaxMoveGroupId(markup))
+        {
+            var fused = new HashSet<string>(System.StringComparer.Ordinal);
+            foreach (var op in markup.Operations.Where(o => o.Kind == IrEditOpKind.CrossParagraphRunBlock))
+                foreach (var cell in op.CrossParagraphCells ?? IrNodeList.Empty<IrCrossParagraphCell>())
+                {
+                    if (cell.LeftAnchor is { } la) fused.Add(la);
+                    if (cell.RightAnchor is { } ra) fused.Add(ra);
+                }
+            return (Apply(data, left, right, settings, fused), Apply(markup, left, right, settings));
+        }
+        var view = new RedlineView(markup, data, left, right, settings);
+        var pairedData = Pair(data, left, right, settings, fusedAnchors: null, view);
+        return (pairedData, view.Replay(data, pairedData));
+    }
+
+    /// <summary>Pairing only labels content as moved, so it runs only where a move is drawn and reported: move
+    /// reporting on, the engine's fine revision grain (the WmlComparer-compatible grain reproduces that
+    /// comparer's revision set, which has no such moves), and no input revisions being preserved.</summary>
+    private static bool PairsAnything(IrDiffSettings settings) =>
+        !settings.PreserveInputRevisions && settings.RenderMoves &&
+        settings.RevisionGranularity == RevisionGranularity.Fine;
+
+    private static IrEditScript Pair(
+        IrEditScript script, IrDocument left, IrDocument right, IrDiffSettings settings,
+        IReadOnlySet<string>? fusedAnchors, RedlineView? view)
+    {
+        if (!PairsAnything(settings))
             return script;
 
         int min = settings.MoveMinimumTokenCount;
         var blocks = new List<Candidate>();
         var hosts = new List<Host>();
         int nextList = 0;
-        bool Fused(string? anchor) => anchor is not null && fusedAnchors?.Contains(anchor) == true;
-        void Collect(IEnumerable<IrEditOp> ops)
+        bool Excluded(string? anchor) => anchor is not null && fusedAnchors?.Contains(anchor) == true;
+        // With a redline view, a top-level op is a candidate only when the markup script either has the same op
+        // (its rewrite carries over) or draws its paragraphs inside a run (its halves are located in the cells);
+        // a nested op inherits its table's standing.
+        void Collect(IEnumerable<IrEditOp> ops, bool topLevel, bool inheritedShared)
         {
             int listId = nextList++;
             foreach (var op in ops)
             {
-                if (op.Kind == IrEditOpKind.DeleteBlock && Paragraph(op.LeftAnchor, left) is { } lp)
-                    AddBlock(op, lp, listId, isSource: true);
-                else if (op.Kind == IrEditOpKind.InsertBlock && Paragraph(op.RightAnchor, right) is { } rp)
-                    AddBlock(op, rp, listId, isSource: false);
-                else if (op.Kind == IrEditOpKind.ModifyBlock && op.TokenDiff is { } diff &&
-                         !op.RequiresWholeParagraphReplace && op.TextboxDiffs is null &&
-                         Paragraph(op.LeftAnchor, left) is { } ml && Paragraph(op.RightAnchor, right) is { } mr)
-                    hosts.Add(new Host
-                    {
-                        Op = op, ListId = listId, Atoms = Atomize(diff), FormatComparison = settings.FormatComparison,
-                        Left = IrDiffTokenizer.Tokenize(ml, settings), Right = IrDiffTokenizer.Tokenize(mr, settings),
-                    });
+                bool fused = view is not null && topLevel && (view.IsFused(op.LeftAnchor) || view.IsFused(op.RightAnchor));
+                bool shared = view is null || (topLevel ? view.Shares(op) : inheritedShared);
+                if (fused || shared)
+                {
+                    var host = fused ? view : null;
+                    if (op.Kind == IrEditOpKind.DeleteBlock && Paragraph(op.LeftAnchor, left) is { } lp)
+                        AddBlock(op, lp, listId, isSource: true, host);
+                    else if (op.Kind == IrEditOpKind.InsertBlock && Paragraph(op.RightAnchor, right) is { } rp)
+                        AddBlock(op, rp, listId, isSource: false, host);
+                    else if (op.Kind == IrEditOpKind.ModifyBlock && op.TokenDiff is { } diff &&
+                             !op.RequiresWholeParagraphReplace && op.TextboxDiffs is null &&
+                             Paragraph(op.LeftAnchor, left) is { } ml && Paragraph(op.RightAnchor, right) is { } mr)
+                        hosts.Add(new Host
+                        {
+                            Op = op, ListId = listId, Atoms = Atomize(diff), FormatComparison = settings.FormatComparison,
+                            Left = IrDiffTokenizer.Tokenize(ml, settings), Right = IrDiffTokenizer.Tokenize(mr, settings),
+                            FusedIn = host,
+                        });
+                }
                 foreach (var cellOps in CellOpLists(op, settings))
-                    Collect(cellOps);
+                    Collect(cellOps, topLevel: false, inheritedShared: shared && !fused);
             }
         }
         IrParagraph? Paragraph(string? anchor, IrDocument doc) =>
-            anchor is not null && !Fused(anchor) && doc.AnchorIndex.TryGetValue(anchor, out var block) &&
+            anchor is not null && !Excluded(anchor) && doc.AnchorIndex.TryGetValue(anchor, out var block) &&
             block is IrParagraph paragraph ? paragraph : null;
-        void AddBlock(IrEditOp op, IrParagraph paragraph, int listId, bool isSource)
+        void AddBlock(IrEditOp op, IrParagraph paragraph, int listId, bool isSource, RedlineView? fusedIn)
         {
             var tokens = IrDiffTokenizer.Tokenize(paragraph, settings);
             var (text, words) = Normalize(tokens);
-            if (words >= min)
-                blocks.Add(new Candidate(op, listId, text, WordFormats(tokens, 0, tokens.Count), isSource));
+            if (words < min)
+                return;
+            CellSpan? cell = null;
+            if (fusedIn is not null)
+            {
+                cell = fusedIn.LocateWhole(isSource ? op.LeftAnchor! : op.RightAnchor!, isSource, tokens.Count);
+                if (cell is null)
+                    return;
+            }
+            blocks.Add(new Candidate(op, listId, text, WordFormats(tokens, 0, tokens.Count), isSource, cell));
         }
-        Collect(script.Operations);
+        Collect(script.Operations, topLevel: true, inheritedShared: true);
         if (blocks.Count == 0 && hosts.Count == 0)
             return script;
 
@@ -162,6 +227,8 @@ internal static class IrRelocationPairer
             blockOrder[blocks[i]] = i;
         foreach (var (source, destination) in blockPairs.OrderBy(p => blockOrder[p.Destination]))
         {
+            source.Cell?.Commit(nextGroup);
+            destination.Cell?.Commit(nextGroup);
             groupOf[source.Op] = nextGroup;
             groupOf[destination.Op] = nextGroup++;
         }
@@ -210,7 +277,7 @@ internal static class IrRelocationPairer
         foreach (var block in blocks)
         {
             var span = new Span { Block = block, IsSource = block.IsSource, Order = order++ };
-            span.Variants.Add((0, block.Text, block.Formats));
+            span.Variants.Add((0, block.Text, block.Formats, block.Cell));
             spans.Add(span);
         }
 
@@ -218,34 +285,36 @@ internal static class IrRelocationPairer
         // text in the same formatting. Preferred, in order: edges on a sentence end (so a move reads "The second
         // sentence." rather than "second sentence. The" when both halves can slide), the smallest total slide,
         // the earliest destination.
-        var destinations = new Dictionary<string, List<(Span Span, int Offset, IReadOnlyList<IrRunFormat?> Formats)>>(
+        var destinations = new Dictionary<string, List<(Span Span, int Offset, IReadOnlyList<IrRunFormat?> Formats, CellSpan? Cell)>>(
             System.StringComparer.Ordinal);
         foreach (var span in spans.Where(s => !s.IsSource))
-            foreach (var (offset, text, formats) in span.Variants)
+            foreach (var (offset, text, formats, cell) in span.Variants)
             {
                 if (!destinations.TryGetValue(text, out var list))
-                    destinations[text] = list = new List<(Span, int, IReadOnlyList<IrRunFormat?>)>();
-                list.Add((span, offset, formats));
+                    destinations[text] = list = new List<(Span, int, IReadOnlyList<IrRunFormat?>, CellSpan?)>();
+                list.Add((span, offset, formats, cell));
             }
 
         foreach (var source in spans.Where(s => s.IsSource).OrderBy(s => s.Order))
         {
-            (Span Span, int SourceOffset, int DestinationOffset, (int Edge, int Slide, int Order) Key)? best = null;
-            foreach (var (offset, text, formats) in source.Variants)
+            (Span Span, int SourceOffset, int DestinationOffset, CellSpan? SourceCell, CellSpan? DestinationCell,
+                (int Edge, int Slide, int Order) Key)? best = null;
+            foreach (var (offset, text, formats, sourceCell) in source.Variants)
             {
                 if (!destinations.TryGetValue(text, out var candidates))
                     continue;
                 int edge = EndsSentence(text) ? 0 : 1;
-                foreach (var (destination, destinationOffset, destinationFormats) in candidates)
+                foreach (var (destination, destinationOffset, destinationFormats, destinationCell) in candidates)
                 {
                     if (destination.Used || (source.Block != null && destination.Block != null) ||
                         !SameFormats(formats, destinationFormats, formatComparison) ||
                         !Separated(source, offset, destination, destinationOffset) ||
-                        !CanClaim(source, offset) || !CanClaim(destination, destinationOffset))
+                        !CanClaim(source, offset) || !CanClaim(destination, destinationOffset) ||
+                        !CellSpan.Compatible(sourceCell, destinationCell))
                         continue;
                     var key = (edge, System.Math.Abs(offset) + System.Math.Abs(destinationOffset), destination.Order);
                     if (best is null || key.CompareTo(best.Value.Key) < 0)
-                        best = (destination, offset, destinationOffset, key);
+                        best = (destination, offset, destinationOffset, sourceCell, destinationCell, key);
                 }
             }
             if (best is not { } chosen)
@@ -253,6 +322,8 @@ internal static class IrRelocationPairer
             int id = nextGroup++;
             Commit(source, chosen.SourceOffset, id, groupOf);
             Commit(chosen.Span, chosen.DestinationOffset, id, groupOf);
+            chosen.SourceCell?.Commit(id);
+            chosen.DestinationCell?.Commit(id);
         }
     }
 
@@ -322,8 +393,17 @@ internal static class IrRelocationPairer
         void Add(int offset)
         {
             var (text, words) = Normalize(tokens, s + offset, e + offset);
-            if (words >= min)
-                span.Variants.Add((offset, text, WordFormats(tokens, s + offset, e + offset)));
+            if (words < min)
+                return;
+            CellSpan? cell = null;
+            if (host.FusedIn is { } view)
+            {
+                cell = view.Locate(deleted ? host.Op.LeftAnchor! : host.Op.RightAnchor!, deleted,
+                    s + offset, e + offset, tokens.Count);
+                if (cell is null)
+                    return;
+            }
+            span.Variants.Add((offset, text, WordFormats(tokens, s + offset, e + offset), cell));
         }
         Add(0);
         for (int k = 1; k <= MaxSlide; k++)
@@ -437,6 +517,229 @@ internal static class IrRelocationPairer
             i = j;
         }
         return IrNodeList.From(ops);
+    }
+
+    // ------------------------------------------------------------------ fused runs (issue #930)
+
+    /// <summary>One output paragraph of a cross-paragraph run in the markup script, as atoms that pairing tags.</summary>
+    private sealed class CellView
+    {
+        public CellView(IrCrossParagraphCell cell, IReadOnlyList<IrDiffToken> leftTokens)
+        {
+            Cell = cell;
+            Atoms = Atomize(cell.Diff);
+            LeftTokens = leftTokens;
+        }
+
+        public IrCrossParagraphCell Cell { get; }
+
+        public List<Atom> Atoms { get; }
+
+        /// <summary>The whole left paragraph's tokens (the cell's left slice starts at
+        /// <see cref="IrCrossParagraphCell.LeftSliceStart"/>), empty when the cell has no left side.</summary>
+        public IReadOnlyList<IrDiffToken> LeftTokens { get; }
+
+        public HashSet<int> Claimed { get; } = new();
+
+        public bool Changed { get; set; }
+    }
+
+    /// <summary>A relocation half located in a run's cell: the atoms [<see cref="AtomStart"/>,
+    /// <see cref="AtomEnd"/>) of <see cref="Cell"/>, one contiguous deleted or inserted stretch.</summary>
+    private sealed record CellSpan(CellView Cell, int AtomStart, int AtomEnd)
+    {
+        /// <summary>Whether two located halves can pair: each still unclaimed, and two halves in the same output
+        /// paragraph separated by a retained word — adjacent, they would be drawn as a replacement.</summary>
+        public static bool Compatible(CellSpan? source, CellSpan? destination)
+        {
+            if (source is not null && !source.Free())
+                return false;
+            if (destination is not null && !destination.Free())
+                return false;
+            if (source is null || destination is null || !ReferenceEquals(source.Cell, destination.Cell))
+                return true;
+            var cell = source.Cell;
+            for (int i = System.Math.Min(source.AtomEnd, destination.AtomEnd);
+                 i < System.Math.Max(source.AtomStart, destination.AtomStart); i++)
+            {
+                var atom = cell.Atoms[i];
+                if (!IsAligned(atom))
+                    continue;
+                int index = cell.Cell.LeftSliceStart + atom.L;
+                if (index >= cell.LeftTokens.Count)
+                    return false; // the tokenizations disagree; fail closed
+                if (cell.LeftTokens[index].Kind == IrDiffTokenKind.Word)
+                    return true;
+            }
+            return false;
+        }
+
+        private bool Free()
+        {
+            for (int i = AtomStart; i < AtomEnd; i++)
+                if (Cell.Claimed.Contains(i))
+                    return false;
+            return true;
+        }
+
+        public void Commit(int id)
+        {
+            for (int i = AtomStart; i < AtomEnd; i++)
+            {
+                Cell.Claimed.Add(i);
+                Cell.Atoms[i] = Cell.Atoms[i] with { Relocation = id };
+            }
+            Cell.Changed = true;
+        }
+    }
+
+    /// <summary>
+    /// The markup script of a comparison whose redline fuses cross-paragraph runs, seen from its data script:
+    /// which data ops it shares value-for-value, and where each fused paragraph's tokens sit in the run cells.
+    /// </summary>
+    private sealed class RedlineView
+    {
+        private readonly IrEditScript _markup;
+        private readonly Dictionary<IrEditOp, IrEditOp> _markupOf = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<IrEditOp, IrEditOp> _dataOf = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<string, List<CellView>> _leftCells = new(System.StringComparer.Ordinal);
+        private readonly Dictionary<string, List<CellView>> _rightCells = new(System.StringComparer.Ordinal);
+        private readonly Dictionary<IrEditOp, List<CellView>> _runCells = new(ReferenceEqualityComparer.Instance);
+
+        public RedlineView(IrEditScript markup, IrEditScript data, IrDocument left, IrDocument right, IrDiffSettings settings)
+        {
+            _markup = markup;
+            var tokensOf = new Dictionary<string, IReadOnlyList<IrDiffToken>>(System.StringComparer.Ordinal);
+            IReadOnlyList<IrDiffToken> Tokens(string anchor, IrDocument doc)
+            {
+                if (!tokensOf.TryGetValue(anchor, out var tokens))
+                    tokensOf[anchor] = tokens = doc.AnchorIndex.TryGetValue(anchor, out var block) && block is IrParagraph p
+                        ? IrDiffTokenizer.Tokenize(p, settings)
+                        : System.Array.Empty<IrDiffToken>();
+                return tokens;
+            }
+
+            var byKey = new Dictionary<(IrEditOpKind, string?, string?), IrEditOp?>();
+            foreach (var op in markup.Operations)
+            {
+                if (op.Kind == IrEditOpKind.CrossParagraphRunBlock)
+                {
+                    var views = new List<CellView>();
+                    foreach (var cell in op.CrossParagraphCells ?? IrNodeList.Empty<IrCrossParagraphCell>())
+                    {
+                        var view = new CellView(cell, cell.LeftAnchor is { } la ? Tokens(la, left) : System.Array.Empty<IrDiffToken>());
+                        views.Add(view);
+                        if (cell.LeftAnchor is { } l)
+                            Add(_leftCells, l, view);
+                        if (cell.RightAnchor is { } r)
+                            Add(_rightCells, r, view);
+                    }
+                    _runCells[op] = views;
+                    continue;
+                }
+                var key = (op.Kind, op.LeftAnchor, op.RightAnchor);
+                byKey[key] = byKey.ContainsKey(key) ? null : op; // an ambiguous key shares nothing
+            }
+            foreach (var op in data.Operations)
+                if (byKey.TryGetValue((op.Kind, op.LeftAnchor, op.RightAnchor), out var twin) && twin is not null &&
+                    twin.Equals(op))
+                {
+                    _markupOf[op] = twin;
+                    _dataOf[twin] = op;
+                }
+
+            static void Add(Dictionary<string, List<CellView>> index, string anchor, CellView view)
+            {
+                if (!index.TryGetValue(anchor, out var list))
+                    index[anchor] = list = new List<CellView>();
+                list.Add(view);
+            }
+        }
+
+        public bool IsFused(string? anchor) =>
+            anchor is not null && (_leftCells.ContainsKey(anchor) || _rightCells.ContainsKey(anchor));
+
+        /// <summary>Whether the markup script holds this top-level data op unchanged.</summary>
+        public bool Shares(IrEditOp dataOp) => _markupOf.ContainsKey(dataOp);
+
+        /// <summary>
+        /// Locate tokens [<paramref name="start"/>, <paramref name="end"/>) of a fused paragraph's
+        /// <paramref name="leftSide"/> in the run: they must lie in one cell, as one contiguous stretch of deleted
+        /// (left) or inserted (right) atoms. Null when they do not, or when a cell's slice reaches past the
+        /// paragraph's <paramref name="tokenCount"/> tokens (the two tokenizations disagree; fail closed).
+        /// </summary>
+        public CellSpan? Locate(string anchor, bool leftSide, int start, int end, int tokenCount)
+        {
+            if (!(leftSide ? _leftCells : _rightCells).TryGetValue(anchor, out var cells))
+                return null;
+            CellView? home = null;
+            foreach (var cell in cells)
+            {
+                int sliceStart = leftSide ? cell.Cell.LeftSliceStart : cell.Cell.RightSliceStart;
+                int sliceEnd = sliceStart + (leftSide ? cell.Cell.LeftSliceLen : cell.Cell.RightSliceLen);
+                if (sliceEnd > tokenCount)
+                    return null;
+                if (start >= sliceStart && end <= sliceEnd)
+                    home = cell;
+            }
+            if (home is null)
+                return null;
+
+            int offset = leftSide ? home.Cell.LeftSliceStart : home.Cell.RightSliceStart;
+            var kind = leftSide ? IrTokenOpKind.Delete : IrTokenOpKind.Insert;
+            int first = -1, last = -1;
+            for (int i = 0; i < home.Atoms.Count; i++)
+            {
+                int index = leftSide ? home.Atoms[i].L : home.Atoms[i].R;
+                if (index < 0 || index + offset < start || index + offset >= end)
+                    continue;
+                if (home.Atoms[i].Kind != kind || (last >= 0 && i != last + 1))
+                    return null;
+                if (first < 0)
+                    first = i;
+                last = i;
+            }
+            return first >= 0 && last - first + 1 == end - start ? new CellSpan(home, first, last + 1) : null;
+        }
+
+        /// <summary>Locate a whole fused paragraph: all its tokens in one output paragraph that is its own and is
+        /// removed (a left paragraph, mark deleted) or introduced (a right paragraph, mark inserted).</summary>
+        public CellSpan? LocateWhole(string anchor, bool leftSide, int tokenCount)
+        {
+            var located = Locate(anchor, leftSide, 0, tokenCount, tokenCount);
+            if (located is null)
+                return null;
+            var cell = located.Cell.Cell;
+            bool own = leftSide
+                ? cell.Mark == IrCrossParagraphMark.Deleted && cell.LeftSliceStart == 0 && cell.LeftSliceLen == tokenCount
+                : cell.Mark == IrCrossParagraphMark.Inserted && cell.RightSliceStart == 0 && cell.RightSliceLen == tokenCount;
+            return own ? located : null;
+        }
+
+        /// <summary>The markup script with the pairing carried over: each shared op replaced by its rewritten data
+        /// twin, and each run whose cells were tagged rebuilt from their atoms.</summary>
+        public IrEditScript Replay(IrEditScript data, IrEditScript pairedData)
+        {
+            var rewritten = new Dictionary<IrEditOp, IrEditOp>(ReferenceEqualityComparer.Instance);
+            for (int i = 0; i < data.Operations.Count; i++)
+                if (!ReferenceEquals(data.Operations[i], pairedData.Operations[i]))
+                    rewritten[data.Operations[i]] = pairedData.Operations[i];
+            if (rewritten.Count == 0 && !_runCells.Values.Any(cells => cells.Any(c => c.Changed)))
+                return _markup;
+            return _markup with
+            {
+                Operations = IrNodeList.From(_markup.Operations.Select(op =>
+                {
+                    if (_runCells.TryGetValue(op, out var cells) && cells.Any(c => c.Changed))
+                        return op with
+                        {
+                            CrossParagraphCells = IrNodeList.From(cells.Select(c =>
+                                c.Changed ? c.Cell with { Diff = new IrTokenDiff(Regroup(c.Atoms)) } : c.Cell)),
+                        };
+                    return _dataOf.TryGetValue(op, out var twin) && rewritten.TryGetValue(twin, out var r) ? r : op;
+                })),
+            };
+        }
     }
 
     // ------------------------------------------------------------------ shared plumbing

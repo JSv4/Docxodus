@@ -144,19 +144,21 @@ public class DocxDiffMovePairingParityTests
     }
 
     [Fact]
-    public void ParagraphBesideFusedParagraphs_IsNotPairedOnEitherSurface()
+    public void ParagraphBesideFusedParagraphs_IsPairedOnBothSurfaces()
     {
-        // The redline draws G, A and B as one cross-paragraph stream, where A has no standalone op to draw as
-        // a move half; the revision list therefore leaves it unpaired too, rather than claiming a move the
-        // redline does not show.
+        // The redline draws G, A and B as one cross-paragraph stream, holding A as one deleted run in an output
+        // paragraph of its own; that run is drawn as the move's source half (issue #930), and the revision list
+        // reports the same move.
         var left = IrTestDocuments.FromParts(P(G) + P(A) + P(B) + OneCell(C) + P(D));
         var right = IrTestDocuments.FromParts(P(G.Replace("courier", "fax")) + P(B.Replace("services", "work")) + OneCell(C, A) + P(D));
 
         var redline = DocxCompare.Compare(left, right);
         var revisions = DocxDiff.GetRevisions(left, right, DocxCompare.ApplyFrontDoorRevisionPolicy(null));
 
-        Assert.Empty(Body(redline.DocumentByteArray).Descendants(W.moveFromRangeStart));
-        Assert.DoesNotContain(revisions, r => r.Type == DocxDiffRevisionType.Moved);
+        Assert.Single(Body(redline.DocumentByteArray).Descendants(W.moveFromRangeStart));
+        Assert.Single(Body(redline.DocumentByteArray).Descendants(W.moveToRangeStart));
+        Assert.Equal(2, revisions.Count(r => r.Type == DocxDiffRevisionType.Moved));
+        AssertMovesWholeAndAgreeing(left, right, new DocxDiffSettings());
     }
 
     [Fact]
