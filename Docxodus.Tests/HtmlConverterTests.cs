@@ -4878,12 +4878,12 @@ namespace OxPt
             XElement xhtml = ConvertBodyToHtml(body, settings);
 
             var row = xhtml.Descendants().Single(e => e.Name.LocalName == "tr");
-            var classes = ((string)row.Attribute("class")).Split(' ');
+            var classes = ((string?)row.Attribute("class") ?? "").Split(' ');
             Assert.Contains($"rev-row-{structural}", classes);
             Assert.Contains("rev-row-format-change", classes);
             // The row's own insertion or deletion is the revision it is attributed to.
-            Assert.Equal("Inserter", (string)row.Attribute("data-author"));
-            Assert.Equal("2026-01-01T00:00:00Z", (string)row.Attribute("data-date"));
+            Assert.Equal("Inserter", (string?)row.Attribute("data-author"));
+            Assert.Equal("2026-01-01T00:00:00Z", (string?)row.Attribute("data-date"));
             Assert.Contains("Both revisions.", row.Value);
         }
 
