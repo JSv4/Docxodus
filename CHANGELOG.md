@@ -102,6 +102,15 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Comparing a document with a long run of edited paragraphs no longer slows down quadratically in the
+  cross-paragraph fusion step (issue #931). When a run of adjacent edited paragraphs declined to be drawn
+  as one word stream, the edit-script builder tried again from the next paragraph, re-examining almost the
+  same run once per paragraph. An 800-paragraph run took over half a minute, and a 2,000-paragraph one did
+  not finish in 20 minutes. A run that declines now proves which later start points must decline as well,
+  so they are skipped. Per-attempt lookups that scanned every paragraph or every match became binary
+  searches. The 2,000-paragraph comparison takes about 3 s. Output is unchanged: the skipped attempts are
+  exactly the ones that would have declined. `GetRevisions` shares the speed-up through relocation
+  pairing, which makes the same fusion decision.
 - Accepting or rejecting revisions no longer strips block-level `w:customXml` wrappers (issue #913).
   The pass that joins paragraphs across deleted paragraph marks rebuilt each body, cell and content
   control from the paragraphs it found and put back only content controls, so every block custom-XML
