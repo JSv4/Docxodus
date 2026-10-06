@@ -110,6 +110,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- A lowered run (negative `w:position`) now grows its line downward the way Word does (issue #948). Word
+  keeps the line's baseline, draws the run below it, and makes the line taller by the drop, so every later
+  line moves down with it (recorded from Word's own PDF as CASE7 in `npm/tests/fixtures/line-baselines.word.json`).
+  The converter moved the run with relative positioning, which left the later lines where they were and could
+  overlap the next line. It now uses `vertical-align`, as it has for a raised run since #941.
 - The HTML converter keeps paragraph and list indents written as `w:ind/@w:start` and `@w:end`
   (issue #894). ECMA-376 spells the indent edges both `w:start`/`w:end` and `w:left`/`w:right`. Word writes
   the second form, LibreOffice the first, and the converter read only `w:left`/`w:right`, so a document saved

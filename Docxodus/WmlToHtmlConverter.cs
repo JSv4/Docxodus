@@ -6824,9 +6824,9 @@ namespace Docxodus
         /// each direct child is also moved up by half the extra with relative positioning: the line
         /// boxes, and with them pagination, are exactly what they were, and only the glyphs move to
         /// the top of their line. In <c>top</c>, <c>1lh</c> is the child's own multiplied height mN,
-        /// so <c>1lh * (1/m - 1) / 2</c> is -(m-1)N/2; a multiple below 1 is not moved. A raised or
-        /// lowered run (<c>w:position</c>) already carries a relative <c>top</c>, and the two offsets
-        /// are added. A child positioned some other way, or holding an image or drawing (which can be
+        /// so <c>1lh * (1/m - 1) / 2</c> is -(m-1)N/2; a multiple below 1 is not moved. A child that
+        /// already carries a relative <c>top</c> keeps it, and the two offsets are added (a raised or
+        /// lowered run uses <c>vertical-align</c>, which composes on its own). A child positioned some other way, or holding an image or drawing (which can be
         /// the tallest thing on its line, so moving it up would overlap the line above), or holding an
         /// absolutely positioned descendant such as a floating drawing (a relative child would become
         /// its containing block), is not moved.
@@ -7728,19 +7728,15 @@ namespace Docxodus
                 style.AddIfMissing("letter-spacing",
                     string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", spacingInTwips/20));
 
-            // W.position. Word grows a line to make room for a raised run, keeping the raised text at the
-            // line's usual top and moving the baseline down by the raise (issue #941, recorded from Word's own
-            // PDF; see npm/tests/fixtures/line-baselines.word.json, CASE6). vertical-align does exactly that,
-            // where relative positioning moved the glyphs without growing the line. A lowered run keeps the
-            // relative offset: Word's line for it has not been recorded.
+            // W.position. Word grows a line to make room for a shifted run, as recorded from its own PDFs (see
+            // npm/tests/fixtures/line-baselines.word.json). For a raised run (CASE6, issue #941) it keeps the
+            // raised text at the line's usual top and moves the baseline down by the raise. For a lowered run
+            // (CASE7, issue #948) it keeps the baseline and grows the line downward by the drop, so every later
+            // line moves down by it. vertical-align does both, where relative positioning moved the glyphs
+            // without growing the line.
             var position = (decimal?) rPr.Elements(W.position).Attributes(W.val).FirstOrDefault();
-            if (position > 0)
-                style.AddIfMissing("vertical-align", string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", position / 2));
-            else if (position < 0)
-            {
-                style.AddIfMissing("position", "relative");
-                style.AddIfMissing("top", string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", -(position/2)));
-            }
+            if (position is { } halfPoints && halfPoints != 0)
+                style.AddIfMissing("vertical-align", string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", halfPoints / 2));
 
             // W.vanish
             if (GetBoolProp(rPr, W.vanish) && !GetBoolProp(rPr, W.specVanish))

@@ -1,11 +1,12 @@
 """Writes line-baselines.docx, the Word-reference fixture for exported baseline placement (issue #908).
 
-Seven cases, one per page, each a paragraph several lines long that starts at the top margin, so the
+Eight cases, one per page, each a paragraph several lines long that starts at the top margin, so the
 first baseline sits a measurable distance below the margin and later lines give the pitch:
 
   CASE0..2  11 pt Calibri, w:line 240 / 276 / 480 (single, 1.15, double), w:lineRule auto
   CASE3..5  12 pt Arial,   the same three spacings
   CASE6     11 pt Calibri at 1.15 with a raised run (w:position 6 = 3 pt up) on its first line
+  CASE7     11 pt Calibri at 1.15 with a lowered run (w:position -6 = 3 pt down) on its first line
 
 It also writes line-baselines-plain-marks.docx: the same cases with paragraph marks that carry no run
 properties, so each mark keeps the default 11 pt Calibri under its runs' font (issue #940). Word's baselines do
@@ -33,7 +34,7 @@ def run(font, half_points, text, position=None):
             f'<w:t xml:space="preserve">{text}</w:t></w:r>')
 
 
-def paragraph(index, font, half_points, line, raised=False, plain_mark=False):
+def paragraph(index, font, half_points, line, position=None, plain_mark=False):
     # The paragraph mark carries the runs' font too, as Word writes it, so the paragraph's own line
     # height comes from the same font as its text. A plain mark has no run properties at all.
     mark = ('' if plain_mark else
@@ -43,8 +44,9 @@ def paragraph(index, font, half_points, line, raised=False, plain_mark=False):
            + f'<w:spacing w:before="0" w:after="0" w:line="{line}" w:lineRule="auto"/>'
            + mark)
     body = run(font, half_points, f"CASE{index} ")
-    if raised:
-        body += run(font, half_points, "raised", position=6) + run(font, half_points, " " + SENTENCE * 4)
+    if position is not None:
+        word = "raised" if position > 0 else "lowered"
+        body += run(font, half_points, word, position=position) + run(font, half_points, " " + SENTENCE * 4)
     else:
         body += run(font, half_points, SENTENCE * 4)
     return f"<w:p><w:pPr>{ppr}</w:pPr>{body}</w:p>"
@@ -52,7 +54,8 @@ def paragraph(index, font, half_points, line, raised=False, plain_mark=False):
 
 def parts(plain_marks):
     paragraphs = [paragraph(i, *case, plain_mark=plain_marks) for i, case in enumerate(CASES)]
-    paragraphs.append(paragraph(6, "Calibri", 22, 276, raised=True, plain_mark=plain_marks))
+    paragraphs.append(paragraph(6, "Calibri", 22, 276, position=6, plain_mark=plain_marks))
+    paragraphs.append(paragraph(7, "Calibri", 22, 276, position=-6, plain_mark=plain_marks))
     return {
         "[Content_Types].xml": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/></Types>""",
