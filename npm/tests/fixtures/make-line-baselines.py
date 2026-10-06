@@ -7,6 +7,11 @@ first baseline sits a measurable distance below the margin and later lines give 
   CASE3..5  12 pt Arial,   the same three spacings
   CASE6     11 pt Calibri at 1.15 with a raised run (w:position 6 = 3 pt up) on its first line
 
+It also writes line-baselines-plain-marks.docx: the same cases with paragraph marks that carry no run
+properties, so each mark keeps the default 11 pt Calibri under its runs' font (issue #940). Word's baselines do
+not depend on the mark here: Word for the web gave identical baselines for a plain-mark version of
+line-baselines.docx and for the current one.
+
 The zip is written with fixed timestamps so the file's SHA-256 is stable. Re-run only to change the
 fixture, and re-capture the Word measurements when you do.
 """
@@ -28,13 +33,15 @@ def run(font, half_points, text, position=None):
             f'<w:t xml:space="preserve">{text}</w:t></w:r>')
 
 
-def paragraph(index, font, half_points, line, raised=False):
+def paragraph(index, font, half_points, line, raised=False, plain_mark=False):
     # The paragraph mark carries the runs' font too, as Word writes it, so the paragraph's own line
-    # height comes from the same font as its text.
+    # height comes from the same font as its text. A plain mark has no run properties at all.
+    mark = ('' if plain_mark else
+            f'<w:rPr><w:rFonts w:ascii="{font}" w:hAnsi="{font}" w:cs="{font}"/>'
+            + f'<w:sz w:val="{half_points}"/><w:szCs w:val="{half_points}"/></w:rPr>')
     ppr = (('<w:pageBreakBefore/>' if index > 0 else '')
            + f'<w:spacing w:before="0" w:after="0" w:line="{line}" w:lineRule="auto"/>'
-           + f'<w:rPr><w:rFonts w:ascii="{font}" w:hAnsi="{font}" w:cs="{font}"/>'
-           + f'<w:sz w:val="{half_points}"/><w:szCs w:val="{half_points}"/></w:rPr>')
+           + mark)
     body = run(font, half_points, f"CASE{index} ")
     if raised:
         body += run(font, half_points, "raised", position=6) + run(font, half_points, " " + SENTENCE * 4)
@@ -43,28 +50,29 @@ def paragraph(index, font, half_points, line, raised=False):
     return f"<w:p><w:pPr>{ppr}</w:pPr>{body}</w:p>"
 
 
-paragraphs = [paragraph(i, *case) for i, case in enumerate(CASES)]
-paragraphs.append(paragraph(6, "Calibri", 22, 276, raised=True))
-
-parts = {
-    "[Content_Types].xml": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+def parts(plain_marks):
+    paragraphs = [paragraph(i, *case, plain_mark=plain_marks) for i, case in enumerate(CASES)]
+    paragraphs.append(paragraph(6, "Calibri", 22, 276, raised=True, plain_mark=plain_marks))
+    return {
+        "[Content_Types].xml": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/></Types>""",
-    "_rels/.rels": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        "_rels/.rels": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>""",
-    "word/_rels/document.xml.rels": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        "word/_rels/document.xml.rels": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/></Relationships>""",
-    "word/styles.xml": f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        "word/styles.xml": f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:styles xmlns:w="{W}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Calibri" w:eastAsia="Calibri"/><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults></w:styles>""",
-    "word/settings.xml": f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        "word/settings.xml": f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:settings xmlns:w="{W}"><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>""",
-    "word/document.xml": f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        "word/document.xml": f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="{W}"><w:body>{''.join(paragraphs)}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body></w:document>""",
-}
+    }
 
-out = Path(__file__).with_name("line-baselines.docx")
-with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-    for name, data in parts.items():
-        info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
-        info.compress_type = zipfile.ZIP_DEFLATED
-        z.writestr(info, data.encode("utf-8"))
-print(out)
+for name, plain_marks in (("line-baselines.docx", False), ("line-baselines-plain-marks.docx", True)):
+    out = Path(__file__).with_name(name)
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        for part, data in parts(plain_marks).items():
+            info = zipfile.ZipInfo(part, date_time=(2026, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            z.writestr(info, data.encode("utf-8"))
+    print(out)

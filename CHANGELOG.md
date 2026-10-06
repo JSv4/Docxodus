@@ -110,6 +110,13 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- A paragraph whose runs use a different font from its paragraph mark no longer gets a line box taller than
+  any of its lines (issue #940). The HTML gave the `<p>` the mark's font family but its largest run's size, so
+  12 pt Arial runs under a mark left at the default Calibri got a Calibri 12 pt line box, 14.65 pt tall where
+  every Arial line is 13.80. Lines were spaced 14.65 pt apart; Word spaces them 13.84. The paragraph now takes
+  both its family and its size from one run, the first of the largest size; a paragraph with no runs keeps
+  its mark's font. Because auto line multiples are built on the paragraph's line height, their spacing follows
+  the runs' font too.
 - Block alignment's same-slot pass no longer slows down quadratically on a long run of edited paragraphs
   (issue #937). Before pairing the k-th leftover paragraph of a gap with the k-th on the other side, the
   pass checks that no other still-free paragraph shares strictly more content words with either partner,

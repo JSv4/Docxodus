@@ -2120,6 +2120,42 @@ Tests: `npm/tests/export-line-baselines.spec.ts`. It lays the fixture out with s
 Liberation Sans (Calibri's and Arial's metrics) served through the export's font resolver, measures
 baselines in the DOM, and compares them with Word's.
 
+### A paragraph's line box comes from the fonts on its lines, not its mark (#940)
+
+Word sizes each line from the fonts actually on it. A paragraph mark left at the document default does not
+make the paragraph's lines taller when its runs use a different, shorter font:
+
+```xml
+<!-- docDefaults: Calibri 11 pt. The mark has no w:rPr. -->
+<w:p><w:pPr><w:spacing w:line="240" w:lineRule="auto"/></w:pPr>
+  <w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:sz w:val="24"/></w:rPr>
+    <w:t>CASE3 The quick brown fox…</w:t></w:r></w:p>
+```
+
+| Line pitch, 12 pt Arial runs under a default Calibri mark | |
+|---|---:|
+| Word (Word for the web PDF export) | 13.84 pt average (13.75, 13.75, 14.02) |
+| Docxodus before #940 | 14.65 pt |
+| Docxodus after #940 | 13.80 pt |
+
+Word's baselines do not depend on the mark here. The first Word capture for #908 was of a version of
+`line-baselines.docx` whose marks were plain; after the marks were given the runs' font, Word was re-captured
+and gave identical baselines. `npm/tests/fixtures/line-baselines-plain-marks.docx` is the current fixture
+with plain marks again, checked against that same record.
+
+**Why Docxodus differed.** The converter took the `<p>`'s `font-family` from the mark (`PtOpenXml.FontName`
+on the paragraph) and its `font-size` from the largest run. The paragraph's own line box (its CSS strut)
+was then Calibri at 12 pt, 1.2207 em × 12 pt = 14.65 pt: a family-and-size pair that exists nowhere in the
+document, taller than every line. Every `auto` multiple is also built on that strut (`1lh`).
+
+**Fix.** `DefineStrutFont` (`Docxodus/WmlToHtmlConverter.cs`) takes the family and the size from the same
+run, the first of the largest size, so the strut is never taller than that run's own line. A paragraph with
+no runs keeps its mark's font. Whether a mark that is *taller* than its runs makes Word's last line taller
+has not been recorded.
+
+Tests: `HCO100_*` in `Docxodus.Tests/HtmlConversionOpsTests.cs`, and the plain-mark case in
+`npm/tests/export-line-baselines.spec.ts`, which serves Calibri and Arial as two different faces.
+
 ### An accumulated line-spacing error can resemble a top-margin deviation
 
 #### Symptom

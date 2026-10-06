@@ -94,6 +94,8 @@
             faces: [face],
           };
         }
+        // plan.byFamily optionally serves a face of its own to each requested family, by its first name.
+        const bytesFor = item => plan.byFamily?.[item.familyStack[0]] ?? plan;
         const faces = request.requests.map(item => ({
           id: `fixture-${item.id}`,
           resolvedFamily: plan.mode === 'substituted'
@@ -106,9 +108,9 @@
           stretch: item.stretch,
           format: plan.format,
           mediaType: plan.mediaType,
-          byteLength: plan.byteLength,
-          sha256: plan.sha256,
-          bytesBase64: plan.bytesBase64,
+          byteLength: bytesFor(item).byteLength,
+          sha256: bytesFor(item).sha256,
+          bytesBase64: bytesFor(item).bytesBase64,
           licenseEvidence: {
             kind: plan.attested ? 'attested' : 'installable',
             identity: plan.licenseIdentity,
