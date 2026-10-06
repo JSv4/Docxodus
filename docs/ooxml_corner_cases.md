@@ -2520,11 +2520,16 @@ writes `w:start`/`w:end`, so any document that has been through a LibreOffice sa
 <w:pPr><w:ind w:start="720" w:hanging="360"/></w:pPr>
 ```
 
-| Renderer | `w:left="1440"` | `w:start="1440"` |
-|---|---|---|
-| LibreOffice | 1 in indent | 1 in indent |
-| Docxodus before #894 | `margin-left: 1.00in` | `margin-left: 0` |
-| Docxodus after #894 | `margin-left: 1.00in` | `margin-left: 1.00in` |
+Indent measured from the left margin (LibreOffice: text x position in its exported PDF; Docxodus:
+the converted paragraph's CSS). The list level is `w:left`/`w:start="720" w:hanging="360"`.
+
+| Renderer | paragraph, `w:left="1440"` | paragraph, `w:start="1440"` | list item, `w:left` level | list item, `w:start` level |
+|---|---|---|---|---|
+| LibreOffice 25.8.7.3 | 1.00 in | 1.00 in | marker 0.25 in, text 0.50 in | marker 0.25 in, text 0.50 in |
+| Docxodus before #894 | `margin-left: 1.00in` | `margin-left: 0` | `margin-left: 0.50in; text-indent: -0.25in` | `margin-left: 0; text-indent: -0.25in` |
+| Docxodus after #894 | `margin-left: 1.00in` | `margin-left: 1.00in` | `margin-left: 0.50in; text-indent: -0.25in` | `margin-left: 0.50in; text-indent: -0.25in` |
+
+Word was not measured; it writes `w:left`/`w:right` itself.
 
 Before #894 a list level written with `w:start` lost its indent but kept its hanging indent, so
 `text-indent: -0.25in` pulled the marker left of the paragraph's box.

@@ -171,6 +171,30 @@ namespace OxPt
             Assert.Equal(360, paragraph.RightIndentTwips);
         }
 
+        [Theory]
+        [InlineData("start", "left")]
+        [InlineData("left", "start")]
+        public void Effective_formatting_takes_the_paragraph_override_in_the_other_spelling(string styleSpelling, string paraSpelling)
+        {
+            var styles = "<w:style w:type=\"paragraph\" w:styleId=\"Deep\"><w:name w:val=\"Deep\"/>" +
+                $"<w:pPr><w:ind w:{styleSpelling}=\"2880\"/></w:pPr></w:style>";
+            using var s = new DocxSession(BuildDocx(
+                Para($"<w:ind w:{paraSpelling}=\"720\"/>", "Override", "<w:pStyle w:val=\"Deep\"/>"), styles));
+            var anchor = s.Project().AnchorIndex.Keys.First(k => k.StartsWith("p:"));
+            Assert.Equal(720, s.GetFormatting(anchor)!.EffectiveParagraph.LeftIndentTwips);
+        }
+
+        [Theory]
+        [InlineData("start", "left")]
+        [InlineData("left", "start")]
+        public void List_paragraph_overrides_its_level_indent_in_the_other_spelling(string levelSpelling, string paraSpelling)
+        {
+            var html = ToHtml(BuildDocx(
+                Para($"<w:ind w:{paraSpelling}=\"1440\" w:hanging=\"360\"/>", "Moved item", ListPPr),
+                numberingXml: ListNumbering($"<w:ind w:{levelSpelling}=\"720\" w:hanging=\"360\"/>")));
+            Assert.Contains("margin-left: 1.00in", StyleOf(html, "Moved item"));
+        }
+
         [Fact]
         public void GetListMembership_reads_a_strict_spelling_level_indent()
         {
