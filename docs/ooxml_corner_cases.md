@@ -2087,9 +2087,31 @@ values are measured in the DOM with Chromium placing baselines on whole CSS pixe
 - **The extra height goes below the text.** The first baseline is identical at every multiple, and
   later lines advance by the multiple of the natural height (Calibri: 13.42, 15.42, 26.84 pt; the
   font's `hhea` height is 13.43 pt).
-- **What remains is whole-pixel rounding.** Chromium puts a line's baseline on a whole CSS pixel, so
-  the exported single-spaced first line sits about one pixel (0.78 pt) above Word's for both fonts. A
-  multiple-spaced first line can read up to a pixel off that. Neither accumulates. Tracked in #942.
+- **Whole-pixel rounding, fixed in #942.** Word sets a baseline its natural line height *L* less the
+  font's descent *D* below the line's top: Calibri 1.2207 − 0.2686 = 0.952 em (10.47 pt at 11 pt), Arial
+  1.1499 − 0.2119 = 0.938 em (11.26 pt at 12 pt; the ascent with the line gap above it). Chromium rounds
+  the ascent and descent to whole pixels and floors half the remaining leading, so the exported first line
+  sat one pixel (0.78 pt) above Word's for both fonts, every later line with it. (CSS also splits a line
+  gap half above and half below the text, where Word puts it all above; Arial has a small one.) The
+  first baselines at 1.15 and double now agree with single spacing to within 0.02 pt:
+
+  | First baseline, pt from the page top | Word | Docxodus before #942 | after |
+  |---|---:|---:|---:|
+  | 11 pt Calibri / Carlito | 82.53 | 81.75 | 82.47 |
+  | 12 pt Arial / Liberation Sans | 83.28 | 82.50 | 83.25 |
+
+  `alignBaselinesToWord` (`npm/src/line-metrics.ts`) runs in the export once the page tree is final.
+  For each paragraph whose line height is its font's natural height it computes Word's offset, *L* − *D*
+  (*D* read from the canvas at 1000 px), measures Chromium's in a probe shaped like the paragraph's first
+  line, and moves each direct inline child by the difference with relative positioning, so no line box
+  changes. It runs after the export's clipping check on purpose: a glyph moved down stays inside its line,
+  but its inline box (the font's rounded ascent plus descent, which can be taller than the line) can pass
+  a page band's bottom edge by a pixel, and the check counts relatively positioned boxes. Run before
+  pagination, it failed a footnote continuation as clipped. A child that sits off the baseline is not used as the probe (a raised run would otherwise have
+  its raise "corrected" away), and a child holding an image, an SVG or a positioned element is not moved.
+  Exact and at-least line heights are left alone, since Word's placement for them has not been recorded.
+  Chromium's printed PDF snaps text origins to whole pixels, so in print the fix shows as landing on Word's
+  pixel.
 - **A raised run (`w:position`) grows Word's line.** CASE6 raises "raised" by 3 pt on the first line
   of a 1.15 paragraph. Word moves that line's baseline down 3 pt to make room, and every later line
   with it:

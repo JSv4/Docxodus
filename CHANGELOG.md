@@ -110,6 +110,16 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- The paginated export now puts each line's baseline where Word does to within a tenth of a point (issue
+  #942). Word sets a baseline its natural line height less the font's descent below the line's top, with any
+  line gap above the text. Chromium rounds the ascent and descent to whole pixels, floors half the remaining
+  leading and splits the line gap, which put the first line of 11 pt Calibri and of 12 pt Arial one CSS pixel
+  (0.78 pt) above Word's, and every later line with it. A new pass (`alignBaselinesToWord`,
+  `npm/src/line-metrics.ts`) measures that offset once per paragraph shape and takes it back with relative
+  positioning on the paragraph's inline children. Line boxes, pagination and PageMap are unchanged. Exported
+  first baselines now read 82.47 pt and 83.25 pt against Word's 82.53 and 83.28, at single, 1.15 and double
+  spacing, and the printed PDF puts them on Word's pixel. It applies to paragraphs with natural line heights
+  (single spacing and `auto` multiples); exact and at-least spacing are left as they were.
 - A raised run (`w:position` above 0) now makes its line taller the way Word does, instead of overlapping the
   line above (issue #941). Word keeps the raised text at the line's usual top and moves the line's baseline
   down by the raise, and every later line with it. The HTML raised the run with relative positioning, which

@@ -8,7 +8,7 @@
 
 import limitsContractJson from "./export-resource-limits-v1.json";
 import { assertWellFormedUnicode, canonicalJson } from "./canonical.js";
-import { applyUnroundedNormalLineHeights } from "./line-metrics.js";
+import { alignBaselinesToWord, applyUnroundedNormalLineHeights } from "./line-metrics.js";
 import { measureRenderedSource, PaginationEngine, type PageMap } from "./pagination.js";
 import {
   createWorkerDocxodus,
@@ -3752,6 +3752,10 @@ export async function convertDocxToPaginatedHtml(
     }
     frame = finalized.frame;
     const { document: renderDocument, engine, pages } = finalized;
+    // Chromium also puts each baseline up to a pixel off Word's (issue #942). Relative offsets take that back
+    // without changing a line box. They run on the final page tree, after the clipping check: a glyph moved
+    // down stays inside its line, but its inline box can pass a page band's edge by a pixel.
+    alignBaselinesToWord(renderDocument.body);
     const renderer = await runPhase(state, "output_verification", ["renderer identity"], () =>
       rendererIdentity(
         renderDocument,
