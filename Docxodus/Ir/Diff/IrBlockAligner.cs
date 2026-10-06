@@ -941,6 +941,10 @@ internal static class IrBlockAligner
             }
         }
 
+        var leftIndex = new ContentWordIndex(leftBlocks, ls, similarity);
+        var rightIndex = new ContentWordIndex(rightBlocks, rs, similarity);
+        var pairedLeft = new HashSet<int>();
+        var pairedRight = new HashSet<int>();
         for (int k = 0; k < slots; k++)
         {
             int li = ls[k], rj = rs[k];
@@ -973,44 +977,99 @@ internal static class IrBlockAligner
             // diagonal in that case; the slot pair only claims its partners when NO still-free
             // paragraph on either side offers strictly more shared content words (a tie keeps the
             // slot pair — positional preference on equal evidence).
-            bool outbid = false;
-            foreach (int cl in ls)
-            {
-                if (cl == li || leftMatch[cl] != -1)
-                    continue;
-                if (SharedContentWordCount((IrParagraph)leftBlocks[cl], rp, similarity) > evidence)
-                {
-                    outbid = true;
-                    break;
-                }
-            }
-            if (!outbid)
-                foreach (int cr in rs)
-                {
-                    if (cr == rj || rightMatch[cr] != -1)
-                        continue;
-                    if (SharedContentWordCount(lp, (IrParagraph)rightBlocks[cr], similarity) > evidence)
-                    {
-                        outbid = true;
-                        break;
-                    }
-                }
-            if (outbid)
+            if (leftIndex.Outbids(rp, li, evidence, leftMatch, similarity) ||
+                rightIndex.Outbids(lp, rj, evidence, rightMatch, similarity))
                 continue;
 
             leftKind[li] = IrAlignmentKind.Modified;
             rightKind[rj] = IrAlignmentKind.Modified;
             leftMatch[li] = rj;
             rightMatch[rj] = li;
-            leftoverLeft.Remove(li);
-            leftoverRight.Remove(rj);
+            pairedLeft.Add(li);
+            pairedRight.Add(rj);
+        }
+
+        // Removed once at the end: removing each pair as it formed scanned the leftover list per pair.
+        leftoverLeft.RemoveAll(pairedLeft.Contains);
+        leftoverRight.RemoveAll(pairedRight.Contains);
+    }
+
+    /// <summary>
+    /// One side's same-slot candidates indexed by content word, so the competitor-evidence guard visits only
+    /// paragraphs that could outbid a slot pair (issue #937). Scanning every still-free paragraph for every
+    /// slot made a gap of K leftover paragraphs cost K² word-set intersections.
+    ///
+    /// The bound is exact. A competitor outbids a slot pair that shares <c>evidence</c> content words with
+    /// the target only by sharing at least <c>evidence + 1</c> of the target's n content words. Leaving out
+    /// any <c>n - evidence</c> of those words leaves only <c>evidence</c>, so every such competitor holds one
+    /// of the words left out. Probing the <c>n - evidence</c> rarest of the target's words therefore reaches
+    /// every possible competitor, and a pair sharing all of the target's content words has none.
+    /// </summary>
+    internal sealed class ContentWordIndex
+    {
+        private readonly IrNodeList<IrBlock> _blocks;
+        private readonly Dictionary<string, List<int>> _postings = new();
+
+        public ContentWordIndex(IrNodeList<IrBlock> blocks, List<int> candidates, IrBlockSimilarity similarity)
+        {
+            _blocks = blocks;
+            foreach (int index in candidates)
+                foreach (var key in similarity.PairingWordKeys((IrParagraph)blocks[index]).Keys)
+                {
+                    if (FunctionWords.Contains(key))
+                        continue;
+                    if (!_postings.TryGetValue(key, out var list))
+                        _postings[key] = list = new List<int>();
+                    list.Add(index);
+                }
+        }
+
+        /// <summary>Whether a still-free paragraph of this side other than <paramref name="slotPartner"/>
+        /// shares more than <paramref name="evidence"/> content words with <paramref name="target"/>.</summary>
+        public bool Outbids(IrParagraph target, int slotPartner, int evidence, int[] match, IrBlockSimilarity similarity)
+        {
+            int words = 0;
+            var postings = new List<List<int>>();
+            foreach (var key in similarity.PairingWordKeys(target).Keys)
+            {
+                if (FunctionWords.Contains(key))
+                    continue;
+                words++;
+                if (_postings.TryGetValue(key, out var list))
+                    postings.Add(list);
+            }
+
+            // The target's words no paragraph here holds are the rarest of all: they fill the probed prefix
+            // first and reach no one.
+            int probe = words - evidence - (words - postings.Count);
+            if (probe <= 0)
+                return false;
+            postings.Sort((a, b) => a.Count.CompareTo(b.Count));
+            var seen = new HashSet<int>();
+            for (int p = 0; p < probe; p++)
+                foreach (int candidate in postings[p])
+                {
+                    if (candidate == slotPartner || match[candidate] != -1 || !seen.Add(candidate))
+                        continue;
+                    competitorChecksOnThisThread++;
+                    if (SharedContentWordCount((IrParagraph)_blocks[candidate], target, similarity) > evidence)
+                        return true;
+                }
+            return false;
         }
     }
+
+    /// <summary>Number of word-set comparisons <see cref="SameSlotPair"/>'s competitor-evidence guard made on the
+    /// current thread — lets tests check that the guard's cost stays linear in a gap's size (issue #937).</summary>
+    [ThreadStatic]
+    private static int competitorChecksOnThisThread;
+
+    internal static int CompetitorChecksOnThisThread => competitorChecksOnThisThread;
 
     /// <summary>Number of distinct shared word keys that are not English closed-class function
     /// words — the lexical-evidence measure of the same-slot pass (shared "with" or "this" is
     /// positional scaffolding, not evidence of correspondence).</summary>
-    private static int SharedContentWordCount(IrParagraph lp, IrParagraph rp, IrBlockSimilarity similarity)
+    internal static int SharedContentWordCount(IrParagraph lp, IrParagraph rp, IrBlockSimilarity similarity)
     {
         var a = similarity.PairingWordKeys(lp);
         var b = similarity.PairingWordKeys(rp);
