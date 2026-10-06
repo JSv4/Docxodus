@@ -836,12 +836,8 @@ namespace Docxodus
 
         private static void AddTabAtLeftIndent(XElement pPr)
         {
-            int left = 0;
-            var ind = pPr.Element(W.ind);
-
-            // todo need to handle W.start
-            if (pPr.Attribute(W.left) != null)
-                left = (int)pPr.Attribute(W.left)!;
+            var left = WordprocessingMLUtil.AttributeToTwips(
+                WordprocessingMLUtil.IndLeadingAttribute(pPr.Element(W.ind))) ?? 0;
             var tabs = pPr.Element(W.tabs);
             if (tabs == null)
             {
@@ -2143,6 +2139,14 @@ namespace Docxodus
             None,
         };
 
+        private static readonly (XName Strict, XName Transitional)[] IndEdgeSpellings =
+        {
+            (W.start, W.left),
+            (W.end, W.right),
+            (W.startChars, W.leftChars),
+            (W.endChars, W.rightChars),
+        };
+
         [return: NotNullIfNotNull(nameof(higherPriorityElement))]
         [return: NotNullIfNotNull(nameof(lowerPriorityElement))]
         private static XElement? IndMerge(XElement? higherPriorityElement, XElement? lowerPriorityElement)
@@ -2169,6 +2173,18 @@ namespace Docxodus
 
             if (hpe.Attribute(W.hangingChars) != null)
                 lpe.Attributes(W.firstLineChars).Remove();
+
+            // w:start/w:left (and w:end/w:right) are two spellings of one edge. A higher-priority
+            // value in either spelling must replace the lower-priority value in both, or a style's
+            // w:start would survive beside the paragraph's w:left and win the read.
+            foreach (var (strict, transitional) in IndEdgeSpellings)
+            {
+                if (hpe.Attribute(strict) != null || hpe.Attribute(transitional) != null)
+                {
+                    lpe.Attributes(strict).Remove();
+                    lpe.Attributes(transitional).Remove();
+                }
+            }
 
             var highPriAtts = hpe
                 .Attributes()

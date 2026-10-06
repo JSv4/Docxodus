@@ -920,6 +920,23 @@ namespace Docxodus
             return int.Parse(twipsOrPoints);
         }
 
+        /// <summary>
+        /// The leading edge of a <c>w:ind</c>. The strict schema spells it <c>w:start</c>; the
+        /// transitional <c>w:left</c> names the same edge (ECMA-376 Part 1, §17.3.1.12). Word writes
+        /// <c>w:left</c>, LibreOffice writes <c>w:start</c>. When one element carries both,
+        /// <c>w:start</c> wins. Style inheritance never produces that case: <c>IndMerge</c> in
+        /// <c>FormattingAssembler</c> treats the two spellings as one slot.
+        /// </summary>
+        internal static XAttribute? IndLeadingAttribute(XElement? ind) =>
+            ind?.Attribute(W.start) ?? ind?.Attribute(W.left);
+
+        /// <summary>
+        /// The trailing edge of a <c>w:ind</c>: <c>w:end</c>, or its transitional spelling
+        /// <c>w:right</c>. See <see cref="IndLeadingAttribute"/> for the precedence.
+        /// </summary>
+        internal static XAttribute? IndTrailingAttribute(XElement? ind) =>
+            ind?.Attribute(W.end) ?? ind?.Attribute(W.right);
+
         public static int? AttributeToTwips(XAttribute? attribute)
         {
             if (attribute == null)

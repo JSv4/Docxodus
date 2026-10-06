@@ -18,6 +18,7 @@ This document tracks edge cases and quirks in Open XML document processing where
    - [`w:lineRule="auto"` is a multiple of the FONT's line box, not of font-size](#wlineruleauto-is-a-multiple-of-the-fonts-line-box-not-of-font-size)
    - [An accumulated line-spacing error can resemble a top-margin deviation](#an-accumulated-line-spacing-error-can-resemble-a-top-margin-deviation)
    - [Cached TOC field results suppress hyperlink presentation](#cached-toc-field-results-suppress-hyperlink-presentation)
+   - [`w:ind` has two spellings for each edge: `w:start`/`w:left` and `w:end`/`w:right`](#wind-has-two-spellings-for-each-edge-wstartwleft-and-wendwright)
 5. [Theme Colors](#theme-colors)
    - [`w:color`/`w:fill` are a CACHE; `w:themeColor`/`w:themeFill` are the authority](#wcolorwfill-are-a-cache-wthemecolorwthemefill-are-the-authority)
 6. [Contributing](#contributing)
@@ -2504,6 +2505,50 @@ merges, actual clipping at the paper edges and body bottom, and PageMap geometry
   `npm/src/pagination.ts` (content area).
 - Tests: `HCO099_TableIndent_UsesLeadingMargin`,
   `npm/tests/pagination-negative-table-indent.spec.ts`.
+
+## `w:ind` has two spellings for each edge: `w:start`/`w:left` and `w:end`/`w:right`
+
+ECMA-376 Part 1, §17.3.1.12 names a paragraph's indent edges `w:start` and `w:end`; the transitional
+schema keeps the older `w:left` and `w:right` for the same edges (both are "leading" and "trailing",
+so a right-to-left paragraph swaps them the same way). Word writes `w:left`/`w:right`. LibreOffice
+writes `w:start`/`w:end`, so any document that has been through a LibreOffice save uses that form.
+
+```xml
+<w:p><w:pPr><w:ind w:start="1440"/></w:pPr><w:r><w:t>Indented one inch.</w:t></w:r></w:p>
+
+<!-- numbering.xml, a list level -->
+<w:pPr><w:ind w:start="720" w:hanging="360"/></w:pPr>
+```
+
+| Renderer | `w:left="1440"` | `w:start="1440"` |
+|---|---|---|
+| LibreOffice | 1 in indent | 1 in indent |
+| Docxodus before #894 | `margin-left: 1.00in` | `margin-left: 0` |
+| Docxodus after #894 | `margin-left: 1.00in` | `margin-left: 1.00in` |
+
+Before #894 a list level written with `w:start` lost its indent but kept its hanging indent, so
+`text-indent: -0.25in` pulled the marker left of the paragraph's box.
+
+**Both spellings on one element.** Nothing seen in the wild writes both, but style inheritance
+used to manufacture it: `FormattingAssembler.IndMerge` merged attribute by attribute, so a style's
+`w:start` survived beside the paragraph's overriding `w:left`. The merge now treats each pair
+(`start`/`left`, `end`/`right`, `startChars`/`leftChars`, `endChars`/`rightChars`) as one slot, the
+way it already treats `firstLine` against `hanging`. On a source element that does carry both,
+every reader prefers `w:start`/`w:end`, the strict-schema name.
+
+#### Relevant code
+
+- `WordprocessingMLUtil.IndLeadingAttribute` / `IndTrailingAttribute` (`Docxodus/PtOpenXmlUtil.cs`):
+  the one rule. The converter (`CreateStyleFromInd`, the tab layout, bordered paragraph groups),
+  `FormattingAssembler.AddTabAtLeftIndent`, `DocxSession.GetFormatting` and `IndentDelta`,
+  `GetListMembership` and `IrReader.MapParaFormat` all read through it.
+- `FormattingAssembler.IndMerge`: the one-slot merge.
+
+#### Tests
+
+- `Docxodus.Tests/WmlIndStartEndTests.cs`.
+
+---
 
 ## Theme Colors
 
