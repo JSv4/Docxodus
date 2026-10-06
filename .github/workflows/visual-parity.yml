@@ -169,7 +169,8 @@ jobs:
           download() {
             rm -f "$archive_dir/libreoffice.tar.gz" "$archive_dir/libreoffice.tar.gz.asc"
             fetch "$archive_url" "$archive_dir/libreoffice.tar.gz" 300000000
-            fetch "$archive_url.asc" "$archive_dir/libreoffice.tar.gz.asc" 1048576
+            fetch "https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.7.3/deb/x86_64/LibreOffice_25.8.7.3_Linux_x86-64_deb.tar.gz.asc" \
+              "$archive_dir/libreoffice.tar.gz.asc" 1048576
           }
           if [ ! -s "$archive_dir/libreoffice.tar.gz" ] || [ ! -s "$archive_dir/libreoffice.tar.gz.asc" ]; then
             download
@@ -185,9 +186,12 @@ jobs:
             --with-colons --fingerprint C2839ECAD9408FBE9531C3E9F434A1EFAFEEAEA3 \
             | awk -F: '$1 == "fpr" { print $10; exit }')"
           test "$libreoffice_key_fingerprint" = "C2839ECAD9408FBE9531C3E9F434A1EFAFEEAEA3"
+          # Verify (and later extract) the exact bytes copied out of the cache directory.
           verify() {
+            cp "$archive_dir/libreoffice.tar.gz" /tmp/libreoffice.tar.gz
+            cp "$archive_dir/libreoffice.tar.gz.asc" /tmp/libreoffice.tar.gz.asc
             gpg --batch --homedir "$libreoffice_gnupg_home" \
-              --verify "$archive_dir/libreoffice.tar.gz.asc" "$archive_dir/libreoffice.tar.gz"
+              --verify /tmp/libreoffice.tar.gz.asc /tmp/libreoffice.tar.gz
           }
           # A restored archive that no longer verifies is downloaded again rather than trusted,
           # so a bad cache entry cannot fail every later run.
@@ -196,7 +200,7 @@ jobs:
             download
             verify
           fi
-          tar -xzf "$archive_dir/libreoffice.tar.gz" -C /tmp
+          tar -xzf /tmp/libreoffice.tar.gz -C /tmp
           sudo dpkg -i /tmp/LibreOffice_*_Linux_x86-64_deb/DEBS/*.deb
           sudo rm -f /opt/libreoffice25.8/share/fonts/truetype/Carlito*.ttf \
             /opt/libreoffice25.8/share/fonts/truetype/Caladea*.ttf \
