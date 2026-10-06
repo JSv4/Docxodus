@@ -110,6 +110,16 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- 1.15, double and other `auto` line-spacing multiples now place each line's text where Word does, at the
+  top of the taller line with the extra height below it (issue #908). CSS split the extra half above and
+  half below the glyphs, so every line of a 1.15-spaced 11 pt paragraph sat about 1 pt lower than in Word,
+  and nearly 7 pt lower at double spacing. Word's positions were recorded from its own PDF export of a new
+  fixture (`npm/tests/fixtures/line-baselines.docx`; the numbers are in `line-baselines.word.json`), and
+  `npm/tests/export-line-baselines.spec.ts` checks the export against them. Line heights, and so pagination
+  and PageMap fragment sizes, are unchanged. Raised and lowered runs keep their offsets. The HTML now gives a
+  multiple-spaced paragraph's runs a single line height plus a `vertical-align` raise, in place of the
+  multiplied line height. Three smaller differences found while measuring are tracked separately: #940,
+  #941 and #942.
 - Comparing a document with a long run of edited paragraphs no longer slows down quadratically in the
   cross-paragraph fusion step (issue #931). When a run of adjacent edited paragraphs declined to be drawn
   as one word stream, the edit-script builder tried again from the next paragraph, re-examining almost the

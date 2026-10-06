@@ -2042,8 +2042,9 @@ with Arial, the error is 0.30 pt per line, so it moves page breaks.
 The fix removes Chromium's rounding and follows the font's own metrics. For Carlito/Calibri, all three
 metric sets (`hhea`, `typo`, `win`) give the same 1.2207 em, so that is also Word's height. For Arial,
 the sets disagree: `win` gives 13.41 pt and `typo` 13.06 pt. None reproduces the 13.68 pt Word figure
-in #850, which has no recorded fixture to check against. The remaining Arial difference is tracked
-with the baseline work in #908.
+in #850, which has no recorded fixture to check against. The recorded Word fixture of #908 settles it:
+Word's own single-spaced 12 pt Arial pitch averages 13.84 pt (13.75, 13.75 and 14.02 between four lines),
+which matches the `hhea` height the export now uses.
 
 Exact and at-least heights had a converter-side quantization of the same kind: they were formatted
 with one decimal, so `w:line="253"` (12.65 pt) rendered as 12.7 pt. They now keep twentieths of a
@@ -2051,8 +2052,60 @@ point (`{0:0.0#}pt`). The paginated export now runs `applyUnroundedNormalLineHei
 (`npm/src/line-metrics.ts`) before pagination. It gives every element whose computed line height is
 `normal` an explicit height for its own font, measured at 1000 px, where pixel rounding is negligible.
 The converter's output is unchanged, and so is the editor's paginated view. Word's baseline placement
-for `auto` multiples (extra leading below the text, not split around it) is tracked separately in #908.
+for `auto` multiples (extra leading below the text, not split around it) is the next section.
 Tests: `npm/tests/export-line-pitch.spec.ts`.
+
+#### Word puts the extra height of `auto` multiples below the text (issue #908)
+
+A `w:lineRule="auto"` multiple above 1 makes each line taller. Word adds all the extra height **below**
+the text: a line's baseline sits where single spacing would put it. CSS splits extra leading in half,
+above and below the glyphs, so before #908 every line of a 1.15 or double-spaced paragraph sat half the
+extra lower than Word's.
+
+Reproducer: `npm/tests/fixtures/line-baselines.docx`, one paragraph per page at the 72 pt top margin:
+
+```xml
+<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="276" w:lineRule="auto"/></w:pPr>
+  <w:r><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="22"/></w:rPr>
+    <w:t>CASE1 The quick brown fox…</w:t></w:r></w:p>
+```
+
+Baselines in pt from the top of the page. Word's are the text origins of its own PDF export, recorded in
+`npm/tests/fixtures/line-baselines.word.json` (Word for the web, File > Export > Download as PDF):
+
+| 11 pt Calibri | Word, line 1 | Word, lines 2–4 | Docxodus before #908, line 1 | Docxodus after #908, line 1 |
+|---|---:|---|---:|---:|
+| single (240) | 82.53 | 95.78, 109.28, 122.80 | 81.75 | 81.75 |
+| 1.15 (276) | 82.53 | 98.03, 113.53, 128.80 | 83.25 | 81.75 |
+| double (480) | 82.53 | 109.28, 136.30, 163.05 | 88.50 | 81.75 |
+
+12 pt Arial behaves the same way: Word's first line sits at 83.28 pt at all three spacings. The export put
+it at 82.50, 84.00 and 89.25 pt before the fix, and at 82.50 pt for all three after it. (The export's
+values are measured in the DOM with Chromium placing baselines on whole CSS pixels, so the 1.15 shift reads
+1.5 pt rather than its exact 1.0 pt.)
+
+- **The extra height goes below the text.** The first baseline is identical at every multiple, and
+  later lines advance by the multiple of the natural height (Calibri: 13.42, 15.42, 26.84 pt; the
+  font's `hhea` height is 13.43 pt).
+- **What remains is a whole-pixel offset.** Chromium puts a line's baseline on a whole CSS pixel, so
+  the exported first line sits about one pixel (0.78 pt) above Word's for both fonts, at every spacing.
+  It does not accumulate. Tracked in #942.
+- **A raised run (`w:position`) grows Word's line.** CASE6 raises "raised" by 3 pt on the first line
+  of a 1.15 paragraph. Word moves that line's baseline down 3 pt to make room. The export raises the
+  run with relative positioning, which does not grow the line, so the line stays put. The run's 3 pt
+  offset above its line matches Word. Tracked in #941.
+
+**Fix.** `ApplyAutomaticLineSpacingToInlineContent` (`Docxodus/WmlToHtmlConverter.cs`). For a
+multiple m ≥ 1, each direct inline child keeps the single line height (`1lh`) and is raised by
+(m − 1) lines with `vertical-align: calc(1lh * max(m - 1, 0))`. The line box spans from the raised
+child's top down to the paragraph strut's bottom: m lines tall, with the glyphs at its top. A multiple
+below 1 keeps the multiplied height. Relative positioning for `w:position` composes with it. The line
+boxes themselves are unchanged, so pagination and PageMap fragments keep their size; only the glyphs
+move within them.
+
+Tests: `npm/tests/export-line-baselines.spec.ts`. It lays the fixture out with subsets of Carlito and
+Liberation Sans (Calibri's and Arial's metrics) served through the export's font resolver, measures
+baselines in the DOM, and compares them with Word's.
 
 ### An accumulated line-spacing error can resemble a top-margin deviation
 

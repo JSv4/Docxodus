@@ -6816,6 +6816,17 @@ namespace Docxodus
         /// length preserves the OOXML semantics without hard-coding a font-independent approximation.
         /// Applying the calculated height to the direct children also avoids a self-reference in the
         /// paragraph's own line-height property.
+        ///
+        /// Word places the extra height of a multiple above 1 entirely BELOW the text: a line's
+        /// baseline sits where single spacing puts it, whatever the multiple (issue #908, measured
+        /// from Word's own PDF output; see <c>npm/tests/fixtures/line-baselines.word.json</c>). A CSS
+        /// line-height instead splits its extra leading half above and half below the glyphs. So for
+        /// a multiple m of at least 1 each direct child keeps the single line height and is raised by
+        /// (m - 1) lines with <c>vertical-align</c>: the line box is then the paragraph's own strut
+        /// from the child's raised top down to the strut's bottom, m lines tall with the glyphs at its
+        /// top. A multiple below 1 keeps the plain multiplied height. Raised and lowered runs
+        /// (<c>w:position</c>) are offset with relative positioning, which composes with this. A child
+        /// that sets its own vertical alignment keeps the multiplied height instead.
         /// </summary>
         private static void ApplyAutomaticLineSpacingToInlineContent(
             XElement paragraph,
@@ -6840,8 +6851,19 @@ namespace Docxodus
                 if (childStyle.ContainsKey("line-height"))
                     continue;
 
+                if (childStyle.ContainsKey("vertical-align"))
+                {
+                    childStyle["line-height"] =
+                        $"calc(1lh * var({AutomaticLineSpacingMultiplierCssProperty}))";
+                    continue;
+                }
+
+                // Inside vertical-align, 1lh is the child's own line height: one single line when
+                // the multiple is at least 1.
                 childStyle["line-height"] =
-                    $"calc(1lh * var({AutomaticLineSpacingMultiplierCssProperty}))";
+                    $"calc(1lh * min(var({AutomaticLineSpacingMultiplierCssProperty}), 1))";
+                childStyle["vertical-align"] =
+                    $"calc(1lh * max(var({AutomaticLineSpacingMultiplierCssProperty}) - 1, 0))";
             }
         }
 

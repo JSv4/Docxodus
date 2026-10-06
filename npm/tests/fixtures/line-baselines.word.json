@@ -1,0 +1,124 @@
+{
+  "fixture": "npm/tests/fixtures/line-baselines.docx",
+  "fixtureSha256": "75ed1399d2033fb96187dfb6273e3bcc06efd351ff7d98532d7b9cab9516ac28",
+  "word": "Word for the web (Microsoft 365); PDF Creator \"Microsoft Word\", with Calibri and ArialMT embedded",
+  "export": "OneDrive upload, File > Export > Download as PDF, 2026-10-05, no edits after upload",
+  "capturedAt": "2026-10-06",
+  "topMarginPt": 72,
+  "cases": [
+    {
+      "case": 0,
+      "page": 1,
+      "baselinesPt": [
+        82.53,
+        95.78,
+        109.28,
+        122.8
+      ],
+      "lineStarts": [
+        "CASE0 The qu",
+        "fox jumps ov",
+        "dog while th",
+        "counts every"
+      ]
+    },
+    {
+      "case": 1,
+      "page": 2,
+      "baselinesPt": [
+        82.53,
+        98.03,
+        113.53,
+        128.8
+      ],
+      "lineStarts": [
+        "CASE1 The qu",
+        "fox jumps ov",
+        "dog while th",
+        "counts every"
+      ]
+    },
+    {
+      "case": 2,
+      "page": 3,
+      "baselinesPt": [
+        82.53,
+        109.28,
+        136.3,
+        163.05
+      ],
+      "lineStarts": [
+        "CASE2 The qu",
+        "fox jumps ov",
+        "dog while th",
+        "counts every"
+      ]
+    },
+    {
+      "case": 3,
+      "page": 4,
+      "baselinesPt": [
+        83.28,
+        97.03,
+        110.78,
+        124.8
+      ],
+      "lineStarts": [
+        "CASE3 The qu",
+        "The quick br",
+        "quick brown ",
+        "brown fox ju"
+      ]
+    },
+    {
+      "case": 4,
+      "page": 5,
+      "baselinesPt": [
+        83.28,
+        99.03,
+        115.03,
+        130.8
+      ],
+      "lineStarts": [
+        "CASE4 The qu",
+        "The quick br",
+        "quick brown ",
+        "brown fox ju"
+      ]
+    },
+    {
+      "case": 5,
+      "page": 6,
+      "baselinesPt": [
+        83.28,
+        110.78,
+        138.55,
+        166.05
+      ],
+      "lineStarts": [
+        "CASE5 The qu",
+        "The quick br",
+        "quick brown ",
+        "brown fox ju"
+      ]
+    },
+    {
+      "case": 6,
+      "page": 7,
+      "baselinesPt": [
+        82.53,
+        85.53,
+        101.03,
+        116.55,
+        131.8
+      ],
+      "lineStarts": [
+        "raised ",
+        "CASE6 The qu",
+        "brown fox ju",
+        "the lazy dog",
+        "editor count"
+      ]
+    }
+  ]
+}
