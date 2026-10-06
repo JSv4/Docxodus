@@ -110,6 +110,13 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Block alignment's same-slot pass no longer slows down quadratically on a long run of edited paragraphs
+  (issue #937). Before pairing the k-th leftover paragraph of a gap with the k-th on the other side, the
+  pass checks that no other still-free paragraph shares strictly more content words with either partner,
+  and it did that by comparing against every free paragraph, for every slot. It now indexes the free
+  paragraphs by content word and compares only against those holding one of the slot's rarest unshared
+  words, which a counting argument shows reaches every paragraph that could share more. Aligning 6,000
+  edited paragraphs took 36 s and now takes under 2 s (2,000: 3.6 s to 0.5 s). Output is unchanged.
 - 1.15, double and other `auto` line-spacing multiples now place each line's text where Word does, at the
   top of the taller line with the extra height below it (issue #908). CSS split the extra half above and
   half below the glyphs, so every line of a 1.15-spaced 11 pt paragraph sat about 1 pt lower than in Word,
