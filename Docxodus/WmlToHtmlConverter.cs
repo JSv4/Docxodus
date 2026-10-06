@@ -6826,10 +6826,11 @@ namespace Docxodus
         /// the top of their line. In <c>top</c>, <c>1lh</c> is the child's own multiplied height mN,
         /// so <c>1lh * (1/m - 1) / 2</c> is -(m-1)N/2; a multiple below 1 is not moved. A child that
         /// already carries a relative <c>top</c> keeps it, and the two offsets are added (a raised or
-        /// lowered run uses <c>vertical-align</c>, which composes on its own). A child positioned some other way, or holding an image or drawing (which can be
-        /// the tallest thing on its line, so moving it up would overlap the line above), or holding an
-        /// absolutely positioned descendant such as a floating drawing (a relative child would become
-        /// its containing block), is not moved.
+        /// lowered run uses <c>vertical-align</c>, which composes on its own). A child positioned
+        /// some other way, or holding an image or drawing (which can be the tallest thing on its
+        /// line, so moving it up would overlap the line above), or holding an absolutely positioned
+        /// descendant such as a floating drawing (a relative child would become its containing
+        /// block), is not moved.
         /// </summary>
         private static void ApplyAutomaticLineSpacingToInlineContent(
             XElement paragraph,
