@@ -2042,8 +2042,9 @@ with Arial, the error is 0.30 pt per line, so it moves page breaks.
 The fix removes Chromium's rounding and follows the font's own metrics. For Carlito/Calibri, all three
 metric sets (`hhea`, `typo`, `win`) give the same 1.2207 em, so that is also Word's height. For Arial,
 the sets disagree: `win` gives 13.41 pt and `typo` 13.06 pt. None reproduces the 13.68 pt Word figure
-in #850, which has no recorded fixture to check against. The remaining Arial difference is tracked
-with the baseline work in #908.
+in #850, which has no recorded fixture to check against. The recorded Word fixture of #908 settles it:
+Word's own single-spaced 12 pt Arial pitch averages 13.84 pt (13.75, 13.75 and 14.02 between four lines),
+which matches the `hhea` height the export now uses.
 
 Exact and at-least heights had a converter-side quantization of the same kind: they were formatted
 with one decimal, so `w:line="253"` (12.65 pt) rendered as 12.7 pt. They now keep twentieths of a
@@ -2051,8 +2052,73 @@ point (`{0:0.0#}pt`). The paginated export now runs `applyUnroundedNormalLineHei
 (`npm/src/line-metrics.ts`) before pagination. It gives every element whose computed line height is
 `normal` an explicit height for its own font, measured at 1000 px, where pixel rounding is negligible.
 The converter's output is unchanged, and so is the editor's paginated view. Word's baseline placement
-for `auto` multiples (extra leading below the text, not split around it) is tracked separately in #908.
+for `auto` multiples (extra leading below the text, not split around it) is the next section.
 Tests: `npm/tests/export-line-pitch.spec.ts`.
+
+#### Word puts the extra height of `auto` multiples below the text (issue #908)
+
+A `w:lineRule="auto"` multiple above 1 makes each line taller. Word adds all the extra height **below**
+the text: a line's baseline sits where single spacing would put it. CSS splits extra leading in half,
+above and below the glyphs, so before #908 every line of a 1.15 or double-spaced paragraph sat half the
+extra lower than Word's.
+
+Reproducer: `npm/tests/fixtures/line-baselines.docx`, one paragraph per page at the 72 pt top margin:
+
+```xml
+<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="276" w:lineRule="auto"/></w:pPr>
+  <w:r><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="22"/></w:rPr>
+    <w:t>CASE1 The quick brown fox…</w:t></w:r></w:p>
+```
+
+Baselines in pt from the top of the page. Word's are the text origins of its own PDF export, recorded in
+`npm/tests/fixtures/line-baselines.word.json` (Word for the web, File > Export > Download as PDF):
+
+| 11 pt Calibri | Word, line 1 | Word, lines 2–4 | Docxodus before #908, line 1 | Docxodus after #908, line 1 |
+|---|---:|---|---:|---:|
+| single (240) | 82.53 | 95.78, 109.28, 122.80 | 81.75 | 81.75 |
+| 1.15 (276) | 82.53 | 98.03, 113.53, 128.80 | 83.25 | 81.75 |
+| double (480) | 82.53 | 109.28, 136.30, 163.05 | 88.50 | 81.75 |
+
+12 pt Arial behaves the same way: Word's first line sits at 83.28 pt at all three spacings. The export put
+it at 82.50, 84.00 and 89.25 pt before the fix, and at 82.50 pt for all three after it. (The export's
+values are measured in the DOM with Chromium placing baselines on whole CSS pixels, so the 1.15 shift reads
+1.5 pt rather than its exact 1.0 pt.)
+
+- **The extra height goes below the text.** The first baseline is identical at every multiple, and
+  later lines advance by the multiple of the natural height (Calibri: 13.42, 15.42, 26.84 pt; the
+  font's `hhea` height is 13.43 pt).
+- **What remains is whole-pixel rounding.** Chromium puts a line's baseline on a whole CSS pixel, so
+  the exported single-spaced first line sits about one pixel (0.78 pt) above Word's for both fonts. A
+  multiple-spaced first line can read up to a pixel off that. Neither accumulates. Tracked in #942.
+- **A raised run (`w:position`) grows Word's line.** CASE6 raises "raised" by 3 pt on the first line
+  of a 1.15 paragraph. Word moves that line's baseline down 3 pt to make room. The export raises the
+  run with relative positioning, which does not grow the line, so the line stays put. The run's 3 pt
+  offset above its line matches Word. Tracked in #941.
+
+**Fix.** `ApplyAutomaticLineSpacingToInlineContent` (`Docxodus/WmlToHtmlConverter.cs`). Each direct inline
+child keeps the multiplied `line-height: calc(1lh * m)` as before, so every line box is exactly what it was,
+and is moved up by half the extra with relative positioning:
+`top: min(0px, calc(1lh * (1 / m - 1) / 2))`. In `top`, `1lh` is the child's own height mN, so this is
+−(m − 1)N/2, and nothing for a multiple below 1. A raised or lowered run's own `w:position` offset is added
+in the same `calc()`. A child positioned some other way, or holding an image, an SVG or an absolutely
+positioned descendant (a floating drawing, for which a relative child would become the containing block), is
+not moved.
+
+A first attempt instead raised each child with `vertical-align` and the single line height, which lets the
+layout itself put the glyphs at the top. It changed line heights whenever a run's font differs from its
+paragraph's font, because the line box is then the union of differently shaped boxes: a tab-leader
+screenshot came out 3 px shorter. Relative positioning cannot change layout. Its cost is that Chromium puts
+each line's baseline on a whole pixel before the offset applies, so a multiple-spaced first line can read up
+to a pixel off a single-spaced one (#942).
+
+The same measurement exposed an export bug. The paginated export's font resolver restyled only elements that
+hold text, so a paragraph's own line box, which every multiple is built on, kept its requested family and
+fell back to whatever the machine had installed. The resolver now also gives every rendered element whose
+font matches a resolved request that face (`npm/src/font-runtime.ts`, `collectFontInventory`).
+
+Tests: `npm/tests/export-line-baselines.spec.ts`. It lays the fixture out with subsets of Carlito and
+Liberation Sans (Calibri's and Arial's metrics) served through the export's font resolver, measures
+baselines in the DOM, and compares them with Word's.
 
 ### An accumulated line-spacing error can resemble a top-margin deviation
 

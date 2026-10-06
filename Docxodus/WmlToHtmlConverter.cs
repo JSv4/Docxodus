@@ -6816,6 +6816,20 @@ namespace Docxodus
         /// length preserves the OOXML semantics without hard-coding a font-independent approximation.
         /// Applying the calculated height to the direct children also avoids a self-reference in the
         /// paragraph's own line-height property.
+        ///
+        /// Word places the extra height of a multiple above 1 entirely BELOW the text: a line's
+        /// baseline sits where single spacing puts it, whatever the multiple (issue #908, measured
+        /// from Word's own PDF output; see <c>npm/tests/fixtures/line-baselines.word.json</c>). The
+        /// multiplied line-height instead splits the extra half above and half below the glyphs. So
+        /// each direct child is also moved up by half the extra with relative positioning: the line
+        /// boxes, and with them pagination, are exactly what they were, and only the glyphs move to
+        /// the top of their line. In <c>top</c>, <c>1lh</c> is the child's own multiplied height mN,
+        /// so <c>1lh * (1/m - 1) / 2</c> is -(m-1)N/2; a multiple below 1 is not moved. A raised or
+        /// lowered run (<c>w:position</c>) already carries a relative <c>top</c>, and the two offsets
+        /// are added. A child positioned some other way, or holding an image or drawing (which can be
+        /// the tallest thing on its line, so moving it up would overlap the line above), or holding an
+        /// absolutely positioned descendant such as a floating drawing (a relative child would become
+        /// its containing block), is not moved.
         /// </summary>
         private static void ApplyAutomaticLineSpacingToInlineContent(
             XElement paragraph,
@@ -6842,7 +6856,24 @@ namespace Docxodus
 
                 childStyle["line-height"] =
                     $"calc(1lh * var({AutomaticLineSpacingMultiplierCssProperty}))";
+
+                if ((childStyle.TryGetValue("position", out var position) && position != "relative") ||
+                    child.DescendantsAndSelf().Any(PinsOrPlacesMedia))
+                    continue;
+                var lift = $"min(0px, calc(1lh * (1 / var({AutomaticLineSpacingMultiplierCssProperty}) - 1) / 2))";
+                childStyle["position"] = "relative";
+                childStyle["top"] = childStyle.TryGetValue("top", out var top) ? $"calc({top} + {lift})" : lift;
             }
+        }
+
+        /// <summary>An image, an inline SVG, or an absolutely positioned element (a floating drawing).</summary>
+        private static bool PinsOrPlacesMedia(XElement element)
+        {
+            if (element.Name == Xhtml.img || element.Name.LocalName == "svg")
+                return true;
+            var style = element.Annotation<Dictionary<string, string>>();
+            return style != null && style.TryGetValue("position", out var position) &&
+                position is "absolute" or "fixed";
         }
 
         private static List<object?> TransformElementsPrecedingTab(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
