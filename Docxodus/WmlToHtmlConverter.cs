@@ -7021,12 +7021,7 @@ namespace Docxodus
             CreateStyleFromJc(style, pPr.Element(W.jc), isBidi);
             CreateStyleFromShd(style, pPr.Element(W.shd), paragraph);
 
-            // Pt.FontName
-            var font = (string?) paragraph.Attributes(PtOpenXml.FontName).FirstOrDefault();
-            if (font != null)
-                CreateFontCssProperty(font, null, null, style, paragraph);
-
-            DefineFontSize(style, paragraph);
+            DefineStrutFont(style, paragraph);
             DefineLineHeight(style, paragraph);
 
             // vertical text alignment as of December 2013 does not work in any major browsers.
@@ -7168,13 +7163,31 @@ namespace Docxodus
                 style.AddIfMissing("vertical-align", "bottom");
         }
 
-        private static void DefineFontSize(Dictionary<string, string> style, XElement paragraph)
+        /// <summary>
+        /// The paragraph's own font, which sizes its strut: its share of every line box, and the <c>1lh</c> that
+        /// auto line multiples are built on. Family and size come from one real run, the first of the largest
+        /// size, so the strut is never taller than that run's own line (issue #940). Taking the family from the
+        /// paragraph mark and the size from the largest run paired, say, the default Calibri with the 12 pt of
+        /// Arial runs, and the strut outgrew every line. A paragraph with no runs keeps its mark's font.
+        /// </summary>
+        private static void DefineStrutFont(Dictionary<string, string> style, XElement paragraph)
         {
-            var sz = paragraph
-                .DescendantsTrimmed(W.txbxContent)
-                .Where(e => e.Name == W.r)
-                .Select(r => GetFontSize(r))
-                .Max();
+            XElement? strutRun = null;
+            decimal? sz = null;
+            foreach (var run in paragraph.DescendantsTrimmed(W.txbxContent).Where(e => e.Name == W.r))
+            {
+                var runSize = GetFontSize(run);
+                if (runSize != null && (sz == null || runSize > sz))
+                {
+                    sz = runSize;
+                    strutRun = run;
+                }
+            }
+
+            var font = (string?)strutRun?.Attribute(PtOpenXml.FontName) ??
+                       (string?)paragraph.Attribute(PtOpenXml.FontName);
+            if (font != null)
+                CreateFontCssProperty(font, null, null, style, paragraph);
             if (sz != null)
                 style.AddIfMissing("font-size", string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", sz / 2.0m));
         }

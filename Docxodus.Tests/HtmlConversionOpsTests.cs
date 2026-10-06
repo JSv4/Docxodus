@@ -2237,4 +2237,62 @@ public class HtmlConversionOpsTests
         }
         return ms.ToArray();
     }
+    // Issue #940: a paragraph's own line box (its strut) is sized from the family AND size of one real run, the
+    // largest one on its lines. The family used to come from the paragraph mark and the size from the largest
+    // run, so Arial runs under a Calibri mark gave the <p> a Calibri 12 pt strut that exists nowhere in the
+    // document and is taller than any of its lines.
+    [Theory]
+    [InlineData(new[] { "Arial:24" }, "Arial", "12pt")]
+    [InlineData(new[] { "Arial:20", "Times New Roman:28", "Arial:20" }, "Times New Roman", "14pt")]
+    [InlineData(new[] { "Arial:24", "Courier New:24" }, "Arial", "12pt")]
+    public void HCO100_ParagraphStrut_TakesFamilyAndSizeFromItsLargestRun(
+        string[] runs, string expectedFamily, string expectedSize)
+    {
+        var style = ParagraphStyle(new Wp.Paragraph(runs.Select(r =>
+        {
+            var parts = r.Split(':');
+            return new Wp.Run(
+                new Wp.RunProperties(
+                    new Wp.RunFonts { Ascii = parts[0], HighAnsi = parts[0], ComplexScript = parts[0] },
+                    new Wp.FontSize { Val = parts[1] }),
+                new Wp.Text("Words on the line ") { Space = DocumentFormat.OpenXml.SpaceProcessingModeValues.Preserve });
+        })));
+
+        Assert.Contains($"font-family: '{expectedFamily}'", style);
+        Assert.DoesNotContain("Calibri", style);
+        Assert.Contains($"font-size: {expectedSize}", style);
+    }
+
+    [Fact]
+    public void HCO100_EmptyParagraphStrut_KeepsTheMarkFont()
+    {
+        // With no runs, the paragraph mark is the only font on the line.
+        var style = ParagraphStyle(new Wp.Paragraph());
+
+        Assert.Contains("font-family: 'Calibri'", style);
+    }
+
+    /// <summary>Converts one paragraph whose mark has no run properties, under a Calibri 11 pt default, and
+    /// returns the &lt;p&gt;'s inline style.</summary>
+    private static string ParagraphStyle(Wp.Paragraph paragraph)
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Wp.Document(new Wp.Body(paragraph));
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles(
+                new Wp.DocDefaults(
+                    new Wp.RunPropertiesDefault(
+                        new Wp.RunPropertiesBaseStyle(
+                            new Wp.RunFonts { Ascii = "Calibri", HighAnsi = "Calibri", ComplexScript = "Calibri" },
+                            new Wp.FontSize { Val = "22" }))));
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
+            main.Document.Save();
+        }
+
+        var html = HtmlConversionOps.ConvertToHtml(ms.ToArray(), new HtmlConversionOptions { FabricateCssClasses = false });
+        var p = XElement.Parse(html).Descendants().Single(e => e.Name.LocalName == "p");
+        return (string?)p.Attribute("style") ?? string.Empty;
+    }
 }

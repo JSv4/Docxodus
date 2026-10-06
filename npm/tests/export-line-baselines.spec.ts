@@ -19,6 +19,10 @@ import { fileURLToPath } from 'node:url';
  */
 const here = dirname(fileURLToPath(import.meta.url));
 const fixture = readFileSync(join(here, 'fixtures', 'line-baselines.docx'));
+/** The same cases with paragraph marks that carry no run properties, so each keeps the default 11 pt Calibri
+ * (issue #940). Word's baselines do not depend on the mark: it gave the same numbers for a plain-mark version of
+ * the fixture as for the current one, so the fixture's record applies. */
+const plainMarks = readFileSync(join(here, 'fixtures', 'line-baselines-plain-marks.docx'));
 const word = JSON.parse(readFileSync(join(here, 'fixtures', 'line-baselines.word.json'), 'utf8')) as {
   fixtureSha256: string;
   cases: Array<{ case: number; baselinesPt: number[] }>;
@@ -68,13 +72,13 @@ function plan(file: string) {
  */
 interface ExportedPage { baselines: number[]; heightPx: number; strutPx: number }
 
-async function exportedBaselines(page: Page, fontFile: string): Promise<ExportedPage[]> {
+async function exportedBaselines(page: Page, fontFile: string | ReturnType<typeof plan>, docx = fixture): Promise<ExportedPage[]> {
   await page.goto('/standalone-export-harness.html');
   await page.waitForFunction(() => (window as any).DocxodusStandaloneReady === true);
   const result = await page.evaluate(async ({ bytes, fontPlan }) => {
     const api = (window as any).DocxodusStandalone;
     return api.convertWithFontResolver(bytes, { reviewProfile: 'final', commentProfile: 'hidden' }, fontPlan);
-  }, { bytes: Array.from(fixture), fontPlan: plan(fontFile) });
+  }, { bytes: Array.from(docx), fontPlan: typeof fontFile === 'string' ? plan(fontFile) : fontFile });
   expect(result.renderReport.status).toBe('complete');
   await page.setContent(result.html);
   await page.evaluate(() => document.fonts.ready);
@@ -172,6 +176,28 @@ test.describe('exported baselines follow Word (#908)', () => {
       .map((p) => getComputedStyle(p).fontFamily));
     expect(families.length).toBeGreaterThan(0);
     for (const family of families) expect(family).toMatch(/^__DocxodusConfigured_/);
+  });
+
+  test('Arial runs under a plain Calibri mark keep their own line pitch (#940)', async ({ page }) => {
+    // The paragraph's own line box used to pair the mark's Calibri with the runs' 12 pt: a font-and-size
+    // combination found nowhere in the document, taller than any line (14.65 pt for Word's 13.84). Each family
+    // gets its own face here, so the mark's family really differs from the runs'.
+    const twoFaces = {
+      ...plan('baseline-test-b.woff2'),
+      byFamily: { Calibri: plan('baseline-test-a.woff2'), Arial: plan('baseline-test-b.woff2') },
+    };
+    const exported = await exportedBaselines(page, twoFaces, plainMarks);
+    const wordOrigin = word.cases.find((c) => c.case === ARIAL[0])!.baselinesPt[0];
+    const origin = exported[ARIAL[0]].baselines[0];
+    for (const id of ARIAL) {
+      const expected = word.cases.find((c) => c.case === id)!.baselinesPt;
+      const actual = exported[id].baselines;
+      expected.forEach((y, line) => {
+        const got = actual[line] - origin;
+        expect(Math.abs(got - (y - wordOrigin)), `CASE${id} line ${line + 1}: ${got} pt below the first ` +
+          `baseline, Word ${y - wordOrigin} pt`).toBeLessThanOrEqual(LINE_TOLERANCE_PT);
+      });
+    }
   });
 
   test('a raised run at 1.15 still sits its w:position above the line', async ({ page }) => {
