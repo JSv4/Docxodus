@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 
 /**
  * Exported baselines sit where Word puts them (issue #908). For `w:lineRule="auto"` multiples Word places a
@@ -34,16 +35,18 @@ const ARIAL = [3, 4, 5];
 
 /**
  * How far an exported line may sit from Word's, measured from the same font's single-spaced first baseline.
- * About one CSS pixel: Chromium puts each line's baseline on a whole pixel before the glyphs are lifted to the
- * top of their line (issue #942), and Word writes baselines on its own coarse grid (its single-spaced Calibri
- * pitch reads 13.25, 13.50 and 13.52 pt for one 13.43 pt line height). Before the fix the 1.15-spaced lines
- * read 1.5 pt low and the double-spaced ones 6.75 pt.
+ * Word writes baselines on its own coarse grid (its single-spaced Calibri pitch reads 13.25, 13.50 and 13.52 pt
+ * for one 13.43 pt line height), and before #942 Chromium also put each baseline on a whole pixel. Before the
+ * #908 fix the 1.15-spaced lines read 1.5 pt low and the double-spaced ones 6.75 pt.
  */
 const LINE_TOLERANCE_PT = 0.8;
 
-/** How far the single-spaced first baseline itself may sit from Word's: the same whole-pixel rounding, which
- * puts the exported first line one pixel (0.75 pt) above Word's for both fonts (issue #942). */
+/** How far the single-spaced first baseline itself may sit from Word's. Before #942 Chromium's whole-pixel
+ * rounding put it one pixel (0.75 pt) above Word's for both fonts; the #942 test below holds it to 0.1 pt. */
 const FIRST_LINE_TOLERANCE_PT = 1.0;
+
+/** How far any first baseline may sit from Word's once whole-pixel rounding is taken back (issue #942). */
+const WORD_BASELINE_TOLERANCE_PT = 0.1;
 
 /** Each CASE paragraph's line spacing multiple, by case number. */
 const MULTIPLE = [1, 276 / 240, 2, 1, 276 / 240, 2];
@@ -148,6 +151,19 @@ test.describe('exported baselines follow Word (#908)', () => {
         .toBeLessThanOrEqual(LINE_TOLERANCE_PT);
     });
 
+    test(`${font}: every first baseline lands within 0.1 pt of Word's (#942)`, async ({ page }) => {
+      // Word puts a line's baseline its natural height less the font's descent below the line's top. Chromium
+      // rounded the ascent and descent and floored half the leading, one pixel high for both fonts; the export
+      // now takes that back. The extra height of a multiple goes below the text, so all three spacings agree.
+      const exported = await exportedBaselines(page, file);
+      for (const id of cases) {
+        const want = word.cases.find((c) => c.case === id)!.baselinesPt[0];
+        const got = exported[id].baselines[0];
+        expect(Math.abs(got - want), `CASE${id} first baseline ${got} pt vs Word ${want} pt`)
+          .toBeLessThanOrEqual(WORD_BASELINE_TOLERANCE_PT);
+      }
+    });
+
     test(`${font}: each line box keeps its multiplied height`, async ({ page }) => {
       // Only the glyphs move: every line is still the multiple of the paragraph's natural line height, so
       // pagination and PageMap fragments are what they were.
@@ -160,6 +176,39 @@ test.describe('exported baselines follow Word (#908)', () => {
       }
     });
   }
+
+  test('the printed PDF puts each first baseline on Word\'s pixel (#942)', async ({ page }) => {
+    // Chromium's PDF output snaps text origins to whole CSS pixels (0.75 pt), so a sub-pixel correction only
+    // shows in print by landing on the right pixel. Word's first baselines here (82.53 and 83.28 pt) sit within
+    // 0.05 pt of a whole pixel; the export used to print them one pixel higher.
+    await page.goto('/standalone-export-harness.html');
+    await page.waitForFunction(() => (window as any).DocxodusStandaloneReady === true);
+    const result = await page.evaluate(async ({ bytes, fontPlan }) => {
+      const api = (window as any).DocxodusStandalone;
+      return api.convertWithFontResolver(bytes, { reviewProfile: 'final', commentProfile: 'hidden' }, fontPlan);
+    }, {
+      bytes: Array.from(plainMarks),
+      fontPlan: {
+        ...plan('baseline-test-b.woff2'),
+        byFamily: { Calibri: plan('baseline-test-a.woff2'), Arial: plan('baseline-test-b.woff2') },
+      },
+    });
+    await page.setContent(result.html);
+    await page.evaluate(() => document.fonts.ready);
+    const pdf = await page.pdf({ preferCSSPageSize: true, printBackground: true });
+    const printed = await getDocument({ data: new Uint8Array(pdf), verbosity: 0 }).promise;
+    for (const id of [CALIBRI[0], ARIAL[0]]) {
+      const pdfPage = await printed.getPage(id + 1);
+      const height = pdfPage.view[3];
+      const origins = (await pdfPage.getTextContent()).items
+        .filter((item: any) => item.str?.trim())
+        .map((item: any) => height - item.transform[5]);
+      const got = Math.min(...origins);
+      const want = word.cases.find((c) => c.case === id)!.baselinesPt[0];
+      expect(Math.abs(got - want), `CASE${id} printed first baseline ${got} pt vs Word ${want} pt`)
+        .toBeLessThanOrEqual(0.375);
+    }
+  });
 
   test('the font resolver gives a paragraph its configured face, not only its runs', async ({ page }) => {
     // A paragraph holds no text of its own, but its own line box (the strut every auto multiple is built on)
