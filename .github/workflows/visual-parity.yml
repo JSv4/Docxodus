@@ -124,23 +124,59 @@ jobs:
           poppler-utils fonts-liberation2
           fonts-crosextra-carlito fonts-crosextra-caladea
 
+      # The archive mirror is slow and has cut the 200 MB transfer short ("curl: (18) Transferred
+      # a partial file", issue #910), which plain --retry does not treat as transient. The archive
+      # is saved to the cache right after its signature verifies (not at job end, so a later failing
+      # step cannot keep it out), and a download that does run resumes
+      # from where a cut-off attempt stopped. The signature is verified on every run, cached or not.
+      - name: Restore pinned LibreOffice archive
+        id: libreoffice-archive
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.cache/libreoffice-archive
+          key: libreoffice-25.8.7.3-deb-x86_64
+
       # The LibreOffice reference-version contract (issue #403): the benchmark's numbers are only
       # meaningful against the version ratchet.json was recorded under, so CI installs that exact
       # TDF build instead of whatever `ubuntu-latest` apt carries. The bundled Carlito/Caladea/
       # Liberation copies are removed because they silently override the font-substitution
       # contract inside LibreOffice only (the issue-#400 finding). Keep the version here in step
       # with LIBREOFFICE_CONTRACT in npm/tests/visual-parity/environment-contract.ts — the run
-      # fails at start, with this same guidance, when they drift.
+      # fails at start, with this same guidance, when they drift. Keep the cache key above in
+      # step with the version too.
       - name: Install pinned LibreOffice 25.8.7.3 (reference-version contract)
         run: |
-          curl -fsS -L --max-redirs 5 --retry 3 --proto '=https' --tlsv1.2 --max-filesize 300000000 \
-            -o /tmp/libreoffice.tar.gz \
-            "https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.7.3/deb/x86_64/LibreOffice_25.8.7.3_Linux_x86-64_deb.tar.gz"
-          curl -fsS -L --max-redirs 5 --retry 3 --proto '=https' --tlsv1.2 --max-filesize 1048576 \
-            -o /tmp/libreoffice.tar.gz.asc \
-            "https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.7.3/deb/x86_64/LibreOffice_25.8.7.3_Linux_x86-64_deb.tar.gz.asc"
-          curl -fsS -L --max-redirs 5 --retry 3 --proto '=https' --tlsv1.2 --max-filesize 1048576 \
-            -o /tmp/libreoffice-signing-key.asc \
+          archive_dir="$HOME/.cache/libreoffice-archive"
+          archive_url="https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.7.3/deb/x86_64/LibreOffice_25.8.7.3_Linux_x86-64_deb.tar.gz"
+          mkdir -p "$archive_dir"
+          # Resume a cut-off transfer (-C -) rather than restarting it; --retry-all-errors makes
+          # curl retry a partial transfer (exit 18) too, and the outer loop resumes from the bytes
+          # already on disk if curl gives up.
+          fetch() {
+            local url="$1" out="$2" max="$3" attempt status
+            for attempt in 1 2 3 4 5; do
+              status=0
+              curl -fsS -L --max-redirs 5 --retry 3 --retry-all-errors --retry-delay 10 \
+                --proto '=https' --tlsv1.2 --max-filesize "$max" -C - -o "$out" "$url" || status=$?
+              [ "$status" -eq 0 ] && return 0
+              # 33/36: the server refused to resume; start that file over.
+              case "$status" in 33|36) rm -f "$out" ;; esac
+              echo "Download of $url stopped with curl exit $status (attempt $attempt); retrying." >&2
+              sleep 15
+            done
+            return 1
+          }
+          download() {
+            rm -f "$archive_dir/libreoffice.tar.gz" "$archive_dir/libreoffice.tar.gz.asc"
+            fetch "$archive_url" "$archive_dir/libreoffice.tar.gz" 300000000
+            fetch "https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.7.3/deb/x86_64/LibreOffice_25.8.7.3_Linux_x86-64_deb.tar.gz.asc" \
+              "$archive_dir/libreoffice.tar.gz.asc" 1048576
+          }
+          if [ ! -s "$archive_dir/libreoffice.tar.gz" ] || [ ! -s "$archive_dir/libreoffice.tar.gz.asc" ]; then
+            download
+          fi
+          curl -fsS -L --max-redirs 5 --retry 3 --retry-all-errors --proto '=https' --tlsv1.2 \
+            --max-filesize 1048576 -o /tmp/libreoffice-signing-key.asc \
             "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xC2839ECAD9408FBE9531C3E9F434A1EFAFEEAEA3"
           libreoffice_gnupg_home="$(mktemp -d)"
           chmod 700 "$libreoffice_gnupg_home"
@@ -150,8 +186,20 @@ jobs:
             --with-colons --fingerprint C2839ECAD9408FBE9531C3E9F434A1EFAFEEAEA3 \
             | awk -F: '$1 == "fpr" { print $10; exit }')"
           test "$libreoffice_key_fingerprint" = "C2839ECAD9408FBE9531C3E9F434A1EFAFEEAEA3"
-          gpg --batch --homedir "$libreoffice_gnupg_home" \
-            --verify /tmp/libreoffice.tar.gz.asc /tmp/libreoffice.tar.gz
+          # Verify (and later extract) the exact bytes copied out of the cache directory.
+          verify() {
+            cp "$archive_dir/libreoffice.tar.gz" /tmp/libreoffice.tar.gz
+            cp "$archive_dir/libreoffice.tar.gz.asc" /tmp/libreoffice.tar.gz.asc
+            gpg --batch --homedir "$libreoffice_gnupg_home" \
+              --verify /tmp/libreoffice.tar.gz.asc /tmp/libreoffice.tar.gz
+          }
+          # A restored archive that no longer verifies is downloaded again rather than trusted,
+          # so a bad cache entry cannot fail every later run.
+          if ! verify; then
+            echo "LibreOffice archive failed verification; downloading it again." >&2
+            download
+            verify
+          fi
           tar -xzf /tmp/libreoffice.tar.gz -C /tmp
           sudo dpkg -i /tmp/LibreOffice_*_Linux_x86-64_deb/DEBS/*.deb
           sudo rm -f /opt/libreoffice25.8/share/fonts/truetype/Carlito*.ttf \
@@ -160,6 +208,13 @@ jobs:
           sudo ln -sf /opt/libreoffice25.8/program/soffice /usr/local/bin/libreoffice
           sudo ln -sf /opt/libreoffice25.8/program/soffice /usr/local/bin/soffice
           libreoffice --version
+
+      - name: Save verified LibreOffice archive
+        if: steps.libreoffice-archive.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.cache/libreoffice-archive
+          key: libreoffice-25.8.7.3-deb-x86_64
 
       - name: Install npm dependencies
         run: cd npm && npm ci
