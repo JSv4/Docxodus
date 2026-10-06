@@ -2196,11 +2196,39 @@ document, taller than every line. Every `auto` multiple is also built on that st
 
 **Fix.** `DefineStrutFont` (`Docxodus/WmlToHtmlConverter.cs`) takes the family and the size from the same
 run, the first of the largest size, so the strut is never taller than that run's own line. A paragraph with
-no runs keeps its mark's font. Whether a mark that is *taller* than its runs makes Word's last line taller
-has not been recorded.
+no runs keeps its mark's font.
 
 Tests: `HCO100_*` in `Docxodus.Tests/HtmlConversionOpsTests.cs`, and the plain-mark case in
 `npm/tests/export-line-baselines.spec.ts`, which serves Calibri and Arial as two different faces.
+
+### A paragraph mark taller than its runs does not make any line taller (#949)
+
+The pilcrow sits on a paragraph's last line, so a mark much larger than the text might be expected to make
+that line taller. Word for the web says it does not. `line-baselines.docx` CASE8 and CASE9 are three lines
+of 10 pt Calibri under a 20 pt Calibri mark, at single and 1.15 spacing. Each is followed on its page by a
+plain 10 pt paragraph (AFTER8, AFTER9), whose first baseline shows how tall the last line was:
+
+```xml
+<w:p><w:pPr><w:spacing w:line="240" w:lineRule="auto"/>
+    <w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="40"/></w:rPr></w:pPr>
+  <w:r><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="20"/></w:rPr>
+    <w:t>CASE8 The quick brown fox…</w:t></w:r></w:p>
+```
+
+| Baselines, pt from the page top | line 1 | line 2 | line 3 (holds the mark) | next paragraph |
+|---|---:|---:|---:|---:|
+| Word, single (CASE8) | 81.53 | 93.78 | 105.78 | 118.05 |
+| Word, 1.15 (CASE9) | 81.53 | 95.53 | 109.53 | 123.55 |
+
+Every step is one ordinary 10 pt Calibri line: 12.0–12.27 pt single, 14.0–14.02 pt at 1.15 (10 pt Calibri's
+natural height is 12.21 pt). The first baseline, 81.53 pt, is 10 pt Calibri's ascent below the margin. The
+20 pt mark grows neither the last line nor any other.
+
+Docxodus already matches, because `DefineStrutFont` (#940) sizes the paragraph's strut from its runs and
+the mark draws no glyph. The fixture case is a regression guard: with the strut at the mark's 20 pt, the
+second baseline lands 15.96 pt below the first instead of Word's 12.25 pt.
+
+Tests: the #949 case in `npm/tests/export-line-baselines.spec.ts`.
 
 ### An accumulated line-spacing error can resemble a top-margin deviation
 

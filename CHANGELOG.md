@@ -110,6 +110,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Recorded how Word lays out a paragraph whose mark is taller than its runs (issue #949): it does not grow the
+  last line, or any other. Word for the web's PDF of 10 pt runs under a 20 pt mark, at single and 1.15
+  spacing, shows ordinary 10 pt line steps down to the next paragraph. The converter already matched because
+  its paragraph strut comes from the runs (#940); the fixture cases now guard that in
+  `npm/tests/export-line-baselines.spec.ts`, and `docs/ooxml_corner_cases.md` records the measurements.
 - A lowered run (negative `w:position`) now grows its line downward the way Word does (issue #948). Word
   keeps the line's baseline, draws the run below it, and makes the line taller by the drop, so every later
   line moves down with it (recorded from Word's own PDF as CASE7 in `npm/tests/fixtures/line-baselines.word.json`).
