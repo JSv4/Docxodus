@@ -57,7 +57,9 @@ public sealed class DocxDiffComparison
 
     private readonly Lazy<(WmlDocument Left, WmlDocument Right)> _preflighted;
     private readonly Lazy<(IrDocument Left, IrDocument Right)> _ir;
-    private readonly Lazy<IrEditScript> _dataScript;
+    private readonly Lazy<IrBlockAlignment> _alignment;
+    private readonly Lazy<IrEditScript> _markupBuild;
+    private readonly Lazy<(IrEditScript Data, IrEditScript? Markup)> _scripts;
     private readonly Lazy<WmlDocument> _redline;
     private readonly Lazy<IReadOnlyList<DocxDiffRevision>> _revisions;
     private readonly Lazy<string> _editScriptJson;
@@ -108,24 +110,40 @@ public sealed class DocxDiffComparison
             return ParallelWork.Pair(() => _left.Ir, () => _right.Ir);
         }, LazyThreadSafetyMode.ExecutionAndPublication);
 
-        // The DATA script: CrossParagraphTokenDiff forced off, exactly as GetRevisions and
-        // GetEditScriptJson force it (it is a markup-only refinement; see those statics).
-        _dataScript = new(() =>
+        // One block alignment serves every script: the aligner never reads CrossParagraphTokenDiff, the one
+        // setting in which the data and markup builds differ.
+        _alignment = new(() =>
         {
-            var diff = _settings.ToIrDiffSettings() with { CrossParagraphTokenDiff = false };
             var (irLeft, irRight) = _ir.Value;
-            // When this comparison's redline fuses cross-paragraph runs, relocations touching a fused
-            // paragraph are left unpaired here too, so the revision list and the redline pair alike.
-            // Finding the fused paragraphs means running the fusion decision, which is costly on a long
-            // run of edited paragraphs, so it runs only when a relocation touches a body paragraph: only
-            // body paragraphs fuse, and leaving out candidates that paired nothing changes no pairing.
-            var script = IrEditScriptBuilder.Build(irLeft, irRight, diff);
+            return IrBlockAligner.Align(irLeft, irRight, DataSettings());
+        }, LazyThreadSafetyMode.ExecutionAndPublication);
+
+        // The fused MARKUP build, before relocation pairing (only built when the redline fuses runs).
+        _markupBuild = new(() =>
+        {
+            var (irLeft, irRight) = _ir.Value;
+            return IrEditScriptBuilder.Build(irLeft, irRight, _settings.ToIrDiffSettings(), alignment: _alignment.Value);
+        }, LazyThreadSafetyMode.ExecutionAndPublication);
+
+        // The DATA script (CrossParagraphTokenDiff forced off, exactly as GetRevisions and GetEditScriptJson
+        // force it — it is a markup-only refinement), and, when the redline fuses runs and pairing touches
+        // the body, the markup script paired jointly with it (issue #930): a relocation half inside a fused
+        // paragraph pairs only where the run can draw it, so both surfaces report the same moves. When no
+        // relocation touches a body paragraph, no fused paragraph can be part of one (only body paragraphs
+        // fuse, and a candidate that paired nothing unconstrained pairs nothing constrained), so the markup
+        // script pairs on its own, as before, and only when the redline is asked for.
+        _scripts = new(() =>
+        {
+            var diff = DataSettings();
+            var (irLeft, irRight) = _ir.Value;
+            var script = IrEditScriptBuilder.Build(irLeft, irRight, diff, alignment: _alignment.Value);
             var paired = IrRelocationPairer.Apply(script, irLeft, irRight, diff);
-            if (!_settings.CrossParagraphTokenDiff || !IrRelocationPairer.TouchesBody(paired))
-                return paired;
-            var fused = new HashSet<string>(StringComparer.Ordinal);
-            script = IrEditScriptBuilder.Build(irLeft, irRight, diff, fused);
-            return IrRelocationPairer.Apply(script, irLeft, irRight, diff, fused);
+            if (!_settings.CrossParagraphTokenDiff)
+                return (paired, paired);
+            if (!IrRelocationPairer.TouchesBody(paired))
+                return (paired, null);
+            var (data, markup) = IrRelocationPairer.ApplyToBoth(script, _markupBuild.Value, irLeft, irRight, diff);
+            return (data, markup);
         }, LazyThreadSafetyMode.ExecutionAndPublication);
 
         _redline = new(BuildRedline, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -154,12 +172,12 @@ public sealed class DocxDiffComparison
 
             var diff = _settings.ToIrDiffSettings() with { CrossParagraphTokenDiff = false };
             var (irLeft, irRight) = _ir.Value;
-            return IrRevisionRenderer.Render(_dataScript.Value, irLeft, irRight, diff)
+            return IrRevisionRenderer.Render(_scripts.Value.Data, irLeft, irRight, diff)
                 .Select(DocxDiffRevision.FromIr).ToList();
         }, LazyThreadSafetyMode.ExecutionAndPublication);
 
         _editScriptJson = new(
-            () => IrEditScriptJson.Write(_dataScript.Value),
+            () => IrEditScriptJson.Write(_scripts.Value.Data),
             LazyThreadSafetyMode.ExecutionAndPublication);
 
         _semanticChanges = new(
@@ -233,12 +251,20 @@ public sealed class DocxDiffComparison
             return new WmlDocument(left);
 
         var diff = s.ToIrDiffSettings();
-        var script = diff.CrossParagraphTokenDiff
-            ? BuildFusedScript(diff)
-            : _dataScript.Value;
         var (irLeft, irRight) = _ir.Value;
+        // Without a cross-paragraph run the markup build has no fused paragraph, so pairing it on its own is
+        // exactly the joint pairing — and skips building the data script for a redline-only caller.
+        IrEditScript script;
+        if (!diff.CrossParagraphTokenDiff)
+            script = _scripts.Value.Data;
+        else if (!_markupBuild.Value.Operations.Any(op => op.Kind == IrEditOpKind.CrossParagraphRunBlock))
+            script = IrRelocationPairer.Apply(_markupBuild.Value, irLeft, irRight, diff);
+        else
+            script = _scripts.Value.Markup ?? IrRelocationPairer.Apply(_markupBuild.Value, irLeft, irRight, diff);
         return IrMarkupRenderer.Render(script, left, right, diff, irLeft, irRight);
     }
+
+    private IrDiffSettings DataSettings() => _settings.ToIrDiffSettings() with { CrossParagraphTokenDiff = false };
 
     /// <summary>
     /// The compatibility preflight a product's identical-bytes shortcut still owes its caller, run
@@ -257,14 +283,4 @@ public sealed class DocxDiffComparison
         DocxDiff.PreflightCompatibility(s, preflightLeft, preflightRight);
     }
 
-    private IrEditScript BuildFusedScript(IrDiffSettings diff)
-    {
-        var (irLeft, irRight) = _ir.Value;
-        return BuildTwoWayScript(irLeft, irRight, diff);
-    }
-
-    /// <summary>A two-way markup script: the builder's, plus the relocations that cross a table boundary
-    /// (<see cref="IrRelocationPairer"/>). Consolidate builds its per-reviewer scripts without them.</summary>
-    private static IrEditScript BuildTwoWayScript(IrDocument irLeft, IrDocument irRight, IrDiffSettings diff) =>
-        IrRelocationPairer.Apply(IrEditScriptBuilder.Build(irLeft, irRight, diff), irLeft, irRight, diff);
 }
