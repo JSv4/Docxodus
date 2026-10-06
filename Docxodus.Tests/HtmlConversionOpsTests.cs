@@ -2295,4 +2295,38 @@ public class HtmlConversionOpsTests
         var p = XElement.Parse(html).Descendants().Single(e => e.Name.LocalName == "p");
         return (string?)p.Attribute("style") ?? string.Empty;
     }
+    // Issue #941: Word grows a line to make room for a raised run (w:position > 0), moving the line's baseline
+    // down by the raise. `vertical-align` does that in CSS; relative positioning moved the glyphs without
+    // growing the line, so the raised text could overlap the line above. A lowered run keeps its relative
+    // offset until Word's behaviour for it is recorded.
+    [Theory]
+    [InlineData(6, "vertical-align: 3pt", "top")]
+    [InlineData(-6, "top: 3pt", "vertical-align")]
+    public void HCO101_RaisedRun_GrowsItsLineWithVerticalAlign(int position, string expected, string absent)
+    {
+        var run = RunStyle(new Wp.Run(
+            new Wp.RunProperties(new Wp.Position { Val = position.ToString(System.Globalization.CultureInfo.InvariantCulture) }),
+            new Wp.Text("shifted")));
+
+        Assert.Contains(expected, run);
+        Assert.DoesNotContain(absent + ":", run);
+    }
+
+    /// <summary>Converts one single-spaced paragraph holding <paramref name="run"/> and returns the run's span style.</summary>
+    private static string RunStyle(Wp.Run run)
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Wp.Document(new Wp.Body(new Wp.Paragraph(run)));
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles(new Wp.DocDefaults());
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
+            main.Document.Save();
+        }
+
+        var html = HtmlConversionOps.ConvertToHtml(ms.ToArray(), new HtmlConversionOptions { FabricateCssClasses = false });
+        var span = XElement.Parse(html).Descendants().Single(e => e.Name.LocalName == "span" && e.Value == "shifted");
+        return (string?)span.Attribute("style") ?? string.Empty;
+    }
 }

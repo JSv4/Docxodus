@@ -2091,9 +2091,19 @@ values are measured in the DOM with Chromium placing baselines on whole CSS pixe
   the exported single-spaced first line sits about one pixel (0.78 pt) above Word's for both fonts. A
   multiple-spaced first line can read up to a pixel off that. Neither accumulates. Tracked in #942.
 - **A raised run (`w:position`) grows Word's line.** CASE6 raises "raised" by 3 pt on the first line
-  of a 1.15 paragraph. Word moves that line's baseline down 3 pt to make room. The export raises the
-  run with relative positioning, which does not grow the line, so the line stays put. The run's 3 pt
-  offset above its line matches Word. Tracked in #941.
+  of a 1.15 paragraph. Word moves that line's baseline down 3 pt to make room, and every later line
+  with it:
+
+  | pt from the page top | raised run | rest of line 1 | line 2 |
+  |---|---:|---:|---:|
+  | Word | 82.53 | 85.53 | 101.03 |
+  | Same paragraph without the raised run (CASE1) | — | 82.53 | 98.03 |
+  | Docxodus before #941 | 78.72 | 81.72 | 97.16 |
+
+  The converter raised the run with relative positioning, which does not grow the line. Since #941 it
+  raises it with `vertical-align: <raise>pt`, which grows the line upward by the raise exactly as Word
+  does (`ConvertRun` in `Docxodus/WmlToHtmlConverter.cs`). A lowered run (negative `w:position`) keeps
+  its relative offset: Word's line for it has not been recorded yet.
 
 **Fix.** `ApplyAutomaticLineSpacingToInlineContent` (`Docxodus/WmlToHtmlConverter.cs`). Each direct inline
 child keeps the multiplied `line-height: calc(1lh * m)` as before, so every line box is exactly what it was,

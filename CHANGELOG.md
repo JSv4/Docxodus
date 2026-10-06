@@ -110,6 +110,12 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- A raised run (`w:position` above 0) now makes its line taller the way Word does, instead of overlapping the
+  line above (issue #941). Word keeps the raised text at the line's usual top and moves the line's baseline
+  down by the raise, and every later line with it. The HTML raised the run with relative positioning, which
+  moves the glyphs without growing the line; it now uses `vertical-align`, which grows the line. Recorded
+  from Word for the web: a 3 pt raise on the first line of an 11 pt Calibri paragraph at 1.15 moves the rest
+  of the paragraph down 3 pt. A lowered run keeps its relative offset until Word's line for it is recorded.
 - A paragraph whose runs use a different font from its paragraph mark no longer gets a line box taller than
   any of its lines (issue #940). The HTML gave the `<p>` the mark's font family but its largest run's size, so
   12 pt Arial runs under a mark left at the default Calibri got a Calibri 12 pt line box, 14.65 pt tall where

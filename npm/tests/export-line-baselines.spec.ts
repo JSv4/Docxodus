@@ -200,6 +200,21 @@ test.describe('exported baselines follow Word (#908)', () => {
     }
   });
 
+  test('a raised run grows its line the way Word does (#941)', async ({ page }) => {
+    // CASE6 is CASE1 with "raised" at w:position 6 (3 pt up) on its first line. Word keeps the raised text at
+    // the line's usual top and moves the line's baseline down by the raise, and every later line with it.
+    const exported = await exportedBaselines(page, 'baseline-test-a.woff2');
+    const origin = exported[1].baselines[0];
+    const wordOrigin = word.cases.find((c) => c.case === 1)!.baselinesPt[0];
+    const expected = word.cases.find((c) => c.case === 6)!.baselinesPt;
+    const actual = exported[6].baselines;
+    expected.forEach((y, line) => {
+      const got = actual[line] - origin;
+      expect(Math.abs(got - (y - wordOrigin)), `CASE6 baseline ${line + 1}: ${got} pt below CASE1's first, ` +
+        `Word ${y - wordOrigin} pt`).toBeLessThanOrEqual(LINE_TOLERANCE_PT);
+    });
+  });
+
   test('a raised run at 1.15 still sits its w:position above the line', async ({ page }) => {
     // CASE6 is 11 pt Calibri at 1.15 whose first line holds "raised" at w:position 6 (3 pt up). Word draws it
     // 3 pt above the line's baseline; the relative offset that raises it composes with the new placement.
