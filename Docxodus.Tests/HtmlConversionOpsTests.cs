@@ -2084,10 +2084,7 @@ public class HtmlConversionOpsTests
 
         Assert.Contains("--docx-auto-line-spacing: 1.079", (string?)paragraph.Attribute("style"));
         Assert.Contains("line-height: normal", (string?)paragraph.Attribute("style"));
-        // Single line height, raised by the multiple's extra so it falls below the text (issue #908).
-        Assert.Contains("line-height: calc(1lh * min(var(--docx-auto-line-spacing), 1))",
-            (string?)placeholder.Attribute("style"));
-        Assert.Contains("vertical-align: calc(1lh * max(var(--docx-auto-line-spacing) - 1, 0))",
+        Assert.Contains("line-height: calc(1lh * var(--docx-auto-line-spacing))",
             (string?)placeholder.Attribute("style"));
         Assert.Equal("\u00A0", placeholder.Value);
         Assert.Empty(paragraph.Descendants().Where(e =>

@@ -2087,21 +2087,34 @@ values are measured in the DOM with Chromium placing baselines on whole CSS pixe
 - **The extra height goes below the text.** The first baseline is identical at every multiple, and
   later lines advance by the multiple of the natural height (Calibri: 13.42, 15.42, 26.84 pt; the
   font's `hhea` height is 13.43 pt).
-- **What remains is a whole-pixel offset.** Chromium puts a line's baseline on a whole CSS pixel, so
-  the exported first line sits about one pixel (0.78 pt) above Word's for both fonts, at every spacing.
-  It does not accumulate. Tracked in #942.
+- **What remains is whole-pixel rounding.** Chromium puts a line's baseline on a whole CSS pixel, so
+  the exported single-spaced first line sits about one pixel (0.78 pt) above Word's for both fonts. A
+  multiple-spaced first line can read up to a pixel off that. Neither accumulates. Tracked in #942.
 - **A raised run (`w:position`) grows Word's line.** CASE6 raises "raised" by 3 pt on the first line
   of a 1.15 paragraph. Word moves that line's baseline down 3 pt to make room. The export raises the
   run with relative positioning, which does not grow the line, so the line stays put. The run's 3 pt
   offset above its line matches Word. Tracked in #941.
 
-**Fix.** `ApplyAutomaticLineSpacingToInlineContent` (`Docxodus/WmlToHtmlConverter.cs`). For a
-multiple m ≥ 1, each direct inline child keeps the single line height (`1lh`) and is raised by
-(m − 1) lines with `vertical-align: calc(1lh * max(m - 1, 0))`. The line box spans from the raised
-child's top down to the paragraph strut's bottom: m lines tall, with the glyphs at its top. A multiple
-below 1 keeps the multiplied height. Relative positioning for `w:position` composes with it. The line
-boxes themselves are unchanged, so pagination and PageMap fragments keep their size; only the glyphs
-move within them.
+**Fix.** `ApplyAutomaticLineSpacingToInlineContent` (`Docxodus/WmlToHtmlConverter.cs`). Each direct inline
+child keeps the multiplied `line-height: calc(1lh * m)` as before, so every line box is exactly what it was,
+and is moved up by half the extra with relative positioning:
+`top: min(0px, calc(1lh * (1 / m - 1) / 2))`. In `top`, `1lh` is the child's own height mN, so this is
+−(m − 1)N/2, and nothing for a multiple below 1. A raised or lowered run's own `w:position` offset is added
+in the same `calc()`. A child positioned some other way, or holding an image, an SVG or an absolutely
+positioned descendant (a floating drawing, for which a relative child would become the containing block), is
+not moved.
+
+A first attempt instead raised each child with `vertical-align` and the single line height, which lets the
+layout itself put the glyphs at the top. It changed line heights whenever a run's font differs from its
+paragraph's font, because the line box is then the union of differently shaped boxes: a tab-leader
+screenshot came out 3 px shorter. Relative positioning cannot change layout. Its cost is that Chromium puts
+each line's baseline on a whole pixel before the offset applies, so a multiple-spaced first line can read up
+to a pixel off a single-spaced one (#942).
+
+The same measurement exposed an export bug. The paginated export's font resolver restyled only elements that
+hold text, so a paragraph's own line box, which every multiple is built on, kept its requested family and
+fell back to whatever the machine had installed. The resolver now also gives every rendered element whose
+font matches a resolved request that face (`npm/src/font-runtime.ts`, `collectFontInventory`).
 
 Tests: `npm/tests/export-line-baselines.spec.ts`. It lays the fixture out with subsets of Carlito and
 Liberation Sans (Calibri's and Arial's metrics) served through the export's font resolver, measures

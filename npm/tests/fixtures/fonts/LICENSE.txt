@@ -1,7 +1,8 @@
 baseline-test-a.woff2, baseline-test-b.woff2
 ============================================
 
-Subsets of two open fonts, cut down to the characters of line-baselines.docx and renamed, as the
+Subsets of two open fonts, cut down to the characters of line-baselines.docx (plus "Hg", the probe the export
+measures natural line height with) and renamed, as the
 license below requires for a modified font:
 
   baseline-test-a.woff2  "Docxodus Baseline Test A", from Carlito Regular (Debian fonts-crosextra-carlito,
@@ -13,7 +14,7 @@ They exist so the exported-baseline test (tests/export-line-baselines.spec.ts, i
 fixture out with Calibri's and Arial's vertical metrics on any machine, without installing fonts
 system-wide. Subsetting keeps the hhea and OS/2 metrics the test depends on. Built with:
 
-  pyftsubset <source.ttf> --text="CASE0123456789 The quick brown fox jumps over the lazy dog while
+  pyftsubset <source.ttf> --text="HgCASE0123456789 The quick brown fox jumps over the lazy dog while
     the editor counts every line. raised" --flavor=woff2 --no-hinting --name-IDs='*'
 
 then renaming name IDs 1, 3, 4, 6 and 16 with fontTools. Docxodus itself remains MIT-licensed. Only these

@@ -397,6 +397,28 @@ function collectFontInventory(document: Document, limits: BrowserFontLimits): Fo
     }
     uses.push({ element, requestKey: key, originalStyle: element.getAttribute("style") });
   }
+  // An element with no text of its own still lays out with its font: a paragraph's strut, its own share of
+  // every line box, is sized from the paragraph's font, and so are `lh` units and the auto line multiples
+  // built on them. Point every rendered element whose font matches a requested face at that face too, or
+  // those line boxes fall back to whatever the machine has installed (issue #908).
+  const used = new Set(uses.map((use) => use.element));
+  for (const element of Array.from(document.body.querySelectorAll("*"))) {
+    if (!(element instanceof view.HTMLElement) || used.has(element)) continue;
+    if (/^(?:script|style|template|noscript)$/i.test(element.localName)) continue;
+    if (!participatesInRendering(element, view)) continue;
+    const computed = view.getComputedStyle(element);
+    const parsedFamilies = parseCssFontFamilyTokens(computed.fontFamily);
+    if (parsedFamilies.length === 0) continue;
+    const key = requestKey({
+      familyStack: parsedFamilies.map(({ name }) => name),
+      familyKinds: parsedFamilies.map(({ kind }) => kind),
+      style: faceStyle(computed.fontStyle),
+      weight: faceWeight(computed.fontWeight),
+      stretch: faceStretch(computed.fontStretch),
+    });
+    if (!requests.has(key)) continue;
+    uses.push({ element, requestKey: key, originalStyle: element.getAttribute("style") });
+  }
   const ordered = Array.from(requests, ([key, request]) => ({ key, request }))
     .sort((left, right) => compareText(left.key, right.key));
   const idByKey = new Map<string, string>();

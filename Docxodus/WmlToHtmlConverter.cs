@@ -6819,14 +6819,17 @@ namespace Docxodus
         ///
         /// Word places the extra height of a multiple above 1 entirely BELOW the text: a line's
         /// baseline sits where single spacing puts it, whatever the multiple (issue #908, measured
-        /// from Word's own PDF output; see <c>npm/tests/fixtures/line-baselines.word.json</c>). A CSS
-        /// line-height instead splits its extra leading half above and half below the glyphs. So for
-        /// a multiple m of at least 1 each direct child keeps the single line height and is raised by
-        /// (m - 1) lines with <c>vertical-align</c>: the line box is then the paragraph's own strut
-        /// from the child's raised top down to the strut's bottom, m lines tall with the glyphs at its
-        /// top. A multiple below 1 keeps the plain multiplied height. Raised and lowered runs
-        /// (<c>w:position</c>) are offset with relative positioning, which composes with this. A child
-        /// that sets its own vertical alignment keeps the multiplied height instead.
+        /// from Word's own PDF output; see <c>npm/tests/fixtures/line-baselines.word.json</c>). The
+        /// multiplied line-height instead splits the extra half above and half below the glyphs. So
+        /// each direct child is also moved up by half the extra with relative positioning: the line
+        /// boxes, and with them pagination, are exactly what they were, and only the glyphs move to
+        /// the top of their line. In <c>top</c>, <c>1lh</c> is the child's own multiplied height mN,
+        /// so <c>1lh * (1/m - 1) / 2</c> is -(m-1)N/2; a multiple below 1 is not moved. A raised or
+        /// lowered run (<c>w:position</c>) already carries a relative <c>top</c>, and the two offsets
+        /// are added. A child positioned some other way, or holding an image or drawing (which can be
+        /// the tallest thing on its line, so moving it up would overlap the line above), or holding an
+        /// absolutely positioned descendant such as a floating drawing (a relative child would become
+        /// its containing block), is not moved.
         /// </summary>
         private static void ApplyAutomaticLineSpacingToInlineContent(
             XElement paragraph,
@@ -6851,20 +6854,26 @@ namespace Docxodus
                 if (childStyle.ContainsKey("line-height"))
                     continue;
 
-                if (childStyle.ContainsKey("vertical-align"))
-                {
-                    childStyle["line-height"] =
-                        $"calc(1lh * var({AutomaticLineSpacingMultiplierCssProperty}))";
-                    continue;
-                }
-
-                // Inside vertical-align, 1lh is the child's own line height: one single line when
-                // the multiple is at least 1.
                 childStyle["line-height"] =
-                    $"calc(1lh * min(var({AutomaticLineSpacingMultiplierCssProperty}), 1))";
-                childStyle["vertical-align"] =
-                    $"calc(1lh * max(var({AutomaticLineSpacingMultiplierCssProperty}) - 1, 0))";
+                    $"calc(1lh * var({AutomaticLineSpacingMultiplierCssProperty}))";
+
+                if ((childStyle.TryGetValue("position", out var position) && position != "relative") ||
+                    child.DescendantsAndSelf().Any(PinsOrPlacesMedia))
+                    continue;
+                var lift = $"min(0px, calc(1lh * (1 / var({AutomaticLineSpacingMultiplierCssProperty}) - 1) / 2))";
+                childStyle["position"] = "relative";
+                childStyle["top"] = childStyle.TryGetValue("top", out var top) ? $"calc({top} + {lift})" : lift;
             }
+        }
+
+        /// <summary>An image, an inline SVG, or an absolutely positioned element (a floating drawing).</summary>
+        private static bool PinsOrPlacesMedia(XElement element)
+        {
+            if (element.Name == Xhtml.img || element.Name.LocalName == "svg")
+                return true;
+            var style = element.Annotation<Dictionary<string, string>>();
+            return style != null && style.TryGetValue("position", out var position) &&
+                position is "absolute" or "fixed";
         }
 
         private static List<object?> TransformElementsPrecedingTab(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
