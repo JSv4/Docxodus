@@ -3,7 +3,8 @@
 A standalone harness that times the `DocxDiff` pipeline against one heavyweight legal
 `.docx` and its own generated edit variants, and proves that an optimization changed
 nothing about the output. It is deliberately **not** part of `Docxodus.sln`, so it never
-affects CI, packaging, or the warning baselines.
+affects packaging or the warning baselines. CI's `perf.yml` runs it on pull requests that touch
+the library, as an allocation regression gate (see [CI allocation gate](#ci-allocation-gate)).
 
 Its sibling `benchmarks/complex-form-doc` answers "does the toolchain get this document
 right?". This one answers "how fast, and where does the time go?".
@@ -204,8 +205,24 @@ dotnet run -c Release --project benchmarks/docxdiff-stress -- path/to/document.d
 | `--probe` | sub-stage attribution inside `IrReader` and `UnidHelper`, plus the pipeline decomposition |
 | `--baseline FILE` / `--check FILE` | write / verify output digests |
 | `--out DIR` | write the generated variants as `.docx` for inspection |
+| `--stats-json FILE` | write each case's median time and bytes allocated per run as JSON |
 
 Build in `Release`. A `Debug` build's numbers are not meaningful.
+
+### CI allocation gate
+
+`.github/workflows/perf.yml` runs `scripts/perf-run.sh` on every pull request that touches
+`Docxodus/`, this harness or `benchmarks/complex-form-doc`. The script copies this checkout's
+harnesses into a worktree of the PR's base commit, so both runs use the same harness code and
+differ only in the library. It runs both harnesses on both sides against
+`TestFiles/NVCA-Model-COI.docx`, then `scripts/perf-compare.py` writes a before/after table to
+the job summary. The job fails when a case allocates **more than 10% (and at least 1 MiB) above
+base**. Allocation repeats to well under 1% between runs of one build; wall time on a shared
+runner swings by 20–40%, so it is shown but never gated. To reproduce locally:
+
+```bash
+scripts/perf-run.sh origin/main /tmp/perf-results
+```
 
 ### Reading the numbers
 
