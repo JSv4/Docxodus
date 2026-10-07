@@ -9359,7 +9359,7 @@ internal static class IrMarkupRenderer
             foreach (var member in groups)
                 foreach (var rev in member.DescendantsAndSelf()
                              .Where(e => TrackedRevisionNames.Contains(e.Name)))
-                    if (int.TryParse((string)rev.Attribute(W.id),
+                    if (int.TryParse((string?)rev.Attribute(W.id),
                             System.Globalization.NumberStyles.Integer,
                             System.Globalization.CultureInfo.InvariantCulture, out var id) && id >= _nextId)
                         _nextId = id + 1;

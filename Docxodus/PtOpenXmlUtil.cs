@@ -2150,7 +2150,7 @@ listSeparator
             using (Stream s = part.GetStream(FileMode.Open, FileAccess.Read))
             {
                 Image = new byte[s.Length];
-                s.Read(Image, 0, (int)s.Length);
+                s.ReadExactly(Image);
             }
         }
 
@@ -2204,7 +2204,7 @@ listSeparator
             using (Stream s = part.GetStream(FileMode.Open, FileAccess.Read))
             {
                 Media = new byte[s.Length];
-                s.Read(Media, 0, (int)s.Length);
+                s.ReadExactly(Media);
             }
         }
 
