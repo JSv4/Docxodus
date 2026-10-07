@@ -148,15 +148,17 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- **A very long paragraph no longer exhausts memory in a comparison.** The word-level differ
-  aligned every paragraph pair with a full n×m table: about 1 GB for a 16,000-word paragraph and
-  1.6 GB at 20,000 words, enough to kill a browser (WASM) heap. The table now runs only on regions of
-  up to a fixed cell budget. A larger pair is first cut into such regions by matching its common
-  prefix and suffix and anchoring on words that occur once on each side (falling back to the rarest
-  shared word), all in linear memory. A 20,000-word pair now diffs in tens of megabytes and well under
-  a second. Ordinary paragraphs stay under the budget, so their output is unchanged. The differ's
-  documentation, which claimed it used Myers' algorithm, now describes what it does. (#964)
-
+- A misspelled option value for a session op is now refused instead of silently performing a different
+  edit (issue #962). Every string-valued option the wire parsers read (insert position, header/footer
+  kind, page-number field and number format, tracked-change mode, table border scope, shading scope,
+  merge-content policy, row-height rule, list format, paragraph alignment and line-spacing rule, cell
+  alignment, authority category) now goes through one lookup. An absent value still takes the op's
+  default, and the known spellings still match in any case, with or without underscores
+  (`"atLeast"` and `"at_least"` agree). Anything else raises an argument error naming the accepted
+  values. The stdio host and Python client report it as `invalid_argument`, MCP as a tool error
+  (including `docxodus_open`'s `trackedChanges`, which had its own lenient copy), and the browser
+  bridge throws. Before, `"outsid"` bordered every edge of a table, `"exactly"` set an at-least row height,
+  and a misspelled list format removed the list.
 - **`DocxodusDocument.SavePartAs` disposes the part stream it opens**, and the three places that
   copy a part's bytes into a buffer (`SavePartAs`, plus the image and media copies `DocumentBuilder`
   uses when merging) now read with `ReadExactly`. They used a single `Stream.Read`
@@ -531,6 +533,14 @@ All notable changes to this project will be documented in this file.
   such as `1)`); a longer one keeps its first 14
   characters followed by `…`. The shortening is lossy: the redline HTML shows such an item's old
   marker as `Three thousand…`, and the rest of the label is not recoverable from the output.
+- **A very long paragraph no longer exhausts memory in a comparison.** The word-level differ
+  aligned every paragraph pair with a full n×m table: about 1 GB for a 16,000-word paragraph and
+  1.6 GB at 20,000 words, enough to kill a browser (WASM) heap. The table now runs only on regions of
+  up to a fixed cell budget. A larger pair is first cut into such regions by matching its common
+  prefix and suffix and anchoring on words that occur once on each side (falling back to the rarest
+  shared word), all in linear memory. A 20,000-word pair now diffs in tens of megabytes and well under
+  a second. Ordinary paragraphs stay under the budget, so their output is unchanged. The differ's
+  documentation, which claimed it used Myers' algorithm, now describes what it does. (#964)
 
 ## [12.6.5] - 2026-09-28
 

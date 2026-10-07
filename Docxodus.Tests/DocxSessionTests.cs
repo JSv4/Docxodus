@@ -1888,7 +1888,7 @@ public class DocxSessionTests
         Assert.Equal(ListFormat.DecimalParenthesis, Docxodus.Internal.DocxSessionJson.ParseListFormat("decimalParenthesis"));
         Assert.Equal(ListFormat.UpperRomanParenthesis, Docxodus.Internal.DocxSessionJson.ParseListFormat("upperRomanParenthesis"));
         Assert.Equal(ListFormat.UpperLetter, Docxodus.Internal.DocxSessionJson.ParseListFormat("UPPERLETTER")); // case-insensitive
-        Assert.Equal(ListFormat.None, Docxodus.Internal.DocxSessionJson.ParseListFormat("wingding")); // lenient fallback
+        Assert.Throws<System.ArgumentException>(() => Docxodus.Internal.DocxSessionJson.ParseListFormat("wingding")); // a typo is refused, not read as "remove the list" (#962)
     }
 
     [Fact]
