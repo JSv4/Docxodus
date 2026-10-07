@@ -564,6 +564,17 @@ All notable changes to this project will be documented in this file.
   shared word), all in linear memory. A 20,000-word pair now diffs in tens of megabytes and well under
   a second. Ordinary paragraphs stay under the budget, so their output is unchanged. The differ's
   documentation, which claimed it used Myers' algorithm, now describes what it does. (#964)
+- An exported paragraph's lines are sized from its configured font even when the paragraph's weight
+  or style differs from its text's (issue #956). The export points each element that holds no text
+  of its own at the resolved face of its font, so a paragraph's line box and the `lh` its auto line
+  spacing is built on use that face. The match required the same weight and style as the text. A
+  heading inherits the browser's bold while its runs are normal, so it matched nothing, and its lines
+  fell back to whatever the machine resolves the family to. For Calibri Light, which Chromium will
+  not alias to the contract's Carlito, that was Liberation Sans. A Calibri Light heading at Word's
+  1.08 spacing advanced 19.75 pt per line instead of LibreOffice's 21.1 pt, and the `pdf-final-revisions`
+  generated-PDF case scored ink F1 0.943. Such an element now takes the closest resolved face of the
+  same family stack: the heading advances 21.25 pt and the case scores 0.996. No font request is
+  added, so the render report is unchanged.
 
 ## [12.6.5] - 2026-09-28
 
