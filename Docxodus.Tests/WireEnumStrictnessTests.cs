@@ -202,6 +202,11 @@ public class WireEnumStrictnessTests : IDisposable
             var ex = Assert.ThrowsAny<Exception>(() => Docxodus.McpServer.Dispatcher.Call(store, "docxodus_table", Json(
                 $$"""{"sessionId":{{sid}},"action":"set_borders","cellAnchorId":"{{cell}}","borderScope":"outsid"}""")));
             Assert.Contains("outsid", ex.Message, StringComparison.Ordinal);
+
+            // docxodus_open had its own lenient switch: a typo opened the session in accept mode.
+            var open = Assert.ThrowsAny<Exception>(() => Docxodus.McpServer.Dispatcher.Call(store, "docxodus_open",
+                Json($$"""{"path":{{JsonSerializer.Serialize(path)}},"trackedChanges":"render-inline"}""")));
+            Assert.Contains("render-inline", open.Message, StringComparison.Ordinal);
         }
         finally
         {

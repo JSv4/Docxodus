@@ -152,12 +152,7 @@ internal static class Dispatcher
         var location = store.Documents.Resolve(Str(args, "path"));
         var bytes = store.Documents.Read(location);
 
-        var tracked = OptStr(args, "trackedChanges") switch
-        {
-            "render_inline" => TrackedChangeMode.RenderInline,
-            "strip_deletions" => TrackedChangeMode.StripDeletions,
-            _ => TrackedChangeMode.Accept,
-        };
+        var tracked = DocxSessionJson.ParseTrackedChangeMode(OptStr(args, "trackedChanges"));
         // Defaults come from the settings object, not repeated literals, so this surface cannot
         // drift from the .NET default the way the hardcoded undoDepth of 50 had.
         var settingDefaults = new DocxSessionSettings();

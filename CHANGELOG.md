@@ -155,8 +155,9 @@ All notable changes to this project will be documented in this file.
   alignment, authority category) now goes through one lookup. An absent value still takes the op's
   default, and the known spellings still match in any case, with or without underscores
   (`"atLeast"` and `"at_least"` agree). Anything else raises an argument error naming the accepted
-  values, which the stdio host and Python client report as `invalid_argument` and MCP as a tool
-  error. Before, `"outsid"` bordered every edge of a table, `"exactly"` set an at-least row height,
+  values. The stdio host and Python client report it as `invalid_argument`, MCP as a tool error
+  (including `docxodus_open`'s `trackedChanges`, which had its own lenient copy), and the browser
+  bridge throws. Before, `"outsid"` bordered every edge of a table, `"exactly"` set an at-least row height,
   and a misspelled list format removed the list.
 - **`DocxodusDocument.SavePartAs` disposes the part stream it opens**, and the three places that
   copy a part's bytes into a buffer (`SavePartAs`, plus the image and media copies `DocumentBuilder`
