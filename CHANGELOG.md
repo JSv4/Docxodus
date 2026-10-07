@@ -81,6 +81,13 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **The browser bundles ship minified, with source maps.** `embed.bundle.js`, `embed.iife.js`,
+  `editor.bundle.js`, `pagination.bundle.js`, `session.bundle.js`, `docxodus.worker.js` and the
+  worker proxy were built unminified. `embed` drops from 195 KB to 117 KB gzip and `editor` from
+  157 KB to 96 KB. A `.map` file now sits next to each bundle, on the CDN and the hosted demos,
+  so stack traces still resolve to source. A per-bundle gzip budget in `pretest` stops an
+  unminified build or a large new dependency from shipping unnoticed. (#971)
+
 - `@docxodus/export` spends about a quarter less time per document (issue #852). The time went to
   per-document setup, not conversion. Each document's fresh browser page fetched and SHA-256-hashed
   the whole runtime asset graph (about 26 MB) again, although the Node host had already verified

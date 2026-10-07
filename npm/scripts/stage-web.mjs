@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { cp, copyFile, mkdir, readdir, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -34,6 +35,12 @@ await cp(join(webroot, '_framework'), join(demo, 'wasm', '_framework'), { recurs
 for (const [source, target] of runtime) {
   await copyFile(join(dist, source), join(webroot, target));
   await copyFile(join(dist, source), join(demo, target));
+  // Minified bundles end in `//# sourceMappingURL=<source>.map`; stage the map under that
+  // original name (even when the bundle itself is renamed) so devtools can resolve it.
+  if (existsSync(join(dist, `${source}.map`))) {
+    await copyFile(join(dist, `${source}.map`), join(webroot, `${source}.map`));
+    await copyFile(join(dist, `${source}.map`), join(demo, `${source}.map`));
+  }
 }
 for (const entry of await readdir(join(repoRoot, 'docs', 'demo'), { withFileTypes: true })) {
   if (entry.name === 'README.md') continue;
