@@ -93,6 +93,7 @@ import type {
 
 import { DocxSession, openDocxSession as openDocxSessionImpl } from "./session.js";
 import { serializeVerificationRequest } from "./verification-request.js";
+import { needsCompleteConversion } from "./conversion-options.js";
 import {
   readExternalAnnotationSet,
   readExternalAnnotationValidation,
@@ -894,20 +895,8 @@ export async function convertDocxToHtml(
 
   let result: string;
 
-  // Check if any of the new complete options are specified
-  const needsCompleteMethod = options?.renderFootnotesAndEndnotes !== undefined ||
-    options?.renderHeadersAndFooters !== undefined ||
-    options?.renderTrackedChanges !== undefined ||
-    options?.showDeletedContent !== undefined ||
-    options?.renderMoveOperations !== undefined ||
-    options?.renderUnsupportedContentPlaceholders !== undefined ||
-    options?.documentLanguage !== undefined ||
-    options?.stampAnchors !== undefined ||
-    options?.revisionPresentation !== undefined ||
-    options?.semanticLists !== undefined;
-
-  // Use complete method when any new options are specified (most comprehensive)
-  if (needsCompleteMethod || options?.renderAnnotations) {
+  // Use complete method when any complete-only option is specified (most comprehensive)
+  if (needsCompleteConversion(options)) {
     result = exports.DocumentConverter.ConvertDocxToHtmlComplete(
       bytes,
       options?.pageTitle ?? "Document",

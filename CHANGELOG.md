@@ -148,6 +148,12 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- The npm worker's `convertDocxToHtml` now honors `stampAnchors` when it is the only option that
+  needs the complete conversion entry point (issue #954). The worker kept its own list of those
+  options, which had drifted from the main-thread `convertDocxToHtml`'s and lacked `stampAnchors`,
+  so `{ stampAnchors: true }` took the plain entry point and returned HTML without `data-anchor`
+  attributes. Both paths now read one shared list (`npm/src/conversion-options.ts`).
+
 - **`DocxodusDocument.SavePartAs` disposes the part stream it opens**, and the three places that
   copy a part's bytes into a buffer (`SavePartAs`, plus the image and media copies `DocumentBuilder`
   uses when merging) now read with `ReadExactly`. They used a single `Stream.Read`
