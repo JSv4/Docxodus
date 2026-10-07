@@ -529,7 +529,10 @@ This replaced the original listing, which re-diffed `RevisionProcessor.RejectRev
 `.AcceptRevisions` output through `DocxDiffOps.GetRevisionsJson` — that shape had no stable
 identity to address, substituted engine-default authors/dates for the markup's real ones, and
 cost ~3s on a 49-page document. `author`, `changeType`, `family`, `resolutionStatus`, and
-`partUri` are display-only filters applied after the fact.
+`partUri` are display-only filters. The session facade applies them
+(`DocxSessionOps.ListRevisions(handle, RevisionListFilter)`), so the stdio host, the Python
+`list_revisions(...)` keywords and the npm `listRevisions(filter)` filter the same way. The
+`docxodus_search` `maxResults` cap is the facade's too.
 
 `accept`/`reject` resolve ONE revision by `revisionId` as an ordinary undoable session
 mutation (`DocxSession.AcceptRevision`/`RejectRevision` — no whole-document
@@ -799,8 +802,11 @@ post-insert styling actions (issue #315 Stage A): `set_column_widths` (`widths`,
 positive twip value per column), `set_borders` (`borderScope` `all`/`outside`/`inside`,
 `borderStyle` — `none` removes the targeted edges — `borderSize`, `borderColor`), `set_shading`
 (`fill` hex/`auto`, omit to clear; `shadingScope` `cell`/`row` — row is header-row banding), and
-`set_repeat_header_row` (`repeat`, default true), `set_row_options`, `merge_cells`, and
-`unmerge_cells`.
+`set_repeat_header_row` (`repeat`, default true), `set_row_options` (`repeatHeader` — `repeat`
+is accepted as a deprecated alias — `allowBreakAcrossPages`, `heightTwips`, `heightRule`),
+`merge_cells`, and `unmerge_cells`. Every default named here is the session facade's
+(`DocxSessionOps`), not the MCP dispatcher's, so the stdio host and the npm/Python clients apply the
+same one (issue #960).
 
 The input schema does not overload anchor fields: `insert` uses `anchorId` for the neighboring
 block, metadata/coordinate reads use `tableAnchorId` (`tbl`), and every cell operation uses

@@ -3,6 +3,7 @@
 using System.Collections.Generic;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Docxodus.Internal;
 
@@ -33,6 +34,41 @@ internal sealed record EditorRenderOptions
     /// session index the preceding mutation just invalidated); a windowed initial mount turns it
     /// on so its blocks are attribute-for-attribute the full render's.</summary>
     public bool StampAnchors { get; init; }
+}
+
+/// <summary>
+/// Every option of a <see cref="DocxSession.Grep"/> / <see cref="DocxSession.GrepCrossBlock"/>
+/// call as it crosses the wire. The initializers are the defaults an omitted field takes, declared
+/// once for every transport; <see cref="ContextChars"/> null means
+/// <see cref="DocxSession.DefaultContextChars"/>, and <see cref="MaxResults"/> null keeps every match.
+/// </summary>
+internal sealed record GrepRequest
+{
+    public RegexOptions RegexOptions { get; init; } = RegexOptions.None;
+    public ProjectionScopes Scope { get; init; } = ProjectionScopes.Body;
+    public int? ContextChars { get; init; }
+    public WhitespaceMode Whitespace { get; init; } = WhitespaceMode.Preserve;
+    public ContextBoundary Boundary { get; init; } = ContextBoundary.Char;
+    public PageCitationRequest? CitationRequest { get; init; }
+    public int? MaxResults { get; init; }
+}
+
+/// <summary>
+/// Narrows <see cref="DocxSessionOps.ListRevisions"/> to the entries matching every non-null
+/// field, compared against the wire values: <see cref="Author"/>, <see cref="ChangeType"/>
+/// (<c>type</c>), <see cref="Family"/> and <see cref="ResolutionStatus"/> ignore case;
+/// <see cref="PartUri"/> is exact.
+/// </summary>
+internal sealed record RevisionListFilter
+{
+    public string? Author { get; init; }
+    public string? ChangeType { get; init; }
+    public string? Family { get; init; }
+    public string? ResolutionStatus { get; init; }
+    public string? PartUri { get; init; }
+
+    public bool IsEmpty => Author is null && ChangeType is null && Family is null
+        && ResolutionStatus is null && PartUri is null;
 }
 
 internal static class DocxSessionJson
@@ -67,8 +103,118 @@ internal static class DocxSessionJson
         token.Replace("_", string.Empty).ToLowerInvariant();
 
     /// <summary>"before" | "after"; absent → <see cref="Position.After"/>.</summary>
-    public static Position ParsePos(string? s) => ParseToken(s, "position", Position.After,
+    public static Position ParsePos(string? s) => ParseOptionalPos(s) ?? Position.After;
+
+    /// <summary>"before" | "after"; absent → null, for an op whose facade owns a different
+    /// default (the reference-field inserts, see
+    /// <see cref="DocxSessionOps.ReferenceFieldDefaultPosition"/>).</summary>
+    public static Position? ParseOptionalPos(string? s) => ParseToken<Position?>(s, "position", null,
         ("before", Position.Before), ("after", Position.After));
+
+    /// <summary>
+    /// Parse the numeric grep options object the stdio host and the WASM bridge share:
+    /// <c>{ regexOptions?, scope?, contextChars?, whitespace?, boundary?, maxResults?, citation? }</c>,
+    /// numbers following the .NET <see cref="RegexOptions"/>, <see cref="ProjectionScopes"/>,
+    /// <see cref="WhitespaceMode"/> and <see cref="ContextBoundary"/> layouts. An omitted field takes
+    /// the <see cref="GrepRequest"/> default.
+    /// </summary>
+    public static GrepRequest ParseGrepRequest(JsonElement root)
+    {
+        var defaults = new GrepRequest();
+        if (root.ValueKind != JsonValueKind.Object) return defaults;
+        return new GrepRequest
+        {
+            RegexOptions = (RegexOptions)TryGetInt(root, "regexOptions", (int)defaults.RegexOptions),
+            Scope = (ProjectionScopes)TryGetInt(root, "scope", (int)defaults.Scope),
+            ContextChars = TryGetIntNullable(root, "contextChars"),
+            Whitespace = (WhitespaceMode)TryGetInt(root, "whitespace", (int)defaults.Whitespace),
+            Boundary = (ContextBoundary)TryGetInt(root, "boundary", (int)defaults.Boundary),
+            CitationRequest = ParsePageCitationRequest(root),
+            MaxResults = TryGetIntNullable(root, "maxResults"),
+        };
+    }
+
+    /// <summary>String overload — the WASM bridge receives the options as text; "" is all defaults.</summary>
+    public static GrepRequest ParseGrepRequest(string? json)
+    {
+        if (string.IsNullOrEmpty(json)) return new GrepRequest();
+        using var doc = JsonDocument.Parse(json);
+        return ParseGrepRequest(doc.RootElement);
+    }
+
+    /// <summary>
+    /// An argument one transport historically spelled differently (issue #960): the value under
+    /// <paramref name="name"/>, else under <paramref name="deprecatedAlias"/>. Naming it both ways
+    /// with different values is refused rather than silently picking one.
+    /// </summary>
+    public static JsonElement? AliasedArgument(JsonElement args, string name, string deprecatedAlias)
+    {
+        if (args.ValueKind != JsonValueKind.Object) return null;
+        var hasName = args.TryGetProperty(name, out var value);
+        var hasAlias = args.TryGetProperty(deprecatedAlias, out var alias);
+        if (hasName && hasAlias && value.GetRawText() != alias.GetRawText())
+            throw new System.ArgumentException(
+                $"\"{name}\" and its deprecated alias \"{deprecatedAlias}\" disagree; pass only \"{name}\"");
+        return hasName ? value : hasAlias ? alias : null;
+    }
+
+    /// <summary><see cref="AliasedArgument"/> read as an optional string.</summary>
+    public static string? AliasedString(JsonElement args, string name, string deprecatedAlias) =>
+        AliasedArgument(args, name, deprecatedAlias) is { ValueKind: JsonValueKind.String } v ? v.GetString() : null;
+
+    /// <summary><see cref="AliasedArgument"/> read as an optional boolean.</summary>
+    public static bool? AliasedBool(JsonElement args, string name, string deprecatedAlias) =>
+        AliasedArgument(args, name, deprecatedAlias) is { ValueKind: JsonValueKind.True or JsonValueKind.False } v
+            ? v.GetBoolean() : null;
+
+    /// <summary>Read <c>{ author?, changeType?, family?, resolutionStatus?, partUri? }</c> off a
+    /// request object; null when none is present.</summary>
+    public static RevisionListFilter? ParseRevisionListFilter(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object) return null;
+        var filter = new RevisionListFilter
+        {
+            Author = TryGetString(root, "author", null),
+            ChangeType = TryGetString(root, "changeType", null),
+            Family = TryGetString(root, "family", null),
+            ResolutionStatus = TryGetString(root, "resolutionStatus", null),
+            PartUri = TryGetString(root, "partUri", null),
+        };
+        return filter.IsEmpty ? null : filter;
+    }
+
+    /// <summary>String overload for the WASM bridge; "" means no filter.</summary>
+    public static RevisionListFilter? ParseRevisionListFilter(string? json)
+    {
+        if (string.IsNullOrEmpty(json)) return null;
+        using var doc = JsonDocument.Parse(json);
+        return ParseRevisionListFilter(doc.RootElement);
+    }
+
+    /// <summary>Keep the revisions that match every field <paramref name="filter"/> sets, comparing
+    /// the same wire names <see cref="SerializeRevisionList"/> writes.</summary>
+    public static IReadOnlyList<RevisionListEntry> FilterRevisions(
+        IReadOnlyList<RevisionListEntry> revisions, RevisionListFilter? filter)
+    {
+        if (filter is null || filter.IsEmpty) return revisions;
+        var kept = new List<RevisionListEntry>();
+        foreach (var r in revisions)
+        {
+            if (filter.Author is not null
+                && !string.Equals(r.Author, filter.Author, System.StringComparison.OrdinalIgnoreCase)) continue;
+            if (filter.ChangeType is not null
+                && !string.Equals(r.Type, filter.ChangeType, System.StringComparison.OrdinalIgnoreCase)) continue;
+            if (filter.Family is not null
+                && !string.Equals(RevisionFamilyWire(r.Family), filter.Family, System.StringComparison.OrdinalIgnoreCase)) continue;
+            if (filter.ResolutionStatus is not null
+                && !string.Equals(RevisionStatusWire(r.ResolutionStatus), filter.ResolutionStatus,
+                    System.StringComparison.OrdinalIgnoreCase)) continue;
+            if (filter.PartUri is not null
+                && !string.Equals(r.PartUri, filter.PartUri, System.StringComparison.Ordinal)) continue;
+            kept.Add(r);
+        }
+        return kept;
+    }
 
     public static PageMap ParsePageMap(string json)
     {
