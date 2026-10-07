@@ -2600,6 +2600,26 @@ internal static class IrMarkupRenderer
     }
 
     /// <summary>
+    /// The elements that follow <paramref name="start"/> in document order: its descendants, then each
+    /// following sibling's subtree at every level up to the root. Equivalent to the root's
+    /// <c>Descendants()</c> after <paramref name="start"/>, without walking everything before it.
+    /// </summary>
+    internal static IEnumerable<XElement> ElementsAfterInDocumentOrder(XElement start)
+    {
+        foreach (var d in start.Descendants())
+            yield return d;
+        for (var level = start; level != null; level = level.Parent)
+        {
+            foreach (var sibling in level.ElementsAfterSelf())
+            {
+                yield return sibling;
+                foreach (var d in sibling.Descendants())
+                    yield return d;
+            }
+        }
+    }
+
+    /// <summary>
     /// Safety net for relocations (issue #887): a move range this render generated whose <c>w:name</c> has no
     /// range of the other direction anywhere in the body is lowered to plain <c>w:del</c>/<c>w:ins</c>, and its
     /// range markers are dropped. A move range an input carries (kept by <c>PreserveInputRevisions</c>) is the
@@ -2630,7 +2650,7 @@ internal static class IrMarkupRenderer
             var wrapperName = isFrom ? W.moveFrom : W.moveTo;
             XElement? end = null;
             var wrappers = new List<XElement>();
-            foreach (var e in start.AncestorsAndSelf().Last().Descendants().SkipWhile(e => e != start).Skip(1))
+            foreach (var e in ElementsAfterInDocumentOrder(start))
             {
                 if (e.Name == endName && (string?)e.Attribute(W.id) == id)
                 {
@@ -3691,12 +3711,21 @@ internal static class IrMarkupRenderer
 
         bool changed = false;
 
+        // One body scan, grouped by id in document order, serves (A) and (A2) instead of a rescan per id.
+        // Both passes only ever remove, re-parent or wrap a marker in place — never clone it or change its
+        // id — and each touches only its own id's markers, so a group stays in document order and needs
+        // only its detached members dropped (`StillInBody`) to equal a fresh scan.
+        var markersById = Markers().Where(m => IdOf(m) != null).GroupBy(m => IdOf(m)!)
+            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+        List<XElement> MarkersWithId(string id) => markersById[id].Where(StillInBody).ToList();
+        bool StillInBody(XElement m) => m.Ancestors().Any(a => ReferenceEquals(a, body));
+
         // (A) Identity-aware collapse — common comment with a bare survivor → single bare marker per kind.
-        foreach (var id in Markers().Select(IdOf).Where(i => i != null).Distinct().ToList())
+        foreach (var id in markersById.Keys)
         {
-            if (!(leftIds.Contains(id!) && rightIds.Contains(id!)))
+            if (!(leftIds.Contains(id) && rightIds.Contains(id)))
                 continue; // right-added / left-deleted: keep its revision context
-            var all = Markers().Where(m => IdOf(m) == id).ToList();
+            var all = MarkersWithId(id);
             if (!all.Any(IsBare))
                 continue; // all wrapped (rewritten anchor) → (B)
             foreach (var kind in new[] { W.commentRangeStart, W.commentRangeEnd, W.commentReference })
@@ -3724,14 +3753,14 @@ internal static class IrMarkupRenderer
         //      or keeping a left-deleted comment on accept. Wrap each bare marker in the matching revision
         //      element so it toggles with its side: right-added → w:ins (reject drops it); left-deleted → w:del
         //      (accept drops it). Markers already in their revision context are left alone.
-        foreach (var id in Markers().Select(IdOf).Where(i => i != null).Distinct().ToList())
+        foreach (var id in markersById.Keys)
         {
-            bool rightAdded = rightIds.Contains(id!) && !leftIds.Contains(id!);
-            bool leftDeleted = leftIds.Contains(id!) && !rightIds.Contains(id!);
+            bool rightAdded = rightIds.Contains(id) && !leftIds.Contains(id);
+            bool leftDeleted = leftIds.Contains(id) && !rightIds.Contains(id);
             if (!rightAdded && !leftDeleted)
                 continue;
             var kind = rightAdded ? RevKind.Ins : RevKind.Del;
-            foreach (var m in Markers().Where(m => IdOf(m) == id && IsBare(m)).ToList())
+            foreach (var m in MarkersWithId(id).Where(IsBare).ToList())
             {
                 WrapMarkerInRevision(m, kind, state);
                 changed = true;
