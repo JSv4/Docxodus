@@ -135,8 +135,11 @@ public sealed class HistoryClientOps : IDisposable
         return HistoryClientJson.Write(new HistoryClientResult { Success = false, ErrorCode = code, Message = error.Message });
     }
 
-    private static T Required<T>(T? value) where T : class => value ?? throw new ArgumentException("Required history argument is missing.");
-    private static T Required<T>(T? value) where T : struct => value ?? throw new ArgumentException("Required history argument is missing.");
+    private static T Required<T>(T? value)
+        where T : class => value ?? throw new ArgumentException("Required history argument is missing.");
+
+    private static T Required<T>(T? value)
+        where T : struct => value ?? throw new ArgumentException("Required history argument is missing.");
 }
 
 public sealed record HistoryClientRequest

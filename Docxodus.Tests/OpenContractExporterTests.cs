@@ -15,9 +15,8 @@ using WTable = DocumentFormat.OpenXml.Wordprocessing.Table;
 using WTableRow = DocumentFormat.OpenXml.Wordprocessing.TableRow;
 using WTableCell = DocumentFormat.OpenXml.Wordprocessing.TableCell;
 
-#if !ELIDE_XUNIT_TESTS
 
-namespace OxPt
+namespace Docxodus.Tests
 {
     /// <summary>
     /// Tests for OpenContractExporter.Export() method.
@@ -962,4 +961,3 @@ namespace OxPt
     }
 }
 
-#endif

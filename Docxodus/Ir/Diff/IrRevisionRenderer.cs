@@ -1306,7 +1306,7 @@ internal static class IrRevisionRenderer
 
     /// <summary>
     /// True iff position <paramref name="i"/> in <paramref name="s"/> is a word boundary under
-    /// <see cref="WmlComparer"/>'s EXACT atom-grouping rule (<c>GetComparisonUnitList</c>): the comparer groups
+    /// <c>WmlComparer</c>'s EXACT atom-grouping rule (<c>GetComparisonUnitList</c>): the comparer groups
     /// per-character atoms into words, where a char is a SPLITTING char (its own isolated atom — boundaries on
     /// BOTH sides) iff it is a <see cref="IrDiffSettings.WordSeparators"/> member, a CJK ideograph, OR a
     /// non-digit-adjacent <c>.</c>/<c>,</c>; every OTHER char (letters, digits, and other punctuation such as

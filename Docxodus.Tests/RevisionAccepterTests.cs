@@ -12,9 +12,8 @@ using DocumentFormat.OpenXml.Packaging;
 using Docxodus;
 using Xunit;
 
-#if !ELIDE_XUNIT_TESTS
 
-namespace OxPt
+namespace Docxodus.Tests
 {
     public class RaTests
     {
@@ -28,12 +27,16 @@ namespace OxPt
             FileInfo sourceDocx = new FileInfo(Path.Combine(sourceDir.FullName, name));
 
             WmlDocument notAccepted = new WmlDocument(sourceDocx.FullName);
+            Assert.True(RevisionProcessor.HasTrackedRevisions(notAccepted), "fixture must carry tracked revisions");
+
             WmlDocument afterAccepting = RevisionAccepter.AcceptRevisions(notAccepted);
+            Assert.False(RevisionProcessor.HasTrackedRevisions(afterAccepting));
+
             var processedDestDocx = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, sourceDocx.Name.Replace(".docx", "-processed-by-RevisionAccepter.docx")));
             afterAccepting.SaveAs(processedDestDocx.FullName);
+            Assert.False(RevisionProcessor.HasTrackedRevisions(new WmlDocument(processedDestDocx.FullName)));
         }
 
     }
 }
 
-#endif

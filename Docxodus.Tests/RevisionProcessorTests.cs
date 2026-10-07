@@ -12,9 +12,8 @@ using DocumentFormat.OpenXml.Packaging;
 using Docxodus;
 using Xunit;
 
-#if !ELIDE_XUNIT_TESTS
 
-namespace OxPt
+namespace Docxodus.Tests
 {
     public class RpTests
     {
@@ -218,4 +217,3 @@ namespace OxPt
     }
 }
 
-#endif

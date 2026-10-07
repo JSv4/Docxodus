@@ -33,7 +33,9 @@ anything about the shipped binary.
    The library is then recompiled and the analyzers flag every risky call in it, whether or not a
    CLI can reach it. These warnings are attributed to `Docxodus.csproj`. They appear only when the
    library is actually recompiled, which is why some logs show them and others don't. The library
-   sets `TreatWarningsAsErrors=false`, so they never fail the build.
+   otherwise builds warning-free and fails Release builds on any warning, but `Docxodus.csproj`
+   turns `TreatWarningsAsErrors` off when `PublishTrimmed` or `PublishAot` is set, so these never
+   fail a CLI publish.
 2. **Whole-application warnings from ILLink (trimming) and ILC (NativeAOT).** These analyze only
    the code the application can reach and are printed as `Trim analysis warning` /
    `AOT analysis warning`. The CLI projects inherit `TreatWarningsAsErrors=true` in Release, and

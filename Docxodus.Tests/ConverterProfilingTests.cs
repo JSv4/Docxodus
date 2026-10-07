@@ -12,7 +12,7 @@ using Docxodus;
 using Xunit;
 using Xunit.Abstractions;
 
-namespace OxPt
+namespace Docxodus.Tests
 {
     /// <summary>
     /// Performance profiling tests for WmlToHtmlConverter.

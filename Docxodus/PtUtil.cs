@@ -71,6 +71,7 @@ namespace Docxodus
         }
     }
 
+    [Obsolete("MhtParser is unused by Docxodus and will be removed in the next major version.")]
     public class MhtParser
     {
         public string? MimeVersion;
@@ -454,24 +455,6 @@ namespace Docxodus
                 }
             }
         }
-
-#if !NET35
-        internal static void ThreadSafeAppendAllLines(FileInfo file, string[] strings)
-        {
-            while (true)
-            {
-                try
-                {
-                    File.AppendAllLines(file.FullName, strings);
-                    break;
-                }
-                catch (IOException)
-                {
-                    System.Threading.Thread.Sleep(50);
-                }
-            }
-        }
-#endif
 
         public static List<string> GetFilesRecursive(DirectoryInfo dir, string searchPattern)
         {
@@ -1174,6 +1157,7 @@ namespace Docxodus
 
     // this is fundamentally the same as PtBucketTimer, except that it is instance based,
     // not a static class.
+    [Obsolete("BucketTimer is unused by Docxodus and will be removed in the next major version.")]
     public class BucketTimer
     {
         public BucketTimer()
@@ -1295,6 +1279,7 @@ namespace Docxodus
         }
     }
 
+    [Obsolete("PtBucketTimer is unused by Docxodus and will be removed in the next major version.")]
     public static class PtBucketTimer
     {
         private class BucketInfo

@@ -18,15 +18,12 @@ namespace Docxodus;
 /// (<c>IrReader → IrEditScriptBuilder → IrMarkupRenderer / IrRevisionRenderer / IrEditScriptJson</c>).
 /// </summary>
 /// <remarks>
-/// <para><b>Relationship to <see cref="WmlComparer"/>.</b> <see cref="DocxDiff"/> is the default
-/// comparison engine (since v8.0.0) on every surface that doesn't explicitly select one — CLI, WASM,
-/// and npm all route an omitted engine selector here. It is built on an intermediate document
-/// representation (IR) with anchor-addressed blocks, so its revisions carry stable anchors
-/// (<see cref="DocxDiffRevision.LeftAnchor"/>/<see cref="DocxDiffRevision.RightAnchor"/>) and it can
-/// emit its edit script as data (<see cref="GetEditScriptJson"/>) — neither of which
-/// <see cref="WmlComparer"/> offers. <see cref="WmlComparer"/> is the older engine, retained via an
-/// explicit <see cref="ComparisonEngine.WmlComparer"/> selector (wire value 0) for callers that need
-/// its historical behavior; it is feature-frozen and will not gain new capabilities. See
+/// <para><b>Relationship to <c>WmlComparer</c>.</b> <see cref="DocxDiff"/> is the only comparison
+/// engine; it replaced the inherited <c>WmlComparer</c>, which was removed in v11.0.0. It is built on an
+/// intermediate document representation (IR) with anchor-addressed blocks, so its revisions carry
+/// stable anchors (<see cref="DocxDiffRevision.LeftAnchor"/>/<see cref="DocxDiffRevision.RightAnchor"/>)
+/// and it can emit its edit script as data (<see cref="GetEditScriptJson"/>). Most callers should enter
+/// through <see cref="DocxCompare.Compare"/>, which also normalizes the inputs' own tracked changes. See
 /// <c>docs/architecture/ir_diff_engine.md</c>.</para>
 ///
 /// <para><b>Multi-author / consolidate-forward stance.</b> Nothing here is static or process-global:
@@ -169,7 +166,7 @@ public static class DocxDiff
     /// <summary>
     /// Compare <paramref name="left"/> and <paramref name="right"/> and return the consumer revision list
     /// (insertions, deletions, moves, format changes) rendered from the edit script — the diff-as-revisions
-    /// view, analogous to <see cref="WmlComparer"/>'s <c>GetRevisions</c> but anchor-addressed and produced
+    /// view, analogous to <c>WmlComparer</c>'s <c>GetRevisions</c> but anchor-addressed and produced
     /// directly off the IR script (no produce-then-reparse round-trip).
     /// </summary>
     /// <remarks>
@@ -612,7 +609,7 @@ public enum DocxDiffRevisionGranularity
     Fine,
 
     /// <summary>
-    /// A render-time projection that reproduces <see cref="WmlComparer"/>'s coarser <c>GetRevisions</c>
+    /// A render-time projection that reproduces <c>WmlComparer</c>'s coarser <c>GetRevisions</c>
     /// atomization, so a <see cref="DocxDiff"/> revision set is count/text-comparable to the shipped
     /// comparer's. Per modified block it coalesces adjacent same-kind revisions into one maximal contiguous
     /// changed region (bridging purely-separator gaps), trims the common character prefix/suffix shared by a
@@ -650,9 +647,9 @@ public enum DocxDiffFormatComparison
 }
 
 /// <summary>
-/// Settings for <see cref="DocxDiff"/>. Defaults mirror <see cref="WmlComparerSettings"/> so the engine
-/// reproduces the shipped comparer's word granularity and normalization out of the box, with two honest
-/// deviations called out below (<see cref="Deterministic"/> revision dates and
+/// Settings for <see cref="DocxDiff"/>. Defaults mirror the former <c>WmlComparerSettings</c> (removed in
+/// v11.0.0) so the engine reproduces that comparer's word granularity and normalization out of the box, with
+/// two deliberate deviations called out below (<see cref="Deterministic"/> revision dates and
 /// <see cref="FormatComparison"/> defaulting to modeled-only). Its properties are settable; construct a
 /// fresh instance per call rather than mutating one shared across concurrent diffs.
 /// </summary>
@@ -665,8 +662,8 @@ public sealed class DocxDiffSettings
 {
     /// <summary>
     /// Author name stamped on every revision's <see cref="DocxDiffRevision.Author"/> and on the produced
-    /// markup's <c>w:author</c> attributes. Default <c>"Open-Xml-PowerTools"</c>, matching
-    /// <see cref="WmlComparerSettings.AuthorForRevisions"/>. Flows per call — set a different author per
+    /// markup's <c>w:author</c> attributes. Default <c>"Open-Xml-PowerTools"</c>, inherited
+    /// from the former <c>WmlComparerSettings.AuthorForRevisions</c>. Flows per call — set a different author per
     /// comparison in a multi-author/consolidate pipeline.
     /// </summary>
     public string AuthorForRevisions { get; set; } = "Open-Xml-PowerTools";
@@ -674,8 +671,8 @@ public sealed class DocxDiffSettings
     /// <summary>
     /// When true (the DEFAULT), revision dates are pinned to a fixed epoch
     /// (<c>2000-01-01T00:00:00Z</c>) so two diffs of the same inputs are byte-identical. Set false for
-    /// wall-clock dates (matching <see cref="WmlComparerSettings"/>'s <c>DateTime.Now</c> default). This is
-    /// an intentional deviation from <see cref="WmlComparerSettings"/>, which is nondeterministic by default.
+    /// wall-clock dates. This deliberately deviates from the former <c>WmlComparerSettings</c>, whose
+    /// <c>DateTime.Now</c> default was nondeterministic.
     /// </summary>
     public bool Deterministic { get; set; } = true;
 
@@ -711,28 +708,28 @@ public sealed class DocxDiffSettings
     /// <summary>
     /// When true, word match keys are case-folded (per <see cref="Culture"/>, or ordinal/invariant when
     /// <see cref="Culture"/> is null) so "Foo" matches "foo". Default false, matching
-    /// <see cref="WmlComparerSettings.CaseInsensitive"/>.
+    /// <c>WmlComparerSettings.CaseInsensitive</c>.
     /// </summary>
     public bool CaseInsensitive { get; set; }
 
     /// <summary>
     /// Culture used for case folding when <see cref="CaseInsensitive"/> is true. Null (the default) means
     /// ordinal/invariant folding — no culture-specific casing. Mirrors
-    /// <see cref="WmlComparerSettings.CultureInfo"/>.
+    /// <c>WmlComparerSettings.CultureInfo</c>.
     /// </summary>
     public CultureInfo? Culture { get; set; }
 
     /// <summary>
     /// When true (the DEFAULT), a non-breaking space (U+00A0) folds to an ordinary space (U+0020) in match
     /// keys, so NBSP-separated text matches space-separated text. The non-breaking hyphen (U+2011) is not
-    /// folded. Mirrors <see cref="WmlComparerSettings.ConflateBreakingAndNonbreakingSpaces"/>.
+    /// folded. Mirrors <c>WmlComparerSettings.ConflateBreakingAndNonbreakingSpaces</c>.
     /// </summary>
     public bool ConflateBreakingAndNonbreakingSpaces { get; set; } = true;
 
     /// <summary>
     /// Characters that split a run's text into word vs. separator tokens; each separator character becomes
     /// its own token. <b>Null (the default)</b> uses the same default set as
-    /// <see cref="WmlComparerSettings.WordSeparators"/>
+    /// <c>WmlComparerSettings.WordSeparators</c>
     /// (<c>{ ' ', '-', ')', '(', ';', ',', and CJK punctuation }</c>). An explicit set replaces that
     /// default, including an empty array. Independently of this set, Han, kana, and Hangul text elements
     /// form individual word tokens, ASCII <c>:</c> and non-numeric <c>.</c>/<c>,</c> split, and NBSP splits
@@ -745,7 +742,7 @@ public sealed class DocxDiffSettings
     /// <see cref="DocxDiffRevision.MoveGroupId"/> with its destination) and the produced markup uses native
     /// <c>w:moveFrom</c>/<c>w:moveTo</c>. When false, an aligned move is projected as an ordinary
     /// inserted+deleted pair and the markup uses plain <c>w:del</c>/<c>w:ins</c>. Mirrors
-    /// <see cref="WmlComparerSettings.DetectMoves"/>. The engine always ALIGNS a relocation as a move; this
+    /// <c>WmlComparerSettings.DetectMoves</c>. The engine always ALIGNS a relocation as a move; this
     /// only controls how it is REPORTED, so it works regardless of how the move was detected.
     /// </summary>
     public bool DetectMoves { get; set; } = true;
@@ -753,14 +750,14 @@ public sealed class DocxDiffSettings
     /// <summary>
     /// Minimum block similarity (Jaccard over token match-key multisets, 0.0–1.0) for two leftover blocks to
     /// be re-paired as a cross-gap fuzzy move. Default 0.8, matching
-    /// <see cref="WmlComparerSettings.MoveSimilarityThreshold"/>.
+    /// <c>WmlComparerSettings.MoveSimilarityThreshold</c>.
     /// </summary>
     public double MoveSimilarityThreshold { get; set; } = 0.8;
 
     /// <summary>
     /// Minimum number of word tokens both sides of a candidate fuzzy move must carry for it to be considered
     /// a move (short fragments are excluded to avoid false positives). Default 3, matching
-    /// <see cref="WmlComparerSettings.MoveMinimumWordCount"/>.
+    /// <c>WmlComparerSettings.MoveMinimumWordCount</c>.
     /// </summary>
     public int MoveMinimumWordCount { get; set; } = 3;
 
@@ -1007,7 +1004,7 @@ public sealed class DocxDiffSettings
 
 /// <summary>
 /// The kind of a <see cref="DocxDiffRevision"/>. One-for-one with
-/// <see cref="WmlComparer.WmlComparerRevisionType"/> plus the <see cref="Moved"/> and
+/// <c>WmlComparer.WmlComparerRevisionType</c> plus the <see cref="Moved"/> and
 /// <see cref="FormatChanged"/> kinds the IR engine surfaces natively.
 /// </summary>
 public enum DocxDiffRevisionType
@@ -1035,7 +1032,7 @@ public enum DocxDiffRevisionType
 /// <summary>
 /// Details of a <see cref="DocxDiffRevisionType.FormatChanged"/> revision: the modeled run-format fields
 /// before and after, plus the names of the fields that differ. Mirrors
-/// <see cref="WmlComparer.FormatChangeDetails"/>.
+/// <c>WmlComparer.FormatChangeDetails</c>.
 /// </summary>
 /// <remarks>
 /// The dictionaries enumerate only MODELED format fields (bold, italic, underline, fontSize, color, …),
@@ -1103,10 +1100,10 @@ public enum DocxDiffFormatChangeScope
 
 /// <summary>
 /// One consumer-facing revision from <see cref="DocxDiff.GetRevisions"/>. Mirrors the consumer-relevant
-/// shape of <see cref="WmlComparer.WmlComparerRevision"/>
+/// shape of <c>WmlComparer.WmlComparerRevision</c>
 /// (<see cref="Type"/>/<see cref="Text"/>/<see cref="Author"/>/<see cref="Date"/>/<see cref="MoveGroupId"/>/
 /// <see cref="IsMoveSource"/>/<see cref="FormatChange"/>) and ADDS the block anchors the revision derives
-/// from — the IR engine's differentiator over <see cref="WmlComparer.WmlComparerRevision"/>.
+/// from — the IR engine's differentiator over <c>WmlComparer.WmlComparerRevision</c>.
 /// </summary>
 /// <remarks>
 /// <para><b>Anchor grammar.</b> <see cref="LeftAnchor"/> and <see cref="RightAnchor"/> are stable block
