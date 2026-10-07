@@ -337,6 +337,13 @@ look for a re-rooted assembly (`TrimmerRootAssembly`), a dependency bump growing
 new package reference, or a re-recorded AOT profile that got much wider. The npm CI job runs
 the same script, so regressions surface at PR time.
 
+The JavaScript bundles browsers download next to the WASM — `embed.bundle.js`/`embed.iife.js`,
+`editor.bundle.js`, `pagination.bundle.js`, `session.bundle.js`, the worker and its proxy — are
+built with esbuild `--minify --sourcemap` and held to per-file gzip budgets by
+`npm/scripts/check-bundle-sizes.mjs`, which `pretest` runs. Minifying took `embed` from 195 KB to
+117 KB gzip (828 KB to 435 KB raw). `export-browser.bundle.js` is deliberately left unminified and
+unbudgeted: it runs inside `@docxodus/export`'s pinned Chromium, where download size is irrelevant.
+
 ### Why the budget moved from 5 MB to 5.25 MB
 
 The 5 MB line was set when the payload measured 4.76 MB, and two changes consumed the
