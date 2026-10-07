@@ -1197,11 +1197,18 @@ public sealed partial class DocxSession : IDisposable
         ResetProjectionCache();
     }
 
-    /// <summary>Drop the projection/anchor caches without touching package relationships.</summary>
+    /// <summary>
+    /// Drop the projection/anchor caches without touching package relationships. List numbering
+    /// is a projection cache too: <see cref="ListItemRetriever"/> stamps each paragraph's counters
+    /// once and never recounts a paragraph that already carries them, so an edit that adds,
+    /// removes, re-levels or re-numbers any list item would otherwise leave the survivors
+    /// showing the numbers they had before it (issue #959).
+    /// </summary>
     private void ResetProjectionCache()
     {
         _cachedProjection = null;
         _cachedAnchorIndex = null;
+        if (_doc is not null) ListItemRetriever.ClearAnnotations(_doc);
     }
 
     /// <summary>

@@ -324,8 +324,7 @@ namespace Docxodus
         /// repointing w:numPr at a different w:num) must call this: initialization is
         /// once-per-paragraph, so the retriever would otherwise keep serving the counter vectors
         /// computed before the mutation. The per-numId caches on the numbering part's XDocument
-        /// root stay — existing w:num definitions are never mutated by session ops (additive-only),
-        /// so those entries remain valid.
+        /// root stay; the whole-document overload drops those too.
         /// </summary>
         public static void ClearAnnotations(XElement root)
         {
@@ -337,6 +336,28 @@ namespace Docxodus
                 p.RemoveAnnotations<ParagraphInfo>();
                 p.RemoveAnnotations<ReverseAxis>();
             }
+        }
+
+        /// <summary>
+        /// Forget everything this retriever has computed for <paramref name="wordDoc"/>: the
+        /// per-paragraph annotations on every content part it numbers, plus the
+        /// style-and-numId cache on the numbering part and the default-style cache on the
+        /// styles part. The next RetrieveListItem call then recounts the whole document from
+        /// its current XML, exactly as a fresh open would. An editor that mutates a live
+        /// document calls this after each edit.
+        /// </summary>
+        internal static void ClearAnnotations(WordprocessingDocument wordDoc)
+        {
+            // Only a part whose tree is already loaded can carry annotations, so read the cached
+            // tree rather than GetXDocument, which would parse a part nobody has touched.
+            var main = wordDoc.MainDocumentPart;
+            if (main is null) return;
+            foreach (var part in wordDoc.ContentParts())
+            {
+                if (part.Annotation<XDocument>()?.Root is { } root) ClearAnnotations(root);
+            }
+            main.NumberingDefinitionsPart?.Annotation<XDocument>()?.Root?.RemoveAnnotations<Dictionary<string, ListItemInfo>>();
+            main.StyleDefinitionsPart?.Annotation<XDocument>()?.RemoveAnnotations<StylesInfo>();
         }
 
         public static void SetParagraphLevel(XElement paragraph, int ilvl)

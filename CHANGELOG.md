@@ -148,6 +148,13 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **`DocxSession.Project()` reports current list numbers after a structural edit** (issue #959). Deleting
+  the first item of a numbered list used to leave the survivors numbered `2.` and `3.` until the
+  document was saved and reopened, and inserting, re-levelling or re-formatting a list item went stale
+  the same way. Every edit now drops the numbering the session computed for the previous projection,
+  so the next `Project()` (and the markdown, `AutoNumberPrefix` and `FullText` built on it) counts
+  the list from the document as it now stands.
+
 - **`DocxodusDocument.SavePartAs` disposes the part stream it opens**, and the three places that
   copy a part's bytes into a buffer (`SavePartAs`, plus the image and media copies `DocumentBuilder`
   uses when merging) now read with `ReadExactly`. They used a single `Stream.Read`
