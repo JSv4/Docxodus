@@ -227,7 +227,10 @@ static void Settle()
 static Stat Measure<T>(int n, Func<T> act)
 {
     var samples = new double[n];
-    var alloc0 = GC.GetTotalAllocatedBytes(precise: false);
+    // precise: true flushes every heap's allocation context. The imprecise counter can lag by
+    // hundreds of MB under server GC (CI once read 50 MB for a case that allocates 270 MB), which
+    // is fatal for perf.yml's allocation gate.
+    var alloc0 = GC.GetTotalAllocatedBytes(precise: true);
     for (var i = 0; i < n; i++)
     {
         var sw = Stopwatch.StartNew();
@@ -235,7 +238,7 @@ static Stat Measure<T>(int n, Func<T> act)
         sw.Stop();
         samples[i] = sw.Elapsed.TotalMilliseconds;
     }
-    var alloc = (GC.GetTotalAllocatedBytes(precise: false) - alloc0) / (double)n;
+    var alloc = (GC.GetTotalAllocatedBytes(precise: true) - alloc0) / (double)n;
     Array.Sort(samples);
     return new Stat(samples[0], samples[n / 2], samples[^1], samples.Average(), alloc);
 }
