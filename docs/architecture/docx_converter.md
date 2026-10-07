@@ -349,17 +349,24 @@ With `SemanticLists` on (issue #895), lists come out as lists:
   a note or a section. Each `<p>` is renamed `<li>`, keeping its classes, `data-anchor` and
   `data-source-anchor-id`.
 - **Markers.** CSS draws the markers of a list only when, for every item, the marker is followed by
-  a tab, hangs in a hanging indent, is in the same font family and size as the item's text, and its
-  text is exactly what one `list-style-type` generates for the item's value: `decimal`,
+  a tab, hangs in a hanging indent, is formatted exactly like the item itself (family, size, weight,
+  style, colour and decoration, since a `::marker` takes the item's formatting), is in the same font
+  family and size as the item's first text run (so its line box is not the tallest on the line), and
+  its text is exactly what one `list-style-type` generates for the item's value: `decimal`,
   `decimal-leading-zero`, `lower-/upper-alpha` or `lower-/upper-roman` followed by a period, or the
   bullets `•` (`disc`), `◦` (`circle`) and `▪`/`■` (`square`). Those lists lose their marker spans
   and get `start` (and `value` where the count jumps). Every other list (`(a)`, `1)`, `1.1.`, a
   marker in another font, a lettered list past `z`, where Word and CSS count differently) keeps its
   marker spans under `list-style-type: none`, and its items stay `display: block`.
-- **Geometry.** Each item keeps its own leading indent, measured from the item it is nested in
-  rather than from the page, so nested indents don't compound. `ol`/`ul` get no margin, padding or
-  text indent of their own. An item's space after moves to the top of its nested list, which is
-  where it fell when both were paragraphs. A right-to-left item measures its indent on the right.
+- **Geometry.** Each item keeps its own leading and trailing indents, measured from the item it is
+  nested in rather than from the page, so nested indents don't compound. `ol`/`ul` get no margin,
+  padding or text indent of their own, and a nested list resets `text-align` and `line-height` so its
+  items don't inherit their parent paragraph's. An item's space after moves to the top of its nested
+  list, which is where it fell when both were paragraphs. A right-to-left item measures its indent on
+  the right. Under the setting, the notes section's padding rule selects only the notes list itself
+  (`section.footnotes > ol`), so lists inside a note body keep their own indent.
+- **Known limit.** A nested list sits inside its parent item's box, so a parent item's shading
+  (`w:shd`) or a Word-style revision change bar extends down beside its nested items.
 
 Rendered in a standards-mode page, the list form of every `TestFiles/` fixture places each block's
 first character exactly where the paragraph form does. In a page without a doctype (quirks mode),

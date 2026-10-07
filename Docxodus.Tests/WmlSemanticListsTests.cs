@@ -245,6 +245,52 @@ namespace OxPt
         }
 
         [Fact]
+        public void A_nested_items_right_indent_is_measured_from_its_parent_item()
+        {
+            var right = "<w:ind w:right=\"720\"/>";
+            var body = Body(Convert(BuildDocx(
+                Item("One", extraPPr: right) + Item("One a", level: 1, extraPPr: right), Decimal + Num(1, 0))));
+
+            var nested = body.Descendants().Where(e => e.Name.LocalName == "li").Last();
+            Assert.Contains("margin-right: 0;", Style(nested) + ";", System.StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void A_nested_list_does_not_inherit_its_parent_items_alignment()
+        {
+            var body = Body(Convert(BuildDocx(
+                Item("One", extraPPr: "<w:jc w:val=\"center\"/>") + Item("One a", level: 1), Decimal + Num(1, 0))));
+
+            var nested = body.Descendants().Where(e => e.Name.LocalName == "ol").Last();
+            Assert.Contains("text-align: start", Style(nested), System.StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void A_bold_marker_keeps_its_span()
+        {
+            // A ::marker takes the item's formatting, so a marker run formatted differently stays a span.
+            var boldMarker = "<w:abstractNum w:abstractNumId=\"0\"><w:lvl w:ilvl=\"0\"><w:start w:val=\"1\"/><w:numFmt w:val=\"decimal\"/>" +
+                "<w:lvlText w:val=\"%1.\"/><w:lvlJc w:val=\"left\"/><w:pPr><w:ind w:left=\"720\" w:hanging=\"360\"/></w:pPr>" +
+                "<w:rPr><w:b/></w:rPr></w:lvl></w:abstractNum>";
+            var body = Body(Convert(BuildDocx(Item("One") + Item("Two"), boldMarker + Num(1, 0))));
+
+            var list = Assert.Single(body.Descendants(), e => e.Name.LocalName == "ol");
+            Assert.Contains("list-style-type: none", Style(list), System.StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public void A_marker_smaller_than_the_items_largest_run_keeps_its_span()
+        {
+            // The item's own font is its largest run's (16 pt here); a ::marker would draw "1." at that size.
+            var mixed = "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"1\"/></w:numPr></w:pPr>" +
+                "<w:r><w:t xml:space=\"preserve\">Small text and </w:t></w:r><w:r><w:rPr><w:sz w:val=\"32\"/></w:rPr><w:t>BIG</w:t></w:r></w:p>";
+            var body = Body(Convert(BuildDocx(mixed + Item("Two"), Decimal + Num(1, 0))));
+
+            var list = Assert.Single(body.Descendants(), e => e.Name.LocalName == "ol");
+            Assert.Contains("list-style-type: none", Style(list), System.StringComparison.Ordinal);
+        }
+
+        [Fact]
         public void A_right_to_left_item_measures_its_indent_on_the_right()
         {
             var body = Body(Convert(BuildDocx(
@@ -252,6 +298,19 @@ namespace OxPt
 
             var nested = body.Descendants().Where(e => e.Name.LocalName == "li").Last();
             Assert.Contains("margin-right: 0.50in", Style(nested));
+        }
+
+        [Fact]
+        public void The_notes_list_padding_rule_reaches_only_the_notes_list()
+        {
+            // Lists inside a note body nest inside the notes <ol>; a descendant selector would pad them too.
+            string NotesRule(bool semantic) => WmlToHtmlConverter.ConvertToHtml(
+                new WmlDocument("t.docx", BuildDocx(Item("One"), Decimal + Num(1, 0))),
+                new WmlToHtmlConverterSettings { SemanticLists = semantic, RenderFootnotesAndEndnotes = true })
+                .Descendants().Where(e => e.Name.LocalName == "style").Select(e => e.Value).Single(v => v.Contains("section.footnotes"));
+
+            Assert.Contains("section.footnotes > ol, section.endnotes > ol {", NotesRule(true), System.StringComparison.Ordinal);
+            Assert.Contains("section.footnotes ol, section.endnotes ol {", NotesRule(false), System.StringComparison.Ordinal);
         }
 
         [Fact]

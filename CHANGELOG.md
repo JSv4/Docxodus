@@ -12,7 +12,7 @@ All notable changes to this project will be documented in this file.
   `ol` (numbered) or `ul` (bulleted) and nests a deeper level inside the preceding item. Each item keeps
   its `data-anchor`, and a numbered heading stays a heading. CSS draws the markers (`list-style-type`,
   with `start` and `value` for restarts and resumed lists) only where it reproduces Word's marker text
-  exactly, in the text's own font, hanging in the item's indent. Other lists, such as `(a)`, `1)` or
+  exactly, formatted like the item, hanging in the item's indent. Other lists, such as `(a)`, `1)` or
   `1.1.`, keep their generated marker spans under `list-style-type: none`. Item indents are measured
   from the item they are nested in. Paginated output ignores the setting, and with it off the output
   is unchanged.

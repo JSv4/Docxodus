@@ -2294,8 +2294,11 @@ namespace Docxodus
             sb.AppendLine("    font-size: 0.9em;");
             sb.AppendLine("}");
 
-            // Footnote/Endnote list
-            sb.AppendLine("section.footnotes ol, section.endnotes ol {");
+            // Footnote/Endnote list. Semantic lists nest the note bodies' own lists inside it, so
+            // the rule then reaches only the notes list itself.
+            sb.AppendLine(EmitsSemanticLists(settings)
+                ? "section.footnotes > ol, section.endnotes > ol {"
+                : "section.footnotes ol, section.endnotes ol {");
             sb.AppendLine("    padding-left: 1.5em;");
             sb.AppendLine("}");
 

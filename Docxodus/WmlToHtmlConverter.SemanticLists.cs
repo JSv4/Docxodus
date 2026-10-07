@@ -141,8 +141,16 @@ namespace Docxodus
             listStyle["margin-bottom"] = "0";
             listStyle["padding"] = "0";
             listStyle["text-indent"] = "0";
+            if (open.ParentItem != null)
+            {
+                // A nested list sits inside its parent item's box: without these, its items would
+                // inherit the parent paragraph's alignment and line height where their own paragraphs
+                // set none (text-indent is reset above for the same reason).
+                listStyle["text-align"] = "start";
+                listStyle["line-height"] = "normal";
+            }
 
-            var container = open.ParentItem is { } parent ? LeadingIndentInches(parent) : 0m;
+            var container = open.ParentItem is { } parent ? IndentsInches(parent) : (Leading: 0m, Trailing: 0m);
             var types = open.Items.Select(i => CssMarkerType(i.Item, i.Info)).Distinct().ToList();
             var cssType = types.Count == 1 ? types[0] : null;
             listStyle["list-style-type"] = cssType ?? "none";
@@ -152,11 +160,12 @@ namespace Docxodus
             {
                 var (item, info) = open.Items[index];
                 var style = Style(item);
-                var side = info.IsBidi ? "margin-right" : "margin-left";
-                var indent = LeadingIndentInches(item);
-                style[side] = FormatInches(indent - container);
-                // Remember the item's absolute indent for any list nested inside it.
-                item.AddAnnotation(new AbsoluteLeadingIndent(indent));
+                var (leadingSide, trailingSide) = info.IsBidi ? ("margin-right", "margin-left") : ("margin-left", "margin-right");
+                var indents = IndentsInches(item);
+                style[leadingSide] = FormatInches(indents.Leading - container.Leading);
+                style[trailingSide] = FormatInches(indents.Trailing - container.Trailing);
+                // Remember the item's absolute indents for any list nested inside it.
+                item.AddAnnotation(new AbsoluteIndents(indents.Leading, indents.Trailing));
 
                 // An item that keeps its own marker lays out as the paragraph it was. A list item
                 // box would also differ from it in a quirks-mode page, where Chromium sizes the line
@@ -183,7 +192,7 @@ namespace Docxodus
                 listStyle["margin-top"] = spaceAfter;
         }
 
-        private sealed record AbsoluteLeadingIndent(decimal Inches);
+        private sealed record AbsoluteIndents(decimal Leading, decimal Trailing);
 
         private static Dictionary<string, string> Style(XElement element)
         {
@@ -196,20 +205,20 @@ namespace Docxodus
             return style;
         }
 
-        /// <summary>The item's leading indent in inches from its container, as the paragraph
-        /// conversion wrote it (<c>0</c> or <c>N.NNin</c>).</summary>
-        private static decimal LeadingIndentInches(XElement item)
+        /// <summary>The item's leading and trailing indents in inches from its container, as the
+        /// paragraph conversion wrote them (<c>0</c> or <c>N.NNin</c>).</summary>
+        private static (decimal Leading, decimal Trailing) IndentsInches(XElement item)
         {
-            if (item.Annotation<AbsoluteLeadingIndent>() is { } known)
-                return known.Inches;
-            var info = item.Annotation<SemanticListItem>();
+            if (item.Annotation<AbsoluteIndents>() is { } known)
+                return (known.Leading, known.Trailing);
+            var bidi = item.Annotation<SemanticListItem>()?.IsBidi == true;
             var style = item.Annotation<Dictionary<string, string>>();
-            if (style == null || !style.TryGetValue(info?.IsBidi == true ? "margin-right" : "margin-left", out var value))
-                return 0m;
-            return value.EndsWith("in", StringComparison.Ordinal) &&
+            decimal Inches(string property) =>
+                style != null && style.TryGetValue(property, out var value) && value.EndsWith("in", StringComparison.Ordinal) &&
                 decimal.TryParse(value[..^2], NumberStyles.Number, CultureInfo.InvariantCulture, out var inches)
-                ? inches
-                : 0m;
+                    ? inches
+                    : 0m;
+            return bidi ? (Inches("margin-right"), Inches("margin-left")) : (Inches("margin-left"), Inches("margin-right"));
         }
 
         private static string FormatInches(decimal inches) =>
@@ -235,11 +244,14 @@ namespace Docxodus
             if (item.Annotation<Dictionary<string, string>>() is not { } style ||
                 !style.TryGetValue("text-indent", out var textIndent) || !textIndent.StartsWith("-", StringComparison.Ordinal))
                 return null;
-            // A ::marker takes the item's font. Where the marker run's font differs from the text's,
-            // its line box can be the tallest on the first line (Word counts it too), and dropping
-            // the span would shorten the line.
-            if (!SameFont(EffectiveFont(MarkerTextSpan(wrapper), style),
-                    EffectiveFont(item.Elements().Skip(1).FirstOrDefault(e => e.Name == Xhtml.span && e.Value.Trim().Length > 0), style)))
+            // A ::marker takes the item's own formatting, so the marker run must already look like
+            // the item: same family, size, weight, style, colour and decoration. And where the marker
+            // run's font differs from the text's, its line box can be the tallest on the first line
+            // (Word counts it too), so dropping the span would shorten the line.
+            var markerFormat = EffectiveFormat(MarkerTextSpan(wrapper), style);
+            var textFormat = EffectiveFormat(item.Elements().Skip(1).FirstOrDefault(e => e.Name == Xhtml.span && e.Value.Trim().Length > 0), style);
+            if (markerFormat != EffectiveFormat(null, style) ||
+                markerFormat.Family != textFormat.Family || markerFormat.Size != textFormat.Size)
                 return null;
             var marker = wrapper.Value.Trim().Trim('\u200e', '\u200f');
 
@@ -271,18 +283,18 @@ namespace Docxodus
         private static XElement? MarkerTextSpan(XElement wrapper) =>
             wrapper.Descendants(Xhtml.span).LastOrDefault(s => (string?)s.Attribute("data-list-marker") == "true");
 
-        /// <summary>A span's font family and size, each falling back to the item's own.</summary>
-        private static (string? Family, string? Size) EffectiveFont(XElement? span, Dictionary<string, string> itemStyle)
+        /// <summary>A span's text formatting, each property falling back to the item's own and then
+        /// to the CSS initial value; with no span, the item's own formatting.</summary>
+        private static (string? Family, string? Size, string Weight, string Style, string? Color, string? Decoration) EffectiveFormat(
+            XElement? span, Dictionary<string, string> itemStyle)
         {
             var style = span?.Annotation<Dictionary<string, string>>();
             string? Get(string property) =>
                 style != null && style.TryGetValue(property, out var value) ? value
                 : itemStyle.TryGetValue(property, out var inherited) ? inherited : null;
-            return (Get("font-family"), Get("font-size"));
+            return (Get("font-family"), Get("font-size"), Get("font-weight") ?? "normal", Get("font-style") ?? "normal",
+                Get("color"), Get("text-decoration"));
         }
-
-        private static bool SameFont((string? Family, string? Size) a, (string? Family, string? Size) b) =>
-            a.Family == b.Family && a.Size == b.Size;
 
         /// <summary>CSS <c>lower-alpha</c>: a..z, aa, ab, … (bijective base 26). Word repeats the
         /// letter after z (aa, bb), so its 27th marker differs and keeps its span.</summary>
