@@ -249,6 +249,7 @@ to the `session_to_html` stdio-host op.
 | `render_move_operations` | `True` | Distinguish move operations from plain insert/delete. |
 | `render_unsupported_content_placeholders` | `False` | Insert placeholder text for unsupported OOXML elements. |
 | `document_language` | `None` | BCP-47 language tag (e.g. `"en-US"`). Omitted from the wire when `None`. |
+| `semantic_lists` | `False` | Emit Word lists as `<ol>`/`<ul>`/`<li>`; CSS draws a marker only where it matches Word's. Ignored when paginated. |
 
 Integer-coded mode fields follow the same conventions as the WASM/npm surface.
 `HtmlOptions.to_wire()` always serializes every field except `document_language`,

@@ -378,7 +378,8 @@ function handleConvert(
       options?.renderMoveOperations !== undefined ||
       options?.renderUnsupportedContentPlaceholders !== undefined ||
       options?.documentLanguage !== undefined ||
-      options?.revisionPresentation !== undefined;
+      options?.revisionPresentation !== undefined ||
+      options?.semanticLists !== undefined;
 
     if (needsCompleteMethod || options?.renderAnnotations) {
       result = exports.DocumentConverter.ConvertDocxToHtmlComplete(
@@ -403,7 +404,8 @@ function handleConvert(
         options?.renderUnsupportedContentPlaceholders ?? false,
         options?.documentLanguage ?? null,
         options?.stampAnchors ?? false,
-        options?.revisionPresentation ?? 0
+        options?.revisionPresentation ?? 0,
+        options?.semanticLists ?? false
       );
     } else if (
       options?.paginationMode !== undefined &&

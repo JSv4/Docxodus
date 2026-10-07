@@ -22,6 +22,11 @@ namespace Docxodus
         public bool RestrictToSupportedLanguages;
         public ListItemRetrieverSettings ListItemRetrieverSettings;
 
+        /// <summary>Stamp each list paragraph with its list, level, counter value and number format
+        /// (<see cref="PtOpenXml.ListNumId"/> and its companions), which assembly otherwise discards
+        /// along with <c>w:numPr</c>. Set by the HTML converter for semantic lists (issue #895).</summary>
+        internal bool AnnotateListMembership;
+
         public FormattingAssemblerSettings()
         {
             RemoveStyleNamesFromParagraphAndRunProperties = true;
@@ -303,6 +308,7 @@ namespace Docxodus
                         XElement? listItemRunProps = null;
                         List<XAttribute> listItemHtmlAttributes = new List<XAttribute>();
                         int? abstractNumId = null;
+                        string? listNumFmt = null;
                         if (listItemInfo != null)
                         {
                             abstractNumId = listItemInfo.AbstractNumId;
@@ -375,6 +381,7 @@ namespace Docxodus
                                     }
                                 }
                             }
+                            listNumFmt = numFmt;
 
                             if (numFmt == "bullet")
                             {
@@ -763,6 +770,10 @@ namespace Docxodus
                             // li != null implies listItemInfo != null and abstractNumId was set.
                             new XAttribute(PtOpenXml.AbstractNumId, abstractNumId!),
                             listItemHtmlAttributes,
+                            settings.AnnotateListMembership
+                                ? ListMembershipAttributes(listItemInfo, levelNums, paragraphLevel,
+                                    ListItemRetriever.GetEffectiveLevel(element), listNumFmt)
+                                : null,
                             newParaProps,
                             previousListItemRun,
                             listItemRun,
@@ -854,11 +865,31 @@ namespace Docxodus
             }
         }
 
+        /// <summary>The list facts <see cref="FormattingAssemblerSettings.AnnotateListMembership"/>
+        /// stamps on a list paragraph. The value is the counter at the paragraph's own level, the
+        /// number its marker text was built from.</summary>
+        private static IEnumerable<XAttribute> ListMembershipAttributes(ListItemRetriever.ListItemInfo? info,
+            ListItemRetriever.LevelNumbers levelNumbers, int paragraphLevel, int effectiveLevel, string? numFmt)
+        {
+            var numId = info?.FromParagraph?.Main.NumId ?? info?.FromStyle?.Main.NumId;
+            if (numId is { } id)
+                yield return new XAttribute(PtOpenXml.ListNumId, id);
+            yield return new XAttribute(PtOpenXml.ListLevel, effectiveLevel);
+            if (paragraphLevel < levelNumbers.LevelNumbersArray.Length)
+                yield return new XAttribute(PtOpenXml.ListValue, levelNumbers.LevelNumbersArray[paragraphLevel]);
+            if (numFmt != null)
+                yield return new XAttribute(PtOpenXml.ListFormat, numFmt);
+        }
+
         public static XName[] PtNamesToKeep = new[] {
             PtOpenXml.FontName,
             PtOpenXml.AbstractNumId,
             PtOpenXml.HtmlStructure,
             PtOpenXml.HtmlStyle,
+            PtOpenXml.ListNumId,
+            PtOpenXml.ListLevel,
+            PtOpenXml.ListValue,
+            PtOpenXml.ListFormat,
             PtOpenXml.StyleName,
             PtOpenXml.LanguageType,
             PtOpenXml.ListItemRun,
