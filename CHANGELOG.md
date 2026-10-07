@@ -6,6 +6,16 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- The HTML converter can emit Word lists as `<ol>`/`<ul>`/`<li>` (issue #895). The new opt-in
+  `WmlToHtmlConverterSettings.SemanticLists` (`semanticLists` in the npm `ConversionOptions`,
+  `semantic_lists` in the Python `HtmlOptions`) groups adjacent list paragraphs of one list into an
+  `ol` (numbered) or `ul` (bulleted) and nests a deeper level inside the preceding item. Each item keeps
+  its `data-anchor`, and a numbered heading stays a heading. CSS draws the markers (`list-style-type`,
+  with `start` and `value` for restarts and resumed lists) only where it reproduces Word's marker text
+  exactly, in the text's own font, hanging in the item's indent. Other lists, such as `(a)`, `1)` or
+  `1.1.`, keep their generated marker spans under `list-style-type: none`. Item indents are measured
+  from the item they are nested in. Paginated output ignores the setting, and with it off the output
+  is unchanged.
 - Relocated text next to paragraphs the redline draws as one cross-paragraph stream is reported as a move
   (issue #930). With `CrossParagraphTokenDiff` on (the default), the redline draws a stretch of adjacent
   edited paragraphs as one flat word stream. A moved sentence or paragraph touching that stretch used to be

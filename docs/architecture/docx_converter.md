@@ -50,6 +50,7 @@ All methods return an `XElement` representing the complete HTML document (the `<
 | `RestrictToSupportedNumberingFormats` | `bool` | `false` | Limits list numbering formats |
 | `ListItemImplementations` | `Dictionary<string, Func<...>>` | Default implementations | Custom list item text generators |
 | `ImageHandler` | `Func<ImageInfo, XElement>` | `null` | **Required for images** - callback to process embedded images |
+| `SemanticLists` | `bool` | `false` | Emit Word lists as `ol`/`ul`/`li` instead of paragraphs (see [Lists](#lists)); ignored by paginated output |
 
 ### ImageInfo Structure
 
@@ -325,6 +326,49 @@ It carries `role="img"`, an `aria-label`, a `<title>`, and stable `data-chart-*`
 inspection. Unsupported chart families and stacked/percent-stacked groupings continue through the
 existing drawing fallback; 3-D effects, trend lines, data labels, secondary axes, and exact Office
 chart styling are not projected.
+
+### Lists
+
+By default a numbered or bulleted paragraph converts to a `<p>` like any other. Its marker is the
+text Word would draw, in a `data-list-marker` span followed by a tab span, and the level's indent is
+the paragraph's left margin with a negative first-line indent. That renders correctly, but nothing
+in the markup says "list".
+
+With `SemanticLists` on (issue #895), lists come out as lists:
+
+- **Facts.** Formatting assembly discards `w:numPr` once it has computed the marker, so under the
+  setting it stamps each list paragraph with its `w:num` id, the level it nests at, the counter
+  value its marker shows, and the level's `w:numFmt` (`pt:ListNumId`, `pt:ListLevel`,
+  `pt:ListValue`, `pt:ListFormat`). The level is the *effective* level: a continuation item, which
+  Word draws with level 0's format, counts as level 0. A numbered heading stays an `h1`–`h6`.
+- **Grouping.** After conversion, and before styles become classes, `GroupSemanticLists` walks each
+  element's children. A run of adjacent list paragraphs becomes lists: items of one list at one
+  level share an `ol` (numbered) or `ul` (`bullet`), a deeper level opens a list inside the
+  preceding `li`, and a different list (or numbered after bulleted) at the same level starts a
+  sibling list. Anything else between two items ends the run, so a list never crosses a table cell,
+  a note or a section. Each `<p>` is renamed `<li>`, keeping its classes, `data-anchor` and
+  `data-source-anchor-id`.
+- **Markers.** CSS draws the markers of a list only when, for every item, the marker is followed by
+  a tab, hangs in a hanging indent, is in the same font family and size as the item's text, and its
+  text is exactly what one `list-style-type` generates for the item's value: `decimal`,
+  `decimal-leading-zero`, `lower-/upper-alpha` or `lower-/upper-roman` followed by a period, or the
+  bullets `•` (`disc`), `◦` (`circle`) and `▪`/`■` (`square`). Those lists lose their marker spans
+  and get `start` (and `value` where the count jumps). Every other list (`(a)`, `1)`, `1.1.`, a
+  marker in another font, a lettered list past `z`, where Word and CSS count differently) keeps its
+  marker spans under `list-style-type: none`, and its items stay `display: block`.
+- **Geometry.** Each item keeps its own leading indent, measured from the item it is nested in
+  rather than from the page, so nested indents don't compound. `ol`/`ul` get no margin, padding or
+  text indent of their own. An item's space after moves to the top of its nested list, which is
+  where it fell when both were paragraphs. A right-to-left item measures its indent on the right.
+
+Rendered in a standards-mode page, the list form of every `TestFiles/` fixture places each block's
+first character exactly where the paragraph form does. In a page without a doctype (quirks mode),
+Chromium lays a list item's line out slightly differently, and a CSS-marked item can sit up to
+1.4 px higher. The marker font rule above exists because a `::marker` takes the item's font: where
+the marker run is taller than the text, dropping its span shortened the first line (by 9 px in
+`WC-BodyBookmarks-Before.docx`).
+
+Paginated output ignores the setting, because the paginator measures and splits paragraphs.
 
 ### Bidirectional Text (RTL)
 
