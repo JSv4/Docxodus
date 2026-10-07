@@ -35,6 +35,11 @@ namespace Docxodus;
 /// </remarks>
 public sealed partial class DocxSession : IDisposable
 {
+    /// <summary>Characters of surrounding text <see cref="Grep"/>, <see cref="GrepCrossBlock"/> and
+    /// <see cref="FindPlaceholders"/> report on each side of a match when the caller names no
+    /// width. Every transport reads it from here rather than repeating the literal.</summary>
+    public const int DefaultContextChars = 80;
+
     private readonly DocxSessionSettings _settings;
     private readonly Internal.UndoRing<DocumentSnapshot> _history;
     private MemoryStream? _stream;

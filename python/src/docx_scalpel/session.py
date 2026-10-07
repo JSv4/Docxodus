@@ -981,19 +981,25 @@ class DocxSession:
         pattern: str,
         regex_options: RegexOptions = RegexOptions.NONE,
         scope: ProjectionScopes = ProjectionScopes.BODY,
-        context_chars: int = 80,
+        context_chars: int | None = None,
         whitespace: WhitespaceMode = WhitespaceMode.PRESERVE,
         boundary: ContextBoundary = ContextBoundary.CHAR,
         citation: PageCitationRequest | None = None,
+        max_results: int | None = None,
     ) -> tuple[TextMatch, ...]:
+        """Regex search over the projection. ``context_chars`` omitted takes the engine's
+        default (80); ``max_results`` returns at most that many matches, in document order."""
         args: dict[str, Any] = {
             "pattern": pattern,
             "regexOptions": int(regex_options),
             "scope": int(scope),
-            "contextChars": context_chars,
             "whitespace": int(whitespace),
             "boundary": int(boundary),
         }
+        if context_chars is not None:
+            args["contextChars"] = context_chars
+        if max_results is not None:
+            args["maxResults"] = max_results
         if citation is not None:
             args["citation"] = citation.to_wire()
         result = self._call(
@@ -1007,19 +1013,23 @@ class DocxSession:
         pattern: str,
         regex_options: RegexOptions = RegexOptions.NONE,
         scope: ProjectionScopes = ProjectionScopes.BODY,
-        context_chars: int = 80,
+        context_chars: int | None = None,
         whitespace: WhitespaceMode = WhitespaceMode.PRESERVE,
         boundary: ContextBoundary = ContextBoundary.CHAR,
         citation: PageCitationRequest | None = None,
+        max_results: int | None = None,
     ) -> tuple[CrossBlockMatch, ...]:
         args: dict[str, Any] = {
             "pattern": pattern,
             "regexOptions": int(regex_options),
             "scope": int(scope),
-            "contextChars": context_chars,
             "whitespace": int(whitespace),
             "boundary": int(boundary),
         }
+        if context_chars is not None:
+            args["contextChars"] = context_chars
+        if max_results is not None:
+            args["maxResults"] = max_results
         if citation is not None:
             args["citation"] = citation.to_wire()
         result = self._call(
@@ -1032,16 +1042,17 @@ class DocxSession:
         self,
         kinds: PlaceholderKinds = PlaceholderKinds.ALL,
         scope: ProjectionScopes = ProjectionScopes.BODY,
-        context_chars: int = 80,
+        context_chars: int | None = None,
         boundary: ContextBoundary = ContextBoundary.CHAR,
         citation: PageCitationRequest | None = None,
     ) -> tuple[TemplatePlaceholder, ...]:
         args: dict[str, Any] = {
             "kinds": int(kinds),
             "scope": int(scope),
-            "contextChars": context_chars,
             "boundary": int(boundary),
         }
+        if context_chars is not None:
+            args["contextChars"] = context_chars
         if citation is not None:
             args["citation"] = citation.to_wire()
         result = self._call(
@@ -1726,7 +1737,7 @@ class DocxSession:
     def insert_table_of_contents(
         self,
         anchor_id: str,
-        position: str = "before",
+        position: str | None = None,
         *,
         levels: str | None = None,
         hyperlinks: bool | None = None,
@@ -1736,6 +1747,9 @@ class DocxSession:
         right_tab_pos: int | None = None,
     ) -> EditResult:
         r"""Insert a **table of contents** before/after ``anchor_id`` (issue #607).
+
+        ``position`` is ``"before"`` or ``"after"``; omitted, the engine places the table before
+        the anchor, the same default every transport uses.
 
         The field is written dirty and the document asks for a field update on open, so Word
         paginates and fills the table itself rather than shipping a cached result that is stale the
@@ -1768,7 +1782,7 @@ class DocxSession:
     def insert_table_of_figures(
         self,
         anchor_id: str,
-        position: str = "before",
+        position: str | None = None,
         *,
         caption_label: str | None = None,
         hyperlinks: bool | None = None,
@@ -1792,7 +1806,7 @@ class DocxSession:
     def insert_table_of_authorities(
         self,
         anchor_id: str,
-        position: str = "before",
+        position: str | None = None,
         *,
         category: AuthorityCategory | None = None,
         hyperlinks: bool | None = None,
@@ -1819,9 +1833,11 @@ class DocxSession:
         )
 
     def _insert_reference_field(
-        self, op: str, anchor_id: str, position: str, options: dict[str, Any]
+        self, op: str, anchor_id: str, position: str | None, options: dict[str, Any]
     ) -> EditResult:
-        args: dict[str, Any] = {"anchorId": anchor_id, "position": position}
+        args: dict[str, Any] = {"anchorId": anchor_id}
+        if position is not None:
+            args["position"] = position
         if options:
             args["options"] = options
         return EditResult._from_wire(self._call(op, args))
@@ -2154,12 +2170,31 @@ class DocxSession:
 
     # -- Tracked revisions (issue #318) -----------------------------------
 
-    def list_revisions(self) -> tuple[RevisionListEntry, ...]:
+    def list_revisions(
+        self,
+        *,
+        author: str | None = None,
+        change_type: str | None = None,
+        family: str | None = None,
+        resolution_status: str | None = None,
+        part_uri: str | None = None,
+    ) -> tuple[RevisionListEntry, ...]:
         """Markup-native tracked-revision listing, in document order across body,
         headers, footers, footnotes, and endnotes. Ids are stable while the underlying
         markup exists and address ``accept_revision``/``reject_revision``;
-        authors/dates are the markup's own (no accept/reject re-diff)."""
-        result = self._call("list_revisions", {})
+        authors/dates are the markup's own (no accept/reject re-diff).
+
+        Each keyword narrows the list to entries matching it: ``author``, ``change_type``
+        (the entry's ``type``), ``family`` and ``resolution_status`` ignore case; ``part_uri``
+        is exact."""
+        args: dict[str, Any] = {}
+        for key, value in (
+            ("author", author), ("changeType", change_type), ("family", family),
+            ("resolutionStatus", resolution_status), ("partUri", part_uri),
+        ):
+            if value is not None:
+                args[key] = value
+        result = self._call("list_revisions", args)
         return tuple(RevisionListEntry._from_wire(r) for r in result)
 
     def list_revision_repairs(self) -> tuple[RevisionRepairProposal, ...]:
@@ -2417,11 +2452,14 @@ class DocxSession:
         }))
 
     def set_cell_shading(
-        self, cell_anchor_id: str, fill: str | None, scope: str = "cell",
+        self, cell_anchor_id: str, fill: str | None, scope: str | None = None,
     ) -> EditResult:
-        return EditResult._from_wire(self._call("set_cell_shading", {
-            "cellAnchorId": cell_anchor_id, "fill": fill, "scope": scope,
-        }))
+        """Shade the anchor's cell, or with ``scope="row"`` every cell of its row. ``scope``
+        omitted takes the engine's default, ``"cell"``."""
+        args: dict[str, Any] = {"cellAnchorId": cell_anchor_id, "fill": fill}
+        if scope is not None:
+            args["shadingScope"] = scope
+        return EditResult._from_wire(self._call("set_cell_shading", args))
 
     def set_repeat_header_row(self, cell_anchor_id: str, repeat: bool) -> EditResult:
         return EditResult._from_wire(self._call("set_repeat_header_row", {

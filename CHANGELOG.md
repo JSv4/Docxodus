@@ -159,6 +159,24 @@ All notable changes to this project will be documented in this file.
   (including `docxodus_open`'s `trackedChanges`, which had its own lenient copy), and the browser
   bridge throws. Before, `"outsid"` bordered every edge of a table, `"exactly"` set an at-least row height,
   and a misspelled list format removed the list.
+- A session op now behaves the same whichever transport calls it (issue #960). Each per-op default,
+  argument name, revision filter and result cap used to be supplied by the MCP server, the stdio host
+  and the WASM bridge separately, and they had drifted. They now live once, in the shared session
+  facade:
+  - **Table of contents, figures and authorities with no `position`.** These are placed before the
+    anchor on every transport. MCP used to put them after it, so an MCP call that omits `position`
+    now inserts the table above the anchor instead of below it.
+  - **Search context width.** It is `DocxSession.DefaultContextChars` (80) everywhere.
+  - **Cell shading scope and the repeat-header flag.** These defaults are read from the facade.
+  - **Argument names.** Each argument has one name across transports. The stdio host now reads
+    `shadingScope` for `set_cell_shading` and still accepts `scope`. MCP's `set_row_options` now
+    reads `repeatHeader` and still accepts `repeat`. Passing both spellings with different values
+    is refused.
+  - **Revision-list filtering and `maxResults`.** These were MCP-only and worked by re-parsing the
+    result. They now run in the facade, so the stdio host and the clients get them too:
+    - Python: `list_revisions(author=, change_type=, family=, resolution_status=, part_uri=)`, and
+      `max_results` on `grep` / `grep_cross_block`.
+    - npm: `listRevisions(filter)` and `GrepOptions.maxResults`.
 - **`DocxodusDocument.SavePartAs` disposes the part stream it opens**, and the three places that
   copy a part's bytes into a buffer (`SavePartAs`, plus the image and media copies `DocumentBuilder`
   uses when merging) now read with `ReadExactly`. They used a single `Stream.Read`

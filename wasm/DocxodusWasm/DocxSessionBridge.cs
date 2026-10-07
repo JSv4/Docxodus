@@ -504,7 +504,7 @@ public static partial class DocxSessionBridge
     /// <summary>Shade the cell containing <paramref name="cellAnchor"/> (scope "cell") or its whole
     /// row (scope "row"). <paramref name="fill"/> is a hex RRGGBB triplet or "auto"; "" clears.</summary>
     [JSExport]
-    public static string SetCellShading(int h, string cellAnchor, string fill, string scope) =>
+    public static string SetCellShading(int h, string cellAnchor, string fill, string? scope) =>
         DocxSessionOps.SetCellShading(h, cellAnchor, fill, scope);
 
     /// <summary>Mark/unmark the row containing <paramref name="cellAnchor"/> as a repeating
@@ -565,13 +565,13 @@ public static partial class DocxSessionBridge
     /// </summary>
     [JSExport]
     public static string InsertTableOfContents(int h, string anchor, string posStr, string optionsJson) =>
-        DocxSessionOps.InsertTableOfContents(h, anchor, DocxSessionJson.ParsePos(posStr),
+        DocxSessionOps.InsertTableOfContents(h, anchor, DocxSessionJson.ParseOptionalPos(posStr),
             ParseJsonOptions(optionsJson, DocxSessionJson.ParseTableOfContentsOptions));
 
     /// <summary>Insert a table of figures — <c>{captionLabel?, hyperlinks?, rightTabPos?}</c>.</summary>
     [JSExport]
     public static string InsertTableOfFigures(int h, string anchor, string posStr, string optionsJson) =>
-        DocxSessionOps.InsertTableOfFigures(h, anchor, DocxSessionJson.ParsePos(posStr),
+        DocxSessionOps.InsertTableOfFigures(h, anchor, DocxSessionJson.ParseOptionalPos(posStr),
             ParseJsonOptions(optionsJson, DocxSessionJson.ParseTableOfFiguresOptions));
 
     /// <summary>Insert a table of authorities —
@@ -579,7 +579,7 @@ public static partial class DocxSessionBridge
     /// name ("cases", "statutes", …) rather than Word's number.</summary>
     [JSExport]
     public static string InsertTableOfAuthorities(int h, string anchor, string posStr, string optionsJson) =>
-        DocxSessionOps.InsertTableOfAuthorities(h, anchor, DocxSessionJson.ParsePos(posStr),
+        DocxSessionOps.InsertTableOfAuthorities(h, anchor, DocxSessionJson.ParseOptionalPos(posStr),
             ParseJsonOptions(optionsJson, DocxSessionJson.ParseTableOfAuthoritiesOptions));
 
     /// <summary>Parse an optional options object; an empty string means "all defaults".</summary>
@@ -853,6 +853,14 @@ public static partial class DocxSessionBridge
     [JSExport]
     public static string ListRevisions(int h) => DocxSessionOps.ListRevisions(h);
 
+    /// <summary>
+    /// <see cref="ListRevisions(int)"/> narrowed by <paramref name="filterJson"/>:
+    /// <c>{author?, changeType?, family?, resolutionStatus?, partUri?}</c> ("" lists everything).
+    /// </summary>
+    [JSExport]
+    public static string ListRevisionsFiltered(int h, string filterJson) =>
+        DocxSessionOps.ListRevisions(h, DocxSessionJson.ParseRevisionListFilter(filterJson));
+
     /// <summary>The explicit repairs the registry offers for entries it refuses to resolve
     /// (issues #754–#758): JSON array of proposals with carriers, repairability and reason.</summary>
     [JSExport]
@@ -1039,21 +1047,13 @@ public static partial class DocxSessionBridge
 
     /// <summary>
     /// Bridge for <see cref="DocxSession.Grep"/>. <paramref name="optionsJson"/>
-    /// accepts <c>{regexOptions?: number, scope?: number, contextChars?: number,
-    /// whitespace?: number, boundary?: number}</c>; numeric values follow the .NET
-    /// <see cref="System.Text.RegularExpressions.RegexOptions"/>, <see cref="ProjectionScopes"/>,
-    /// <see cref="WhitespaceMode"/>, and <see cref="ContextBoundary"/> flag layouts.
-    /// Missing fields use sensible defaults (no options, body-only, 80 chars of
-    /// context, preserve whitespace, char-boundary).
+    /// accepts <c>{regexOptions?, scope?, contextChars?, whitespace?, boundary?, maxResults?,
+    /// citation?}</c> — see <see cref="DocxSessionJson.ParseGrepRequest(System.Text.Json.JsonElement)"/>
+    /// for the layouts and the defaults a missing field takes.
     /// </summary>
     [JSExport]
-    public static string Grep(int h, string pattern, string optionsJson)
-    {
-        ParseGrepOptions(optionsJson, out var regexOpts, out var scope, out var contextChars,
-            out var whitespace, out var boundary, out var citationRequest);
-        return DocxSessionOps.Grep(
-            h, pattern, regexOpts, scope, contextChars, whitespace, boundary, citationRequest);
-    }
+    public static string Grep(int h, string pattern, string optionsJson) =>
+        DocxSessionOps.Grep(h, pattern, DocxSessionJson.ParseGrepRequest(optionsJson));
 
     /// <summary>
     /// Bridge for <see cref="DocxSession.GrepCrossBlock"/>. Same <paramref name="optionsJson"/>
@@ -1061,13 +1061,8 @@ public static partial class DocxSessionBridge
     /// carries <c>enclosingAnchors[]</c> + <c>slices[]</c>).
     /// </summary>
     [JSExport]
-    public static string GrepCrossBlock(int h, string pattern, string optionsJson)
-    {
-        ParseGrepOptions(optionsJson, out var regexOpts, out var scope, out var contextChars,
-            out var whitespace, out var boundary, out var citationRequest);
-        return DocxSessionOps.GrepCrossBlock(
-            h, pattern, regexOpts, scope, contextChars, whitespace, boundary, citationRequest);
-    }
+    public static string GrepCrossBlock(int h, string pattern, string optionsJson) =>
+        DocxSessionOps.GrepCrossBlock(h, pattern, DocxSessionJson.ParseGrepRequest(optionsJson));
 
     /// <summary>
     /// Bridge for <see cref="DocxSession.ReplaceTextRange"/>. <paramref name="optionsJson"/>
@@ -1129,12 +1124,12 @@ public static partial class DocxSessionBridge
     /// uses the <see cref="ProjectionScopes"/> flag layout. Returns a JSON array of placeholders.
     /// </summary>
     [JSExport]
-    public static string FindPlaceholders(int h, int kinds, int scope, int contextChars, int boundary) =>
+    public static string FindPlaceholders(int h, int kinds, int scope, int? contextChars, int boundary) =>
         DocxSessionOps.FindPlaceholders(h, (PlaceholderKinds)kinds, (ProjectionScopes)scope, contextChars, (ContextBoundary)boundary);
 
     [JSExport]
     public static string FindPlaceholdersWithCitations(
-        int h, int kinds, int scope, int contextChars, int boundary, string requestJson) =>
+        int h, int kinds, int scope, int? contextChars, int boundary, string requestJson) =>
         DocxSessionOps.FindPlaceholders(
             h, (PlaceholderKinds)kinds, (ProjectionScopes)scope, contextChars,
             (ContextBoundary)boundary, ParseRequiredCitationRequest(requestJson));
@@ -1465,32 +1460,6 @@ public static partial class DocxSessionBridge
         using var doc = JsonDocument.Parse("{\"citation\":" + requestJson + "}");
         return DocxSessionJson.ParsePageCitationRequest(doc.RootElement)
             ?? throw new FormatException("citation request is required");
-    }
-
-    private static void ParseGrepOptions(string optionsJson, out RegexOptions regexOpts,
-        out ProjectionScopes scope, out int contextChars, out WhitespaceMode whitespace,
-        out ContextBoundary boundary, out PageCitationRequest? citationRequest)
-    {
-        regexOpts = RegexOptions.None;
-        scope = ProjectionScopes.Body;
-        contextChars = 80;
-        whitespace = WhitespaceMode.Preserve;
-        boundary = ContextBoundary.Char;
-        citationRequest = null;
-        if (string.IsNullOrEmpty(optionsJson)) return;
-        using var doc = JsonDocument.Parse(optionsJson);
-        var root = doc.RootElement;
-        if (root.TryGetProperty("regexOptions", out var ro) && ro.ValueKind == JsonValueKind.Number)
-            regexOpts = (RegexOptions)ro.GetInt32();
-        if (root.TryGetProperty("scope", out var s) && s.ValueKind == JsonValueKind.Number)
-            scope = (ProjectionScopes)s.GetInt32();
-        if (root.TryGetProperty("contextChars", out var c) && c.ValueKind == JsonValueKind.Number)
-            contextChars = c.GetInt32();
-        if (root.TryGetProperty("whitespace", out var w) && w.ValueKind == JsonValueKind.Number)
-            whitespace = (WhitespaceMode)w.GetInt32();
-        if (root.TryGetProperty("boundary", out var b) && b.ValueKind == JsonValueKind.Number)
-            boundary = (ContextBoundary)b.GetInt32();
-        citationRequest = DocxSessionJson.ParsePageCitationRequest(root);
     }
 
 }

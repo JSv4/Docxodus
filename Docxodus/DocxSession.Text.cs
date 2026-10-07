@@ -599,7 +599,7 @@ public sealed partial class DocxSession
     public IReadOnlyList<TemplatePlaceholder> FindPlaceholders(
         PlaceholderKinds kinds = PlaceholderKinds.All,
         ProjectionScopes scope = ProjectionScopes.Body,
-        int contextChars = 80,
+        int contextChars = DefaultContextChars,
         ContextBoundary boundary = ContextBoundary.Char,
         PageCitationRequest? citationRequest = null)
     {

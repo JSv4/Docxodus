@@ -388,7 +388,7 @@ internal static class ToolCatalog
                 "action": { "type": "string", "enum": ["insert_paragraph", "insert_heading", "insert_table", "insert_horizontal_rule", "insert_footnote", "insert_endnote", "insert_page_number_field", "insert_table_of_contents", "insert_table_of_figures", "insert_table_of_authorities", "set_header_text", "set_footer_text", "ensure_header_footer_visible"] },
                 "anchorId": { "type": "string", "description": "Reference block for insert_paragraph/insert_heading/insert_table/insert_horizontal_rule (paired with position), or the citing paragraph for insert_footnote/insert_endnote, or the target paragraph for insert_page_number_field." },
                 "bodyAnchorId": { "type": "string", "description": "set_header_text/set_footer_text/ensure_header_footer_visible: a body block identifying the section whose running story or visibility flags should change." },
-                "position": { "type": "string", "enum": ["before", "after"] },
+                "position": { "type": "string", "enum": ["before", "after"], "description": "Relative to anchorId. Default after, except insert_table_of_contents/insert_table_of_figures/insert_table_of_authorities, which default to before." },
                 "text": { "type": "string", "description": "insert_heading: heading text (plain, not markdown)." },
                 "level": { "type": "integer", "minimum": 1, "maximum": 6, "description": "insert_heading: 1-6." },
                 "markdown": { "type": "string", "description": "insert_paragraph / insert_footnote / insert_endnote / set_header_text / set_footer_text payload." },
@@ -743,7 +743,8 @@ internal static class ToolCatalog
                 "borderColor": { "type": "string", "description": "set_borders: hex RRGGBB (no '#') or auto (default)." },
                 "fill": { "type": "string", "description": "set_shading: hex RRGGBB (leading '#' tolerated) or auto; omit/empty to remove the shading." },
                 "shadingScope": { "type": "string", "enum": ["cell", "row"], "description": "set_shading: just the anchor's cell (default) or every cell of its row — header-row banding." },
-                "repeat": { "type": "boolean", "description": "set_repeat_header_row/set_row_options: true marks the anchor's row as a repeating header row (w:tblHeader; Word honors it on a run of rows starting at row 1), false unmarks." },
+                "repeat": { "type": "boolean", "description": "set_repeat_header_row: true (default) marks the anchor's row as a repeating header row (w:tblHeader; Word honors it on a run of rows starting at row 1), false unmarks. set_row_options: deprecated alias of repeatHeader." },
+                "repeatHeader": { "type": "boolean", "description": "set_row_options: true marks the anchor's row as a repeating header row, false unmarks, omitted leaves it unchanged." },
                 "allowBreakAcrossPages": { "type": "boolean", "description": "set_row_options: true permits a row to split across pages; false writes w:cantSplit." },
                 "heightTwips": { "type": "integer", "minimum": 0, "description": "set_row_options: explicit row height in twips (20 twips = 1pt); zero removes an existing height." },
                 "heightRule": { "type": "string", "enum": ["auto", "atLeast", "exact"], "description": "set_row_options: how Word interprets a positive heightTwips value (default atLeast)." }
