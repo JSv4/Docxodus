@@ -20,9 +20,19 @@
     <PackageTags>openxml;ooxml;docx;word;xlsx;excel;pptx;powerpoint;document;compare;diff;redline;tracked-changes;docx-to-html;html;markdown;document-editor;merge;split;llm;agent</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
 
-
     <!-- ReadyToRun: Pre-compile to native code during publish to eliminate JIT warmup -->
     <PublishReadyToRun>true</PublishReadyToRun>
+  </PropertyGroup>
+
+  <!-- The library builds warning-free and so inherits TreatWarningsAsErrors in Release. A CLI's
+       `dotnet publish -p:PublishTrimmed=true` / `-p:PublishAot=true` makes that a global property,
+       which also switches the trim/AOT analyzers on for this project. Their findings here are
+       catalogued in docs/architecture/cli_trimming_and_native_aot.md and none is reachable from a
+       CLI; the publish's whole-application ILLink/ILC analysis is the real gate, and it still fails
+       on any warning. So those analyzer warnings stay warnings. A plain Release build still fails
+       on every other warning. -->
+  <PropertyGroup Condition="'$(PublishTrimmed)' == 'true' or '$(PublishAot)' == 'true'">
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
   </PropertyGroup>
 
   <!-- Define WASM_BUILD constant when building for WASM.
