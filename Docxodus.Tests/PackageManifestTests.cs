@@ -12,7 +12,7 @@ using Docxodus.McpServer;
 using Docxodus.Verification;
 using Xunit;
 
-namespace OxPt;
+namespace Docxodus.Tests;
 
 public class PackageManifestTests
 {

@@ -1036,7 +1036,7 @@ internal static class IrTableDiffer
     /// Align a cell's block lists with the shared block aligner and project to block edit ops (the same
     /// projection the body builder uses), so a cell-text edit lands as a ModifyBlock carrying a token
     /// diff. Cells nest one level: a table-in-a-cell Modified pair recurses again through
-    /// <see cref="IrEditScriptBuilder.ProjectBlockOp"/>.
+    /// <see cref="IrEditScriptBuilder.ProjectAlignment"/>.
     /// </summary>
     private static List<IrEditOp> DiffCellBlocks(IrCell left, IrCell right, IrDiffSettings settings)
     {

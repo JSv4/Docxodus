@@ -98,7 +98,7 @@ internal static class NoteReferenceOps
     /// <c>Accept(Compare(l, r)) ≡ r</c> and <c>Reject(Compare(l, r)) ≡ l</c> both hold for the
     /// note stores. (Redlines whose producer left an inserted definition's TEXT unmarked —
     /// sessions from the brief #614-era — reject to an orphaned husk instead; see CHANGELOG.)
-    /// <para>"Emptied" is scaffolding-aware, not merely blockless: <see cref="WmlComparer"/>
+    /// <para>"Emptied" is scaffolding-aware, not merely blockless: <c>WmlComparer</c>
     /// re-synthesizes an UNMARKED <c>w:footnoteRef</c> marker run into every inserted definition
     /// it renders, so rejecting one of its redlines strips the definition to a marker-only
     /// paragraph rather than to nothing. A definition left with no text, tables, SDTs or other
@@ -132,7 +132,7 @@ internal static class NoteReferenceOps
 
     /// <summary>Whether a note definition was stripped to scaffolding: no block children at all,
     /// or only paragraphs whose remaining run content is note-reference-mark scaffolding
-    /// (<c>w:footnoteRef</c>/<c>w:endnoteRef</c>) — the marker run <see cref="WmlComparer"/>
+    /// (<c>w:footnoteRef</c>/<c>w:endnoteRef</c>) — the marker run <c>WmlComparer</c>
     /// re-synthesizes UNMARKED into inserted definitions, which would otherwise shield them from
     /// the guarded prune. Tables, SDTs, any text, and any other run content mean real content
     /// survived. A direct-children walk is sufficient HERE — and only here — because this runs

@@ -8,7 +8,6 @@ using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using Xunit;
 
-#if !ELIDE_XUNIT_TESTS
 
 namespace Docxodus.Tests
 {
@@ -160,4 +159,3 @@ namespace Docxodus.Tests
     }
 }
 
-#endif

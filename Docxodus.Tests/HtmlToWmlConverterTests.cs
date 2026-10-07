@@ -40,9 +40,8 @@ using System.Text.RegularExpressions;
 using Word = Microsoft.Office.Interop.Word;
 #endif
 
-#if !ELIDE_XUNIT_TESTS
 
-namespace OxPt
+namespace Docxodus.Tests
 {
     public class HwTests
     {
@@ -512,4 +511,3 @@ BDO[DIR=""rtl""] { direction: rtl; unicode-bidi: bidi-override }
     }
 }
 
-#endif

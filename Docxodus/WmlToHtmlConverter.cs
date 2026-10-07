@@ -344,7 +344,7 @@ namespace Docxodus
         /// <para>A cross-reference that leaves the fragment is expected there, not broken: a citing
         /// paragraph rendered on its own legitimately links to a note definition that is simply not
         /// in this output. Completeness checks over the finished tree — <see
-        /// cref="RemoveUnresolvableNoteLinks"/> — are therefore skipped, because on a fragment they
+        /// cref="WmlToHtmlConverter.RemoveUnresolvableNoteLinks"/> — are therefore skipped, because on a fragment they
         /// would strip navigation the surrounding document does resolve. Internal-only; the
         /// full-document render leaves it false. Default: false.</para>
         /// </summary>

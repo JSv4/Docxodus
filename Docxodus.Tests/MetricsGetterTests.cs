@@ -14,9 +14,8 @@ using DocumentFormat.OpenXml.Wordprocessing;
 using Docxodus;
 using Xunit;
 
-#if !ELIDE_XUNIT_TESTS
 
-namespace OxPt
+namespace Docxodus.Tests
 {
     public class MgTests
     {
@@ -108,4 +107,3 @@ namespace OxPt
     }
 }
 
-#endif

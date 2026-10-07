@@ -9,11 +9,10 @@ using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using Xunit;
 using Docxodus;
-using W = DocumentFormat.OpenXml.Wordprocessing;
+using Wp = DocumentFormat.OpenXml.Wordprocessing;
 
-#if !ELIDE_XUNIT_TESTS
 
-namespace OxPt
+namespace Docxodus.Tests
 {
     // Regression coverage for issue #210: WmlToHtmlConverter threw
     // FormatException ("Format_InvalidStringWithValue, 100%") when a table or
@@ -28,8 +27,8 @@ namespace OxPt
         // the per-cell w:tcW. Widths are passed through verbatim as the raw
         // OOXML attribute string so we can exercise the "100%" / "50%" forms.
         private static byte[] CreateDocxWithTableWidth(
-            string tblWidth, W.TableWidthUnitValues tblType,
-            string cellWidth, W.TableWidthUnitValues cellType)
+            string tblWidth, Wp.TableWidthUnitValues tblType,
+            string cellWidth, Wp.TableWidthUnitValues cellType)
         {
             using var ms = new MemoryStream();
             using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
@@ -41,45 +40,45 @@ namespace OxPt
                 // in-memory document must supply one (plus default run props) or
                 // conversion throws ArgumentNullException before any width parsing.
                 var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
-                stylesPart.Styles = new W.Styles(
-                    new W.DocDefaults(
-                        new W.RunPropertiesDefault(
-                            new W.RunPropertiesBaseStyle(
-                                new W.RunFonts { Ascii = "Calibri", HighAnsi = "Calibri" },
-                                new W.FontSize { Val = "24" }))));
+                stylesPart.Styles = new Wp.Styles(
+                    new Wp.DocDefaults(
+                        new Wp.RunPropertiesDefault(
+                            new Wp.RunPropertiesBaseStyle(
+                                new Wp.RunFonts { Ascii = "Calibri", HighAnsi = "Calibri" },
+                                new Wp.FontSize { Val = "24" }))));
                 stylesPart.Styles.Save();
 
                 // ConvertToHtml also dereferences MainDocumentPart.DocumentSettingsPart
                 // (CalculateSpanWidthForTabs reads w:defaultTabStop).
                 var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
-                settingsPart.Settings = new W.Settings();
+                settingsPart.Settings = new Wp.Settings();
                 settingsPart.Settings.Save();
 
-                W.TableCell MakeCell(string text) => new W.TableCell(
-                    new W.TableCellProperties(
-                        new W.TableCellWidth { Width = cellWidth, Type = cellType }),
-                    new W.Paragraph(
-                        new W.Run(
-                            new W.Text(text) { Space = SpaceProcessingModeValues.Preserve })));
+                Wp.TableCell MakeCell(string text) => new Wp.TableCell(
+                    new Wp.TableCellProperties(
+                        new Wp.TableCellWidth { Width = cellWidth, Type = cellType }),
+                    new Wp.Paragraph(
+                        new Wp.Run(
+                            new Wp.Text(text) { Space = SpaceProcessingModeValues.Preserve })));
 
-                var table = new W.Table(
-                    new W.TableProperties(
-                        new W.TableWidth { Width = tblWidth, Type = tblType }),
-                    new W.TableGrid(
-                        new W.GridColumn { Width = "4500" },
-                        new W.GridColumn { Width = "4500" }),
-                    new W.TableRow(MakeCell("Item"), MakeCell("Amount")),
-                    new W.TableRow(MakeCell("Fee"), MakeCell("1000")));
+                var table = new Wp.Table(
+                    new Wp.TableProperties(
+                        new Wp.TableWidth { Width = tblWidth, Type = tblType }),
+                    new Wp.TableGrid(
+                        new Wp.GridColumn { Width = "4500" },
+                        new Wp.GridColumn { Width = "4500" }),
+                    new Wp.TableRow(MakeCell("Item"), MakeCell("Amount")),
+                    new Wp.TableRow(MakeCell("Fee"), MakeCell("1000")));
 
-                mainPart.Document = new W.Document(
-                    new W.Body(
-                        new W.Paragraph(
-                            new W.Run(
-                                new W.Text("Header") { Space = SpaceProcessingModeValues.Preserve })),
+                mainPart.Document = new Wp.Document(
+                    new Wp.Body(
+                        new Wp.Paragraph(
+                            new Wp.Run(
+                                new Wp.Text("Header") { Space = SpaceProcessingModeValues.Preserve })),
                         table,
-                        new W.SectionProperties(
-                            new W.PageSize { Width = 12240, Height = 15840 },
-                            new W.PageMargin { Top = 1440, Bottom = 1440, Left = 1440, Right = 1440 })));
+                        new Wp.SectionProperties(
+                            new Wp.PageSize { Width = 12240, Height = 15840 },
+                            new Wp.PageMargin { Top = 1440, Bottom = 1440, Left = 1440, Right = 1440 })));
                 mainPart.Document.Save();
             }
             return ms.ToArray();
@@ -99,8 +98,8 @@ namespace OxPt
         public void HC_Pct_PercentSuffixString_DoesNotThrow_AndEmitsPercentWidths()
         {
             var bytes = CreateDocxWithTableWidth(
-                "100%", W.TableWidthUnitValues.Pct,
-                "50%", W.TableWidthUnitValues.Pct);
+                "100%", Wp.TableWidthUnitValues.Pct,
+                "50%", Wp.TableWidthUnitValues.Pct);
 
             string html = null;
             var ex = Record.Exception(() => html = RenderToHtml(bytes));
@@ -121,8 +120,8 @@ namespace OxPt
         public void HC_Pct_IntegerFiftieths_StillYieldsPercentWidths()
         {
             var bytes = CreateDocxWithTableWidth(
-                "5000", W.TableWidthUnitValues.Pct,
-                "2500", W.TableWidthUnitValues.Pct);
+                "5000", Wp.TableWidthUnitValues.Pct,
+                "2500", Wp.TableWidthUnitValues.Pct);
 
             var html = RenderToHtml(bytes);
             var normalized = html.Replace(" ", "");
@@ -137,8 +136,8 @@ namespace OxPt
         public void HC_Dxa_TwipsWidths_StillYieldPointWidths()
         {
             var bytes = CreateDocxWithTableWidth(
-                "9000", W.TableWidthUnitValues.Dxa,
-                "4500", W.TableWidthUnitValues.Dxa);
+                "9000", Wp.TableWidthUnitValues.Dxa,
+                "4500", Wp.TableWidthUnitValues.Dxa);
 
             var html = RenderToHtml(bytes);
             var normalized = html.Replace(" ", "");
@@ -153,8 +152,8 @@ namespace OxPt
         public void HC_Pct_GarbageWidth_IsIgnored_DoesNotThrow()
         {
             var bytes = CreateDocxWithTableWidth(
-                "not-a-number", W.TableWidthUnitValues.Pct,
-                "2500", W.TableWidthUnitValues.Pct);
+                "not-a-number", Wp.TableWidthUnitValues.Pct,
+                "2500", Wp.TableWidthUnitValues.Pct);
 
             string html = null;
             var ex = Record.Exception(() => html = RenderToHtml(bytes));
@@ -167,4 +166,3 @@ namespace OxPt
     }
 }
 
-#endif

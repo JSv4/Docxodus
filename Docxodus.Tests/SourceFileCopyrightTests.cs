@@ -61,7 +61,6 @@ public class SourceFileCopyrightTests
         "Docxodus.Tests/MarkupSimplifierTests.cs",
         "Docxodus.Tests/MetricsGetterTests.cs",
         "Docxodus.Tests/OpenXmlRegexTests.cs",
-        "Docxodus.Tests/PtUtilTests.cs",
         "Docxodus.Tests/RevisionAccepterTests.cs",
         "Docxodus.Tests/RevisionProcessorTests.cs",
         "Docxodus.Tests/TestsBase.cs",

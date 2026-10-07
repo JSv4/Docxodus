@@ -19,7 +19,6 @@ using System.Linq;
 using System.Xml.Linq;
 using Xunit;
 
-#if !ELIDE_XUNIT_TESTS
 
 namespace Docxodus.Tests
 {
@@ -145,4 +144,3 @@ namespace Docxodus.Tests
     }
 }
 
-#endif

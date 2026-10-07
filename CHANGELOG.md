@@ -108,6 +108,14 @@ All notable changes to this project will be documented in this file.
   binaries need glibc 2.34, and the other platforms are untested. Findings and measurements are
   in `docs/architecture/cli_trimming_and_native_aot.md`.
 
+### Deprecated
+
+- **`MhtParser`, `BucketTimer` and `PtBucketTimer` are marked `[Obsolete]`.** They are inherited
+  from OpenXmlPowerTools and nothing in Docxodus uses them: `MhtParser` parses MHT web archives,
+  which are outside the DOCX scope, and the two timers are ad-hoc profilers. `PtBucketTimer` also
+  keeps process-wide mutable state that is not thread-safe. All three will be removed in the next
+  major version. (#977)
+
 ### Fixed
 
 - Recorded how Word lays out a paragraph whose mark is taller than its runs (issue #949): it does not grow the

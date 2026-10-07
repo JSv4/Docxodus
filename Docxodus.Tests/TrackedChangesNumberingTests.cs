@@ -17,7 +17,7 @@ using Docxodus;
 using Docxodus.Tests;
 using Xunit;
 
-namespace OxPt
+namespace Docxodus.Tests
 {
     /// <summary>
     /// Tests for list numbering in tracked-changes documents (the redline render).
