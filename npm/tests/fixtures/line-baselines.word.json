@@ -1,8 +1,8 @@
 {
   "fixture": "npm/tests/fixtures/line-baselines.docx",
-  "fixtureSha256": "75ed1399d2033fb96187dfb6273e3bcc06efd351ff7d98532d7b9cab9516ac28",
+  "fixtureSha256": "38b57724f699be5b858fd5cc41cf4b5536f6e5456e8ac3e7b905971360a99660",
   "word": "Word for the web (Microsoft 365); PDF Creator \"Microsoft Word\", with Calibri and ArialMT embedded",
-  "export": "OneDrive upload, File > Export > Download as PDF, 2026-10-05, no edits after upload",
+  "export": "OneDrive upload, File > Export > Download as PDF, 2026-10-06, no edits after upload",
   "capturedAt": "2026-10-06",
   "topMarginPt": 72,
   "cases": [
@@ -118,6 +118,24 @@
         "brown fox ju",
         "the lazy dog",
         "editor count"
+      ]
+    },
+    {
+      "case": 7,
+      "page": 8,
+      "baselinesPt": [
+        82.53,
+        85.53,
+        101.03,
+        116.55,
+        131.8
+      ],
+      "lineStarts": [
+        "CASE7 The qu",
+        "lowered ",
+        "quick brown ",
+        "over the laz",
+        "the editor c"
       ]
     }
   ]

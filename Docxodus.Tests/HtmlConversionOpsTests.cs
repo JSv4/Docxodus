@@ -2295,14 +2295,14 @@ public class HtmlConversionOpsTests
         var p = XElement.Parse(html).Descendants().Single(e => e.Name.LocalName == "p");
         return (string?)p.Attribute("style") ?? string.Empty;
     }
-    // Issue #941: Word grows a line to make room for a raised run (w:position > 0), moving the line's baseline
-    // down by the raise. `vertical-align` does that in CSS; relative positioning moved the glyphs without
-    // growing the line, so the raised text could overlap the line above. A lowered run keeps its relative
-    // offset until Word's behaviour for it is recorded.
+    // Issues #941 and #948: Word grows a line to make room for a raised run (w:position > 0), moving the line's
+    // baseline down by the raise, and for a lowered run (w:position < 0), growing the line downward by the drop.
+    // `vertical-align` does both in CSS; relative positioning moved the glyphs without growing the line, so the
+    // shifted text could overlap the next or previous line.
     [Theory]
     [InlineData(6, "vertical-align: 3pt", "top")]
-    [InlineData(-6, "top: 3pt", "vertical-align")]
-    public void HCO101_RaisedRun_GrowsItsLineWithVerticalAlign(int position, string expected, string absent)
+    [InlineData(-6, "vertical-align: -3pt", "top")]
+    public void HCO101_ShiftedRun_GrowsItsLineWithVerticalAlign(int position, string expected, string absent)
     {
         var run = RunStyle(new Wp.Run(
             new Wp.RunProperties(new Wp.Position { Val = position.ToString(System.Globalization.CultureInfo.InvariantCulture) }),

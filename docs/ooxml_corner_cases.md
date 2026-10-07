@@ -2125,8 +2125,21 @@ values are measured in the DOM with Chromium placing baselines on whole CSS pixe
 
   The converter raised the run with relative positioning, which does not grow the line. Since #941 it
   raises it with `vertical-align: <raise>pt`, which grows the line upward by the raise exactly as Word
-  does (`ConvertRun` in `Docxodus/WmlToHtmlConverter.cs`). A lowered run (negative `w:position`) keeps
-  its relative offset: Word's line for it has not been recorded yet.
+  does (`ConvertRun` in `Docxodus/WmlToHtmlConverter.cs`).
+- **A lowered run (negative `w:position`) grows Word's line downward.** CASE7 lowers "lowered" by 3 pt
+  on the first line of a 1.15 paragraph. Word leaves that line's baseline where it was, draws the run
+  3 pt below it, and makes the line 3 pt taller underneath, so every later line moves down 3 pt. That
+  puts CASE7's later lines exactly where CASE6's are: both shifts grow the line by the same amount, one
+  above the baseline and one below.
+
+  | pt from the page top | rest of line 1 | lowered run | line 2 | line 3 |
+  |---|---:|---:|---:|---:|
+  | Word | 82.53 | 85.53 | 101.03 | 116.55 |
+  | Same paragraph without the lowered run (CASE1) | 82.53 | — | 98.03 | 113.53 |
+
+  Until #948 the converter lowered the run with relative positioning, which leaves the later lines where
+  CASE1 has them. It now uses `vertical-align: -<drop>pt`, as for the raised case: the run's inline box
+  moves down and the line box grows to hold it.
 
 **Fix.** `ApplyAutomaticLineSpacingToInlineContent` (`Docxodus/WmlToHtmlConverter.cs`). Each direct inline
 child keeps the multiplied `line-height: calc(1lh * m)` as before, so every line box is exactly what it was,

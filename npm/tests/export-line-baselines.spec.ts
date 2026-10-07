@@ -264,6 +264,31 @@ test.describe('exported baselines follow Word (#908)', () => {
     });
   });
 
+  test('a lowered run grows its line downward the way Word does (#948)', async ({ page }) => {
+    // CASE7 is CASE1 with "lowered" at w:position -6 (3 pt down) on its first line. Word keeps the line's
+    // baseline where it was and grows the line below by the drop, so every later line moves down 3 pt. A
+    // relative offset moved the glyphs without growing the line, leaving the later lines where CASE1 has them.
+    const exported = await exportedBaselines(page, 'baseline-test-a.woff2');
+    const origin = exported[1].baselines[0];
+    const wordOrigin = word.cases.find((c) => c.case === 1)!.baselinesPt[0];
+    const expected = word.cases.find((c) => c.case === 7)!.baselinesPt;
+    const actual = exported[7].baselines;
+    expect(actual.length, 'CASE7 baselines').toBeGreaterThanOrEqual(expected.length);
+    expected.forEach((y, line) => {
+      const got = actual[line] - origin;
+      expect(Math.abs(got - (y - wordOrigin)), `CASE7 baseline ${line + 1}: ${got} pt below CASE1's first, ` +
+        `Word ${y - wordOrigin} pt`).toBeLessThanOrEqual(LINE_TOLERANCE_PT);
+    });
+  });
+
+  test('a lowered run at 1.15 sits its w:position below the line', async ({ page }) => {
+    // Word draws "lowered" 3 pt below its line's baseline.
+    const [line, lowered] = (await exportedBaselines(page, 'baseline-test-a.woff2'))[7].baselines;
+    const [wordLine, wordLowered] = word.cases.find((c) => c.case === 7)!.baselinesPt;
+    expect(Math.abs((lowered - line) - (wordLowered - wordLine)), `line ${line}, lowered ${lowered}`)
+      .toBeLessThanOrEqual(0.05);
+  });
+
   test('a raised run at 1.15 still sits its w:position above the line', async ({ page }) => {
     // CASE6 is 11 pt Calibri at 1.15 whose first line holds "raised" at w:position 6 (3 pt up). Word draws it
     // 3 pt above the line's baseline; the relative offset that raises it composes with the new placement.
