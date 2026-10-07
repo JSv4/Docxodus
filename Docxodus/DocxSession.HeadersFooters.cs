@@ -80,7 +80,7 @@ public sealed partial class DocxSession
     /// </remarks>
     public EditResult EnsureHeaderFooterVisible(string anchorId, HeaderFooterKind kind)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var target = FindAnchor(anchorId);
         if (target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
@@ -153,7 +153,7 @@ public sealed partial class DocxSession
     {
         if (enabled) return EnsureHeaderFooterVisible(anchorId, kind);
 
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var target = FindAnchor(anchorId);
         if (target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
@@ -208,7 +208,7 @@ public sealed partial class DocxSession
 
     private EditResult SetHeaderFooterText(bool isHeader, string anchorId, HeaderFooterKind kind, string markdownPayload)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var target = FindAnchor(anchorId);
         if (target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
@@ -367,7 +367,7 @@ public sealed partial class DocxSession
         PageNumberField field = PageNumberField.CurrentPage,
         NumberFormat? format = null)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (format is { } f && !Internal.NumberFormats.IsPageNumberFormat(f))
             return EditResult.Fail(EditErrorCode.InvalidPageNumbering,
                 $"{f} cannot format a page number", anchorId);
@@ -733,7 +733,7 @@ public sealed partial class DocxSession
     /// </summary>
     private EditResult EditGoverningSectPr(string anchorId, string opName, Func<XElement, bool> mutate)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var target = FindAnchor(anchorId);
         if (target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);

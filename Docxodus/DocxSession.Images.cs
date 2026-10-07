@@ -285,7 +285,7 @@ public sealed partial class DocxSession
     public EditResult InsertImage(string anchorId, int characterOffset, byte[] imageBytes,
         ImageInsertOptions? options = null)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         options ??= new ImageInsertOptions();
         var binary = ValidateImageBytes(imageBytes, anchorId);
         if (binary.Error is not null) return binary.Error;
@@ -339,7 +339,7 @@ public sealed partial class DocxSession
 
     public EditResult ReplaceImage(string imageId, byte[] imageBytes)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var binary = ValidateImageBytes(imageBytes, null);
         if (binary.Error is not null) return binary.Error;
         if (ResolveMutableImage(imageId, ImageOperation.Replace, out var candidate) is { } imageError) return imageError;
@@ -363,7 +363,7 @@ public sealed partial class DocxSession
     /// relationship disappears with its last reference.</summary>
     public EditResult EmbedLinkedImage(string imageId, byte[] imageBytes)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var binary = ValidateImageBytes(imageBytes, null);
         if (binary.Error is not null) return binary.Error;
         if (ResolveMutableImage(imageId, ImageOperation.EmbedLinked, out var candidate) is { } imageError) return imageError;
@@ -387,7 +387,7 @@ public sealed partial class DocxSession
     public EditResult SetImageDimensions(string imageId, double? widthPoints,
         double? heightPoints, bool preserveAspect = true)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (ResolveMutableImage(imageId, ImageOperation.SetDimensions, out var candidate) is { } imageError) return imageError;
         if (ResolveRenderedDimensions(widthPoints, heightPoints, preserveAspect,
             candidate.Info.RenderedWidthPoints, candidate.Info.RenderedHeightPoints,
@@ -400,7 +400,7 @@ public sealed partial class DocxSession
 
     public EditResult SetImageMetadata(string imageId, string? altText, string? title)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (ResolveMutableImage(imageId, ImageOperation.SetMetadata, out var candidate) is { } imageError) return imageError;
         if (!ValidXmlAttributeText(altText) || !ValidXmlAttributeText(title))
             return EditResult.Fail(EditErrorCode.InvalidImageData,
@@ -417,7 +417,7 @@ public sealed partial class DocxSession
 
     public EditResult SetImageFloatingLayout(string imageId, FloatingImageLayout layout)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (layout is null) return EditResult.Fail(EditErrorCode.InvalidImageLayout,
             "floating layout is required");
         if (ValidateFloatingLayout(layout) is { } layoutError) return layoutError;
@@ -435,7 +435,7 @@ public sealed partial class DocxSession
 
     public EditResult RemoveImage(string imageId)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (ResolveMutableImage(imageId, ImageOperation.Remove, out var candidate) is { } imageError) return imageError;
         return MutateImage(candidate, imageId, ImageOperation.Remove, null);
     }

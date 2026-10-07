@@ -704,9 +704,9 @@ public sealed partial class DocxSession
     {
         candidate = null;
         error = null;
-        if (_disposed)
+        if (MutationRefusal() is { } refusal)
         {
-            error = EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+            error = EditResult.Fail(refusal);
             return false;
         }
         var registry = BuildContentControlRegistry(ProjectionScopes.All);

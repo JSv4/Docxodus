@@ -326,6 +326,16 @@ public sealed partial class DocxSession : IDisposable
     /// </summary>
     public Exception? LastRollbackError { get; private set; }
 
+    /// <summary>
+    /// True once a failed op's rollback also failed (<see cref="LastRollbackError"/> is set). From then
+    /// on every mutation is refused with <see cref="EditErrorCode.SessionCorrupted"/> (or, for the few
+    /// members with no error channel, an <see cref="InvalidOperationException"/>). Reads and
+    /// <see cref="Save()"/> are not refused, though a save can fail on whatever the half-applied op
+    /// left behind. Rolling back an enclosing transaction restores the checkpointed
+    /// package and clears it. Otherwise close the session and reopen it from known-good bytes.
+    /// </summary>
+    public bool IsCorrupted => LastRollbackError is not null;
+
     /// <summary>Undo steps currently available. Bounded by both
     /// <see cref="DocxSessionSettings.UndoDepth"/> and
     /// <see cref="DocxSessionSettings.UndoMemoryBudgetBytes"/>.</summary>
@@ -1076,7 +1086,7 @@ public sealed partial class DocxSession : IDisposable
     /// </remarks>
     public CompactResult CompactRuns(ProjectionScopes scopes = ProjectionScopes.All)
     {
-        ThrowIfDisposed();
+        ThrowIfMutationRefused();
         _history.RecordPreOp(TakeSnapshot());
 
         int removed = 0;
@@ -1485,8 +1495,13 @@ public sealed partial class DocxSession : IDisposable
         }
     }
 
+    /// <summary>Test seam: runs at the start of every <see cref="RestoreSnapshot"/>, so a test can make
+    /// the restore itself fail — the one fault no realistic input reaches (issue #963).</summary>
+    internal Action? BeforeRestoreSnapshotForTests { get; set; }
+
     internal void RestoreSnapshot(DocumentSnapshot snapshot)
     {
+        BeforeRestoreSnapshotForTests?.Invoke();
         CommentsVersion++;
         // The restored markup is different markup: re-seed the revision counter from it on
         // next use. Seeding only ever raises the counter, so this can never hand out an id

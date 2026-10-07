@@ -29,7 +29,7 @@ public sealed partial class DocxSession
     /// </summary>
     public EditResult MoveBlock(string sourceAnchorId, string targetAnchorId, Position pos)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
 
         var sourceTarget = FindAnchor(sourceAnchorId);
         if (sourceTarget is null)
@@ -612,7 +612,7 @@ public sealed partial class DocxSession
 
     public EditResult InsertParagraph(string anchorId, Position pos, string markdownPayload)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var target = FindAnchor(anchorId);
         if (target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
@@ -690,7 +690,7 @@ public sealed partial class DocxSession
 
     public EditResult SplitParagraph(string anchorId, int characterOffset)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var target = FindAnchor(anchorId);
         if (target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
@@ -822,7 +822,7 @@ public sealed partial class DocxSession
 
     public EditResult MergeParagraphs(string firstAnchorId, string secondAnchorId)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var firstTarget = FindAnchor(firstAnchorId);
         if (firstTarget is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, "first anchor not found", firstAnchorId);

@@ -1358,9 +1358,19 @@ internal static class DocxSessionOps
 
     // ─── Undo / Redo ────────────────────────────────────────────────────
 
-    public static bool Undo(int handle) => SessionRegistry.Get(handle).Undo();
+    /// <summary><c>false</c> means nothing to undo. A corrupted session (issue #963) throws instead,
+    /// so a transport reports an error rather than an empty history.</summary>
+    public static bool Undo(int handle) => RefuseIfCorrupted(SessionRegistry.Get(handle)).Undo();
 
-    public static bool Redo(int handle) => SessionRegistry.Get(handle).Redo();
+    /// <summary>See <see cref="Undo"/>.</summary>
+    public static bool Redo(int handle) => RefuseIfCorrupted(SessionRegistry.Get(handle)).Redo();
+
+    private static DocxSession RefuseIfCorrupted(DocxSession session) =>
+        session.IsCorrupted
+            ? throw new System.InvalidOperationException(
+                "session_corrupted: a failed edit could not be rolled back, so the document may be "
+                + "half-changed; reopen the session from known-good bytes")
+            : session;
 
     public static string UndoChecked(int handle, MutationPreconditions? preconditions) =>
         Mutate(handle, preconditions, null, s => s.Undo()

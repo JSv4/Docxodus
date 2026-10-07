@@ -136,7 +136,7 @@ public sealed partial class DocxSession
         string entryStyleId, string entryStyleName, bool withHeadingStyle,
         string instruction, int rightTabPos, string? title, bool wrapInContentControl)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
 
         var target = FindAnchor(anchorId);
         if (target is null)

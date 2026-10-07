@@ -31,7 +31,7 @@ public sealed partial class DocxSession
     /// </summary>
     public EditResult AddAnnotation(string anchorId, CharSpan? span, DocumentAnnotation annotation)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (annotation is null)
             return EditResult.Fail(EditErrorCode.MalformedMarkdown, "annotation is null", anchorId);
 
@@ -56,7 +56,7 @@ public sealed partial class DocxSession
     /// <summary>Removes an annotation (its bookmark and custom-XML entry) by id.</summary>
     public EditResult RemoveAnnotation(string annotationId)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         _history.RecordPreOp(TakeSnapshot());
         try
         {
@@ -74,7 +74,7 @@ public sealed partial class DocxSession
     /// <summary>Mutates label/color/author/metadata of an annotation without re-targeting.</summary>
     public EditResult UpdateAnnotation(string annotationId, AnnotationUpdate update)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (update is null)
             return EditResult.Fail(EditErrorCode.MalformedMarkdown, "update is null");
 
@@ -94,7 +94,7 @@ public sealed partial class DocxSession
     /// <summary>Re-targets an existing annotation to a new anchor + span.</summary>
     public EditResult MoveAnnotation(string annotationId, string newAnchorId, CharSpan? newSpan)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var anchor = FindAnchor(newAnchorId);
         if (anchor is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound,

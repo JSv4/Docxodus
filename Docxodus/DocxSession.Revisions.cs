@@ -156,7 +156,7 @@ public sealed partial class DocxSession
 
     private EditResult ResolveRevision(string revisionId, bool accept)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (string.IsNullOrEmpty(revisionId))
             return EditResult.Fail(EditErrorCode.RevisionNotFound, "revision id is empty");
 
@@ -238,7 +238,7 @@ public sealed partial class DocxSession
 
     private EditResult ResolveAllRevisions(bool accept)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
 
         _ = AnchorIndex();
         var registry = BuildRevisionRegistry();
@@ -354,7 +354,7 @@ public sealed partial class DocxSession
     /// </summary>
     public RevisionRepairResult RepairRevisions(IReadOnlyList<RevisionRepairRequest> repairs)
     {
-        if (_disposed) return RevisionRepairResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return RevisionRepairResult.Fail(refusal.Code, refusal.Message);
         if (repairs is null || repairs.Count == 0)
             return RevisionRepairResult.Fail(EditErrorCode.RevisionRepairRejected, "no repairs requested");
 
@@ -423,8 +423,8 @@ public sealed partial class DocxSession
         }
         catch (Exception ex)
         {
-            RecordFailedOp(ex);
-            return RevisionRepairResult.Fail(EditErrorCode.InternalError, ex.Message);
+            var failure = RecordFailedOp(ex);
+            return RevisionRepairResult.Fail(failure.Code, failure.Message);
         }
     }
 

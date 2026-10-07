@@ -2136,7 +2136,10 @@ export type EditErrorCode =
   | "unsupported_image_markup"
   | "linked_image_read_only"
   | "invalid_image_layout"
-  | "internal_error";
+  | "internal_error"
+  /** A failed edit's rollback also failed, so the document may be half-changed. Every later
+   * mutation is refused with this code; close the session and reopen it from known-good bytes. */
+  | "session_corrupted";
 
 export interface AnchorRef {
   id: string;

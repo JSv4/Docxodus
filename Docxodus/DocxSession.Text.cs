@@ -68,8 +68,8 @@ public sealed partial class DocxSession
         string replace,
         ReplaceOptions? options)
     {
-        if (_disposed)
-            return new[] { EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed") };
+        if (MutationRefusal() is { } refusal)
+            return new[] { EditResult.Fail(refusal) };
         if (string.IsNullOrEmpty(find))
             return new[] { EditResult.Fail(EditErrorCode.MalformedMarkdown, "find must be non-empty", anchorId) };
 
@@ -162,7 +162,7 @@ public sealed partial class DocxSession
     /// </summary>
     public EditResult ReplaceMatch(TextMatch match, string replace)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (match is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "match is null");
         return ReplaceTextAtSpan(match.EnclosingAnchor.Anchor.Id, match.Span.Start, match.Span.Length, replace);
     }
@@ -180,7 +180,7 @@ public sealed partial class DocxSession
     public EditResult ReplaceTextAtSpanWithFormat(
         string anchorId, int spanStart, int spanLength, string replace, FormatOp format)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (format is null) return EditResult.Fail(EditErrorCode.MalformedMarkdown, "null format op", anchorId);
 
         // These two operations touch only snapshot-scoped XML/styles and owned story images.
@@ -209,7 +209,7 @@ public sealed partial class DocxSession
     /// </summary>
     public EditResult ReplaceInner(TextMatch match, string newInner)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (match is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "match is null");
 
         int lb = match.Text.IndexOf('[');
@@ -232,7 +232,7 @@ public sealed partial class DocxSession
     /// </summary>
     public EditResult ReplaceTextAtSpan(string anchorId, int spanStart, int spanLength, string replace)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var target = FindAnchor(anchorId);
         if (target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
@@ -799,7 +799,7 @@ public sealed partial class DocxSession
     /// </summary>
     private EditResult ReplaceMatchCoalescingNeighbors(TextMatch match)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
 
         var anchorId = match.EnclosingAnchor.Anchor.Id;
         var target = FindAnchor(anchorId);
@@ -1285,7 +1285,7 @@ public sealed partial class DocxSession
 
     public EditResult ReplaceText(string anchorId, string markdownPayload)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var target = FindAnchor(anchorId);
         if (target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
@@ -1463,7 +1463,7 @@ public sealed partial class DocxSession
 
     public EditResult DeleteBlock(string anchorId)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var target = FindAnchor(anchorId);
         if (target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
@@ -1586,7 +1586,7 @@ public sealed partial class DocxSession
     /// </remarks>
     public EditResult DeleteRange(string fromAnchorId, string toAnchorIdExclusive)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
 
         var fromTarget = FindAnchor(fromAnchorId);
         if (fromTarget is null)
@@ -1637,7 +1637,7 @@ public sealed partial class DocxSession
     /// </remarks>
     public EditResult DeleteSection(string headingAnchorId)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
 
         var headingTarget = FindAnchor(headingAnchorId);
         if (headingTarget is null)
