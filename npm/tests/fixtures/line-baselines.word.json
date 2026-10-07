@@ -1,6 +1,6 @@
 {
   "fixture": "npm/tests/fixtures/line-baselines.docx",
-  "fixtureSha256": "38b57724f699be5b858fd5cc41cf4b5536f6e5456e8ac3e7b905971360a99660",
+  "fixtureSha256": "ca673a921f72ac6cec825bc9c79076adf1d6165b84e9276fce684927f73e7770",
   "word": "Word for the web (Microsoft 365); PDF Creator \"Microsoft Word\", with Calibri and ArialMT embedded",
   "export": "OneDrive upload, File > Export > Download as PDF, 2026-10-06, no edits after upload",
   "capturedAt": "2026-10-06",
@@ -136,6 +136,38 @@
         "quick brown ",
         "over the laz",
         "the editor c"
+      ]
+    },
+    {
+      "case": 8,
+      "page": 9,
+      "baselinesPt": [
+        81.53,
+        93.78,
+        105.78,
+        118.05
+      ],
+      "lineStarts": [
+        "CASE8 The qu",
+        "over the laz",
+        "counts every",
+        "AFTER8 The q"
+      ]
+    },
+    {
+      "case": 9,
+      "page": 10,
+      "baselinesPt": [
+        81.53,
+        95.53,
+        109.53,
+        123.55
+      ],
+      "lineStarts": [
+        "CASE9 The qu",
+        "over the laz",
+        "counts every",
+        "AFTER9 The q"
       ]
     }
   ]

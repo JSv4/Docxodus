@@ -289,6 +289,23 @@ test.describe('exported baselines follow Word (#908)', () => {
       .toBeLessThanOrEqual(0.05);
   });
 
+  test('a paragraph mark taller than its runs does not grow any line (#949)', async ({ page }) => {
+    // CASE8 (single) and CASE9 (1.15) are 10 pt Calibri runs under a 20 pt paragraph mark, each followed on its
+    // page by a plain 10 pt paragraph (AFTER8, AFTER9). Word sizes every line, the last one included, from the
+    // runs: the gap down to the next paragraph is one ordinary 10 pt line (12.27 and 14.02 pt).
+    const exported = await exportedBaselines(page, 'baseline-test-a.woff2');
+    for (const id of [8, 9]) {
+      const expected = word.cases.find((c) => c.case === id)!.baselinesPt;
+      const actual = exported[id].baselines;
+      expect(actual.length, `CASE${id} baselines`).toBe(expected.length);
+      expected.forEach((y, line) => {
+        const got = actual[line] - actual[0];
+        expect(Math.abs(got - (y - expected[0])), `CASE${id} line ${line + 1}: ${got} pt below its first ` +
+          `baseline, Word ${y - expected[0]} pt`).toBeLessThanOrEqual(LINE_TOLERANCE_PT);
+      });
+    }
+  });
+
   test('a raised run at 1.15 still sits its w:position above the line', async ({ page }) => {
     // CASE6 is 11 pt Calibri at 1.15 whose first line holds "raised" at w:position 6 (3 pt up). Word draws it
     // 3 pt above the line's baseline; the relative offset that raises it composes with the new placement.
