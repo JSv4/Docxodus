@@ -148,6 +148,15 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **A very long paragraph no longer exhausts memory in a comparison.** The word-level differ
+  aligned every paragraph pair with a full n×m table: about 1 GB for a 16,000-word paragraph and
+  1.6 GB at 20,000 words, enough to kill a browser (WASM) heap. The table now runs only on regions of
+  up to a fixed cell budget. A larger pair is first cut into such regions by matching its common
+  prefix and suffix and anchoring on words that occur once on each side (falling back to the rarest
+  shared word), all in linear memory. A 20,000-word pair now diffs in tens of megabytes and well under
+  a second. Ordinary paragraphs stay under the budget, so their output is unchanged. The differ's
+  documentation, which claimed it used Myers' algorithm, now describes what it does. (#964)
+
 - **`DocxodusDocument.SavePartAs` disposes the part stream it opens**, and the three places that
   copy a part's bytes into a buffer (`SavePartAs`, plus the image and media copies `DocumentBuilder`
   uses when merging) now read with `ReadExactly`. They used a single `Stream.Read`
