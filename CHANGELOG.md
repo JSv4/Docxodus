@@ -98,6 +98,13 @@ All notable changes to this project will be documented in this file.
   so stack traces still resolve to source. A per-bundle gzip budget in `pretest` stops an
   unminified build or a large new dependency from shipping unnoticed. (#971)
 
+- **Comparing comment-heavy documents is up to about twice as fast.** After a comparison, comment
+  normalization scanned the whole body once for every comment id; it now scans once and groups the
+  markers by id. On a generated 4,000-paragraph document with 2,000 edited comments,
+  `DocxCompare.Compare` dropped from about 1.9 s to 0.9 s, with byte-identical output parts. The
+  rarer unpaired-move fallback likewise walks forward from each move start instead of rescanning
+  from the document root. (#980)
+
 - `@docxodus/export` spends about a quarter less time per document (issue #852). The time went to
   per-document setup, not conversion. Each document's fresh browser page fetched and SHA-256-hashed
   the whole runtime asset graph (about 26 MB) again, although the Node host had already verified
