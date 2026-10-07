@@ -162,6 +162,11 @@ npx tsc --noEmit
 Playwright serves from `npm/dist/wasm/`. **If you edit C#, `.ts`, or the harness HTML,
 re-run `npm run build` first** or you will test stale artifacts.
 
+**Allocation gate.** On pull requests that touch `Docxodus/`, `perf.yml` runs the DocxDiff stress
+and complex-form benchmarks against the base commit's library and the PR's, and fails when a case
+allocates more than 10% above base (time is reported, not gated). Reproduce it with
+`scripts/perf-run.sh origin/main /tmp/perf-results`; details in `benchmarks/docxdiff-stress/README.md`.
+
 The .NET suite no longer dirties `TestFiles/` — the `SH*` spreadsheet tests that used to
 write back to their own committed `.xlsx` fixtures were removed with the SpreadsheetML
 modules. If `git status` shows modified fixtures after a run, a test is writing where it
@@ -247,13 +252,12 @@ detail; this file deliberately does not restate them.
 Editor internals: `editor_block_drag_handles.md`, `editor_inline_formatting_on_edit.md`,
 `native_content_controls.md`, `native_images.md`, `unsupported_content_placeholders.md`,
 `browser_llm_demo.md`. Diff/comparison detail: `docxdiff_libreoffice_findings.md`,
-`move_detection_implementation_plan.md`, `token_stream_arrangement.md`. Smoke-test contracts: `s1_smoke_test_features.md`,
+`token_stream_arrangement.md`. Smoke-test contracts: `s1_smoke_test_features.md`,
 `epic_435_acceptance_smoke.md`.
 
 WASM/browser work: `wasm-packaging.md` (trimming, profile-guided AOT, Brotli, size budget,
-measured payload and speed frontier),
-`wasm-optimization-plan.md`, `skiasharp-removal-plan.md`, `ui_responsiveness.md`,
-`profiling-results.md`. Python wrapper: `python_docxodus.md`.
+measured payload and speed frontier), `ui_responsiveness.md`. Python wrapper:
+`python_docxodus.md`.
 
 ### Scope: the DOCX toolchain, nothing else
 

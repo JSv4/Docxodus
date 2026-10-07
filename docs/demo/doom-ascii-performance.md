@@ -1,3 +1,5 @@
+# Doom ASCII renderer performance
+
 The Doom ASCII renderer keeps all 320×200 source pixels, including the original
 HUD and sprites. Each pixel retains its tone glyph. Ink runs use the existing
 per-cell color-error bound, with a linear longest-prefix allocator instead of

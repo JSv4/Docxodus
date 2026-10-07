@@ -466,7 +466,7 @@ test.describe('DocxEditor — block editor end-to-end', () => {
       const after = editable().find((e) => norm(e.textContent || '').startsWith(word));
       let superFound = false;
       if (after) {
-        for (const el of after.querySelectorAll('*')) {
+        for (const el of Array.from(after.querySelectorAll('*'))) {
           if (getComputedStyle(el).verticalAlign === 'super' || el.tagName === 'SUP') { superFound = true; break; }
         }
       }
@@ -581,7 +581,7 @@ test.describe('DocxEditor — block editor end-to-end', () => {
       item.focus();
       const tn = (() => {
         const w = document.createTreeWalker(item, NodeFilter.SHOW_TEXT, {
-          acceptNode: (n) => (n.parentElement && (n.parentElement as HTMLElement).closest('[data-list-marker]')) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+          acceptNode: (n: Node) => (n.parentElement && (n.parentElement as HTMLElement).closest('[data-list-marker]')) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
         } as any);
         let n: Node | null, last: Text | null = null;
         while ((n = w.nextNode())) last = n as Text;

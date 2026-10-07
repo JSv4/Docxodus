@@ -43,7 +43,7 @@ for (const [source, target] of runtime) {
   }
 }
 for (const entry of await readdir(join(repoRoot, 'docs', 'demo'), { withFileTypes: true })) {
-  if (entry.name === 'README.md') continue;
+  if (entry.name.endsWith('.md')) continue; // docs about the demos, not part of them
   const target = entry.name.endsWith('.html') && entry.name !== 'player.html'
     ? `demo-${entry.name}` : entry.name;
   await cp(join(repoRoot, 'docs', 'demo', entry.name), join(webroot, target), { recursive: true });

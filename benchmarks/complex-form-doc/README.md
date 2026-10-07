@@ -40,8 +40,13 @@ form document can be passed instead; see the edit-script note below.
 ## Running
 
 ```bash
-dotnet run --project benchmarks/complex-form-doc -- TestFiles/NVCA-Model-COI.docx [edits.json] [--out DIR]
+dotnet run --project benchmarks/complex-form-doc -- TestFiles/NVCA-Model-COI.docx [edits.json] [--out DIR] [--stats-json FILE]
 ```
+
+Each `[bench]` line reports the stage's wall time and the bytes it allocated. `--stats-json`
+writes the same figures as JSON; CI's allocation gate (`perf.yml`, described in
+`benchmarks/docxdiff-stress/README.md`) compares them between a pull request and its base, and
+fails the job if this harness's checks fail on the pull request.
 
 The edit script defaults to `edits/nvca-coi.json`, which encodes a realistic Series A
 counsel pass over the NVCA charter (placeholder fills, a liquidation-preference and

@@ -25,7 +25,7 @@ using Docxodus;
 
 if (args.Length < 1)
 {
-    Console.Error.WriteLine("usage: ComplexFormBenchmark <document.docx> [edits.json] [--out <dir>]");
+    Console.Error.WriteLine("usage: ComplexFormBenchmark <document.docx> [edits.json] [--out <dir>] [--stats-json <file>]");
     Console.Error.WriteLine("       edits.json defaults to edits/nvca-coi.json next to this program");
     return 1;
 }
@@ -37,6 +37,8 @@ var editsPath = args.Length > 1 && !args[1].StartsWith("--")
 var outIx = Array.IndexOf(args, "--out");
 var outDir = outIx >= 0 && outIx + 1 < args.Length ? args[outIx + 1] : Path.Combine(Path.GetTempPath(), "complex-form-benchmark");
 Directory.CreateDirectory(outDir);
+var statsIx = Array.IndexOf(args, "--stats-json");
+var statsOut = statsIx >= 0 && statsIx + 1 < args.Length ? args[statsIx + 1] : null;
 
 var bytes = File.ReadAllBytes(docPath);
 var edits = JsonSerializer.Deserialize<EditScript>(File.ReadAllText(editsPath), new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
@@ -150,6 +152,12 @@ Bench("redline -> HTML with tracked-change markup", () =>
     File.WriteAllText(Path.Combine(outDir, "redline.html"), WmlToHtmlConverter.ToHtmlString(html, indent: false));
 });
 
+if (statsOut != null)
+{
+    File.WriteAllText(statsOut, JsonSerializer.Serialize(Stats, new JsonSerializerOptions { WriteIndented = true }));
+    Console.WriteLine($"stats written to {statsOut} ({Stats.Count} stages)");
+}
+
 Console.WriteLine();
 Console.WriteLine(FailedChecks == 0
     ? "ALL CHECKS PASSED"
@@ -160,12 +168,15 @@ return FailedChecks == 0 ? 0 : 2;
 
 static void Bench(string label, Action act)
 {
+    var alloc0 = GC.GetTotalAllocatedBytes(precise: true);
     var sw = Stopwatch.StartNew();
     try
     {
         act();
         sw.Stop();
-        Console.WriteLine($"[bench] {label}: {sw.ElapsedMilliseconds} ms");
+        var alloc = GC.GetTotalAllocatedBytes(precise: true) - alloc0;
+        Stats[label] = new StageStats(sw.Elapsed.TotalMilliseconds, alloc);
+        Console.WriteLine($"[bench] {label}: {sw.ElapsedMilliseconds} ms, {alloc / 1048576.0:F1} MB allocated");
     }
     catch (Exception ex)
     {
@@ -286,7 +297,11 @@ internal sealed record Replacement(string Find, string Replace);
 internal sealed record InsertSpec(string Needle, string Markdown);
 internal sealed record CommentSpec(string Needle, string Text);
 
+/// <summary>One stage's figures in <c>--stats-json</c> output (single run, so the time is cold).</summary>
+internal sealed record StageStats(double MedianMs, double AllocBytes);
+
 internal static partial class Program
 {
     internal static int FailedChecks;
+    internal static readonly SortedDictionary<string, StageStats> Stats = new(StringComparer.Ordinal);
 }

@@ -98,6 +98,13 @@ All notable changes to this project will be documented in this file.
   so stack traces still resolve to source. A per-bundle gzip budget in `pretest` stops an
   unminified build or a large new dependency from shipping unnoticed. (#971)
 
+- **Comparing comment-heavy documents is up to about twice as fast.** After a comparison, comment
+  normalization scanned the whole body once for every comment id; it now scans once and groups the
+  markers by id. On a generated 4,000-paragraph document with 2,000 edited comments,
+  `DocxCompare.Compare` dropped from about 1.9 s to 0.9 s, with byte-identical output parts. The
+  rarer unpaired-move fallback likewise walks forward from each move start instead of rescanning
+  from the document root. (#980)
+
 - **DOCX→HTML conversion of long documents no longer slows down quadratically.** For every
   paragraph, the converter walked all of the paragraph's preceding siblings to find the previous one,
   and did the same for every table. It now indexes each parent's children once. A generated
@@ -1029,7 +1036,7 @@ All notable changes to this project will be documented in this file.
 - Dense text paragraphs reuse formatting templates during incremental HTML rendering, retaining
   every original character and line break. Together with the updated ASCII projection and WASM
   AOT profile, this improves full-resolution DOOM ASCII throughput beyond 10 FPS in the measured
-  browser configuration; see [the measurements](docs/architecture/doom-ascii-performance.md).
+  browser configuration; see [the measurements](docs/demo/doom-ascii-performance.md).
 
 ### Dependencies
 

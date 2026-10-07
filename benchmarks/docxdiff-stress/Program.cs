@@ -43,6 +43,8 @@ usage: DocxDiffStress <document.docx> [options]
                      products and digest the results (use with --baseline / --check)
   --limit N          corpus mode: stop after N documents
   --threads N        corpus mode: documents in flight (default: processor count)
+  --stats-json FILE  write each case's median time and bytes allocated per run as JSON
+                     (what CI's perf workflow compares between a PR and its base)
 """;
 
 // Corpus mode takes its input from --corpus, so it is the one shape with no positional document.
@@ -61,6 +63,8 @@ var wantProducts = args.Contains("--products");
 var baselineOut = StrArg("--baseline");
 var checkAgainst = StrArg("--check");
 var outDir = StrArg("--out");
+var statsOut = StrArg("--stats-json");
+var stats = new SortedDictionary<string, CaseStats>(StringComparer.Ordinal);
 var caseFilter = StrArg("--cases")?.Split(',', StringSplitOptions.RemoveEmptyEntries).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
 if (outDir != null) Directory.CreateDirectory(outDir);
@@ -114,6 +118,7 @@ foreach (var v in variants)
     Settle();
 
     var row = new Row(v.Name, Measure(iterations, () => DocxDiff.Compare(left, right)));
+    stats[$"compare/{v.Name}"] = new(row.Compare.Median, row.Compare.AllocBytes);
 
     if (wantProducts)
     {
@@ -156,6 +161,7 @@ foreach (var v in variants)
         for (var i = 0; i < warmup; i++) _ = DocxDiff.Consolidate(baseDoc, reviewers);
         Settle();
         var stat = Measure(iterations, () => DocxDiff.Consolidate(baseDoc, reviewers));
+        stats["consolidate"] = new(stat.Median, stat.AllocBytes);
         Console.WriteLine();
         Console.WriteLine($"=== DocxDiff.Consolidate ({reviewers.Count} reviewers) ===");
         Console.WriteLine($"{"case",-12} {"min ms",9} {"median",9} {"max ms",9} {"runs/s",9} {"alloc MB",10}");
@@ -173,6 +179,12 @@ foreach (var v in variants)
 }
 
 Report(rows, wantProducts, wantStages);
+
+if (statsOut != null)
+{
+    File.WriteAllText(statsOut, JsonSerializer.Serialize(stats, new JsonSerializerOptions { WriteIndented = true }));
+    Console.WriteLine($"{Environment.NewLine}stats written to {statsOut} ({stats.Count} cases)");
+}
 
 if (baselineOut != null)
 {
@@ -215,7 +227,10 @@ static void Settle()
 static Stat Measure<T>(int n, Func<T> act)
 {
     var samples = new double[n];
-    var alloc0 = GC.GetTotalAllocatedBytes(precise: false);
+    // precise: true flushes every heap's allocation context. The imprecise counter can lag by
+    // hundreds of MB under server GC (CI once read 50 MB for a case that allocates 270 MB), which
+    // is fatal for perf.yml's allocation gate.
+    var alloc0 = GC.GetTotalAllocatedBytes(precise: true);
     for (var i = 0; i < n; i++)
     {
         var sw = Stopwatch.StartNew();
@@ -223,7 +238,7 @@ static Stat Measure<T>(int n, Func<T> act)
         sw.Stop();
         samples[i] = sw.Elapsed.TotalMilliseconds;
     }
-    var alloc = (GC.GetTotalAllocatedBytes(precise: false) - alloc0) / (double)n;
+    var alloc = (GC.GetTotalAllocatedBytes(precise: true) - alloc0) / (double)n;
     Array.Sort(samples);
     return new Stat(samples[0], samples[n / 2], samples[^1], samples.Average(), alloc);
 }
@@ -332,6 +347,9 @@ string? StrArg(string name)
 }
 
 sealed record Stat(double Min, double Median, double Max, double Mean, double AllocBytes);
+
+/// <summary>One case's figures in <c>--stats-json</c> output: median wall time and bytes allocated per run.</summary>
+sealed record CaseStats(double MedianMs, double AllocBytes);
 
 sealed record StageTimes(Stat ReadLeft, Stat ReadRight, Stat ReadSrcLeft, Stat ReadSrcRight, Stat Build, Stat Render, Stat RevRender);
 

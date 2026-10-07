@@ -1026,7 +1026,7 @@ the main thread. Self-host the package if you need off-main-thread execution.
 - [Custom Annotations Architecture](architecture/custom_annotations.md) - Annotation system design and implementation
 - [Comment Rendering Architecture](architecture/comment_rendering.md) - Detailed documentation on comment rendering implementation
 - [DOCX Converter Architecture](architecture/docx_converter.md) - HTML conversion internals
-- [Comparison Engine](architecture/comparison_engine.md) - Document comparison algorithm details
+- [IR Diff Engine](architecture/ir_diff_engine.md) - Document comparison engine (`DocxDiff`) design
 
 ## License
 

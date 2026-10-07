@@ -51,9 +51,6 @@ test.describe('Tab Rendering Visual Tests', () => {
       `;
     }, result.html!);
 
-    // Wait for rendering
-    await page.waitForTimeout(500);
-
     // Take screenshot for visual verification
     await expect(page.locator('#doc-container')).toHaveScreenshot('tabs-hc024-left-aligned.png', {
       maxDiffPixelRatio: 0.05  // Allow 5% variance for font rendering differences
@@ -77,8 +74,6 @@ test.describe('Tab Rendering Visual Tests', () => {
       `;
     }, result.html!);
 
-    await page.waitForTimeout(500);
-
     await expect(page.locator('#doc-container')).toHaveScreenshot('tabs-hc025-various-alignments.png', {
       maxDiffPixelRatio: 0.05
     });
@@ -101,8 +96,6 @@ test.describe('Tab Rendering Visual Tests', () => {
       `;
     }, result.html!);
 
-    await page.waitForTimeout(500);
-
     await expect(page.locator('#doc-container')).toHaveScreenshot('tabs-hc026-leader-characters.png', {
       maxDiffPixelRatio: 0.05
     });
@@ -124,8 +117,6 @@ test.describe('Tab Rendering Visual Tests', () => {
         </div>
       `;
     }, result.html!);
-
-    await page.waitForTimeout(500);
 
     await expect(page.locator('#doc-container')).toHaveScreenshot('tabs-hc027-complex-scenarios.png', {
       maxDiffPixelRatio: 0.05
@@ -188,8 +179,6 @@ test.describe('Tab Rendering Visual Tests', () => {
         </div>
       `;
     }, result.html!);
-
-    await page.waitForTimeout(500);
 
     await expect(page.locator('#doc-container')).toHaveScreenshot('tabs-toc-style.png', {
       maxDiffPixelRatio: 0.05
