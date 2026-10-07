@@ -22,6 +22,28 @@ public sealed partial class DocxSession
     // ─── Undo / Redo ─────────────────────────────────────────────────────
 
     /// <summary>
+    /// The failure path every mutation's <c>catch</c> shares: keep the exception, roll the op back
+    /// (<see cref="RecordFailedOp"/>), and report <see cref="EditErrorCode.InternalError"/> with the
+    /// exception's message. One owner, so a change to how a failed mutation is handled lands once.
+    /// </summary>
+    private EditResult FailInternal(Exception ex, string? anchorId = null)
+    {
+        RecordFailedOp(ex);
+        return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+    }
+
+    /// <summary>
+    /// Keep <paramref name="ex"/> as <see cref="LastInternalError"/> and restore the pre-op snapshot
+    /// (<see cref="RollbackFailedOp"/>), for a failing mutation whose result type is not an
+    /// <see cref="EditResult"/>.
+    /// </summary>
+    private void RecordFailedOp(Exception ex)
+    {
+        LastInternalError = ex;
+        RollbackFailedOp();
+    }
+
+    /// <summary>
     /// Roll the document back to the pre-op snapshot after a mutation threw partway through.
     /// </summary>
     /// <remarks>
