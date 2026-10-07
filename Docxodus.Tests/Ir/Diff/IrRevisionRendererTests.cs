@@ -637,7 +637,7 @@ public class IrRevisionRendererTests
             {
                 totalRevisions++;
                 Assert.NotNull(rev.Text); // totality: every revision carries (possibly empty) text
-                Assert.Equal("Open-Xml-PowerTools", rev.Author);
+                Assert.Equal("Docxodus", rev.Author);
                 Assert.Equal(IrDiffSettings.DeterministicEpoch, rev.Date);
 
                 // Anchor presence by type (the M2.6 Task 2 contract). The PRIMARY anchor for the type is ALWAYS
