@@ -1,5 +1,6 @@
 #nullable enable
 
+using System.Collections.Generic;
 using System.Text.RegularExpressions;
 
 namespace Docxodus.Internal;
@@ -13,6 +14,25 @@ namespace Docxodus.Internal;
 /// </summary>
 internal static class DocxSessionOps
 {
+    /// <summary>Where a table of contents, figures or authorities goes when the caller names no
+    /// position: ahead of the anchor, the usual intent when the anchor is the first heading. Owned
+    /// here so every transport agrees (issue #960: MCP used to default to after, the stdio host to
+    /// before).</summary>
+    public const Position ReferenceFieldDefaultPosition = Position.Before;
+
+    /// <summary>Keep the first <paramref name="maxResults"/> items; null keeps them all. The one
+    /// truncation every listing op shares, so a transport never re-parses a result to cut it.</summary>
+    private static IReadOnlyList<T> Limit<T>(IReadOnlyList<T> items, int? maxResults)
+    {
+        if (maxResults is null) return items;
+        if (maxResults < 0)
+            throw new System.ArgumentException($"maxResults must be zero or more, got {maxResults}");
+        if (items.Count <= maxResults) return items;
+        var kept = new List<T>(maxResults.Value);
+        for (int i = 0; i < maxResults; i++) kept.Add(items[i]);
+        return kept;
+    }
+
     private static MutationPreconditions? ForTarget(MutationPreconditions? preconditions, string? anchorId) =>
         preconditions is not null && preconditions.AnchorId is null && anchorId is not null
             ? preconditions with { AnchorId = anchorId }
@@ -545,30 +565,34 @@ internal static class DocxSessionOps
             StampAnchors = true,
         });
 
-    public static string Grep(int handle, string pattern, RegexOptions regexOpts,
-        ProjectionScopes scope, int contextChars, WhitespaceMode whitespace, ContextBoundary boundary,
-        PageCitationRequest? citationRequest = null) =>
-        DocxSessionJson.SerializeMatches(
+    /// <summary>Grep with every option the wire can carry; see <see cref="GrepRequest"/> for the
+    /// defaults an omitted field takes.</summary>
+    public static string Grep(int handle, string pattern, GrepRequest request) =>
+        DocxSessionJson.SerializeMatches(Limit(
             SessionRegistry.Get(handle).Grep(
-                pattern, regexOpts, scope, contextChars, whitespace, boundary, citationRequest));
+                pattern, request.RegexOptions, request.Scope, request.ContextChars ?? DocxSession.DefaultContextChars,
+                request.Whitespace, request.Boundary, request.CitationRequest),
+            request.MaxResults));
 
-    public static string GrepCrossBlock(int handle, string pattern, RegexOptions regexOpts,
-        ProjectionScopes scope, int contextChars, WhitespaceMode whitespace, ContextBoundary boundary,
-        PageCitationRequest? citationRequest = null) =>
-        DocxSessionJson.SerializeCrossBlockMatches(
+    public static string GrepCrossBlock(int handle, string pattern, GrepRequest request) =>
+        DocxSessionJson.SerializeCrossBlockMatches(Limit(
             SessionRegistry.Get(handle).GrepCrossBlock(
-                pattern, regexOpts, scope, contextChars, whitespace, boundary, citationRequest));
+                pattern, request.RegexOptions, request.Scope, request.ContextChars ?? DocxSession.DefaultContextChars,
+                request.Whitespace, request.Boundary, request.CitationRequest),
+            request.MaxResults));
 
+    /// <summary><paramref name="contextChars"/> null takes
+    /// <see cref="DocxSession.DefaultContextChars"/>.</summary>
     public static string FindPlaceholders(int handle, PlaceholderKinds kinds, ProjectionScopes scope,
-        int contextChars, ContextBoundary boundary, PageCitationRequest? citationRequest = null) =>
+        int? contextChars, ContextBoundary boundary, PageCitationRequest? citationRequest = null) =>
         DocxSessionJson.SerializePlaceholders(
             SessionRegistry.Get(handle).FindPlaceholders(
-                kinds, scope, contextChars, boundary, citationRequest));
+                kinds, scope, contextChars ?? DocxSession.DefaultContextChars, boundary, citationRequest));
 
     public static string FindByAnnotation(
-        int handle, string annotationId, PageCitationRequest? citationRequest = null) =>
-        DocxSessionJson.SerializeAnchorTargets(
-            SessionRegistry.Get(handle).FindByAnnotation(annotationId, citationRequest));
+        int handle, string annotationId, PageCitationRequest? citationRequest = null, int? maxResults = null) =>
+        DocxSessionJson.SerializeAnchorTargets(Limit(
+            SessionRegistry.Get(handle).FindByAnnotation(annotationId, citationRequest), maxResults));
 
     public static string FindByLabel(
         int handle, string labelId, PageCitationRequest? citationRequest = null) =>
@@ -576,9 +600,9 @@ internal static class DocxSessionOps
             SessionRegistry.Get(handle).FindByLabel(labelId, citationRequest));
 
     public static string FindByBookmark(
-        int handle, string bookmarkName, PageCitationRequest? citationRequest = null) =>
-        DocxSessionJson.SerializeAnchorTargets(
-            SessionRegistry.Get(handle).FindByBookmark(bookmarkName, citationRequest));
+        int handle, string bookmarkName, PageCitationRequest? citationRequest = null, int? maxResults = null) =>
+        DocxSessionJson.SerializeAnchorTargets(Limit(
+            SessionRegistry.Get(handle).FindByBookmark(bookmarkName, citationRequest), maxResults));
 
     public static string ListAnnotations(int handle) =>
         DocxSessionJson.SerializeAnnotations(SessionRegistry.Get(handle).ListAnnotations());
@@ -623,9 +647,10 @@ internal static class DocxSessionOps
         DocxSessionJson.SerializeAnchorTargets(SessionRegistry.Get(handle).FindByRegex(pattern, regexOptions, options));
 
     public static string FindByKind(
-        int handle, string kind, string? scope, PageCitationRequest? citationRequest = null) =>
-        DocxSessionJson.SerializeAnchorTargets(
-            SessionRegistry.Get(handle).FindByKind(kind, scope, citationRequest));
+        int handle, string kind, string? scope, PageCitationRequest? citationRequest = null,
+        int? maxResults = null) =>
+        DocxSessionJson.SerializeAnchorTargets(Limit(
+            SessionRegistry.Get(handle).FindByKind(kind, scope, citationRequest), maxResults));
 
     public static string GetEditSummary(int handle) =>
         DocxSessionJson.SerializeEditSummary(SessionRegistry.Get(handle).GetEditSummary());
@@ -782,9 +807,12 @@ internal static class DocxSessionOps
     /// <paramref name="kind"/> is the wire token ("first" | "even"; "default" is refused when
     /// disabling). See <see cref="DocxSession.SetHeaderFooterKindEnabled"/>.</summary>
     public static string SetHeaderFooterKindEnabled(int handle, string anchorId, string kind, bool enabled,
-        MutationPreconditions? preconditions = null) =>
-        Mutate(handle, preconditions, anchorId,
-            s => s.SetHeaderFooterKindEnabled(anchorId, DocxSessionJson.ParseHeaderFooterKind(kind), enabled));
+        MutationPreconditions? preconditions = null)
+    {
+        var parsed = DocxSessionJson.ParseHeaderFooterKind(kind);
+        return Mutate(handle, preconditions, anchorId,
+            s => s.SetHeaderFooterKindEnabled(anchorId, parsed, enabled));
+    }
 
     /// <summary>Page size / orientation / margins / header-footer distance of the section owning
     /// <paramref name="anchorId"/>. <paramref name="opJson"/> is the <see cref="PageSetupOp"/> wire
@@ -800,22 +828,22 @@ internal static class DocxSessionOps
     // ─── Reference fields (issue #607) ──────────────────────────────────
 
     public static string InsertTableOfContents(
-        int handle, string anchorId, Position pos, TableOfContentsOptions? options = null,
+        int handle, string anchorId, Position? pos, TableOfContentsOptions? options = null,
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, anchorId,
-            s => s.InsertTableOfContents(anchorId, pos, options));
+            s => s.InsertTableOfContents(anchorId, pos ?? ReferenceFieldDefaultPosition, options));
 
     public static string InsertTableOfFigures(
-        int handle, string anchorId, Position pos, TableOfFiguresOptions? options = null,
+        int handle, string anchorId, Position? pos, TableOfFiguresOptions? options = null,
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, anchorId,
-            s => s.InsertTableOfFigures(anchorId, pos, options));
+            s => s.InsertTableOfFigures(anchorId, pos ?? ReferenceFieldDefaultPosition, options));
 
     public static string InsertTableOfAuthorities(
-        int handle, string anchorId, Position pos, TableOfAuthoritiesOptions? options = null,
+        int handle, string anchorId, Position? pos, TableOfAuthoritiesOptions? options = null,
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, anchorId,
-            s => s.InsertTableOfAuthorities(anchorId, pos, options));
+            s => s.InsertTableOfAuthorities(anchorId, pos ?? ReferenceFieldDefaultPosition, options));
 
     // ─── Footnotes / endnotes ───────────────────────────────────────────
 
@@ -1200,9 +1228,12 @@ internal static class DocxSessionOps
     /// <summary><paramref name="content"/> is "append" (default) | "discard" | "reject" —
     /// what happens to the content of the cells the merge absorbs.</summary>
     public static string MergeCells(int handle, string cellAnchorId, int rowSpan, int colSpan,
-        string? content, MutationPreconditions? preconditions = null) =>
-        Mutate(handle, preconditions, cellAnchorId, s => s.MergeCells(cellAnchorId, rowSpan, colSpan,
-            new TableMergeOptions { Content = DocxSessionJson.ParseTableMergeContent(content) }));
+        string? content, MutationPreconditions? preconditions = null)
+    {
+        var options = new TableMergeOptions { Content = DocxSessionJson.ParseTableMergeContent(content) };
+        return Mutate(handle, preconditions, cellAnchorId,
+            s => s.MergeCells(cellAnchorId, rowSpan, colSpan, options));
+    }
 
     public static string UnmergeCells(int handle, string cellAnchorId,
         MutationPreconditions? preconditions = null) =>
@@ -1220,34 +1251,41 @@ internal static class DocxSessionOps
     /// <summary><paramref name="specJson"/> is a TableBorderSpec object
     /// ({ scope?: "all"|"outside"|"inside", style?, size?, color? }); "" uses the defaults.</summary>
     public static string SetTableBorders(int handle, string cellAnchorId, string specJson,
-        MutationPreconditions? preconditions = null) =>
-        Mutate(handle, preconditions, cellAnchorId,
-            s => s.SetTableBorders(cellAnchorId, DocxSessionJson.ParseTableBorderSpec(specJson)));
+        MutationPreconditions? preconditions = null)
+    {
+        var spec = DocxSessionJson.ParseTableBorderSpec(specJson);
+        return Mutate(handle, preconditions, cellAnchorId, s => s.SetTableBorders(cellAnchorId, spec));
+    }
 
     /// <summary><paramref name="fill"/> is a hex RRGGBB triplet or "auto"; "" clears the shading.
-    /// <paramref name="scope"/> is "cell" | "row".</summary>
-    public static string SetCellShading(int handle, string cellAnchorId, string fill, string scope,
-        MutationPreconditions? preconditions = null) =>
-        Mutate(handle, preconditions, cellAnchorId, s => s.SetCellShading(
-            cellAnchorId, string.IsNullOrEmpty(fill) ? null : fill,
-            DocxSessionJson.ParseTableShadingScope(scope)));
+    /// <paramref name="scope"/> is "cell" | "row"; null or "" takes "cell".</summary>
+    public static string SetCellShading(int handle, string cellAnchorId, string fill, string? scope,
+        MutationPreconditions? preconditions = null)
+    {
+        var parsedScope = DocxSessionJson.ParseTableShadingScope(scope);
+        return Mutate(handle, preconditions, cellAnchorId, s => s.SetCellShading(
+            cellAnchorId, string.IsNullOrEmpty(fill) ? null : fill, parsedScope));
+    }
 
-    public static string SetRepeatHeaderRow(int handle, string cellAnchorId, bool repeat,
+    /// <summary><paramref name="repeat"/> null marks the row (the op's purpose); false unmarks it.</summary>
+    public static string SetRepeatHeaderRow(int handle, string cellAnchorId, bool? repeat,
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, cellAnchorId,
-            s => s.SetRepeatHeaderRow(cellAnchorId, repeat));
+            s => s.SetRepeatHeaderRow(cellAnchorId, repeat ?? true));
 
     public static string SetTableRowOptions(int handle, string cellAnchorId, bool? repeatHeader,
         bool? allowBreakAcrossPages, int? heightTwips, string? heightRule,
-        MutationPreconditions? preconditions = null) =>
-        Mutate(handle, preconditions, cellAnchorId, s => s.SetTableRowOptions(cellAnchorId,
-            new TableRowOptions
-            {
-                RepeatHeader = repeatHeader,
-                AllowBreakAcrossPages = allowBreakAcrossPages,
-                HeightTwips = heightTwips,
-                HeightRule = DocxSessionJson.ParseTableRowHeightRule(heightRule),
-            }));
+        MutationPreconditions? preconditions = null)
+    {
+        var options = new TableRowOptions
+        {
+            RepeatHeader = repeatHeader,
+            AllowBreakAcrossPages = allowBreakAcrossPages,
+            HeightTwips = heightTwips,
+            HeightRule = DocxSessionJson.ParseTableRowHeightRule(heightRule),
+        };
+        return Mutate(handle, preconditions, cellAnchorId, s => s.SetTableRowOptions(cellAnchorId, options));
+    }
 
     // ─── Raw escape hatch ───────────────────────────────────────────────
 
@@ -1296,8 +1334,11 @@ internal static class DocxSessionOps
         DocxSessionJson.SerializeRevisionRepairResult(SessionRegistry.Get(handle).RepairRevisions(
             DocxSessionJson.ParseRevisionRepairRequests(repairsJson)));
 
-    public static string ListRevisions(int handle) =>
-        DocxSessionJson.SerializeRevisionList(SessionRegistry.Get(handle).ListRevisions());
+    /// <summary>The session's tracked revisions, narrowed by <paramref name="filter"/> when given
+    /// (see <see cref="RevisionListFilter"/>).</summary>
+    public static string ListRevisions(int handle, RevisionListFilter? filter = null) =>
+        DocxSessionJson.SerializeRevisionList(
+            DocxSessionJson.FilterRevisions(SessionRegistry.Get(handle).ListRevisions(), filter));
 
     public static string AcceptRevision(int handle, string revisionId,
         MutationPreconditions? preconditions = null) =>

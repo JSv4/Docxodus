@@ -3,6 +3,7 @@
 using System.Collections.Generic;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Docxodus.Internal;
 
@@ -35,12 +36,185 @@ internal sealed record EditorRenderOptions
     public bool StampAnchors { get; init; }
 }
 
+/// <summary>
+/// Every option of a <see cref="DocxSession.Grep"/> / <see cref="DocxSession.GrepCrossBlock"/>
+/// call as it crosses the wire. The initializers are the defaults an omitted field takes, declared
+/// once for every transport; <see cref="ContextChars"/> null means
+/// <see cref="DocxSession.DefaultContextChars"/>, and <see cref="MaxResults"/> null keeps every match.
+/// </summary>
+internal sealed record GrepRequest
+{
+    public RegexOptions RegexOptions { get; init; } = RegexOptions.None;
+    public ProjectionScopes Scope { get; init; } = ProjectionScopes.Body;
+    public int? ContextChars { get; init; }
+    public WhitespaceMode Whitespace { get; init; } = WhitespaceMode.Preserve;
+    public ContextBoundary Boundary { get; init; } = ContextBoundary.Char;
+    public PageCitationRequest? CitationRequest { get; init; }
+    public int? MaxResults { get; init; }
+}
+
+/// <summary>
+/// Narrows <see cref="DocxSessionOps.ListRevisions"/> to the entries matching every non-null
+/// field, compared against the wire values: <see cref="Author"/>, <see cref="ChangeType"/>
+/// (<c>type</c>), <see cref="Family"/> and <see cref="ResolutionStatus"/> ignore case;
+/// <see cref="PartUri"/> is exact.
+/// </summary>
+internal sealed record RevisionListFilter
+{
+    public string? Author { get; init; }
+    public string? ChangeType { get; init; }
+    public string? Family { get; init; }
+    public string? ResolutionStatus { get; init; }
+    public string? PartUri { get; init; }
+
+    public bool IsEmpty => Author is null && ChangeType is null && Family is null
+        && ResolutionStatus is null && PartUri is null;
+}
+
 internal static class DocxSessionJson
 {
     // ─── Parsers ────────────────────────────────────────────────────────
 
-    public static Position ParsePos(string s) =>
-        string.Equals(s, "before", System.StringComparison.OrdinalIgnoreCase) ? Position.Before : Position.After;
+    /// <summary>
+    /// The one wire-token → enum lookup every string-valued parser here routes through. An absent
+    /// or empty token yields <paramref name="fallback"/> (the op's default). A recognized token maps
+    /// through <paramref name="tokens"/>, compared case-insensitively with underscores ignored, so
+    /// <c>"atLeast"</c>, <c>"at_least"</c> and <c>"ATLEAST"</c> agree. Anything else throws
+    /// <see cref="System.ArgumentException"/> naming the accepted spellings, which the stdio host
+    /// reports as <c>invalid_argument</c> and MCP as a tool error. Rejecting is the point: a
+    /// misspelled token used to fall through to the default and perform a different edit than the
+    /// caller asked for (<c>"outsid"</c> bordered every edge of a table).
+    /// </summary>
+    internal static T ParseToken<T>(string? token, string what, T fallback, params (string Token, T Value)[] tokens)
+    {
+        if (string.IsNullOrEmpty(token)) return fallback;
+        var key = NormalizeToken(token);
+        foreach (var (name, value) in tokens)
+        {
+            if (NormalizeToken(name) == key) return value;
+        }
+        var expected = new string[tokens.Length];
+        for (int i = 0; i < tokens.Length; i++) expected[i] = tokens[i].Token;
+        throw new System.ArgumentException(
+            $"unknown {what} '{token}'; expected one of {string.Join(", ", expected)}");
+    }
+
+    private static string NormalizeToken(string token) =>
+        token.Replace("_", string.Empty).ToLowerInvariant();
+
+    /// <summary>"before" | "after"; absent → <see cref="Position.After"/>.</summary>
+    public static Position ParsePos(string? s) => ParseOptionalPos(s) ?? Position.After;
+
+    /// <summary>"before" | "after"; absent → null, for an op whose facade owns a different
+    /// default (the reference-field inserts, see
+    /// <see cref="DocxSessionOps.ReferenceFieldDefaultPosition"/>).</summary>
+    public static Position? ParseOptionalPos(string? s) => ParseToken<Position?>(s, "position", null,
+        ("before", Position.Before), ("after", Position.After));
+
+    /// <summary>
+    /// Parse the numeric grep options object the stdio host and the WASM bridge share:
+    /// <c>{ regexOptions?, scope?, contextChars?, whitespace?, boundary?, maxResults?, citation? }</c>,
+    /// numbers following the .NET <see cref="RegexOptions"/>, <see cref="ProjectionScopes"/>,
+    /// <see cref="WhitespaceMode"/> and <see cref="ContextBoundary"/> layouts. An omitted field takes
+    /// the <see cref="GrepRequest"/> default.
+    /// </summary>
+    public static GrepRequest ParseGrepRequest(JsonElement root)
+    {
+        var defaults = new GrepRequest();
+        if (root.ValueKind != JsonValueKind.Object) return defaults;
+        return new GrepRequest
+        {
+            RegexOptions = (RegexOptions)TryGetInt(root, "regexOptions", (int)defaults.RegexOptions),
+            Scope = (ProjectionScopes)TryGetInt(root, "scope", (int)defaults.Scope),
+            ContextChars = TryGetIntNullable(root, "contextChars"),
+            Whitespace = (WhitespaceMode)TryGetInt(root, "whitespace", (int)defaults.Whitespace),
+            Boundary = (ContextBoundary)TryGetInt(root, "boundary", (int)defaults.Boundary),
+            CitationRequest = ParsePageCitationRequest(root),
+            MaxResults = TryGetIntNullable(root, "maxResults"),
+        };
+    }
+
+    /// <summary>String overload — the WASM bridge receives the options as text; "" is all defaults.</summary>
+    public static GrepRequest ParseGrepRequest(string? json)
+    {
+        if (string.IsNullOrEmpty(json)) return new GrepRequest();
+        using var doc = JsonDocument.Parse(json);
+        return ParseGrepRequest(doc.RootElement);
+    }
+
+    /// <summary>
+    /// An argument one transport historically spelled differently (issue #960): the value under
+    /// <paramref name="name"/>, else under <paramref name="deprecatedAlias"/>. Naming it both ways
+    /// with different values is refused rather than silently picking one.
+    /// </summary>
+    public static JsonElement? AliasedArgument(JsonElement args, string name, string deprecatedAlias)
+    {
+        if (args.ValueKind != JsonValueKind.Object) return null;
+        var hasName = args.TryGetProperty(name, out var value);
+        var hasAlias = args.TryGetProperty(deprecatedAlias, out var alias);
+        if (hasName && hasAlias && value.GetRawText() != alias.GetRawText())
+            throw new System.ArgumentException(
+                $"\"{name}\" and its deprecated alias \"{deprecatedAlias}\" disagree; pass only \"{name}\"");
+        return hasName ? value : hasAlias ? alias : null;
+    }
+
+    /// <summary><see cref="AliasedArgument"/> read as an optional string.</summary>
+    public static string? AliasedString(JsonElement args, string name, string deprecatedAlias) =>
+        AliasedArgument(args, name, deprecatedAlias) is { ValueKind: JsonValueKind.String } v ? v.GetString() : null;
+
+    /// <summary><see cref="AliasedArgument"/> read as an optional boolean.</summary>
+    public static bool? AliasedBool(JsonElement args, string name, string deprecatedAlias) =>
+        AliasedArgument(args, name, deprecatedAlias) is { ValueKind: JsonValueKind.True or JsonValueKind.False } v
+            ? v.GetBoolean() : null;
+
+    /// <summary>Read <c>{ author?, changeType?, family?, resolutionStatus?, partUri? }</c> off a
+    /// request object; null when none is present.</summary>
+    public static RevisionListFilter? ParseRevisionListFilter(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object) return null;
+        var filter = new RevisionListFilter
+        {
+            Author = TryGetString(root, "author", null),
+            ChangeType = TryGetString(root, "changeType", null),
+            Family = TryGetString(root, "family", null),
+            ResolutionStatus = TryGetString(root, "resolutionStatus", null),
+            PartUri = TryGetString(root, "partUri", null),
+        };
+        return filter.IsEmpty ? null : filter;
+    }
+
+    /// <summary>String overload for the WASM bridge; "" means no filter.</summary>
+    public static RevisionListFilter? ParseRevisionListFilter(string? json)
+    {
+        if (string.IsNullOrEmpty(json)) return null;
+        using var doc = JsonDocument.Parse(json);
+        return ParseRevisionListFilter(doc.RootElement);
+    }
+
+    /// <summary>Keep the revisions that match every field <paramref name="filter"/> sets, comparing
+    /// the same wire names <see cref="SerializeRevisionList"/> writes.</summary>
+    public static IReadOnlyList<RevisionListEntry> FilterRevisions(
+        IReadOnlyList<RevisionListEntry> revisions, RevisionListFilter? filter)
+    {
+        if (filter is null || filter.IsEmpty) return revisions;
+        var kept = new List<RevisionListEntry>();
+        foreach (var r in revisions)
+        {
+            if (filter.Author is not null
+                && !string.Equals(r.Author, filter.Author, System.StringComparison.OrdinalIgnoreCase)) continue;
+            if (filter.ChangeType is not null
+                && !string.Equals(r.Type, filter.ChangeType, System.StringComparison.OrdinalIgnoreCase)) continue;
+            if (filter.Family is not null
+                && !string.Equals(RevisionFamilyWire(r.Family), filter.Family, System.StringComparison.OrdinalIgnoreCase)) continue;
+            if (filter.ResolutionStatus is not null
+                && !string.Equals(RevisionStatusWire(r.ResolutionStatus), filter.ResolutionStatus,
+                    System.StringComparison.OrdinalIgnoreCase)) continue;
+            if (filter.PartUri is not null
+                && !string.Equals(r.PartUri, filter.PartUri, System.StringComparison.Ordinal)) continue;
+            kept.Add(r);
+        }
+        return kept;
+    }
 
     public static PageMap ParsePageMap(string json)
     {
@@ -214,39 +388,31 @@ internal static class DocxSessionJson
         _ => throw new FormatException($"Unknown PageMap story: {value}"),
     };
 
+    /// <summary>"default" | "first" | "even"; absent → <see cref="HeaderFooterKind.Default"/>.</summary>
     public static HeaderFooterKind ParseHeaderFooterKind(string? s) =>
-        (s?.ToLowerInvariant()) switch
-        {
-            "first" => HeaderFooterKind.First,
-            "even" => HeaderFooterKind.Even,
-            _ => HeaderFooterKind.Default,
-        };
+        ParseToken(s, "header/footer kind", HeaderFooterKind.Default,
+            ("default", HeaderFooterKind.Default), ("first", HeaderFooterKind.First),
+            ("even", HeaderFooterKind.Even));
 
+    /// <summary>"currentPage" | "totalPages" (alias "numPages") | "pageOfTotal", in camelCase or
+    /// snake_case; absent → <see cref="PageNumberField.CurrentPage"/>.</summary>
     public static PageNumberField ParsePageNumberField(string? s) =>
-        (s?.ToLowerInvariant()) switch
-        {
-            "totalpages" or "total_pages" or "numpages" => PageNumberField.TotalPages,
-            "pageoftotal" or "page_of_total" => PageNumberField.PageOfTotal,
-            _ => PageNumberField.CurrentPage,
-        };
+        ParseToken(s, "page-number field", PageNumberField.CurrentPage,
+            ("currentPage", PageNumberField.CurrentPage), ("totalPages", PageNumberField.TotalPages),
+            ("numPages", PageNumberField.TotalPages), ("pageOfTotal", PageNumberField.PageOfTotal));
 
     /// <summary>
     /// Wire → <see cref="NumberFormat"/>, where an EMPTY or absent token means "no format
     /// specified" rather than a default — the distinction the tri-state page-numbering surface is
-    /// built on. Unlike <see cref="NumberFormats.ParseOoxml"/>, an unrecognized non-empty token also
-    /// reads as null so a typo cannot silently become <see cref="NumberFormat.Decimal"/>; the typed
-    /// clients (TypeScript union, Python enum) constrain the value long before it gets here.
+    /// built on. Unlike <see cref="NumberFormats.ParseOoxml"/>, an unrecognized non-empty token is
+    /// rejected rather than read as <see cref="NumberFormat.Decimal"/> or as "unspecified", either
+    /// of which would silently perform a different edit than the caller asked for.
     /// </summary>
-    public static NumberFormat? ParseNumberFormatOrNull(string? s) => s switch
-    {
-        "decimal" => NumberFormat.Decimal,
-        "upperLetter" => NumberFormat.UpperLetter,
-        "lowerLetter" => NumberFormat.LowerLetter,
-        "upperRoman" => NumberFormat.UpperRoman,
-        "lowerRoman" => NumberFormat.LowerRoman,
-        "bullet" => NumberFormat.Bullet,
-        _ => null,
-    };
+    public static NumberFormat? ParseNumberFormatOrNull(string? s) =>
+        ParseToken<NumberFormat?>(s, "number format", null,
+            ("decimal", NumberFormat.Decimal), ("upperLetter", NumberFormat.UpperLetter),
+            ("lowerLetter", NumberFormat.LowerLetter), ("upperRoman", NumberFormat.UpperRoman),
+            ("lowerRoman", NumberFormat.LowerRoman), ("bullet", NumberFormat.Bullet));
 
     /// <summary>
     /// Parse a <see cref="PageNumberingOp"/> from <c>{ start?: int, format?: string }</c>. An
@@ -328,18 +494,14 @@ internal static class DocxSessionJson
         };
     }
 
-    /// <summary>Wire name → <see cref="AuthorityCategory"/>; null for absent or unknown.</summary>
-    public static AuthorityCategory? ParseAuthorityCategory(string? name) => name switch
-    {
-        "cases" => AuthorityCategory.Cases,
-        "statutes" => AuthorityCategory.Statutes,
-        "other_authorities" => AuthorityCategory.OtherAuthorities,
-        "rules" => AuthorityCategory.Rules,
-        "treatises" => AuthorityCategory.Treatises,
-        "regulations" => AuthorityCategory.Regulations,
-        "constitutional_provisions" => AuthorityCategory.ConstitutionalProvisions,
-        _ => null,
-    };
+    /// <summary>Wire name → <see cref="AuthorityCategory"/>; null when absent, and an
+    /// <see cref="System.ArgumentException"/> for an unknown name.</summary>
+    public static AuthorityCategory? ParseAuthorityCategory(string? name) =>
+        ParseToken<AuthorityCategory?>(name, "authority category", null,
+            ("cases", AuthorityCategory.Cases), ("statutes", AuthorityCategory.Statutes),
+            ("other_authorities", AuthorityCategory.OtherAuthorities), ("rules", AuthorityCategory.Rules),
+            ("treatises", AuthorityCategory.Treatises), ("regulations", AuthorityCategory.Regulations),
+            ("constitutional_provisions", AuthorityCategory.ConstitutionalProvisions));
 
     /// <summary>The wire names <see cref="ParseAuthorityCategory"/> accepts, in Word's order — the
     /// single owner of the enum's transport spelling, so a schema and a client cannot drift.</summary>
@@ -349,14 +511,12 @@ internal static class DocxSessionJson
         "constitutional_provisions",
     };
 
-    /// <summary>Lenient wire-name → enum: unknown/absent falls back to Accept, mirroring
-    /// ParseSettings' historical behavior. Strict callers (MCP set_mode) do their own switch.</summary>
-    public static TrackedChangeMode ParseTrackedChangeMode(string? mode) => mode switch
-    {
-        "render_inline" => TrackedChangeMode.RenderInline,
-        "strip_deletions" => TrackedChangeMode.StripDeletions,
-        _ => TrackedChangeMode.Accept,
-    };
+    /// <summary>"accept" | "render_inline" | "strip_deletions"; absent → Accept, and an
+    /// <see cref="System.ArgumentException"/> for anything else.</summary>
+    public static TrackedChangeMode ParseTrackedChangeMode(string? mode) =>
+        ParseToken(mode, "trackedChanges mode", TrackedChangeMode.Accept,
+            ("accept", TrackedChangeMode.Accept), ("render_inline", TrackedChangeMode.RenderInline),
+            ("strip_deletions", TrackedChangeMode.StripDeletions));
 
     public static string TrackedChangeModeName(TrackedChangeMode mode) => mode switch
     {
@@ -379,7 +539,7 @@ internal static class DocxSessionJson
         long undoMemoryBudgetBytes =
             TryGetLong(root, "undoMemoryBudgetBytes", defaults.UndoMemoryBudgetBytes);
         bool validateRawOps = TryGetBool(root, "validateRawOps", false);
-        var tracked = ParseTrackedChangeMode(TryGetString(root, "trackedChanges", "accept"));
+        var tracked = ParseTrackedChangeMode(TryGetString(root, "trackedChanges", null));
         var revisionAuthor = TryGetString(root, "revisionAuthor", null);
         bool persistAnchorIds = TryGetBool(root, "persistAnchorIds", false);
         bool smartQuotes = TryGetBool(root, "smartQuotes", false);
@@ -563,21 +723,11 @@ internal static class DocxSessionJson
         if (string.IsNullOrEmpty(json)) return new ParagraphFormatOp();
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
-        ParagraphAlignment? align = TryGetString(root, "alignment", null)?.ToLowerInvariant() switch
-        {
-            "left" => ParagraphAlignment.Left,
-            "center" => ParagraphAlignment.Center,
-            "right" => ParagraphAlignment.Right,
-            "justify" or "both" => ParagraphAlignment.Justify,
-            _ => null,
-        };
-        LineSpacingRule? lineRule = TryGetString(root, "lineSpacingRule", null)?.ToLowerInvariant() switch
-        {
-            "auto" => LineSpacingRule.Auto,
-            "exact" or "exactly" => LineSpacingRule.Exact,
-            "atleast" => LineSpacingRule.AtLeast,
-            _ => null,
-        };
+        ParagraphAlignment? align = ParseParagraphAlignment(TryGetString(root, "alignment", null));
+        LineSpacingRule? lineRule = ParseToken<LineSpacingRule?>(
+            TryGetString(root, "lineSpacingRule", null), "lineSpacingRule", null,
+            ("auto", LineSpacingRule.Auto), ("exact", LineSpacingRule.Exact),
+            ("exactly", LineSpacingRule.Exact), ("atLeast", LineSpacingRule.AtLeast));
         return new ParagraphFormatOp
         {
             Alignment = align,
@@ -594,6 +744,14 @@ internal static class DocxSessionJson
             ClearBorders = TryGetBoolNullable(root, "clearBorders"),
         };
     }
+
+    /// <summary>"left" | "center" | "right" | "justify" (alias "both"); absent → null ("leave
+    /// unchanged").</summary>
+    private static ParagraphAlignment? ParseParagraphAlignment(string? token) =>
+        ParseToken<ParagraphAlignment?>(token, "alignment", null,
+            ("left", ParagraphAlignment.Left), ("center", ParagraphAlignment.Center),
+            ("right", ParagraphAlignment.Right), ("justify", ParagraphAlignment.Justify),
+            ("both", ParagraphAlignment.Justify));
 
     /// <summary>
     /// Parse a <see cref="ParagraphBorderEdge"/> from a named object property
@@ -628,14 +786,7 @@ internal static class DocxSessionJson
             foreach (var item in cc.EnumerateArray())
                 cells.Add(item.ValueKind == JsonValueKind.String ? (item.GetString() ?? string.Empty) : string.Empty);
         }
-        ParagraphAlignment? align = TryGetString(root, "cellAlignment", null)?.ToLowerInvariant() switch
-        {
-            "left" => ParagraphAlignment.Left,
-            "center" => ParagraphAlignment.Center,
-            "right" => ParagraphAlignment.Right,
-            "justify" or "both" => ParagraphAlignment.Justify,
-            _ => null,
-        };
+        ParagraphAlignment? align = ParseParagraphAlignment(TryGetString(root, "cellAlignment", null));
         List<int>? widths = null;
         if (root.TryGetProperty("columnWidths", out var cw) && cw.ValueKind == JsonValueKind.Array)
         {
@@ -672,12 +823,9 @@ internal static class DocxSessionJson
         if (string.IsNullOrEmpty(json)) return new TableBorderSpec();
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
-        var scope = TryGetString(root, "scope", null)?.ToLowerInvariant() switch
-        {
-            "outside" => TableBorderScope.Outside,
-            "inside" => TableBorderScope.Inside,
-            _ => TableBorderScope.All,
-        };
+        var scope = ParseToken(TryGetString(root, "scope", null), "border scope", TableBorderScope.All,
+            ("all", TableBorderScope.All), ("outside", TableBorderScope.Outside),
+            ("inside", TableBorderScope.Inside));
         TryGetIntNullable(root, "size", out var size);
         return new TableBorderSpec
         {
@@ -688,51 +836,39 @@ internal static class DocxSessionJson
         };
     }
 
-    /// <summary>"row" → <see cref="TableShadingScope.Row"/>; anything else → Cell.</summary>
+    /// <summary>"cell" | "row"; absent → <see cref="TableShadingScope.Cell"/>.</summary>
     public static TableShadingScope ParseTableShadingScope(string? scope) =>
-        string.Equals(scope, "row", System.StringComparison.OrdinalIgnoreCase)
-            ? TableShadingScope.Row : TableShadingScope.Cell;
+        ParseToken(scope, "shading scope", TableShadingScope.Cell,
+            ("cell", TableShadingScope.Cell), ("row", TableShadingScope.Row));
 
     /// <summary>Parse the absorbed-content policy token for <see cref="DocxSession.MergeCells"/>:
-    /// "discard" | "reject"; anything else (including null) keeps the lossless default.</summary>
+    /// "append" | "discard" | "reject"; absent keeps the lossless default (append).</summary>
     public static TableMergeContent ParseTableMergeContent(string? content) =>
-        content?.ToLowerInvariant() switch
-        {
-            "discard" => TableMergeContent.Discard,
-            "reject" => TableMergeContent.Reject,
-            _ => TableMergeContent.Append,
-        };
+        ParseToken(content, "merge content policy", TableMergeContent.Append,
+            ("append", TableMergeContent.Append), ("discard", TableMergeContent.Discard),
+            ("reject", TableMergeContent.Reject));
 
-    /// <summary>Parse the OOXML row-height rule token used by the bridge.</summary>
+    /// <summary>The OOXML row-height rule: "auto" | "atLeast" | "exact"; absent → AtLeast.</summary>
     public static TableRowHeightRule ParseTableRowHeightRule(string? rule) =>
-        rule?.ToLowerInvariant() switch
-        {
-            "auto" => TableRowHeightRule.Auto,
-            "exact" => TableRowHeightRule.Exact,
-            _ => TableRowHeightRule.AtLeast,
-        };
+        ParseToken(rule, "row height rule", TableRowHeightRule.AtLeast,
+            ("auto", TableRowHeightRule.Auto), ("atLeast", TableRowHeightRule.AtLeast),
+            ("exact", TableRowHeightRule.Exact));
 
     /// <summary>
-    /// Parse a list-format kind token (case-insensitive camelCase of the <see cref="ListFormat"/>
-    /// member: "bullet", "decimal", "lowerLetter", "upperRoman", "decimalParenthesis", …; "none"
-    /// or anything unrecognized maps to <see cref="ListFormat.None"/>, matching the historical
-    /// leniency of this parser).
+    /// Parse a list-format kind token (camelCase of the <see cref="ListFormat"/> member, any case:
+    /// "bullet", "decimal" (aliases "number", "numbered"), "lowerLetter", "upperRoman",
+    /// "decimalParenthesis", …, or "none"). Absent → <see cref="ListFormat.None"/>; an unrecognized
+    /// token is rejected rather than read as "none", which would remove the list.
     /// </summary>
-    public static ListFormat ParseListFormat(string? kind) => kind?.ToLowerInvariant() switch
-    {
-        "bullet" => ListFormat.Bullet,
-        "decimal" or "number" or "numbered" => ListFormat.Decimal,
-        "lowerletter" => ListFormat.LowerLetter,
-        "upperletter" => ListFormat.UpperLetter,
-        "lowerroman" => ListFormat.LowerRoman,
-        "upperroman" => ListFormat.UpperRoman,
-        "decimalparenthesis" => ListFormat.DecimalParenthesis,
-        "lowerletterparenthesis" => ListFormat.LowerLetterParenthesis,
-        "upperletterparenthesis" => ListFormat.UpperLetterParenthesis,
-        "lowerromanparenthesis" => ListFormat.LowerRomanParenthesis,
-        "upperromanparenthesis" => ListFormat.UpperRomanParenthesis,
-        _ => ListFormat.None,
-    };
+    public static ListFormat ParseListFormat(string? kind) => ParseToken(kind, "list format", ListFormat.None,
+        ("bullet", ListFormat.Bullet), ("decimal", ListFormat.Decimal), ("number", ListFormat.Decimal),
+        ("numbered", ListFormat.Decimal), ("lowerLetter", ListFormat.LowerLetter),
+        ("upperLetter", ListFormat.UpperLetter), ("lowerRoman", ListFormat.LowerRoman),
+        ("upperRoman", ListFormat.UpperRoman), ("decimalParenthesis", ListFormat.DecimalParenthesis),
+        ("lowerLetterParenthesis", ListFormat.LowerLetterParenthesis),
+        ("upperLetterParenthesis", ListFormat.UpperLetterParenthesis),
+        ("lowerRomanParenthesis", ListFormat.LowerRomanParenthesis),
+        ("upperRomanParenthesis", ListFormat.UpperRomanParenthesis), ("none", ListFormat.None));
 
     public static FindOptions? ParseFindOptions(JsonElement root)
     {
