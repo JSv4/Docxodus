@@ -388,7 +388,7 @@ public class IrRevisionRendererTests
         Assert.All(revs, x =>
         {
             Assert.Equal(IrDiffSettings.DeterministicEpoch, x.Date);
-            Assert.Equal("Open-Xml-PowerTools", x.Author);
+            Assert.Equal("Docxodus", x.Author);
         });
     }
 

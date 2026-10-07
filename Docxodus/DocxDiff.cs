@@ -661,12 +661,19 @@ public enum DocxDiffFormatComparison
 public sealed class DocxDiffSettings
 {
     /// <summary>
-    /// Author name stamped on every revision's <see cref="DocxDiffRevision.Author"/> and on the produced
-    /// markup's <c>w:author</c> attributes. Default <c>"Open-Xml-PowerTools"</c>, inherited
-    /// from the former <c>WmlComparerSettings.AuthorForRevisions</c>. Flows per call — set a different author per
-    /// comparison in a multi-author/consolidate pipeline.
+    /// The author a comparison stamps when the caller names none: <c>"Docxodus"</c> on every surface
+    /// (.NET, browser, Python, MCP). Through v12 the .NET default was <c>"Open-Xml-PowerTools"</c>,
+    /// inherited from <c>WmlComparerSettings</c>, while the browser stamped <c>"Docxodus"</c>; issue #961
+    /// made this the one default. Pass <c>"Open-Xml-PowerTools"</c> explicitly to keep the old author.
     /// </summary>
-    public string AuthorForRevisions { get; set; } = "Open-Xml-PowerTools";
+    public const string DefaultAuthorForRevisions = "Docxodus";
+
+    /// <summary>
+    /// Author name stamped on every revision's <see cref="DocxDiffRevision.Author"/> and on the produced
+    /// markup's <c>w:author</c> attributes. Default <see cref="DefaultAuthorForRevisions"/>. Flows per
+    /// call — set a different author per comparison in a multi-author/consolidate pipeline.
+    /// </summary>
+    public string AuthorForRevisions { get; set; } = DefaultAuthorForRevisions;
 
     /// <summary>
     /// When true (the DEFAULT), revision dates are pinned to a fixed epoch
@@ -1215,7 +1222,7 @@ public sealed class DocxDiffRevision
     /// Self-describing one-line rendering — type, move role, changed format property names,
     /// quoted (truncated) text, anchors, and author — so a revision prints usefully in logs
     /// and string interpolation instead of as the bare type name (issue #596). For example:
-    /// <c>Deleted "[8]%" @ p:body:abca8bfa ↔ p:body:dad1d7ec (Open-Xml-PowerTools)</c>.
+    /// <c>Deleted "[8]%" @ p:body:abca8bfa ↔ p:body:dad1d7ec (Docxodus)</c>.
     /// </summary>
     public override string ToString()
     {

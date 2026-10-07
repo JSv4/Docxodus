@@ -431,11 +431,10 @@ internal sealed record IrDiffSettings
 
     /// <summary>
     /// REVISIONS-SURFACE setting (M2.3 Task 1). Author name stamped on every <see cref="IrRevision"/>'s
-    /// <see cref="IrRevision.Author"/>. Default <c>"Open-Xml-PowerTools"</c> — copied verbatim from
-    /// <c>WmlComparerSettings.AuthorForRevisions</c> (Docxodus/WmlComparer.cs ~line 54) so an IR-rendered
-    /// revision set is author-comparable to the shipped comparer's out of the box.
+    /// <see cref="IrRevision.Author"/>. Default <see cref="DocxDiffSettings.DefaultAuthorForRevisions"/>,
+    /// the public settings' own default, so the engine and its front door cannot disagree.
     /// </summary>
-    public string AuthorForRevisions { get; init; } = "Open-Xml-PowerTools";
+    public string AuthorForRevisions { get; init; } = DocxDiffSettings.DefaultAuthorForRevisions;
 
     /// <summary>
     /// REVISIONS-SURFACE setting (M2.3 Task 1). When true (the DEFAULT), <see cref="DateTimeForRevisions"/>

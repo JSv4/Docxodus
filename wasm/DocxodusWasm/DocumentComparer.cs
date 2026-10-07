@@ -3,7 +3,6 @@ using System.Runtime.Versioning;
 using System.Text.Json;
 using Docxodus;
 using Docxodus.Internal;
-using DocumentFormat.OpenXml.Packaging;
 
 namespace DocxodusWasm;
 
@@ -40,48 +39,14 @@ public partial class DocumentComparer
     /// </summary>
     /// <param name="originalBytes">The original DOCX file as a byte array</param>
     /// <param name="modifiedBytes">The modified DOCX file as a byte array</param>
-    /// <param name="authorName">Author name for tracked changes</param>
+    /// <param name="authorName">Author name for tracked changes; null takes the core default</param>
     /// <returns>Redlined DOCX as byte array, or empty array on error</returns>
     [JSExport]
     public static byte[] CompareDocuments(
         byte[] originalBytes,
         byte[] modifiedBytes,
-        string authorName)
-    {
-        if (originalBytes == null || originalBytes.Length == 0 ||
-            modifiedBytes == null || modifiedBytes.Length == 0)
-        {
-            Console.WriteLine("Error: Missing document data");
-            return Array.Empty<byte>();
-        }
-
-        // The public byte-array API has no document metadata beyond the package itself. Avoid
-        // marshaling an exact no-op through either comparison engine so callers receive a detached,
-        // byte-for-byte copy of the package they supplied.
-        if (originalBytes.AsSpan().SequenceEqual(modifiedBytes))
-            return (byte[])originalBytes.Clone();
-
-        try
-        {
-            var original = new WmlDocument("original.docx", originalBytes);
-            var modified = new WmlDocument("modified.docx", modifiedBytes);
-
-            var settings = new DocxDiffSettings
-            {
-                AuthorForRevisions = authorName ?? "Docxodus",
-                DateTimeForRevisions = DateTime.UtcNow.ToString("o"),
-            };
-
-            var result = DocxCompare.Compare(original, modified, settings);
-            return result.DocumentByteArray;
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Comparison error: {ex.GetType().Name}: {ex.Message}");
-            Console.WriteLine(ex.StackTrace);
-            return Array.Empty<byte>();
-        }
-    }
+        string? authorName) =>
+        CompareDocumentsWithOptions(originalBytes, modifiedBytes, authorName, caseInsensitive: false);
 
     /// <summary>
     /// Compare two DOCX documents and return the result as HTML.
@@ -89,87 +54,30 @@ public partial class DocumentComparer
     /// </summary>
     /// <param name="originalBytes">The original DOCX file as a byte array</param>
     /// <param name="modifiedBytes">The modified DOCX file as a byte array</param>
-    /// <param name="authorName">Author name for tracked changes</param>
+    /// <param name="authorName">Author name for tracked changes; null takes the core default</param>
     /// <returns>HTML string with redlined content, or JSON error object</returns>
     [JSExport]
     public static string CompareDocumentsToHtml(
         byte[] originalBytes,
         byte[] modifiedBytes,
-        string authorName)
-    {
-        // Default: show tracked changes visually through the DocxDiff engine.
-        return CompareDocumentsToHtmlWithOptions(originalBytes, modifiedBytes, authorName, renderTrackedChanges: true);
-    }
+        string? authorName) =>
+        CompareDocumentsToHtmlFull(originalBytes, modifiedBytes, authorName, caseInsensitive: false, renderTrackedChanges: true);
 
     /// <summary>
     /// Compare two DOCX documents and return the result as HTML with options.
     /// </summary>
     /// <param name="originalBytes">The original DOCX file as a byte array</param>
     /// <param name="modifiedBytes">The modified DOCX file as a byte array</param>
-    /// <param name="authorName">Author name for tracked changes</param>
+    /// <param name="authorName">Author name for tracked changes; null takes the core default</param>
     /// <param name="renderTrackedChanges">If true, show insertions/deletions visually. If false, accept all changes (clean output).</param>
     /// <returns>HTML string, or JSON error object</returns>
     [JSExport]
     public static string CompareDocumentsToHtmlWithOptions(
         byte[] originalBytes,
         byte[] modifiedBytes,
-        string authorName,
-        bool renderTrackedChanges)
-    {
-        if (originalBytes == null || originalBytes.Length == 0 ||
-            modifiedBytes == null || modifiedBytes.Length == 0)
-        {
-            return DocumentConverter.SerializeError("Missing document data");
-        }
-
-        try
-        {
-            var original = new WmlDocument("original.docx", originalBytes);
-            var modified = new WmlDocument("modified.docx", modifiedBytes);
-
-            var settings = new DocxDiffSettings
-            {
-                AuthorForRevisions = authorName ?? "Docxodus",
-                DateTimeForRevisions = DateTime.UtcNow.ToString("o"),
-            };
-
-            var result = DocxCompare.Compare(original, modified, settings);
-
-            // Convert the redlined document to HTML
-            // Must use writable stream - WmlToHtmlConverter may call RevisionAccepter internally
-            using var memoryStream = new MemoryStream();
-            memoryStream.Write(result.DocumentByteArray, 0, result.DocumentByteArray.Length);
-            memoryStream.Position = 0;
-            using var wordDoc = WordprocessingDocument.Open(memoryStream, true);
-
-            var htmlSettings = new WmlToHtmlConverterSettings
-            {
-                PageTitle = "Document Comparison",
-                CssClassPrefix = "redline-",
-                FabricateCssClasses = true,
-                RenderTrackedChanges = renderTrackedChanges,
-                IncludeRevisionMetadata = renderTrackedChanges,
-                ShowDeletedContent = true,
-                RenderMoveOperations = true,
-            };
-
-            // Add author color if rendering tracked changes
-            if (renderTrackedChanges)
-            {
-                htmlSettings.AuthorColors = new Dictionary<string, string>
-                {
-                    { authorName ?? "Docxodus", "#007bff" }
-                };
-            }
-
-            var htmlElement = WmlToHtmlConverter.ConvertToHtml(wordDoc, htmlSettings);
-            return htmlElement.ToString();
-        }
-        catch (Exception ex)
-        {
-            return DocumentConverter.SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
-        }
-    }
+        string? authorName,
+        bool renderTrackedChanges) =>
+        CompareDocumentsToHtmlFull(originalBytes, modifiedBytes, authorName, caseInsensitive: false, renderTrackedChanges);
 
     /// <summary>
     /// A throwaway session for a one-shot read. The default settings serve an editing session
@@ -249,10 +157,13 @@ public partial class DocumentComparer
     /// <summary>
     /// Compare two DOCX documents and return the result as HTML with full options.
     /// Supports the comparison settings that survive (caseInsensitive) plus HTML rendering options.
+    /// The comparison and the render both run through the shared facades
+    /// (<see cref="DocxDiffOps.CompareToHtml"/>), so the browser takes the same author and date
+    /// defaults as every other surface (issue #961).
     /// </summary>
     /// <param name="originalBytes">The original DOCX file as a byte array</param>
     /// <param name="modifiedBytes">The modified DOCX file as a byte array</param>
-    /// <param name="authorName">Author name for tracked changes</param>
+    /// <param name="authorName">Author name for tracked changes; null takes the core default</param>
     /// <param name="caseInsensitive">Whether comparison is case-insensitive</param>
     /// <param name="renderTrackedChanges">If true, show insertions/deletions visually. If false, accept all changes (clean output).</param>
     /// <returns>HTML string, or JSON error object</returns>
@@ -260,108 +171,47 @@ public partial class DocumentComparer
     public static string CompareDocumentsToHtmlFull(
         byte[] originalBytes,
         byte[] modifiedBytes,
-        string authorName,
+        string? authorName,
         bool caseInsensitive,
         bool renderTrackedChanges)
     {
-        if (originalBytes == null || originalBytes.Length == 0 ||
-            modifiedBytes == null || modifiedBytes.Length == 0)
-        {
-            return DocumentConverter.SerializeError("Missing document data");
-        }
-
         try
         {
-            var original = new WmlDocument("original.docx", originalBytes);
-            var modified = new WmlDocument("modified.docx", modifiedBytes);
-
-            var settings = new DocxDiffSettings
-            {
-                AuthorForRevisions = authorName ?? "Docxodus",
-                DateTimeForRevisions = DateTime.UtcNow.ToString("o"),
-                CaseInsensitive = caseInsensitive,
-            };
-
-            var result = DocxCompare.Compare(original, modified, settings);
-
-            // Convert the redlined document to HTML
-            // Must use writable stream - WmlToHtmlConverter may call RevisionAccepter internally
-            using var memoryStream = new MemoryStream();
-            memoryStream.Write(result.DocumentByteArray, 0, result.DocumentByteArray.Length);
-            memoryStream.Position = 0;
-            using var wordDoc = WordprocessingDocument.Open(memoryStream, true);
-
-            var htmlSettings = new WmlToHtmlConverterSettings
-            {
-                PageTitle = "Document Comparison",
-                CssClassPrefix = "redline-",
-                FabricateCssClasses = true,
-                RenderTrackedChanges = renderTrackedChanges,
-                IncludeRevisionMetadata = renderTrackedChanges,
-                ShowDeletedContent = true,
-                RenderMoveOperations = true,
-            };
-
-            // Add author color if rendering tracked changes
-            if (renderTrackedChanges)
-            {
-                htmlSettings.AuthorColors = new Dictionary<string, string>
-                {
-                    { authorName ?? "Docxodus", "#007bff" }
-                };
-            }
-
-            var htmlElement = WmlToHtmlConverter.ConvertToHtml(wordDoc, htmlSettings);
-            return htmlElement.ToString();
+            return DocxDiffOps.CompareToHtml(
+                originalBytes, modifiedBytes,
+                DocxDiffOps.FrontDoorSettings(authorName, caseInsensitive),
+                renderTrackedChanges);
         }
         catch (Exception ex)
         {
-            return DocumentConverter.SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+            return DocumentConverter.SerializeError(ex.Message, ex.GetType().Name);
         }
     }
 
     /// <summary>
-    /// Compare documents with detailed options.
+    /// Compare documents with detailed options, through the shared comparison front door
+    /// (<see cref="DocxDiffOps.CompareFrontDoor"/>).
     /// </summary>
     /// <param name="originalBytes">The original DOCX file</param>
     /// <param name="modifiedBytes">The modified DOCX file</param>
-    /// <param name="authorName">Author name for tracked changes</param>
+    /// <param name="authorName">Author name for tracked changes; null takes the core default</param>
     /// <param name="caseInsensitive">Whether comparison is case-insensitive</param>
-    /// <returns>Redlined DOCX as byte array</returns>
+    /// <returns>Redlined DOCX as byte array, or empty array on error</returns>
     [JSExport]
     public static byte[] CompareDocumentsWithOptions(
         byte[] originalBytes,
         byte[] modifiedBytes,
-        string authorName,
+        string? authorName,
         bool caseInsensitive)
     {
-        if (originalBytes == null || originalBytes.Length == 0 ||
-            modifiedBytes == null || modifiedBytes.Length == 0)
-        {
-            return Array.Empty<byte>();
-        }
-
-        if (originalBytes.AsSpan().SequenceEqual(modifiedBytes))
-            return (byte[])originalBytes.Clone();
-
         try
         {
-            var original = new WmlDocument("original.docx", originalBytes);
-            var modified = new WmlDocument("modified.docx", modifiedBytes);
-
-            var settings = new DocxDiffSettings
-            {
-                AuthorForRevisions = authorName ?? "Docxodus",
-                DateTimeForRevisions = DateTime.UtcNow.ToString("o"),
-                CaseInsensitive = caseInsensitive,
-            };
-
-            var result = DocxCompare.Compare(original, modified, settings);
-            return result.DocumentByteArray;
+            return DocxDiffOps.CompareFrontDoor(
+                originalBytes, modifiedBytes, DocxDiffOps.FrontDoorSettings(authorName, caseInsensitive));
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Comparison error: {ex.Message}");
+            Console.WriteLine($"Comparison error: {ex.GetType().Name}: {ex.Message}");
             return Array.Empty<byte>();
         }
     }

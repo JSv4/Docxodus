@@ -4215,7 +4215,7 @@ class DocxDiffSettings:
     object stays minimal and the host applies its own defaults for omitted keys.
     """
 
-    author_for_revisions: str = "Open-Xml-PowerTools"
+    author_for_revisions: str = "Docxodus"
     deterministic: bool = True
     date_time_for_revisions: str | None = None
     #: Accept every tracked revision already present in both inputs before diffing (default False).
@@ -4267,7 +4267,7 @@ class DocxDiffSettings:
         """camelCase keys the host's ``DocxDiffOps.ParseSettings`` reads. Only
         non-default fields are emitted."""
         wire: dict[str, Any] = {}
-        if self.author_for_revisions != "Open-Xml-PowerTools":
+        if self.author_for_revisions != "Docxodus":
             wire["authorForRevisions"] = self.author_for_revisions
         if not self.deterministic:
             wire["deterministic"] = False

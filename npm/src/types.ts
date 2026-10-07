@@ -330,7 +330,7 @@ export interface ConversionOptions {
  * Options for document comparison
  */
 export interface CompareOptions {
-  /** Author name for tracked changes (default: "Docxodus") */
+  /** Author name for tracked changes (default: the engine's, "Docxodus") */
   authorName?: string;
   /** Whether comparison is case-insensitive (default: false) */
   caseInsensitive?: boolean;
@@ -415,7 +415,7 @@ export enum DocxDiffFormatComparison {
  * every field is optional and an omitted field uses the engine default.
  */
 export interface DocxDiffSettings {
-  /** Author stamped on revisions and markup (default "Open-Xml-PowerTools"). */
+  /** Author stamped on revisions and markup (default "Docxodus"). */
   authorForRevisions?: string;
   /** Pin revision dates to a fixed epoch for byte-identical output (default true). */
   deterministic?: boolean;
@@ -798,6 +798,9 @@ export interface VersionInfo {
 export interface ErrorResponse {
   error: string;
   type?: string;
+  /**
+   * @deprecated Never populated: the engine stopped putting stack traces on the wire (issue #961).
+   */
   stackTrace?: string;
 }
 
@@ -1631,30 +1634,30 @@ export interface DocxodusWasmExports {
     CompareDocuments: (
       originalBytes: Uint8Array,
       modifiedBytes: Uint8Array,
-      authorName: string
+      authorName: string | null
     ) => Uint8Array;
     CompareDocumentsToHtml: (
       originalBytes: Uint8Array,
       modifiedBytes: Uint8Array,
-      authorName: string
+      authorName: string | null
     ) => string;
     CompareDocumentsToHtmlWithOptions: (
       originalBytes: Uint8Array,
       modifiedBytes: Uint8Array,
-      authorName: string,
+      authorName: string | null,
       renderTrackedChanges: boolean
     ) => string;
     CompareDocumentsToHtmlFull: (
       originalBytes: Uint8Array,
       modifiedBytes: Uint8Array,
-      authorName: string,
+      authorName: string | null,
       caseInsensitive: boolean,
       renderTrackedChanges: boolean
     ) => string;
     CompareDocumentsWithOptions: (
       originalBytes: Uint8Array,
       modifiedBytes: Uint8Array,
-      authorName: string,
+      authorName: string | null,
       caseInsensitive: boolean
     ) => Uint8Array;
     GetRevisionsJson: (comparedDocBytes: Uint8Array) => string;

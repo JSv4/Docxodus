@@ -334,7 +334,7 @@ A `ModifyBlock` over a paragraph carries a `tokenDiff`; over a table, a `tableDi
 
 | Public setting | Default | Maps to | Notes |
 |---|---|---|---|
-| `AuthorForRevisions` | `"Open-Xml-PowerTools"` | `IrDiffSettings.AuthorForRevisions` | matches `WmlComparerSettings` |
+| `AuthorForRevisions` | `"Docxodus"` (`DocxDiffSettings.DefaultAuthorForRevisions`) | `IrDiffSettings.AuthorForRevisions` | was `"Open-Xml-PowerTools"` (the `WmlComparerSettings` value) through v12; one default on every surface since issue #961 |
 | `Deterministic` | `true` | `IrDiffSettings.Deterministic` | **deviation from `WmlComparerSettings`** (which is wall-clock by default) |
 | `DateTimeForRevisions` | `null` → epoch or `DateTime.Now` | `IrDiffSettings.DateTimeForRevisions` | explicit value always wins |
 | `CaseInsensitive` / `Culture` | `false` / `null` | `CaseInsensitive` / `Culture` | |

@@ -2014,7 +2014,7 @@ public class IrMarkupRendererTests
         var headerXml = Assert.Single(HeaderFooterFixtures.StoryPartsXml(rendered));
         Assert.Contains("<w:ins", headerXml);
         Assert.Contains("<w:del", headerXml);
-        Assert.Contains("Open-Xml-PowerTools", headerXml);
+        Assert.Contains("Docxodus", headerXml);
 
         Assert.Equal("CONFIDENTIAL Draft 2",
             Assert.Single(HeaderFooterFixtures.StoryTexts(RevisionProcessor.AcceptRevisions(rendered))));
