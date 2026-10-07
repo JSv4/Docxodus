@@ -14,17 +14,5 @@
     "rootDir": "."
   },
   "include": ["src/**/*", "tests/**/*", "examples/**/*.ts"],
-  "exclude": [
-    "node_modules",
-    "dist",
-    // Pre-existing type errors, all the same shape: a `page.evaluate` return is inferred as a
-    // union (`number | number[]`, `boolean | number[]`) and passed straight to `new Uint8Array(...)`.
-    // They are unrelated to any current work and fixing them means editing four specs that pass;
-    // excluded rather than silently weakening `strict` for everything. Remove an entry once its
-    // file is cleaned up.
-    "tests/worker.spec.ts",
-    "tests/docxodus.spec.ts",
-    "tests/editor.spec.ts",
-    "tests/pagination-print.spec.ts"
-  ]
+  "exclude": ["node_modules", "dist"]
 }
