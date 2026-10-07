@@ -115,7 +115,7 @@ and two clients.
 | Bug fix | ✓ | ✓ | – | – | – | – | – | CHANGELOG |
 | Internal refactor | ✓ | ✓ | – | – | – | – | – | – |
 
-Concretely, a new session op touches: `DocxSession.cs` → `DocxSessionOps.cs` →
+Concretely, a new session op touches: the matching `DocxSession.<Area>.cs` partial → `DocxSessionOps.cs` →
 `DocxSessionJson.cs` → `wasm/DocxodusWasm/DocxSessionBridge.cs` → `npm/src/types.ts` +
 `npm/src/core.ts` → `tools/python-host/Dispatcher.cs` → `python/src/docx_scalpel/{types,session}.py`
 → `tools/mcp-server/{ToolCatalog,Dispatcher}.cs`.
@@ -230,7 +230,7 @@ detail; this file deliberately does not restate them.
 
 | Module | What it does | Design doc |
 |--------|--------------|------------|
-| `DocxSession.cs` | Stateful anchor-addressed editing API (text, structural, formatting, tables, notes, comments, revisions, annotations, raw XML, undo/redo) | `docx_mutation_api.md` |
+| `DocxSession*.cs` | Stateful anchor-addressed editing API (text, structural, formatting, tables, notes, comments, revisions, annotations, raw XML, undo/redo). One partial class split by area: state, lifecycle and shared mutation helpers in `DocxSession.cs`, public value types in `DocxSession.Types.cs`, each op family in its own `DocxSession.<Area>.cs` | `docx_mutation_api.md` |
 | `DocxDiff.cs` + `Ir/Diff/` | Structure-aware comparison → native tracked changes; edit script as data; N-way consolidate | `ir_diff_engine.md` |
 | `WmlToHtmlConverter.cs` | DOCX → HTML, the render fidelity oracle | `docx_converter.md`, `comment_rendering.md`, `paginated_headers_footers.md`, `wml_to_html_converter_gaps.md` |
 | `HtmlToWmlConverter.cs` | HTML → DOCX | — |
