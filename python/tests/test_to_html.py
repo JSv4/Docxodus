@@ -70,3 +70,19 @@ def test_th004_word_revision_presentation_colours_authors(test_files_dir) -> Non
 def test_th005_revision_presentation_on_the_wire() -> None:
     assert HtmlOptions().to_wire()["revisionPresentation"] == 0
     assert HtmlOptions(revision_presentation=1).to_wire()["revisionPresentation"] == 1
+
+
+def test_th006_semantic_lists_emit_list_markup(test_files_dir) -> None:
+    # Issue #895: semantic_lists turns Word list paragraphs into <ol>/<li>.
+    numbered = (test_files_dir / "DB012-Lists-With-Different-Numberings.docx").read_bytes()
+
+    semantic = convert_docx_to_html(numbered, HtmlOptions(semantic_lists=True))
+    default = convert_docx_to_html(numbered)
+
+    assert "<ol" in semantic and "<li" in semantic
+    assert "<ol" not in default and "<li" not in default
+
+
+def test_th007_semantic_lists_on_the_wire() -> None:
+    assert HtmlOptions().to_wire()["semanticLists"] is False
+    assert HtmlOptions(semantic_lists=True).to_wire()["semanticLists"] is True

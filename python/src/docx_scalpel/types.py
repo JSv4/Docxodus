@@ -4143,6 +4143,10 @@ class HtmlOptions:
     ``revision_presentation`` 0=docxodus,1=word (how rendered tracked changes look: Word's
     All Markup style colours each author, underlines/strikes only, and draws left-margin
     change bars).
+
+    ``semantic_lists`` emits Word lists as ``<ol>``/``<ul>``/``<li>`` instead of paragraphs.
+    CSS draws a marker only where it reproduces Word's exactly; other lists keep their
+    generated marker spans. Paginated output ignores it.
     """
 
     page_title: str = "Document"
@@ -4165,6 +4169,7 @@ class HtmlOptions:
     revision_presentation: int = 0
     render_unsupported_content_placeholders: bool = False
     document_language: str | None = None
+    semantic_lists: bool = False
 
     def to_wire(self) -> dict[str, Any]:
         """camelCase keys the host dispatcher's ``ParseHtmlOptions`` reads."""
@@ -4188,6 +4193,7 @@ class HtmlOptions:
             "renderMoveOperations": self.render_move_operations,
             "revisionPresentation": self.revision_presentation,
             "renderUnsupportedContentPlaceholders": self.render_unsupported_content_placeholders,
+            "semanticLists": self.semantic_lists,
         }
         if self.document_language is not None:
             wire["documentLanguage"] = self.document_language

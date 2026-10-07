@@ -384,6 +384,7 @@ public partial class DocumentConverter
     /// <param name="documentLanguage">Override the document's default language for the HTML lang attribute (null = auto-detect from document)</param>
     /// <param name="stampAnchors">Stamp block elements with data-anchor ids</param>
     /// <param name="revisionPresentation">How tracked changes look: 0 = Docxodus style (default), 1 = Word's All Markup style</param>
+    /// <param name="semanticLists">Emit Word lists as ol/ul/li (ignored by paginated output)</param>
     /// <returns>HTML string or JSON error object</returns>
     [JSExport]
     public static string ConvertDocxToHtmlComplete(
@@ -408,7 +409,8 @@ public partial class DocumentConverter
         bool renderUnsupportedContentPlaceholders = false,
         string? documentLanguage = null,
         bool stampAnchors = false,
-        int revisionPresentation = 0)
+        int revisionPresentation = 0,
+        bool semanticLists = false)
     {
         if (docxBytes == null || docxBytes.Length == 0)
         {
@@ -420,6 +422,7 @@ public partial class DocumentConverter
             var options = new Docxodus.Internal.HtmlConversionOptions
             {
                 StampAnchors = stampAnchors,
+                SemanticLists = semanticLists,
                 RevisionPresentation = revisionPresentation,
                 PageTitle = pageTitle ?? "Document",
                 CssClassPrefix = cssPrefix ?? "docx-",

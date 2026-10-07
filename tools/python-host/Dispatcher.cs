@@ -734,6 +734,7 @@ internal static class Dispatcher
             RevisionPresentation = IntOpt("revisionPresentation", defaults.RevisionPresentation),
             RenderUnsupportedContentPlaceholders = BoolOpt("renderUnsupportedContentPlaceholders", defaults.RenderUnsupportedContentPlaceholders),
             DocumentLanguage = StrOptNullable("documentLanguage", defaults.DocumentLanguage),
+            SemanticLists = BoolOpt("semanticLists", defaults.SemanticLists),
         };
     }
 

@@ -316,6 +316,14 @@ export interface ConversionOptions {
    * `renderBlockHtml`. Default: false.
    */
   stampAnchors?: boolean;
+  /**
+   * Emit Word lists as `<ol>`/`<ul>`/`<li>` instead of paragraphs (issue #895). Adjacent list
+   * paragraphs of one list share a list, and a deeper level nests inside the preceding item. CSS
+   * draws the marker (`list-style-type`, with `start`/`value` for restarts) only where it
+   * reproduces Word's marker exactly; other lists keep the generated marker spans under
+   * `list-style-type: none`. Ignored by paginated output. Default: false.
+   */
+  semanticLists?: boolean;
 }
 
 /**
@@ -1543,7 +1551,8 @@ export interface DocxodusWasmExports {
       renderUnsupportedContentPlaceholders: boolean,
       documentLanguage: string | null,
       stampAnchors: boolean,
-      revisionPresentation: number
+      revisionPresentation: number,
+      semanticLists?: boolean
     ) => string;
     GetAnnotations: (bytes: Uint8Array) => string;
     AddAnnotation: (bytes: Uint8Array, requestJson: string) => string;

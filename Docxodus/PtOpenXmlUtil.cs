@@ -6169,6 +6169,17 @@ listSeparator
         /// <summary>Companion to <see cref="LevelNumbers"/>: "true" when the paragraph continues
         /// a flat sequence at a deeper level (rendered with level 0's format).</summary>
         public static XName ListContinuation = pt + "ListContinuation";
+        /// <summary>On an assembled list paragraph, when the HTML converter asked for semantic lists
+        /// (issue #895): the paragraph's <c>w:num</c> id, the level it nests at (the effective level:
+        /// a continuation item counts as level 0), the counter value its marker shows, and the
+        /// level's <c>w:numFmt</c>.</summary>
+        public static XName ListNumId = pt + "ListNumId";
+        /// <summary>See <see cref="ListNumId"/>.</summary>
+        public static XName ListLevel = pt + "ListLevel";
+        /// <summary>See <see cref="ListNumId"/>.</summary>
+        public static XName ListValue = pt + "ListValue";
+        /// <summary>See <see cref="ListNumId"/>.</summary>
+        public static XName ListFormat = pt + "ListFormat";
         public static XName HtmlStructure = pt + "HtmlStructure";
         public static XName HtmlStyle = pt + "HtmlStyle";
         public static XName StyleName = pt + "StyleName";
@@ -6230,6 +6241,7 @@ listSeparator
         public static readonly XName title = xhtml + "title";
         public static readonly XName tr = xhtml + "tr";
         public static readonly XName u = xhtml + "u";
+        public static readonly XName ul = xhtml + "ul";
     }
 
     public static class XhtmlNoNamespace

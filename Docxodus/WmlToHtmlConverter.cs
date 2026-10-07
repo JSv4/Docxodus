@@ -311,6 +311,17 @@ namespace Docxodus
         public bool StampAnchors;
 
         /// <summary>
+        /// When true, emit Word lists as HTML lists (issue #895): adjacent list paragraphs of one
+        /// list become an <c>&lt;ol&gt;</c> (numbered) or <c>&lt;ul&gt;</c> (bulleted) of
+        /// <c>&lt;li&gt;</c>, and a deeper level nests inside the preceding item. CSS draws the
+        /// marker (<c>list-style-type</c>, with <c>start</c>/<c>value</c> for restarts) only where it
+        /// reproduces Word's marker text exactly and the marker hangs in the item's hanging indent;
+        /// any other list keeps its generated marker spans under <c>list-style-type: none</c>.
+        /// Ignored by paginated output, which measures paragraphs. Default: false.
+        /// </summary>
+        public bool SemanticLists;
+
+        /// <summary>
         /// Optional canonical anchor identity provider used alongside <see cref="StampAnchors"/>.
         /// The legacy <c>data-anchor</c> value is intentionally the bare Unid for editor
         /// compatibility; this provider stamps the collision-safe full
@@ -386,6 +397,7 @@ namespace Docxodus
             ResolveThemeColors = true;
             GeneratePageCss = false;
             StampAnchors = false;
+            SemanticLists = false;
         }
 
         public WmlToHtmlConverterSettings(HtmlConverterSettings htmlConverterSettings)
@@ -1054,6 +1066,7 @@ namespace Docxodus
                 RestrictToSupportedNumberingFormats = htmlConverterSettings.RestrictToSupportedNumberingFormats,
                 CreateHtmlConverterAnnotationAttributes = true,
                 OrderElementsPerStandard = false,
+                AnnotateListMembership = EmitsSemanticLists(htmlConverterSettings),
                 ListItemRetrieverSettings =
                     htmlConverterSettings.ListItemImplementations == null ?
                     new ListItemRetrieverSettings()
@@ -1133,6 +1146,9 @@ namespace Docxodus
             // RendersDocumentFragment.
             if (!htmlConverterSettings.RendersDocumentFragment)
                 RemoveUnresolvableNoteLinks(xhtml);
+
+            if (EmitsSemanticLists(htmlConverterSettings))
+                GroupSemanticLists(xhtml);
 
             ReifyStylesAndClasses(htmlConverterSettings, xhtml, wordDoc);
 
@@ -6784,6 +6800,7 @@ namespace Docxodus
                     ConvertContentThatCanContainFields(wordDoc, settings, paragraph.Elements()));
                 ApplyAutomaticLineSpacingToInlineContent(paraElement1, style);
                 paraElement1.AddAnnotation(style);
+                AnnotateSemanticListItem(paraElement1, paragraph, elementName, isBidi);
                 return paraElement1;
             }
 
@@ -6800,6 +6817,7 @@ namespace Docxodus
                 ConvertContentThatCanContainFields(wordDoc, settings, elementsSucceedingTab));
             ApplyAutomaticLineSpacingToInlineContent(paraElement, style);
             paraElement.AddAnnotation(style);
+            AnnotateSemanticListItem(paraElement, paragraph, elementName, isBidi);
 
             return paraElement;
         }
