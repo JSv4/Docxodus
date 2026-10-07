@@ -99,7 +99,7 @@ fixed-line ASCII paragraphs can resolve each distinct format once during an
 incremental render, then expand every original character and break. Unsupported
 structures use the ordinary converter. Unchanged dense formatting templates are
 cached across frames, and ASCII frames omit unused complex-script font properties.
-The [performance measurements and benchmark instructions](../architecture/doom-ascii-performance.md)
+The [performance measurements and benchmark instructions](doom-ascii-performance.md)
 record throughput, full-resolution checks, and browser limitations. Batched random anchor IDs and indexed
 anchor lookup reduce work for any large XML replacement; negative Word character
 spacing now renders correctly. The document's authoritative OOXML is never

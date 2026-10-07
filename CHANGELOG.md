@@ -1023,7 +1023,7 @@ All notable changes to this project will be documented in this file.
 - Dense text paragraphs reuse formatting templates during incremental HTML rendering, retaining
   every original character and line break. Together with the updated ASCII projection and WASM
   AOT profile, this improves full-resolution DOOM ASCII throughput beyond 10 FPS in the measured
-  browser configuration; see [the measurements](docs/architecture/doom-ascii-performance.md).
+  browser configuration; see [the measurements](docs/demo/doom-ascii-performance.md).
 
 ### Dependencies
 

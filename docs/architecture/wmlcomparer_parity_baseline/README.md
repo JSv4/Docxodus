@@ -18,7 +18,7 @@ what", the answer is these numbers and the corpus they were measured over.
 
 The two documented deviations and the 47 divergent rows are not defects — each is a catalogued,
 explained difference where the IR engine deliberately supersedes the legacy grain (see the
-`DIVERGENT sub-buckets` section of the differential report, and `wml_comparer_gaps.md`). The two
+`DIVERGENT sub-buckets` section of the differential report). The two
 `OLD_ERROR` rows are pairs the **legacy** engine threw on and the IR engine handled.
 
 ## What replaced them

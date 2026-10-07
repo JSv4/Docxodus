@@ -1,10 +1,8 @@
 # IR-Powered DOCX Editor — Feasibility & PoC Design
 
-Status: **Design / feasibility** (pre-implementation). Target deliverable of the
-first effort is a written feasibility spec (this document) plus a **focused,
-runnable proof-of-concept** that turns "could we?" into a measured yes/no.
-
-Branch: `feat/ir-editor-feasibility-poc`.
+Status: **Shipped.** The feasibility verdict below held, and the editor was built on this
+architecture (`npm/src/editor.ts`, `ribbon.ts`). This document remains the record of that
+architecture and its feasibility gate, which code and tests cite by section.
 
 > For what the editor **exposes today** — the ribbon, every control mapped to its command and
 > session op, screenshots, and measured per-operation costs — see
@@ -571,7 +569,7 @@ editor's own page view. `columnWidth: "fluid"` opts out for embeds that want ord
   `Docxodus/Internal/DocxSessionOps.cs`, `docs/architecture/docx_mutation_api.md`.
 - TS/WASM surface: `npm/src/{index,session,pagination,react,docxodus.worker,worker-proxy}.ts`,
   `wasm/DocxodusWasm/{DocxSessionBridge,DocumentConverter}.cs`,
-  `docs/architecture/{ui_responsiveness,wasm-optimization-plan,profiling-results}.md`.
+  `docs/architecture/{ui_responsiveness,wasm-packaging}.md`.
 - Rendering/pagination: `Docxodus/WmlToHtmlConverter.cs`,
   `Docxodus/ExternalAnnotationProjector.cs`, `Docxodus/OpenContractExporter.cs`,
   `docs/architecture/{docx_converter,wml_to_html_converter_gaps,incremental_annotation_overlay,paginated_headers_footers}.md`.
