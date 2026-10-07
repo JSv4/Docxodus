@@ -63,7 +63,7 @@ test.describe('Pagination print layout', () => {
       const conversion = await page.evaluate(
         ([bytes, paginationScale]) => (window as any).DocxodusTests.convertToHtmlWithPagination(
           new Uint8Array(bytes), 1, paginationScale),
-        [Array.from(source), scale]
+        [Array.from(source), scale] as const
       );
 
       expect(conversion.error).toBeUndefined();

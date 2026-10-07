@@ -147,7 +147,7 @@ test.describe("Docxodus Web Worker Tests", () => {
       expect(result.active).toBe(true);
 
       console.log("Worker initialized successfully");
-    }, { timeout: 60000 });
+    });
 
     test("worker can be terminated", async ({ page }) => {
       // Create and then terminate worker
@@ -163,7 +163,7 @@ test.describe("Docxodus Web Worker Tests", () => {
       expect(result.activeAfter).toBe(false);
 
       console.log("Worker terminated successfully");
-    }, { timeout: 60000 });
+    });
 
     test("Uint8Array subviews are cloned exactly before transfer", async ({ page }) => {
       const bytes = Array.from(readTestFile("HC006-Test-01.docx"));
@@ -248,7 +248,7 @@ test.describe("Docxodus Web Worker Tests", () => {
       expect(result.sessionVerificationBaselineCompared).toBe(true);
       expect(result.sessionVerificationBaselineDigest).toBe(result.expectedDigest);
       expect(result.unchanged).toBe(true);
-    }, { timeout: 60000 });
+    });
   });
 
   test.describe("Non-blocking Behavior", () => {
@@ -302,7 +302,7 @@ test.describe("Docxodus Web Worker Tests", () => {
         `Conversion took ${result.duration.toFixed(0)}ms, ` +
         `${result.animationFrameCount} animation frames fired (main thread responsive)`
       );
-    }, { timeout: 60000 });
+    });
 
     test("multiple operations can be queued", async ({ page }) => {
       const bytes = readTestFile("HC006-Test-01.docx");
@@ -334,7 +334,7 @@ test.describe("Docxodus Web Worker Tests", () => {
       expect(result.versionSuccess).toBe(true);
 
       console.log(`Multiple operations completed in ${result.duration.toFixed(0)}ms`);
-    }, { timeout: 60000 });
+    });
   });
 
   test.describe("Conversion Operations", () => {
@@ -353,7 +353,7 @@ test.describe("Docxodus Web Worker Tests", () => {
       expect(result.html).toContain("</html>");
 
       console.log(`Converted document to ${result.html.length} bytes of HTML`);
-    }, { timeout: 60000 });
+    });
 
     test("getVersion returns library info", async ({ page }) => {
       const result = await page.evaluate(async () => {
@@ -367,7 +367,7 @@ test.describe("Docxodus Web Worker Tests", () => {
       expect(result.platform).toBeDefined();
 
       console.log(`Worker version: ${result.library}`);
-    }, { timeout: 60000 });
+    });
   });
 
   test.describe("Comparison Operations", () => {
@@ -389,7 +389,7 @@ test.describe("Docxodus Web Worker Tests", () => {
       expect(result.docxBytes[1]).toBe(0x4B); // K
 
       console.log(`Comparison produced ${result.docxBytes.length} byte redlined document`);
-    }, { timeout: 60000 });
+    });
 
     test("compareDocumentsToHtml produces HTML with tracked changes", async ({ page }) => {
       const originalBytes = readTestFile("WC/WC001-Digits.docx");
@@ -408,7 +408,7 @@ test.describe("Docxodus Web Worker Tests", () => {
       expect(result.html).toMatch(/<(ins|del)/);
 
       console.log(`Comparison HTML with tracked changes: ${result.html.length} bytes`);
-    }, { timeout: 60000 });
+    });
 
     test("getRevisions extracts revisions from compared document", async ({ page }) => {
       const originalBytes = readTestFile("WC/WC001-Digits.docx");
@@ -442,7 +442,7 @@ test.describe("Docxodus Web Worker Tests", () => {
       expect(firstRevision.resolutionStatus).toBeDefined();
 
       console.log(`Extracted ${result.revisions.length} revisions`);
-    }, { timeout: 60000 });
+    });
 
     test("getComments reads a document's comments without a session", async ({ page }) => {
       const withComments = readTestFile("DD/DD002-DenseComments.docx");
@@ -469,7 +469,7 @@ test.describe("Docxodus Web Worker Tests", () => {
 
       expect(empty.error).toBeUndefined();
       expect(empty.comments).toEqual([]);
-    }, { timeout: 60000 });
+    });
   });
 
   test.describe("Error Handling", () => {
@@ -485,7 +485,7 @@ test.describe("Docxodus Web Worker Tests", () => {
       expect(result.error.message).toBeTruthy();
 
       console.log(`Error handling works: ${result.error.message}`);
-    }, { timeout: 60000 });
+    });
 
     test("rejects requests after termination", async ({ page }) => {
       const bytes = readTestFile("HC006-Test-01.docx");
@@ -501,7 +501,7 @@ test.describe("Docxodus Web Worker Tests", () => {
       expect(result.error).toBeDefined();
 
       console.log("Correctly rejects requests after termination");
-    }, { timeout: 60000 });
+    });
   });
 
   // ============================================================
@@ -509,6 +509,7 @@ test.describe("Docxodus Web Worker Tests", () => {
   // ============================================================
   test.describe("Visual Lazy Loading", () => {
     test("demonstrates lazy loading with visual page placeholders", async ({ page }) => {
+      test.setTimeout(120_000);
       const bytes = readTestFile("HC001-5DayTourPlanTemplate.docx");
 
       // This test visually demonstrates the lazy loading workflow:
@@ -559,7 +560,7 @@ test.describe("Docxodus Web Worker Tests", () => {
         timeline.push(`${(performance.now() - startTime).toFixed(0)}ms: Metadata received (${metaTime.toFixed(0)}ms)`);
 
         if (metaResult.error) {
-          return { error: metaResult.error, timeline };
+          throw new Error(`metadata failed: ${metaResult.error}\n${timeline.join("\n")}`);
         }
 
         const metadata = metaResult.metadata;
@@ -638,7 +639,9 @@ test.describe("Docxodus Web Worker Tests", () => {
         timeline.push(`${(performance.now() - startTime).toFixed(0)}ms: HTML conversion complete (${convTime.toFixed(0)}ms)`);
 
         if (htmlResult.error) {
-          return { error: htmlResult.error, timeline, placeholderState };
+          // Throwing rejects page.evaluate, which fails the test with this message and keeps the
+          // success shape below as the callback's only return type.
+          throw new Error(`HTML conversion failed: ${htmlResult.error}\n${timeline.join('\n')}`);
         }
 
         // Step 5: Replace placeholders with actual content
@@ -706,7 +709,6 @@ test.describe("Docxodus Web Worker Tests", () => {
       }, Array.from(bytes));
 
       // Assertions
-      expect(result.error).toBeUndefined();
       expect(result.success).toBe(true);
 
       // Verify placeholder phase worked
@@ -731,9 +733,10 @@ test.describe("Docxodus Web Worker Tests", () => {
       console.log(`Total: ${result.timing.totalMs.toFixed(0)}ms`);
       console.log(`\nPlaceholders created: ${result.placeholderState.count}`);
       console.log(`Paragraphs rendered: ${result.renderedState.paragraphCount}`);
-    }, { timeout: 120000 });
+    });
 
     test("visual verification with screenshot", async ({ page }) => {
+      test.setTimeout(120_000);
       const bytes = readTestFile("HC006-Test-01.docx");
 
       // Set viewport for consistent screenshots
@@ -840,6 +843,6 @@ test.describe("Docxodus Web Worker Tests", () => {
 
       console.log('Screenshot captured successfully');
       console.log(`Screenshot size: ${screenshot.length} bytes`);
-    }, { timeout: 120000 });
+    });
   });
 });

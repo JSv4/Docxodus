@@ -92,7 +92,7 @@ async function compareToHtmlWithOptions(
         renderChanges
       );
     },
-    [Array.from(originalBytes), Array.from(modifiedBytes), renderTrackedChanges]
+    [Array.from(originalBytes), Array.from(modifiedBytes), renderTrackedChanges] as const
   );
 }
 
@@ -111,7 +111,7 @@ async function convertToHtmlWithPagination(
         scale
       );
     },
-    [Array.from(bytes), paginationMode, paginationScale]
+    [Array.from(bytes), paginationMode, paginationScale] as const
   );
 }
 
@@ -132,7 +132,7 @@ async function convertToHtmlWithPaginationAndTrackedChanges(
         renderChanges
       );
     },
-    [Array.from(bytes), paginationMode, paginationScale, renderTrackedChanges]
+    [Array.from(bytes), paginationMode, paginationScale, renderTrackedChanges] as const
   );
 }
 
@@ -151,7 +151,7 @@ async function convertToHtmlWithAnnotations(
         labelMode
       );
     },
-    [Array.from(bytes), renderAnnotations, annotationLabelMode]
+    [Array.from(bytes), renderAnnotations, annotationLabelMode] as const
   );
 }
 
@@ -211,7 +211,7 @@ async function removeAnnotationFromDoc(
       }
       return result;
     },
-    [bytes, annotationId]
+    [bytes, annotationId] as const
   );
   return result;
 }
@@ -223,7 +223,7 @@ async function hasAnnotationsInDoc(
 ): Promise<{ hasAnnotations?: boolean; error?: any }> {
   return await page.evaluate((bytesArray) => {
     return (window as any).DocxodusTests.hasAnnotations(new Uint8Array(bytesArray));
-  }, Array.from(bytes as any));
+  }, Array.from(bytes));
 }
 
 // Helper to get document structure
@@ -2505,7 +2505,7 @@ test.describe('Docxodus WASM Tests', () => {
         const htmlResult = (window as any).DocxodusTests.convertToHtmlWithPagination(docBytes, 1, 1.0);
 
         if (metadata.error || htmlResult.error) {
-          return { error: metadata.error || htmlResult.error };
+          throw new Error(`metadata/render failed: ${metadata.error || htmlResult.error}`);
         }
 
         // Parse the HTML and extract section dimensions from data attributes
@@ -2514,7 +2514,7 @@ test.describe('Docxodus WASM Tests', () => {
         const sectionElements = doc.querySelectorAll('[data-section-index]');
 
         const renderedSections = [];
-        for (const section of sectionElements) {
+        for (const section of Array.from(sectionElements)) {
           renderedSections.push({
             sectionIndex: parseInt(section.getAttribute('data-section-index') || '0'),
             pageWidth: parseFloat(section.getAttribute('data-page-width') || '0'),
@@ -2531,8 +2531,6 @@ test.describe('Docxodus WASM Tests', () => {
           renderedSectionCount: renderedSections.length
         };
       }, Array.from(bytes));
-
-      expect(result.error).toBeUndefined();
 
       // For documents with sections, verify dimensions match
       if (result.renderedSectionCount > 0 && result.metadataSectionCount > 0) {
