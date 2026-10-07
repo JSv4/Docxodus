@@ -16,9 +16,8 @@ using Docxodus;
 using Docxodus.Tests;
 using Xunit;
 
-#if !ELIDE_XUNIT_TESTS
 
-namespace OxPt
+namespace Docxodus.Tests
 {
     public class DbTests
     {
@@ -978,4 +977,3 @@ namespace OxPt
         }
     }
 }
-#endif

@@ -492,8 +492,6 @@ SDK 2.8.1 → 3.x. Artifacts of that migration worth knowing:
 - **`Dispose()`, not `.Close()`** — SDK 3.x dropped `Close()`.
 - **SkiaSharp replaces System.Drawing** — `SKColor`/`SKBitmap`/`SKTypeface`/`SKEncodedImageFormat`,
   helpers in `SkiaSharpHelpers.cs` (notably `ColorHelper`). Remember the WASM build excludes it.
-- **Preprocessor cleanup pending** — `NET35` and `ELIDE_XUNIT_TESTS` directives remain in some
-  files; safe to remove when you touch one.
 - The upstream `archived-examples/` console projects were removed with the SpreadsheetML and
   PresentationML modules — they exercised
   the spreadsheet/presentation modules and were never in the solution. `git log` has them.

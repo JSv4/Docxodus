@@ -11,10 +11,10 @@ using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using Docxodus;
 using Xunit;
-using A = DocumentFormat.OpenXml.Drawing;
-using W = DocumentFormat.OpenXml.Wordprocessing;
+using Drw = DocumentFormat.OpenXml.Drawing;
+using Wp = DocumentFormat.OpenXml.Wordprocessing;
 
-namespace OxPt
+namespace Docxodus.Tests
 {
     /// <summary>
     /// Comprehensive feature verification tests for resolved WmlToHtmlConverter gaps.
@@ -35,12 +35,12 @@ namespace OxPt
                     AddBasicStyles(mainPart);
                     AddBasicSettings(mainPart);
 
-                    mainPart.Document = new W.Document(
-                        new W.Body(
-                            new W.Paragraph(new W.Run(new W.Text("Test content"))),
-                            new W.SectionProperties(
-                                new W.PageSize { Width = 12240, Height = 15840 }, // US Letter in twips
-                                new W.PageMargin { Top = 1440, Right = 1440, Bottom = 1440, Left = 1440 }
+                    mainPart.Document = new Wp.Document(
+                        new Wp.Body(
+                            new Wp.Paragraph(new Wp.Run(new Wp.Text("Test content"))),
+                            new Wp.SectionProperties(
+                                new Wp.PageSize { Width = 12240, Height = 15840 }, // US Letter in twips
+                                new Wp.PageMargin { Top = 1440, Right = 1440, Bottom = 1440, Left = 1440 }
                             )
                         )
                     );
@@ -76,21 +76,21 @@ namespace OxPt
                     AddBasicSettings(mainPart);
 
                     // Table with 6 inch DXA width = 8640 twips = 432pt
-                    var table = new W.Table(
-                        new W.TableProperties(
-                            new W.TableWidth { Width = "8640", Type = W.TableWidthUnitValues.Dxa },
-                            new W.TableBorders(
-                                new W.TopBorder { Val = W.BorderValues.Single, Size = 4 },
-                                new W.BottomBorder { Val = W.BorderValues.Single, Size = 4 }
+                    var table = new Wp.Table(
+                        new Wp.TableProperties(
+                            new Wp.TableWidth { Width = "8640", Type = Wp.TableWidthUnitValues.Dxa },
+                            new Wp.TableBorders(
+                                new Wp.TopBorder { Val = Wp.BorderValues.Single, Size = 4 },
+                                new Wp.BottomBorder { Val = Wp.BorderValues.Single, Size = 4 }
                             )
                         )
                     );
-                    var row = new W.TableRow();
-                    var cell = new W.TableCell(new W.Paragraph(new W.Run(new W.Text("Cell content"))));
+                    var row = new Wp.TableRow();
+                    var cell = new Wp.TableCell(new Wp.Paragraph(new Wp.Run(new Wp.Text("Cell content"))));
                     row.Append(cell);
                     table.Append(row);
 
-                    mainPart.Document = new W.Document(new W.Body(table));
+                    mainPart.Document = new Wp.Document(new Wp.Body(table));
                     mainPart.Document.Save();
 
                     var settings = new WmlToHtmlConverterSettings();
@@ -118,24 +118,24 @@ namespace OxPt
                     AddBasicStyles(mainPart);
                     AddBasicSettings(mainPart);
 
-                    var table = new W.Table(
-                        new W.TableProperties(
-                            new W.TableBorders(
-                                new W.TopBorder { Val = W.BorderValues.Nil },
-                                new W.LeftBorder { Val = W.BorderValues.Nil },
-                                new W.BottomBorder { Val = W.BorderValues.Nil },
-                                new W.RightBorder { Val = W.BorderValues.Nil },
-                                new W.InsideHorizontalBorder { Val = W.BorderValues.Nil },
-                                new W.InsideVerticalBorder { Val = W.BorderValues.Nil }
+                    var table = new Wp.Table(
+                        new Wp.TableProperties(
+                            new Wp.TableBorders(
+                                new Wp.TopBorder { Val = Wp.BorderValues.Nil },
+                                new Wp.LeftBorder { Val = Wp.BorderValues.Nil },
+                                new Wp.BottomBorder { Val = Wp.BorderValues.Nil },
+                                new Wp.RightBorder { Val = Wp.BorderValues.Nil },
+                                new Wp.InsideHorizontalBorder { Val = Wp.BorderValues.Nil },
+                                new Wp.InsideVerticalBorder { Val = Wp.BorderValues.Nil }
                             )
                         )
                     );
-                    var row = new W.TableRow();
-                    var cell = new W.TableCell(new W.Paragraph(new W.Run(new W.Text("Borderless cell"))));
+                    var row = new Wp.TableRow();
+                    var cell = new Wp.TableCell(new Wp.Paragraph(new Wp.Run(new Wp.Text("Borderless cell"))));
                     row.Append(cell);
                     table.Append(row);
 
-                    mainPart.Document = new W.Document(new W.Body(table));
+                    mainPart.Document = new Wp.Document(new Wp.Body(table));
                     mainPart.Document.Save();
 
                     var settings = new WmlToHtmlConverterSettings();
@@ -163,12 +163,12 @@ namespace OxPt
                     AddBasicStyles(mainPart);
                     AddBasicSettings(mainPart);
 
-                    mainPart.Document = new W.Document(
-                        new W.Body(
-                            new W.Paragraph(
-                                new W.Run(
-                                    new W.RunProperties(new W.Color { ThemeColor = W.ThemeColorValues.Accent1 }),
-                                    new W.Text("Theme colored text")
+                    mainPart.Document = new Wp.Document(
+                        new Wp.Body(
+                            new Wp.Paragraph(
+                                new Wp.Run(
+                                    new Wp.RunProperties(new Wp.Color { ThemeColor = Wp.ThemeColorValues.Accent1 }),
+                                    new Wp.Text("Theme colored text")
                                 )
                             )
                         )
@@ -198,14 +198,14 @@ namespace OxPt
                     AddBasicSettings(mainPart);
 
                     // Use theme color but also provide explicit Val (fallback)
-                    mainPart.Document = new W.Document(
-                        new W.Body(
-                            new W.Paragraph(
-                                new W.Run(
-                                    new W.RunProperties(
-                                        new W.Color { Val = "FF0000", ThemeColor = W.ThemeColorValues.Accent1 }
+                    mainPart.Document = new Wp.Document(
+                        new Wp.Body(
+                            new Wp.Paragraph(
+                                new Wp.Run(
+                                    new Wp.RunProperties(
+                                        new Wp.Color { Val = "FF0000", ThemeColor = Wp.ThemeColorValues.Accent1 }
                                     ),
-                                    new W.Text("Text with fallback color")
+                                    new Wp.Text("Text with fallback color")
                                 )
                             )
                         )
@@ -240,13 +240,13 @@ namespace OxPt
 
                     // Set document language to French
                     var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
-                    settingsPart.Settings = new W.Settings(
-                        new W.ThemeFontLanguages { Val = "fr-FR" }
+                    settingsPart.Settings = new Wp.Settings(
+                        new Wp.ThemeFontLanguages { Val = "fr-FR" }
                     );
                     settingsPart.Settings.Save();
 
-                    mainPart.Document = new W.Document(
-                        new W.Body(new W.Paragraph(new W.Run(new W.Text("Bonjour"))))
+                    mainPart.Document = new Wp.Document(
+                        new Wp.Body(new Wp.Paragraph(new Wp.Run(new Wp.Text("Bonjour"))))
                     );
                     mainPart.Document.Save();
 
@@ -272,13 +272,13 @@ namespace OxPt
 
                     // Document is French
                     var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
-                    settingsPart.Settings = new W.Settings(
-                        new W.ThemeFontLanguages { Val = "fr-FR" }
+                    settingsPart.Settings = new Wp.Settings(
+                        new Wp.ThemeFontLanguages { Val = "fr-FR" }
                     );
                     settingsPart.Settings.Save();
 
-                    mainPart.Document = new W.Document(
-                        new W.Body(new W.Paragraph(new W.Run(new W.Text("Test"))))
+                    mainPart.Document = new Wp.Document(
+                        new Wp.Body(new Wp.Paragraph(new Wp.Run(new Wp.Text("Test"))))
                     );
                     mainPart.Document.Save();
 
@@ -308,13 +308,13 @@ namespace OxPt
                     AddBasicStyles(mainPart);
                     AddBasicSettings(mainPart); // Default is en-US
 
-                    mainPart.Document = new W.Document(
-                        new W.Body(
-                            new W.Paragraph(
-                                new W.Run(new W.Text("English text ") { Space = SpaceProcessingModeValues.Preserve }),
-                                new W.Run(
-                                    new W.RunProperties(new W.Languages { Val = "es" }),
-                                    new W.Text("Texto en español")
+                    mainPart.Document = new Wp.Document(
+                        new Wp.Body(
+                            new Wp.Paragraph(
+                                new Wp.Run(new Wp.Text("English text ") { Space = SpaceProcessingModeValues.Preserve }),
+                                new Wp.Run(
+                                    new Wp.RunProperties(new Wp.Languages { Val = "es" }),
+                                    new Wp.Text("Texto en español")
                                 )
                             )
                         )
@@ -343,15 +343,15 @@ namespace OxPt
                     AddBasicStyles(mainPart);
                     AddBasicSettings(mainPart); // Default is en-US
 
-                    mainPart.Document = new W.Document(
-                        new W.Body(
-                            new W.Paragraph(
-                                new W.Run(
-                                    new W.RunProperties(
-                                        new W.RunFonts { EastAsia = "MS Mincho" },
-                                        new W.Languages { EastAsia = "ja-JP" }
+                    mainPart.Document = new Wp.Document(
+                        new Wp.Body(
+                            new Wp.Paragraph(
+                                new Wp.Run(
+                                    new Wp.RunProperties(
+                                        new Wp.RunFonts { EastAsia = "MS Mincho" },
+                                        new Wp.Languages { EastAsia = "ja-JP" }
                                     ),
-                                    new W.Text("日本語テスト")
+                                    new Wp.Text("日本語テスト")
                                 )
                             )
                         )
@@ -387,12 +387,12 @@ namespace OxPt
                     var mainPart = wDoc.AddMainDocumentPart();
 
                     var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
-                    stylesPart.Styles = new W.Styles(
-                        new W.DocDefaults(
-                            new W.RunPropertiesDefault(
-                                new W.RunPropertiesBaseStyle(
-                                    new W.RunFonts { Ascii = "MyUnknownProprietaryFont" },
-                                    new W.FontSize { Val = "24" }
+                    stylesPart.Styles = new Wp.Styles(
+                        new Wp.DocDefaults(
+                            new Wp.RunPropertiesDefault(
+                                new Wp.RunPropertiesBaseStyle(
+                                    new Wp.RunFonts { Ascii = "MyUnknownProprietaryFont" },
+                                    new Wp.FontSize { Val = "24" }
                                 )
                             )
                         )
@@ -400,8 +400,8 @@ namespace OxPt
                     stylesPart.Styles.Save();
                     AddBasicSettings(mainPart);
 
-                    mainPart.Document = new W.Document(
-                        new W.Body(new W.Paragraph(new W.Run(new W.Text("Test with unknown font"))))
+                    mainPart.Document = new Wp.Document(
+                        new Wp.Body(new Wp.Paragraph(new Wp.Run(new Wp.Text("Test with unknown font"))))
                     );
                     mainPart.Document.Save();
 
@@ -426,12 +426,12 @@ namespace OxPt
                     var mainPart = wDoc.AddMainDocumentPart();
 
                     var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
-                    stylesPart.Styles = new W.Styles(
-                        new W.DocDefaults(
-                            new W.RunPropertiesDefault(
-                                new W.RunPropertiesBaseStyle(
-                                    new W.RunFonts { Ascii = "CustomSansFont" },
-                                    new W.FontSize { Val = "24" }
+                    stylesPart.Styles = new Wp.Styles(
+                        new Wp.DocDefaults(
+                            new Wp.RunPropertiesDefault(
+                                new Wp.RunPropertiesBaseStyle(
+                                    new Wp.RunFonts { Ascii = "CustomSansFont" },
+                                    new Wp.FontSize { Val = "24" }
                                 )
                             )
                         )
@@ -439,8 +439,8 @@ namespace OxPt
                     stylesPart.Styles.Save();
                     AddBasicSettings(mainPart);
 
-                    mainPart.Document = new W.Document(
-                        new W.Body(new W.Paragraph(new W.Run(new W.Text("Test with sans font"))))
+                    mainPart.Document = new Wp.Document(
+                        new Wp.Body(new Wp.Paragraph(new Wp.Run(new Wp.Text("Test with sans font"))))
                     );
                     mainPart.Document.Save();
 
@@ -465,12 +465,12 @@ namespace OxPt
                     var mainPart = wDoc.AddMainDocumentPart();
 
                     var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
-                    stylesPart.Styles = new W.Styles(
-                        new W.DocDefaults(
-                            new W.RunPropertiesDefault(
-                                new W.RunPropertiesBaseStyle(
-                                    new W.RunFonts { Ascii = "Courier New" },
-                                    new W.FontSize { Val = "24" }
+                    stylesPart.Styles = new Wp.Styles(
+                        new Wp.DocDefaults(
+                            new Wp.RunPropertiesDefault(
+                                new Wp.RunPropertiesBaseStyle(
+                                    new Wp.RunFonts { Ascii = "Courier New" },
+                                    new Wp.FontSize { Val = "24" }
                                 )
                             )
                         )
@@ -478,8 +478,8 @@ namespace OxPt
                     stylesPart.Styles.Save();
                     AddBasicSettings(mainPart);
 
-                    mainPart.Document = new W.Document(
-                        new W.Body(new W.Paragraph(new W.Run(new W.Text("Code sample"))))
+                    mainPart.Document = new Wp.Document(
+                        new Wp.Body(new Wp.Paragraph(new Wp.Run(new Wp.Text("Code sample"))))
                     );
                     mainPart.Document.Save();
 
@@ -508,12 +508,12 @@ namespace OxPt
                     var mainPart = wDoc.AddMainDocumentPart();
 
                     var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
-                    stylesPart.Styles = new W.Styles(
-                        new W.DocDefaults(
-                            new W.RunPropertiesDefault(
-                                new W.RunPropertiesBaseStyle(
-                                    new W.RunFonts { Ascii = "Times New Roman", EastAsia = "MS Mincho" },
-                                    new W.FontSize { Val = "24" }
+                    stylesPart.Styles = new Wp.Styles(
+                        new Wp.DocDefaults(
+                            new Wp.RunPropertiesDefault(
+                                new Wp.RunPropertiesBaseStyle(
+                                    new Wp.RunFonts { Ascii = "Times New Roman", EastAsia = "MS Mincho" },
+                                    new Wp.FontSize { Val = "24" }
                                 )
                             )
                         )
@@ -521,15 +521,15 @@ namespace OxPt
                     stylesPart.Styles.Save();
                     AddBasicSettings(mainPart);
 
-                    mainPart.Document = new W.Document(
-                        new W.Body(
-                            new W.Paragraph(
-                                new W.Run(
-                                    new W.RunProperties(
-                                        new W.RunFonts { EastAsia = "MS Mincho" },
-                                        new W.Languages { EastAsia = "ja-JP" }
+                    mainPart.Document = new Wp.Document(
+                        new Wp.Body(
+                            new Wp.Paragraph(
+                                new Wp.Run(
+                                    new Wp.RunProperties(
+                                        new Wp.RunFonts { EastAsia = "MS Mincho" },
+                                        new Wp.Languages { EastAsia = "ja-JP" }
                                     ),
-                                    new W.Text("日本語テスト")
+                                    new Wp.Text("日本語テスト")
                                 )
                             )
                         )
@@ -556,12 +556,12 @@ namespace OxPt
                     var mainPart = wDoc.AddMainDocumentPart();
 
                     var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
-                    stylesPart.Styles = new W.Styles(
-                        new W.DocDefaults(
-                            new W.RunPropertiesDefault(
-                                new W.RunPropertiesBaseStyle(
-                                    new W.RunFonts { Ascii = "Times New Roman", EastAsia = "SimSun" },
-                                    new W.FontSize { Val = "24" }
+                    stylesPart.Styles = new Wp.Styles(
+                        new Wp.DocDefaults(
+                            new Wp.RunPropertiesDefault(
+                                new Wp.RunPropertiesBaseStyle(
+                                    new Wp.RunFonts { Ascii = "Times New Roman", EastAsia = "SimSun" },
+                                    new Wp.FontSize { Val = "24" }
                                 )
                             )
                         )
@@ -569,15 +569,15 @@ namespace OxPt
                     stylesPart.Styles.Save();
                     AddBasicSettings(mainPart);
 
-                    mainPart.Document = new W.Document(
-                        new W.Body(
-                            new W.Paragraph(
-                                new W.Run(
-                                    new W.RunProperties(
-                                        new W.RunFonts { EastAsia = "SimSun" },
-                                        new W.Languages { EastAsia = "zh-CN" }
+                    mainPart.Document = new Wp.Document(
+                        new Wp.Body(
+                            new Wp.Paragraph(
+                                new Wp.Run(
+                                    new Wp.RunProperties(
+                                        new Wp.RunFonts { EastAsia = "SimSun" },
+                                        new Wp.Languages { EastAsia = "zh-CN" }
                                     ),
-                                    new W.Text("简体中文测试")
+                                    new Wp.Text("简体中文测试")
                                 )
                             )
                         )
@@ -612,102 +612,102 @@ namespace OxPt
 
                     // Set document language to en-US
                     var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
-                    settingsPart.Settings = new W.Settings(
-                        new W.ThemeFontLanguages { Val = "en-US" }
+                    settingsPart.Settings = new Wp.Settings(
+                        new Wp.ThemeFontLanguages { Val = "en-US" }
                     );
                     settingsPart.Settings.Save();
 
-                    var body = new W.Body();
+                    var body = new Wp.Body();
 
                     // 1. Add themed paragraph
-                    body.Append(new W.Paragraph(
-                        new W.Run(
-                            new W.RunProperties(new W.Color { ThemeColor = W.ThemeColorValues.Accent1 }),
-                            new W.Text("AI Report - Theme colored heading")
+                    body.Append(new Wp.Paragraph(
+                        new Wp.Run(
+                            new Wp.RunProperties(new Wp.Color { ThemeColor = Wp.ThemeColorValues.Accent1 }),
+                            new Wp.Text("AI Report - Theme colored heading")
                         )
                     ));
 
                     // 2. Add foreign language text
-                    body.Append(new W.Paragraph(
-                        new W.Run(new W.Text("Markets: ") { Space = SpaceProcessingModeValues.Preserve }),
-                        new W.Run(
-                            new W.RunProperties(new W.Languages { Val = "fr" }),
-                            new W.Text("France ")
+                    body.Append(new Wp.Paragraph(
+                        new Wp.Run(new Wp.Text("Markets: ") { Space = SpaceProcessingModeValues.Preserve }),
+                        new Wp.Run(
+                            new Wp.RunProperties(new Wp.Languages { Val = "fr" }),
+                            new Wp.Text("France ")
                         ),
-                        new W.Run(
-                            new W.RunProperties(new W.Languages { Val = "es" }),
-                            new W.Text("España")
+                        new Wp.Run(
+                            new Wp.RunProperties(new Wp.Languages { Val = "es" }),
+                            new Wp.Text("España")
                         )
                     ));
 
                     // 3. Add table with DXA width
-                    var table = new W.Table(
-                        new W.TableProperties(
-                            new W.TableWidth { Width = "4320", Type = W.TableWidthUnitValues.Dxa }, // 3 inches = 216pt
-                            new W.TableBorders(
-                                new W.TopBorder { Val = W.BorderValues.Single, Size = 4 },
-                                new W.BottomBorder { Val = W.BorderValues.Single, Size = 4 }
+                    var table = new Wp.Table(
+                        new Wp.TableProperties(
+                            new Wp.TableWidth { Width = "4320", Type = Wp.TableWidthUnitValues.Dxa }, // 3 inches = 216pt
+                            new Wp.TableBorders(
+                                new Wp.TopBorder { Val = Wp.BorderValues.Single, Size = 4 },
+                                new Wp.BottomBorder { Val = Wp.BorderValues.Single, Size = 4 }
                             )
                         )
                     );
-                    var tRow = new W.TableRow();
-                    var tCell = new W.TableCell(new W.Paragraph(new W.Run(new W.Text("Data cell"))));
+                    var tRow = new Wp.TableRow();
+                    var tCell = new Wp.TableCell(new Wp.Paragraph(new Wp.Run(new Wp.Text("Data cell"))));
                     tRow.Append(tCell);
                     table.Append(tRow);
                     body.Append(table);
 
                     // 4. Add borderless table
-                    var borderlessTable = new W.Table(
-                        new W.TableProperties(
-                            new W.TableBorders(
-                                new W.TopBorder { Val = W.BorderValues.Nil },
-                                new W.LeftBorder { Val = W.BorderValues.Nil },
-                                new W.BottomBorder { Val = W.BorderValues.Nil },
-                                new W.RightBorder { Val = W.BorderValues.Nil }
+                    var borderlessTable = new Wp.Table(
+                        new Wp.TableProperties(
+                            new Wp.TableBorders(
+                                new Wp.TopBorder { Val = Wp.BorderValues.Nil },
+                                new Wp.LeftBorder { Val = Wp.BorderValues.Nil },
+                                new Wp.BottomBorder { Val = Wp.BorderValues.Nil },
+                                new Wp.RightBorder { Val = Wp.BorderValues.Nil }
                             )
                         )
                     );
-                    var bRow = new W.TableRow();
-                    var bCell = new W.TableCell(new W.Paragraph(new W.Run(new W.Text("Signature: _______________"))));
+                    var bRow = new Wp.TableRow();
+                    var bCell = new Wp.TableCell(new Wp.Paragraph(new Wp.Run(new Wp.Text("Signature: _______________"))));
                     bRow.Append(bCell);
                     borderlessTable.Append(bRow);
                     body.Append(borderlessTable);
 
                     // 5. Add Japanese text
-                    body.Append(new W.Paragraph(
-                        new W.Run(new W.Text("Japan: ") { Space = SpaceProcessingModeValues.Preserve }),
-                        new W.Run(
-                            new W.RunProperties(
-                                new W.RunFonts { EastAsia = "MS Mincho" },
-                                new W.Languages { EastAsia = "ja-JP" }
+                    body.Append(new Wp.Paragraph(
+                        new Wp.Run(new Wp.Text("Japan: ") { Space = SpaceProcessingModeValues.Preserve }),
+                        new Wp.Run(
+                            new Wp.RunProperties(
+                                new Wp.RunFonts { EastAsia = "MS Mincho" },
+                                new Wp.Languages { EastAsia = "ja-JP" }
                             ),
-                            new W.Text("人工知能")
+                            new Wp.Text("人工知能")
                         )
                     ));
 
                     // 6. Add code sample with monospace font
-                    body.Append(new W.Paragraph(
-                        new W.Run(
-                            new W.RunProperties(new W.RunFonts { Ascii = "Courier New", HighAnsi = "Courier New" }),
-                            new W.Text("console.log('AI')")
+                    body.Append(new Wp.Paragraph(
+                        new Wp.Run(
+                            new Wp.RunProperties(new Wp.RunFonts { Ascii = "Courier New", HighAnsi = "Courier New" }),
+                            new Wp.Text("console.log('AI')")
                         )
                     ));
 
                     // 7. Add unknown font text
-                    body.Append(new W.Paragraph(
-                        new W.Run(
-                            new W.RunProperties(new W.RunFonts { Ascii = "ProprietaryBrandFont" }),
-                            new W.Text("Custom branded content")
+                    body.Append(new Wp.Paragraph(
+                        new Wp.Run(
+                            new Wp.RunProperties(new Wp.RunFonts { Ascii = "ProprietaryBrandFont" }),
+                            new Wp.Text("Custom branded content")
                         )
                     ));
 
                     // Add page settings
-                    body.Append(new W.SectionProperties(
-                        new W.PageSize { Width = 12240, Height = 15840 },
-                        new W.PageMargin { Top = 1440, Right = 1440, Bottom = 1440, Left = 1440 }
+                    body.Append(new Wp.SectionProperties(
+                        new Wp.PageSize { Width = 12240, Height = 15840 },
+                        new Wp.PageMargin { Top = 1440, Right = 1440, Bottom = 1440, Left = 1440 }
                     ));
 
-                    mainPart.Document = new W.Document(body);
+                    mainPart.Document = new Wp.Document(body);
                     mainPart.Document.Save();
 
                     var settings = new WmlToHtmlConverterSettings
@@ -772,12 +772,12 @@ namespace OxPt
         private void AddBasicStyles(MainDocumentPart mainPart)
         {
             var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
-            stylesPart.Styles = new W.Styles(
-                new W.DocDefaults(
-                    new W.RunPropertiesDefault(
-                        new W.RunPropertiesBaseStyle(
-                            new W.RunFonts { Ascii = "Calibri", HighAnsi = "Calibri" },
-                            new W.FontSize { Val = "24" }
+            stylesPart.Styles = new Wp.Styles(
+                new Wp.DocDefaults(
+                    new Wp.RunPropertiesDefault(
+                        new Wp.RunPropertiesBaseStyle(
+                            new Wp.RunFonts { Ascii = "Calibri", HighAnsi = "Calibri" },
+                            new Wp.FontSize { Val = "24" }
                         )
                     )
                 )
@@ -788,8 +788,8 @@ namespace OxPt
         private void AddBasicSettings(MainDocumentPart mainPart)
         {
             var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
-            settingsPart.Settings = new W.Settings(
-                new W.ThemeFontLanguages { Val = "en-US" }
+            settingsPart.Settings = new Wp.Settings(
+                new Wp.ThemeFontLanguages { Val = "en-US" }
             );
             settingsPart.Settings.Save();
         }
@@ -797,37 +797,37 @@ namespace OxPt
         private void AddThemePart(MainDocumentPart mainPart, string accent1Color)
         {
             var themePart = mainPart.AddNewPart<ThemePart>();
-            themePart.Theme = new A.Theme(
-                new A.ThemeElements(
-                    new A.ColorScheme(
-                        new A.Dark1Color(new A.RgbColorModelHex { Val = "000000" }),
-                        new A.Light1Color(new A.RgbColorModelHex { Val = "FFFFFF" }),
-                        new A.Dark2Color(new A.RgbColorModelHex { Val = "44546A" }),
-                        new A.Light2Color(new A.RgbColorModelHex { Val = "E7E6E6" }),
-                        new A.Accent1Color(new A.RgbColorModelHex { Val = accent1Color }),
-                        new A.Accent2Color(new A.RgbColorModelHex { Val = "ED7D31" }),
-                        new A.Accent3Color(new A.RgbColorModelHex { Val = "A5A5A5" }),
-                        new A.Accent4Color(new A.RgbColorModelHex { Val = "FFC000" }),
-                        new A.Accent5Color(new A.RgbColorModelHex { Val = "5B9BD5" }),
-                        new A.Accent6Color(new A.RgbColorModelHex { Val = "70AD47" }),
-                        new A.Hyperlink(new A.RgbColorModelHex { Val = "0563C1" }),
-                        new A.FollowedHyperlinkColor(new A.RgbColorModelHex { Val = "954F72" })
+            themePart.Theme = new Drw.Theme(
+                new Drw.ThemeElements(
+                    new Drw.ColorScheme(
+                        new Drw.Dark1Color(new Drw.RgbColorModelHex { Val = "000000" }),
+                        new Drw.Light1Color(new Drw.RgbColorModelHex { Val = "FFFFFF" }),
+                        new Drw.Dark2Color(new Drw.RgbColorModelHex { Val = "44546A" }),
+                        new Drw.Light2Color(new Drw.RgbColorModelHex { Val = "E7E6E6" }),
+                        new Drw.Accent1Color(new Drw.RgbColorModelHex { Val = accent1Color }),
+                        new Drw.Accent2Color(new Drw.RgbColorModelHex { Val = "ED7D31" }),
+                        new Drw.Accent3Color(new Drw.RgbColorModelHex { Val = "A5A5A5" }),
+                        new Drw.Accent4Color(new Drw.RgbColorModelHex { Val = "FFC000" }),
+                        new Drw.Accent5Color(new Drw.RgbColorModelHex { Val = "5B9BD5" }),
+                        new Drw.Accent6Color(new Drw.RgbColorModelHex { Val = "70AD47" }),
+                        new Drw.Hyperlink(new Drw.RgbColorModelHex { Val = "0563C1" }),
+                        new Drw.FollowedHyperlinkColor(new Drw.RgbColorModelHex { Val = "954F72" })
                     )
                     { Name = "Office" },
-                    new A.FontScheme(
-                        new A.MajorFont(new A.LatinFont { Typeface = "Calibri Light" }),
-                        new A.MinorFont(new A.LatinFont { Typeface = "Calibri" })
+                    new Drw.FontScheme(
+                        new Drw.MajorFont(new Drw.LatinFont { Typeface = "Calibri Light" }),
+                        new Drw.MinorFont(new Drw.LatinFont { Typeface = "Calibri" })
                     )
                     { Name = "Office" },
-                    new A.FormatScheme(
-                        new A.FillStyleList(
-                            new A.SolidFill(new A.SchemeColor { Val = A.SchemeColorValues.PhColor })),
-                        new A.LineStyleList(
-                            new A.Outline(new A.SolidFill(new A.SchemeColor { Val = A.SchemeColorValues.PhColor }))
+                    new Drw.FormatScheme(
+                        new Drw.FillStyleList(
+                            new Drw.SolidFill(new Drw.SchemeColor { Val = Drw.SchemeColorValues.PhColor })),
+                        new Drw.LineStyleList(
+                            new Drw.Outline(new Drw.SolidFill(new Drw.SchemeColor { Val = Drw.SchemeColorValues.PhColor }))
                             { Width = 6350 }),
-                        new A.EffectStyleList(new A.EffectStyle(new A.EffectList())),
-                        new A.BackgroundFillStyleList(
-                            new A.SolidFill(new A.SchemeColor { Val = A.SchemeColorValues.PhColor }))
+                        new Drw.EffectStyleList(new Drw.EffectStyle(new Drw.EffectList())),
+                        new Drw.BackgroundFillStyleList(
+                            new Drw.SolidFill(new Drw.SchemeColor { Val = Drw.SchemeColorValues.PhColor }))
                     )
                     { Name = "Office" }
                 )

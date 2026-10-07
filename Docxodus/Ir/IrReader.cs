@@ -68,7 +68,7 @@ internal static class IrReader
 
     /// <summary>
     /// Read <paramref name="doc"/> into an <see cref="IrDocument"/>. The caller's
-    /// <see cref="WmlDocument.DocumentByteArray"/> is left byte-for-byte unchanged.
+    /// <see cref="DocxodusDocument.DocumentByteArray"/> is left byte-for-byte unchanged.
     /// </summary>
     public static IrDocument Read(WmlDocument doc, IrReaderOptions? options = null)
     {

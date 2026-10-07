@@ -14,7 +14,7 @@ namespace Docxodus.Ir.Diff;
 
 /// <summary>
 /// Renders an <see cref="IrEditScript"/> into a NATIVE OOXML tracked-revisions document (M2.4 Task 3 —
-/// the core <c>w:ins</c>/<c>w:del</c> renderer). The output obeys the <see cref="WmlComparer"/> contract:
+/// the core <c>w:ins</c>/<c>w:del</c> renderer). The output obeys the <c>WmlComparer</c> contract:
 /// <b>accept-all-revisions yields the RIGHT document's content; reject-all yields the LEFT's</b>, proven
 /// against <see cref="RevisionProcessor"/> as the round-trip oracle.
 /// </summary>
@@ -2648,7 +2648,7 @@ internal static class IrMarkupRenderer
     }
 
     /// <summary>In-place rewrite of native move markup under one block to plain del/ins (mirrors
-    /// <see cref="WmlComparer"/>'s <c>SimplifyMoveMarkupToDelIns</c>): <c>w:moveFrom</c> → <c>w:del</c>,
+    /// <c>WmlComparer</c>'s <c>SimplifyMoveMarkupToDelIns</c>): <c>w:moveFrom</c> → <c>w:del</c>,
     /// <c>w:moveTo</c> → <c>w:ins</c> (attributes + children preserved), and all four range markers removed.</summary>
     internal static void SimplifyMoveMarkup(XElement block)
     {
@@ -3271,7 +3271,7 @@ internal static class IrMarkupRenderer
 
     /// <summary>
     /// Renumber footnote/endnote ids in the produced package to <b>body-reference document order</b>, mirroring
-    /// <see cref="WmlComparer"/>'s <c>ChangeFootnoteEndnoteReferencesToUniqueRange</c>. Walk every body reference
+    /// <c>WmlComparer</c>'s <c>ChangeFootnoteEndnoteReferencesToUniqueRange</c>. Walk every body reference
     /// (<paramref name="refName"/>) in document order; the n-th reference (1-based) names note ordinal <c>n</c>.
     /// Each reference's <c>@w:id</c> is rewritten to <c>n</c> and its definition (matched by side: a reference
     /// inside <c>w:del</c> resolves a LEFT-sourced definition, an <c>w:ins</c>/equal reference a RIGHT-sourced one)
@@ -3670,7 +3670,7 @@ internal static class IrMarkupRenderer
     /// <item><b>(C) pair + resolve.</b> Drop any marker/reference whose id has no definition; re-close an
     /// orphaned start with a synthetic zero-width end in the start's own context; drop an orphaned end.</item>
     /// </list>
-    /// The blessed <see cref="WmlComparer"/> oracle drops ALL comments on any edit; this preserves them with
+    /// The blessed <c>WmlComparer</c> oracle drops ALL comments on any edit; this preserves them with
     /// fine per-word markup.
     /// </summary>
     internal static void NormalizeComments(MainDocumentPart main, HashSet<string> leftIds, HashSet<string> rightIds,
@@ -4023,7 +4023,7 @@ internal static class IrMarkupRenderer
     /// </list>
     /// Either way the Compare output carries unique, 1:1-paired bookmarks with names intact, so every
     /// <c>REF</c>/<c>PAGEREF</c>/<c>NOTEREF</c>/<c>HYPERLINK \l</c> field and internal hyperlink anchor still
-    /// resolves. The blessed <see cref="WmlComparer"/> oracle strips ALL bookmarks on any edit; this preserves
+    /// resolves. The blessed <c>WmlComparer</c> oracle strips ALL bookmarks on any edit; this preserves
     /// them.
     /// </summary>
     private static void NormalizeBookmarks(
@@ -4468,7 +4468,7 @@ internal static class IrMarkupRenderer
     /// Emit the SOURCE half of a move: the LEFT paragraph bracketed by <c>w:moveFromRangeStart</c>/
     /// <c>w:moveFromRangeEnd</c> (sharing one range id + the group's <c>w:name</c>) with every run wrapped in
     /// <c>w:moveFrom</c> and the paragraph mark marked deleted. Accept removes the moved-from content (it
-    /// relocated); reject restores it. Mirrors <see cref="WmlComparer"/>'s emission.
+    /// relocated); reject restores it. Mirrors <c>WmlComparer</c>'s emission.
     /// </summary>
     private static void EmitMoveSource(IrEditOp op, RenderState state, List<XElement> sink)
     {

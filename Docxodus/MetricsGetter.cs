@@ -65,9 +65,7 @@ namespace Docxodus
                     using (MemoryStream ms = new MemoryStream())
                     {
                         ms.Write(wmlDoc.DocumentByteArray, 0, wmlDoc.DocumentByteArray.Length);
-#if !NET35
                         UriFixer.FixInvalidUri(ms, brokenUri => FixUri(brokenUri));
-#endif
                         wmlDoc = new WmlDocument("dummy.docx", ms.ToArray());
                     }
                     using (MemoryStream ms = new MemoryStream())
@@ -328,9 +326,7 @@ namespace Docxodus
         {
             bool valid = ValidateAgainstSpecificVersion(wDoc, metrics, DocumentFormat.OpenXml.FileFormatVersions.Office2007, H.SdkValidationError2007);
             valid |= ValidateAgainstSpecificVersion(wDoc, metrics, DocumentFormat.OpenXml.FileFormatVersions.Office2010, H.SdkValidationError2010);
-#if !NET35
             valid |= ValidateAgainstSpecificVersion(wDoc, metrics, DocumentFormat.OpenXml.FileFormatVersions.Office2013, H.SdkValidationError2013);
-#endif
 
             int elementCount = 0;
             int paragraphCount = 0;

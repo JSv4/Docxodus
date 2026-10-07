@@ -10,9 +10,8 @@ using DocumentFormat.OpenXml.Packaging;
 using Docxodus;
 using Xunit;
 
-#if !ELIDE_XUNIT_TESTS
 
-namespace OxPt
+namespace Docxodus.Tests
 {
     /// <summary>
     /// The oracle for <c>WordprocessingMLUtil.CanCoalesceAdjacent</c>.
@@ -160,4 +159,3 @@ namespace OxPt
     }
 }
 
-#endif

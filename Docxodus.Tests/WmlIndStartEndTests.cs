@@ -9,7 +9,7 @@ using DocumentFormat.OpenXml.Packaging;
 using Docxodus;
 using Xunit;
 
-namespace OxPt
+namespace Docxodus.Tests
 {
     /// <summary>
     /// Issue #894: ECMA-376 spells a paragraph's indent edges <c>w:start</c>/<c>w:end</c> as well as

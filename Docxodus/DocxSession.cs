@@ -7808,7 +7808,7 @@ public sealed partial class DocxSession : IDisposable
     /// <summary>
     /// Snapshot-scoped projected-part enumeration. Same as
     /// <see cref="EnumerateProjectedParts"/> for the structural parts, but narrows
-    /// <see cref="OpenXmlPackaging.CustomXmlPart"/> enumeration to the Docxodus
+    /// <see cref="DocumentFormat.OpenXml.Packaging.CustomXmlPart"/> enumeration to the Docxodus
     /// <em>annotations</em> CustomXmlPart only (identified by its root namespace
     /// via <see cref="Internal.AnnotationsCustomXml.Find"/>).
     /// </summary>

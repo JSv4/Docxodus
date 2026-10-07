@@ -9,7 +9,7 @@ using System.Text;
 using Docxodus.Verification;
 using Xunit;
 
-namespace OxPt;
+namespace Docxodus.Tests;
 
 public class PackageManifestCoreIntegrityTests
 {

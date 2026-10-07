@@ -24,9 +24,8 @@ using Xunit;
 using Word = Microsoft.Office.Interop.Word;
 #endif
 
-#if !ELIDE_XUNIT_TESTS
 
-namespace OxPt
+namespace Docxodus.Tests
 {
     public class HcTests
     {
@@ -5298,4 +5297,3 @@ namespace OxPt
     }
 }
 
-#endif
