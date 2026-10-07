@@ -21,6 +21,18 @@ namespace Docxodus;
 
 // ─── Session ───────────────────────────────────────────────────────────────
 
+/// <summary>
+/// A stateful, anchor-addressed editing session over one DOCX package: project it, edit it by
+/// anchor, undo and redo, and save it back to bytes. See <c>docs/architecture/docx_mutation_api.md</c>.
+/// </summary>
+/// <remarks>
+/// <para><b>After <see cref="Dispose"/>.</b> A member whose result type carries an error reports
+/// <see cref="EditErrorCode.SessionDisposed"/> in that result (every <see cref="EditResult"/> op,
+/// and the other <c>*Result</c> types that have a failure state). A member with no error channel,
+/// such as a query, a listing or <see cref="Save()"/>, throws <see cref="ObjectDisposedException"/>.
+/// <see cref="Undo"/> and <see cref="Redo"/> return <c>false</c>, as they do whenever there is
+/// nothing to undo or redo.</para>
+/// </remarks>
 public sealed partial class DocxSession : IDisposable
 {
     private readonly DocxSessionSettings _settings;

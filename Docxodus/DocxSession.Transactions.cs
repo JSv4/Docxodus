@@ -929,8 +929,7 @@ public sealed partial class DocxSession
             }
             catch (Exception ex)
             {
-                LastInternalError = ex;
-                RollbackFailedOp();
+                RecordFailedOp(ex);
                 _deliveryEvidence?.Abandon(evidence);
                 return CommitPreviewFailure(EditErrorCode.InternalError, ex.Message, retention);
             }
