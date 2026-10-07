@@ -153,7 +153,17 @@ All notable changes to this project will be documented in this file.
   options, which had drifted from the main-thread `convertDocxToHtml`'s and lacked `stampAnchors`,
   so `{ stampAnchors: true }` took the plain entry point and returned HTML without `data-anchor`
   attributes. Both paths now read one shared list (`npm/src/conversion-options.ts`).
-
+- A misspelled option value for a session op is now refused instead of silently performing a different
+  edit (issue #962). Every string-valued option the wire parsers read (insert position, header/footer
+  kind, page-number field and number format, tracked-change mode, table border scope, shading scope,
+  merge-content policy, row-height rule, list format, paragraph alignment and line-spacing rule, cell
+  alignment, authority category) now goes through one lookup. An absent value still takes the op's
+  default, and the known spellings still match in any case, with or without underscores
+  (`"atLeast"` and `"at_least"` agree). Anything else raises an argument error naming the accepted
+  values. The stdio host and Python client report it as `invalid_argument`, MCP as a tool error
+  (including `docxodus_open`'s `trackedChanges`, which had its own lenient copy), and the browser
+  bridge throws. Before, `"outsid"` bordered every edge of a table, `"exactly"` set an at-least row height,
+  and a misspelled list format removed the list.
 - **`DocxodusDocument.SavePartAs` disposes the part stream it opens**, and the three places that
   copy a part's bytes into a buffer (`SavePartAs`, plus the image and media copies `DocumentBuilder`
   uses when merging) now read with `ReadExactly`. They used a single `Stream.Read`
