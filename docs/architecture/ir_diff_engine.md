@@ -554,8 +554,6 @@ One before-paragraph whose content migrates across N after-paragraphs (the user 
 | Diff-as-data | none | edit-script JSON |
 | Determinism | wall-clock dates by default | deterministic by default |
 
-> **Note for readers of `wml_comparer_gaps.md`:** that document's older "native move markup is not generated" / "format change detection is a gap" claims were stale (both shipped in the v6.x line and are produced by `DocxDiff`'s markup renderer here). The gaps doc has been corrected and points here.
-
 ## Cross-layer ripple
 
 The four-layer ripple (WASM bridge → npm/TypeScript → python host/`docx_scalpel`) for these three entry points is tracked as M2.5 Task 5 (see the program plan). This document covers the .NET public surface.
