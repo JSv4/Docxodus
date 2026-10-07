@@ -5678,8 +5678,7 @@ namespace Docxodus
         {
             // Ignore this paragraph if the previous paragraph has a style separator.
             // We have already transformed this one together with the previous one.
-            var previousParagraph = element.ElementsBeforeSelf(W.p).LastOrDefault();
-            if (HasStyleSeparator(previousParagraph)) return null;
+            if (BlockSiblingIndex.Of(element).FollowsStyleSeparator(element)) return null;
 
             var elementName = GetParagraphElementName(element, wordDoc);
             var isBidi = IsBidi(element);
@@ -6000,7 +5999,7 @@ namespace Docxodus
             // that by examining the preceding element's spacing.
             if (!style.ContainsKey("margin-top"))
             {
-                var precedingSibling = element.ElementsBeforeSelf().LastOrDefault();
+                var precedingSibling = BlockSiblingIndex.Of(element).PreviousElement(element);
                 bool needsDefaultTopMargin = false;
 
                 if (precedingSibling != null && precedingSibling.Name == W.p)
@@ -6445,6 +6444,60 @@ namespace Docxodus
         private static bool HasStyleSeparator(XElement? element)
         {
             return element != null && element.Elements(W.pPr).Elements(W.rPr).Any(e => GetBoolProp(e, W.specVanish));
+        }
+
+        /// <summary>
+        /// Backward-sibling facts for one parent's children, computed in a single pass the first time
+        /// any child asks. LINQ to XML siblings are singly linked, so <c>ElementsBeforeSelf()</c> walks
+        /// from the first child every call; asking it once per paragraph made conversion quadratic in
+        /// the number of body blocks. Built lazily during the transform, which no longer adds or removes
+        /// source blocks, and every caller converts a fresh copy, so the index cannot go stale.
+        /// </summary>
+        private sealed class BlockSiblingIndex
+        {
+            private readonly Dictionary<XElement, XElement?> _previousElement = new();
+            private readonly HashSet<XElement> _followsStyleSeparator = new();
+
+            private BlockSiblingIndex(XElement parent)
+            {
+                XElement? previous = null;
+                XElement? previousParagraph = null;
+                foreach (var child in parent.Elements())
+                {
+                    _previousElement[child] = previous;
+                    previous = child;
+                    if (child.Name != W.p)
+                        continue;
+                    if (HasStyleSeparator(previousParagraph))
+                        _followsStyleSeparator.Add(child);
+                    previousParagraph = child;
+                }
+            }
+
+            public static BlockSiblingIndex Of(XElement child)
+            {
+                var parent = child.Parent!;
+                var index = parent.Annotation<BlockSiblingIndex>();
+                if (index is null)
+                {
+                    index = new BlockSiblingIndex(parent);
+                    parent.AddAnnotation(index);
+                }
+                return index;
+            }
+
+            // A child the index has never seen would mean the tree changed after it was built; answer
+            // from the tree directly rather than from a stale index.
+
+            /// <summary>The element sibling immediately before <paramref name="child"/>, or null.</summary>
+            public XElement? PreviousElement(XElement child) =>
+                _previousElement.TryGetValue(child, out var previous) ? previous : child.ElementsBeforeSelf().LastOrDefault();
+
+            /// <summary>True when the nearest preceding <c>w:p</c> sibling ends in a style separator.</summary>
+            public bool FollowsStyleSeparator(XElement paragraph) =>
+                _previousElement.ContainsKey(paragraph)
+                    ? _followsStyleSeparator.Contains(paragraph)
+                    : HasStyleSeparator(paragraph.ElementsBeforeSelf(W.p).LastOrDefault());
         }
 
         private static bool IsBidi(XElement element)
