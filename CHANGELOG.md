@@ -105,6 +105,12 @@ All notable changes to this project will be documented in this file.
   rarer unpaired-move fallback likewise walks forward from each move start instead of rescanning
   from the document root. (#980)
 
+- **DOCX→HTML conversion of long documents no longer slows down quadratically.** For every
+  paragraph, the converter walked all of the paragraph's preceding siblings to find the previous one,
+  and did the same for every table. It now indexes each parent's children once. A generated
+  32,000-paragraph document converts in about 2.8 s instead of 8.2 s (numbered lists: 8.7 s instead
+  of 13.8 s), with identical HTML. (#981)
+
 - `@docxodus/export` spends about a quarter less time per document (issue #852). The time went to
   per-document setup, not conversion. Each document's fresh browser page fetched and SHA-256-hashed
   the whole runtime asset graph (about 26 MB) again, although the Node host had already verified
