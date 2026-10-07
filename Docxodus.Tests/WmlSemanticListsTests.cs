@@ -92,7 +92,7 @@ namespace OxPt
         {
             var body = Body(Convert(BuildDocx(Item("One") + Item("Two") + Item("Three"), Decimal + Num(1, 0))));
 
-            var list = Assert.Single(body.Descendants().Where(e => e.Name.LocalName == "ol"));
+            var list = Assert.Single(body.Descendants(), e => e.Name.LocalName == "ol");
             Assert.Contains("list-style-type: decimal", Style(list));
             Assert.Equal(new[] { "One", "Two", "Three" }, list.Elements().Select(OwnText));
             Assert.All(list.Elements(), li => Assert.Equal("li", li.Name.LocalName));
@@ -116,7 +116,7 @@ namespace OxPt
             var bullets = AbstractNum(0, ("bullet", "•"));
             var body = Body(Convert(BuildDocx(Item("Apples") + Item("Pears"), bullets + Num(1, 0))));
 
-            var list = Assert.Single(body.Descendants().Where(e => e.Name.LocalName == "ul"));
+            var list = Assert.Single(body.Descendants(), e => e.Name.LocalName == "ul");
             Assert.Contains("list-style-type: disc", Style(list));
             Assert.Equal(2, list.Elements().Count());
         }
@@ -146,7 +146,7 @@ namespace OxPt
             var parenthesized = AbstractNum(0, ("lowerLetter", "(%1)"));
             var body = Body(Convert(BuildDocx(Item("First") + Item("Second"), parenthesized + Num(1, 0))));
 
-            var list = Assert.Single(body.Descendants().Where(e => e.Name.LocalName == "ol"));
+            var list = Assert.Single(body.Descendants(), e => e.Name.LocalName == "ol");
             Assert.Contains("list-style-type: none", Style(list));
             Assert.All(list.Elements(), li => Assert.True(HasMarkerSpan(li)));
             Assert.All(list.Elements(), li => Assert.Contains("display: block", Style(li)));
@@ -171,7 +171,7 @@ namespace OxPt
             var overridden = Num(1, 0, "<w:lvlOverride w:ilvl=\"0\"><w:startOverride w:val=\"5\"/></w:lvlOverride>");
             var body = Body(Convert(BuildDocx(Item("Five") + Item("Six"), Decimal + overridden)));
 
-            var list = Assert.Single(body.Descendants().Where(e => e.Name.LocalName == "ol"));
+            var list = Assert.Single(body.Descendants(), e => e.Name.LocalName == "ol");
             Assert.Equal("5", (string?)list.Attribute("start"));
             Assert.All(list.Elements(), li => Assert.Null(li.Attribute("value")));
         }
@@ -208,7 +208,7 @@ namespace OxPt
             var body = Body(Convert(BuildDocx(Item("Before") + cell, Decimal + Num(1, 0))));
 
             var td = body.Descendants().Single(e => e.Name.LocalName == "td");
-            var inCell = Assert.Single(td.Elements().Where(e => e.Name.LocalName == "ol"));
+            var inCell = Assert.Single(td.Elements(), e => e.Name.LocalName == "ol");
             Assert.Equal(2, inCell.Elements().Count());
             Assert.Equal("Before", OwnText(body.Descendants().First(e => e.Name.LocalName == "ol").Elements().Single()));
         }
@@ -239,7 +239,7 @@ namespace OxPt
                 "<w:rPr><w:sz w:val=\"40\"/></w:rPr></w:lvl></w:abstractNum>";
             var body = Body(Convert(BuildDocx(Item("One") + Item("Two"), bigMarker + Num(1, 0))));
 
-            var list = Assert.Single(body.Descendants().Where(e => e.Name.LocalName == "ol"));
+            var list = Assert.Single(body.Descendants(), e => e.Name.LocalName == "ol");
             Assert.Contains("list-style-type: none", Style(list));
             Assert.All(list.Elements(), li => Assert.True(HasMarkerSpan(li)));
         }
