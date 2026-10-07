@@ -162,6 +162,11 @@ npx tsc --noEmit
 Playwright serves from `npm/dist/wasm/`. **If you edit C#, `.ts`, or the harness HTML,
 re-run `npm run build` first** or you will test stale artifacts.
 
+**Allocation gate.** On pull requests that touch `Docxodus/`, `perf.yml` runs the DocxDiff stress
+and complex-form benchmarks against the base commit's library and the PR's, and fails when a case
+allocates more than 10% above base (time is reported, not gated). Reproduce it with
+`scripts/perf-run.sh origin/main /tmp/perf-results`; details in `benchmarks/docxdiff-stress/README.md`.
+
 The .NET suite no longer dirties `TestFiles/` — the `SH*` spreadsheet tests that used to
 write back to their own committed `.xlsx` fixtures were removed with the SpreadsheetML
 modules. If `git status` shows modified fixtures after a run, a test is writing where it
