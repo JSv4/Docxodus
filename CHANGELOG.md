@@ -128,6 +128,12 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **`DocxodusDocument.SavePartAs` disposes the part stream it opens**, and the three places that
+  copy a part's bytes into a buffer (`SavePartAs`, plus the image and media copies `DocumentBuilder`
+  uses when merging) now read with `ReadExactly`. They used a single `Stream.Read`
+  and ignored its return value. Today's package streams return the whole part in one call, so no
+  truncation was observed, but `Stream.Read` is allowed to return fewer bytes. (#966)
+
 - Recorded how Word lays out a paragraph whose mark is taller than its runs (issue #949): it does not grow the
   last line, or any other. Word for the web's PDF of 10 pt runs under a 20 pt mark, at single and 1.15
   spacing, shows ordinary 10 pt line steps down to the next paragraph. The converter already matched because

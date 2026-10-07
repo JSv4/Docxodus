@@ -1433,7 +1433,8 @@ internal static class HtmlConversionOps
 
     /// <summary>Clone a whole formatting part (styles/numbering/theme/font) from src to dst.</summary>
     private static void CopyPartXml<TPart>(WordprocessingDocument src, WordprocessingDocument dst,
-        Func<MainDocumentPart, TPart?> get) where TPart : OpenXmlPart, IFixedContentTypePart
+        Func<MainDocumentPart, TPart?> get)
+        where TPart : OpenXmlPart, IFixedContentTypePart
     {
         var srcPart = get(src.MainDocumentPart!);
         if (srcPart is null) return;
