@@ -83,7 +83,7 @@ public sealed partial class DocxSession
 
     internal EditResult RawInsertXmlInternal(string anchorId, Position pos, string xml)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var target = FindAnchor(anchorId);
         if (target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
@@ -134,7 +134,7 @@ public sealed partial class DocxSession
 
     internal EditResult RawReplaceXmlInternal(string anchorId, string xml)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var target = FindAnchor(anchorId);
         if (target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);

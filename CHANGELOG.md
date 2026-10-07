@@ -182,6 +182,15 @@ All notable changes to this project will be documented in this file.
     - Python: `list_revisions(author=, change_type=, family=, resolution_status=, part_uri=)`, and
       `max_results` on `grep` / `grep_cross_block`.
     - npm: `listRevisions(filter)` and `GrepOptions.maxResults`.
+- A session whose failed edit could not be rolled back now stops accepting edits (issue #963). When an
+  op throws partway through, the session restores the pre-op snapshot. If that restore also throws,
+  the document may be half-changed. Before, this was only recorded on `LastRollbackError`: the caller
+  saw an ordinary `internal_error` and could keep editing the damaged document over MCP, Python or the
+  browser. Now the failing call reports the new `EditErrorCode.SessionCorrupted` (`session_corrupted`
+  on the wire). Every later mutation is refused with the same code, including undo/redo, which return
+  false. The new `DocxSession.IsCorrupted` flags this state. Reads are not refused, so a caller can
+  inspect the session, then close it and reopen from known-good bytes. Rolling back an enclosing
+  transaction restores its checkpoint and clears the state.
 - **`DocxodusDocument.SavePartAs` disposes the part stream it opens**, and the three places that
   copy a part's bytes into a buffer (`SavePartAs`, plus the image and media copies `DocumentBuilder`
   uses when merging) now read with `ReadExactly`. They used a single `Stream.Read`

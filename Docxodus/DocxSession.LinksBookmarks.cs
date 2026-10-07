@@ -174,7 +174,7 @@ public sealed partial class DocxSession
 
     public EditResult AddHyperlink(string anchorId, CharSpan span, HyperlinkTarget target)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (_trackedChanges == TrackedChangeMode.RenderInline)
             return EditResult.Fail(EditErrorCode.TrackedOperationUnsupported,
                 "hyperlink mutations cannot be represented faithfully as tracked revisions", anchorId);
@@ -239,7 +239,7 @@ public sealed partial class DocxSession
 
     public EditResult UpdateHyperlink(string hyperlinkId, HyperlinkTarget target)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (_trackedChanges == TrackedChangeMode.RenderInline)
             return EditResult.Fail(EditErrorCode.TrackedOperationUnsupported,
                 "hyperlink mutations cannot be represented faithfully as tracked revisions");
@@ -268,7 +268,7 @@ public sealed partial class DocxSession
 
     public EditResult RemoveHyperlink(string hyperlinkId)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (_trackedChanges == TrackedChangeMode.RenderInline)
             return EditResult.Fail(EditErrorCode.TrackedOperationUnsupported,
                 "hyperlink mutations cannot be represented faithfully as tracked revisions");
@@ -312,7 +312,7 @@ public sealed partial class DocxSession
         string bookmarkName,
         CrossReferenceOptions? options = null)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         // The name is embedded verbatim in the field instruction, so the same lexical rule
         // AddBookmark enforces also keeps the instruction well-formed. Word's own reserved
         // names (_Ref…) are legal targets — inserting a cross-reference is exactly what
@@ -417,7 +417,7 @@ public sealed partial class DocxSession
 
     public EditResult AddBookmark(string name, DocumentRange range)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var common = ValidateBookmarkMutation(name);
         if (common is not null) return common;
         if (BookmarkStarts(name).Count != 0)
@@ -441,7 +441,7 @@ public sealed partial class DocxSession
 
     public EditResult RenameBookmark(string name, string newName)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var oldValidation = ValidateBookmarkMutation(name, requireValidName: false);
         if (oldValidation is not null) return oldValidation;
         var newValidation = ValidateBookmarkMutation(newName);
@@ -470,7 +470,7 @@ public sealed partial class DocxSession
 
     public EditResult MoveBookmark(string name, DocumentRange range)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var common = ValidateBookmarkMutation(name, requireValidName: false);
         if (common is not null) return common;
         if (ResolveBookmarkPair(name, hyperlinkTarget: false, null,
@@ -507,7 +507,7 @@ public sealed partial class DocxSession
 
     public EditResult RemoveBookmark(string name)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var common = ValidateBookmarkMutation(name, requireValidName: false);
         if (common is not null) return common;
         if (ResolveBookmarkPair(name, hyperlinkTarget: false, null,

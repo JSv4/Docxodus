@@ -43,7 +43,7 @@ public sealed partial class DocxSession
 
     public EditResult SetListLevel(string anchorId, int levelDelta)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var target = FindAnchor(anchorId);
         if (target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, "anchor not found", anchorId);
@@ -154,7 +154,7 @@ public sealed partial class DocxSession
 
     public EditResult RemoveListMembership(string anchorId)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var target = FindAnchor(anchorId);
         if (target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, "anchor not found", anchorId);
@@ -203,7 +203,7 @@ public sealed partial class DocxSession
     /// </summary>
     public EditResult ApplyListFormat(string anchorId, ListFormat kind)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var target = FindAnchor(anchorId);
         if (target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, "anchor not found", anchorId);
@@ -271,7 +271,7 @@ public sealed partial class DocxSession
     /// </summary>
     public EditResult ApplyListFormatRange(string firstAnchorId, string lastAnchorId, ListFormat kind)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (_trackedChanges == TrackedChangeMode.RenderInline)
             return TrackedStructureUnsupported("ApplyListFormatRange", firstAnchorId);
         var firstTarget = FindAnchor(firstAnchorId);
@@ -398,7 +398,7 @@ public sealed partial class DocxSession
     /// (move the whole sequence onto a clone without it).</summary>
     private EditResult ApplyListStartOverride(string anchorId, int? value)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (_trackedChanges == TrackedChangeMode.RenderInline)
             return TrackedStructureUnsupported(
                 value is null ? "ClearListStartOverride" : "SetListStartOverride", anchorId);

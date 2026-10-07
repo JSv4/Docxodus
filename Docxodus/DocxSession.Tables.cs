@@ -97,7 +97,7 @@ public sealed partial class DocxSession
         out XElement? tr, out XElement? tbl, out AnchorTarget? target)
     {
         p = tc = tr = tbl = null; target = null;
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         target = FindAnchor(cellAnchorId);
         if (target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {cellAnchorId}", cellAnchorId);

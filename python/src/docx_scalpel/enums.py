@@ -417,6 +417,9 @@ class EditErrorCode(str, Enum):
     LINKED_IMAGE_READ_ONLY = "linked_image_read_only"
     INVALID_IMAGE_LAYOUT = "invalid_image_layout"
     INTERNAL_ERROR = "internal_error"
+    # A failed edit's rollback also failed, so the document may be half-changed. Every later
+    # mutation is refused with this code; close the session and reopen it from known-good bytes.
+    SESSION_CORRUPTED = "session_corrupted"
 
     @classmethod
     def _missing_(cls, value: object) -> "EditErrorCode":  # type: ignore[override]
