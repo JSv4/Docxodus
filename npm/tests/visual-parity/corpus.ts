@@ -317,11 +317,14 @@ export const VISUAL_PARITY_CORPUS: VisualCorpusEntry[] = [
     disposition: {
       kind: 'unattributed',
       rationale: 'Wrapping implemented by PR #418: ink F1 0.51179 to 0.94860 in the 2026-08-13 ' +
-        'refresh, with SSIM 0.84881 sitting just under the major boundary (0.85). The prior ' +
-        'attribution is obsolete and the small remaining residual (wrap-pocket line breaks vs ' +
-        'the polygon, same-font line metrics) has not been re-triaged — unattributed so it ' +
-        'gates until it is.',
+        'refresh. Issue #950 measured the lines: Word and LibreOffice place them within 0.2 px of ' +
+        'each other, and #943 brought Docxodus from a mean 1.32 px to 0.61 px of them, though SSIM ' +
+        'fell from 0.84881 to 0.84395, just under the major boundary (0.85). The remaining residual ' +
+        '(wrap-pocket line breaks vs the polygon, glyph rasterization) has not been re-triaged — ' +
+        'unattributed so it gates until it is.',
       reference: 'https://github.com/JSv4/Docxodus/issues/412',
+      wordEvidence: 'Word for the web (2026-10-07) and LibreOffice agree on every text line to 0.2 px ' +
+        'mean, so LibreOffice is a fair line-placement reference for this fixture.',
     },
   },
   {
@@ -362,13 +365,16 @@ export const VISUAL_PARITY_CORPUS: VisualCorpusEntry[] = [
     rationale: 'Endnote reference, end-of-document note placement, and a table inside the note.',
     disposition: {
       kind: 'unattributed',
-      rationale: 'PR #420 flowed endnotes onto the page and fixed the roman citation numbering, ' +
-        'making the prior rationale obsolete and moving the numbers (ink F1 0.93747 to 0.91258, ' +
-        'SSIM 0.84081 to 0.82594 in the 2026-08-13 refresh — the note now occupies page space ' +
-        'the old render left empty). The remaining dominant residual — a systematic ~one-line ' +
-        'downward shift of the whole body plus note-table row offsets — has not been re-triaged ' +
-        'since the flow change; unattributed so it gates until it is.',
+      rationale: 'PR #420 flowed endnotes onto the page and fixed the roman citation numbering ' +
+        '(ink F1 0.93747 to 0.91258, SSIM 0.84081 to 0.82594 in the 2026-08-13 refresh). Issue #950 ' +
+        're-triaged the body: Word and LibreOffice place every body line within 0.2 px of each ' +
+        'other, and #943 brought Docxodus to a mean 0.7 px of them (from 1.17 px), though SSIM fell ' +
+        'to 0.81438. The dominant residual is now the endnote block itself, whose ink starts at ' +
+        'row 697 in Docxodus, 688 in Word and 676 in LibreOffice; unattributed so it gates until ' +
+        'that is triaged.',
       reference: 'https://github.com/JSv4/Docxodus/issues/414',
+      wordEvidence: 'Word for the web (2026-10-07) and LibreOffice agree on the body lines to 0.2 px ' +
+        'mean; Word starts the endnote block at row 688, between LibreOffice (676) and Docxodus (697).',
     },
   },
   {

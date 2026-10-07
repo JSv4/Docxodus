@@ -3,15 +3,36 @@
   "description": "Word-reference evidence store (issue #402). Numbers only: page counts, page geometry, ink extents, and named per-case measurements taken from Microsoft Word PDF exports of the tracked corpus fixtures, rasterized under the same 96-DPI Poppler contract as the benchmark. No binaries and no image corpus are ever committed. Word renders with the genuine Office fonts (not the issue-#379 substitutes), so these measurements decide STRUCTURAL questions; pixel scores against Word are advisory. See WORD_REFERENCE.md for the capture procedure.",
   "procedure": "npm/tests/visual-parity/WORD_REFERENCE.md",
   "environment": {
-    "word": "Microsoft Graph v1.0 DOCX-to-PDF service (build undisclosed)",
-    "os": "Remote conversion service (server OS undisclosed)"
+    "word": "Microsoft Graph v1.0 DOCX-to-PDF service, build undisclosed (cases captured before 2026-10); Word for the web (Microsoft 365), build 20260930.7.17 (cases captured 2026-10-07, each noted)",
+    "os": "Remote conversion service, server OS undisclosed; Word for the web is browser-hosted"
   },
   "cases": [
     { "id": "chart", "status": "pending" },
     { "id": "chart-line", "status": "pending" },
     { "id": "chart-pie", "status": "pending" },
     { "id": "chart-stacked", "status": "pending" },
-    { "id": "endnote", "status": "pending" },
+    {
+      "id": "endnote",
+      "status": "measured",
+      "fixtureSha256": "52dd6af5071df72afd7b3207076d23b119f5b43be30a72ab15bf00531fea62b1",
+      "pageCount": 1,
+      "pages": [
+        {
+          "page": 1,
+          "width": 816,
+          "height": 1056,
+          "inkBounds": {
+            "left": 96,
+            "top": 100,
+            "right": 720,
+            "bottom": 762
+          },
+          "inkPixelRatio": 0.05528
+        }
+      ],
+      "capturedAt": "2026-10-07",
+      "notes": "Captured with Word for the web (build 20260930.7.17): OneDrive upload, File > Export > Download as PDF, no edits."
+    },
     {
       "id": "fields-and-tabs",
       "status": "measured",
@@ -43,10 +64,76 @@
       "notes": "Word renders the cached TOC field-result entries black in the measured region while retaining blue content elsewhere on the page.",
       "capturedAt": "2026-08-13"
     },
-    { "id": "footnote", "status": "pending" },
+    {
+      "id": "footnote",
+      "status": "measured",
+      "fixtureSha256": "a3a43411bf1dfa9b8b3a0907a9966a9f856484564a3f4672fca6be1c2e5f4a81",
+      "pageCount": 1,
+      "pages": [
+        {
+          "page": 1,
+          "width": 816,
+          "height": 1056,
+          "inkBounds": {
+            "left": 96,
+            "top": 99,
+            "right": 287,
+            "bottom": 956
+          },
+          "inkPixelRatio": 0.00116
+        }
+      ],
+      "capturedAt": "2026-10-07",
+      "notes": "Captured with Word for the web (build 20260930.7.17): OneDrive upload, File > Export > Download as PDF, no edits."
+    },
     { "id": "inline-image", "status": "pending" },
     { "id": "landscape-section", "status": "pending" },
-    { "id": "legal-contract", "status": "pending" },
+    {
+      "id": "legal-contract",
+      "status": "measured",
+      "fixtureSha256": "5ad0115afae50d06da1fc7cb21aa61714026fa59b9fa67e454741622d2689346",
+      "pageCount": 3,
+      "pages": [
+        {
+          "page": 1,
+          "width": 816,
+          "height": 1056,
+          "inkBounds": {
+            "left": 96,
+            "top": 100,
+            "right": 719,
+            "bottom": 875
+          },
+          "inkPixelRatio": 0.05996
+        },
+        {
+          "page": 2,
+          "width": 816,
+          "height": 1056,
+          "inkBounds": {
+            "left": 96,
+            "top": 100,
+            "right": 720,
+            "bottom": 957
+          },
+          "inkPixelRatio": 0.08813
+        },
+        {
+          "page": 3,
+          "width": 816,
+          "height": 1056,
+          "inkBounds": {
+            "left": 96,
+            "top": 100,
+            "right": 719,
+            "bottom": 582
+          },
+          "inkPixelRatio": 0.0551
+        }
+      ],
+      "capturedAt": "2026-10-07",
+      "notes": "Captured with Word for the web (build 20260930.7.17): OneDrive upload, File > Export > Download as PDF, no edits."
+    },
     { "id": "merged-table", "status": "pending" },
     { "id": "multi-section", "status": "pending" },
     { "id": "nested-table", "status": "pending" },
@@ -79,8 +166,50 @@
     { "id": "shape", "status": "pending" },
     { "id": "text-formatting", "status": "pending" },
     { "id": "tracked-deletion", "status": "pending" },
-    { "id": "two-column-section", "status": "pending" },
+    {
+      "id": "two-column-section",
+      "status": "measured",
+      "fixtureSha256": "e51b73ae672efcf92d9312e14fade03ff95be2b89a1c06950d98e961e8a61600",
+      "pageCount": 1,
+      "pages": [
+        {
+          "page": 1,
+          "width": 816,
+          "height": 1056,
+          "inkBounds": {
+            "left": 96,
+            "top": 102,
+            "right": 718,
+            "bottom": 942
+          },
+          "inkPixelRatio": 0.05504
+        }
+      ],
+      "capturedAt": "2026-10-07",
+      "notes": "Captured with Word for the web (build 20260930.7.17): OneDrive upload, File > Export > Download as PDF, no edits."
+    },
     { "id": "wrapped-image-square", "status": "pending" },
-    { "id": "wrapped-image-tight", "status": "pending" }
+    {
+      "id": "wrapped-image-tight",
+      "status": "measured",
+      "fixtureSha256": "733dd8177bfa53d535adeb56d6be00934c3861566c11fc602c27786f27d946db",
+      "pageCount": 1,
+      "pages": [
+        {
+          "page": 1,
+          "width": 816,
+          "height": 1056,
+          "inkBounds": {
+            "left": 96,
+            "top": 96,
+            "right": 718,
+            "bottom": 470
+          },
+          "inkPixelRatio": 0.06184
+        }
+      ],
+      "capturedAt": "2026-10-07",
+      "notes": "Captured with Word for the web (build 20260930.7.17): OneDrive upload, File > Export > Download as PDF, no edits."
+    }
   ]
 }
