@@ -353,8 +353,8 @@ Directional marks ensure proper text rendering:
 
 | Word Property | CSS Property |
 |--------------|--------------|
-| `w:ind/@w:left` | `margin-left` (or `margin-right` for RTL) |
-| `w:ind/@w:right` | `margin-right` (or `margin-left` for RTL) |
+| `w:ind/@w:start` or `@w:left` | `margin-left` (or `margin-right` for RTL); `w:start` wins if both |
+| `w:ind/@w:end` or `@w:right` | `margin-right` (or `margin-left` for RTL); `w:end` wins if both |
 | `w:ind/@w:firstLine` | `text-indent` |
 | `w:ind/@w:hanging` | `text-indent` (negative) |
 

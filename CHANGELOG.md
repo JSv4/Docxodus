@@ -110,6 +110,17 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- The HTML converter keeps paragraph and list indents written as `w:ind/@w:start` and `@w:end`
+  (issue #894). ECMA-376 spells the indent edges both `w:start`/`w:end` and `w:left`/`w:right`. Word writes
+  the second form, LibreOffice the first, and the converter read only `w:left`/`w:right`, so a document saved
+  by LibreOffice converted every indent to `margin-left: 0`. Lists were hit hardest: the level's indent was
+  lost but its hanging indent still applied, pulling each marker past the left edge of its text. Every read of
+  the indent (margins, tab layout, bordered paragraph groups, the list tab stop `AssembleFormatting` adds)
+  now accepts both spellings, preferring `w:start`/`w:end` when one element carries both. Style inheritance
+  treats the two spellings as one value, so a paragraph's `w:left` overrides its style's `w:start`.
+  `GetFormatting`, `GetListMembership` and the comparison read the same edge, and `SetParagraphFormat`'s
+  `IndentDelta` adjusts the spelling the paragraph already uses. `AssembleFormatting` also put a list's tab
+  stop at 0 because it read the indent off `w:pPr` instead of `w:ind`; it now sits at the indent.
 - The paginated export now puts each line's baseline where Word does to within a tenth of a point (issue
   #942). Word sets a baseline its natural line height less the font's descent below the line's top, with any
   line gap above the text. Chromium rounds the ascent and descent to whole pixels, floors half the remaining

@@ -7040,7 +7040,7 @@ namespace Docxodus
         {
             if (ind == null) return;
 
-            var left = (decimal?) ind.Attribute(W.left);
+            var left = (decimal?) WordprocessingMLUtil.IndLeadingAttribute(ind);
             if (left != null && elementName != Xhtml.span)
             {
                 var leftInInches = (decimal) left/1440 - currentMarginLeft;
@@ -7050,7 +7050,7 @@ namespace Docxodus
                         : "0");
             }
 
-            var right = (decimal?) ind.Attribute(W.right);
+            var right = (decimal?) WordprocessingMLUtil.IndTrailingAttribute(ind);
             if (right != null)
             {
                 var rightInInches = (decimal) right/1440;
@@ -8577,9 +8577,7 @@ namespace Docxodus
                 ?? clonedPara.Elements(W.pPr).Elements(W.ind).FirstOrDefault();
             if (ind != null)
             {
-                // todo need to handle start and end attributes
-
-                var left = WordprocessingMLUtil.AttributeToTwips(ind.Attribute(W.left));
+                var left = WordprocessingMLUtil.AttributeToTwips(WordprocessingMLUtil.IndLeadingAttribute(ind));
                 if (left != null)
                     leftInTwips = (int)left;
 
@@ -8596,7 +8594,7 @@ namespace Docxodus
             }
             var rightInTwips = ind == null
                 ? 0
-                : (int)(WordprocessingMLUtil.AttributeToTwips(ind.Attribute(W.right) ?? ind.Attribute(W.end)) ?? 0);
+                : (int)(WordprocessingMLUtil.AttributeToTwips(WordprocessingMLUtil.IndTrailingAttribute(ind)) ?? 0);
             int? lineEndTwips = lineWidthTwips - rightInTwips;
 
             // calculate the tab stops, in twips
@@ -9570,7 +9568,7 @@ namespace Docxodus
                     var ind = pPr.Element(W.ind);
                     if (ind != null)
                     {
-                        var leftInInches = (decimal?) ind.Attribute(W.left)/1440m ?? 0;
+                        var leftInInches = (decimal?) WordprocessingMLUtil.IndLeadingAttribute(ind)/1440m ?? 0;
                         var hangingInInches = -(decimal?) ind.Attribute(W.hanging)/1440m ?? 0;
                         currentMarginLeft = leftInInches + hangingInInches;
 

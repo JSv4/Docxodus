@@ -187,8 +187,8 @@ internal static class FormattingIntrospectionOps
             StyleId = effectiveStyleId
                 ?? (string?)pPr?.Element(W.pStyle)?.Attribute(W.val),
             Alignment = alignment,
-            LeftIndentTwips = ReadIntAttribute(ind?.Attribute(W.left) ?? ind?.Attribute(W.start)),
-            RightIndentTwips = ReadIntAttribute(ind?.Attribute(W.right) ?? ind?.Attribute(W.end)),
+            LeftIndentTwips = ReadIntAttribute(WordprocessingMLUtil.IndLeadingAttribute(ind)),
+            RightIndentTwips = ReadIntAttribute(WordprocessingMLUtil.IndTrailingAttribute(ind)),
             FirstLineIndentTwips = ReadIntAttribute(ind?.Attribute(W.firstLine)),
             HangingIndentTwips = ReadIntAttribute(ind?.Attribute(W.hanging)),
             SpacingBeforeTwips = ReadIntAttribute(spacing?.Attribute(W.before)),
