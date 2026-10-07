@@ -2,7 +2,10 @@
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 using System;
+using System.IO;
 using System.Linq;
+using System.Xml.Linq;
+using DocumentFormat.OpenXml.Packaging;
 using Docxodus;
 using Xunit;
 
@@ -80,6 +83,37 @@ public class DocxSessionListNumberingRefreshTests
         Assert.True(session.Redo());
         Assert.Equal(new[] { "1. Item 1", "2. Item 2" }, ListItems(session));
         AssertMatchesReopen(session);
+    }
+
+    /// <summary>
+    /// The session clears numbering only on the parts the retriever numbers. That is safe only
+    /// while a numbered paragraph anywhere else (here, a comment that reuses the body list's
+    /// numId) is never stamped with counters. If the retriever starts numbering comments,
+    /// this fails and the clear set must grow with it.
+    /// </summary>
+    [Fact]
+    public void DS959f_NumberedCommentParagraph_IsNeverStampedWithCounters()
+    {
+        XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        using var session = ThreeItemList(out _);
+        using var stream = new MemoryStream();
+        stream.Write(session.Save());
+        using var doc = WordprocessingDocument.Open(stream, true);
+        var main = doc.MainDocumentPart!;
+        var bodyItem = main.GetXDocument().Descendants(w + "p").First(p => p.Descendants(w + "numPr").Any());
+        var commentItem = new XElement(w + "p",
+            new XElement(w + "pPr", new XElement(bodyItem.Element(w + "pPr")!.Element(w + "numPr")!)),
+            new XElement(w + "r", new XElement(w + "t", "Comment item")));
+        var comments = main.AddNewPart<WordprocessingCommentsPart>();
+        comments.PutXDocument(new XDocument(new XElement(w + "comments",
+            new XElement(w + "comment", new XAttribute(w + "id", "0"), commentItem))));
+        commentItem = comments.GetXDocument().Descendants(w + "p").Single();
+
+        Assert.Equal("1.", ListItemRetriever.RetrieveListItem(doc, bodyItem)?.TrimEnd());
+        Assert.Null(ListItemRetriever.RetrieveListItem(doc, commentItem));
+
+        Assert.NotNull(bodyItem.Annotation<ListItemRetriever.ListItemInfo>());
+        Assert.Null(commentItem.Annotation<ListItemRetriever.ListItemInfo>());
     }
 
     private static DocxSession ThreeItemList(out string[] items)

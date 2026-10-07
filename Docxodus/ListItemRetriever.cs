@@ -340,7 +340,7 @@ namespace Docxodus
 
         /// <summary>
         /// Forget everything this retriever has computed for <paramref name="wordDoc"/>: the
-        /// per-paragraph annotations on every content part it numbers, plus the
+        /// per-paragraph annotations on every part it numbers (<see cref="NumberedParts"/>), plus the
         /// style-and-numId cache on the numbering part and the default-style cache on the
         /// styles part. The next RetrieveListItem call then recounts the whole document from
         /// its current XML, exactly as a fresh open would. An editor that mutates a live
@@ -352,7 +352,7 @@ namespace Docxodus
             // tree rather than GetXDocument, which would parse a part nobody has touched.
             var main = wordDoc.MainDocumentPart;
             if (main is null) return;
-            foreach (var part in wordDoc.ContentParts())
+            foreach (var part in NumberedParts(wordDoc))
             {
                 if (part.Annotation<XDocument>()?.Root is { } root) ClearAnnotations(root);
             }
@@ -963,12 +963,20 @@ namespace Docxodus
             return languageIdentifier;
         }
 
+        /// <summary>
+        /// The parts whose paragraphs this retriever numbers, and therefore the only parts it
+        /// ever annotates: initialization, the in-part check and <see cref="ClearAnnotations(WordprocessingDocument)"/>
+        /// all read this one set. A paragraph in any other part (a comment, a detached element)
+        /// is never stamped and is not a list item.
+        /// </summary>
+        private static IEnumerable<OpenXmlPart> NumberedParts(WordprocessingDocument wordDoc) => wordDoc.ContentParts();
+
         private static bool IsInContentPart(WordprocessingDocument wordDoc, XElement paragraph) =>
-            paragraph.Document is { } xDoc && wordDoc.ContentParts().Any(part => part.GetXDocument() == xDoc);
+            paragraph.Document is { } xDoc && NumberedParts(wordDoc).Any(part => part.GetXDocument() == xDoc);
 
         private static void InitializeListItemRetriever(WordprocessingDocument wordDoc, ListItemRetrieverSettings? settings)
         {
-            foreach (var part in wordDoc.ContentParts())
+            foreach (var part in NumberedParts(wordDoc))
                 InitializeListItemRetrieverForPart(wordDoc, part, settings);
 
 #if false
