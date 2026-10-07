@@ -14,40 +14,6 @@ using Docxodus.Internal;
 
 namespace Docxodus;
 
-/// <summary>
-/// Shared helpers for the <c>PtOpenXml.Unid</c> stable-id attribute. The Unid is a 32-char
-/// hex string. Two assignment strategies coexist:
-/// <list type="bullet">
-/// <item><see cref="AssignToAllElements"/> uses random Guids — the legacy behavior that
-/// <see cref="WmlComparer"/> relies on for its comparison heuristics. <b>Do not change
-/// this call site to the deterministic path.</b> WmlComparer's matching algorithm
-/// assumes Unids are content-independent within each version it compares; making
-/// them content-addressable causes same-content-but-different-content elements in
-/// the two versions (e.g. two distinct images that happen to share a tag-name
-/// signature) to be matched by Unid instead of by content, which inflates the
-/// detected revision count. The split keeps each consumer pointed at the scheme
-/// its algorithm expects.</item>
-/// <item><see cref="AssignToAllElementsDeterministic"/> uses content-addressable hashes
-/// keyed on element content + structural position, so the same document content
-/// produces the same Unids across sessions. Used by <see cref="WmlToMarkdownConverter"/>
-/// so an anchor id captured in one <see cref="DocxSession"/> still resolves in a
-/// fresh session opened over the same bytes.</item>
-/// </list>
-/// </summary>
-/// <remarks>
-/// <para>
-/// The deterministic scheme hashes <c>parent_unid : tag_name : content_sig : dup_index</c>
-/// — where <c>dup_index</c> is the count of preceding siblings with the same
-/// (tag, content_sig). Properties:
-/// </para>
-/// <list type="bullet">
-/// <item>Two opens of the same bytes produce identical Unids on every element.</item>
-/// <item>Editing a paragraph's text changes that paragraph's Unid; siblings stay stable.</item>
-/// <item>Inserting a unique-content paragraph anywhere does not shift any other Unid.</item>
-/// <item>Inserting/editing a duplicate-content paragraph between duplicates shifts the
-/// <c>dup_index</c> of later duplicates of the same content (the only rough edge in the scheme).</item>
-/// </list>
-/// </remarks>
 /// <summary>Which elements a deterministic Unid pass assigns to.</summary>
 internal enum UnidAssignment
 {
@@ -66,43 +32,36 @@ internal enum UnidAssignment
     IdentityBearing,
 }
 
+/// <summary>
+/// Shared helpers for the <c>PtOpenXml.Unid</c> stable-id attribute. The Unid is a 32-char
+/// hex string. <see cref="AssignToAllElementsDeterministic"/> derives it from element content +
+/// structural position, so the same document content produces the same Unids across sessions —
+/// an anchor id captured in one <see cref="DocxSession"/> still resolves in a fresh session opened
+/// over the same bytes. <see cref="GenerateUnid"/> mints a random Unid for freshly-inserted elements.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The deterministic scheme hashes <c>parent_unid : tag_name : content_sig : dup_index</c>
+/// — where <c>dup_index</c> is the count of preceding siblings with the same
+/// (tag, content_sig). Properties:
+/// </para>
+/// <list type="bullet">
+/// <item>Two opens of the same bytes produce identical Unids on every element.</item>
+/// <item>Editing a paragraph's text changes that paragraph's Unid; siblings stay stable.</item>
+/// <item>Inserting a unique-content paragraph anywhere does not shift any other Unid.</item>
+/// <item>Inserting/editing a duplicate-content paragraph between duplicates shifts the
+/// <c>dup_index</c> of later duplicates of the same content (the only rough edge in the scheme).</item>
+/// </list>
+/// </remarks>
 internal static class UnidHelper
 {
-    /// <summary>Random 32-char hex Unid. Used by the legacy bulk-assign path and by
-    /// <see cref="AssignToSelfAndDescendants"/> on freshly-inserted elements that
-    /// don't yet have a parent.</summary>
+    /// <summary>Random 32-char hex Unid. Used by <see cref="AssignToSelfAndDescendants"/> on
+    /// freshly-inserted elements that don't yet have a parent.</summary>
     internal static string GenerateUnid() => Guid.NewGuid().ToString().Replace("-", "");
 
     /// <summary>
-    /// Random-Guid assignment. Assigns a <c>PtOpenXml.Unid</c> attribute to
-    /// <paramref name="contentParent"/> (if it is a footnote/endnote root) and to
-    /// every descendant that does not already have one. This is the path
-    /// <see cref="WmlComparer"/> uses — its matching heuristics expect Unids to be
-    /// distinct across siblings regardless of content.
-    /// </summary>
-    internal static void AssignToAllElements(XElement contentParent)
-    {
-        if (contentParent.Name == W.footnote || contentParent.Name == W.endnote)
-        {
-            if (contentParent.Attribute(PtOpenXml.Unid) == null)
-            {
-                contentParent.Add(new XAttribute(PtOpenXml.Unid, GenerateUnid()));
-            }
-        }
-
-        foreach (var d in contentParent.Descendants())
-        {
-            if (d.Attribute(PtOpenXml.Unid) == null)
-            {
-                d.Add(new XAttribute(PtOpenXml.Unid, GenerateUnid()));
-            }
-        }
-    }
-
-    /// <summary>
-    /// Content-addressable assignment. Identical to <see cref="AssignToAllElements"/>
-    /// in shape (assigns <c>PtOpenXml.Unid</c> on the root if it's a footnote/endnote
-    /// and on every descendant that does not already have one), but the values are
+    /// Content-addressable assignment. Assigns <c>PtOpenXml.Unid</c> on the root if it's a
+    /// footnote/endnote and on every descendant that does not already have one; the values are
     /// derived deterministically from element content + structural position so the
     /// same bytes produce the same Unids across sessions.
     /// </summary>
@@ -215,8 +174,8 @@ internal static class UnidHelper
     }
 
     /// <summary>
-    /// Like <see cref="AssignToAllElements"/> but also assigns to the root element
-    /// itself (regardless of element name). Used for freshly-built block elements
+    /// Assigns a random Unid to the root element itself (regardless of element name) and to
+    /// every descendant that does not already have one. Used for freshly-built block elements
     /// inserted into a document by <c>DocxSession</c>. Uses the random Unid path
     /// because the inserted root often isn't yet attached to a parent at call time;
     /// once saved and reopened, the deterministic projector path will re-derive a

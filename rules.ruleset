@@ -48,6 +48,10 @@
     <Rule Id="SA1202" Action="None" />
     <Rule Id="SA1203" Action="None" />
     <Rule Id="SA1204" Action="None" />
+    <!-- SA1206 wants `required` ahead of the access modifier (`required public`); the codebase
+         writes `public required` throughout, the order the C# docs and the compiler's own fixes use.
+         Off so the library can build warning-free, which is what lets Release fail on warnings. -->
+    <Rule Id="SA1206" Action="None" />
     <Rule Id="SA1208" Action="None" />
     <Rule Id="SA1209" Action="None" />
     <Rule Id="SA1210" Action="None" />
@@ -89,7 +93,11 @@
     <Rule Id="SA1518" Action="None" />
     <Rule Id="SA1519" Action="None" />
     <Rule Id="SA1520" Action="None" />
-    <Rule Id="SA1633" Action="Warning" />
+    <!-- SA1633 requires a header on every file, but the repository's policy (CLAUDE.md) is that a
+         new file may carry no header at all; most of the library has none. Off for the same reason
+         as SA1206. A header that IS present must still be well-formed (SA1634/SA1635/SA1637), and
+         attribution is enforced by SourceFileCopyrightTests (see SA1636 below). -->
+    <Rule Id="SA1633" Action="None" />
     <Rule Id="SA1634" Action="Warning" />
     <Rule Id="SA1635" Action="Warning" />
     <!-- SA1636 compares every file header against stylecop.json's single companyName. This
@@ -97,7 +105,7 @@
          from OpenXmlPowerTools, John Scrudato IV for everything written after the fork - so the
          rule flags one group or the other no matter which name is configured. Attribution is
          enforced per file by Docxodus.Tests/SourceFileCopyrightTests.cs instead, which can tell
-         the two groups apart. SA1633/SA1634/SA1635/SA1637 still require a well-formed header. -->
+         the two groups apart. SA1634/SA1635/SA1637 still require a present header to be well-formed. -->
     <Rule Id="SA1636" Action="None" />
     <Rule Id="SA1637" Action="Warning" />
     <Rule Id="SA1649" Action="None" />

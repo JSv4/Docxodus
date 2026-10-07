@@ -7808,7 +7808,7 @@ public sealed partial class DocxSession : IDisposable
     /// <summary>
     /// Snapshot-scoped projected-part enumeration. Same as
     /// <see cref="EnumerateProjectedParts"/> for the structural parts, but narrows
-    /// <see cref="OpenXmlPackaging.CustomXmlPart"/> enumeration to the Docxodus
+    /// <see cref="DocumentFormat.OpenXml.Packaging.CustomXmlPart"/> enumeration to the Docxodus
     /// <em>annotations</em> CustomXmlPart only (identified by its root namespace
     /// via <see cref="Internal.AnnotationsCustomXml.Find"/>).
     /// </summary>
@@ -9788,8 +9788,8 @@ public sealed partial class DocxSession : IDisposable
         // structured wrappers; validate the whole cell subtree rather than only direct paragraphs.
         if (ValidateBookmarkRemoval(new[] { cell! }, cellAnchorId) is { } bookmarkError)
             return bookmarkError;
-        var hyperlinkOwner = Internal.OwnedPartRelationships.FindOwner(_doc!, cell);
-        var oldHyperlinkIds = cell.Descendants(W.hyperlink)
+        var hyperlinkOwner = Internal.OwnedPartRelationships.FindOwner(_doc!, cell!);
+        var oldHyperlinkIds = cell!.Descendants(W.hyperlink)
             .Select(h => (string?)h.Attribute(R.id)).Where(id => !string.IsNullOrEmpty(id)).Cast<string>().ToList();
 
         _history.RecordPreOp(TakeSnapshot());
@@ -9908,7 +9908,7 @@ public sealed partial class DocxSession : IDisposable
         {
             // Inline code references a "Code" character style by id; ensure it actually
             // exists so the run renders monospace instead of pointing at a phantom style.
-            if (op.Code is true) Internal.StyleFactory.EnsureCodeCharacterStyle(_doc);
+            if (op.Code is true) Internal.StyleFactory.EnsureCodeCharacterStyle(_doc!);
 
             SplitRunsAtOffset(element, actualSpan.Start);
             SplitRunsAtOffset(element, actualSpan.Start + actualSpan.Length);
@@ -9980,7 +9980,7 @@ public sealed partial class DocxSession : IDisposable
         if (target.Anchor.Kind is not ("p" or "h" or "li"))
             return EditResult.Fail(EditErrorCode.AnchorWrongKind, "SetParagraphStyle requires a paragraph anchor", anchorId);
 
-        var element = target.Resolve(_doc);
+        var element = target.Resolve(_doc!);
         if (element is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", anchorId);
         if (RefuseNestedTrackedParagraphPropertyChange(element, anchorId) is { } pending) return pending;
 

@@ -253,6 +253,8 @@ internal sealed record IrTextboxDiff(IrNodeList<IrEditOp> Ops);
 /// </remarks>
 internal sealed record IrNoteDiff(IrNoteKind Kind, string NoteId, IrNodeList<IrEditOp> Ops, string? LeftNoteId = null);
 
+internal readonly record struct IrHeaderFooterBinding(int SectionIndex, IrHeaderFooterKind Kind);
+
 /// <summary>
 /// The block-level diff of ONE header/footer story (the header/footer scope-diff campaign, 2026-07-03).
 /// A story is the effective header (or footer) of one occurrence kind for one body section; stories pair
@@ -282,8 +284,6 @@ internal sealed record IrNoteDiff(IrNoteKind Kind, string NoteId, IrNodeList<IrE
 /// its content is redlined; <see cref="ReferenceBindings"/> then attaches that copy to the exact
 /// section/kind cells that require it.</para>
 /// </remarks>
-internal readonly record struct IrHeaderFooterBinding(int SectionIndex, IrHeaderFooterKind Kind);
-
 internal sealed record IrHeaderFooterDiff(
     bool IsHeader,
     IrHeaderFooterKind Kind,
@@ -375,7 +375,7 @@ internal sealed record IrTableDiff(IrNodeList<IrRowOp> RowOps);
 /// <para><b>Note scopes (M2.4 Task 1).</b> <see cref="NoteOps"/> carries the per-note block diffs for the
 /// footnote and endnote scopes, in a DETERMINISTIC document order appended AFTER the body
 /// <see cref="Operations"/>: footnotes first (by note id, numeric ascending), then endnotes (by note id,
-/// numeric ascending). This mirrors <see cref="WmlComparer.GetRevisions"/>'s coverage — body, then
+/// numeric ascending). This mirrors <c>WmlComparer.GetRevisions</c>'s coverage — body, then
 /// footnotes, then endnotes. Each <see cref="IrNoteDiff"/>'s anchors live in the note's own
 /// <c>fn</c>/<c>en</c> scope, so they never collide with body anchors.</para>
 /// <para><b>Header/footer scopes (2026-07-03 campaign).</b> <see cref="HeaderFooterOps"/> carries the

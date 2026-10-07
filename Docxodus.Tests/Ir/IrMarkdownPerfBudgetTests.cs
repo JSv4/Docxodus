@@ -51,7 +51,7 @@ public class IrMarkdownPerfBudgetTests
 
     // The full corpus benchmark forces blocking full GCs and churns hundreds of MB; run concurrently
     // (xUnit parallelizes across test classes by default) it starves the SkiaSharp native image-
-    // rendering tests (OxPt.HcTests image/RTL fixtures) and flakes them. CI runs the whole suite
+    // rendering tests (Docxodus.Tests.HcTests image/RTL fixtures) and flakes them. CI runs the whole suite
     // unfiltered, so the heavy path is OPT-IN via DOCXODUS_RUN_PERF=1 (the gate is run explicitly,
     // also giving an uncontended measurement). The default run executes a fast, GC-quiet
     // handful-of-fixtures smoke check that still asserts the IR path is in the same order of magnitude

@@ -11,9 +11,8 @@ using DocumentFormat.OpenXml.Wordprocessing;
 using Docxodus;
 using Xunit;
 
-#if !ELIDE_XUNIT_TESTS
 
-namespace OxPt
+namespace Docxodus.Tests
 {
     /// <summary>
     /// Tests for the External Annotation system (Issue #57).
@@ -921,4 +920,3 @@ namespace OxPt
     }
 }
 
-#endif

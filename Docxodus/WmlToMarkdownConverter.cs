@@ -444,9 +444,7 @@ public static class WmlToMarkdownConverter
         foreach (var scope in scopes)
         {
             // Deterministic Unid path so the same docx bytes produce identical
-            // anchor ids across sessions. WmlComparer continues to use the random
-            // path via AssignToAllElements — see UnidHelper class doc for why
-            // the two consumers stay split.
+            // anchor ids across sessions.
             bool assignedAny = UnidHelper.AssignToAllElementsDeterministic(scope.Root);
             // Stash the owning part on the root so downstream emitters (hyperlinks, etc.)
             // can resolve relationship-bound URIs without threading the part through every call.

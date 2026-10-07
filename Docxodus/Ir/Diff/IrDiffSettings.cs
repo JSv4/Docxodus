@@ -84,7 +84,7 @@ internal enum RevisionGranularity
 /// comparison settings that live here — the IR itself stores raw runs and never applies them.
 /// </summary>
 /// <remarks>
-/// The defaults mirror <see cref="WmlComparerSettings"/> so the IR diff path reproduces the
+/// The defaults mirror <c>WmlComparerSettings</c> so the IR diff path reproduces the
 /// shipped comparer's word granularity and normalization out of the box.
 /// </remarks>
 internal sealed record IrDiffSettings

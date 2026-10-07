@@ -91,6 +91,13 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **The browser bundles ship minified, with source maps.** `embed.bundle.js`, `embed.iife.js`,
+  `editor.bundle.js`, `pagination.bundle.js`, `session.bundle.js`, `docxodus.worker.js` and the
+  worker proxy were built unminified. `embed` drops from 195 KB to 117 KB gzip and `editor` from
+  157 KB to 96 KB. A `.map` file now sits next to each bundle, on the CDN and the hosted demos,
+  so stack traces still resolve to source. A per-bundle gzip budget in `pretest` stops an
+  unminified build or a large new dependency from shipping unnoticed. (#971)
+
 - **Comparing comment-heavy documents is up to about twice as fast.** After a comparison, comment
   normalization scanned the whole body once for every comment id; it now scans once and groups the
   markers by id. On a generated 4,000-paragraph document with 2,000 edited comments,
@@ -125,7 +132,21 @@ All notable changes to this project will be documented in this file.
   binaries need glibc 2.34, and the other platforms are untested. Findings and measurements are
   in `docs/architecture/cli_trimming_and_native_aot.md`.
 
+### Deprecated
+
+- **`MhtParser`, `BucketTimer` and `PtBucketTimer` are marked `[Obsolete]`.** They are inherited
+  from OpenXmlPowerTools and nothing in Docxodus uses them: `MhtParser` parses MHT web archives,
+  which are outside the DOCX scope, and the two timers are ad-hoc profilers. `PtBucketTimer` also
+  keeps process-wide mutable state that is not thread-safe. All three will be removed in the next
+  major version. (#977)
+
 ### Fixed
+
+- **`DocxodusDocument.SavePartAs` disposes the part stream it opens**, and the three places that
+  copy a part's bytes into a buffer (`SavePartAs`, plus the image and media copies `DocumentBuilder`
+  uses when merging) now read with `ReadExactly`. They used a single `Stream.Read`
+  and ignored its return value. Today's package streams return the whole part in one call, so no
+  truncation was observed, but `Stream.Read` is allowed to return fewer bytes. (#966)
 
 - Recorded how Word lays out a paragraph whose mark is taller than its runs (issue #949): it does not grow the
   last line, or any other. Word for the web's PDF of 10 pt runs under a 20 pt mark, at single and 1.15

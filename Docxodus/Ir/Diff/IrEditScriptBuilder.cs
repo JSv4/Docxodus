@@ -397,7 +397,7 @@ internal static class IrEditScriptBuilder
     /// store: a matched note aligns its left/right block lists with the body block aligner and projects the
     /// alignment to block ops (so a footnote-text edit surfaces as a ModifyBlock token diff inside the note,
     /// exactly like a body paragraph); an only-left note becomes all-Deleted blocks; an only-right note
-    /// all-Inserted blocks. Mirrors <see cref="WmlComparer.GetRevisions"/>'s footnote+endnote coverage —
+    /// all-Inserted blocks. Mirrors <c>WmlComparer.GetRevisions</c>'s footnote+endnote coverage —
     /// header/footer scopes are deliberately NOT diffed (the oracle does not diff them either).
     /// </summary>
     private static List<IrNoteDiff> BuildNoteOps(
@@ -524,7 +524,7 @@ internal static class IrEditScriptBuilder
     /// <summary>
     /// Diff one note store (footnotes OR endnotes) under the oracle's NOTE CORRESPONDENCE semantics.
     ///
-    /// <para><b>Why not by raw <c>w:id</c>.</b> <see cref="WmlComparer"/> does NOT pair notes by their stored
+    /// <para><b>Why not by raw <c>w:id</c>.</b> <c>WmlComparer</c> does NOT pair notes by their stored
     /// <c>w:id</c>. <c>WmlComparer.ChangeFootnoteEndnoteReferencesToUniqueRange</c> RENUMBERS every note id to a
     /// per-document range in BODY-REFERENCE ORDER (the n-th <c>w:footnoteReference</c>/<c>w:endnoteReference</c>
     /// encountered walking <c>document.xml</c> gets id <c>base+n</c>, and its note definition is renumbered to

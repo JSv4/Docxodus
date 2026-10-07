@@ -32,7 +32,7 @@ duplicated description is one that will go stale.
   [OfficeDev/Open-Xml-PowerTools](https://github.com/OfficeDev/Open-Xml-PowerTools) — is original
   work and must not claim Microsoft's copyright. Give a new file no header at all, or
   `// Copyright (c) John Scrudato IV. All rights reserved.` if you want the same two-line
-  `SA1633`-satisfying form the rest of the library uses. This was a real bug, not a
+  header form the rest of the library uses. This was a real bug, not a
   hypothetical: ~195 files had the Microsoft line copy-pasted onto wholly new post-fork source
   before a dedicated pass corrected them. **The enforced keep-list lives in
   `Docxodus.Tests/SourceFileCopyrightTests.cs`**, which asserts set equality in both directions
@@ -59,31 +59,19 @@ file that could fire them.
 
 ### Warnings
 
-`Directory.Build.props` sets `TreatWarningsAsErrors=true` for Release — but
-**`Docxodus.csproj` and `Docxodus.Tests.csproj` both override it to `false`**, so the core
-library and the test project do *not* fail on warnings. The CLI tools, MCP server,
-python-host and WASM project do inherit it. Current baseline: the library builds with
-**175 warnings**, the test project with **790** (mostly StyleCop `SA1633` missing file headers
-and `SA1206` modifier/using order). Don't add to either baseline. Measure with
-`--no-incremental` — a warm incremental build reports zero because nothing recompiles.
+`Directory.Build.props` sets `TreatWarningsAsErrors=true` for Release, and **the core library
+builds with zero warnings in both default and `WASM_BUILD` mode**, so any new library warning fails
+CI's Release build (`ci.yml`), the WASM build and publishing. Fix the warning; don't suppress it
+locally or re-add the opt-out. Debug builds don't fail on warnings, so check with
+`dotnet build Docxodus/Docxodus.csproj -c Release --no-incremental` before pushing.
 
-What a new file costs depends on whether it carries a StyleCop file header. Most of the
-library has none, so `SA1633` fires once per file and such a file moves both counts by
-exactly one (the test build compiles the library through its project reference). Files that
-*do* carry the header — everything under `History/`, which follows the two-line
-`// Copyright (c) John Scrudato IV. All rights reserved.` form (see the copyright-attribution
-rule above; `History/` postdates the fork, so it is not the Microsoft form) — cost no `SA1633`
-but fire one `SA1206` per `public required` member, because StyleCop wants `required` ahead of
-the access modifier while the whole codebase writes it the other way. Count what your own files
-actually add rather than assuming one apiece.
+`rules.ruleset` turns off two StyleCop rules that contradict the codebase's conventions, each with
+its reason inline: `SA1206` (the code writes `public required`) and `SA1633` (new files may have no
+header — see the copyright-attribution rule above; `SourceFileCopyrightTests` enforces attribution).
 
-Update the two numbers here in the same commit rather than leaving them stale. They had
-drifted before (113/707 described a tree ~30 warnings behind, then 175/788, then briefly
-177/791 and 184/800, then 175/793 on `main` with the doc still saying 788); re-measure, don't extrapolate. The drop from 187/804 came from switching
-`SA1636` off in `rules.ruleset`: it compares every header against `stylecop.json`'s single
-`companyName`, which a repository with two legitimate copyright holders can never satisfy.
-`SourceFileCopyrightTests` enforces attribution per file instead, which is what that rule was
-failing to do.
+`Docxodus.Tests.csproj` still opts out with `TreatWarningsAsErrors=false`: the test project builds
+with **434 warnings**, nearly all nullable-reference warnings in test code. Don't add to that
+number. Measure with `--no-incremental`, because a warm incremental build reports zero.
 
 ## Repository Layout
 
@@ -492,8 +480,6 @@ SDK 2.8.1 → 3.x. Artifacts of that migration worth knowing:
 - **`Dispose()`, not `.Close()`** — SDK 3.x dropped `Close()`.
 - **SkiaSharp replaces System.Drawing** — `SKColor`/`SKBitmap`/`SKTypeface`/`SKEncodedImageFormat`,
   helpers in `SkiaSharpHelpers.cs` (notably `ColorHelper`). Remember the WASM build excludes it.
-- **Preprocessor cleanup pending** — `NET35` and `ELIDE_XUNIT_TESTS` directives remain in some
-  files; safe to remove when you touch one.
 - The upstream `archived-examples/` console projects were removed with the SpreadsheetML and
   PresentationML modules — they exercised
   the spreadsheet/presentation modules and were never in the solution. `git log` has them.

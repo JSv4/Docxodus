@@ -61,7 +61,6 @@ public class SourceFileCopyrightTests
         "Docxodus.Tests/MarkupSimplifierTests.cs",
         "Docxodus.Tests/MetricsGetterTests.cs",
         "Docxodus.Tests/OpenXmlRegexTests.cs",
-        "Docxodus.Tests/PtUtilTests.cs",
         "Docxodus.Tests/RevisionAccepterTests.cs",
         "Docxodus.Tests/RevisionProcessorTests.cs",
         "Docxodus.Tests/TestsBase.cs",
@@ -94,7 +93,7 @@ public class SourceFileCopyrightTests
         {
             var header = Header(file.Path);
             var copyright = header.FirstOrDefault(line => line.StartsWith("// Copyright", StringComparison.Ordinal));
-            if (copyright is null) continue; // Most of the library carries no header at all; SA1633 covers that.
+            if (copyright is null) continue; // Most of the library carries no header at all, which is allowed.
 
             var expected = InheritedFromMicrosoft.Contains(file.Relative) ? MicrosoftNotice : ProjectNotice;
             Assert.True(copyright == expected,
