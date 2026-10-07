@@ -2354,8 +2354,17 @@ namespace Docxodus
             // Individual footnote item (in registry and on page). Word stacks notes with no
             // spacing of its own — any inter-note gap belongs to the FootnoteText paragraph's
             // w:spacing, which the paragraph carries inline when nonzero.
+            //
+            // The note's lines are its paragraph's, as in Word, where the number is a run of the
+            // FootnoteText paragraph. The item and its content wrapper are set in the page's default
+            // font, and a strut in that font made the note's line box taller than the paragraph's own,
+            // which lifted the bottom-anchored text about a pixel above Word's (issue #955). So the item
+            // contributes no strut (line-height 0, which the number inherits, so a raised number does not
+            // grow the line either), and the wrapper generates no box and hands `normal` back to the
+            // paragraph, whose own font then sizes its lines.
             sb.AppendLine(".footnote-item {");
             sb.AppendLine("    margin-bottom: 0;");
+            sb.AppendLine("    line-height: 0;");
             sb.AppendLine("}");
 
             // Footnote number - inline with superscript styling
@@ -2369,7 +2378,8 @@ namespace Docxodus
 
             // Footnote content (inline with number)
             sb.AppendLine(".footnote-content {");
-            sb.AppendLine("    display: inline;");
+            sb.AppendLine("    display: contents;");
+            sb.AppendLine("    line-height: normal;");
             sb.AppendLine("}");
 
             // Make first paragraph in footnote content inline to flow with number
