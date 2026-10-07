@@ -182,6 +182,12 @@ All notable changes to this project will be documented in this file.
     - Python: `list_revisions(author=, change_type=, family=, resolution_status=, part_uri=)`, and
       `max_results` on `grep` / `grep_cross_block`.
     - npm: `listRevisions(filter)` and `GrepOptions.maxResults`.
+- **`DocxodusDocument.SavePartAs` disposes the part stream it opens**, and the three places that
+  copy a part's bytes into a buffer (`SavePartAs`, plus the image and media copies `DocumentBuilder`
+  uses when merging) now read with `ReadExactly`. They used a single `Stream.Read`
+  and ignored its return value. Today's package streams return the whole part in one call, so no
+  truncation was observed, but `Stream.Read` is allowed to return fewer bytes. (#966)
+
 - **`DocxSession.Project()` reports current list numbers after a structural edit** (issue #959). Deleting
   the first item of a numbered list used to leave the survivors numbered `2.` and `3.` until the
   document was saved and reopened, and inserting, re-levelling or re-formatting a list item went stale
@@ -191,12 +197,6 @@ All notable changes to this project will be documented in this file.
   stands. Edits that leave numbering alone keep the counts they have. Counting a document's lists
   also no longer re-walks the whole story once per list, which cuts the markdown projection's
   allocations by about a tenth on a large form document.
-- **`DocxodusDocument.SavePartAs` disposes the part stream it opens**, and the three places that
-  copy a part's bytes into a buffer (`SavePartAs`, plus the image and media copies `DocumentBuilder`
-  uses when merging) now read with `ReadExactly`. They used a single `Stream.Read`
-  and ignored its return value. Today's package streams return the whole part in one call, so no
-  truncation was observed, but `Stream.Read` is allowed to return fewer bytes. (#966)
-
 - Recorded how Word lays out a paragraph whose mark is taller than its runs (issue #949): it does not grow the
   last line, or any other. Word for the web's PDF of 10 pt runs under a 20 pt mark, at single and 1.15
   spacing, shows ordinary 10 pt line steps down to the next paragraph. The converter already matched because
