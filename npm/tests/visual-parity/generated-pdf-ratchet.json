@@ -1,8 +1,8 @@
 {
   "schemaVersion": 2,
-  "description": "Generated-PDF visual-fidelity regression ratchet (issue #443). Numbers only; complete PDFs, rasters, semantic evidence, geometry, hashes, and fingerprints live in the uploaded artifact. See npm/tests/visual-parity/README.md.",
-  "recordedAt": "2026-08-23",
-  "sourceCommit": "38262345278abf6d905330c40e29012d2e6ff468",
+  "description": "Generated-PDF visual-fidelity regression ratchet (issue #443). Numbers only; complete PDFs, rasters, semantic evidence, geometry, hashes, and fingerprints live in the uploaded artifact. See npm/tests/visual-parity/README.md. PROVENANCE: `sourceCommit` is the tip of the issue-#950 branch stack as measured in CI on the pinned reference environment (visual-parity run 37552073014, update_record), before the stack was squash-merged; after the merge it is not an ancestor of main, but main's rendering code at the merge is that tree's. The drops it banks were traced in issue #950: the browser-page endnote and wrapped-image-tight SSIM drops come from #943 (Word's placement of auto line spacing), which moved body lines toward both Word and LibreOffice; the generated-PDF drops come from #850 (unrounded line pitch). Residuals are tracked in #955 (footnote placement) and #956 (Calibri Light metrics in the export).",
+  "recordedAt": "2026-10-07",
+  "sourceCommit": "bfb2156dcb219fed8b9c519a858dc5f957af6d11",
   "environment": {
     "libreoffice": "25.8",
     "chromium": "143",
@@ -33,8 +33,8 @@
         "libreoffice": 1
       },
       "severity": "severe",
-      "ssim": 0.83263,
-      "worstInkF1": 0.92516
+      "ssim": 0.84443,
+      "worstInkF1": 0.9125
     },
     {
       "id": "pdf-external-hyperlink",
@@ -55,8 +55,8 @@
         "libreoffice": 1
       },
       "severity": "minor",
-      "ssim": 0.97089,
-      "worstInkF1": 0.99563
+      "ssim": 0.96356,
+      "worstInkF1": 0.94265
     },
     {
       "id": "pdf-footnote",
@@ -65,9 +65,9 @@
         "docxodus": 1,
         "libreoffice": 1
       },
-      "severity": "close",
-      "ssim": 0.99563,
-      "worstInkF1": 0.99031
+      "severity": "minor",
+      "ssim": 0.99459,
+      "worstInkF1": 0.90309
     },
     {
       "id": "pdf-hidden-comments",
@@ -76,8 +76,8 @@
         "docxodus": 1,
         "libreoffice": 1
       },
-      "severity": "minor",
-      "ssim": 0.97934,
+      "severity": "close",
+      "ssim": 0.98903,
       "worstInkF1": 1
     },
     {
@@ -88,8 +88,8 @@
         "libreoffice": 3
       },
       "severity": "severe",
-      "ssim": 0.72192,
-      "worstInkF1": 0.64058
+      "ssim": 0.81275,
+      "worstInkF1": 0.83623
     },
     {
       "id": "pdf-mixed-orientation-running-stories",
@@ -99,8 +99,8 @@
         "libreoffice": 6
       },
       "severity": "close",
-      "ssim": 0.99951,
-      "worstInkF1": 0.95004
+      "ssim": 0.99986,
+      "worstInkF1": 1
     },
     {
       "id": "pdf-raster-image",
@@ -110,8 +110,8 @@
         "libreoffice": 1
       },
       "severity": "major",
-      "ssim": 0.93775,
-      "worstInkF1": 0.8797
+      "ssim": 0.93661,
+      "worstInkF1": 0.92176
     },
     {
       "id": "pdf-two-column-section",
@@ -121,8 +121,8 @@
         "libreoffice": 1
       },
       "severity": "severe",
-      "ssim": 0.71808,
-      "worstInkF1": 0.46279
+      "ssim": 0.70871,
+      "worstInkF1": 0.45298
     }
   ]
 }
