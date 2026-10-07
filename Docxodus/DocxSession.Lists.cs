@@ -254,9 +254,7 @@ public sealed partial class DocxSession
         }
         catch (Exception ex)
         {
-            LastInternalError = ex;
-            RollbackFailedOp();
-            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+            return FailInternal(ex, anchorId);
         }
     }
 
@@ -359,9 +357,7 @@ public sealed partial class DocxSession
         }
         catch (Exception ex)
         {
-            LastInternalError = ex;
-            RollbackFailedOp();
-            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, firstAnchorId);
+            return FailInternal(ex, firstAnchorId);
         }
     }
 
@@ -473,9 +469,7 @@ public sealed partial class DocxSession
         }
         catch (Exception ex)
         {
-            LastInternalError = ex;
-            RollbackFailedOp();
-            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+            return FailInternal(ex, anchorId);
         }
     }
 
