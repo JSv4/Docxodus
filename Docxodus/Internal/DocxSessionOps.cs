@@ -782,9 +782,12 @@ internal static class DocxSessionOps
     /// <paramref name="kind"/> is the wire token ("first" | "even"; "default" is refused when
     /// disabling). See <see cref="DocxSession.SetHeaderFooterKindEnabled"/>.</summary>
     public static string SetHeaderFooterKindEnabled(int handle, string anchorId, string kind, bool enabled,
-        MutationPreconditions? preconditions = null) =>
-        Mutate(handle, preconditions, anchorId,
-            s => s.SetHeaderFooterKindEnabled(anchorId, DocxSessionJson.ParseHeaderFooterKind(kind), enabled));
+        MutationPreconditions? preconditions = null)
+    {
+        var parsed = DocxSessionJson.ParseHeaderFooterKind(kind);
+        return Mutate(handle, preconditions, anchorId,
+            s => s.SetHeaderFooterKindEnabled(anchorId, parsed, enabled));
+    }
 
     /// <summary>Page size / orientation / margins / header-footer distance of the section owning
     /// <paramref name="anchorId"/>. <paramref name="opJson"/> is the <see cref="PageSetupOp"/> wire
@@ -1200,9 +1203,12 @@ internal static class DocxSessionOps
     /// <summary><paramref name="content"/> is "append" (default) | "discard" | "reject" —
     /// what happens to the content of the cells the merge absorbs.</summary>
     public static string MergeCells(int handle, string cellAnchorId, int rowSpan, int colSpan,
-        string? content, MutationPreconditions? preconditions = null) =>
-        Mutate(handle, preconditions, cellAnchorId, s => s.MergeCells(cellAnchorId, rowSpan, colSpan,
-            new TableMergeOptions { Content = DocxSessionJson.ParseTableMergeContent(content) }));
+        string? content, MutationPreconditions? preconditions = null)
+    {
+        var options = new TableMergeOptions { Content = DocxSessionJson.ParseTableMergeContent(content) };
+        return Mutate(handle, preconditions, cellAnchorId,
+            s => s.MergeCells(cellAnchorId, rowSpan, colSpan, options));
+    }
 
     public static string UnmergeCells(int handle, string cellAnchorId,
         MutationPreconditions? preconditions = null) =>
@@ -1220,17 +1226,21 @@ internal static class DocxSessionOps
     /// <summary><paramref name="specJson"/> is a TableBorderSpec object
     /// ({ scope?: "all"|"outside"|"inside", style?, size?, color? }); "" uses the defaults.</summary>
     public static string SetTableBorders(int handle, string cellAnchorId, string specJson,
-        MutationPreconditions? preconditions = null) =>
-        Mutate(handle, preconditions, cellAnchorId,
-            s => s.SetTableBorders(cellAnchorId, DocxSessionJson.ParseTableBorderSpec(specJson)));
+        MutationPreconditions? preconditions = null)
+    {
+        var spec = DocxSessionJson.ParseTableBorderSpec(specJson);
+        return Mutate(handle, preconditions, cellAnchorId, s => s.SetTableBorders(cellAnchorId, spec));
+    }
 
     /// <summary><paramref name="fill"/> is a hex RRGGBB triplet or "auto"; "" clears the shading.
     /// <paramref name="scope"/> is "cell" | "row".</summary>
     public static string SetCellShading(int handle, string cellAnchorId, string fill, string scope,
-        MutationPreconditions? preconditions = null) =>
-        Mutate(handle, preconditions, cellAnchorId, s => s.SetCellShading(
-            cellAnchorId, string.IsNullOrEmpty(fill) ? null : fill,
-            DocxSessionJson.ParseTableShadingScope(scope)));
+        MutationPreconditions? preconditions = null)
+    {
+        var parsedScope = DocxSessionJson.ParseTableShadingScope(scope);
+        return Mutate(handle, preconditions, cellAnchorId, s => s.SetCellShading(
+            cellAnchorId, string.IsNullOrEmpty(fill) ? null : fill, parsedScope));
+    }
 
     public static string SetRepeatHeaderRow(int handle, string cellAnchorId, bool repeat,
         MutationPreconditions? preconditions = null) =>
@@ -1239,15 +1249,17 @@ internal static class DocxSessionOps
 
     public static string SetTableRowOptions(int handle, string cellAnchorId, bool? repeatHeader,
         bool? allowBreakAcrossPages, int? heightTwips, string? heightRule,
-        MutationPreconditions? preconditions = null) =>
-        Mutate(handle, preconditions, cellAnchorId, s => s.SetTableRowOptions(cellAnchorId,
-            new TableRowOptions
-            {
-                RepeatHeader = repeatHeader,
-                AllowBreakAcrossPages = allowBreakAcrossPages,
-                HeightTwips = heightTwips,
-                HeightRule = DocxSessionJson.ParseTableRowHeightRule(heightRule),
-            }));
+        MutationPreconditions? preconditions = null)
+    {
+        var options = new TableRowOptions
+        {
+            RepeatHeader = repeatHeader,
+            AllowBreakAcrossPages = allowBreakAcrossPages,
+            HeightTwips = heightTwips,
+            HeightRule = DocxSessionJson.ParseTableRowHeightRule(heightRule),
+        };
+        return Mutate(handle, preconditions, cellAnchorId, s => s.SetTableRowOptions(cellAnchorId, options));
+    }
 
     // ─── Raw escape hatch ───────────────────────────────────────────────
 
