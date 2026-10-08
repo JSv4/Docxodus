@@ -870,6 +870,7 @@ self.addEventListener("message", async (event: MessageEvent<WorkerRequest>) => {
             type: "init",
             success: false,
             error: String(error),
+            errorCode: "internal_error",
           };
         }
         break;
@@ -1267,6 +1268,7 @@ self.addEventListener("message", async (event: MessageEvent<WorkerRequest>) => {
       type: request.type,
       success: false,
       error: String(error),
+      errorCode: "internal_error",
     } as WorkerResponse);
   }
 });

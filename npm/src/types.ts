@@ -4808,8 +4808,24 @@ export interface WorkerResponseBase {
   errorCode?: WorkerErrorCode;
 }
 
-/** Closed set of machine-readable worker failure causes. */
-export type WorkerErrorCode = "resource_limit";
+/**
+ * Closed set of machine-readable worker failure causes.
+ *
+ * - `resource_limit`: the operation exceeded a configured size or work limit.
+ * - `internal_error`: the worker threw an unexpected error while handling the request.
+ * - `timeout`: the request outlived its `timeoutMs` / `requestTimeoutMs` deadline.
+ * - `aborted`: the request's `AbortSignal` fired.
+ * - `message_error`: a worker response could not be deserialized (`messageerror`); every request
+ *   in flight is rejected with this code, because the lost response cannot be matched to its request.
+ * - `missing_result`: the worker reported success but sent no payload.
+ */
+export type WorkerErrorCode =
+  | "resource_limit"
+  | "internal_error"
+  | "timeout"
+  | "aborted"
+  | "message_error"
+  | "missing_result";
 
 /**
  * Response from init request.
@@ -5029,6 +5045,22 @@ export interface WorkerDocxodusOptions {
   wasmBasePath?: string;
   /** Abort the owned worker, including an initialization that has not completed. */
   signal?: AbortSignal;
+  /**
+   * Reject any request, including initialization, that has not answered within this many
+   * milliseconds, with a `timeout` {@link WorkerErrorCode}. Off by default: large documents can
+   * legitimately take a long time. A timed-out initialization stops the worker. Any other
+   * timed-out request is most likely still running on the worker's single thread, and later
+   * requests queue behind it; call `terminate()` to stop it.
+   */
+  requestTimeoutMs?: number;
+}
+
+/** Per-request options for a `WorkerDocxodus.withRequestOptions` view. */
+export interface WorkerRequestOptions {
+  /** Rejects each pending request of the view with an `aborted` {@link WorkerErrorCode} when it fires. */
+  signal?: AbortSignal;
+  /** A deadline in milliseconds that overrides the instance's `requestTimeoutMs`. */
+  timeoutMs?: number;
 }
 
 // ============================================================================
