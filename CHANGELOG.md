@@ -16,6 +16,9 @@ All notable changes to this project will be documented in this file.
   `1.1.`, keep their generated marker spans under `list-style-type: none`. Item indents are measured
   from the item they are nested in. Paginated output ignores the setting, and with it off the output
   is unchanged.
+- `DocxEditor` reports edits the engine rejects (issue #969). The new `onEditFailed` option receives
+  the engine's error code and message and the anchor involved; with no handler, the editor logs the
+  rejection with `console.warn` instead of dropping it.
 - Relocated text next to paragraphs the redline draws as one cross-paragraph stream is reported as a move
   (issue #930). With `CrossParagraphTokenDiff` on (the default), the redline draws a stretch of adjacent
   edited paragraphs as one flat word stream. A moved sentence or paragraph touching that stretch used to be
@@ -235,6 +238,13 @@ All notable changes to this project will be documented in this file.
   line moves down with it (recorded from Word's own PDF as CASE7 in `npm/tests/fixtures/line-baselines.word.json`).
   The converter moved the run with relative positioning, which left the later lines where they were and could
   overlap the next line. It now uses `vertical-align`, as it has for a raised run since #941.
+- The block editor no longer keeps showing text the engine refused (issue #969). About twenty
+  editor operations returned silently when the engine rejected an edit. Every rejection now passes
+  through one place that reports it, and the affected block is re-rendered from the session. When
+  flushing the typed text ahead of one of the 24 formatting and structural operations that do so is refused, the operation
+  now stops instead of running on text the document does not hold, at offsets measured in the
+  rejected text. The editor's internal result type is also derived from the public `EditResult`,
+  so a change to that shape now breaks the editor's build instead of drifting.
 - The HTML converter keeps paragraph and list indents written as `w:ind/@w:start` and `@w:end`
   (issue #894). ECMA-376 spells the indent edges both `w:start`/`w:end` and `w:left`/`w:right`. Word writes
   the second form, LibreOffice the first, and the converter read only `w:left`/`w:right`, so a document saved

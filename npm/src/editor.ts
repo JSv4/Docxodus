@@ -38,6 +38,8 @@ import {
 import { TrackedChangeMode } from "./types.js";
 import type {
   CommentListEntry,
+  EditErrorCode,
+  EditResult,
   FormattingInspection,
   HeaderFooterKind,
   HyperlinkInfo,
@@ -297,6 +299,12 @@ export interface DocxEditorOptions {
   commentAuthor?: string;
   /** Called after a block edit commits (with the affected anchor). */
   onEdit?: (info: { anchorId: string; unid: string }) => void;
+  /**
+   * Called when the engine rejects an edit. The editor has already put the affected block back
+   * to the session's content, so the screen never shows text the document does not hold. When no
+   * handler is set, the editor logs the rejection with `console.warn` instead.
+   */
+  onEditFailed?: (info: EditFailure) => void;
   /** Called after a successful block move. */
   onMove?: (info: { sourceAnchorId: string; destinationAnchorId: string }) => void;
   /** Called when the caret enters or leaves a header/footer story (`null` = back in the body). */
@@ -631,12 +639,22 @@ interface AnchorRef {
   unid: string;
 }
 
-interface EditResultLite {
-  success: boolean;
-  created?: AnchorRef[];
-  removed?: AnchorRef[];
-  modified?: AnchorRef[];
-  error?: { message?: string };
+/**
+ * An `EditResult` as the editor reads it straight off the bridge. It is derived from the public
+ * type the typed session wrapper (`session.ts`) returns, so a change to the wire shape surfaces
+ * in both at compile time; the lists are optional because a malformed reply may omit them.
+ */
+type EditResultLite = Pick<EditResult, "success">
+  & Partial<Pick<EditResult, "created" | "removed" | "modified" | "error">>;
+
+/** What {@link DocxEditorOptions.onEditFailed} receives when the engine rejects an edit. */
+export interface EditFailure {
+  /** The engine's error code, when it sent one. */
+  code?: EditErrorCode;
+  /** The engine's error message. */
+  message: string;
+  /** The anchor the engine named in its error, else the block being edited, when there is one. */
+  anchorId: string | null;
 }
 
 interface DomSelectionPoint {
@@ -1178,9 +1196,9 @@ export class DocxEditor {
   private container: HTMLElement;
   private readonly handle: number;
   private readonly options: Required<
-    Omit<DocxEditorOptions, "onEdit" | "onMove" | "onStoryChange" | "onCommentsChange">
+    Omit<DocxEditorOptions, "onEdit" | "onEditFailed" | "onMove" | "onStoryChange" | "onCommentsChange">
   > &
-    Pick<DocxEditorOptions, "onEdit" | "onMove" | "onStoryChange" | "onCommentsChange">;
+    Pick<DocxEditorOptions, "onEdit" | "onEditFailed" | "onMove" | "onStoryChange" | "onCommentsChange">;
   /** Map a block's current bare unid → its full kind:scope:unid (DocxSession anchor). */
   private readonly unidToFullId = new Map<string, string>();
   /** The element whose [data-anchor] descendants are the editable blocks (container or page container). */
@@ -1547,6 +1565,7 @@ export class DocxEditor {
       comments: options.comments ?? true,
       commentAuthor: options.commentAuthor ?? options.revisionAuthor ?? "Reviewer",
       onEdit: options.onEdit,
+      onEditFailed: options.onEditFailed,
       onMove: options.onMove,
       onStoryChange: options.onStoryChange,
       onCommentsChange: options.onCommentsChange,
@@ -2763,12 +2782,7 @@ export class DocxEditor {
     const result = this.commitTextChange(el, fullId);
     if (!result) return; // no change
     if (!result.success) {
-      // Session unchanged — re-render this block from truth to discard the rejected DOM edit.
-      const fresh = this.renderInto(fullId);
-      if (fresh && this.replaceNode(el, fresh)) {
-        this.wireBlock(fresh);
-        if (this.activeBlock === el) this.activeBlock = fresh;
-      }
+      this.restoreBlock(el, fullId);
       return;
     }
 
@@ -2940,6 +2954,7 @@ export class DocxEditor {
     // Whether this paragraph is rendered inside a border <div> — captured before the DOM mutates.
     const wrappedInBorder = inBorderWrapper(el);
     fullId = this.syncBlock(el, fullId); // flush any uncommitted typing first
+    if (!fullId) return;
     const res = this.parseEdit(this.exports.DocxSessionBridge.SplitParagraph(this.handle, fullId, offset));
     if (!res.success) return;
     const first = res.modified?.[0];
@@ -2994,6 +3009,7 @@ export class DocxEditor {
     const wrappedInBorder = inBorderWrapper(prev) || inBorderWrapper(el);
     prevId = this.syncBlock(prev, prevId);
     thisId = this.syncBlock(el, thisId);
+    if (!prevId || !thisId) return;
     const caret = (prev.textContent ?? "").length; // merge boundary
 
     const res = this.parseEdit(this.exports.DocxSessionBridge.MergeParagraphs(this.handle, prevId, thisId));
@@ -3082,6 +3098,7 @@ export class DocxEditor {
       // contenteditable; the first run at the very start).
       const inserted = this.parseEdit(
         this.exports.DocxSessionBridge.ReplaceTextAtSpan(this.handle, fullId, start, 0, middle),
+        { expectRejection: true }, // a refusal here only selects the fallback below
       );
       if (inserted.success) return inserted;
       if (start > 0) { start -= 1; len = 1; middle = old[start] + middle; }
@@ -3093,12 +3110,33 @@ export class DocxEditor {
     );
   }
 
-  /** Flush a block's current (uncommitted) text to the session; returns the live full id. */
-  private syncBlock(el: HTMLElement, fullId: string): string {
+  /**
+   * Flush a block's current (uncommitted) text to the session; returns the live full id, or
+   * undefined when the engine rejected the text. The block is then restored from the session, and the
+   * caller must stop: the operation it was about to run would act on text the document does not
+   * hold, at offsets measured in the rejected DOM.
+   */
+  private syncBlock(el: HTMLElement, fullId: string): string | undefined {
     const result = this.commitTextChange(el, fullId);
-    if (!result || !result.success) return fullId;
+    if (!result) return fullId;
+    if (!result.success) {
+      this.restoreBlock(el, fullId);
+      return undefined;
+    }
     el.dataset.committedText = blockContentText(el);
     return result.modified?.[0]?.id ?? fullId;
+  }
+
+  /**
+   * The session refused an edit to `el`, so re-render the block from the session to discard the
+   * DOM the user typed but the document never accepted.
+   */
+  private restoreBlock(el: HTMLElement, fullId: string): void {
+    const fresh = this.renderInto(fullId);
+    if (fresh && this.replaceNode(el, fresh)) {
+      this.wireBlock(fresh);
+      if (this.activeBlock === el) this.activeBlock = fresh;
+    }
   }
 
   /** Render a block by anchor and parse it into a detached element (null on error). */
@@ -3191,17 +3229,36 @@ export class DocxEditor {
     return i > 0 ? all[i - 1] : null;
   }
 
-  private parseEdit(json: string): EditResultLite {
+  /**
+   * Read the result of a session mutation. Every editor mutation's result passes through here, so
+   * this is where a rejection is reported (see {@link DocxEditorOptions.onEditFailed}), once, for
+   * all of them. A caller probing an op it expects may be refused passes `expectRejection`.
+   */
+  private parseEdit(json: string, opts?: { expectRejection?: boolean }): EditResultLite {
+    let result: EditResultLite;
     try {
-      const result = JSON.parse(json) as EditResultLite;
-      if (result.success) {
-        this.invalidateBlockMoveTargets();
-        this.gutter?.schedule();
-      }
-      return result;
+      result = JSON.parse(json) as EditResultLite;
     } catch {
-      return { success: false };
+      result = { success: false };
     }
+    if (result.success) {
+      this.invalidateBlockMoveTargets();
+      this.gutter?.schedule();
+    } else if (!opts?.expectRejection) {
+      this.reportEditFailure(result.error);
+    }
+    return result;
+  }
+
+  private reportEditFailure(error: EditResultLite["error"]): void {
+    const active = this.activeBlock;
+    const failure: EditFailure = {
+      code: error?.code,
+      message: error?.message ?? "The engine rejected the edit, or returned an unreadable result",
+      anchorId: error?.anchorId ?? (active ? this.anchorIdOf(active) ?? null : null),
+    };
+    if (this.options.onEditFailed) this.options.onEditFailed(failure);
+    else console.warn(`[DocxEditor] the engine rejected an edit${failure.code ? ` (${failure.code})` : ""}: ${failure.message}`);
   }
 
   /**
@@ -3303,6 +3360,7 @@ export class DocxEditor {
     for (const t of targets) {
       if (!t.fullId || (t.span && t.span.length === 0)) continue;
       const synced = this.syncBlock(t.block, t.fullId);
+      if (!synced) continue;
       const res = this.parseEdit(this.exports.DocxSessionBridge.ApplyFormat(
         this.handle, synced, t.span ? JSON.stringify(t.span) : "", JSON.stringify(op),
       ));
@@ -3326,6 +3384,7 @@ export class DocxEditor {
     for (const t of targets) {
       if (!t.fullId) continue;
       const synced = this.syncBlock(t.block, t.fullId);
+      if (!synced) continue;
       const res = this.parseEdit(run(synced));
       if (res.success) t.res = res;
     }
@@ -3438,6 +3497,7 @@ export class DocxEditor {
         ? { vertAlign: on ? key : "" }
         : { [key]: on };
     fullId = this.syncBlock(block, fullId); // don't clobber uncommitted typing
+    if (!fullId) return;
     const res = this.parseEdit(
       this.exports.DocxSessionBridge.ApplyFormat(
         this.handle,
@@ -3472,6 +3532,7 @@ export class DocxEditor {
     let span = selectionSpanIn(block);
     if (!span && this.lastSelection && this.lastSelection.unid === unid) span = this.lastSelection.span;
     fullId = this.syncBlock(block, fullId);
+    if (!fullId) return;
     const res = this.parseEdit(
       this.exports.DocxSessionBridge.ApplyFormat(
         this.handle,
@@ -3506,6 +3567,7 @@ export class DocxEditor {
     let span = selectionSpanIn(block);
     if (!span && this.lastSelection && this.lastSelection.unid === unid) span = this.lastSelection.span;
     fullId = this.syncBlock(block, fullId);
+    if (!fullId) return;
     const res = this.parseEdit(
       this.exports.DocxSessionBridge.ApplyFormat(
         this.handle,
@@ -3540,6 +3602,7 @@ export class DocxEditor {
     if (!fullId) return;
     const idx = this.blockIndex(block);
     fullId = this.syncBlock(block, fullId);
+    if (!fullId) return;
     const res = this.parseEdit(
       this.exports.DocxSessionBridge.InsertHorizontalRule(
         this.handle,
@@ -3578,6 +3641,7 @@ export class DocxEditor {
     if (!fullId) return;
     const idx = this.blockIndex(block);
     fullId = this.syncBlock(block, fullId);
+    if (!fullId) return;
     // If the caret is on an empty paragraph (not a table cell), insert the table BEFORE it so the
     // empty paragraph becomes the editable line BELOW the table — no stray blank line above it, and
     // a reachable paragraph below (S-1 smoke-test findings 2 + 4). Otherwise insert after.
@@ -3610,7 +3674,7 @@ export class DocxEditor {
     const cellId = this.anchorIdOf(cell);
     if (!paragraphId || !cellId) return;
     const idx = this.blockIndex(block);
-    this.syncBlock(block, paragraphId); // flush uncommitted cell text first
+    if (!this.syncBlock(block, paragraphId)) return; // flush uncommitted cell text first
     const res = this.parseEdit(run(cellId));
     if (!res.success) return;
     this.refreshAfter(block, idx, false);
@@ -3664,6 +3728,7 @@ export class DocxEditor {
     if (!fullId) return;
     const idx = this.blockIndex(block);
     fullId = this.syncBlock(block, fullId);
+    if (!fullId) return;
     const res = this.parseEdit(this.exports.DocxSessionBridge.SetListLevel(this.handle, fullId, delta));
     if (!res.success) return;
     // A level change ripples through the whole list's numbering — re-render with full document
@@ -3698,6 +3763,7 @@ export class DocxEditor {
 
     const idx = this.blockIndex(block); // capture before the op
     fullId = this.syncBlock(block, fullId);
+    if (!fullId) return;
     const res = this.parseEdit(
       this.exports.DocxSessionBridge.ApplyListFormat(this.handle, fullId, isThisKind ? "none" : kind),
     );
@@ -3767,6 +3833,7 @@ export class DocxEditor {
     // Offset first: syncBlock re-renders the block and would drop the live selection.
     const raw = caretOffsetIn(block);
     fullId = this.syncBlock(block, fullId);
+    if (!fullId) return;
     const offset = trimmedSplitOffset(block, raw ?? (block.textContent ?? "").length);
     const bridge = this.exports.DocxSessionBridge;
     const call = kind === "footnote" ? bridge.InsertFootnote : bridge.InsertEndnote;
@@ -3810,6 +3877,7 @@ export class DocxEditor {
     // captured earlier (the gutter's draft bubble) wins over whatever the selection is now.
     if (!target) span = selectionSpanIn(block);
     fullId = this.syncBlock(block, fullId);
+    if (!fullId) return null;
     const res = this.parseEdit(
       bridge.AddComment(
         this.handle, fullId, span ? JSON.stringify(span) : "", author, "", "", markdown,
@@ -3968,6 +4036,7 @@ export class DocxEditor {
     if (!fullId) return;
     const idx = this.blockIndex(block);
     fullId = this.syncBlock(block, fullId);
+    if (!fullId) return;
     const res = this.parseEdit(
       this.exports.DocxSessionBridge.SetParagraphFormat(this.handle, fullId, JSON.stringify(op)),
     );
@@ -3997,6 +4066,7 @@ export class DocxEditor {
     if (!fullId) return;
     const idx = this.blockIndex(block);
     fullId = this.syncBlock(block, fullId);
+    if (!fullId) return;
     const res = this.parseEdit(this.exports.DocxSessionBridge.SetParagraphStyle(this.handle, fullId, styleId));
     if (!res.success) return;
     if (this.affectsList(res)) { this.refreshAfter(block, idx, false, true); return; }
@@ -4051,6 +4121,7 @@ export class DocxEditor {
       // Flush uncommitted typing first: the field appends to the SESSION paragraph, and the
       // story repaint that follows would otherwise blur-commit stale DOM text over it.
       const synced = this.syncBlock(block, anchorId);
+      if (!synced) return;
       this.region.insertPageNumber(this.region.whichOf(band), synced, field);
       return;
     }
@@ -4105,6 +4176,7 @@ export class DocxEditor {
     let span = selectionSpanIn(block);
     if (!span && this.lastSelection && this.lastSelection.unid === unid) span = this.lastSelection.span;
     fullId = this.syncBlock(block, fullId);
+    if (!fullId) return;
     const res = this.parseEdit(
       this.exports.DocxSessionBridge.ApplyFormat(
         this.handle, fullId, span ? JSON.stringify(span) : "", JSON.stringify(op),
@@ -4214,6 +4286,7 @@ export class DocxEditor {
     if (!fullId) return;
     const idx = this.blockIndex(block);
     fullId = this.syncBlock(block, fullId);
+    if (!fullId) return;
     const res = this.parseEdit(this.exports.DocxSessionBridge.ApplyListFormat(this.handle, fullId, kind));
     if (!res.success) return;
     this.refreshAfter(block, idx, false, /* forceRemount */ true);
@@ -4263,6 +4336,7 @@ export class DocxEditor {
     if (!span && this.lastSelection && this.lastSelection.unid === unid) span = this.lastSelection.span;
     if (!span) return false; // Word needs a range to link
     fullId = this.syncBlock(block, fullId);
+    if (!fullId) return false;
     const res = this.parseEdit(
       bridge.AddHyperlink(this.handle, fullId, span.start, span.length, kind, target),
     );
@@ -4320,6 +4394,7 @@ export class DocxEditor {
     const idx = this.blockIndex(block);
     const raw = caretOffsetIn(block);
     fullId = this.syncBlock(block, fullId);
+    if (!fullId) return false;
     const offset = trimmedSplitOffset(block, raw ?? (block.textContent ?? "").length);
     const res = this.parseEdit(
       bridge.InsertImage(this.handle, fullId, offset, imageBase64, JSON.stringify(options)),
@@ -4352,6 +4427,7 @@ export class DocxEditor {
     if (!fullId) return false;
     const idx = this.blockIndex(block);
     fullId = this.syncBlock(block, fullId);
+    if (!fullId) return false;
     const res = this.parseEdit(
       bridge.InsertTableOfContents(this.handle, fullId, "before", JSON.stringify(options)),
     );
@@ -4613,6 +4689,7 @@ export class DocxEditor {
     let fullId = this.anchorIdOf(block);
     if (!fullId) return false;
     fullId = this.syncBlock(block, fullId);
+    if (!fullId) return false;
     const span = trimmedSpan(block, { start: match.start, length: match.length });
     if (span.length === 0) return false;
     const res = this.parseEdit(
