@@ -25,7 +25,7 @@ using Docxodus;
 
 if (args.Length < 1)
 {
-    Console.Error.WriteLine("usage: ComplexFormBenchmark <document.docx> [edits.json] [--out <dir>] [--stats-json <file>]");
+    Console.Error.WriteLine("usage: ComplexFormBenchmark <document.docx> [edits.json] [--out <dir>] [--stats-json <file>] [--iterations <n>]");
     Console.Error.WriteLine("       edits.json defaults to edits/nvca-coi.json next to this program");
     return 1;
 }
@@ -39,6 +39,8 @@ var outDir = outIx >= 0 && outIx + 1 < args.Length ? args[outIx + 1] : Path.Comb
 Directory.CreateDirectory(outDir);
 var statsIx = Array.IndexOf(args, "--stats-json");
 var statsOut = statsIx >= 0 && statsIx + 1 < args.Length ? args[statsIx + 1] : null;
+var iterationsIx = Array.IndexOf(args, "--iterations");
+Iterations = iterationsIx >= 0 && iterationsIx + 1 < args.Length ? Math.Max(1, int.Parse(args[iterationsIx + 1])) : 3;
 
 var bytes = File.ReadAllBytes(docPath);
 var edits = JsonSerializer.Deserialize<EditScript>(File.ReadAllText(editsPath), new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
@@ -100,8 +102,10 @@ Bench("tracked session: full edit script", () =>
     }
     trackedDocx = s.Save();
     File.WriteAllBytes(Path.Combine(outDir, "tracked-session.docx"), trackedDocx);
-    Check("tracked save adds no schema findings", ValidateCount(trackedDocx) <= baselineErrors);
 });
+// Outside the measured stage for the same reason as the redline's schema check below.
+if (trackedDocx.Length > 0)
+    Check("tracked save adds no schema findings", ValidateCount(trackedDocx) <= baselineErrors);
 
 // ---------- 4. Clean edits + DocxDiff redline ----------
 byte[] modified = [];
@@ -133,14 +137,22 @@ Bench("DocxDiff edit script + semantic changes", () =>
     File.WriteAllText(Path.Combine(outDir, "semantic-changes.json"), semantic);
     Console.WriteLine($"    edit script {editScript.Length:N0} chars, semantic changes {semantic.Length:N0} chars");
 });
-Bench("DocxDiff round-trip invariants", () =>
+WmlDocument? acceptAll = null, rejectAll = null;
+Bench("DocxDiff accept-all + reject-all", () =>
 {
-    var acceptAll = RevisionProcessor.AcceptRevisions(redline!);
-    var rejectAll = RevisionProcessor.RejectRevisions(redline!);
+    acceptAll = RevisionProcessor.AcceptRevisions(redline!);
+    rejectAll = RevisionProcessor.RejectRevisions(redline!);
+});
+// The invariant checks run outside the measured stage. Schema validation in particular builds
+// OpenXmlValidator caches that the GC may or may not have collected by the time it runs, so it
+// allocated either ~237 or ~266 MiB depending on the process, which the allocation gate read
+// as a regression on pull requests that never touched the library.
+if (acceptAll is not null && rejectAll is not null)
+{
     Check("accept-all == modified text", ExtractText(acceptAll.DocumentByteArray) == ExtractText(modified));
     Check("reject-all == baseline text", ExtractText(rejectAll.DocumentByteArray) == ExtractText(bytes));
     Check("redline adds no schema findings", ValidateCount(redline!.DocumentByteArray) <= baselineErrors);
-});
+}
 Bench("redline -> HTML with tracked-change markup", () =>
 {
     var html = WmlToHtmlConverter.ConvertToHtml(redline!, new WmlToHtmlConverterSettings
@@ -166,23 +178,47 @@ return FailedChecks == 0 ? 0 : 2;
 
 // ---------- helpers ----------
 
+// Each stage runs Iterations times and records the median time and the median allocation. A
+// single reading of the process-wide allocation counter occasionally jumps under server GC (see
+// the docxdiff-stress harness's Measure), and the median of the per-run deltas cannot be moved by
+// one jumped read. Only the first run prints and counts its checks; the repeats are silent, so the
+// log and the exit code are those of a single pass.
 static void Bench(string label, Action act)
 {
-    var alloc0 = GC.GetTotalAllocatedBytes(precise: true);
-    var sw = Stopwatch.StartNew();
+    var times = new double[Iterations];
+    var allocs = new double[Iterations];
+    var console = Console.Out;
+    var sw = new Stopwatch();
     try
     {
-        act();
-        sw.Stop();
-        var alloc = GC.GetTotalAllocatedBytes(precise: true) - alloc0;
-        Stats[label] = new StageStats(sw.Elapsed.TotalMilliseconds, alloc);
-        Console.WriteLine($"[bench] {label}: {sw.ElapsedMilliseconds} ms, {alloc / 1048576.0:F1} MB allocated");
+        for (var i = 0; i < Iterations; i++)
+        {
+            Repeating = i > 0;
+            if (Repeating) Console.SetOut(TextWriter.Null);
+            var alloc0 = GC.GetTotalAllocatedBytes(precise: true);
+            sw.Restart();
+            act();
+            sw.Stop();
+            allocs[i] = GC.GetTotalAllocatedBytes(precise: true) - alloc0;
+            times[i] = sw.Elapsed.TotalMilliseconds;
+        }
+        Console.SetOut(console);
+        Array.Sort(times);
+        Array.Sort(allocs);
+        var stats = new StageStats(times[Iterations / 2], allocs[Iterations / 2]);
+        Stats[label] = stats;
+        Console.WriteLine($"[bench] {label}: {stats.MedianMs:F0} ms, {stats.AllocBytes / 1048576.0:F1} MB allocated (median of {Iterations})");
     }
     catch (Exception ex)
     {
         sw.Stop();
+        Console.SetOut(console);
         Console.WriteLine($"[bench] {label}: FAILED after {sw.ElapsedMilliseconds} ms :: {ex.GetType().Name}: {ex.Message}");
         FailedChecks++;
+    }
+    finally
+    {
+        Repeating = false;
     }
 }
 
@@ -279,6 +315,7 @@ static int ValidateCount(byte[] docx)
 
 static void Check(string label, bool pass)
 {
+    if (Repeating) return;
     Console.WriteLine($"    [check] {label}: {(pass ? "PASS" : "FAIL")}");
     if (!pass) FailedChecks++;
 }
@@ -297,11 +334,13 @@ internal sealed record Replacement(string Find, string Replace);
 internal sealed record InsertSpec(string Needle, string Markdown);
 internal sealed record CommentSpec(string Needle, string Text);
 
-/// <summary>One stage's figures in <c>--stats-json</c> output (single run, so the time is cold).</summary>
+/// <summary>One stage's figures in <c>--stats-json</c> output: the median time and allocation over <c>--iterations</c> runs.</summary>
 internal sealed record StageStats(double MedianMs, double AllocBytes);
 
 internal static partial class Program
 {
     internal static int FailedChecks;
+    internal static int Iterations = 3;
+    internal static bool Repeating;
     internal static readonly SortedDictionary<string, StageStats> Stats = new(StringComparer.Ordinal);
 }
