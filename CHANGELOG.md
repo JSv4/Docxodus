@@ -298,6 +298,12 @@ All notable changes to this project will be documented in this file.
   searches. The 2,000-paragraph comparison takes about 3 s. Output is unchanged: the skipped attempts are
   exactly the ones that would have declined. `GetRevisions` shares the speed-up through relocation
   pairing, which makes the same fusion decision.
+- The React hooks `useDocumentStructure` and `useAnnotations` no longer apply a stale result (issue
+  #973). Each load now takes a ticket, and only the newest load of a still-mounted hook may set
+  state. A slower load for a document the caller has since replaced, or one still running when the
+  document is cleared or the component unmounts, is ignored instead of overwriting newer state.
+  `useDocxodus` also returns the same object until its state changes. It used to return a new one on
+  every render, and the hooks built on it re-ran their loads on every render as a result.
 - Accepting or rejecting revisions no longer strips block-level `w:customXml` wrappers (issue #913).
   The pass that joins paragraphs across deleted paragraph marks rebuilt each body, cell and content
   control from the paragraphs it found and put back only content controls, so every block custom-XML
