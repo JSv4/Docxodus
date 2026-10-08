@@ -32,6 +32,15 @@ namespace Docxodus;
 /// such as a query, a listing or <see cref="Save()"/>, throws <see cref="ObjectDisposedException"/>.
 /// <see cref="Undo"/> and <see cref="Redo"/> return <c>false</c>, as they do whenever there is
 /// nothing to undo or redo.</para>
+///
+/// <para><b>Threading.</b> A session is not thread-safe: call it from one thread at a time. Its
+/// internal gate serializes <see cref="ExecuteMutation"/>, transactions and a few composite
+/// operations against each other, but most edits (<c>ReplaceText</c>, <c>InsertParagraph</c> and
+/// the rest) and every query run without it, so a second thread can observe or change the package
+/// mid-operation. A host that shares one session across threads must serialize every call itself;
+/// the shared transport facades do this for mutations by routing each one through
+/// <see cref="ExecuteMutation"/>, and each transport handles one request at a time. Separate
+/// sessions are independent and may be used on different threads concurrently.</para>
 /// </remarks>
 public sealed partial class DocxSession : IDisposable
 {

@@ -69,8 +69,11 @@ import type {
   SemanticChangeSet,
   PackageManifestInspectionLimits,
   WorkerErrorCode,
+  WorkerRequestOptions,
 } from "./types.js";
 import { serializeVerificationRequest } from "./verification-request.js";
+
+export type { WorkerDocxodusOptions, WorkerErrorCode, WorkerRequestOptions } from "./types.js";
 
 /**
  * Rejection carrying the worker's machine-readable cause. Callers classify failures with
@@ -88,6 +91,29 @@ export class WorkerOperationError extends Error {
 
 function workerError(message?: string, code?: WorkerErrorCode): WorkerOperationError {
   return new WorkerOperationError(message || "Unknown error", code);
+}
+
+/**
+ * Read a success response's payload, rejecting with `missing_result` when the worker reported
+ * success without it rather than handing the caller `undefined` typed as a value.
+ */
+function requireField<R extends WorkerResponse, K extends keyof R>(response: R, field: K): NonNullable<R[K]> {
+  const value = response[field];
+  if (value === undefined || value === null) {
+    throw workerError(
+      `The worker's "${(response as { type?: string }).type ?? "unknown"}" response reported success without its ${String(field)}`,
+      "missing_result",
+    );
+  }
+  return value as NonNullable<R[K]>;
+}
+
+/** A positive, finite timeout in milliseconds, or undefined; anything else is a caller error. */
+function checkTimeout(timeoutMs: number | undefined, name: string): number | undefined {
+  if (timeoutMs !== undefined && !(Number.isFinite(timeoutMs) && timeoutMs > 0)) {
+    throw new RangeError(`${name} must be a positive, finite number of milliseconds; got ${timeoutMs}`);
+  }
+  return timeoutMs;
 }
 
 /** Reads a worker failure's machine-readable cause, or undefined for any other error. */
@@ -403,6 +429,19 @@ export interface WorkerDocxodus {
   ): Promise<WorkerDocxSession>;
 
   /**
+   * A view of this instance whose requests carry `options`: an `AbortSignal` that rejects each
+   * request it is passed to, and a `timeoutMs` deadline that overrides the instance's
+   * `requestTimeoutMs`. The view shares this instance's worker, so terminating either terminates
+   * both. Sessions opened through the view inherit its options, except that
+   * {@link WorkerDocxSession.close} ignores the signal so a session handle is always released.
+   *
+   * Rejecting a request does not stop work the worker has already started: the WASM engine runs
+   * on the worker's single thread, so a request that was aborted or timed out is most likely still
+   * running, and later requests queue behind it. Call {@link terminate} to stop it.
+   */
+  withRequestOptions(options: WorkerRequestOptions): WorkerDocxodus;
+
+  /**
    * Terminate the worker.
    * After calling this, the instance cannot be used anymore.
    */
@@ -441,6 +480,7 @@ export async function createWorkerDocxodus(
   if (options?.signal?.aborted) {
     throw new Error("Worker creation aborted");
   }
+  const requestTimeoutMs = checkTimeout(options?.requestTimeoutMs, "requestTimeoutMs");
   // Determine WASM base path
   const wasmBasePath = options?.wasmBasePath ?? deriveWasmBasePath();
 
@@ -514,20 +554,67 @@ export async function createWorkerDocxodus(
     stopWorker(`Worker error: ${error.message}`);
   };
 
+  // A response that cannot be deserialized arrives without its request id, so the request it
+  // answered cannot be identified. Rather than leave that request pending forever, reject every
+  // request in flight; the worker itself is unaffected and stays usable.
+  worker.onmessageerror = () => {
+    for (const pending of [...pendingRequests.values()]) {
+      pending.reject(workerError(
+        "A worker response could not be deserialized, so every request in flight was rejected",
+        "message_error",
+      ));
+    }
+  };
+
   /**
-   * Send a request to the worker and wait for response.
+   * Send a request to the worker and wait for its response. Every way a request ends (a
+   * response, a timeout, an abort, the worker stopping, or a failed post) goes through the
+   * pending entry's resolve/reject, which clear its timer and abort listener exactly once.
    */
   function sendRequest<T extends WorkerResponse>(
     request: WorkerRequest,
-    transfer?: Transferable[]
+    transfer?: Transferable[],
+    requestOptions?: WorkerRequestOptions,
   ): Promise<T> {
     return new Promise((resolve, reject) => {
       if (!isWorkerActive) {
         reject(new Error("Worker has been terminated"));
         return;
       }
+      const signal = requestOptions?.signal;
+      if (signal?.aborted) {
+        reject(workerError(`The worker request "${request.type}" was aborted before it was sent`, "aborted"));
+        return;
+      }
+      const timeoutMs = requestOptions?.timeoutMs ?? requestTimeoutMs;
 
-      pendingRequests.set(request.id, { resolve, reject });
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let onAbort: (() => void) | undefined;
+      const finish = (): void => {
+        pendingRequests.delete(request.id);
+        if (timer !== undefined) clearTimeout(timer);
+        if (onAbort) signal?.removeEventListener("abort", onAbort);
+      };
+      pendingRequests.set(request.id, {
+        resolve: (value) => {
+          finish();
+          resolve(value);
+        },
+        reject: (error) => {
+          finish();
+          reject(error);
+        },
+      });
+      const fail = (error: Error): void => pendingRequests.get(request.id)?.reject(error);
+
+      if (timeoutMs !== undefined) {
+        timer = setTimeout(() => fail(workerError(
+          `The worker request "${request.type}" timed out after ${timeoutMs} ms`, "timeout")), timeoutMs);
+      }
+      if (signal) {
+        onAbort = () => fail(workerError(`The worker request "${request.type}" was aborted`, "aborted"));
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
 
       try {
         if (transfer && transfer.length > 0) {
@@ -536,8 +623,7 @@ export async function createWorkerDocxodus(
           worker.postMessage(request);
         }
       } catch (error) {
-        pendingRequests.delete(request.id);
-        reject(error instanceof Error ? error : new Error(String(error)));
+        fail(error instanceof Error ? error : new Error(String(error)));
       }
     });
   }
@@ -554,494 +640,457 @@ export async function createWorkerDocxodus(
     throw error;
   }
 
-  // Return the WorkerDocxodus instance
-  return {
-    async generatePackageManifest(
-      document: File | Uint8Array,
-      limits?: PackageManifestInspectionLimits,
-    ): Promise<PackageManifest> {
-      const bytes = await toBytes(document);
-      const response = await sendRequest<WorkerGeneratePackageManifestResponse>(
-        {
-          id: generateId(),
-          type: "generatePackageManifest",
-          documentBytes: bytes,
-          limits,
-          representation: "object",
-        },
-        [bytes.buffer]
-      );
-      return response.manifest!;
-    },
+  // The instance, and any withRequestOptions views of it, share this worker; each view's
+  // requests carry its options.
+  const createApi = (requestOptions?: WorkerRequestOptions): WorkerDocxodus => {
+    const send = <T extends WorkerResponse>(request: WorkerRequest, transfer?: Transferable[]): Promise<T> =>
+      sendRequest<T>(request, transfer, requestOptions);
 
-    async verifyDeliverable(
-      document: File | Uint8Array,
-      baseline?: File | Uint8Array,
-      request?: DeliverableVerificationRequest,
-    ): Promise<DeliverableVerificationResult> {
-      const bytes = await toBytes(document);
-      const baselineBytes = baseline === undefined ? undefined : await toBytes(baseline);
-      const transfer: Transferable[] = [bytes.buffer];
-      if (baselineBytes !== undefined) transfer.push(baselineBytes.buffer);
-      const response = await sendRequest<WorkerVerifyDeliverableResponse>(
-        {
-          id: generateId(),
-          type: "verifyDeliverable",
-          documentBytes: bytes,
-          baselineBytes,
-          requestJson: request === undefined ? undefined : serializeVerificationRequest(request),
-        },
-        transfer
-      );
-      if (!response.success || !response.verification) {
-        throw new Error(response.error ?? "verifyDeliverable failed");
-      }
-      return response.verification;
-    },
-
-    async proveRedlineReversibility(
-      baseline: File | Uint8Array,
-      intendedFinal: File | Uint8Array,
-      redline: File | Uint8Array
-    ): Promise<RedlineReversibilityProof> {
-      const baselineBytes = await toBytes(baseline);
-      const intendedFinalBytes = await toBytes(intendedFinal);
-      const redlineBytes = await toBytes(redline);
-      const response = await sendRequest<WorkerProveRedlineReversibilityResponse>(
-        {
-          id: generateId(),
-          type: "proveRedlineReversibility",
-          baselineBytes,
-          intendedFinalBytes,
-          redlineBytes,
-        },
-        [baselineBytes.buffer, intendedFinalBytes.buffer, redlineBytes.buffer]
-      );
-      if (!response.success || !response.proof) {
-        throw new Error(response.error ?? "proveRedlineReversibility failed");
-      }
-      return response.proof;
-    },
-
-    async getSemanticChanges(
-      left: File | Uint8Array,
-      right: File | Uint8Array,
-      settings?: DocxDiffSettings
-    ): Promise<SemanticChangeSet> {
-      const leftBytes = await toBytes(left);
-      const rightBytes = await toBytes(right);
-      const response = await sendRequest<WorkerGetSemanticChangesResponse>(
-        {
-          id: generateId(),
-          type: "getSemanticChanges",
-          leftBytes,
-          rightBytes,
-          settings,
-        },
-        [leftBytes.buffer, rightBytes.buffer]
-      );
-      return response.semanticChanges!;
-    },
-
-    async createExternalAnnotationSet(
-      document: File | Uint8Array,
-      documentId: string,
-    ): Promise<ExternalAnnotationSet> {
-      const bytes = await toBytes(document);
-      const response = await sendRequest<WorkerCreateExternalAnnotationSetResponse>(
-        { id: generateId(), type: "createExternalAnnotationSet", documentBytes: bytes, documentId },
-        [bytes.buffer]
-      );
-      if (!response.success || !response.annotationSet) {
-        throw new Error(response.error ?? "createExternalAnnotationSet failed");
-      }
-      return response.annotationSet;
-    },
-
-    async validateExternalAnnotations(
-      document: File | Uint8Array,
-      annotationSet: ExternalAnnotationSet,
-    ): Promise<ExternalAnnotationValidationResult> {
-      const bytes = await toBytes(document);
-      const response = await sendRequest<WorkerValidateExternalAnnotationsResponse>(
-        { id: generateId(), type: "validateExternalAnnotations", documentBytes: bytes, annotationSet },
-        [bytes.buffer]
-      );
-      if (!response.success || !response.validation) {
-        throw new Error(response.error ?? "validateExternalAnnotations failed");
-      }
-      return response.validation;
-    },
-
-    async projectAnnotationsOntoHtml(
-      html: string,
-      annotationSet: ExternalAnnotationSet,
-      projectionOptions?: ExternalAnnotationProjectionSettings,
-    ): Promise<string> {
-      const response = await sendRequest<WorkerProjectAnnotationsOntoHtmlResponse>({
-        id: generateId(),
-        type: "projectAnnotationsOntoHtml",
-        html,
-        annotationSet,
-        projectionOptions,
-      });
-      if (!response.success || response.html === undefined) {
-        throw new Error(response.error ?? "projectAnnotationsOntoHtml failed");
-      }
-      return response.html;
-    },
-
-    async convertDocxToHtmlWithExternalAnnotations(
-      document: File | Uint8Array,
-      annotationSet: ExternalAnnotationSet,
-      conversionOptions?: ConversionOptions,
-      projectionOptions?: ExternalAnnotationProjectionSettings,
-    ): Promise<string> {
-      const bytes = await toBytes(document);
-      const response = await sendRequest<WorkerConvertWithExternalAnnotationsResponse>(
-        {
-          id: generateId(),
-          type: "convertDocxToHtmlWithExternalAnnotations",
-          documentBytes: bytes,
-          annotationSet,
-          conversionOptions,
-          projectionOptions,
-        },
-        [bytes.buffer]
-      );
-      if (!response.success || response.html === undefined) {
-        throw new Error(response.error ?? "convertDocxToHtmlWithExternalAnnotations failed");
-      }
-      return response.html;
-    },
-
-    async exportToOpenContract(document: File | Uint8Array): Promise<OpenContractDocExport> {
-      const bytes = await toBytes(document);
-      const response = await sendRequest<WorkerExportToOpenContractResponse>(
-        { id: generateId(), type: "exportToOpenContract", documentBytes: bytes },
-        [bytes.buffer]
-      );
-      if (!response.success || !response.export) {
-        throw new Error(response.error ?? "exportToOpenContract failed");
-      }
-      return response.export;
-    },
-
-    async generatePackageManifestJson(
-      document: File | Uint8Array,
-      limits?: PackageManifestInspectionLimits,
-    ): Promise<string> {
-      const bytes = await toBytes(document);
-      const response = await sendRequest<WorkerGeneratePackageManifestResponse>(
-        {
-          id: generateId(),
-          type: "generatePackageManifest",
-          documentBytes: bytes,
-          limits,
-          representation: "json",
-        },
-        [bytes.buffer],
-      );
-      if (response.manifestJson === undefined) {
-        throw new Error("Package manifest worker response omitted canonical JSON");
-      }
-      return response.manifestJson;
-    },
-
-    async projectReviewProfile(
-      document: File | Uint8Array,
-      profile: "final" | "original",
-      maximumOutputBytes?: number,
-    ): Promise<Uint8Array> {
-      const bytes = await toBytes(document);
-      const response = await sendRequest<WorkerProjectReviewProfileResponse>(
-        {
-          id: generateId(),
-          type: "projectReviewProfile",
-          documentBytes: bytes,
-          profile,
-          maximumOutputBytes,
-        },
-        [bytes.buffer],
-      );
-      if (!response.documentBytes || response.documentBytes.byteLength === 0) {
-        throw new Error(`Failed to derive the ${profile} review profile`);
-      }
-      return response.documentBytes;
-    },
-
-    async convertDocxToHtml(
-      document: File | Uint8Array,
-      options?: ConversionOptions,
-      maximumOutputBytes?: number,
-    ): Promise<string> {
-      const bytes = await toBytes(document);
-      const response = await sendRequest<WorkerConvertResponse>(
-        {
-          id: generateId(),
-          type: "convertDocxToHtml",
-          documentBytes: bytes,
-          options,
-          maximumOutputBytes,
-        },
-        [bytes.buffer]
-      );
-      return response.html!;
-    },
-
-    async compareDocuments(
-      original: File | Uint8Array,
-      modified: File | Uint8Array,
-      options?: CompareOptions
-    ): Promise<Uint8Array> {
-      const originalBytes = await toBytes(original);
-      const modifiedBytes = await toBytes(modified);
-      const response = await sendRequest<WorkerCompareResponse>(
-        {
-          id: generateId(),
-          type: "compareDocuments",
-          originalBytes,
-          modifiedBytes,
-          options,
-        },
-        [originalBytes.buffer, modifiedBytes.buffer]
-      );
-      return response.documentBytes!;
-    },
-
-    async compareDocumentsToHtml(
-      original: File | Uint8Array,
-      modified: File | Uint8Array,
-      options?: CompareOptions
-    ): Promise<string> {
-      const originalBytes = await toBytes(original);
-      const modifiedBytes = await toBytes(modified);
-      const response = await sendRequest<WorkerCompareToHtmlResponse>(
-        {
-          id: generateId(),
-          type: "compareDocumentsToHtml",
-          originalBytes,
-          modifiedBytes,
-          options,
-        },
-        [originalBytes.buffer, modifiedBytes.buffer]
-      );
-      return response.html!;
-    },
-
-    async getRevisions(
-      document: File | Uint8Array
-    ): Promise<RevisionListEntry[]> {
-      const bytes = await toBytes(document);
-      const response = await sendRequest<WorkerGetRevisionsResponse>(
-        {
-          id: generateId(),
-          type: "getRevisions",
-          documentBytes: bytes,
-        },
-        [bytes.buffer]
-      );
-      return response.revisions!;
-    },
-
-    async getComments(document: File | Uint8Array): Promise<CommentListEntry[]> {
-      const bytes = await toBytes(document);
-      const response = await sendRequest<WorkerGetCommentsResponse>(
-        { id: generateId(), type: "getComments", documentBytes: bytes },
-        [bytes.buffer]
-      );
-      return response.comments!;
-    },
-
-    async getDocumentMetadata(
-      document: File | Uint8Array
-    ): Promise<DocumentMetadata> {
-      const bytes = await toBytes(document);
-      const response = await sendRequest<WorkerGetDocumentMetadataResponse>(
-        {
-          id: generateId(),
-          type: "getDocumentMetadata",
-          documentBytes: bytes,
-        },
-        [bytes.buffer]
-      );
-      return response.metadata!;
-    },
-
-    async getVersion(): Promise<VersionInfo> {
-      const response = await sendRequest<WorkerGetVersionResponse>({
-        id: generateId(),
-        type: "getVersion",
-      });
-      return response.version!;
-    },
-
-    prepare(): Promise<void> {
-      // Idempotent: hand back the existing warmup if one is in flight or done.
-      if (preparePromise) {
-        return preparePromise;
-      }
-      preparePromise = sendRequest<WorkerPrepareResponse>({
-        id: generateId(),
-        type: "prepare",
-      }).then(() => undefined);
-      // On failure, clear the cache so a subsequent prepare() can retry.
-      preparePromise.catch(() => {
-        preparePromise = null;
-      });
-      return preparePromise;
-    },
-
-    async openDocxSession(
-      document: File | Uint8Array,
-      settings?: DocxSessionSettings
-    ): Promise<WorkerDocxSession> {
-      const bytes = await toBytes(document);
-      const settingsJson = settings ? JSON.stringify(settings) : "";
-      const openResponse = await sendRequest<WorkerSessionOpenResponse>(
-        {
-          id: generateId(),
-          type: "sessionOpen",
-          documentBytes: bytes,
-          settingsJson,
-        },
-        [bytes.buffer]
-      );
-
-      if (!openResponse.success || openResponse.handle === undefined) {
-        throw new Error(
-          `Failed to open worker DocxSession: ${openResponse.error ?? "unknown error"}`
+    return {
+      async generatePackageManifest(
+        document: File | Uint8Array,
+        limits?: PackageManifestInspectionLimits,
+      ): Promise<PackageManifest> {
+        const bytes = await toBytes(document);
+        const response = await send<WorkerGeneratePackageManifestResponse>(
+          {
+            id: generateId(),
+            type: "generatePackageManifest",
+            documentBytes: bytes,
+            limits,
+            representation: "object",
+          },
+          [bytes.buffer]
         );
-      }
+        return requireField(response, "manifest");
+      },
 
-      const handle = openResponse.handle;
-
-      return {
-        async getPackageManifest(): Promise<PackageManifest> {
-          const res = await sendRequest<WorkerSessionGetPackageManifestResponse>({
+      async verifyDeliverable(
+        document: File | Uint8Array,
+        baseline?: File | Uint8Array,
+        request?: DeliverableVerificationRequest,
+      ): Promise<DeliverableVerificationResult> {
+        const bytes = await toBytes(document);
+        const baselineBytes = baseline === undefined ? undefined : await toBytes(baseline);
+        const transfer: Transferable[] = [bytes.buffer];
+        if (baselineBytes !== undefined) transfer.push(baselineBytes.buffer);
+        const response = await send<WorkerVerifyDeliverableResponse>(
+          {
             id: generateId(),
-            type: "sessionGetPackageManifest",
-            handle,
-          });
-          if (!res.success || !res.manifest) {
-            throw new Error(res.error ?? "sessionGetPackageManifest failed");
-          }
-          return res.manifest;
-        },
-
-        async getSemanticChanges(): Promise<SemanticChangeSet> {
-          const res = await sendRequest<WorkerSessionGetSemanticChangesResponse>({
-            id: generateId(),
-            type: "sessionGetSemanticChanges",
-            handle,
-          });
-          if (!res.success || !res.semanticChanges) {
-            throw new Error(res.error ?? "sessionGetSemanticChanges failed");
-          }
-          return res.semanticChanges;
-        },
-
-        async verifyDeliverable(
-          request?: DeliverableVerificationRequest,
-        ): Promise<DeliverableVerificationResult> {
-          const res = await sendRequest<WorkerSessionVerifyDeliverableResponse>({
-            id: generateId(),
-            type: "sessionVerifyDeliverable",
-            handle,
+            type: "verifyDeliverable",
+            documentBytes: bytes,
+            baselineBytes,
             requestJson: request === undefined ? undefined : serializeVerificationRequest(request),
-          });
-          if (!res.success || !res.verification) {
-            throw new Error(res.error ?? "sessionVerifyDeliverable failed");
-          }
-          return res.verification;
-        },
+          },
+          transfer
+        );
+        return requireField(response, "verification");
+      },
 
-        async addAnnotation(
-          anchorId: string,
-          span: CharSpan | null,
-          annotation: DocumentAnnotation
-        ): Promise<EditResult> {
-          const res = await sendRequest<WorkerSessionEditResponse>({
+      async proveRedlineReversibility(
+        baseline: File | Uint8Array,
+        intendedFinal: File | Uint8Array,
+        redline: File | Uint8Array
+      ): Promise<RedlineReversibilityProof> {
+        const baselineBytes = await toBytes(baseline);
+        const intendedFinalBytes = await toBytes(intendedFinal);
+        const redlineBytes = await toBytes(redline);
+        const response = await send<WorkerProveRedlineReversibilityResponse>(
+          {
             id: generateId(),
-            type: "sessionAddAnnotation",
-            handle,
-            anchorId,
-            spanJson: span ? JSON.stringify(span) : "",
-            annotationJson: JSON.stringify(annotation),
-          });
-          if (!res.success) {
-            throw new Error(res.error ?? "sessionAddAnnotation failed");
-          }
-          return res.result!;
-        },
+            type: "proveRedlineReversibility",
+            baselineBytes,
+            intendedFinalBytes,
+            redlineBytes,
+          },
+          [baselineBytes.buffer, intendedFinalBytes.buffer, redlineBytes.buffer]
+        );
+        return requireField(response, "proof");
+      },
 
-        async removeAnnotation(annotationId: string): Promise<EditResult> {
-          const res = await sendRequest<WorkerSessionEditResponse>({
+      async getSemanticChanges(
+        left: File | Uint8Array,
+        right: File | Uint8Array,
+        settings?: DocxDiffSettings
+      ): Promise<SemanticChangeSet> {
+        const leftBytes = await toBytes(left);
+        const rightBytes = await toBytes(right);
+        const response = await send<WorkerGetSemanticChangesResponse>(
+          {
             id: generateId(),
-            type: "sessionRemoveAnnotation",
-            handle,
-            annotationId,
-          });
-          if (!res.success) {
-            throw new Error(res.error ?? "sessionRemoveAnnotation failed");
-          }
-          return res.result!;
-        },
+            type: "getSemanticChanges",
+            leftBytes,
+            rightBytes,
+            settings,
+          },
+          [leftBytes.buffer, rightBytes.buffer]
+        );
+        return requireField(response, "semanticChanges");
+      },
 
-        async updateAnnotation(
-          annotationId: string,
-          update: AnnotationUpdate
-        ): Promise<EditResult> {
-          const res = await sendRequest<WorkerSessionEditResponse>({
+      async createExternalAnnotationSet(
+        document: File | Uint8Array,
+        documentId: string,
+      ): Promise<ExternalAnnotationSet> {
+        const bytes = await toBytes(document);
+        const response = await send<WorkerCreateExternalAnnotationSetResponse>(
+          { id: generateId(), type: "createExternalAnnotationSet", documentBytes: bytes, documentId },
+          [bytes.buffer]
+        );
+        return requireField(response, "annotationSet");
+      },
+
+      async validateExternalAnnotations(
+        document: File | Uint8Array,
+        annotationSet: ExternalAnnotationSet,
+      ): Promise<ExternalAnnotationValidationResult> {
+        const bytes = await toBytes(document);
+        const response = await send<WorkerValidateExternalAnnotationsResponse>(
+          { id: generateId(), type: "validateExternalAnnotations", documentBytes: bytes, annotationSet },
+          [bytes.buffer]
+        );
+        return requireField(response, "validation");
+      },
+
+      async projectAnnotationsOntoHtml(
+        html: string,
+        annotationSet: ExternalAnnotationSet,
+        projectionOptions?: ExternalAnnotationProjectionSettings,
+      ): Promise<string> {
+        const response = await send<WorkerProjectAnnotationsOntoHtmlResponse>({
+          id: generateId(),
+          type: "projectAnnotationsOntoHtml",
+          html,
+          annotationSet,
+          projectionOptions,
+        });
+        return requireField(response, "html");
+      },
+
+      async convertDocxToHtmlWithExternalAnnotations(
+        document: File | Uint8Array,
+        annotationSet: ExternalAnnotationSet,
+        conversionOptions?: ConversionOptions,
+        projectionOptions?: ExternalAnnotationProjectionSettings,
+      ): Promise<string> {
+        const bytes = await toBytes(document);
+        const response = await send<WorkerConvertWithExternalAnnotationsResponse>(
+          {
             id: generateId(),
-            type: "sessionUpdateAnnotation",
-            handle,
-            annotationId,
-            updateJson: JSON.stringify(update),
-          });
-          if (!res.success) {
-            throw new Error(res.error ?? "sessionUpdateAnnotation failed");
-          }
-          return res.result!;
-        },
+            type: "convertDocxToHtmlWithExternalAnnotations",
+            documentBytes: bytes,
+            annotationSet,
+            conversionOptions,
+            projectionOptions,
+          },
+          [bytes.buffer]
+        );
+        return requireField(response, "html");
+      },
 
-        async moveAnnotation(
-          annotationId: string,
-          newAnchorId: string,
-          newSpan: CharSpan | null
-        ): Promise<EditResult> {
-          const res = await sendRequest<WorkerSessionEditResponse>({
+      async exportToOpenContract(document: File | Uint8Array): Promise<OpenContractDocExport> {
+        const bytes = await toBytes(document);
+        const response = await send<WorkerExportToOpenContractResponse>(
+          { id: generateId(), type: "exportToOpenContract", documentBytes: bytes },
+          [bytes.buffer]
+        );
+        return requireField(response, "export");
+      },
+
+      async generatePackageManifestJson(
+        document: File | Uint8Array,
+        limits?: PackageManifestInspectionLimits,
+      ): Promise<string> {
+        const bytes = await toBytes(document);
+        const response = await send<WorkerGeneratePackageManifestResponse>(
+          {
             id: generateId(),
-            type: "sessionMoveAnnotation",
-            handle,
-            annotationId,
-            newAnchorId,
-            newSpanJson: newSpan ? JSON.stringify(newSpan) : "",
-          });
-          if (!res.success) {
-            throw new Error(res.error ?? "sessionMoveAnnotation failed");
-          }
-          return res.result!;
-        },
+            type: "generatePackageManifest",
+            documentBytes: bytes,
+            limits,
+            representation: "json",
+          },
+          [bytes.buffer],
+        );
+        return requireField(response, "manifestJson");
+      },
 
-        async close(): Promise<void> {
-          await sendRequest({
+      async projectReviewProfile(
+        document: File | Uint8Array,
+        profile: "final" | "original",
+        maximumOutputBytes?: number,
+      ): Promise<Uint8Array> {
+        const bytes = await toBytes(document);
+        const response = await send<WorkerProjectReviewProfileResponse>(
+          {
             id: generateId(),
-            type: "sessionClose",
-            handle,
-          });
-        },
-      };
-    },
+            type: "projectReviewProfile",
+            documentBytes: bytes,
+            profile,
+            maximumOutputBytes,
+          },
+          [bytes.buffer],
+        );
+        if (!response.documentBytes || response.documentBytes.byteLength === 0) {
+          throw new Error(`Failed to derive the ${profile} review profile`);
+        }
+        return response.documentBytes;
+      },
 
-    terminate(): void {
-      stopWorker("Worker terminated");
-    },
+      async convertDocxToHtml(
+        document: File | Uint8Array,
+        options?: ConversionOptions,
+        maximumOutputBytes?: number,
+      ): Promise<string> {
+        const bytes = await toBytes(document);
+        const response = await send<WorkerConvertResponse>(
+          {
+            id: generateId(),
+            type: "convertDocxToHtml",
+            documentBytes: bytes,
+            options,
+            maximumOutputBytes,
+          },
+          [bytes.buffer]
+        );
+        return requireField(response, "html");
+      },
 
-    isActive(): boolean {
-      return isWorkerActive;
-    },
+      async compareDocuments(
+        original: File | Uint8Array,
+        modified: File | Uint8Array,
+        options?: CompareOptions
+      ): Promise<Uint8Array> {
+        const originalBytes = await toBytes(original);
+        const modifiedBytes = await toBytes(modified);
+        const response = await send<WorkerCompareResponse>(
+          {
+            id: generateId(),
+            type: "compareDocuments",
+            originalBytes,
+            modifiedBytes,
+            options,
+          },
+          [originalBytes.buffer, modifiedBytes.buffer]
+        );
+        return requireField(response, "documentBytes");
+      },
+
+      async compareDocumentsToHtml(
+        original: File | Uint8Array,
+        modified: File | Uint8Array,
+        options?: CompareOptions
+      ): Promise<string> {
+        const originalBytes = await toBytes(original);
+        const modifiedBytes = await toBytes(modified);
+        const response = await send<WorkerCompareToHtmlResponse>(
+          {
+            id: generateId(),
+            type: "compareDocumentsToHtml",
+            originalBytes,
+            modifiedBytes,
+            options,
+          },
+          [originalBytes.buffer, modifiedBytes.buffer]
+        );
+        return requireField(response, "html");
+      },
+
+      async getRevisions(
+        document: File | Uint8Array
+      ): Promise<RevisionListEntry[]> {
+        const bytes = await toBytes(document);
+        const response = await send<WorkerGetRevisionsResponse>(
+          {
+            id: generateId(),
+            type: "getRevisions",
+            documentBytes: bytes,
+          },
+          [bytes.buffer]
+        );
+        return requireField(response, "revisions");
+      },
+
+      async getComments(document: File | Uint8Array): Promise<CommentListEntry[]> {
+        const bytes = await toBytes(document);
+        const response = await send<WorkerGetCommentsResponse>(
+          { id: generateId(), type: "getComments", documentBytes: bytes },
+          [bytes.buffer]
+        );
+        return requireField(response, "comments");
+      },
+
+      async getDocumentMetadata(
+        document: File | Uint8Array
+      ): Promise<DocumentMetadata> {
+        const bytes = await toBytes(document);
+        const response = await send<WorkerGetDocumentMetadataResponse>(
+          {
+            id: generateId(),
+            type: "getDocumentMetadata",
+            documentBytes: bytes,
+          },
+          [bytes.buffer]
+        );
+        return requireField(response, "metadata");
+      },
+
+      async getVersion(): Promise<VersionInfo> {
+        const response = await send<WorkerGetVersionResponse>({
+          id: generateId(),
+          type: "getVersion",
+        });
+        return requireField(response, "version");
+      },
+
+      prepare(): Promise<void> {
+        // Idempotent: hand back the existing warmup if one is in flight or done.
+        if (preparePromise) {
+          return preparePromise;
+        }
+        preparePromise = send<WorkerPrepareResponse>({
+          id: generateId(),
+          type: "prepare",
+        }).then(() => undefined);
+        // On failure, clear the cache so a subsequent prepare() can retry.
+        preparePromise.catch(() => {
+          preparePromise = null;
+        });
+        return preparePromise;
+      },
+
+      async openDocxSession(
+        document: File | Uint8Array,
+        settings?: DocxSessionSettings
+      ): Promise<WorkerDocxSession> {
+        const bytes = await toBytes(document);
+        const settingsJson = settings ? JSON.stringify(settings) : "";
+        const openResponse = await send<WorkerSessionOpenResponse>(
+          {
+            id: generateId(),
+            type: "sessionOpen",
+            documentBytes: bytes,
+            settingsJson,
+          },
+          [bytes.buffer]
+        );
+
+        const handle = requireField(openResponse, "handle");
+
+        return {
+          async getPackageManifest(): Promise<PackageManifest> {
+            const res = await send<WorkerSessionGetPackageManifestResponse>({
+              id: generateId(),
+              type: "sessionGetPackageManifest",
+              handle,
+            });
+            return requireField(res, "manifest");
+          },
+
+          async getSemanticChanges(): Promise<SemanticChangeSet> {
+            const res = await send<WorkerSessionGetSemanticChangesResponse>({
+              id: generateId(),
+              type: "sessionGetSemanticChanges",
+              handle,
+            });
+            return requireField(res, "semanticChanges");
+          },
+
+          async verifyDeliverable(
+            request?: DeliverableVerificationRequest,
+          ): Promise<DeliverableVerificationResult> {
+            const res = await send<WorkerSessionVerifyDeliverableResponse>({
+              id: generateId(),
+              type: "sessionVerifyDeliverable",
+              handle,
+              requestJson: request === undefined ? undefined : serializeVerificationRequest(request),
+            });
+            return requireField(res, "verification");
+          },
+
+          async addAnnotation(
+            anchorId: string,
+            span: CharSpan | null,
+            annotation: DocumentAnnotation
+          ): Promise<EditResult> {
+            const res = await send<WorkerSessionEditResponse>({
+              id: generateId(),
+              type: "sessionAddAnnotation",
+              handle,
+              anchorId,
+              spanJson: span ? JSON.stringify(span) : "",
+              annotationJson: JSON.stringify(annotation),
+            });
+            return requireField(res, "result");
+          },
+
+          async removeAnnotation(annotationId: string): Promise<EditResult> {
+            const res = await send<WorkerSessionEditResponse>({
+              id: generateId(),
+              type: "sessionRemoveAnnotation",
+              handle,
+              annotationId,
+            });
+            return requireField(res, "result");
+          },
+
+          async updateAnnotation(
+            annotationId: string,
+            update: AnnotationUpdate
+          ): Promise<EditResult> {
+            const res = await send<WorkerSessionEditResponse>({
+              id: generateId(),
+              type: "sessionUpdateAnnotation",
+              handle,
+              annotationId,
+              updateJson: JSON.stringify(update),
+            });
+            return requireField(res, "result");
+          },
+
+          async moveAnnotation(
+            annotationId: string,
+            newAnchorId: string,
+            newSpan: CharSpan | null
+          ): Promise<EditResult> {
+            const res = await send<WorkerSessionEditResponse>({
+              id: generateId(),
+              type: "sessionMoveAnnotation",
+              handle,
+              annotationId,
+              newAnchorId,
+              newSpanJson: newSpan ? JSON.stringify(newSpan) : "",
+            });
+            return requireField(res, "result");
+          },
+
+          async close(): Promise<void> {
+            // Not abortable: an aborted view must still release the in-worker session handle.
+            await sendRequest(
+              { id: generateId(), type: "sessionClose", handle },
+              undefined,
+              { timeoutMs: requestOptions?.timeoutMs },
+            );
+          },
+        };
+      },
+
+      terminate(): void {
+        stopWorker("Worker terminated");
+      },
+
+      withRequestOptions(more: WorkerRequestOptions): WorkerDocxodus {
+        checkTimeout(more.timeoutMs, "timeoutMs");
+        return createApi({ ...requestOptions, ...more });
+      },
+
+      isActive(): boolean {
+        return isWorkerActive;
+      },
+    };
   };
+
+  return createApi();
 }
 
 /**

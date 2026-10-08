@@ -24,6 +24,9 @@ All notable changes to this project will be documented in this file.
   it. Writing the description surfaced four argument-name and default differences between the stdio
   host and MCP, which are now recorded and pinned (#1014). The design, and the path from checking
   to generating the per-transport layers, is in `docs/architecture/session_op_descriptions.md`.
+- `DocxEditor` reports edits the engine rejects (issue #969). The new `onEditFailed` option receives
+  the engine's error code and message and the anchor involved; with no handler, the editor logs the
+  rejection with `console.warn` instead of dropping it.
 - Relocated text next to paragraphs the redline draws as one cross-paragraph stream is reported as a move
   (issue #930). With `CrossParagraphTokenDiff` on (the default), the redline draws a stretch of adjacent
   edited paragraphs as one flat word stream. A moved sentence or paragraph touching that stretch used to be
@@ -96,6 +99,16 @@ All notable changes to this project will be documented in this file.
 
   Accepting all changes still gives the revised document and rejecting them the original with
   either setting off.
+- The npm worker proxy can put a deadline on its requests and cancel them one at a time (issue #972).
+  `createWorkerDocxodus({ requestTimeoutMs })` rejects any request, initialization included, that has
+  not answered in time; it is off by default. `withRequestOptions({ signal, timeoutMs })` returns a
+  view of the same worker whose requests honor an `AbortSignal` and their own deadline. A timed-out
+  initialization stops the worker. Other requests reject without stopping it, because the engine
+  runs on the worker's single thread and cannot be interrupted, so `terminate()` remains the way to
+  stop a hung call. A session opened through a view still closes after the view's signal fires.
+  `WorkerErrorCode` gains `timeout`, `aborted`, `message_error`, `missing_result` and
+  `internal_error`, and `docxodus/worker` now exports `WorkerDocxodusOptions`, `WorkerErrorCode` and
+  `WorkerRequestOptions`.
 
 ### Changed
 
@@ -156,6 +169,17 @@ All notable changes to this project will be documented in this file.
   measured, at 28–32 MB and three to four times faster startup, but is not used yet: its Linux
   binaries need glibc 2.34, and the other platforms are untested. Findings and measurements are
   in `docs/architecture/cli_trimming_and_native_aot.md`.
+- **`ListItemRetrieverSettings.DefaultListItemTextImplementations` is now a read-only property
+  (BREAKING, binary).** It returns a new copy of the built-in locale implementations on every read
+  (issue #974). It was a public, writable static `Dictionary` that every settings object shared, so
+  a caller adding a locale to one settings object changed list numbering for every conversion in
+  the process, on every thread. Code that reads the defaults or copies them into its own settings compiles unchanged; code
+  that assigned the static field or relied on editing it to change global behaviour must now pass
+  its implementations through `ListItemRetrieverSettings.ListItemTextImplementations` or
+  `WmlToHtmlConverterSettings.ListItemImplementations`. Callers compiled against an earlier version
+  must recompile, because a field became a property. `DocxSession` also documents its threading
+  contract: a session is not thread-safe, and a host sharing one across threads must serialize
+  every call.
 
 ### Deprecated
 
@@ -167,6 +191,13 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Symbol mapping no longer corrupts its process-wide tables when documents are processed on several
+  threads at once (issue #974). `UnicodeMapper` keeps one map from `w:sym` elements to characters
+  for the whole process, and `SymToChar` checked and added to it without a lock, so concurrent
+  `OpenXmlRegex` replacements could throw a duplicate-key error or leave the map corrupt. Both
+  tables and the private-use counter now change under one lock. `CharToRunChild` also returns a copy
+  of the mapped `w:sym` rather than the map's own element, which the first caller used to place into
+  its document.
 - The npm worker's `convertDocxToHtml` now honors `stampAnchors` when it is the only option that
   needs the complete conversion entry point (issue #954). The worker kept its own list of those
   options, which had drifted from the main-thread `convertDocxToHtml`'s and lacked `stampAnchors`,
@@ -243,6 +274,13 @@ All notable changes to this project will be documented in this file.
   line moves down with it (recorded from Word's own PDF as CASE7 in `npm/tests/fixtures/line-baselines.word.json`).
   The converter moved the run with relative positioning, which left the later lines where they were and could
   overlap the next line. It now uses `vertical-align`, as it has for a raised run since #941.
+- The block editor no longer keeps showing text the engine refused (issue #969). About twenty
+  editor operations returned silently when the engine rejected an edit. Every rejection now passes
+  through one place that reports it, and the affected block is re-rendered from the session. When
+  flushing the typed text ahead of one of the 24 formatting and structural operations that do so is refused, the operation
+  now stops instead of running on text the document does not hold, at offsets measured in the
+  rejected text. The editor's internal result type is also derived from the public `EditResult`,
+  so a change to that shape now breaks the editor's build instead of drifting.
 - The HTML converter keeps paragraph and list indents written as `w:ind/@w:start` and `@w:end`
   (issue #894). ECMA-376 spells the indent edges both `w:start`/`w:end` and `w:left`/`w:right`. Word writes
   the second form, LibreOffice the first, and the converter read only `w:left`/`w:right`, so a document saved
@@ -367,6 +405,13 @@ All notable changes to this project will be documented in this file.
   empty, so such a paragraph gets the placeholder line an empty paragraph already gets. Its PageMap
   fragment still encloses the drawing (the #849 contract): a host left with only that line measures as
   its line plus the drawings promoted out of it. The finding is recorded in `docs/ooxml_corner_cases.md`.
+- The npm worker proxy no longer resolves a request with `undefined` or leaves it pending forever
+  (issue #972). A success response that omitted its payload resolved about a dozen methods with
+  `undefined` typed as a value; every payload read now goes through one check that rejects with a
+  `missing_result` code. A response the browser could not deserialize was never observed, so its
+  request never settled; a `messageerror` now rejects every request in flight with
+  `message_error`, since the lost response cannot be matched to its request, and the worker stays
+  usable. The worker's catch-all now reports `internal_error` instead of no code.
 - Comparing two long, unrelated documents no longer takes minutes (issue #863). The reported pair, a
   235-paragraph charter against a 3,113-paragraph document, ran for over six minutes and now takes
   about 8 s. Pairs with `HC031` that used to time out at 60 s take 1–5 s. Two causes, both in block

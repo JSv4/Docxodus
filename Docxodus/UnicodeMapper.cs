@@ -37,7 +37,11 @@ namespace Docxodus
         public static readonly char StartOfSymbolArea = '\uF000';
         public static readonly char EndOfPrivateUseArea = '\uF8FF';
 
-        // Dictionaries for w:sym stringification.
+        // Dictionaries for w:sym stringification. They are process-wide and shared by every
+        // document on every thread, so SymMapGate guards both of them and _lastUnicodeChar: the two
+        // dictionaries and the counter change together and must be read and written as one.
+        private static readonly object SymMapGate = new();
+
         private static readonly Dictionary<string, char> SymStringToUnicodeCharDictionary =
             new Dictionary<string, char>();
 
@@ -226,20 +230,23 @@ namespace Docxodus
                 new XAttribute(W._char, charAttributeValue),
                 new XAttribute(XNamespace.Xmlns + "w", W.w));
             string standardizedSymString = standardizedSym.ToString(SaveOptions.None);
-            if (SymStringToUnicodeCharDictionary.ContainsKey(standardizedSymString))
-                return SymStringToUnicodeCharDictionary[standardizedSymString];
+            lock (SymMapGate)
+            {
+                if (SymStringToUnicodeCharDictionary.TryGetValue(standardizedSymString, out var mapped))
+                    return mapped;
 
-            // Determine Unicode value to be used to represent the current w:sym element.
-            // Use the actual Unicode value if it has not yet been used with another font.
-            // Otherwise, create a special Unicode value in the private use area to represent
-            // the current w:sym element.
-            var unicodeChar = (char) Convert.ToInt32(charAttributeValue, 16);
-            if (UnicodeCharToSymDictionary.ContainsKey(unicodeChar))
-                unicodeChar = ++_lastUnicodeChar;
+                // Determine Unicode value to be used to represent the current w:sym element.
+                // Use the actual Unicode value if it has not yet been used with another font.
+                // Otherwise, create a special Unicode value in the private use area to represent
+                // the current w:sym element.
+                var unicodeChar = (char) Convert.ToInt32(charAttributeValue, 16);
+                if (UnicodeCharToSymDictionary.ContainsKey(unicodeChar))
+                    unicodeChar = ++_lastUnicodeChar;
 
-            SymStringToUnicodeCharDictionary.Add(standardizedSymString, unicodeChar);
-            UnicodeCharToSymDictionary.Add(unicodeChar, standardizedSym);
-            return unicodeChar;
+                SymStringToUnicodeCharDictionary.Add(standardizedSymString, unicodeChar);
+                UnicodeCharToSymDictionary.Add(unicodeChar, standardizedSym);
+                return unicodeChar;
+            }
         }
 
         /// <summary>
@@ -326,9 +333,13 @@ namespace Docxodus
             if (character == SoftHyphen)
                 return new XElement(W.softHyphen);
 
-            // Translate symbol characters into their corresponding w:sym elements.
-            if (UnicodeCharToSymDictionary.ContainsKey(character))
-                return UnicodeCharToSymDictionary[character];
+            // Translate symbol characters into their corresponding w:sym elements. The map keeps
+            // its own element, so each caller gets a copy it can parent or change.
+            lock (SymMapGate)
+            {
+                if (UnicodeCharToSymDictionary.TryGetValue(character, out var sym))
+                    return new XElement(sym);
+            }
 
             // Turn "normal" characters into text elements.
             return new XElement(W.t, XmlUtil.GetXmlSpaceAttribute(character), character);
