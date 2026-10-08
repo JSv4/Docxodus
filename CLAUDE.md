@@ -120,6 +120,10 @@ Concretely, a new session op touches: the matching `DocxSession.<Area>.cs` parti
 `npm/src/core.ts` → `tools/python-host/Dispatcher.cs` → `python/src/docx_scalpel/{types,session}.py`
 → `tools/mcp-server/{ToolCatalog,Dispatcher}.cs`.
 
+**Described ops are a ripple site.** An op family with a file in `tools/op-descriptions/` is
+checked against every transport by `SessionOpDescriptionDriftTests`; change the description in the
+same change as the op. See `docs/architecture/session_op_descriptions.md`.
+
 **The generated-PDF benchmark is a ripple site for PageMap shape.**
 `npm/tests/visual-parity/pdf-result.ts` validates the supported `convertDocxToPdf` envelope with
 *exact* key matching on `pageMap`, each page, and each fragment, so adding an optional field to any

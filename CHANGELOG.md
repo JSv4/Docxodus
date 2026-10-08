@@ -16,6 +16,14 @@ All notable changes to this project will be documented in this file.
   `1.1.`, keep their generated marker spans under `list-style-type: none`. Item indents are measured
   from the item they are nested in. Paginated output ignores the setting, and with it off the output
   is unchanged.
+- Session op families can be described once, as data, and checked against every transport (issue
+  #982, first slice). `tools/op-descriptions/comments.json` describes the native-comment ops: the
+  facade method, each argument's wire name, type and whether it is required, and each transport's
+  name for the op. `SessionOpDescriptionDriftTests` fails when the facade, the MCP schema, the WASM
+  bridge, the npm or Python wrapper, or the stdio host or MCP server (called for real) disagree with
+  it. Writing the description surfaced four argument-name and default differences between the stdio
+  host and MCP, which are now recorded and pinned (#1014). The design, and the path from checking
+  to generating the per-transport layers, is in `docs/architecture/session_op_descriptions.md`.
 - `DocxEditor` reports edits the engine rejects (issue #969). The new `onEditFailed` option receives
   the engine's error code and message and the anchor involved; with no handler, the editor logs the
   rejection with `console.warn` instead of dropping it.
