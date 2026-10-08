@@ -191,6 +191,15 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- The native-comment ops take the same argument names and defaults on every transport (issue #1014).
+  The comment being replied to, updated, resolved or removed is `commentAnchorId` on the stdio host
+  (and so the Python client), as it already was on MCP. The host still accepts its old spellings,
+  `parentAnchorId` for a reply and `anchorId` for the others, as deprecated aliases, and refuses a call
+  that gives both with different values. `DocxSessionOps` now owns the two defaults MCP alone applied:
+  an add or reply without `markdown` adds an empty comment, and a resolve without `resolved` resolves.
+  The stdio host used to refuse both calls. `tools/op-descriptions/comments.json` records no
+  divergences any more.
+
 - Symbol mapping no longer corrupts its process-wide tables when documents are processed on several
   threads at once (issue #974). `UnicodeMapper` keeps one map from `w:sym` elements to characters
   for the whole process, and `SymToChar` checked and added to it without a lock, so concurrent

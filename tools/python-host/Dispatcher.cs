@@ -214,16 +214,17 @@ internal static class Dispatcher
             Str(args, "bookmarkName"), ParseCrossReferenceOptions(args)),
 
         "add_comment" => AddComment(args),
+        // The comment is commentAnchorId on every transport (issue #1014); parentAnchorId and
+        // anchorId are this host's deprecated spellings of it.
         "add_comment_reply" => DocxSessionOps.AddCommentReply(
-            Handle(args), Str(args, "parentAnchorId"), Str(args, "author"),
-            OptStr(args, "initials"), OptStr(args, "date"), Str(args, "markdown")),
+            Handle(args), CommentAnchor(args, "parentAnchorId"), Str(args, "author"),
+            OptStr(args, "initials"), OptStr(args, "date"), OptStr(args, "markdown")),
         "update_comment" => DocxSessionOps.UpdateComment(
-            Handle(args), Str(args, "anchorId"), Str(args, "markdown")),
+            Handle(args), CommentAnchor(args, "anchorId"), Str(args, "markdown")),
         "set_comment_resolved" => DocxSessionOps.SetCommentResolved(
-            Handle(args), Str(args, "anchorId"),
-            OptBool(args, "resolved") ?? throw new FormatException("args missing boolean \"resolved\"")),
+            Handle(args), CommentAnchor(args, "anchorId"), OptBool(args, "resolved")),
         "remove_comment" => DocxSessionOps.RemoveComment(
-            Handle(args), Str(args, "anchorId")),
+            Handle(args), CommentAnchor(args, "anchorId")),
         "list_comments" => DocxSessionOps.ListComments(Handle(args)),
 
         "list_hyperlinks" => DocxSessionOps.ListHyperlinks(
@@ -763,11 +764,15 @@ internal static class Dispatcher
         return revisionId is not null
             ? DocxSessionOps.AddCommentToRevision(
                 Handle(args), revisionId, Str(args, "author"), OptStr(args, "initials"),
-                OptStr(args, "date"), Str(args, "markdown"))
+                OptStr(args, "date"), OptStr(args, "markdown"))
             : DocxSessionOps.AddComment(
                 Handle(args), anchorId!, ParseOptionalSpan(args, "span"), Str(args, "author"),
-                OptStr(args, "initials"), OptStr(args, "date"), Str(args, "markdown"));
+                OptStr(args, "initials"), OptStr(args, "date"), OptStr(args, "markdown"));
     }
+
+    private static string CommentAnchor(JsonElement args, string deprecatedAlias) =>
+        DocxSessionJson.AliasedString(args, "commentAnchorId", deprecatedAlias)
+        ?? throw new FormatException("args missing string \"commentAnchorId\"");
 
     // ─── Arg helpers ────────────────────────────────────────────────────
 
