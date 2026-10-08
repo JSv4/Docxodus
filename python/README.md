@@ -287,7 +287,11 @@ Alongside the session API, the package exposes stateless one-shot functions at t
 | `docx_diff_get_consolidated_revisions` | `(base, reviewers, settings=None)` | `tuple[DocxDiffConsolidatedRevision, ...]` |
 | `docx_diff_get_consolidated_edit_script` | `(base, reviewers, settings=None)` | edit-script JSON `str` |
 
-The `docx_diff_*` family is a thin client over Docxodus' `DocxDiff` IR diff engine. Tune pairwise comparisons with `DocxDiffSettings` and N-way consolidation with `DocxDiffConsolidateSettings` (whose `conflict_resolution` takes a `ConflictResolution` value). `DetectMoves`/format-change tracking, header/footer comparison, and per-reviewer attribution all round-trip through these calls.
+The `docx_diff_*` family is a thin client over Docxodus' `DocxDiff` IR diff engine, with the
+engine's defaults. In particular it compares each input's raw markup, so an input that already
+carries tracked changes produces whole-document churn. To compare as Word's Compare does (and as
+.NET's `DocxCompare.Compare` front door does), pass
+`DocxDiffSettings(pre_accept_input_revisions=True)`. Tune pairwise comparisons with `DocxDiffSettings` and N-way consolidation with `DocxDiffConsolidateSettings` (whose `conflict_resolution` takes a `ConflictResolution` value). `DetectMoves`/format-change tracking, header/footer comparison, and per-reviewer attribution all round-trip through these calls.
 
 For an open session, `session.get_semantic_changes()` compares the exact opening package with the
 current logical checkpoint. It requires the default
