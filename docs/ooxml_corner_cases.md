@@ -2547,6 +2547,35 @@ merges, actual clipping at the paper edges and body bottom, and PageMap geometry
 - Tests: `HCO099_TableIndent_UsesLeadingMargin`,
   `npm/tests/pagination-negative-table-indent.spec.ts`.
 
+## `w:rtl` and `w:bidiVisual` are on/off values, and Google Docs writes them switched off
+
+Both are `ST_OnOff` properties. Google Docs' `.docx` export writes the run-level one, switched off, on almost
+every run (issue #1011):
+
+```xml
+<w:p>
+  <w:r>
+    <w:rPr><w:rtl w:val="0"/></w:rPr>
+    <w:t>2026. 10. 07.</w:t>
+  </w:r>
+</w:p>
+```
+
+| Renderer | Result |
+|---|---|
+| Word | Left-to-right run: `2026. 10. 07.` |
+| Docxodus (before) | Run wrapped in RLM marks (U+200F); the browser displays roughly `.07 .10 .2026` |
+| Docxodus (after) | No directional marks, the same as with no `w:rtl` |
+
+The converter tested only whether `w:rtl` (and, for tables, `w:bidiVisual`) was present. `w:val` values `0`,
+`false` and `off` switch the property off; a missing `w:val` means on. Strongly left-to-right text such as
+Hangul hid the defect in most runs. It showed wherever a run started or ended with digits or punctuation,
+which the bidi algorithm placed by the surrounding RLM marks.
+
+- Code: `Docxodus/WmlToHtmlConverter.cs`: `DetermineRunMarks`, `ProcessTable`,
+  `ReverseTableBordersForRtlTables`, all reading through `IsOnOffPropertyEnabled`.
+- Tests: `Docxodus.Tests/WmlToHtmlOnOffDirectionTests.cs`.
+
 ## `w:ind` has two spellings for each edge: `w:start`/`w:left` and `w:end`/`w:right`
 
 ECMA-376 Part 1, §17.3.1.12 names a paragraph's indent edges `w:start` and `w:end`; the transitional

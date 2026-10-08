@@ -191,6 +191,13 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- The HTML converter reads `w:rtl` and `w:bidiVisual` as on/off values (issue #1011). It treated either
+  element as "on" whenever it was present, so `<w:rtl w:val="0"/>`, which Google Docs writes on almost every
+  run it exports, wrapped left-to-right text in right-to-left marks (U+200F). The browser then reordered the
+  run's digits and punctuation: `2026. 10. 07.` displayed roughly as `.07 .10 .2026`. A table with
+  `<w:bidiVisual w:val="0"/>` was likewise laid out right to left. `w:val` values `0`, `false` and `off` now
+  switch both properties off, as Word reads them.
+
 - Symbol mapping no longer corrupts its process-wide tables when documents are processed on several
   threads at once (issue #974). `UnicodeMapper` keeps one map from `w:sym` elements to characters
   for the whole process, and `SymToChar` checked and added to it without a lock, so concurrent
