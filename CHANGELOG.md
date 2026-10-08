@@ -191,6 +191,15 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- The MCP `docxodus_compare` tool compares through the `DocxCompare` front door (issue #1006), as the
+  `redline` CLI and the browser's `compareDocuments` already did. Two-way and fan-out comparisons now
+  accept each input's own pending tracked changes first, as Word's Compare does. The raw engine it ran
+  before already compared the accepted view of the body, but it copied carried-over parts (headers,
+  footers, unchanged notes) verbatim, so another reviewer's pending changes there leaked into the
+  redline under their original author. Identical packages now return the baseline unchanged, as
+  `DocxCompare.Compare` does. N-way consolidate is unchanged. The Python `docx_diff_*` functions stay
+  on the raw engine, which they mirror; their docstrings now say so and show the opt-in.
+
 - Symbol mapping no longer corrupts its process-wide tables when documents are processed on several
   threads at once (issue #974). `UnicodeMapper` keeps one map from `w:sym` elements to characters
   for the whole process, and `SymToChar` checked and added to it without a lock, so concurrent

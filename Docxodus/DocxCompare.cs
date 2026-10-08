@@ -42,18 +42,28 @@ public static class DocxCompare
         ArgumentNullException.ThrowIfNull(left);
         ArgumentNullException.ThrowIfNull(right);
 
+        return ExactNoOpResult(left, right)
+            ?? DocxDiff.Compare(left, right, ApplyFrontDoorRevisionPolicy(settings));
+    }
+
+    /// <summary>
+    /// The front door's redline for an exact same-package comparison, or <c>null</c> when the engine
+    /// must run. Shared with the transports' multi-product front-door calls
+    /// (<see cref="Internal.DocxDiffOps.CompareFrontDoorProducts"/>), so every front door returns the
+    /// same bytes for identical inputs.
+    /// </summary>
+    internal static WmlDocument? ExactNoOpResult(WmlDocument left, WmlDocument right)
+    {
         // An exact same-package comparison has no revisions to produce; return a detached clone so
         // the result remains safe for callers to mutate/save independently of the input. A STRICT
         // package is still normalized to transitional on the way out — Word converts on open no
         // matter what the compare finds, and strict bytes break downstream consumers (LibreOffice
         // renders them poorly, python-docx rejects them). Transitional inputs stay byte-identical.
-        if (CanReturnExactNoOp(left, right))
-        {
-            var normalized = StrictOoxmlNormalizer.NormalizeToTransitional(left);
-            return ReferenceEquals(normalized, left) ? new WmlDocument(left) : normalized;
-        }
+        if (!CanReturnExactNoOp(left, right))
+            return null;
 
-        return DocxDiff.Compare(left, right, ApplyFrontDoorRevisionPolicy(settings));
+        var normalized = StrictOoxmlNormalizer.NormalizeToTransitional(left);
+        return ReferenceEquals(normalized, left) ? new WmlDocument(left) : normalized;
     }
 
     /// <summary>Whether two documents are the exact same package bytes, not merely semantically equal.</summary>
