@@ -1,0 +1,145 @@
+{
+  "$comment": "One description of the text session ops (issue #982). See docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names (the MCP name where the stdio host and MCP differ); argNames, defaults, requires and flattens on a transport are recorded divergences, not the target. flattens: the transport spreads the fields of the canonical object argument across its own top-level arguments. aliases: further MCP tool/action pairs that call the same facade op with the same arguments.",
+  "family": "text",
+  "ops": [
+    {
+      "op": "replaceText",
+      "facade": "ReplaceText",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "markdown", "type": "markdown", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "ReplaceText" },
+        "npm": { "method": "replaceText" },
+        "python": { "method": "replace_text" },
+        "stdio": { "op": "replace_text" },
+        "mcp": { "tool": "docxodus_edit", "action": "replace_text" }
+      }
+    },
+    {
+      "op": "replaceTextRange",
+      "facade": "ReplaceTextRange",
+      "result": "EditResult[]",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "find", "type": "string", "required": true },
+        { "name": "replace", "type": "string", "required": true },
+        { "name": "options", "type": "object", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "ReplaceTextRange" },
+        "npm": { "method": "replaceTextRange" },
+        "python": { "method": "replace_text_range" },
+        "stdio": { "op": "replace_text_range" },
+        "mcp": { "tool": "docxodus_edit", "action": "replace_text_range", "flattens": { "options": { "ignoreCase": "caseSensitive" } }, "$comment": "MCP has no options object: its caseSensitive boolean (default false) is the negation of options.ignoreCase, and options.maxReplacements / options.expectedMatchCount are not reachable (expectedMatchCount only through preconditions)." }
+      }
+    },
+    {
+      "op": "replaceTextAtSpan",
+      "facade": "ReplaceTextAtSpan",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "spanStart", "type": "int", "required": true },
+        { "name": "spanLength", "type": "int", "required": true },
+        { "name": "replace", "type": "string", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "ReplaceTextAtSpan" },
+        "npm": { "method": "replaceMatch" },
+        "python": { "method": "replace_text_at_span" },
+        "stdio": { "op": "replace_text_at_span" },
+        "mcp": { "absent": "no MCP action; docxodus_edit exposes only replace_text_at_span_with_format" }
+      }
+    },
+    {
+      "op": "replaceTextAtSpanWithFormat",
+      "facade": "ReplaceTextAtSpanWithFormat",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "spanStart", "type": "int", "required": true },
+        { "name": "spanLength", "type": "int", "required": true },
+        { "name": "replace", "type": "string", "required": true },
+        { "name": "format", "type": "object", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "ReplaceTextAtSpanWithFormat" },
+        "npm": { "method": "replaceMatch" },
+        "python": { "method": "replace_text_at_span" },
+        "stdio": { "op": "replace_text_at_span_with_format", "defaults": { "format": {} } },
+        "mcp": { "tool": "docxodus_edit", "action": "replace_text_at_span_with_format", "defaults": { "format": {} } }
+      }
+    },
+    {
+      "op": "replaceInner",
+      "facade": "ReplaceInner",
+      "result": "EditResult",
+      "args": [
+        { "name": "matchText", "type": "string", "required": true },
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "spanStart", "type": "int", "required": true },
+        { "name": "spanLength", "type": "int", "required": true },
+        { "name": "newInner", "type": "string", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "ReplaceInner" },
+        "npm": { "method": "replaceInner" },
+        "python": { "method": "replace_inner" },
+        "stdio": { "op": "replace_inner" },
+        "mcp": { "absent": "no MCP action" }
+      }
+    },
+    {
+      "op": "insertParagraph",
+      "facade": "InsertParagraph",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "position", "type": "position", "required": true },
+        { "name": "markdown", "type": "markdown", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "InsertParagraph" },
+        "npm": { "method": "insertParagraph" },
+        "python": { "method": "insert_paragraph" },
+        "stdio": { "op": "insert_paragraph" },
+        "mcp": { "tool": "docxodus_edit", "action": "insert_paragraph", "defaults": { "position": "after" }, "aliases": [ { "tool": "docxodus_create", "action": "insert_paragraph" } ] }
+      }
+    },
+    {
+      "op": "splitParagraph",
+      "facade": "SplitParagraph",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "characterOffset", "type": "int", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "SplitParagraph" },
+        "npm": { "method": "splitParagraph" },
+        "python": { "method": "split_paragraph" },
+        "stdio": { "op": "split_paragraph" },
+        "mcp": { "tool": "docxodus_edit", "action": "split_paragraph" }
+      }
+    },
+    {
+      "op": "mergeParagraphs",
+      "facade": "MergeParagraphs",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "secondAnchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "MergeParagraphs" },
+        "npm": { "method": "mergeParagraphs" },
+        "python": { "method": "merge_paragraphs" },
+        "stdio": { "op": "merge_paragraphs", "argNames": { "anchorId": "firstAnchorId" } },
+        "mcp": { "tool": "docxodus_edit", "action": "merge_paragraphs" }
+      }
+    }
+  ]
+}

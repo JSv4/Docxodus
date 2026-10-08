@@ -1,0 +1,101 @@
+{
+  "$comment": "One description of the structural session ops (issue #982). See docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names (the MCP name where the stdio host and MCP differ); argNames, defaults, requires and flattens on a transport are recorded divergences, not the target. flattens: the transport spreads the fields of the canonical object argument across its own top-level arguments.",
+  "family": "structure",
+  "ops": [
+    {
+      "op": "deleteBlock",
+      "facade": "DeleteBlock",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "DeleteBlock" },
+        "npm": { "method": "deleteBlock" },
+        "python": { "method": "delete_block" },
+        "stdio": { "op": "delete_block" },
+        "mcp": { "tool": "docxodus_edit", "action": "delete_block" }
+      }
+    },
+    {
+      "op": "moveBlock",
+      "facade": "MoveBlock",
+      "result": "EditResult",
+      "args": [
+        { "name": "sourceAnchorId", "type": "anchor", "required": true },
+        { "name": "targetAnchorId", "type": "anchor", "required": true },
+        { "name": "position", "type": "position", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "MoveBlock" },
+        "npm": { "method": "moveBlock" },
+        "python": { "method": "move_block" },
+        "stdio": { "op": "move_block" },
+        "mcp": { "tool": "docxodus_edit", "action": "move_block", "defaults": { "position": "after" } }
+      }
+    },
+    {
+      "op": "deleteRange",
+      "facade": "DeleteRange",
+      "result": "EditResult",
+      "args": [
+        { "name": "fromAnchorId", "type": "anchor", "required": true },
+        { "name": "toAnchorIdExclusive", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "DeleteRange" },
+        "npm": { "method": "deleteRange" },
+        "python": { "method": "delete_range" },
+        "stdio": { "op": "delete_range" },
+        "mcp": { "tool": "docxodus_edit", "action": "delete_range" }
+      }
+    },
+    {
+      "op": "deleteSection",
+      "facade": "DeleteSection",
+      "result": "EditResult",
+      "args": [
+        { "name": "headingAnchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "DeleteSection" },
+        "npm": { "method": "deleteSection" },
+        "python": { "method": "delete_section" },
+        "stdio": { "op": "delete_section" },
+        "mcp": { "tool": "docxodus_edit", "action": "delete_section" }
+      }
+    },
+    {
+      "op": "insertHorizontalRule",
+      "facade": "InsertHorizontalRule",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "position", "type": "position", "required": true },
+        { "name": "rule", "type": "object", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "InsertHorizontalRule" },
+        "npm": { "method": "insertHorizontalRule" },
+        "python": { "absent": "no Python wrapper" },
+        "stdio": { "absent": "no stdio op" },
+        "mcp": { "tool": "docxodus_create", "action": "insert_horizontal_rule", "defaults": { "position": "after" }, "flattens": { "rule": { "style": "ruleStyle" } }, "$comment": "MCP ruleStyle (single | double | thick) becomes rule.style; the other border-edge fields (size, color, space) are not reachable." }
+      }
+    },
+    {
+      "op": "validMoveTargets",
+      "facade": "ValidMoveTargets",
+      "result": "MoveTarget[]",
+      "args": [
+        { "name": "sourceAnchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "ValidMoveTargets" },
+        "npm": { "absent": "no DocxSession wrapper; npm/src/editor.ts calls the bridge export directly" },
+        "python": { "absent": "no Python wrapper" },
+        "stdio": { "absent": "no stdio op" },
+        "mcp": { "absent": "no MCP action" }
+      }
+    }
+  ]
+}

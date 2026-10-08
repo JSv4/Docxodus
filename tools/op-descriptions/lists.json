@@ -1,0 +1,116 @@
+{
+  "$comment": "One description of the list session ops (issue #982). See docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names (the MCP name where the stdio host and MCP differ); argNames, defaults and requires on a transport are recorded divergences, not the target. aliases: further MCP tool/action pairs that call the same facade op with the same arguments.",
+  "family": "lists",
+  "ops": [
+    {
+      "op": "applyListFormat",
+      "facade": "ApplyListFormat",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "listFormat", "type": "enum", "required": true, "values": ["bullet", "decimal", "lowerLetter", "upperLetter", "lowerRoman", "upperRoman", "decimalParenthesis", "lowerLetterParenthesis", "upperLetterParenthesis", "lowerRomanParenthesis", "upperRomanParenthesis", "none"] }
+      ],
+      "transports": {
+        "wasm": { "method": "ApplyListFormat" },
+        "npm": { "method": "applyListFormat" },
+        "python": { "method": "apply_list_format" },
+        "stdio": { "op": "apply_list_format", "defaults": { "listFormat": "none" } },
+        "mcp": { "tool": "docxodus_list", "action": "apply_format", "defaults": { "listFormat": "none" }, "aliases": [ { "tool": "docxodus_format", "action": "apply_list_format" } ] }
+      }
+    },
+    {
+      "op": "applyListFormatRange",
+      "facade": "ApplyListFormatRange",
+      "result": "EditResult",
+      "args": [
+        { "name": "firstAnchorId", "type": "anchor", "required": true },
+        { "name": "lastAnchorId", "type": "anchor", "required": true },
+        { "name": "listFormat", "type": "enum", "required": true, "values": ["bullet", "decimal", "lowerLetter", "upperLetter", "lowerRoman", "upperRoman", "decimalParenthesis", "lowerLetterParenthesis", "upperLetterParenthesis", "lowerRomanParenthesis", "upperRomanParenthesis", "none"] }
+      ],
+      "transports": {
+        "wasm": { "method": "ApplyListFormatRange" },
+        "npm": { "method": "applyListFormatRange" },
+        "python": { "method": "apply_list_format_range" },
+        "stdio": { "op": "apply_list_format_range", "defaults": { "listFormat": "none" } },
+        "mcp": { "tool": "docxodus_list", "action": "apply_format_range", "defaults": { "listFormat": "none" } }
+      }
+    },
+    {
+      "op": "setListLevel",
+      "facade": "SetListLevel",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "levelDelta", "type": "int", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "SetListLevel" },
+        "npm": { "method": "setListLevel" },
+        "python": { "method": "set_list_level" },
+        "stdio": { "op": "set_list_level" },
+        "mcp": { "tool": "docxodus_list", "action": "set_level", "aliases": [ { "tool": "docxodus_format", "action": "set_list_level" } ] }
+      }
+    },
+    {
+      "op": "setListStartOverride",
+      "facade": "SetListStartOverride",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "startValue", "type": "int", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "SetListStartOverride" },
+        "npm": { "method": "setListStartOverride" },
+        "python": { "method": "set_list_start_override" },
+        "stdio": { "op": "set_list_start_override", "argNames": { "startValue": "value" } },
+        "mcp": { "tool": "docxodus_list", "action": "set_start" }
+      }
+    },
+    {
+      "op": "clearListStartOverride",
+      "facade": "ClearListStartOverride",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "ClearListStartOverride" },
+        "npm": { "method": "clearListStartOverride" },
+        "python": { "method": "clear_list_start_override" },
+        "stdio": { "op": "clear_list_start_override" },
+        "mcp": { "tool": "docxodus_list", "action": "clear_start" }
+      }
+    },
+    {
+      "op": "removeListMembership",
+      "facade": "RemoveListMembership",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "RemoveListMembership" },
+        "npm": { "method": "removeListMembership" },
+        "python": { "method": "remove_list_membership" },
+        "stdio": { "op": "remove_list_membership" },
+        "mcp": { "tool": "docxodus_list", "action": "remove", "aliases": [ { "tool": "docxodus_format", "action": "remove_list_membership" } ] }
+      }
+    },
+    {
+      "op": "getListMembership",
+      "facade": "GetListMembership",
+      "result": "ListMembership?",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "GetListMembership" },
+        "npm": { "method": "getListMembership" },
+        "python": { "method": "get_list_membership" },
+        "stdio": { "op": "get_list_membership" },
+        "mcp": { "tool": "docxodus_list", "action": "get_membership" }
+      }
+    }
+  ]
+}
