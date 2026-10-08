@@ -687,9 +687,17 @@ All notable changes to this project will be documented in this file.
   717.48 pt. The note item now contributes no strut (`line-height: 0`, inherited by the number, so a
   raised number does not grow the line either), and the content wrapper is `display: contents` and
   hands `normal` back to the paragraph. The text lands at 717.32 pt, the note area stops reserving the
-  extra height, and the number moves down with the text. The number still sits 4.66 pt above the
-  text, against Word's 3 pt, because it is drawn in the page's default font rather than as the note's
-  own reference run.
+  extra height, and the number moves down with the text. The number then sat 4.66 pt above the
+  text, against Word's 3 pt; see the next entry.
+- An exported footnote's number is now the note's own reference run (issue #1003). Word draws the
+  number as the `w:footnoteRef` run at the start of the note paragraph, formatted like any of the
+  note's runs: normally the FootnoteReference style, superscript at the note text's size. The
+  paginated converter instead drew a generic number in the page's default font, shrunk and raised by
+  CSS. The number is now converted from that run, with the note's display number in place of the
+  marker, so it takes the run's style, size and font; a note with no reference run keeps the generic
+  number. In `TestFiles/CA/CA008-Footnote-Reference.docx` this moves the number from 4.66 pt to 4.59
+  pt above the note text. Word's 3 pt is not reached yet: the remaining gap is how the converter
+  raises every superscript, which is tracked in #1016.
 
 ## [12.6.5] - 2026-09-28
 
