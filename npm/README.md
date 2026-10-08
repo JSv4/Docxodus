@@ -474,7 +474,9 @@ const htmlMargin = await convertDocxToHtml(docxFile, {
 | `Margin` | 2 | Side column using CSS flexbox |
 
 #### `compareDocuments(original, modified, options?): Promise<Uint8Array>`
-Compare two DOCX documents and return a redlined DOCX with tracked changes.
+Compare two DOCX documents and return a redlined DOCX with tracked changes. This is the .NET
+`DocxCompare.Compare` front door: it compares the accepted view of each input, as Word's Compare
+does, so inputs that already carry tracked changes still produce a clean redline.
 
 ```typescript
 interface CompareOptions {

@@ -43,7 +43,7 @@ forms that every startup lawyer actually redlines.
 
 ## Compare — a redline Word will open
 
-`DocxDiff` compares two documents structurally and emits **native Word tracked-changes markup**:
+Docxodus compares two documents structurally and emits **native Word tracked-changes markup**:
 `w:ins`, `w:del`, `w:moveFrom`/`w:moveTo`, and `w:pPrChange`. Not a text diff with highlighting — a
 file you can hand to opposing counsel, who accepts and rejects changes in Word as usual.
 
@@ -81,19 +81,21 @@ cites are the final document's.
   cross-surface ripple is tracked in #520.
 - **N-way consolidate.** Merge many reviewers' copies against one base into a single multi-author
   tracked-changes document, with a structured conflict report.
-- Headers and footers are compared too — the way Word's own "Headers and footers" option does, and
-  the way `WmlComparer` never did.
+- Headers and footers are compared too — the way Word's own "Headers and footers" option does.
 
-Two engines ship, and they are not peers going forward:
+Two entry points share one engine:
 
-- **`DocxDiff`** — structure-aware, anchor-addressed, diff-as-data, and **the default** on every
-  surface that doesn't explicitly pick an engine (CLI, WASM, npm). This is where all active
-  development happens: N-way consolidate, header/footer diffing, block-format-change tracking, and
-  everything else new lands here first.
-- **`WmlComparer`** — the older engine, kept available via an explicit `ComparisonEngine.WmlComparer`
-  selector (wire value `0`) for callers that need its historical behavior. **`WmlComparer` will not
-  be enhanced going forward** — no new capabilities, ever. Treat it as legacy: fine to keep using
-  today, but new integrations should target `DocxDiff`.
+- **`DocxCompare.Compare`** — the front door, and the one to start from. It compares the
+  *accepted* view of each input, as Word's Compare does, so documents that already carry tracked
+  changes still produce a clean redline. The `redline` CLI and the browser package's
+  `compareDocuments` go through it.
+- **`DocxDiff`** — the engine underneath. Call it directly when you want more than a redlined
+  document: revisions as data, the edit script, semantic changes, N-way consolidation, or the
+  engine's own defaults. Those defaults compare each input's raw markup, including any tracked
+  changes it already has, which turns a revision-bearing input into whole-document churn unless you
+  set `PreAcceptInputRevisions` (or `PreserveInputRevisions`).
+
+The older `WmlComparer` engine was removed in v11.0.0.
 
 See [`docs/architecture/ir_diff_engine.md`](docs/architecture/ir_diff_engine.md).
 
@@ -187,7 +189,7 @@ dotnet add package Docxodus
 ```csharp
 using Docxodus;
 
-var redline = DocxDiff.Compare(
+var redline = DocxCompare.Compare(
     new WmlDocument("v1.docx"),
     new WmlDocument("v2.docx"));
 
@@ -293,7 +295,7 @@ reading first:
 
 ```bash
 dotnet build Docxodus.sln            # build
-dotnet test Docxodus.Tests/Docxodus.Tests.csproj   # 1,900+ tests
+dotnet test Docxodus.Tests/Docxodus.Tests.csproj   # .NET unit tests
 
 cd npm && npm install && npx playwright install chromium
 npm run build && npm test           # WASM + Playwright browser tests
