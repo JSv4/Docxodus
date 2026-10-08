@@ -191,6 +191,15 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- A `DocxSession` edit on a document with large pictures no longer copies every picture into its undo
+  snapshot (issue #965). Consecutive snapshots now share each unchanged picture's bytes, and the undo
+  memory budget (`UndoMemoryBudgetBytes`) counts each shared copy once rather than once per step. On
+  4,000 paragraphs with four 2 MiB pictures, an edit allocates 15.8 MiB instead of 33.4 MiB, and the
+  default budget keeps all 20 undo steps instead of 11. Undoing a text edit no longer rereads every
+  picture to check whether it changed. `UndoMemoryBytes` reports the shared total, so it is lower than
+  before on documents with pictures. `benchmarks/session-edit-cost` measures per-edit cost and undo
+  retention; the remaining cost that grows with the document is tracked in #1022.
+
 - Symbol mapping no longer corrupts its process-wide tables when documents are processed on several
   threads at once (issue #974). `UnicodeMapper` keeps one map from `w:sym` elements to characters
   for the whole process, and `SymToChar` checked and added to it without a lock, so concurrent

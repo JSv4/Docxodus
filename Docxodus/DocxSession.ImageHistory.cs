@@ -59,6 +59,23 @@ public sealed partial class DocxSession
             OwnedPartRelationships.SweepOrphanedImages(owner.Part);
     }
 
+    /// <summary>
+    /// The bytes of each live image part, read once and then shared by every snapshot taken while
+    /// the part exists (issue #965). Without it, every mutation copied every image's full bytes
+    /// into its undo snapshot, so a text edit on a document with large pictures cost the pictures'
+    /// size in time and undo memory.
+    ///
+    /// <para>Keyed by the SDK part object, which is safe because the session never rewrites an
+    /// existing image part's stream: inserting or replacing an image creates a new part (or reuses
+    /// an identical one), and restoring image topology writes at the package level and then reopens
+    /// the document, so every part object, and with it every entry here, is new. The arrays are
+    /// shared, so nothing may write into them.</para>
+    /// </summary>
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<OpenXmlPart, byte[]> _imageBytes = new();
+
+    private byte[] SnapshotImageBytes(ImagePart part) =>
+        _imageBytes.GetValue(part, static p => OwnedPartRelationships.ReadPartBytes(p));
+
     /// <summary>Restore image media and owner-local relationship topology after the owning XML
     /// stories have been restored, including the exact OPC target URI. Reopen the SDK graph once
     /// the low-level repair is complete so every subsequent typed read sees the restored parts.</summary>
@@ -107,8 +124,12 @@ public sealed partial class DocxSession
         foreach (var expected in snapshot.ImageParts)
         {
             if (!liveParts.TryGetValue(expected.PartUri, out var live)
-                || !string.Equals(live.ContentType, expected.ContentType, StringComparison.Ordinal)
-                || !PartBytesEqual(live, expected.Bytes))
+                || !string.Equals(live.ContentType, expected.ContentType, StringComparison.Ordinal))
+                return false;
+            // A snapshot taken while this part was live shares its bytes array: no need to reread it.
+            if (_imageBytes.TryGetValue(live, out var shared) && ReferenceEquals(shared, expected.Bytes))
+                continue;
+            if (!PartBytesEqual(live, expected.Bytes))
                 return false;
         }
         return true;
