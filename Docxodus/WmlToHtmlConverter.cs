@@ -1667,8 +1667,7 @@ namespace Docxodus
             XDocument xd = wordDoc.MainDocumentPart!.GetXDocument();
             foreach (var tbl in xd.Descendants(W.tbl))
             {
-                var bidiVisual = tbl.Elements(W.tblPr).Elements(W.bidiVisual).FirstOrDefault();
-                if (bidiVisual == null)
+                if (!IsOnOffPropertyEnabled(tbl.Elements(W.tblPr).Elements(W.bidiVisual).FirstOrDefault()))
                     continue;
 
                 var tblBorders = tbl.Elements(W.tblPr).Elements(W.tblBorders).FirstOrDefault();
@@ -5967,7 +5966,7 @@ namespace Docxodus
             // Check if the table is explicitly borderless (all borders nil/none or missing)
             var isBorderless = IsTableBorderless(element);
 
-            var bidiVisual = element.Elements(W.tblPr).Elements(W.bidiVisual).FirstOrDefault();
+            var bidiVisual = IsOnOffPropertyEnabled(element.Elements(W.tblPr).Elements(W.bidiVisual).FirstOrDefault());
             var tblW = element.Elements(W.tblPr).Elements(W.tblW).FirstOrDefault();
             if (tblW != null)
             {
@@ -6016,7 +6015,7 @@ namespace Docxodus
                         {
                             // The indent is relative to the table's leading edge. Negative
                             // values pull it into that page margin, including RTL tables (#827).
-                            style.AddIfMissing(bidiVisual != null ? "margin-right" : "margin-left",
+                            style.AddIfMissing(bidiVisual ? "margin-right" : "margin-left",
                                 width != 0m
                                     ? string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", width / 20m)
                                     : "0");
@@ -6070,7 +6069,7 @@ namespace Docxodus
             }
             style.AddIfMissing("margin-top", ".001pt");
 
-            var tableDirection = bidiVisual != null ? new XAttribute("dir", "rtl") : new XAttribute("dir", "ltr");
+            var tableDirection = bidiVisual ? new XAttribute("dir", "rtl") : new XAttribute("dir", "ltr");
             style.AddIfMissing("margin-bottom", ".001pt");
             var table = new XElement(Xhtml.table,
                 // TODO: Revisit and make sure the omission is covered by appropriate CSS.
@@ -6119,7 +6118,7 @@ namespace Docxodus
             var jc = (string?)element.Elements(W.tblPr).Elements(W.jc).Attributes(W.val).FirstOrDefault() ?? "left";
             XAttribute? dir = null;
             XAttribute? jcToUse = null;
-            if (bidiVisual != null)
+            if (bidiVisual)
             {
                 dir = new XAttribute("dir", "rtl");
                 if (jc == "left")
@@ -7920,7 +7919,7 @@ namespace Docxodus
             }
             if (!addDirectionalMarks) return;
 
-            var isRtl = rPr?.Element(W.rtl) != null;
+            var isRtl = IsOnOffPropertyEnabled(rPr?.Element(W.rtl));
             if (isRtl)
             {
                 runStartMark = new XEntity("#x200f"); // RLM
