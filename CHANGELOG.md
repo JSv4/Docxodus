@@ -88,6 +88,16 @@ All notable changes to this project will be documented in this file.
 
   Accepting all changes still gives the revised document and rejecting them the original with
   either setting off.
+- The npm worker proxy can put a deadline on its requests and cancel them one at a time (issue #972).
+  `createWorkerDocxodus({ requestTimeoutMs })` rejects any request, initialization included, that has
+  not answered in time; it is off by default. `withRequestOptions({ signal, timeoutMs })` returns a
+  view of the same worker whose requests honor an `AbortSignal` and their own deadline. A timed-out
+  initialization stops the worker. Other requests reject without stopping it, because the engine
+  runs on the worker's single thread and cannot be interrupted, so `terminate()` remains the way to
+  stop a hung call. A session opened through a view still closes after the view's signal fires.
+  `WorkerErrorCode` gains `timeout`, `aborted`, `message_error`, `missing_result` and
+  `internal_error`, and `docxodus/worker` now exports `WorkerDocxodusOptions`, `WorkerErrorCode` and
+  `WorkerRequestOptions`.
 
 ### Changed
 
@@ -377,6 +387,13 @@ All notable changes to this project will be documented in this file.
   empty, so such a paragraph gets the placeholder line an empty paragraph already gets. Its PageMap
   fragment still encloses the drawing (the #849 contract): a host left with only that line measures as
   its line plus the drawings promoted out of it. The finding is recorded in `docs/ooxml_corner_cases.md`.
+- The npm worker proxy no longer resolves a request with `undefined` or leaves it pending forever
+  (issue #972). A success response that omitted its payload resolved about a dozen methods with
+  `undefined` typed as a value; every payload read now goes through one check that rejects with a
+  `missing_result` code. A response the browser could not deserialize was never observed, so its
+  request never settled; a `messageerror` now rejects every request in flight with
+  `message_error`, since the lost response cannot be matched to its request, and the worker stays
+  usable. The worker's catch-all now reports `internal_error` instead of no code.
 - Comparing two long, unrelated documents no longer takes minutes (issue #863). The reported pair, a
   235-paragraph charter against a 3,113-paragraph document, ran for over six minutes and now takes
   about 8 s. Pairs with `HC031` that used to time out at 60 s take 1–5 s. Two causes, both in block
