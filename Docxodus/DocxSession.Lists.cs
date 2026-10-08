@@ -451,7 +451,6 @@ public sealed partial class DocxSession
             // Flush the body mutation to the part stream immediately — same WASM typed-DOM /
             // XDocument divergence rationale as SetListLevel.
             (ResolvePart(target.PartUri) ?? _doc!.MainDocumentPart!).PutXDocument();
-            ClearListNumberingAnnotations();
             InvalidateProjectionCache();
             _ = AnchorIndex();
             var modified = new List<Anchor>();
@@ -487,22 +486,6 @@ public sealed partial class DocxSession
         if (directNumId is not null) return (directNumId, directIlvl ?? 0);
         var (styleNumId, styleIlvl) = ResolveStyleNumbering(paragraph);
         return (styleNumId, directIlvl ?? styleIlvl);
-    }
-
-    /// <summary>
-    /// Strip the <see cref="ListItemRetriever"/> annotations (<c>ListItemInfo</c> /
-    /// <c>LevelNumbers</c> / <c>ContinuationInfo</c>) a previous projection stamped on the live
-    /// paragraphs. The retriever re-initializes only paragraphs WITHOUT a <c>ListItemInfo</c>
-    /// annotation, so a numbering mutation after a projection would otherwise keep serving the
-    /// stale counter vectors — the visible numbers would not restart until save/reopen.
-    /// </summary>
-    private void ClearListNumberingAnnotations()
-    {
-        foreach (var part in EnumerateProjectedParts())
-        {
-            var root = part.GetXDocument().Root;
-            if (root is not null) ListItemRetriever.ClearAnnotations(root);
-        }
     }
 
     /// <summary>Point <paramref name="paragraph"/>'s numbering at <paramref name="newNumId"/>,

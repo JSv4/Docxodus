@@ -147,6 +147,9 @@ public sealed partial class DocxSession : IDisposable
         _stream.Write(docxBytes, 0, docxBytes.Length);
         _stream.Position = 0;
         _doc = WordprocessingDocument.Open(_stream, isEditable: true);
+        // Stamp list numbering's inputs before anything counts a list, so the first edit can tell
+        // whether the counts it finds are still current (see ResetProjectionCache).
+        ResetProjectionCache();
 
         if (_settings.CaptureInitialProjection && !skipInitialProjectionCapture)
         {
@@ -1212,11 +1215,19 @@ public sealed partial class DocxSession : IDisposable
         ResetProjectionCache();
     }
 
-    /// <summary>Drop the projection/anchor caches without touching package relationships.</summary>
+    /// <summary>
+    /// Drop the projection/anchor caches without touching package relationships. List numbering
+    /// is a projection cache too: <see cref="ListItemRetriever"/> stamps each paragraph's counters
+    /// once and never recounts a paragraph that already carries them, so an edit that adds,
+    /// removes, re-levels or re-numbers any list item would otherwise leave the survivors
+    /// showing the numbers they had before it (issue #959). The retriever decides whether the
+    /// edit could have changed them and drops them only then.
+    /// </summary>
     private void ResetProjectionCache()
     {
         _cachedProjection = null;
         _cachedAnchorIndex = null;
+        if (_doc is not null) ListItemRetriever.ClearStaleAnnotations(_doc);
     }
 
     /// <summary>
