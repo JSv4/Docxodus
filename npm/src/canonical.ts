@@ -36,10 +36,14 @@ function canonicalValue(value: unknown): unknown {
     if (prototype !== Object.prototype && prototype !== null) {
       throw new TypeError("Canonical JSON supports only plain objects");
     }
-    const result: Record<string, unknown> = {};
-    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+    const record = value as Record<string, unknown>;
+    // A normal object would treat `__proto__` as a prototype mutation rather than an own data
+    // property, silently dropping it from the canonical payload. The exporter's copy
+    // (`npm-export/src/canonical.ts`) does the same, so both sides digest the same bytes.
+    const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    for (const key of Object.keys(record).sort()) {
       assertWellFormedUnicode(key);
-      const member = (value as Record<string, unknown>)[key];
+      const member = record[key];
       if (member !== undefined) result[key] = canonicalValue(member);
     }
     return result;

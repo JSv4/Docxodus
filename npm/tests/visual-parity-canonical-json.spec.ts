@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { canonicalJson } from './visual-parity/canonical-json.js';
+import { canonicalJson as packageCanonicalJson } from '../src/canonical.js';
 
 /**
  * `canonical-json.ts` is a copy of the exporter's `npm-export/src/canonical.ts`. The benchmark
@@ -67,6 +68,29 @@ test.describe('canonical JSON mirrors the exporter', () => {
     // calling JSON.stringify, or every assertion above would be trivially true.
     expect(reference({ b: 1, a: 2 })).toBe('{"a":2,"b":1}');
     expect(JSON.stringify({ b: 1, a: 2 })).toBe('{"b":1,"a":2}');
+  });
+
+  test('the package, the exporter and this copy agree on __proto__ and constructor keys', () => {
+    // The browser font runtime digests through the package's `src/canonical.ts`; the Node exporter
+    // through its own copy. A `__proto__` key arriving in parsed JSON is an own data property and
+    // must stay one, or the two sides digest different bytes for the same input (issue #970). An
+    // object literal would not reproduce this: `{ __proto__: ... }` sets the prototype instead of
+    // creating the key, so the fixtures are parsed.
+    const reference = exporterCanonicalJson();
+    const fixtures = [
+      '{"__proto__":{"x":1},"a":1}',
+      '{"a":{"__proto__":{"polluted":true},"constructor":{"prototype":{"y":2}}}}',
+      '{"constructor":"c","__proto__":[1,{"__proto__":null}]}',
+    ];
+    for (const fixture of fixtures) {
+      const value: unknown = JSON.parse(fixture);
+      expect(packageCanonicalJson(value), fixture).toBe(reference(value));
+      expect(canonicalJson(value), fixture).toBe(reference(value));
+    }
+    expect(packageCanonicalJson(JSON.parse(fixtures[0]))).toBe('{"__proto__":{"x":1},"a":1}');
+    // Nothing leaked onto Object.prototype while canonicalizing.
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(({} as Record<string, unknown>).x).toBeUndefined();
   });
 
   test('rejects what the exporter rejects', () => {
