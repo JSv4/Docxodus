@@ -458,36 +458,27 @@ internal static class Dispatcher
         var mode = Str(args, "mode");
         var query = Str(args, "query");
         var caseSensitive = BoolOpt(args, "caseSensitive", false);
-        var contextChars = IntOpt(args, "contextChars", 80);
-        var scope = ParseSearchScope(OptStr(args, "scope"));
-        var maxResults = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("maxResults", out var mr) && mr.ValueKind == JsonValueKind.Number
-            ? mr.GetInt32() : (int?)null;
+        var maxResults = OptInt(args, "maxResults");
         var citation = DocxSessionJson.ParsePageCitationRequest(args);
+        var grep = new GrepRequest
+        {
+            RegexOptions = caseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase,
+            Scope = ParseSearchScope(OptStr(args, "scope")),
+            ContextChars = OptInt(args, "contextChars"),
+            CitationRequest = citation,
+            MaxResults = maxResults,
+        };
 
         string matchesJson = mode switch
         {
-            "text" => DocxSessionOps.Grep(
-                session.Handle, Regex.Escape(query), caseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase,
-                scope, contextChars, WhitespaceMode.Preserve, ContextBoundary.Char, citation),
-            "regex" => DocxSessionOps.Grep(
-                session.Handle, query, caseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase,
-                scope, contextChars, WhitespaceMode.Preserve, ContextBoundary.Char, citation),
-            "kind" => DocxSessionOps.FindByKind(session.Handle, query, null, citation),
-            "annotation" => DocxSessionOps.FindByAnnotation(session.Handle, query, citation),
-            "bookmark" => DocxSessionOps.FindByBookmark(session.Handle, query, citation),
+            "text" => DocxSessionOps.Grep(session.Handle, Regex.Escape(query), grep),
+            "regex" => DocxSessionOps.Grep(session.Handle, query, grep),
+            "kind" => DocxSessionOps.FindByKind(session.Handle, query, null, citation, maxResults),
+            "annotation" => DocxSessionOps.FindByAnnotation(session.Handle, query, citation, maxResults),
+            "bookmark" => DocxSessionOps.FindByBookmark(session.Handle, query, citation, maxResults),
             _ => throw new McpToolException($"unknown search mode: {mode}"),
         };
-
-        if (maxResults is null) return $"{{\"matches\":{matchesJson}}}";
-
-        using var doc = JsonDocument.Parse(matchesJson);
-        var items = new List<string>();
-        foreach (var el in doc.RootElement.EnumerateArray())
-        {
-            if (items.Count >= maxResults) break;
-            items.Add(el.GetRawText());
-        }
-        return "{\"matches\":[" + string.Join(",", items) + "]}";
+        return $"{{\"matches\":{matchesJson}}}";
     }
 
     /// <summary>Translate the MCP search vocabulary onto the engine's flag set. Omitted scope
@@ -623,13 +614,13 @@ internal static class Dispatcher
         // Reference fields (issue #607). The switches are typed options here too: an agent asks
         // for "levels 1-3, hyperlinked", never for \o "1-3" \h.
         "insert_table_of_contents" => DocxSessionOps.InsertTableOfContents(
-            session.Handle, Str(args, "anchorId"), ParsePos(args),
+            session.Handle, Str(args, "anchorId"), DocxSessionJson.ParseOptionalPos(OptStr(args, "position")),
             ReferenceFieldOptions(args, DocxSessionJson.ParseTableOfContentsOptions)),
         "insert_table_of_figures" => DocxSessionOps.InsertTableOfFigures(
-            session.Handle, Str(args, "anchorId"), ParsePos(args),
+            session.Handle, Str(args, "anchorId"), DocxSessionJson.ParseOptionalPos(OptStr(args, "position")),
             ReferenceFieldOptions(args, DocxSessionJson.ParseTableOfFiguresOptions)),
         "insert_table_of_authorities" => DocxSessionOps.InsertTableOfAuthorities(
-            session.Handle, Str(args, "anchorId"), ParsePos(args),
+            session.Handle, Str(args, "anchorId"), DocxSessionJson.ParseOptionalPos(OptStr(args, "position")),
             ReferenceFieldOptions(args, DocxSessionJson.ParseTableOfAuthoritiesOptions)),
         "set_header_text" => DocxSessionOps.SetHeaderText(
             session.Handle, Str(args, "bodyAnchorId"),
@@ -1183,9 +1174,8 @@ internal static class Dispatcher
                 // straight off the live session — stable per-revision ids, the markup's
                 // true authors/dates, and none of the ~seconds-long accept-all/reject-all
                 // re-diff the old listing paid on large documents.
-                var revisionsJson = "{\"revisions\":" + DocxSessionOps.ListRevisions(session.Handle) + "}";
-                return FilterRevisions(revisionsJson, OptStr(args, "author"), OptStr(args, "changeType"),
-                    OptStr(args, "family"), OptStr(args, "resolutionStatus"), OptStr(args, "partUri"));
+                return "{\"revisions\":" + DocxSessionOps.ListRevisions(
+                    session.Handle, DocxSessionJson.ParseRevisionListFilter(args)) + "}";
             }
             case "repairs":
                 // Read-only: what the registry could repair, with carriers and reasons.
@@ -1228,40 +1218,6 @@ internal static class Dispatcher
             default:
                 throw new McpToolException($"unknown docxodus_track_changes action: {action}");
         }
-    }
-
-    private static string FilterRevisions(string revisionsJson, string? author, string? changeType,
-        string? family, string? resolutionStatus, string? partUri)
-    {
-        if (author is null && changeType is null && family is null
-            && resolutionStatus is null && partUri is null) return revisionsJson;
-        using var doc = JsonDocument.Parse(revisionsJson);
-        if (!doc.RootElement.TryGetProperty("revisions", out var revisions) || revisions.ValueKind != JsonValueKind.Array)
-            return revisionsJson;
-
-        var kept = new List<string>();
-        foreach (var r in revisions.EnumerateArray())
-        {
-            if (author is not null
-                && (!r.TryGetProperty("author", out var a) || !string.Equals(a.GetString(), author, StringComparison.OrdinalIgnoreCase)))
-                continue;
-            if (changeType is not null
-                && (!r.TryGetProperty("type", out var t) || !string.Equals(t.GetString(), changeType, StringComparison.OrdinalIgnoreCase)))
-                continue;
-            if (family is not null
-                && (!r.TryGetProperty("family", out var f) || !string.Equals(f.GetString(), family, StringComparison.OrdinalIgnoreCase)))
-                continue;
-            if (resolutionStatus is not null
-                && (!r.TryGetProperty("resolutionStatus", out var status)
-                    || !string.Equals(status.GetString(), resolutionStatus, StringComparison.OrdinalIgnoreCase)))
-                continue;
-            if (partUri is not null
-                && (!r.TryGetProperty("partUri", out var part)
-                    || !string.Equals(part.GetString(), partUri, StringComparison.Ordinal)))
-                continue;
-            kept.Add(r.GetRawText());
-        }
-        return "{\"revisions\":[" + string.Join(",", kept) + "]}";
     }
 
     // ─── Mutations (batch) ──────────────────────────────────────────────
@@ -1784,7 +1740,9 @@ internal static class Dispatcher
                 break;
             case ("docxodus_table", "set_row_options"):
                 RequireStrings(args, "cellAnchorId");
+                ValidateOptionalBool(args, "repeatHeader");
                 ValidateOptionalBool(args, "repeat");
+                _ = DocxSessionJson.AliasedBool(args, "repeatHeader", "repeat");
                 ValidateOptionalBool(args, "allowBreakAcrossPages");
                 ValidateOptionalNumber(args, "heightTwips");
                 ValidateOptionalEnum(args, "heightRule", "auto", "atLeast", "exact");
@@ -2124,11 +2082,11 @@ internal static class Dispatcher
             session.Handle, Str(args, "cellAnchorId"), BuildTableBorderSpecJson(args)),
         "set_shading" => DocxSessionOps.SetCellShading(
             session.Handle, Str(args, "cellAnchorId"), OptStr(args, "fill") ?? "",
-            OptStr(args, "shadingScope") ?? "cell"),
+            OptStr(args, "shadingScope")),
         "set_repeat_header_row" => DocxSessionOps.SetRepeatHeaderRow(
-            session.Handle, Str(args, "cellAnchorId"), BoolOpt(args, "repeat", true)),
+            session.Handle, Str(args, "cellAnchorId"), OptBool(args, "repeat")),
         "set_row_options" => DocxSessionOps.SetTableRowOptions(
-            session.Handle, Str(args, "cellAnchorId"), OptBool(args, "repeat"),
+            session.Handle, Str(args, "cellAnchorId"), DocxSessionJson.AliasedBool(args, "repeatHeader", "repeat"),
             OptBool(args, "allowBreakAcrossPages"), OptInt(args, "heightTwips"),
             OptStr(args, "heightRule")),
         _ => throw new McpToolException($"unknown docxodus_table action: {action}"),
@@ -2268,7 +2226,7 @@ internal static class Dispatcher
             ? v.GetBoolean() : null;
 
     private static Position ParsePos(JsonElement args) =>
-        DocxSessionJson.ParsePos(OptStr(args, "position") ?? "after");
+        DocxSessionJson.ParsePos(OptStr(args, "position"));
 
     private static CharSpan? ParseSpan(JsonElement args, string name)
     {

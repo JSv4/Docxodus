@@ -159,6 +159,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- The npm worker's `convertDocxToHtml` now honors `stampAnchors` when it is the only option that
+  needs the complete conversion entry point (issue #954). The worker kept its own list of those
+  options, which had drifted from the main-thread `convertDocxToHtml`'s and lacked `stampAnchors`,
+  so `{ stampAnchors: true }` took the plain entry point and returned HTML without `data-anchor`
+  attributes. Both paths now read one shared list (`npm/src/conversion-options.ts`).
 - A misspelled option value for a session op is now refused instead of silently performing a different
   edit (issue #962). Every string-valued option the wire parsers read (insert position, header/footer
   kind, page-number field and number format, tracked-change mode, table border scope, shading scope,
@@ -178,6 +183,24 @@ All notable changes to this project will be documented in this file.
   .NET front door byte for byte), kept its own author default, and rendered compare HTML without the
   converter's image handling. WASM error JSON no longer carries a `StackTrace` field; the npm
   `ErrorResponse.stackTrace` property is deprecated and never set.
+- A session op now behaves the same whichever transport calls it (issue #960). Each per-op default,
+  argument name, revision filter and result cap used to be supplied by the MCP server, the stdio host
+  and the WASM bridge separately, and they had drifted. They now live once, in the shared session
+  facade:
+  - **Table of contents, figures and authorities with no `position`.** These are placed before the
+    anchor on every transport. MCP used to put them after it, so an MCP call that omits `position`
+    now inserts the table above the anchor instead of below it.
+  - **Search context width.** It is `DocxSession.DefaultContextChars` (80) everywhere.
+  - **Cell shading scope and the repeat-header flag.** These defaults are read from the facade.
+  - **Argument names.** Each argument has one name across transports. The stdio host now reads
+    `shadingScope` for `set_cell_shading` and still accepts `scope`. MCP's `set_row_options` now
+    reads `repeatHeader` and still accepts `repeat`. Passing both spellings with different values
+    is refused.
+  - **Revision-list filtering and `maxResults`.** These were MCP-only and worked by re-parsing the
+    result. They now run in the facade, so the stdio host and the clients get them too:
+    - Python: `list_revisions(author=, change_type=, family=, resolution_status=, part_uri=)`, and
+      `max_results` on `grep` / `grep_cross_block`.
+    - npm: `listRevisions(filter)` and `GrepOptions.maxResults`.
 - **`DocxodusDocument.SavePartAs` disposes the part stream it opens**, and the three places that
   copy a part's bytes into a buffer (`SavePartAs`, plus the image and media copies `DocumentBuilder`
   uses when merging) now read with `ReadExactly`. They used a single `Stream.Read`
@@ -552,6 +575,14 @@ All notable changes to this project will be documented in this file.
   such as `1)`); a longer one keeps its first 14
   characters followed by `…`. The shortening is lossy: the redline HTML shows such an item's old
   marker as `Three thousand…`, and the rest of the label is not recoverable from the output.
+- **A very long paragraph no longer exhausts memory in a comparison.** The word-level differ
+  aligned every paragraph pair with a full n×m table: about 1 GB for a 16,000-word paragraph and
+  1.6 GB at 20,000 words, enough to kill a browser (WASM) heap. The table now runs only on regions of
+  up to a fixed cell budget. A larger pair is first cut into such regions by matching its common
+  prefix and suffix and anchoring on words that occur once on each side (falling back to the rarest
+  shared word), all in linear memory. A 20,000-word pair now diffs in tens of megabytes and well under
+  a second. Ordinary paragraphs stay under the budget, so their output is unchanged. The differ's
+  documentation, which claimed it used Myers' algorithm, now describes what it does. (#964)
 
 ## [12.6.5] - 2026-09-28
 

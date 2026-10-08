@@ -2032,7 +2032,7 @@ internal static class IrEditScriptBuilder
     }
 
     /// <summary>
-    /// Token-diff a Modified (or MovedModified) pair. Paragraph pairs are tokenized + Myers-diffed;
+    /// Token-diff a Modified (or MovedModified) pair. Paragraph pairs are tokenized + token-diffed;
     /// non-paragraph pairs other than tables (opaque blocks, section breaks) get a null TokenDiff — they
     /// have no sub-block token model. Tables are handled by <see cref="MakeModifyOp"/> via the table diff.
     /// </summary>

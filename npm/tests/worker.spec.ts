@@ -355,6 +355,26 @@ test.describe("Docxodus Web Worker Tests", () => {
       console.log(`Converted document to ${result.html.length} bytes of HTML`);
     });
 
+    // Issue #954: stampAnchors is complete-entry-only. Passed alone, the worker used to take the
+    // plain entry point and return HTML with no data-anchor attributes.
+    test("convertDocxToHtml honors stampAnchors as the only option", async ({ page }) => {
+      const bytes = readTestFile("HC006-Test-01.docx");
+
+      const result = await page.evaluate(async (bytesArray: number[]) => {
+        await (window as any).createDocxodusWorker();
+        const worker = (window as any).DocxodusWorker;
+        const stamped: string = await worker.convertDocxToHtml(new Uint8Array(bytesArray), { stampAnchors: true });
+        const plain: string = await worker.convertDocxToHtml(new Uint8Array(bytesArray));
+        return {
+          stampedAnchors: (stamped.match(/data-anchor="/g) ?? []).length,
+          plainAnchors: (plain.match(/data-anchor="/g) ?? []).length,
+        };
+      }, Array.from(bytes));
+
+      expect(result.stampedAnchors).toBeGreaterThan(0);
+      expect(result.plainAnchors).toBe(0);
+    });
+
     test("getVersion returns library info", async ({ page }) => {
       const result = await page.evaluate(async () => {
         await (window as any).createDocxodusWorker();

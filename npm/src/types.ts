@@ -1956,6 +1956,7 @@ export interface DocxodusWasmExports {
     MoveBookmark: (handle: number, name: string, startAnchor: string, startOffset: number, endAnchor: string, endOffset: number) => string;
     RemoveBookmark: (handle: number, name: string) => string;
     ListRevisions: (handle: number) => string;
+    ListRevisionsFiltered?: (handle: number, filterJson: string) => string;
     ListRevisionRepairs?: (handle: number) => string;
     RepairRevisions?: (handle: number, repairsJson: string) => string;
     AcceptRevision: (handle: number, revisionId: string) => string;
@@ -1989,12 +1990,12 @@ export interface DocxodusWasmExports {
       spanLength: number,
       newInner: string,
     ) => string;
-    FindPlaceholders: (handle: number, kinds: number, scope: number, contextChars: number, boundary: number) => string;
+    FindPlaceholders: (handle: number, kinds: number, scope: number, contextChars: number | null, boundary: number) => string;
     FindPlaceholdersWithCitations: (
       handle: number,
       kinds: number,
       scope: number,
-      contextChars: number,
+      contextChars: number | null,
       boundary: number,
       requestJson: string,
     ) => string;
@@ -3503,6 +3504,21 @@ export interface GrepOptions {
   boundary?: number;
   /** Attach citations only if this exact registered layout is still valid. */
   citation?: PageCitationRequest;
+  /** Return at most this many matches, in document order. Omitted returns them all. */
+  maxResults?: number;
+}
+
+/**
+ * Narrows {@link DocxSession.listRevisions} to the entries matching every field set here.
+ * `author`, `changeType` (the entry's `type`), `family` and `resolutionStatus` ignore case;
+ * `partUri` is exact.
+ */
+export interface RevisionListFilter {
+  author?: string;
+  changeType?: string;
+  family?: string;
+  resolutionStatus?: string;
+  partUri?: string;
 }
 
 /**

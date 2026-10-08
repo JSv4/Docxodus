@@ -58,6 +58,7 @@ import type {
   SemanticChangeSet,
 } from "./types.js";
 import { AnnotationLabelMode } from "./types.js";
+import { needsCompleteConversion } from "./conversion-options.js";
 import {
   readExternalAnnotationSet,
   readExternalAnnotationValidation,
@@ -369,19 +370,7 @@ function handleConvert(
   try {
     let result: string;
 
-    // Check if any of the complete options are specified
-    const needsCompleteMethod =
-      options?.renderFootnotesAndEndnotes !== undefined ||
-      options?.renderHeadersAndFooters !== undefined ||
-      options?.renderTrackedChanges !== undefined ||
-      options?.showDeletedContent !== undefined ||
-      options?.renderMoveOperations !== undefined ||
-      options?.renderUnsupportedContentPlaceholders !== undefined ||
-      options?.documentLanguage !== undefined ||
-      options?.revisionPresentation !== undefined ||
-      options?.semanticLists !== undefined;
-
-    if (needsCompleteMethod || options?.renderAnnotations) {
+    if (needsCompleteConversion(options)) {
       result = exports.DocumentConverter.ConvertDocxToHtmlComplete(
         request.documentBytes,
         options?.pageTitle ?? "Document",
