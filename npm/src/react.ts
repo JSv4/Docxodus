@@ -328,7 +328,9 @@ export function useDocxodus(wasmBasePath?: string): UseDocxodusResult {
     [isReady]
   );
 
-  return {
+  // One object per state change, not per render: hooks built on this one list it as a dependency
+  // of their load callbacks, and a new identity every render re-ran their loads on every render.
+  return useMemo(() => ({
     isReady,
     isLoading,
     error,
@@ -342,7 +344,21 @@ export function useDocxodus(wasmBasePath?: string): UseDocxodusResult {
     removeAnnotation: removeAnnotationCallback,
     hasAnnotations: hasAnnotationsCallback,
     getDocumentStructure: getDocumentStructureCallback,
-  };
+  }), [
+    isReady,
+    isLoading,
+    error,
+    convertToHtml,
+    compare,
+    compareToHtml,
+    getRevisionsCallback,
+    getAnnotationsCallback,
+    addAnnotationCallback,
+    addAnnotationWithTargetCallback,
+    removeAnnotationCallback,
+    hasAnnotationsCallback,
+    getDocumentStructureCallback,
+  ]);
 }
 
 export interface UseConversionResult {
@@ -913,6 +929,28 @@ export interface UseAnnotationsResult {
 }
 
 /**
+ * Hands each asynchronous load a ticket so that only the newest load of a still-mounted hook may
+ * apply its result. A slower load for a document the caller has since replaced, or one that
+ * finishes after unmount or after the document was cleared, is ignored rather than overwriting
+ * newer state.
+ */
+function useLoadTickets() {
+  const latest = useRef(0);
+  useEffect(() => () => {
+    latest.current++;
+  }, []);
+  return useMemo(() => ({
+    /** Start a load; it stays current until the next `take()` or `invalidate()`. */
+    take: () => ++latest.current,
+    isCurrent: (ticket: number) => ticket === latest.current,
+    /** Supersede any load in flight without starting a new one. */
+    invalidate: () => {
+      latest.current++;
+    },
+  }), []);
+}
+
+/**
  * React hook for managing document annotations.
  *
  * @param document - DOCX file as File object or Uint8Array
@@ -968,11 +1006,15 @@ export function useAnnotations(
     return new Uint8Array(buffer);
   }, []);
 
+  const loads = useLoadTickets();
+
   // Initialize document bytes when document changes
   useEffect(() => {
     if (!document) {
+      loads.invalidate();
       setDocumentBytes(null);
       setAnnotations([]);
+      setIsLoading(false);
       return;
     }
 
@@ -996,7 +1038,7 @@ export function useAnnotations(
     return () => {
       cancelled = true;
     };
-  }, [document, toBytes]);
+  }, [document, toBytes, loads]);
 
   // Load annotations when document or WASM is ready
   const reload = useCallback(async () => {
@@ -1004,6 +1046,7 @@ export function useAnnotations(
       return;
     }
 
+    const ticket = loads.take();
     setIsLoading(true);
     setError(null);
 
@@ -1012,13 +1055,13 @@ export function useAnnotations(
 
     try {
       const annots = await docxodus.getAnnotations(documentBytes);
-      setAnnotations(annots);
+      if (loads.isCurrent(ticket)) setAnnotations(annots);
     } catch (err) {
-      setError(err instanceof Error ? err : new Error(String(err)));
+      if (loads.isCurrent(ticket)) setError(err instanceof Error ? err : new Error(String(err)));
     } finally {
-      setIsLoading(false);
+      if (loads.isCurrent(ticket)) setIsLoading(false);
     }
-  }, [docxodus, documentBytes]);
+  }, [docxodus, documentBytes, loads]);
 
   // Auto-reload when document bytes change
   useEffect(() => {
@@ -1341,11 +1384,13 @@ export function useDocumentStructure(
   const [error, setError] = useState<Error | null>(null);
 
   // Load structure when document or WASM is ready
+  const loads = useLoadTickets();
   const reload = useCallback(async () => {
     if (!docxodus.isReady || !document) {
       return;
     }
 
+    const ticket = loads.take();
     setIsLoading(true);
     setError(null);
 
@@ -1354,13 +1399,13 @@ export function useDocumentStructure(
 
     try {
       const struct = await docxodus.getDocumentStructure(document);
-      setStructure(struct);
+      if (loads.isCurrent(ticket)) setStructure(struct);
     } catch (err) {
-      setError(err instanceof Error ? err : new Error(String(err)));
+      if (loads.isCurrent(ticket)) setError(err instanceof Error ? err : new Error(String(err)));
     } finally {
-      setIsLoading(false);
+      if (loads.isCurrent(ticket)) setIsLoading(false);
     }
-  }, [docxodus, document]);
+  }, [docxodus, document, loads]);
 
   // Auto-load when document changes
   useEffect(() => {
@@ -1372,10 +1417,12 @@ export function useDocumentStructure(
   // Clear structure when document is removed
   useEffect(() => {
     if (!document) {
+      loads.invalidate();
       setStructure(null);
       setError(null);
+      setIsLoading(false);
     }
-  }, [document]);
+  }, [document, loads]);
 
   // Helper functions that work with current structure
   const findById = useCallback(
