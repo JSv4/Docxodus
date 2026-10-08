@@ -1,8 +1,8 @@
 {
   "schemaVersion": 2,
-  "description": "Generated-PDF visual-fidelity regression ratchet (issue #443). Numbers only; complete PDFs, rasters, semantic evidence, geometry, hashes, and fingerprints live in the uploaded artifact. See npm/tests/visual-parity/README.md. PROVENANCE: `sourceCommit` is the issue-#956 branch as measured in CI on the pinned reference environment (visual-parity run 37703505935, update_record), before the branch was rebased and squash-merged; after the merge it is not an ancestor of main, but main's rendering code at the merge is that tree's. The only change from the previous record (run 37552073014) is pdf-final-revisions improving with #956, which sizes a Calibri Light heading's lines from Carlito instead of Liberation Sans. The pdf-footnote residual is tracked in #955.",
-  "recordedAt": "2026-10-07",
-  "sourceCommit": "5d6270aef4d975f3852c3cc2175ace8e709a86cc",
+  "description": "Generated-PDF visual-fidelity regression ratchet (issue #443). Numbers only; complete PDFs, rasters, semantic evidence, geometry, hashes, and fingerprints live in the uploaded artifact. See npm/tests/visual-parity/README.md. PROVENANCE: `sourceCommit` is the issue-#955 branch as measured in CI on the pinned reference environment (visual-parity run 37715886650, update_record), before the branch was squash-merged; after the merge it is not an ancestor of main, but main's rendering code at the merge is that tree's. The only change from the previous record (run 37703505935, #956) is pdf-footnote, an accepted drop approved by the maintainer: #955 makes a note's lines its FootnoteText paragraph's own, which moves the note text onto Word's baseline (716.25 -> 717.32 pt; Word 717.48) and the separator rule down onto the converter's documented model of Word, the baseline of an empty line above the first note (about 704.8 pt). LibreOffice draws its rule higher, at 702.4 pt; the old rule (699.75 pt) sat within the 2 px ink tolerance of it only because an oversized note strut pushed it up, so ink F1 against LibreOffice falls while the page moves toward Word.",
+  "recordedAt": "2026-10-08",
+  "sourceCommit": "a42fa5f70b170689656ec49d2b69611f6ac3eb13",
   "environment": {
     "libreoffice": "25.8",
     "chromium": "143",
@@ -65,9 +65,9 @@
         "docxodus": 1,
         "libreoffice": 1
       },
-      "severity": "minor",
-      "ssim": 0.99459,
-      "worstInkF1": 0.90309
+      "severity": "severe",
+      "ssim": 0.99471,
+      "worstInkF1": 0.73864
     },
     {
       "id": "pdf-hidden-comments",

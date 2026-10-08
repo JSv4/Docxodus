@@ -612,6 +612,18 @@ All notable changes to this project will be documented in this file.
   generated-PDF case scored ink F1 0.943. Such an element now takes the closest resolved face of the
   same family stack: the heading advances 21.25 pt and the case scores 0.996. No font request is
   added, so the render report is unchanged.
+- Exported footnote text sits on Word's baseline again (issue #955). Word anchors the footnote area to
+  the bottom margin, and a note's lines are its FootnoteText paragraph's own, so the last note line's
+  baseline is the margin less the note font's descent. The paginated converter wrapped each note's
+  number and text in elements set in the page's default font. Their strut, which #850 had fixed at the
+  default font's 16 px line height, made every note line taller than the paragraph's own. In the
+  `pdf-footnote` generated-PDF case, that put the text at 716.25 pt from the page top against Word's
+  717.48 pt. The note item now contributes no strut (`line-height: 0`, inherited by the number, so a
+  raised number does not grow the line either), and the content wrapper is `display: contents` and
+  hands `normal` back to the paragraph. The text lands at 717.32 pt, the note area stops reserving the
+  extra height, and the number moves down with the text. The number still sits 4.66 pt above the
+  text, against Word's 3 pt, because it is drawn in the page's default font rather than as the note's
+  own reference run.
 
 ## [12.6.5] - 2026-09-28
 
