@@ -16,6 +16,14 @@ All notable changes to this project will be documented in this file.
   `1.1.`, keep their generated marker spans under `list-style-type: none`. Item indents are measured
   from the item they are nested in. Paginated output ignores the setting, and with it off the output
   is unchanged.
+- Every session op family is now described as data and checked against every transport (issue #982).
+  `tools/op-descriptions/` holds 19 family files covering about 150 `DocxSessionOps` ops, and
+  `not-described.json` lists the lifecycle, transaction, preview and delivery-evidence methods left out
+  on purpose, each with its reason. `SessionOpDescriptionDriftTests` now runs its static checks over
+  every described op. It also fails when a public facade method is neither described nor listed, so a
+  new op cannot bypass the description. The descriptions record 186 places where a transport names,
+  defaults, flattens or omits an argument or op differently, filed as #1023–#1026; generating the
+  per-transport layers from the descriptions is #1027.
 - Session op families can be described once, as data, and checked against every transport (issue
   #982, first slice). `tools/op-descriptions/comments.json` describes the native-comment ops: the
   facade method, each argument's wire name, type and whether it is required, and each transport's
