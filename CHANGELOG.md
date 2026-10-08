@@ -423,6 +423,13 @@ All notable changes to this project will be documented in this file.
   single numbered paragraph with `w:start="2147483647"` produced a list marker about 74 million
   characters long wherever markers are resolved (comparison, markdown, HTML). Markers for counter
   values 1–870 are unchanged; larger values now wrap and stay at most 30 characters.
+- The npm package's canonical JSON keeps a `__proto__` key as data (issue #970). The browser font
+  runtime and the export orchestrator canonicalize values with `src/canonical.ts` before digesting
+  them, and it built each object as a plain `{}`, so a `__proto__` key in parsed input set the
+  object's prototype instead of becoming a key and was dropped from the output. The Node exporter's
+  copy already built prototype-less objects, so the two sides could produce different digests for
+  the same input. The package's copy now does the same, and a test checks that the package, the
+  exporter and the benchmark's copy agree on `__proto__` and `constructor` keys.
 - `import ... from "docxodus"` now works in plain Node.js ESM (issue #854). It failed with
   `ERR_UNSUPPORTED_DIR_IMPORT` before any call, because the root entry re-exports the editor, and
   the editor imported `@atlaskit/pragmatic-drag-and-drop` by directory path, which Node's ESM resolver
