@@ -196,13 +196,13 @@ internal static class Dispatcher
 
         // Reference fields (issue #607): the switches never cross the wire — typed options only.
         "insert_table_of_contents" => DocxSessionOps.InsertTableOfContents(
-            Handle(args), Str(args, "anchorId"), DocxSessionJson.ParsePos(OptStr(args, "position") ?? "before"),
+            Handle(args), Str(args, "anchorId"), DocxSessionJson.ParseOptionalPos(OptStr(args, "position")),
             OptionsOrNull(args, DocxSessionJson.ParseTableOfContentsOptions)),
         "insert_table_of_figures" => DocxSessionOps.InsertTableOfFigures(
-            Handle(args), Str(args, "anchorId"), DocxSessionJson.ParsePos(OptStr(args, "position") ?? "before"),
+            Handle(args), Str(args, "anchorId"), DocxSessionJson.ParseOptionalPos(OptStr(args, "position")),
             OptionsOrNull(args, DocxSessionJson.ParseTableOfFiguresOptions)),
         "insert_table_of_authorities" => DocxSessionOps.InsertTableOfAuthorities(
-            Handle(args), Str(args, "anchorId"), DocxSessionJson.ParsePos(OptStr(args, "position") ?? "before"),
+            Handle(args), Str(args, "anchorId"), DocxSessionJson.ParseOptionalPos(OptStr(args, "position")),
             OptionsOrNull(args, DocxSessionJson.ParseTableOfAuthoritiesOptions)),
 
         "insert_footnote" => DocxSessionOps.InsertFootnote(
@@ -289,7 +289,8 @@ internal static class Dispatcher
             Str(args, "endAnchorId"), Int(args, "endOffset")),
         "remove_bookmark" => DocxSessionOps.RemoveBookmark(Handle(args), Str(args, "name")),
 
-        "list_revisions" => DocxSessionOps.ListRevisions(Handle(args)),
+        "list_revisions" => DocxSessionOps.ListRevisions(
+            Handle(args), DocxSessionJson.ParseRevisionListFilter(args)),
         "list_revision_repairs" => DocxSessionOps.ListRevisionRepairs(Handle(args)),
         "repair_revisions" => DocxSessionOps.RepairRevisions(Handle(args),
             args.TryGetProperty("repairs", out var repairs) ? repairs.GetRawText() : "[]"),
@@ -345,9 +346,9 @@ internal static class Dispatcher
             Handle(args), Str(args, "cellAnchorId"), RawObjectOrEmpty(args, "spec")),
         "set_cell_shading" => DocxSessionOps.SetCellShading(
             Handle(args), Str(args, "cellAnchorId"), OptStr(args, "fill") ?? "",
-            OptStr(args, "scope") ?? "cell"),
+            DocxSessionJson.AliasedString(args, "shadingScope", "scope")),
         "set_repeat_header_row" => DocxSessionOps.SetRepeatHeaderRow(
-            Handle(args), Str(args, "cellAnchorId"), OptBool(args, "repeat") ?? true),
+            Handle(args), Str(args, "cellAnchorId"), OptBool(args, "repeat")),
         "set_table_row_options" => DocxSessionOps.SetTableRowOptions(
             Handle(args), Str(args, "cellAnchorId"), OptBool(args, "repeatHeader"),
             OptBool(args, "allowBreakAcrossPages"), OptInt(args, "heightTwips"),
@@ -368,7 +369,7 @@ internal static class Dispatcher
             Handle(args),
             (PlaceholderKinds)IntOptional(args, "kinds", (int)PlaceholderKinds.All),
             (ProjectionScopes)IntOptional(args, "scope", (int)ProjectionScopes.Body),
-            IntOptional(args, "contextChars", 80),
+            OptInt(args, "contextChars"),
             (ContextBoundary)IntOptional(args, "boundary", (int)ContextBoundary.Char),
             DocxSessionJson.ParsePageCitationRequest(args)),
         "get_edit_summary" => DocxSessionOps.GetEditSummary(Handle(args)),
@@ -378,11 +379,13 @@ internal static class Dispatcher
             Handle(args), (DiffFormat)IntOptional(args, "format", 0)),
         "get_semantic_changes" => DocxSessionOps.GetSemanticChanges(Handle(args)),
         "find_by_annotation" => DocxSessionOps.FindByAnnotation(
-            Handle(args), Str(args, "annotationId"), DocxSessionJson.ParsePageCitationRequest(args)),
+            Handle(args), Str(args, "annotationId"), DocxSessionJson.ParsePageCitationRequest(args),
+            OptInt(args, "maxResults")),
         "find_by_label" => DocxSessionOps.FindByLabel(
             Handle(args), Str(args, "labelId"), DocxSessionJson.ParsePageCitationRequest(args)),
         "find_by_bookmark" => DocxSessionOps.FindByBookmark(
-            Handle(args), Str(args, "bookmarkName"), DocxSessionJson.ParsePageCitationRequest(args)),
+            Handle(args), Str(args, "bookmarkName"), DocxSessionJson.ParsePageCitationRequest(args),
+            OptInt(args, "maxResults")),
         "list_annotations" => DocxSessionOps.ListAnnotations(Handle(args)),
         "add_annotation" => DocxSessionOps.AddAnnotation(
             Handle(args),
@@ -419,7 +422,8 @@ internal static class Dispatcher
             Handle(args), Str(args, "kind"),
             args.ValueKind == JsonValueKind.Object && args.TryGetProperty("scope", out var sc) && sc.ValueKind == JsonValueKind.String
                 ? sc.GetString() : null,
-            DocxSessionJson.ParsePageCitationRequest(args)),
+            DocxSessionJson.ParsePageCitationRequest(args),
+            OptInt(args, "maxResults")),
 
         "undo" => DocxSessionOps.Undo(Handle(args)) ? "true" : "false",
         "redo" => DocxSessionOps.Redo(Handle(args)) ? "true" : "false",
@@ -741,15 +745,10 @@ internal static class Dispatcher
     private static string Grep(JsonElement args, bool crossBlock)
     {
         var pattern = Str(args, "pattern");
-        var regexOpts = (RegexOptions)IntOptional(args, "regexOptions", 0);
-        var scope = (ProjectionScopes)IntOptional(args, "scope", (int)ProjectionScopes.Body);
-        var contextChars = IntOptional(args, "contextChars", 80);
-        var whitespace = (WhitespaceMode)IntOptional(args, "whitespace", (int)WhitespaceMode.Preserve);
-        var boundary = (ContextBoundary)IntOptional(args, "boundary", (int)ContextBoundary.Char);
-        var citation = DocxSessionJson.ParsePageCitationRequest(args);
+        var request = DocxSessionJson.ParseGrepRequest(args);
         return crossBlock
-            ? DocxSessionOps.GrepCrossBlock(Handle(args), pattern, regexOpts, scope, contextChars, whitespace, boundary, citation)
-            : DocxSessionOps.Grep(Handle(args), pattern, regexOpts, scope, contextChars, whitespace, boundary, citation);
+            ? DocxSessionOps.GrepCrossBlock(Handle(args), pattern, request)
+            : DocxSessionOps.Grep(Handle(args), pattern, request);
     }
 
     private static string AddComment(JsonElement args)

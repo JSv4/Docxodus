@@ -1,8 +1,8 @@
 {
   "schemaVersion": 2,
-  "description": "Generated-PDF visual-fidelity regression ratchet (issue #443). Numbers only; complete PDFs, rasters, semantic evidence, geometry, hashes, and fingerprints live in the uploaded artifact. See npm/tests/visual-parity/README.md. PROVENANCE: `sourceCommit` is the tip of the issue-#950 branch stack as measured in CI on the pinned reference environment (visual-parity run 37552073014, update_record), before the stack was squash-merged; after the merge it is not an ancestor of main, but main's rendering code at the merge is that tree's. The drops it banks were traced in issue #950: the browser-page endnote and wrapped-image-tight SSIM drops come from #943 (Word's placement of auto line spacing), which moved body lines toward both Word and LibreOffice; the generated-PDF drops come from #850 (unrounded line pitch). Residuals are tracked in #955 (footnote placement) and #956 (Calibri Light metrics in the export).",
+  "description": "Generated-PDF visual-fidelity regression ratchet (issue #443). Numbers only; complete PDFs, rasters, semantic evidence, geometry, hashes, and fingerprints live in the uploaded artifact. See npm/tests/visual-parity/README.md. PROVENANCE: `sourceCommit` is the issue-#956 branch as measured in CI on the pinned reference environment (visual-parity run 37703505935, update_record), before the branch was rebased and squash-merged; after the merge it is not an ancestor of main, but main's rendering code at the merge is that tree's. The only change from the previous record (run 37552073014) is pdf-final-revisions improving with #956, which sizes a Calibri Light heading's lines from Carlito instead of Liberation Sans. The pdf-footnote residual is tracked in #955.",
   "recordedAt": "2026-10-07",
-  "sourceCommit": "bfb2156dcb219fed8b9c519a858dc5f957af6d11",
+  "sourceCommit": "5d6270aef4d975f3852c3cc2175ace8e709a86cc",
   "environment": {
     "libreoffice": "25.8",
     "chromium": "143",
@@ -55,8 +55,8 @@
         "libreoffice": 1
       },
       "severity": "minor",
-      "ssim": 0.96356,
-      "worstInkF1": 0.94265
+      "ssim": 0.97866,
+      "worstInkF1": 0.99554
     },
     {
       "id": "pdf-footnote",

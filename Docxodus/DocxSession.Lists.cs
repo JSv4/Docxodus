@@ -43,7 +43,7 @@ public sealed partial class DocxSession
 
     public EditResult SetListLevel(string anchorId, int levelDelta)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var target = FindAnchor(anchorId);
         if (target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, "anchor not found", anchorId);
@@ -154,7 +154,7 @@ public sealed partial class DocxSession
 
     public EditResult RemoveListMembership(string anchorId)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var target = FindAnchor(anchorId);
         if (target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, "anchor not found", anchorId);
@@ -203,7 +203,7 @@ public sealed partial class DocxSession
     /// </summary>
     public EditResult ApplyListFormat(string anchorId, ListFormat kind)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var target = FindAnchor(anchorId);
         if (target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, "anchor not found", anchorId);
@@ -271,7 +271,7 @@ public sealed partial class DocxSession
     /// </summary>
     public EditResult ApplyListFormatRange(string firstAnchorId, string lastAnchorId, ListFormat kind)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (_trackedChanges == TrackedChangeMode.RenderInline)
             return TrackedStructureUnsupported("ApplyListFormatRange", firstAnchorId);
         var firstTarget = FindAnchor(firstAnchorId);
@@ -398,7 +398,7 @@ public sealed partial class DocxSession
     /// (move the whole sequence onto a clone without it).</summary>
     private EditResult ApplyListStartOverride(string anchorId, int? value)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (_trackedChanges == TrackedChangeMode.RenderInline)
             return TrackedStructureUnsupported(
                 value is null ? "ClearListStartOverride" : "SetListStartOverride", anchorId);
@@ -451,7 +451,6 @@ public sealed partial class DocxSession
             // Flush the body mutation to the part stream immediately — same WASM typed-DOM /
             // XDocument divergence rationale as SetListLevel.
             (ResolvePart(target.PartUri) ?? _doc!.MainDocumentPart!).PutXDocument();
-            ClearListNumberingAnnotations();
             InvalidateProjectionCache();
             _ = AnchorIndex();
             var modified = new List<Anchor>();
@@ -487,22 +486,6 @@ public sealed partial class DocxSession
         if (directNumId is not null) return (directNumId, directIlvl ?? 0);
         var (styleNumId, styleIlvl) = ResolveStyleNumbering(paragraph);
         return (styleNumId, directIlvl ?? styleIlvl);
-    }
-
-    /// <summary>
-    /// Strip the <see cref="ListItemRetriever"/> annotations (<c>ListItemInfo</c> /
-    /// <c>LevelNumbers</c> / <c>ContinuationInfo</c>) a previous projection stamped on the live
-    /// paragraphs. The retriever re-initializes only paragraphs WITHOUT a <c>ListItemInfo</c>
-    /// annotation, so a numbering mutation after a projection would otherwise keep serving the
-    /// stale counter vectors — the visible numbers would not restart until save/reopen.
-    /// </summary>
-    private void ClearListNumberingAnnotations()
-    {
-        foreach (var part in EnumerateProjectedParts())
-        {
-            var root = part.GetXDocument().Root;
-            if (root is not null) ListItemRetriever.ClearAnnotations(root);
-        }
     }
 
     /// <summary>Point <paramref name="paragraph"/>'s numbering at <paramref name="newNumId"/>,

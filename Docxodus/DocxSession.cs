@@ -35,6 +35,11 @@ namespace Docxodus;
 /// </remarks>
 public sealed partial class DocxSession : IDisposable
 {
+    /// <summary>Characters of surrounding text <see cref="Grep"/>, <see cref="GrepCrossBlock"/> and
+    /// <see cref="FindPlaceholders"/> report on each side of a match when the caller names no
+    /// width. Every transport reads it from here rather than repeating the literal.</summary>
+    public const int DefaultContextChars = 80;
+
     private readonly DocxSessionSettings _settings;
     private readonly Internal.UndoRing<DocumentSnapshot> _history;
     private MemoryStream? _stream;
@@ -142,6 +147,9 @@ public sealed partial class DocxSession : IDisposable
         _stream.Write(docxBytes, 0, docxBytes.Length);
         _stream.Position = 0;
         _doc = WordprocessingDocument.Open(_stream, isEditable: true);
+        // Stamp list numbering's inputs before anything counts a list, so the first edit can tell
+        // whether the counts it finds are still current (see ResetProjectionCache).
+        ResetProjectionCache();
 
         if (_settings.CaptureInitialProjection && !skipInitialProjectionCapture)
         {
@@ -320,6 +328,16 @@ public sealed partial class DocxSession : IDisposable
     /// no longer trustworthy": reopen from the last known-good bytes rather than continuing to edit.
     /// </summary>
     public Exception? LastRollbackError { get; private set; }
+
+    /// <summary>
+    /// True once a failed op's rollback also failed (<see cref="LastRollbackError"/> is set). From then
+    /// on every mutation is refused with <see cref="EditErrorCode.SessionCorrupted"/> (or, for the few
+    /// members with no error channel, an <see cref="InvalidOperationException"/>). Reads and
+    /// <see cref="Save()"/> are not refused, though a save can fail on whatever the half-applied op
+    /// left behind. Rolling back an enclosing transaction restores the checkpointed
+    /// package and clears it. Otherwise close the session and reopen it from known-good bytes.
+    /// </summary>
+    public bool IsCorrupted => LastRollbackError is not null;
 
     /// <summary>Undo steps currently available. Bounded by both
     /// <see cref="DocxSessionSettings.UndoDepth"/> and
@@ -1071,7 +1089,7 @@ public sealed partial class DocxSession : IDisposable
     /// </remarks>
     public CompactResult CompactRuns(ProjectionScopes scopes = ProjectionScopes.All)
     {
-        ThrowIfDisposed();
+        ThrowIfMutationRefused();
         _history.RecordPreOp(TakeSnapshot());
 
         int removed = 0;
@@ -1197,11 +1215,19 @@ public sealed partial class DocxSession : IDisposable
         ResetProjectionCache();
     }
 
-    /// <summary>Drop the projection/anchor caches without touching package relationships.</summary>
+    /// <summary>
+    /// Drop the projection/anchor caches without touching package relationships. List numbering
+    /// is a projection cache too: <see cref="ListItemRetriever"/> stamps each paragraph's counters
+    /// once and never recounts a paragraph that already carries them, so an edit that adds,
+    /// removes, re-levels or re-numbers any list item would otherwise leave the survivors
+    /// showing the numbers they had before it (issue #959). The retriever decides whether the
+    /// edit could have changed them and drops them only then.
+    /// </summary>
     private void ResetProjectionCache()
     {
         _cachedProjection = null;
         _cachedAnchorIndex = null;
+        if (_doc is not null) ListItemRetriever.ClearStaleAnnotations(_doc);
     }
 
     /// <summary>
@@ -1480,8 +1506,13 @@ public sealed partial class DocxSession : IDisposable
         }
     }
 
+    /// <summary>Test seam: runs at the start of every <see cref="RestoreSnapshot"/>, so a test can make
+    /// the restore itself fail — the one fault no realistic input reaches (issue #963).</summary>
+    internal Action? BeforeRestoreSnapshotForTests { get; set; }
+
     internal void RestoreSnapshot(DocumentSnapshot snapshot)
     {
+        BeforeRestoreSnapshotForTests?.Invoke();
         CommentsVersion++;
         // The restored markup is different markup: re-seed the revision counter from it on
         // next use. Seeding only ever raises the counter, so this can never hand out an id

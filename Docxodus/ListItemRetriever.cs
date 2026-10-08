@@ -324,8 +324,7 @@ namespace Docxodus
         /// repointing w:numPr at a different w:num) must call this: initialization is
         /// once-per-paragraph, so the retriever would otherwise keep serving the counter vectors
         /// computed before the mutation. The per-numId caches on the numbering part's XDocument
-        /// root stay — existing w:num definitions are never mutated by session ops (additive-only),
-        /// so those entries remain valid.
+        /// root stay; the whole-document overload drops those too.
         /// </summary>
         public static void ClearAnnotations(XElement root)
         {
@@ -336,7 +335,243 @@ namespace Docxodus
                 p.RemoveAnnotations<ContinuationInfo>();
                 p.RemoveAnnotations<ParagraphInfo>();
                 p.RemoveAnnotations<ReverseAxis>();
+                p.RemoveAnnotations<NumberingStamp>();
             }
+        }
+
+        /// <summary>
+        /// Forget everything this retriever has computed for <paramref name="wordDoc"/>: the
+        /// per-paragraph annotations on every part it numbers (<see cref="NumberedParts"/>), plus the
+        /// style-and-numId cache on the numbering part and the default-style cache on the
+        /// styles part. The next RetrieveListItem call then recounts the whole document from
+        /// its current XML, exactly as a fresh open would. <see cref="ClearStaleAnnotations"/>
+        /// calls it when an edit has changed what the counts depend on.
+        /// </summary>
+        internal static void ClearAnnotations(WordprocessingDocument wordDoc)
+        {
+            // Only a part whose tree is already loaded can carry annotations, so read the cached
+            // tree rather than GetXDocument, which would parse a part nobody has touched.
+            var main = wordDoc.MainDocumentPart;
+            if (main is null) return;
+            foreach (var part in NumberedParts(wordDoc))
+            {
+                if (part.Annotation<XDocument>()?.Root is { } root) ClearAnnotations(root);
+            }
+            main.NumberingDefinitionsPart?.Annotation<XDocument>()?.Root?.RemoveAnnotations<Dictionary<string, ListItemInfo>>();
+            main.StyleDefinitionsPart?.Annotation<XDocument>()?.RemoveAnnotations<StylesInfo>();
+        }
+
+        /// <summary>
+        /// Drop this retriever's numbering for <paramref name="wordDoc"/> only when an edit could
+        /// have changed it, so a live document's next RetrieveListItem returns what a fresh open
+        /// would, without recounting every list after edits that leave numbering alone.
+        /// </summary>
+        /// <remarks>
+        /// A paragraph's counters depend only on the numbering-relevant facts of itself and of
+        /// the paragraphs before it in its story (the same story walk the counting pass makes),
+        /// plus the numbering definitions and the paragraph styles' numbering. Each pass hashes
+        /// those facts in story order into a running prefix and stamps every paragraph that can
+        /// number with the prefix at its position. A paragraph whose counters were computed
+        /// while its stamp held is still correct exactly when its stamp equals the prefix at its
+        /// position now. One mismatch (a deleted or inserted list item before it, a changed
+        /// level, numId or style, a deleted paragraph mark, a changed definition, or a move
+        /// between stories) clears every annotation, as <see cref="ClearAnnotations(WordprocessingDocument)"/>
+        /// does. A paragraph counted before it was ever stamped is treated as a mismatch.
+        /// Call it after each edit, before the next RetrieveListItem.
+        /// </remarks>
+        internal static void ClearStaleAnnotations(WordprocessingDocument wordDoc)
+        {
+            var main = wordDoc.MainDocumentPart;
+            var numXDoc = main?.NumberingDefinitionsPart?.GetXDocument();
+            var stylesXDoc = main?.StyleDefinitionsPart?.GetXDocument();
+            // Without both parts nothing is numbered (RetrieveListItem returns early).
+            if (main is null || numXDoc?.Root is null || stylesXDoc?.Root is null)
+                return;
+
+            var definitions = new NumberingFactsHash();
+            foreach (var e in numXDoc.Root.DescendantsAndSelf())
+            {
+                definitions.Add(e.Name.LocalName);
+                foreach (var a in e.Attributes())
+                {
+                    definitions.Add(a.Name.LocalName);
+                    definitions.Add(a.Value);
+                }
+            }
+            var numberingStyles = NumberingStyles(stylesXDoc.Root, ref definitions);
+            // Read from the XML, not GetDefaultParagraphStyleName's cache, which an edit to the
+            // default style would leave stale until the clear below.
+            var defaultStyle = (string?)stylesXDoc.Root.Elements(W.style).FirstOrDefault(st =>
+                (string?)st.Attribute(W.type) == "paragraph" &&
+                (string?)st.Attribute(W._default) is { } d &&
+                (d == "1" || d.Equals("true", StringComparison.OrdinalIgnoreCase) || d.Equals("on", StringComparison.OrdinalIgnoreCase)))
+                ?.Attribute(W.styleId);
+
+            if (StampNumberingPrefixes(wordDoc, definitions, numberingStyles, defaultStyle, verify: true))
+                return;
+            ClearAnnotations(wordDoc);
+            StampNumberingPrefixes(wordDoc, definitions, numberingStyles, defaultStyle, verify: false);
+        }
+
+        /// <summary>
+        /// Walk every numbered story in the counting pass's order, stamping each paragraph that
+        /// can number with the running prefix at its position. With <paramref name="verify"/>,
+        /// returns false (and stops) at the first counted paragraph whose stamp no longer holds.
+        /// </summary>
+        private static bool StampNumberingPrefixes(WordprocessingDocument wordDoc, NumberingFactsHash definitions,
+            HashSet<string> numberingStyles, string? defaultStyle, bool verify)
+        {
+            foreach (var part in NumberedParts(wordDoc))
+            {
+                var root = part.GetXDocument().Root;
+                if (root is null) continue;
+                var storySeed = definitions;
+                storySeed.Add(part.Uri.OriginalString);
+                var ordinal = 0;
+                foreach (var story in new[] { root }.Concat(root.Descendants(W.txbxContent)))
+                {
+                    var prefix = storySeed;
+                    prefix.Add(ordinal++);
+                    foreach (var paragraph in story.DescendantsTrimmed(W.txbxContent))
+                    {
+                        if (paragraph.Name != W.p) continue;
+                        var pPr = paragraph.Element(W.pPr);
+                        var numPr = pPr?.Element(W.numPr);
+                        var style = (string?)pPr?.Element(W.pStyle)?.Attribute(W.val);
+                        var canNumber = numPr is not null || numberingStyles.Contains(style ?? defaultStyle ?? string.Empty);
+                        var stamp = paragraph.Annotation<NumberingStamp>();
+                        var counted = paragraph.Annotation<ListItemInfo>() is not null;
+                        if (!canNumber)
+                        {
+                            // A stamp means it could number when last stamped: if it was counted
+                            // then, its annotations describe numbering it no longer has.
+                            if (stamp is not null)
+                            {
+                                if (verify && counted) return false;
+                                paragraph.RemoveAnnotations<NumberingStamp>();
+                            }
+                            continue;
+                        }
+
+                        prefix.Add(1);
+                        prefix.Add((string?)numPr?.Element(W.numId)?.Attribute(W.val));
+                        prefix.Add((string?)numPr?.Element(W.ilvl)?.Attribute(W.val));
+                        prefix.Add(style);
+                        prefix.Add(ParagraphMarkIsDeleted(paragraph) ? 1 : 0);
+                        prefix.Add(pPr?.Element(W.sectPr) is not null && FirstRunIsEmptySectionBreak(paragraph) ? 1 : 0);
+                        prefix.Add((string?)paragraph.Attribute(PtOpenXml.LevelNumbers));
+                        prefix.Add((string?)paragraph.Attribute(PtOpenXml.ListContinuation));
+
+                        if (stamp is null)
+                        {
+                            if (verify && counted) return false;
+                            paragraph.AddAnnotation(new NumberingStamp { Prefix = prefix });
+                        }
+                        else if (!stamp.Prefix.Equals(prefix))
+                        {
+                            if (verify && counted) return false;
+                            stamp.Prefix = prefix;
+                        }
+                    }
+                }
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// The ids of paragraph styles whose <c>w:basedOn</c> chain carries a <c>w:numPr</c>
+        /// (the chain FormattingAssembler.ParagraphStyleRollup walks), folding every paragraph
+        /// style's numbering facts into <paramref name="hash"/>.
+        /// </summary>
+        private static HashSet<string> NumberingStyles(XElement stylesRoot, ref NumberingFactsHash hash)
+        {
+            var byId = new Dictionary<string, XElement>(StringComparer.Ordinal);
+            foreach (var style in stylesRoot.Elements(W.style))
+            {
+                if ((string?)style.Attribute(W.type) != "paragraph") continue;
+                var id = (string?)style.Attribute(W.styleId);
+                var numPr = style.Element(W.pPr)?.Element(W.numPr);
+                hash.Add(id);
+                hash.Add((string?)style.Attribute(W._default));
+                hash.Add((string?)style.Element(W.basedOn)?.Attribute(W.val));
+                hash.Add(numPr is null ? 0 : 1);
+                hash.Add((string?)numPr?.Element(W.numId)?.Attribute(W.val));
+                hash.Add((string?)numPr?.Element(W.ilvl)?.Attribute(W.val));
+                if (id is not null) byId.TryAdd(id, style);
+            }
+
+            var numbering = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var id in byId.Keys)
+            {
+                var visited = new HashSet<string>(StringComparer.Ordinal);
+                for (var current = id; current is not null && visited.Add(current) && byId.TryGetValue(current, out var style);
+                     current = (string?)style.Element(W.basedOn)?.Attribute(W.val))
+                {
+                    if (style.Element(W.pPr)?.Element(W.numPr) is not null)
+                    {
+                        numbering.Add(id);
+                        break;
+                    }
+                }
+            }
+            return numbering;
+        }
+
+        /// <summary>The running prefix a paragraph's counters were computed under.</summary>
+        private sealed class NumberingStamp
+        {
+            public NumberingFactsHash Prefix;
+        }
+
+        /// <summary>
+        /// A 128-bit running hash (an FNV-1a lane and a multiply-rotate lane) of the facts list
+        /// numbering reads. Values are length-prefixed and null is distinct from "".
+        /// </summary>
+        private struct NumberingFactsHash : IEquatable<NumberingFactsHash>
+        {
+            private ulong _a;
+            private ulong _b;
+            private bool _started;
+
+            public void Add(int value)
+            {
+                Start();
+                Mix(0x49);
+                Mix((uint)value);
+            }
+
+            public void Add(string? value)
+            {
+                Start();
+                if (value is null)
+                {
+                    Mix(0x4E);
+                    return;
+                }
+                Mix(0x53);
+                Mix((uint)value.Length);
+                foreach (var c in value) Mix(c);
+            }
+
+            private void Start()
+            {
+                if (_started) return;
+                _a = 14695981039346656037UL;
+                _b = 0x6C62272E07BB0142UL;
+                _started = true;
+            }
+
+            private void Mix(uint value)
+            {
+                _a = (_a ^ value) * 1099511628211UL;
+                _b = System.Numerics.BitOperations.RotateLeft((_b ^ value) * 0x9E3779B97F4A7C15UL, 31);
+            }
+
+            public readonly bool Equals(NumberingFactsHash other) => _a == other._a && _b == other._b;
+
+            public override readonly bool Equals(object? obj) => obj is NumberingFactsHash other && Equals(other);
+
+            public override readonly int GetHashCode() => HashCode.Combine(_a, _b);
         }
 
         public static void SetParagraphLevel(XElement paragraph, int ilvl)
@@ -942,12 +1177,20 @@ namespace Docxodus
             return languageIdentifier;
         }
 
+        /// <summary>
+        /// The parts whose paragraphs this retriever numbers, and therefore the only parts it
+        /// ever annotates: initialization, the in-part check and <see cref="ClearAnnotations(WordprocessingDocument)"/>
+        /// all read this one set. A paragraph in any other part (a comment, a detached element)
+        /// is never stamped and is not a list item.
+        /// </summary>
+        private static IEnumerable<OpenXmlPart> NumberedParts(WordprocessingDocument wordDoc) => wordDoc.ContentParts();
+
         private static bool IsInContentPart(WordprocessingDocument wordDoc, XElement paragraph) =>
-            paragraph.Document is { } xDoc && wordDoc.ContentParts().Any(part => part.GetXDocument() == xDoc);
+            paragraph.Document is { } xDoc && NumberedParts(wordDoc).Any(part => part.GetXDocument() == xDoc);
 
         private static void InitializeListItemRetriever(WordprocessingDocument wordDoc, ListItemRetrieverSettings? settings)
         {
-            foreach (var part in wordDoc.ContentParts())
+            foreach (var part in NumberedParts(wordDoc))
                 InitializeListItemRetrieverForPart(wordDoc, part, settings);
 
 #if false
@@ -996,9 +1239,12 @@ namespace Docxodus
 
         private static void InitializeListItemRetrieverForStory(XDocument numXDoc, XDocument stylesXDoc, XElement rootNode)
         {
+            // Materialized once: the passes below enumerate it once per list, and walking the
+            // story's whole element tree each time dominated the cost of a count.
             var paragraphs = rootNode
                 .DescendantsTrimmed(W.txbxContent)
-                .Where(p => p.Name == W.p);
+                .Where(p => p.Name == W.p)
+                .ToList();
 
             foreach (var paragraph in paragraphs)
                 InitListItemInfo(numXDoc, stylesXDoc, paragraph);

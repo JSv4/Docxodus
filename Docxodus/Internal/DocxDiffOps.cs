@@ -32,6 +32,62 @@ internal static class DocxDiffOps
         return DocxDiff.Compare(left, right, settings).DocumentByteArray;
     }
 
+    /// <summary>
+    /// The settings the browser's typed comparison exports (<c>DocumentComparer</c>) run with: the
+    /// <see cref="DocxDiffSettings"/> defaults, plus the two knobs those exports take. A null or empty
+    /// <paramref name="author"/> keeps <see cref="DocxDiffSettings.DefaultAuthorForRevisions"/>, so the
+    /// browser cannot carry an author default of its own (issue #961).
+    /// </summary>
+    public static DocxDiffSettings FrontDoorSettings(string? author, bool caseInsensitive)
+    {
+        var settings = new DocxDiffSettings { CaseInsensitive = caseInsensitive };
+        if (!string.IsNullOrEmpty(author))
+            settings.AuthorForRevisions = author!;
+        return settings;
+    }
+
+    /// <summary>
+    /// Compare two DOCX byte arrays through the <see cref="DocxCompare"/> front door — the
+    /// input-revision policy and the exact no-op clone applied — and return the redlined DOCX bytes.
+    /// </summary>
+    public static byte[] CompareFrontDoor(byte[] leftBytes, byte[] rightBytes, DocxDiffSettings settings)
+    {
+        RequireBytes(leftBytes, nameof(leftBytes));
+        RequireBytes(rightBytes, nameof(rightBytes));
+        ArgumentNullException.ThrowIfNull(settings);
+        return DocxCompare.Compare(
+            new WmlDocument("original.docx", leftBytes),
+            new WmlDocument("modified.docx", rightBytes),
+            settings).DocumentByteArray;
+    }
+
+    /// <summary>
+    /// Compare through the front door (<see cref="CompareFrontDoor"/>) and render the redline to HTML
+    /// through <see cref="HtmlConversionOps"/>. With <paramref name="renderTrackedChanges"/> the
+    /// insertions and deletions are drawn, the comparison author outlined in one colour; without it
+    /// the converter shows the accepted result.
+    /// </summary>
+    public static string CompareToHtml(
+        byte[] leftBytes, byte[] rightBytes, DocxDiffSettings settings, bool renderTrackedChanges)
+    {
+        var redline = CompareFrontDoor(leftBytes, rightBytes, settings);
+        return HtmlConversionOps.ConvertToHtml(redline, new HtmlConversionOptions
+        {
+            PageTitle = "Document Comparison",
+            CssClassPrefix = "redline-",
+            RenderTrackedChanges = renderTrackedChanges,
+            AuthorColors = renderTrackedChanges
+                ? new Dictionary<string, string> { [settings.AuthorForRevisions] = "#007bff" }
+                : null,
+        });
+    }
+
+    private static void RequireBytes(byte[] bytes, string name)
+    {
+        if (bytes == null || bytes.Length == 0)
+            throw new ArgumentException("Missing document data", name);
+    }
+
     /// <summary>Compare two DOCX byte arrays; return the revision list as a JSON string.</summary>
     public static string GetRevisionsJson(byte[] leftBytes, byte[] rightBytes, string? settingsJson)
     {

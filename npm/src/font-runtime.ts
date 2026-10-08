@@ -400,7 +400,31 @@ function collectFontInventory(document: Document, limits: BrowserFontLimits): Fo
   // An element with no text of its own still lays out with its font: a paragraph's strut, its own share of
   // every line box, is sized from the paragraph's font, and so are `lh` units and the auto line multiples
   // built on them. Point every rendered element whose font matches a requested face at that face too, or
-  // those line boxes fall back to whatever the machine has installed (issue #908).
+  // those line boxes fall back to whatever the machine has installed (issue #908). Its weight or style
+  // need not match its text's: a heading inherits the browser's bold while its runs are normal, and a
+  // paragraph of bold runs keeps a normal mark. Such an element takes the closest requested face of
+  // the same family stack, which sizes its lines from the right font without adding a request, since it
+  // draws no glyphs of its own (issue #956).
+  const requestsByStack = new Map<string, Array<{ key: string; request: MutableRequest }>>();
+  for (const [key, request] of requests) {
+    const stackKey = JSON.stringify([request.familyStack, request.familyKinds]);
+    const list = requestsByStack.get(stackKey) ?? [];
+    list.push({ key, request });
+    requestsByStack.set(stackKey, list);
+  }
+  const closestRequestKey = (descriptor: Omit<MutableRequest, "sampleCodePoints">): string | undefined => {
+    const candidates = requestsByStack.get(JSON.stringify([descriptor.familyStack, descriptor.familyKinds]));
+    if (!candidates) return undefined;
+    let best: { key: string; distance: number } | undefined;
+    for (const { key, request } of candidates) {
+      const distance = (request.style === descriptor.style ? 0 : 10_000)
+        + Math.abs(request.weight - descriptor.weight) + Math.abs(request.stretch - descriptor.stretch);
+      if (!best || distance < best.distance || (distance === best.distance && compareText(key, best.key) < 0)) {
+        best = { key, distance };
+      }
+    }
+    return best?.key;
+  };
   const used = new Set(uses.map((use) => use.element));
   for (const element of Array.from(document.body.querySelectorAll("*"))) {
     if (!(element instanceof view.HTMLElement) || used.has(element)) continue;
@@ -409,14 +433,16 @@ function collectFontInventory(document: Document, limits: BrowserFontLimits): Fo
     const computed = view.getComputedStyle(element);
     const parsedFamilies = parseCssFontFamilyTokens(computed.fontFamily);
     if (parsedFamilies.length === 0) continue;
-    const key = requestKey({
+    const descriptor = {
       familyStack: parsedFamilies.map(({ name }) => name),
       familyKinds: parsedFamilies.map(({ kind }) => kind),
       style: faceStyle(computed.fontStyle),
       weight: faceWeight(computed.fontWeight),
       stretch: faceStretch(computed.fontStretch),
-    });
-    if (!requests.has(key)) continue;
+    };
+    const exactKey = requestKey(descriptor);
+    const key = requests.has(exactKey) ? exactKey : closestRequestKey(descriptor);
+    if (key === undefined) continue;
     uses.push({ element, requestKey: key, originalStyle: element.getAttribute("style") });
   }
   const ordered = Array.from(requests, ([key, request]) => ({ key, request }))

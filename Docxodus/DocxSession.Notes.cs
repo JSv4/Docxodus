@@ -105,7 +105,7 @@ public sealed partial class DocxSession
 
     private EditResult InsertNote(bool isFootnote, string anchorId, int characterOffset, string markdownPayload)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var opName = isFootnote ? "InsertFootnote" : "InsertEndnote";
 
         var target = FindAnchor(anchorId);

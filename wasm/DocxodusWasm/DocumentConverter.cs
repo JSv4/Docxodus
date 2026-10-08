@@ -45,7 +45,7 @@ public partial class DocumentConverter
         }
         catch (Exception ex)
         {
-            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+            return SerializeError(ex.Message, ex.GetType().Name);
         }
     }
 
@@ -448,7 +448,7 @@ public partial class DocumentConverter
         }
         catch (Exception ex)
         {
-            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+            return SerializeError(ex.Message, ex.GetType().Name);
         }
     }
 
@@ -475,7 +475,7 @@ public partial class DocumentConverter
         }
         catch (Exception ex)
         {
-            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+            return SerializeError(ex.Message, ex.GetType().Name);
         }
     }
 
@@ -519,7 +519,7 @@ public partial class DocumentConverter
         }
         catch (Exception ex)
         {
-            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+            return SerializeError(ex.Message, ex.GetType().Name);
         }
     }
 
@@ -599,7 +599,7 @@ public partial class DocumentConverter
         }
         catch (Exception ex)
         {
-            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+            return SerializeError(ex.Message, ex.GetType().Name);
         }
     }
 
@@ -636,7 +636,7 @@ public partial class DocumentConverter
         }
         catch (Exception ex)
         {
-            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+            return SerializeError(ex.Message, ex.GetType().Name);
         }
     }
 
@@ -663,7 +663,7 @@ public partial class DocumentConverter
         }
         catch (Exception ex)
         {
-            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+            return SerializeError(ex.Message, ex.GetType().Name);
         }
     }
 
@@ -706,7 +706,7 @@ public partial class DocumentConverter
         }
         catch (Exception ex)
         {
-            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+            return SerializeError(ex.Message, ex.GetType().Name);
         }
     }
 
@@ -809,7 +809,7 @@ public partial class DocumentConverter
         }
         catch (Exception ex)
         {
-            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+            return SerializeError(ex.Message, ex.GetType().Name);
         }
     }
 
@@ -907,7 +907,7 @@ public partial class DocumentConverter
         }
         catch (Exception ex)
         {
-            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+            return SerializeError(ex.Message, ex.GetType().Name);
         }
     }
 
@@ -980,7 +980,7 @@ public partial class DocumentConverter
         }
         catch (Exception ex)
         {
-            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+            return SerializeError(ex.Message, ex.GetType().Name);
         }
     }
 
@@ -1085,7 +1085,7 @@ public partial class DocumentConverter
         }
         catch (Exception ex)
         {
-            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+            return SerializeError(ex.Message, ex.GetType().Name);
         }
     }
 
@@ -1127,7 +1127,7 @@ public partial class DocumentConverter
         }
         catch (Exception ex)
         {
-            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+            return SerializeError(ex.Message, ex.GetType().Name);
         }
     }
 
@@ -1161,7 +1161,7 @@ public partial class DocumentConverter
         }
         catch (Exception ex)
         {
-            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+            return SerializeError(ex.Message, ex.GetType().Name);
         }
     }
 
@@ -1215,7 +1215,7 @@ public partial class DocumentConverter
         }
         catch (Exception ex)
         {
-            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+            return SerializeError(ex.Message, ex.GetType().Name);
         }
     }
 
@@ -1279,7 +1279,7 @@ public partial class DocumentConverter
         }
         catch (Exception ex)
         {
-            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+            return SerializeError(ex.Message, ex.GetType().Name);
         }
     }
 
@@ -1321,7 +1321,7 @@ public partial class DocumentConverter
         }
         catch (Exception ex)
         {
-            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+            return SerializeError(ex.Message, ex.GetType().Name);
         }
     }
 
@@ -1370,7 +1370,7 @@ public partial class DocumentConverter
         }
         catch (Exception ex)
         {
-            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+            return SerializeError(ex.Message, ex.GetType().Name);
         }
     }
 
@@ -1438,7 +1438,7 @@ public partial class DocumentConverter
         }
         catch (Exception ex)
         {
-            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+            return SerializeError(ex.Message, ex.GetType().Name);
         }
     }
 
@@ -1472,7 +1472,7 @@ public partial class DocumentConverter
         }
         catch (Exception ex)
         {
-            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+            return SerializeError(ex.Message, ex.GetType().Name);
         }
     }
 
@@ -1506,7 +1506,7 @@ public partial class DocumentConverter
         }
         catch (Exception ex)
         {
-            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+            return SerializeError(ex.Message, ex.GetType().Name);
         }
     }
 
@@ -1559,7 +1559,7 @@ public partial class DocumentConverter
         }
         catch (Exception ex)
         {
-            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+            return SerializeError(ex.Message, ex.GetType().Name);
         }
     }
 
@@ -1998,7 +1998,7 @@ public partial class DocumentConverter
         }
         catch (Exception ex)
         {
-            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+            return SerializeError(ex.Message, ex.GetType().Name);
         }
     }
 
@@ -2160,7 +2160,7 @@ public partial class DocumentConverter
         }
         catch (Exception ex)
         {
-            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+            return SerializeError(ex.Message, ex.GetType().Name);
         }
     }
 
@@ -2204,13 +2204,14 @@ public partial class DocumentConverter
         };
     }
 
-    internal static string SerializeError(string error, string? type = null, string? stackTrace = null)
+    internal static string SerializeError(string error, string? type = null)
     {
+        // No stack trace: the wire error is for callers, and a trace is server internals
+        // (issue #961). Message and exception type are the whole contract.
         var response = new ErrorResponse
         {
             Error = error,
             Type = type,
-            StackTrace = stackTrace
         };
         return JsonSerializer.Serialize(response, DocxodusJsonContext.Default.ErrorResponse);
     }

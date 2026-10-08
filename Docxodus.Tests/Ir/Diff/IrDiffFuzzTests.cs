@@ -59,7 +59,7 @@ public class IrDiffFuzzTests
     /// Measured when the differential half was retired in v11.0.0.
     /// </summary>
     private const int ExpectedZeroRevisionCases = 0;
-    private const string Author = "Open-Xml-PowerTools";
+    private const string Author = "Docxodus";
 
     private static readonly IrReaderOptions ReadOpts =
         new() { RetainSources = false, RevisionView = RevisionView.Accept };

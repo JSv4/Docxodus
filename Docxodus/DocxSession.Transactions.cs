@@ -30,7 +30,7 @@ public sealed partial class DocxSession
         int? actualMatchCount = null)
     {
         if (preconditions is null) return null;
-        if (_disposed) return new EditError(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return refusal;
 
         var target = !string.IsNullOrEmpty(preconditions.AnchorId)
             ? CurrentPreconditionTarget(preconditions.AnchorId)
@@ -97,7 +97,9 @@ public sealed partial class DocxSession
         ArgumentNullException.ThrowIfNull(mutation);
         lock (_mutationGate)
         {
-            var error = EvaluatePreconditions(preconditions);
+            // Refuse before the mutation runs, so a corrupted session reports SessionCorrupted even
+            // from an op whose own result cannot say so (undo/redo answer only true or false).
+            var error = MutationRefusal() ?? EvaluatePreconditions(preconditions);
             return error is null
                 ? mutation(this)
                 : new EditResult { Success = false, Error = error };
@@ -869,8 +871,8 @@ public sealed partial class DocxSession
         ArgumentException.ThrowIfNullOrWhiteSpace(previewId);
         lock (_mutationGate)
         {
-            if (_disposed)
-                return CommitPreviewFailure(EditErrorCode.SessionDisposed, "session disposed", null);
+            if (MutationRefusal() is { } refusal)
+                return CommitPreviewFailure(refusal.Code, refusal.Message, null);
             if (!RetainedPreviews.TryGet(previewId, out var retained))
             {
                 return CommitPreviewFailure(
@@ -929,9 +931,9 @@ public sealed partial class DocxSession
             }
             catch (Exception ex)
             {
-                RecordFailedOp(ex);
+                var failure = RecordFailedOp(ex);
                 _deliveryEvidence?.Abandon(evidence);
-                return CommitPreviewFailure(EditErrorCode.InternalError, ex.Message, retention);
+                return CommitPreviewFailure(failure.Code, failure.Message, retention);
             }
             if (evidence is not null)
                 _deliveryEvidence!.CompleteDirect(evidence, new[] { new EditResult { Success = true } });

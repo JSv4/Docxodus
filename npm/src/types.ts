@@ -330,7 +330,7 @@ export interface ConversionOptions {
  * Options for document comparison
  */
 export interface CompareOptions {
-  /** Author name for tracked changes (default: "Docxodus") */
+  /** Author name for tracked changes (default: the engine's, "Docxodus") */
   authorName?: string;
   /** Whether comparison is case-insensitive (default: false) */
   caseInsensitive?: boolean;
@@ -415,7 +415,7 @@ export enum DocxDiffFormatComparison {
  * every field is optional and an omitted field uses the engine default.
  */
 export interface DocxDiffSettings {
-  /** Author stamped on revisions and markup (default "Open-Xml-PowerTools"). */
+  /** Author stamped on revisions and markup (default "Docxodus"). */
   authorForRevisions?: string;
   /** Pin revision dates to a fixed epoch for byte-identical output (default true). */
   deterministic?: boolean;
@@ -798,6 +798,9 @@ export interface VersionInfo {
 export interface ErrorResponse {
   error: string;
   type?: string;
+  /**
+   * @deprecated Never populated: the engine stopped putting stack traces on the wire (issue #961).
+   */
   stackTrace?: string;
 }
 
@@ -1631,30 +1634,30 @@ export interface DocxodusWasmExports {
     CompareDocuments: (
       originalBytes: Uint8Array,
       modifiedBytes: Uint8Array,
-      authorName: string
+      authorName: string | null
     ) => Uint8Array;
     CompareDocumentsToHtml: (
       originalBytes: Uint8Array,
       modifiedBytes: Uint8Array,
-      authorName: string
+      authorName: string | null
     ) => string;
     CompareDocumentsToHtmlWithOptions: (
       originalBytes: Uint8Array,
       modifiedBytes: Uint8Array,
-      authorName: string,
+      authorName: string | null,
       renderTrackedChanges: boolean
     ) => string;
     CompareDocumentsToHtmlFull: (
       originalBytes: Uint8Array,
       modifiedBytes: Uint8Array,
-      authorName: string,
+      authorName: string | null,
       caseInsensitive: boolean,
       renderTrackedChanges: boolean
     ) => string;
     CompareDocumentsWithOptions: (
       originalBytes: Uint8Array,
       modifiedBytes: Uint8Array,
-      authorName: string,
+      authorName: string | null,
       caseInsensitive: boolean
     ) => Uint8Array;
     GetRevisionsJson: (comparedDocBytes: Uint8Array) => string;
@@ -1953,6 +1956,7 @@ export interface DocxodusWasmExports {
     MoveBookmark: (handle: number, name: string, startAnchor: string, startOffset: number, endAnchor: string, endOffset: number) => string;
     RemoveBookmark: (handle: number, name: string) => string;
     ListRevisions: (handle: number) => string;
+    ListRevisionsFiltered?: (handle: number, filterJson: string) => string;
     ListRevisionRepairs?: (handle: number) => string;
     RepairRevisions?: (handle: number, repairsJson: string) => string;
     AcceptRevision: (handle: number, revisionId: string) => string;
@@ -1986,12 +1990,12 @@ export interface DocxodusWasmExports {
       spanLength: number,
       newInner: string,
     ) => string;
-    FindPlaceholders: (handle: number, kinds: number, scope: number, contextChars: number, boundary: number) => string;
+    FindPlaceholders: (handle: number, kinds: number, scope: number, contextChars: number | null, boundary: number) => string;
     FindPlaceholdersWithCitations: (
       handle: number,
       kinds: number,
       scope: number,
-      contextChars: number,
+      contextChars: number | null,
       boundary: number,
       requestJson: string,
     ) => string;
@@ -2135,7 +2139,10 @@ export type EditErrorCode =
   | "unsupported_image_markup"
   | "linked_image_read_only"
   | "invalid_image_layout"
-  | "internal_error";
+  | "internal_error"
+  /** A failed edit's rollback also failed, so the document may be half-changed. Every later
+   * mutation is refused with this code; close the session and reopen it from known-good bytes. */
+  | "session_corrupted";
 
 export interface AnchorRef {
   id: string;
@@ -3500,6 +3507,21 @@ export interface GrepOptions {
   boundary?: number;
   /** Attach citations only if this exact registered layout is still valid. */
   citation?: PageCitationRequest;
+  /** Return at most this many matches, in document order. Omitted returns them all. */
+  maxResults?: number;
+}
+
+/**
+ * Narrows {@link DocxSession.listRevisions} to the entries matching every field set here.
+ * `author`, `changeType` (the entry's `type`), `family` and `resolutionStatus` ignore case;
+ * `partUri` is exact.
+ */
+export interface RevisionListFilter {
+  author?: string;
+  changeType?: string;
+  family?: string;
+  resolutionStatus?: string;
+  partUri?: string;
 }
 
 /**

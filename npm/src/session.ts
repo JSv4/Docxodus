@@ -80,6 +80,7 @@ import type {
   CrossReferenceOptions,
   ReplaceOptions,
   RevisionListEntry,
+  RevisionListFilter,
   RevisionRepairProposal,
   RevisionRepairRequest,
   RevisionRepairResult,
@@ -997,10 +998,11 @@ export class DocxSession {
   setCellShading(
     cellAnchorId: string,
     fill: string | null,
-    scope: TableShadingScope = "cell",
+    scope?: TableShadingScope,
   ): EditResult {
+    // An omitted scope takes the engine's default ("cell"), declared once in the facade.
     return JSON.parse(
-      this.wasm.SetCellShading(this.handle, cellAnchorId, fill ?? "", scope),
+      this.wasm.SetCellShading(this.handle, cellAnchorId, fill ?? "", scope ?? ""),
     ) as EditResult;
   }
 
@@ -1105,12 +1107,13 @@ export class DocxSession {
    */
   insertTableOfContents(
     anchorId: string,
-    pos: "before" | "after" = "before",
+    pos?: "before" | "after",
     options?: TableOfContentsOptions
   ): EditResult {
+    // An omitted position takes the engine's default for reference fields ("before").
     return JSON.parse(
       this.wasm.InsertTableOfContents(
-        this.handle, anchorId, pos, options ? JSON.stringify(options) : "")
+        this.handle, anchorId, pos ?? "", options ? JSON.stringify(options) : "")
     ) as EditResult;
   }
 
@@ -1121,12 +1124,13 @@ export class DocxSession {
    */
   insertTableOfFigures(
     anchorId: string,
-    pos: "before" | "after" = "before",
+    pos?: "before" | "after",
     options?: TableOfFiguresOptions
   ): EditResult {
+    // An omitted position takes the engine's default for reference fields ("before").
     return JSON.parse(
       this.wasm.InsertTableOfFigures(
-        this.handle, anchorId, pos, options ? JSON.stringify(options) : "")
+        this.handle, anchorId, pos ?? "", options ? JSON.stringify(options) : "")
     ) as EditResult;
   }
 
@@ -1137,12 +1141,13 @@ export class DocxSession {
    */
   insertTableOfAuthorities(
     anchorId: string,
-    pos: "before" | "after" = "before",
+    pos?: "before" | "after",
     options?: TableOfAuthoritiesOptions
   ): EditResult {
+    // An omitted position takes the engine's default for reference fields ("before").
     return JSON.parse(
       this.wasm.InsertTableOfAuthorities(
-        this.handle, anchorId, pos, options ? JSON.stringify(options) : "")
+        this.handle, anchorId, pos ?? "", options ? JSON.stringify(options) : "")
     ) as EditResult;
   }
 
@@ -1524,7 +1529,15 @@ export class DocxSession {
    * footers, footnotes, and endnotes. Ids are stable while the underlying markup
    * exists and address {@link acceptRevision}/{@link rejectRevision}; authors/dates
    * are the markup's own (no accept/reject re-diff). */
-  listRevisions(): RevisionListEntry[] {
+  listRevisions(filter?: RevisionListFilter): RevisionListEntry[] {
+    if (filter && Object.values(filter).some((v) => v != null)) {
+      if (!this.wasm.ListRevisionsFiltered) {
+        throw new Error("This WASM bundle predates filtered revision listing; rebuild docxodus.");
+      }
+      return JSON.parse(
+        this.wasm.ListRevisionsFiltered(this.handle, JSON.stringify(filter)),
+      ) as RevisionListEntry[];
+    }
     return JSON.parse(this.wasm.ListRevisions(this.handle)) as RevisionListEntry[];
   }
 
@@ -1861,7 +1874,7 @@ export class DocxSession {
     const scope = opts.scope ?? 1; // Body
     const maxPasses = opts.maxPasses ?? 8;
     const preserveDollarPrefix = opts.preserveDollarPrefix ?? true;
-    const contextChars = opts.contextChars ?? 80;
+    const contextChars = opts.contextChars;
     const boundary = opts.boundary ?? ContextBoundary.Char;
     const coalesceEmpty = opts.coalesceWhitespaceAroundEmptyFill ?? false;
 
@@ -1942,15 +1955,16 @@ export class DocxSession {
   findPlaceholders(
     kinds: number = PlaceholderKinds.All,
     scope: number = 1,
-    contextChars: number = 80,
+    contextChars?: number,
     boundary: number = ContextBoundary.Char,
     citation?: PageCitationRequest,
   ): TemplatePlaceholder[] {
+    // An omitted contextChars takes the engine's default (80), declared once in DocxSession.
     const json = citation
       ? this.wasm.FindPlaceholdersWithCitations(
-          this.handle, kinds, scope, contextChars, boundary, JSON.stringify(citation),
+          this.handle, kinds, scope, contextChars ?? null, boundary, JSON.stringify(citation),
         )
-      : this.wasm.FindPlaceholders(this.handle, kinds, scope, contextChars, boundary);
+      : this.wasm.FindPlaceholders(this.handle, kinds, scope, contextChars ?? null, boundary);
     return JSON.parse(json) as TemplatePlaceholder[];
   }
 

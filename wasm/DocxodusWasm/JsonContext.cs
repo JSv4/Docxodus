@@ -83,7 +83,6 @@ public class ErrorResponse
 {
     public string Error { get; set; } = "";
     public string? Type { get; set; }
-    public string? StackTrace { get; set; }
 }
 
 public class VersionInfo

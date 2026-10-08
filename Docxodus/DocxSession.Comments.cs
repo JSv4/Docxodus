@@ -33,7 +33,7 @@ public sealed partial class DocxSession
     /// </summary>
     public EditResult RemoveComment(string commentAnchorId)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
 
         var target = FindAnchor(commentAnchorId);
         if (target is null)
@@ -145,7 +145,7 @@ public sealed partial class DocxSession
         string anchorId, CharSpan? span, string author, string markdownPayload,
         string? initials = null, DateTime? date = null)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
 
         var target = FindAnchor(anchorId);
         if (target is null)
@@ -209,7 +209,7 @@ public sealed partial class DocxSession
         string revisionId, string author, string markdownPayload,
         string? initials = null, DateTime? date = null)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (string.IsNullOrEmpty(revisionId))
             return EditResult.Fail(EditErrorCode.RevisionNotFound, "revision id is empty");
 
@@ -355,7 +355,7 @@ public sealed partial class DocxSession
         string parentCommentAnchorId, string author, string markdownPayload,
         string? initials = null, DateTime? date = null)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
 
         var parentTarget = FindAnchor(parentCommentAnchorId);
         if (parentTarget is null)
@@ -472,7 +472,7 @@ public sealed partial class DocxSession
     /// </summary>
     public EditResult SetCommentResolved(string commentAnchorId, bool resolved)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
 
         var target = FindAnchor(commentAnchorId);
         if (target is null)
@@ -555,7 +555,7 @@ public sealed partial class DocxSession
     /// </summary>
     public EditResult UpdateComment(string commentAnchorId, string markdownPayload)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
 
         var target = FindAnchor(commentAnchorId);
         if (target is null)
@@ -664,7 +664,7 @@ public sealed partial class DocxSession
     /// </summary>
     public EditResult InsertTable(string anchorId, Position pos, int rows, int cols, TableInsertOptions? options = null)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (rows < 1 || cols < 1)
             return EditResult.Fail(EditErrorCode.MalformedMarkdown, "table needs >= 1 row and >= 1 column", anchorId);
         var target = FindAnchor(anchorId);

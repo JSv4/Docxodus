@@ -32,7 +32,7 @@ public sealed partial class DocxSession
     /// </summary>
     public EditResult ApplyFormatToSubstring(string anchorId, string substring, FormatOp op)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (string.IsNullOrEmpty(substring))
             return EditResult.Fail(EditErrorCode.MalformedMarkdown, "substring must be non-empty", anchorId);
 
@@ -62,7 +62,7 @@ public sealed partial class DocxSession
     /// </summary>
     public EditResult ApplyFormat(TextMatch match, FormatOp op)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (match is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "match is null");
         return ApplyFormat(
             match.EnclosingAnchor.Anchor.Id,
@@ -72,7 +72,7 @@ public sealed partial class DocxSession
 
     public EditResult ApplyFormat(string anchorId, CharSpan? span, FormatOp op)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (op is null) return EditResult.Fail(EditErrorCode.MalformedMarkdown, "null format op", anchorId);
         var target = FindAnchor(anchorId);
         if (target is null)
@@ -158,7 +158,7 @@ public sealed partial class DocxSession
 
     public EditResult SetParagraphStyle(string anchorId, string styleId)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var target = FindAnchor(anchorId);
         if (target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, "anchor not found", anchorId);
@@ -287,7 +287,7 @@ public sealed partial class DocxSession
     /// </summary>
     public EditResult SetParagraphFormat(string anchorId, ParagraphFormatOp op)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var target = FindAnchor(anchorId);
         if (target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, "anchor not found", anchorId);
@@ -444,7 +444,7 @@ public sealed partial class DocxSession
     /// </summary>
     public EditResult InsertHorizontalRule(string anchorId, Position pos, ParagraphBorderEdge? rule = null)
     {
-        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         var target = FindAnchor(anchorId);
         if (target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);

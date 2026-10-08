@@ -2263,6 +2263,7 @@ Errors are grouped by what the agent should do in response, not by where in the 
 | Use `Raw.GetXml(anchor)` as a template, mutate, resubmit | `MalformedXml`, `DisallowedNamespace`, `IncompatibleElementType`, `ValidationFailed` |
 | Stop, reopen, or accept "no more history" | `SessionDisposed`, `NothingToUndo`, `NothingToRedo` |
 | Should not happen; treat as a bug. Op is rolled back, safe to retry once or report. Full exception is on `session.LastInternalError` | `InternalError` |
+| Close the session and reopen it from the last known-good bytes. A failed op's rollback also failed, so the document may be half-changed (`session.IsCorrupted`, cause on `session.LastRollbackError`). The failing call and every later mutation report it; reads are not refused | `SessionCorrupted` |
 
 For batched lookups (an agent that just enumerated 50 anchors and wants
 previews for all of them), use `session.GetAnchorInfos(ids)` — a single pass

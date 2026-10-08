@@ -227,20 +227,28 @@ static void Settle()
 static Stat Measure<T>(int n, Func<T> act)
 {
     var samples = new double[n];
+    var allocs = new double[n];
     // precise: true flushes every heap's allocation context. The imprecise counter can lag by
     // hundreds of MB under server GC (CI once read 50 MB for a case that allocates 270 MB), which
     // is fatal for perf.yml's allocation gate.
-    var alloc0 = GC.GetTotalAllocatedBytes(precise: true);
+    //
+    // Even the precise counter occasionally jumps under server GC: one read in a few hundred lands
+    // gigabytes high or low (CI read 873 MB, and a local probe -1,886 MB, for a case that allocates
+    // 231 MB every time; the per-thread counter stayed flat). A comparison allocates the same bytes
+    // on every run, so the median of the per-iteration deltas is the true figure and a single jumped
+    // read cannot move it, where an average over the whole window takes the jump in full.
     for (var i = 0; i < n; i++)
     {
+        var alloc0 = GC.GetTotalAllocatedBytes(precise: true);
         var sw = Stopwatch.StartNew();
         _ = act();
         sw.Stop();
+        allocs[i] = GC.GetTotalAllocatedBytes(precise: true) - alloc0;
         samples[i] = sw.Elapsed.TotalMilliseconds;
     }
-    var alloc = (GC.GetTotalAllocatedBytes(precise: true) - alloc0) / (double)n;
     Array.Sort(samples);
-    return new Stat(samples[0], samples[n / 2], samples[^1], samples.Average(), alloc);
+    Array.Sort(allocs);
+    return new Stat(samples[0], samples[n / 2], samples[^1], samples.Average(), allocs[n / 2]);
 }
 
 static StageTimes MeasureStages(WmlDocument left, WmlDocument right, int n, int warmup)

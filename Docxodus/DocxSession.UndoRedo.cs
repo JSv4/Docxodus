@@ -22,25 +22,29 @@ public sealed partial class DocxSession
     // ─── Undo / Redo ─────────────────────────────────────────────────────
 
     /// <summary>
-    /// The failure path every mutation's <c>catch</c> shares: keep the exception, roll the op back
-    /// (<see cref="RecordFailedOp"/>), and report <see cref="EditErrorCode.InternalError"/> with the
-    /// exception's message. One owner, so a change to how a failed mutation is handled lands once.
+    /// The failure path every mutation's <c>catch</c> shares: keep the exception, roll the op back,
+    /// and report the error <see cref="RecordFailedOp"/> chose. One owner, so a change to how a failed
+    /// mutation is handled lands once.
     /// </summary>
-    private EditResult FailInternal(Exception ex, string? anchorId = null)
-    {
-        RecordFailedOp(ex);
-        return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
-    }
+    private EditResult FailInternal(Exception ex, string? anchorId = null) =>
+        EditResult.Fail(RecordFailedOp(ex, anchorId));
 
     /// <summary>
-    /// Keep <paramref name="ex"/> as <see cref="LastInternalError"/> and restore the pre-op snapshot
-    /// (<see cref="RollbackFailedOp"/>), for a failing mutation whose result type is not an
-    /// <see cref="EditResult"/>.
+    /// Keep <paramref name="ex"/> as <see cref="LastInternalError"/>, restore the pre-op snapshot
+    /// (<see cref="RollbackFailedOp"/>), and return the error the failing call reports:
+    /// <see cref="EditErrorCode.InternalError"/> when the rollback put the document back, or
+    /// <see cref="EditErrorCode.SessionCorrupted"/> when the rollback failed too, so the caller learns
+    /// from this very call that the session may no longer be edited (issue #963).
     /// </summary>
-    private void RecordFailedOp(Exception ex)
+    private EditError RecordFailedOp(Exception ex, string? anchorId = null)
     {
         LastInternalError = ex;
         RollbackFailedOp();
+        return IsCorrupted
+            ? new EditError(EditErrorCode.SessionCorrupted,
+                $"{ex.Message} (and rolling the edit back failed too, so the document may be half-changed; "
+                + "reopen the session from known-good bytes)", anchorId)
+            : new EditError(EditErrorCode.InternalError, ex.Message, anchorId);
     }
 
     /// <summary>
@@ -68,6 +72,34 @@ public sealed partial class DocxSession
     /// A non-null <see cref="LastRollbackError"/> is the signal that the document may be
     /// inconsistent and the session should be reopened from bytes.</para>
     /// </remarks>
+    /// <summary>
+    /// Why this session may not mutate, or null when it may: <see cref="EditErrorCode.SessionDisposed"/>
+    /// after <see cref="Dispose"/>, <see cref="EditErrorCode.SessionCorrupted"/> once a failed op's
+    /// rollback also failed (<see cref="IsCorrupted"/>). Every mutation checks this before touching
+    /// the document, so a session whose package may be half-mutated refuses further edits instead of
+    /// building on it (issue #963). Reads, <see cref="Save()"/> and <see cref="Dispose"/> are not
+    /// refused, so a caller can inspect what happened before reopening from known-good bytes, though a
+    /// save can fail on whatever the half-applied op left behind.
+    /// </summary>
+    private EditError? MutationRefusal()
+    {
+        if (_disposed) return new EditError(EditErrorCode.SessionDisposed, "session disposed");
+        if (LastRollbackError is { } rollbackError)
+            return new EditError(EditErrorCode.SessionCorrupted,
+                "a failed edit could not be rolled back, so the document may be half-changed; reopen the "
+                + $"session from known-good bytes (rollback error: {rollbackError.Message})");
+        return null;
+    }
+
+    /// <summary><see cref="MutationRefusal"/> for the members with no error channel: throws
+    /// <see cref="ObjectDisposedException"/> after <see cref="Dispose"/>, and
+    /// <see cref="InvalidOperationException"/> on a corrupted session.</summary>
+    private void ThrowIfMutationRefused()
+    {
+        ThrowIfDisposed();
+        if (MutationRefusal() is { } refusal) throw new InvalidOperationException(refusal.Message);
+    }
+
     private void RollbackFailedOp()
     {
         var (preOp, ok) = _history.PopForUndo();
@@ -84,7 +116,7 @@ public sealed partial class DocxSession
 
     public bool Undo()
     {
-        if (_disposed) return false;
+        if (MutationRefusal() is not null) return false;
         if (_transactions.Count > 0) return false;
         _deliveryEvidence?.Reconcile();
         var nextVersion = NextVersion();
@@ -99,7 +131,7 @@ public sealed partial class DocxSession
 
     public bool Redo()
     {
-        if (_disposed) return false;
+        if (MutationRefusal() is not null) return false;
         if (_transactions.Count > 0) return false;
         _deliveryEvidence?.Reconcile();
         var nextVersion = NextVersion();

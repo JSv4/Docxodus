@@ -91,6 +91,17 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **Breaking default: a comparison that names no author now stamps `"Docxodus"`, not
+  `"Open-Xml-PowerTools"` (issue #961).** `DocxDiffSettings.AuthorForRevisions` defaults to the new
+  `DocxDiffSettings.DefaultAuthorForRevisions` (`"Docxodus"`), and the engine's internal settings read
+  the same constant. The browser always stamped `"Docxodus"` while .NET, Python (`DocxDiffSettings()`
+  in `docx_scalpel`) and the MCP and stdio hosts stamped `"Open-Xml-PowerTools"`, so the same
+  comparison carried a different `w:author` depending on where it ran. A caller who passes no author
+  now gets `w:author="Docxodus"` on every surface; to keep the old author, set
+  `AuthorForRevisions = "Open-Xml-PowerTools"` (`author_for_revisions="Open-Xml-PowerTools"` in
+  Python, `authorForRevisions` in the settings JSON, `authorName` in npm). The `redline` CLI is
+  unaffected; it keeps its own `--author` default of `Redline`.
+
 - **The browser bundles ship minified, with source maps.** `embed.bundle.js`, `embed.iife.js`,
   `editor.bundle.js`, `pagination.bundle.js`, `session.bundle.js`, `docxodus.worker.js` and the
   worker proxy were built unminified. `embed` drops from 195 KB to 117 KB gzip and `editor` from
@@ -148,6 +159,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- The npm worker's `convertDocxToHtml` now honors `stampAnchors` when it is the only option that
+  needs the complete conversion entry point (issue #954). The worker kept its own list of those
+  options, which had drifted from the main-thread `convertDocxToHtml`'s and lacked `stampAnchors`,
+  so `{ stampAnchors: true }` took the plain entry point and returned HTML without `data-anchor`
+  attributes. Both paths now read one shared list (`npm/src/conversion-options.ts`).
 - A misspelled option value for a session op is now refused instead of silently performing a different
   edit (issue #962). Every string-valued option the wire parsers read (insert position, header/footer
   kind, page-number field and number format, tracked-change mode, table border scope, shading scope,
@@ -159,12 +175,56 @@ All notable changes to this project will be documented in this file.
   (including `docxodus_open`'s `trackedChanges`, which had its own lenient copy), and the browser
   bridge throws. Before, `"outsid"` bordered every edge of a table, `"exactly"` set an at-least row height,
   and a misspelled list format removed the list.
+
+- The browser's `compareDocuments` / `compareDocumentsToHtml` route through the shared `DocxDiffOps`
+  and `HtmlConversionOps` facades (issue #961). The WASM `DocumentComparer` built its own settings and
+  called the HTML converter directly, so it stamped `DateTime.UtcNow` on every revision (browser
+  redlines were never byte-reproducible; they now take the core's deterministic date and match the
+  .NET front door byte for byte), kept its own author default, and rendered compare HTML without the
+  converter's image handling. WASM error JSON no longer carries a `StackTrace` field; the npm
+  `ErrorResponse.stackTrace` property is deprecated and never set.
+- A session op now behaves the same whichever transport calls it (issue #960). Each per-op default,
+  argument name, revision filter and result cap used to be supplied by the MCP server, the stdio host
+  and the WASM bridge separately, and they had drifted. They now live once, in the shared session
+  facade:
+  - **Table of contents, figures and authorities with no `position`.** These are placed before the
+    anchor on every transport. MCP used to put them after it, so an MCP call that omits `position`
+    now inserts the table above the anchor instead of below it.
+  - **Search context width.** It is `DocxSession.DefaultContextChars` (80) everywhere.
+  - **Cell shading scope and the repeat-header flag.** These defaults are read from the facade.
+  - **Argument names.** Each argument has one name across transports. The stdio host now reads
+    `shadingScope` for `set_cell_shading` and still accepts `scope`. MCP's `set_row_options` now
+    reads `repeatHeader` and still accepts `repeat`. Passing both spellings with different values
+    is refused.
+  - **Revision-list filtering and `maxResults`.** These were MCP-only and worked by re-parsing the
+    result. They now run in the facade, so the stdio host and the clients get them too:
+    - Python: `list_revisions(author=, change_type=, family=, resolution_status=, part_uri=)`, and
+      `max_results` on `grep` / `grep_cross_block`.
+    - npm: `listRevisions(filter)` and `GrepOptions.maxResults`.
+- A session whose failed edit could not be rolled back now stops accepting edits (issue #963). When an
+  op throws partway through, the session restores the pre-op snapshot. If that restore also throws,
+  the document may be half-changed. Before, this was only recorded on `LastRollbackError`: the caller
+  saw an ordinary `internal_error` and could keep editing the damaged document over MCP, Python or the
+  browser. Now the failing call reports the new `EditErrorCode.SessionCorrupted` (`session_corrupted`
+  on the wire). Every later mutation is refused with the same code, including undo/redo, which return
+  false. The new `DocxSession.IsCorrupted` flags this state. Reads are not refused, so a caller can
+  inspect the session, then close it and reopen from known-good bytes. Rolling back an enclosing
+  transaction restores its checkpoint and clears the state.
 - **`DocxodusDocument.SavePartAs` disposes the part stream it opens**, and the three places that
   copy a part's bytes into a buffer (`SavePartAs`, plus the image and media copies `DocumentBuilder`
   uses when merging) now read with `ReadExactly`. They used a single `Stream.Read`
   and ignored its return value. Today's package streams return the whole part in one call, so no
   truncation was observed, but `Stream.Read` is allowed to return fewer bytes. (#966)
 
+- **`DocxSession.Project()` reports current list numbers after a structural edit** (issue #959). Deleting
+  the first item of a numbered list used to leave the survivors numbered `2.` and `3.` until the
+  document was saved and reopened, and inserting, re-levelling or re-formatting a list item went stale
+  the same way. After each edit the session now checks whether anything list numbering depends on has
+  changed in front of a counted paragraph, and if so the next `Project()` (and the markdown,
+  `AutoNumberPrefix` and `FullText` built on it) recounts the lists from the document as it now
+  stands. Edits that leave numbering alone keep the counts they have. Counting a document's lists
+  also no longer re-walks the whole story once per list, which cuts the markdown projection's
+  allocations by about a tenth on a large form document.
 - Recorded how Word lays out a paragraph whose mark is taller than its runs (issue #949): it does not grow the
   last line, or any other. Word for the web's PDF of 10 pt runs under a 20 pt mark, at single and 1.15
   spacing, shows ordinary 10 pt line steps down to the next paragraph. The converter already matched because
@@ -533,6 +593,25 @@ All notable changes to this project will be documented in this file.
   such as `1)`); a longer one keeps its first 14
   characters followed by `…`. The shortening is lossy: the redline HTML shows such an item's old
   marker as `Three thousand…`, and the rest of the label is not recoverable from the output.
+- **A very long paragraph no longer exhausts memory in a comparison.** The word-level differ
+  aligned every paragraph pair with a full n×m table: about 1 GB for a 16,000-word paragraph and
+  1.6 GB at 20,000 words, enough to kill a browser (WASM) heap. The table now runs only on regions of
+  up to a fixed cell budget. A larger pair is first cut into such regions by matching its common
+  prefix and suffix and anchoring on words that occur once on each side (falling back to the rarest
+  shared word), all in linear memory. A 20,000-word pair now diffs in tens of megabytes and well under
+  a second. Ordinary paragraphs stay under the budget, so their output is unchanged. The differ's
+  documentation, which claimed it used Myers' algorithm, now describes what it does. (#964)
+- An exported paragraph's lines are sized from its configured font even when the paragraph's weight
+  or style differs from its text's (issue #956). The export points each element that holds no text
+  of its own at the resolved face of its font, so a paragraph's line box and the `lh` its auto line
+  spacing is built on use that face. The match required the same weight and style as the text. A
+  heading inherits the browser's bold while its runs are normal, so it matched nothing, and its lines
+  fell back to whatever the machine resolves the family to. For Calibri Light, which Chromium will
+  not alias to the contract's Carlito, that was Liberation Sans. A Calibri Light heading at Word's
+  1.08 spacing advanced 19.75 pt per line instead of LibreOffice's 21.1 pt, and the `pdf-final-revisions`
+  generated-PDF case scored ink F1 0.943. Such an element now takes the closest resolved face of the
+  same family stack: the heading advances 21.25 pt and the case scores 0.996. No font request is
+  added, so the render report is unchanged.
 - Exported footnote text sits on Word's baseline again (issue #955). Word anchors the footnote area to
   the bottom margin, and a note's lines are its FootnoteText paragraph's own, so the last note line's
   baseline is the margin less the note font's descent. The paginated converter wrapped each note's

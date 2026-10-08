@@ -363,7 +363,7 @@ public sealed partial class DocxSession
         string pattern,
         System.Text.RegularExpressions.RegexOptions options = System.Text.RegularExpressions.RegexOptions.None,
         ProjectionScopes scope = ProjectionScopes.Body,
-        int contextChars = 80,
+        int contextChars = DefaultContextChars,
         WhitespaceMode whitespace = WhitespaceMode.Preserve,
         ContextBoundary boundary = ContextBoundary.Char,
         PageCitationRequest? citationRequest = null)
@@ -484,7 +484,7 @@ public sealed partial class DocxSession
         string pattern,
         System.Text.RegularExpressions.RegexOptions options = System.Text.RegularExpressions.RegexOptions.None,
         ProjectionScopes scope = ProjectionScopes.Body,
-        int contextChars = 80,
+        int contextChars = DefaultContextChars,
         WhitespaceMode whitespace = WhitespaceMode.Preserve,
         ContextBoundary boundary = ContextBoundary.Char,
         PageCitationRequest? citationRequest = null)

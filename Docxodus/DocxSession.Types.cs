@@ -2061,6 +2061,11 @@ public enum EditErrorCode
     UnresolvedStructuralRevision,
 
     InternalError,
+
+    /// <summary>A failed op's rollback also failed (<see cref="DocxSession.LastRollbackError"/>), so
+    /// the document may be half-mutated. Every later mutation is refused with this code until the
+    /// session is closed and reopened from known-good bytes (issue #963).</summary>
+    SessionCorrupted,
 }
 
 public sealed class EditResult
@@ -2090,6 +2095,8 @@ public sealed class EditResult
 
     internal static EditResult Fail(EditErrorCode code, string message, string? anchorId = null) =>
         new() { Success = false, Error = new EditError(code, message, anchorId) };
+
+    internal static EditResult Fail(EditError error) => new() { Success = false, Error = error };
 }
 
 /// <summary>
