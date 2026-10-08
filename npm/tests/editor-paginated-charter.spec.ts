@@ -38,8 +38,11 @@ const FOOTER_TAB_STOP_PX = 312;
  * in `mountPaginated`): a fragment has one addressable head, and the editor's model is one
  * addressable node per anchor. Fragmentation is worth 1 page on this document, so it is not the
  * lever anyone reaching for a smaller number is looking for. Re-measure and update deliberately.
+ *
+ * 51 since #955: a footnote's lines are its note paragraph's own height again, so each page's note
+ * area reserves less and the body fits more (it was 53 while the notes carried the page font's strut).
  */
-const PAGES = 53;
+const PAGES = 51;
 const FOOTNOTE_CITATIONS = 94;
 const SECTIONS = 4;
 /** Body-scope blocks the editor makes addressable. Header, footer and note blocks are not these. */
