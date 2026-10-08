@@ -1,8 +1,8 @@
 {
   "schemaVersion": 2,
-  "description": "Per-case visual-parity regression ratchet (issue #395). Numbers only. The scheduled run fails when any case gets worse than recorded beyond `tolerance`. Refresh this file deliberately in the PR that changes rendering, so improvements and accepted regressions are reviewed in the diff. See npm/tests/visual-parity/README.md. PROVENANCE: `sourceCommit` is the tip of the issue-#950 branch stack as measured in CI on the pinned reference environment (visual-parity run 37552073014, update_record), before the stack was squash-merged; after the merge it is not an ancestor of main, but main's rendering code at the merge is that tree's. The drops it banks were traced in issue #950: the browser-page endnote and wrapped-image-tight SSIM drops come from #943 (Word's placement of auto line spacing), which moved body lines toward both Word and LibreOffice; the generated-PDF drops come from #850 (unrounded line pitch). Residuals are tracked in #955 (footnote placement) and #956 (Calibri Light metrics in the export).",
-  "recordedAt": "2026-10-07",
-  "sourceCommit": "bfb2156dcb219fed8b9c519a858dc5f957af6d11",
+  "description": "Per-case visual-parity regression ratchet (issue #395). Numbers only. The scheduled run fails when any case gets worse than recorded beyond `tolerance`. Refresh this file deliberately in the PR that changes rendering, so improvements and accepted regressions are reviewed in the diff. See npm/tests/visual-parity/README.md. PROVENANCE: `sourceCommit` is the issue-#955 branch as measured in CI on the pinned reference environment (visual-parity run 37715886650, update_record), before the branch was squash-merged; after the merge it is not an ancestor of main, but main's rendering code at the merge is that tree's. The only change from the previous record (run 37552073014, #950) is the footnote case, an accepted drop approved by the maintainer: #955 makes a note's lines its FootnoteText paragraph's own, which moves the note text onto Word's baseline and the separator rule down onto the converter's documented model of Word (the baseline of an empty line above the first note). LibreOffice draws its rule higher; the old rule sat within the ink tolerance of it only because an oversized note strut pushed it up, so ink F1 against LibreOffice falls while the page moves toward Word.",
+  "recordedAt": "2026-10-08",
+  "sourceCommit": "a42fa5f70b170689656ec49d2b69611f6ac3eb13",
   "environment": {
     "libreoffice": "25.8",
     "chromium": "143",
@@ -87,9 +87,9 @@
         "docxodus": 1,
         "libreoffice": 1
       },
-      "severity": "close",
-      "ssim": 0.9956,
-      "worstInkF1": 0.99271
+      "severity": "minor",
+      "ssim": 0.9947,
+      "worstInkF1": 0.90757
     },
     {
       "id": "inline-image",
