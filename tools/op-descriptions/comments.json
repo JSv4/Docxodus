@@ -1,0 +1,124 @@
+{
+  "$comment": "One description of the native-comment session ops and how each transport names them (issue #982). SessionOpDescriptionDriftTests checks every transport against it; see docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names; a transport that spells one differently lists it under argNames, and a transport-specific default under defaults. Both are recorded divergences, not the target; this family's are tracked in issue #1014.",
+  "family": "comments",
+  "ops": [
+    {
+      "op": "addComment",
+      "facade": "AddComment",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "span", "type": "charSpan", "required": false },
+        { "name": "author", "type": "string", "required": true },
+        { "name": "initials", "type": "string", "required": false },
+        { "name": "date", "type": "string", "required": false },
+        { "name": "markdown", "type": "markdown", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "AddComment" },
+        "npm": { "method": "addComment" },
+        "python": { "method": "add_comment" },
+        "stdio": { "op": "add_comment" },
+        "mcp": { "tool": "docxodus_comment", "action": "add", "defaults": { "markdown": "" } }
+      }
+    },
+    {
+      "op": "addCommentToRevision",
+      "facade": "AddCommentToRevision",
+      "result": "EditResult",
+      "args": [
+        { "name": "revisionId", "type": "string", "required": true },
+        { "name": "author", "type": "string", "required": true },
+        { "name": "initials", "type": "string", "required": false },
+        { "name": "date", "type": "string", "required": false },
+        { "name": "markdown", "type": "markdown", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "AddCommentToRevision" },
+        "npm": { "method": "addCommentToRevision" },
+        "python": { "method": "add_comment_to_revision" },
+        "stdio": { "op": "add_comment" },
+        "mcp": { "tool": "docxodus_comment", "action": "add", "defaults": { "markdown": "" } }
+      }
+    },
+    {
+      "op": "addCommentReply",
+      "facade": "AddCommentReply",
+      "result": "EditResult",
+      "args": [
+        { "name": "commentAnchorId", "type": "anchor", "required": true },
+        { "name": "author", "type": "string", "required": true },
+        { "name": "initials", "type": "string", "required": false },
+        { "name": "date", "type": "string", "required": false },
+        { "name": "markdown", "type": "markdown", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "AddCommentReply" },
+        "npm": { "method": "addCommentReply" },
+        "python": { "method": "add_comment_reply" },
+        "stdio": { "op": "add_comment_reply", "argNames": { "commentAnchorId": "parentAnchorId" } },
+        "mcp": { "tool": "docxodus_comment", "action": "reply", "defaults": { "markdown": "" } }
+      }
+    },
+    {
+      "op": "updateComment",
+      "facade": "UpdateComment",
+      "result": "EditResult",
+      "args": [
+        { "name": "commentAnchorId", "type": "anchor", "required": true },
+        { "name": "markdown", "type": "markdown", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "UpdateComment" },
+        "npm": { "method": "updateComment" },
+        "python": { "method": "update_comment" },
+        "stdio": { "op": "update_comment", "argNames": { "commentAnchorId": "anchorId" } },
+        "mcp": { "tool": "docxodus_comment", "action": "update" }
+      }
+    },
+    {
+      "op": "setCommentResolved",
+      "facade": "SetCommentResolved",
+      "result": "EditResult",
+      "args": [
+        { "name": "commentAnchorId", "type": "anchor", "required": true },
+        { "name": "resolved", "type": "boolean", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "SetCommentResolved" },
+        "npm": { "method": "setCommentResolved" },
+        "python": { "method": "set_comment_resolved" },
+        "stdio": { "op": "set_comment_resolved", "argNames": { "commentAnchorId": "anchorId" } },
+        "mcp": { "tool": "docxodus_comment", "action": "resolve", "defaults": { "resolved": true } }
+      }
+    },
+    {
+      "op": "removeComment",
+      "facade": "RemoveComment",
+      "result": "EditResult",
+      "args": [
+        { "name": "commentAnchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "RemoveComment" },
+        "npm": { "method": "removeComment" },
+        "python": { "method": "remove_comment" },
+        "stdio": { "op": "remove_comment", "argNames": { "commentAnchorId": "anchorId" } },
+        "mcp": { "tool": "docxodus_comment", "action": "remove" }
+      }
+    },
+    {
+      "op": "listComments",
+      "facade": "ListComments",
+      "result": "CommentListEntry[]",
+      "args": [],
+      "transports": {
+        "wasm": { "method": "ListComments" },
+        "npm": { "method": "listComments" },
+        "python": { "method": "list_comments" },
+        "stdio": { "op": "list_comments" },
+        "mcp": { "tool": "docxodus_comment", "action": "list" }
+      }
+    }
+  ]
+}
