@@ -148,6 +148,17 @@ All notable changes to this project will be documented in this file.
   measured, at 28–32 MB and three to four times faster startup, but is not used yet: its Linux
   binaries need glibc 2.34, and the other platforms are untested. Findings and measurements are
   in `docs/architecture/cli_trimming_and_native_aot.md`.
+- `ListItemRetrieverSettings.DefaultListItemTextImplementations` is now a read-only property that
+  returns a new copy of the built-in locale implementations on every read (issue #974). It was a
+  public, writable static `Dictionary` that every settings object shared, so a caller adding a locale
+  to one settings object changed list numbering for every conversion in the process, on every
+  thread. Code that reads the defaults or copies them into its own settings compiles unchanged; code
+  that assigned the static field or relied on editing it to change global behaviour must now pass
+  its implementations through `ListItemRetrieverSettings.ListItemTextImplementations` or
+  `WmlToHtmlConverterSettings.ListItemImplementations`. Callers compiled against an earlier version
+  must recompile, because a field became a property. `DocxSession` also documents its threading
+  contract: a session is not thread-safe, and a host sharing one across threads must serialize
+  every call.
 
 ### Deprecated
 
@@ -159,6 +170,13 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Symbol mapping no longer corrupts its process-wide tables when documents are processed on several
+  threads at once (issue #974). `UnicodeMapper` keeps one map from `w:sym` elements to characters
+  for the whole process, and `SymToChar` checked and added to it without a lock, so concurrent
+  `OpenXmlRegex` replacements could throw a duplicate-key error or leave the map corrupt. Both
+  tables and the private-use counter now change under one lock. `CharToRunChild` also returns a copy
+  of the mapped `w:sym` rather than the map's own element, which the first caller used to place into
+  its document.
 - The npm worker's `convertDocxToHtml` now honors `stampAnchors` when it is the only option that
   needs the complete conversion entry point (issue #954). The worker kept its own list of those
   options, which had drifted from the main-thread `convertDocxToHtml`'s and lacked `stampAnchors`,

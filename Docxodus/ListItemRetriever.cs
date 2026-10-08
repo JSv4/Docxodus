@@ -13,7 +13,7 @@ namespace Docxodus
 {
     public class ListItemRetrieverSettings
     {
-        public static Dictionary<string, Func<string, int, string?, string?>> DefaultListItemTextImplementations =
+        private static readonly IReadOnlyDictionary<string, Func<string, int, string?, string?>> BuiltInListItemTextImplementations =
             new Dictionary<string, Func<string, int, string?, string?>>()
             {
                 {"fr-FR", ListItemTextGetter_fr_FR.GetListItemText},
@@ -22,6 +22,15 @@ namespace Docxodus
                 {"sv-SE", ListItemTextGetter_sv_SE.GetListItemText},
                 {"zh-CN", ListItemTextGetter_zh_CN.GetListItemText},
             };
+
+        /// <summary>
+        /// The built-in locale-specific list-item text implementations, keyed by culture name.
+        /// Each read returns a new dictionary: adding to or removing from it changes only that copy,
+        /// never the defaults other callers and other threads see.
+        /// </summary>
+        public static Dictionary<string, Func<string, int, string?, string?>> DefaultListItemTextImplementations =>
+            new Dictionary<string, Func<string, int, string?, string?>>(BuiltInListItemTextImplementations);
+
         public Dictionary<string, Func<string, int, string?, string?>> ListItemTextImplementations;
         public ListItemRetrieverSettings()
         {
