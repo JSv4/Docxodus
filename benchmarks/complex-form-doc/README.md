@@ -23,7 +23,7 @@ Every row below is one `Bench(...)` label the harness prints as `[bench] <stage>
 | `DocxDiff.Compare` | `DocxDiff.Compare` | timing |
 | `DocxDiff.GetRevisions` | `DocxDiff.GetRevisions` | revision count |
 | `DocxDiff edit script + semantic changes` | `DocxDiff.GetEditScriptJson`, `GetSemanticChangesJson` | payload sizes |
-| `DocxDiff round-trip invariants` | `RevisionProcessor` over the redline | **accept-all ≡ revised text**, **reject-all ≡ baseline text**, no schema findings added |
+| `DocxDiff accept-all + reject-all` | `RevisionProcessor` over the redline | **accept-all ≡ revised text**, **reject-all ≡ baseline text**, no schema findings added |
 | `redline -> HTML with tracked-change markup` | `WmlToHtmlConverter` with `RenderTrackedChanges` | timing |
 
 "No schema findings added" is measured against the *source document's own* validator
@@ -40,10 +40,16 @@ form document can be passed instead; see the edit-script note below.
 ## Running
 
 ```bash
-dotnet run --project benchmarks/complex-form-doc -- TestFiles/NVCA-Model-COI.docx [edits.json] [--out DIR] [--stats-json FILE]
+dotnet run --project benchmarks/complex-form-doc -- TestFiles/NVCA-Model-COI.docx [edits.json] [--out DIR] [--stats-json FILE] [--iterations N]
 ```
 
-Each `[bench]` line reports the stage's wall time and the bytes it allocated. `--stats-json`
+Each stage runs `--iterations` times (default 3), and each `[bench]` line reports the median
+wall time and the median bytes allocated across those runs. One reading of the process-wide
+allocation counter can jump under server GC; the median of the per-run readings cannot be moved
+by a single jump. Only the first run prints its checks and counts toward the exit code. Checks
+that call into other libraries (schema validation through `OpenXmlValidator`) run outside the
+measured stage: the validator's caches may or may not survive a collection, so its allocation
+differs from one process to the next by about 30 MiB. `--stats-json`
 writes the same figures as JSON; CI's allocation gate (`perf.yml`, described in
 `benchmarks/docxdiff-stress/README.md`) compares them between a pull request and its base, and
 fails the job if this harness's checks fail on the pull request.

@@ -28,7 +28,7 @@ for h in "${harnesses[@]}"; do
 done
 
 stress() { dotnet run -c Release --project "$1/benchmarks/docxdiff-stress" -- "$doc" --iterations 3 --warmup 1 --stats-json "$out/$2-stress.json"; }
-form() { dotnet run -c Release --project "$1/benchmarks/complex-form-doc" -- "$doc" --stats-json "$out/$2-form.json"; }
+form() { dotnet run -c Release --project "$1/benchmarks/complex-form-doc" -- "$doc" --iterations 3 --stats-json "$out/$2-form.json"; }
 
 # The base side only needs to produce numbers; a failed invariant check there is main's problem,
 # not this PR's, so only a missing stats file counts as "could not run".
