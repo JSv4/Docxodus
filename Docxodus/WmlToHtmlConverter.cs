@@ -2376,6 +2376,14 @@ namespace Docxodus
             sb.AppendLine("    margin-right: 2pt;");
             sb.AppendLine("}");
 
+            // A number rendered from the note's own reference run carries that run's size and
+            // raise (issue #1003); the generic styling above would shrink and raise it again.
+            sb.AppendLine(".footnote-number[data-note-run] {");
+            sb.AppendLine("    vertical-align: baseline;");
+            sb.AppendLine("    font-size: inherit;");
+            sb.AppendLine("    margin-right: 0;");
+            sb.AppendLine("}");
+
             // Footnote content (inline with number)
             sb.AppendLine(".footnote-content {");
             sb.AppendLine("    display: contents;");
@@ -4371,9 +4379,7 @@ namespace Docxodus
                     new XAttribute("data-display-number", displayNumber),
                     new XAttribute("class", "footnote-item"),
                     SourceAnchorIdentityAttribute(settings, fn),
-                    new XElement(Xhtml.span,
-                        new XAttribute("class", "footnote-number"),
-                        new XText(displayNumber)),
+                    RenderPaginatedFootnoteNumber(wordDoc, settings, fn, displayNumber),
                     new XElement(Xhtml.span,
                         new XAttribute("class", "footnote-content"),
                         content));
@@ -4382,6 +4388,37 @@ namespace Docxodus
             }
 
             return registry.HasElements ? registry : null;
+        }
+
+        /// <summary>
+        /// The number at the start of a paginated note. In Word it is the note's own
+        /// <c>w:footnoteRef</c> run, formatted like any run of the note paragraph (normally the
+        /// FootnoteReference character style: superscript at the note text's size). Rendering it
+        /// from that run puts it where Word does; the generic number this replaced was set in the
+        /// page's default font and raised by CSS, and sat 4.66 pt above the note text where Word
+        /// puts it 3 pt above (issue #1003). The run is converted from a copy of the note with the
+        /// marker replaced by the display number, so the note's own content conversion, which skips
+        /// marker-only runs, is unchanged. A note with no <c>w:footnoteRef</c> run keeps the
+        /// generic number.
+        /// </summary>
+        private static XElement RenderPaginatedFootnoteNumber(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement footnote, string displayNumber)
+        {
+            var copy = new XElement(footnote);
+            var marker = copy.Descendants(W.footnoteRef).FirstOrDefault();
+            var run = marker?.Parent;
+            if (marker == null || run == null || run.Name != W.r)
+            {
+                return new XElement(Xhtml.span,
+                    new XAttribute("class", "footnote-number"),
+                    new XText(displayNumber));
+            }
+
+            marker.ReplaceWith(new XElement(W.t, displayNumber));
+            return new XElement(Xhtml.span,
+                new XAttribute("class", "footnote-number"),
+                new XAttribute("data-note-run", "true"),
+                ConvertToHtmlTransform(wordDoc, settings, run, false, 0m));
         }
 
         private static XElement? RenderHeadersSection(WordprocessingDocument wordDoc,

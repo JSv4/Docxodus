@@ -2596,6 +2596,32 @@ every reader prefers `w:start`/`w:end`, the strict-schema name.
 
 ---
 
+## Footnote numbers are the note's own reference run, and Word raises superscripts less than the browser (issue #1003)
+
+**Reproducer** (`TestFiles/CA/CA008-Footnote-Reference.docx`, `word/footnotes.xml`):
+
+```xml
+<w:footnote w:id="1">
+  <w:p>
+    <w:pPr><w:pStyle w:val="FootnoteText"/></w:pPr>            <!-- 10 pt -->
+    <w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr>  <!-- vertAlign superscript -->
+      <w:footnoteRef/></w:r>
+    <w:r><w:t xml:space="preserve"> This is a test.</w:t></w:r>
+  </w:p>
+</w:footnote>
+```
+
+| Renderer | Number baseline above the note text's baseline |
+|---|---|
+| Word | 3 pt (0.30 em) |
+| LibreOffice | not measured |
+| Docxodus before #1003 (generic number in the page font, CSS `super` at 0.85 em) | 4.66 pt |
+| Docxodus after #1003 (the note's own run, `<sup>` at the note's size) | 4.59 pt |
+
+**Analysis.** Word draws the number by rendering the `w:footnoteRef` run with that run's own formatting, so the number takes the FootnoteReference style's superscript at the note text's size. The paginated converter now does the same: `RenderPaginatedFootnoteNumber` converts a copy of that run with the display number in place of the marker. Most of the gap remains, because every superscript is raised by the browser's `vertical-align: super`. Chromium raises it by about font size / 3 + 1 px, independent of the face: 0.426, 0.408, 0.396 and 0.371 of the font size at 8, 10, 12 and 20 pt. Word raises this one by 0.30 of the font size. One data point cannot tell whether Word uses a fixed fraction or the face's OS/2 superscript offset. Tracked in #1016.
+
+**Code.** `WmlToHtmlConverter.RenderPaginatedFootnoteNumber`, the `.footnote-number[data-note-run]` rule, and `ConvertRun`'s `w:vertAlign` → `<sup>`/`<sub>`.
+
 ## Theme Colors
 
 ### `w:color`/`w:fill` are a CACHE; `w:themeColor`/`w:themeFill` are the authority
