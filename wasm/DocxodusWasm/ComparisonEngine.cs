@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Runtime.Versioning;
 using Docxodus;
+using Docxodus.Internal;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
@@ -46,20 +47,15 @@ internal static class ComparisonEngine
             // Two minimal in-memory documents that differ by a single word, so DocxDiff produces
             // a real insertion/deletion and walks its full alignment + markup path rather than an
             // empty fast-exit.
-            var original = new WmlDocument("warmup-original.docx", BuildSeedDocx("warmup original"));
-            var modified = new WmlDocument("warmup-modified.docx", BuildSeedDocx("warmup modified"));
-
-            var settings = new DocxDiffSettings
-            {
-                AuthorForRevisions = "Docxodus",
-                DateTimeForRevisions = DateTime.UtcNow.ToString("o"),
-            };
-
-            var result = DocxCompare.Compare(original, modified, settings);
+            // The same facade entry the typed compare exports use, so warming it warms theirs.
+            var redline = DocxDiffOps.CompareFrontDoor(
+                BuildSeedDocx("warmup original"),
+                BuildSeedDocx("warmup modified"),
+                DocxDiffOps.FrontDoorSettings(author: null, caseInsensitive: false));
 
             // Touch the revision-extraction path too, since callers that warm the compare path
             // almost always read revisions next.
-            using (var warmSession = new DocxSession(result.DocumentByteArray))
+            using (var warmSession = new DocxSession(redline))
                 _ = warmSession.ListRevisions();
 
             return "ok";

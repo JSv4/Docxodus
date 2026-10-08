@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -74,6 +75,12 @@ internal sealed record HtmlConversionOptions
     /// re-rendering one gets the marker even if its profile forgot to say it was paginated.
     /// </summary>
     public bool StampPageNumberFieldsInRunningStories { get; init; }
+
+    /// <summary>
+    /// Author name to CSS colour for rendered tracked changes (see
+    /// <see cref="WmlToHtmlConverterSettings.AuthorColors"/>). Null leaves the converter's palette.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? AuthorColors { get; init; }
 }
 
 /// <summary>
@@ -168,6 +175,7 @@ internal static class HtmlConversionOps
             StampAnchors = options.StampAnchors,
             StampCanonicalSourceAnchors = options.StampAnchors || renderPagination,
             SemanticLists = options.SemanticLists,
+            AuthorColors = options.AuthorColors is null ? null : new Dictionary<string, string>(options.AuthorColors),
             // Embed images as base64 data URIs — no SkiaSharp needed (WASM-safe).
             ImageHandler = CreateBase64ImageHandler(),
         };

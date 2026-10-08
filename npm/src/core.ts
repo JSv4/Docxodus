@@ -681,7 +681,6 @@ function parseError(result: string): ErrorResponse {
   return {
     error: parsed.Error || parsed.error,
     type: parsed.Type || parsed.type,
-    stackTrace: parsed.StackTrace || parsed.stackTrace,
   };
 }
 
@@ -988,14 +987,14 @@ export async function compareDocuments(
     result = exports.DocumentComparer.CompareDocumentsWithOptions(
       originalBytes,
       modifiedBytes,
-      options?.authorName ?? "Docxodus",
+      options?.authorName ?? null,
       options.caseInsensitive
     );
   } else {
     result = exports.DocumentComparer.CompareDocuments(
       originalBytes,
       modifiedBytes,
-      options?.authorName ?? "Docxodus"
+      options?.authorName ?? null
     );
   }
 
@@ -1035,7 +1034,7 @@ export async function compareDocumentsToHtml(
     result = exports.DocumentComparer.CompareDocumentsToHtmlFull(
       originalBytes,
       modifiedBytes,
-      options?.authorName ?? "Docxodus",
+      options?.authorName ?? null,
       options.caseInsensitive,
       renderTrackedChanges
     );
@@ -1043,7 +1042,7 @@ export async function compareDocumentsToHtml(
     result = exports.DocumentComparer.CompareDocumentsToHtmlWithOptions(
       originalBytes,
       modifiedBytes,
-      options?.authorName ?? "Docxodus",
+      options?.authorName ?? null,
       renderTrackedChanges
     );
   }

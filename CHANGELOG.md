@@ -91,6 +91,17 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **Breaking default: a comparison that names no author now stamps `"Docxodus"`, not
+  `"Open-Xml-PowerTools"` (issue #961).** `DocxDiffSettings.AuthorForRevisions` defaults to the new
+  `DocxDiffSettings.DefaultAuthorForRevisions` (`"Docxodus"`), and the engine's internal settings read
+  the same constant. The browser always stamped `"Docxodus"` while .NET, Python (`DocxDiffSettings()`
+  in `docx_scalpel`) and the MCP and stdio hosts stamped `"Open-Xml-PowerTools"`, so the same
+  comparison carried a different `w:author` depending on where it ran. A caller who passes no author
+  now gets `w:author="Docxodus"` on every surface; to keep the old author, set
+  `AuthorForRevisions = "Open-Xml-PowerTools"` (`author_for_revisions="Open-Xml-PowerTools"` in
+  Python, `authorForRevisions` in the settings JSON, `authorName` in npm). The `redline` CLI is
+  unaffected; it keeps its own `--author` default of `Redline`.
+
 - **The browser bundles ship minified, with source maps.** `embed.bundle.js`, `embed.iife.js`,
   `editor.bundle.js`, `pagination.bundle.js`, `session.bundle.js`, `docxodus.worker.js` and the
   worker proxy were built unminified. `embed` drops from 195 KB to 117 KB gzip and `editor` from
@@ -164,6 +175,14 @@ All notable changes to this project will be documented in this file.
   (including `docxodus_open`'s `trackedChanges`, which had its own lenient copy), and the browser
   bridge throws. Before, `"outsid"` bordered every edge of a table, `"exactly"` set an at-least row height,
   and a misspelled list format removed the list.
+
+- The browser's `compareDocuments` / `compareDocumentsToHtml` route through the shared `DocxDiffOps`
+  and `HtmlConversionOps` facades (issue #961). The WASM `DocumentComparer` built its own settings and
+  called the HTML converter directly, so it stamped `DateTime.UtcNow` on every revision (browser
+  redlines were never byte-reproducible; they now take the core's deterministic date and match the
+  .NET front door byte for byte), kept its own author default, and rendered compare HTML without the
+  converter's image handling. WASM error JSON no longer carries a `StackTrace` field; the npm
+  `ErrorResponse.stackTrace` property is deprecated and never set.
 - A session op now behaves the same whichever transport calls it (issue #960). Each per-op default,
   argument name, revision filter and result cap used to be supplied by the MCP server, the stdio host
   and the WASM bridge separately, and they had drifted. They now live once, in the shared session

@@ -476,14 +476,14 @@ function handleCompare(
       result = exports.DocumentComparer.CompareDocumentsWithOptions(
         request.originalBytes,
         request.modifiedBytes,
-        options?.authorName ?? "Docxodus",
+        options?.authorName ?? null,
         options.caseInsensitive
       );
     } else {
       result = exports.DocumentComparer.CompareDocuments(
         request.originalBytes,
         request.modifiedBytes,
-        options?.authorName ?? "Docxodus"
+        options?.authorName ?? null
       );
     }
 
@@ -512,7 +512,7 @@ function handleCompareToHtml(
     const result = exports.DocumentComparer.CompareDocumentsToHtmlWithOptions(
       request.originalBytes,
       request.modifiedBytes,
-      options?.authorName ?? "Docxodus",
+      options?.authorName ?? null,
       renderTrackedChanges
     );
 
