@@ -2646,10 +2646,41 @@ every reader prefers `w:start`/`w:end`, the strict-schema name.
 | LibreOffice | not measured |
 | Docxodus before #1003 (generic number in the page font, CSS `super` at 0.85 em) | 4.66 pt |
 | Docxodus after #1003 (the note's own run, `<sup>` at the note's size) | 4.59 pt |
+| Docxodus after #1016 (Word's superscript size and raise, below) | 3.45 pt |
 
-**Analysis.** Word draws the number by rendering the `w:footnoteRef` run with that run's own formatting, so the number takes the FootnoteReference style's superscript at the note text's size. The paginated converter now does the same: `RenderPaginatedFootnoteNumber` converts a copy of that run with the display number in place of the marker. Most of the gap remains, because every superscript is raised by the browser's `vertical-align: super`. Chromium raises it by about font size / 3 + 1 px, independent of the face: 0.426, 0.408, 0.396 and 0.371 of the font size at 8, 10, 12 and 20 pt. Word raises this one by 0.30 of the font size. One data point cannot tell whether Word uses a fixed fraction or the face's OS/2 superscript offset. Tracked in #1016.
+**Analysis.** Word draws the number by rendering the `w:footnoteRef` run with that run's own formatting, so the number takes the FootnoteReference style's superscript at the note text's size. The paginated converter now does the same: `RenderPaginatedFootnoteNumber` converts a copy of that run with the display number in place of the marker. The rest of the gap came from how every superscript was raised, resolved by #1016 (next section).
 
-**Code.** `WmlToHtmlConverter.RenderPaginatedFootnoteNumber`, the `.footnote-number[data-note-run]` rule, and `ConvertRun`'s `w:vertAlign` → `<sup>`/`<sub>`.
+**Code.** `WmlToHtmlConverter.RenderPaginatedFootnoteNumber` and the `.footnote-number[data-note-run]` rule.
+
+## Superscript and subscript size and raise (issue #1016)
+
+**Reproducer.** A run with `<w:vertAlign w:val="superscript"/>` (or `subscript`) next to an ordinary run of the same `w:sz`, in several faces and sizes.
+
+Word reference PDFs of 8 faces at 8 to 288 pt give the following. Baselines in those PDFs fall on a 0.5 pt grid, so the large sizes are the precise ones:
+
+| Face | Superscript raise (em) | Size | Subscript drop (em) | OS/2 `ySuperscriptYOffset` (em) |
+|---|---|---|---|---|
+| Calibri | 0.335 | 0.65 | ~0.095 | 0.477 |
+| Aptos | 0.350 | 0.60 | ~0.075 | 0.350 |
+| Times New Roman | 0.354 | 0.65 | ~0.076 | 0.453 |
+| Arial | ~0.35 | 0.65 | ~0.073 | 0.477 |
+| Verdana | 0.354 | 0.65 | ~0.073 | 0.453 |
+| Georgia | 0.264 | 0.65 | ~0.076 | 0.265 |
+| Courier New | 0.292 | 0.65 | ~0.105 | 0.422 |
+| Cambria, up to 36 pt | 0.250 | 0.65 | ~0.08 | 0.246 |
+| Cambria, 72 pt and up | 0.380 | 0.60 | ~0.088 | 0.246 |
+
+| Renderer | Superscript | Subscript |
+|---|---|---|
+| Word | per face, above | per face, above |
+| Chromium `vertical-align: super` / `sub` with `font-size: smaller` (Docxodus before) | 0.35 em (36 pt) to 0.41 em (8 pt), at 0.83 | 0.22 em (36 pt) to 0.27 em (8 pt), at 0.83 |
+| Docxodus after | 0.345 em at 0.65 | 0.085 em at 0.65 |
+
+**Analysis.** No single rule reproduces Word. Not a fixed fraction: the raise ranges from 0.25 to 0.38 em. Not the face's OS/2 superscript offset: Georgia and Aptos follow it, but Calibri, Arial, Times New Roman, Verdana and Courier New are raised well below it. And not one size-dependent rule: Cambria changes both its raise and its size between 36 and 72 pt. Word's size follows each face's OS/2 `ySuperscriptYSize` (0.65, Aptos 0.60) apart from Cambria's large sizes. HTML cannot express a per-face rule without per-face metrics, so the converter uses fixed values. These have the smallest worst-case error across the faces most documents use (Calibri, Aptos, Times New Roman, Arial): within 0.01 em of Word's superscript raise for all four. Georgia, Courier New and Cambria stay off by up to 0.1 em.
+
+**Code.** `WmlToHtmlConverter.ScriptElement` and its constants, used by `ConvertRun` for `w:vertAlign`, by the footnote and endnote reference markers, and by the generic `.footnote-number` rule. `vertical-align` lengths are in the shrunken element's own em, so the raise is written as 0.345 / 0.65 em. `HtmlToWmlConverter` takes a `sup`/`sub` element's size from the text around it, so the smaller size does not round-trip into `w:sz`.
+
+**Tests.** `WmlToHtmlScriptPositionTests`.
 
 ## Theme Colors
 

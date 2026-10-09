@@ -2920,7 +2920,12 @@ namespace Docxodus.HtmlToWml
             // below already tolerate being absent.
             CssExpression colorProperty = element.GetProp("color")!;
             CssExpression? fontFamilyProperty = element.GetProp("font-family");
-            CssExpression? fontSizeProperty = element.GetProp("font-size");
+            // A superscript or subscript takes its size from the text around it: w:vertAlign already
+            // tells Word to shrink it, so a sup/sub element's own smaller font-size (which the
+            // DOCX-to-HTML converter writes to match Word's drawing, issue #1016) is not a size of its own.
+            var outermostScript = element.AncestorsAndSelf()
+                .LastOrDefault(e => e.Name == XhtmlNoNamespace.sup || e.Name == XhtmlNoNamespace.sub);
+            CssExpression? fontSizeProperty = (outermostScript?.Parent ?? element).GetProp("font-size");
             CssExpression textDecorationProperty = element.GetProp("text-decoration")!;
             CssExpression fontStyleProperty = element.GetProp("font-style")!;
             CssExpression fontWeightProperty = element.GetProp("font-weight")!;

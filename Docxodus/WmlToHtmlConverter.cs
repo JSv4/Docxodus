@@ -2370,8 +2370,8 @@ namespace Docxodus
             sb.AppendLine(".footnote-number {");
             sb.AppendLine("    font-weight: normal;");
             sb.AppendLine("    display: inline;");
-            sb.AppendLine("    vertical-align: super;");
-            sb.AppendLine("    font-size: 0.85em;");
+            sb.AppendLine($"    vertical-align: {ScriptRaiseCss(superscript: true)};");
+            sb.AppendLine($"    font-size: {ScriptSizeCss};");
             sb.AppendLine("    margin-right: 2pt;");
             sb.AppendLine("}");
 
@@ -4010,7 +4010,7 @@ namespace Docxodus
                 new XAttribute("id", $"fn-ref-{footnoteId}"),
                 new XAttribute("class", "footnote-ref"),
                 new XAttribute("data-footnote-id", footnoteId), // For pagination engine to track footnotes per page
-                new XElement(Xhtml.sup, displayNumber));
+                ScriptElement(Xhtml.sup, displayNumber));
 
             return anchor;
         }
@@ -4040,7 +4040,7 @@ namespace Docxodus
                 new XAttribute("href", $"#en-{endnoteId}"),
                 new XAttribute("id", $"en-ref-{endnoteId}"),
                 new XAttribute("class", "endnote-ref"),
-                new XElement(Xhtml.sup, displayNumber));
+                ScriptElement(Xhtml.sup, displayNumber));
 
             return anchor;
         }
@@ -7469,10 +7469,10 @@ namespace Docxodus
                 switch (vertAlignVal)
                 {
                     case "superscript":
-                        newContent = new XElement(Xhtml.sup, content);
+                        newContent = ScriptElement(Xhtml.sup, content);
                         break;
                     case "subscript":
-                        newContent = new XElement(Xhtml.sub, content);
+                        newContent = ScriptElement(Xhtml.sub, content);
                         break;
                 }
                 if (newContent != null && newContent.Nodes().Any())
@@ -7901,6 +7901,32 @@ namespace Docxodus
                 ? (decimal?) rPr.Elements(W.szCs).Attributes(W.val).FirstOrDefault()
                 : (decimal?) rPr.Elements(W.sz).Attributes(W.val).FirstOrDefault();
         }
+
+        /// <summary>
+        /// Word draws a <c>w:vertAlign</c> superscript or subscript at about 0.65 of the run's size,
+        /// raised about 0.345 of the size (superscript) or lowered about 0.085 (subscript), measured in
+        /// Word reference PDFs (issue #1016). Word's exact raise varies by face, so these are the values
+        /// with the smallest worst-case error across Calibri, Aptos, Times New Roman and Arial. The
+        /// browser's own <c>vertical-align: super</c> raises by about a third of the size plus a pixel
+        /// at 0.83 of the size, well above Word.
+        /// </summary>
+        private const decimal ScriptSizeRatio = 0.65m;
+        private const decimal SuperscriptRaiseRatio = 0.345m;
+        private const decimal SubscriptDropRatio = 0.085m;
+
+        private static string ScriptSizeCss => FormattableString.Invariant($"{ScriptSizeRatio}em");
+
+        /// <summary>The raise as a <c>vertical-align</c> length. An em there is the shrunken element's
+        /// own size, so the ratio to the run's size is divided by the script size.</summary>
+        private static string ScriptRaiseCss(bool superscript) => string.Format(NumberFormatInfo.InvariantInfo,
+            "{0:0.####}em", (superscript ? SuperscriptRaiseRatio : -SubscriptDropRatio) / ScriptSizeRatio);
+
+        /// <summary>A superscript or subscript element sized and raised as Word draws it. The one place
+        /// the converter shapes a <c>sup</c> or <c>sub</c>, so runs and note references agree.</summary>
+        private static XElement ScriptElement(XName name, object? content) =>
+            new XElement(name,
+                new XAttribute("style", $"vertical-align: {ScriptRaiseCss(name == Xhtml.sup)}; font-size: {ScriptSizeCss}"),
+                content);
 
         private static void DetermineRunMarks(XElement run, XElement? rPr, Dictionary<string, string> style, out XEntity? runStartMark, out XEntity? runEndMark)
         {

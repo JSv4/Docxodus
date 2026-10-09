@@ -64,7 +64,7 @@ public class DocxSessionNoteRenderTests
 
         // The body citation renders as a numbered superscript marker…
         Assert.Contains("class=\"footnote-ref\"", html);
-        Assert.Contains("<sup>1</sup>", html);
+        Assert.Matches("<sup[^>]*>1</sup>", html);
         // …and the note body renders in the footnotes section.
         Assert.Contains("THE NOTE BODY.", html);
     }

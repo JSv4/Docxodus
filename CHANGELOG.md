@@ -191,6 +191,17 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Superscript and subscript runs are drawn at Word's size and raise (issues #1016 and #1003). The HTML
+  converter used the browser's `vertical-align: super`/`sub` with `font-size: smaller`, which raises a
+  superscript about a third of the size plus a pixel at 0.83 of the size. Word reference PDFs put it at
+  0.65 of the size, raised by about 0.33 to 0.35 of the size in Calibri, Aptos, Times New Roman and
+  Arial, with a subscript about 0.085 lower. The `sup`/`sub` the converter writes now carry that size and
+  raise explicitly, from one set of constants shared by runs, footnote and endnote reference markers and
+  the paginated footnote number. On `CA008-Footnote-Reference.docx` the note number now sits 3.45 pt
+  above the note text (Word: 3 pt; before: 4.59 pt). Line pitch is unchanged. Converting the HTML back
+  to a document keeps the run's own size. Word's raise varies by face; the per-face measurements are in
+  `docs/ooxml_corner_cases.md`.
+
 - The MCP `docxodus_compare` tool compares through the `DocxCompare` front door (issue #1006), as the
   `redline` CLI and the browser's `compareDocuments` already did. Two-way and fan-out comparisons now
   accept each input's own pending tracked changes first, as Word's Compare does. The raw engine it ran
