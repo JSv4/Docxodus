@@ -243,8 +243,24 @@ All notable changes to this project will be documented in this file.
   before already compared the accepted view of the body, but it copied carried-over parts (headers,
   footers, unchanged notes) verbatim, so another reviewer's pending changes there leaked into the
   redline under their original author. Identical packages now return the baseline unchanged, as
-  `DocxCompare.Compare` does. N-way consolidate is unchanged. The Python `docx_diff_*` functions stay
-  on the raw engine, which they mirror; their docstrings now say so and show the opt-in.
+  `DocxCompare.Compare` does. The Python two-way `docx_diff_*` functions stay on the raw engine, which
+  they mirror; their docstrings now say so and show the opt-in.
+- **Breaking default: N-way consolidate now compares the accepted view of its inputs on every surface
+  (issue #1020).** The
+  new `DocxCompare.Consolidate` is the consolidate counterpart of `DocxCompare.Compare`: it accepts the
+  base's and every reviewer's own pending tracked changes before merging, as two-way comparison does.
+  Every transport's consolidate routes through the same policy: the MCP `docxodus_compare` consolidate
+  form, the browser's `docxDiffConsolidate` / `docxDiffGetConflicts` /
+  `docxDiffGetConsolidatedRevisions` / `docxDiffGetConsolidatedEditScript`, and Python's
+  `docx_diff_consolidate` and its three siblings. Before, they ran the engine's defaults, which already
+  merged the accepted view of the body but copied carried-over parts (headers, footers, unchanged notes)
+  from the base verbatim, so a base carrying pending changes there leaked them into the consolidated
+  redline under their original author. What changes for a caller who passes nothing: those parts come out
+  accepted, and rejecting every change in the consolidated redline now gives the base's accepted view
+  rather than the base with its pending changes. On those surfaces `preAcceptInputRevisions: false` is
+  ignored for consolidate; `preserveInputRevisions: true` still turns the pre-accept off. The raw .NET
+  `DocxDiff.Consolidate` is unchanged and keeps the old output. Comments and glossary parts are still
+  carried over as they were, as for two-way comparison.
 - The HTML converter reads `w:rtl` and `w:bidiVisual` as on/off values (issue #1011). It treated either
   element as "on" whenever it was present, so `<w:rtl w:val="0"/>`, which Google Docs writes on almost every
   run it exports, wrapped left-to-right text in right-to-left marks (U+200F). The browser then reordered the

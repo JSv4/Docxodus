@@ -541,7 +541,9 @@ def docx_diff_reject_revisions(redline: bytes) -> bytes:
 # ``docxDiffConsolidate`` / ``docxDiffGetConflicts`` /
 # ``docxDiffGetConsolidatedRevisions`` / ``docxDiffGetConsolidatedEditScript``
 # wrappers. All four are stateless: pass a base DOCX byte blob and a sequence
-# of reviewer blobs, get the result — no session.
+# of reviewer blobs, get the result — no session. Unlike the two-way
+# ``docx_diff_*`` calls, all four run the ``DocxCompare.Consolidate`` front-door
+# policy: the base and every reviewer are compared on their accepted view.
 
 
 def _consolidate_args(
@@ -573,11 +575,17 @@ def docx_diff_consolidate(
 ) -> bytes:
     """Consolidate reviewer DOCX blobs onto a base; return a redlined DOCX.
 
-    Mirrors .NET ``DocxDiff.Consolidate``. Diffs each reviewer's document
+    Mirrors .NET ``DocxCompare.Consolidate``. Diffs each reviewer's document
     against ``base``, merges the resulting edit scripts, resolves conflicts
     per ``settings.conflict_resolution``, and renders a single tracked-changes
     document. Accepting its revisions yields the consolidated result; rejecting
-    them yields ``base``.
+    them yields ``base`` with its own pending tracked changes accepted.
+
+    Like the other consolidate calls, this compares the ACCEPTED view of
+    ``base`` and of every reviewer, as Word's Compare does: tracked changes the
+    inputs already carry (in the body, headers, footers and notes) are accepted
+    first, so they never reach the redline under their original authors.
+    ``preserve_input_revisions`` still turns that pre-accept off.
     """
     result = _call("docx_diff_consolidate", _consolidate_args(base, reviewers, settings))
     if not isinstance(result, dict) or "docxB64" not in result:
