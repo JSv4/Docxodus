@@ -131,7 +131,7 @@
         "wasm": { "method": "SetRevisionAuthor" },
         "npm": { "method": "setRevisionAuthor" },
         "python": { "method": "set_revision_author" },
-        "stdio": { "op": "set_revision_author", "argNames": { "revisionAuthor": "author" } },
+        "stdio": { "op": "set_revision_author" },
         "mcp": { "tool": "docxodus_track_changes", "action": "set_mode" }
       }
     }

@@ -424,6 +424,8 @@ export interface DocxDiffSettings {
   /**
    * Accept every pre-existing revision on both inputs before comparing (default false).
    * This flattens prior authorship; `preserveInputRevisions` takes precedence when both are set.
+   * The consolidate functions (`docxDiffConsolidate` and its siblings) always pre-accept the base
+   * and every reviewer, whatever this says: they compare the accepted view, as Word's Compare does.
    */
   preAcceptInputRevisions?: boolean;
   /**

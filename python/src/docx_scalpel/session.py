@@ -541,7 +541,9 @@ def docx_diff_reject_revisions(redline: bytes) -> bytes:
 # ``docxDiffConsolidate`` / ``docxDiffGetConflicts`` /
 # ``docxDiffGetConsolidatedRevisions`` / ``docxDiffGetConsolidatedEditScript``
 # wrappers. All four are stateless: pass a base DOCX byte blob and a sequence
-# of reviewer blobs, get the result — no session.
+# of reviewer blobs, get the result — no session. Unlike the two-way
+# ``docx_diff_*`` calls, all four run the ``DocxCompare.Consolidate`` front-door
+# policy: the base and every reviewer are compared on their accepted view.
 
 
 def _consolidate_args(
@@ -573,11 +575,17 @@ def docx_diff_consolidate(
 ) -> bytes:
     """Consolidate reviewer DOCX blobs onto a base; return a redlined DOCX.
 
-    Mirrors .NET ``DocxDiff.Consolidate``. Diffs each reviewer's document
+    Mirrors .NET ``DocxCompare.Consolidate``. Diffs each reviewer's document
     against ``base``, merges the resulting edit scripts, resolves conflicts
     per ``settings.conflict_resolution``, and renders a single tracked-changes
     document. Accepting its revisions yields the consolidated result; rejecting
-    them yields ``base``.
+    them yields ``base`` with its own pending tracked changes accepted.
+
+    Like the other consolidate calls, this compares the ACCEPTED view of
+    ``base`` and of every reviewer, as Word's Compare does: tracked changes the
+    inputs already carry (in the body, headers, footers and notes) are accepted
+    first, so they never reach the redline under their original authors.
+    ``preserve_input_revisions`` still turns that pre-accept off.
     """
     result = _call("docx_diff_consolidate", _consolidate_args(base, reviewers, settings))
     if not isinstance(result, dict) or "docxB64" not in result:
@@ -743,7 +751,7 @@ class DocxSession:
 
     def set_revision_author(self, author: str | None) -> None:
         """Author stamped on subsequent tracked-change markup; ``None`` restores the ``"docxodus"`` default."""
-        self._call("set_revision_author", {"author": author})
+        self._call("set_revision_author", {"revisionAuthor": author})
 
     def undo(self) -> bool:
         """Undo one snapshot. Returns ``True`` if the undo ring had something to pop."""
@@ -1259,13 +1267,13 @@ class DocxSession:
         return tuple(AnchorTarget._from_wire(a) for a in result)
 
     def list_hyperlinks(self, scopes: ProjectionScopes = ProjectionScopes.ALL) -> tuple[HyperlinkInfo, ...]:
-        result = self._call("list_hyperlinks", {"scopes": int(scopes)})
+        result = self._call("list_hyperlinks", {"scope": int(scopes)})
         return tuple(HyperlinkInfo._from_wire(item) for item in result)
 
     def add_hyperlink(self, anchor_id: str, span: CharSpan, kind: HyperlinkKind,
                       target: str) -> EditResult:
         return EditResult._from_wire(self._call("add_hyperlink", {
-            "anchorId": anchor_id, "start": span.start, "length": span.length,
+            "anchorId": anchor_id, "startOffset": span.start, "length": span.length,
             "kind": kind.value, "target": target,
         }))
 
@@ -1284,7 +1292,7 @@ class DocxSession:
         return ImageCapabilities._from_wire(self._call("get_image_capabilities", {}))
 
     def list_images(self, scopes: ProjectionScopes = ProjectionScopes.ALL) -> tuple[ImageOccurrence, ...]:
-        result = self._call("list_images", {"scopes": int(scopes)})
+        result = self._call("list_images", {"scope": int(scopes)})
         return tuple(ImageOccurrence._from_wire(item) for item in result)
 
     def insert_image(self, anchor_id: str, character_offset: int, image_bytes: bytes,
@@ -1330,7 +1338,7 @@ class DocxSession:
     def list_content_controls(
         self, scopes: ProjectionScopes = ProjectionScopes.ALL
     ) -> tuple[ContentControlInfo, ...]:
-        result = self._call("list_content_controls", {"scopes": int(scopes)})
+        result = self._call("list_content_controls", {"scope": int(scopes)})
         return tuple(ContentControlInfo._from_wire(item) for item in result)
 
     def fill_content_control_text(self, anchor_id: str, text: str,
@@ -1400,7 +1408,7 @@ class DocxSession:
             "remove_repeating_section_item", {"itemAnchorId": item_anchor_id}))
 
     def list_bookmarks(self, scopes: ProjectionScopes = ProjectionScopes.ALL) -> tuple[BookmarkInfo, ...]:
-        result = self._call("list_bookmarks", {"scopes": int(scopes)})
+        result = self._call("list_bookmarks", {"scope": int(scopes)})
         return tuple(BookmarkInfo._from_wire(item) for item in result)
 
     def add_bookmark(self, name: str, range: DocumentRange) -> EditResult:
@@ -1686,7 +1694,7 @@ class DocxSession:
         return EditResult._from_wire(
             self._call(
                 "merge_paragraphs",
-                {"firstAnchorId": first_anchor_id, "secondAnchorId": second_anchor_id},
+                {"anchorId": first_anchor_id, "secondAnchorId": second_anchor_id},
             )
         )
 
@@ -1705,7 +1713,7 @@ class DocxSession:
         return EditResult._from_wire(
             self._call(
                 "set_header_text",
-                {"anchorId": anchor_id, "kind": kind.value, "markdown": markdown},
+                {"bodyAnchorId": anchor_id, "kind": kind.value, "markdown": markdown},
             )
         )
 
@@ -1717,7 +1725,7 @@ class DocxSession:
         return EditResult._from_wire(
             self._call(
                 "set_footer_text",
-                {"anchorId": anchor_id, "kind": kind.value, "markdown": markdown},
+                {"bodyAnchorId": anchor_id, "kind": kind.value, "markdown": markdown},
             )
         )
 
@@ -1743,7 +1751,7 @@ class DocxSession:
         """
         args: dict[str, Any] = {"anchorId": anchor_id, "field": field.value}
         if format is not None:
-            args["format"] = format.value
+            args["numberFormat"] = format.value
         return EditResult._from_wire(self._call("insert_page_number_field", args))
 
     def insert_table_of_contents(
@@ -1905,7 +1913,7 @@ class DocxSession:
         return EditResult._from_wire(
             self._call(
                 "ensure_header_footer_visible",
-                {"anchorId": anchor_id, "kind": kind.value},
+                {"bodyAnchorId": anchor_id, "kind": kind.value},
             )
         )
 
@@ -2265,7 +2273,7 @@ class DocxSession:
     def apply_format(
         self, anchor_id: str, span: CharSpan | None, op: FormatOp
     ) -> EditResult:
-        args: dict[str, Any] = {"anchorId": anchor_id, "op": op.to_wire()}
+        args: dict[str, Any] = {"anchorId": anchor_id, "format": op.to_wire()}
         if span is not None:
             args["span"] = span.to_wire()
         return EditResult._from_wire(self._call("apply_format", args))
@@ -2276,7 +2284,7 @@ class DocxSession:
         return EditResult._from_wire(
             self._call(
                 "apply_format_by_substring",
-                {"anchorId": anchor_id, "substring": substring, "op": op.to_wire()},
+                {"anchorId": anchor_id, "substring": substring, "format": op.to_wire()},
             )
         )
 
@@ -2310,7 +2318,7 @@ class DocxSession:
         return EditResult._from_wire(
             self._call(
                 "set_paragraph_format",
-                {"anchorId": anchor_id, "op": op.to_wire()},
+                {"anchorId": anchor_id, "paragraphFormat": op.to_wire()},
             )
         )
 
@@ -2369,7 +2377,7 @@ class DocxSession:
         return EditResult._from_wire(
             self._call(
                 "set_list_start_override",
-                {"anchorId": anchor_id, "value": value},
+                {"anchorId": anchor_id, "startValue": value},
             )
         )
 
@@ -2443,7 +2451,7 @@ class DocxSession:
     ) -> EditResult:
         return EditResult._from_wire(self._call("merge_cells", {
             "cellAnchorId": cell_anchor_id, "rowSpan": row_span,
-            "columnSpan": column_span, "content": content,
+            "colSpan": column_span, "mergeContent": content,
         }))
 
     def unmerge_cells(self, cell_anchor_id: str) -> EditResult:

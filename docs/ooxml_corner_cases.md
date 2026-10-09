@@ -918,9 +918,17 @@ own revisions carried through can use the raw `DocxDiff` API with `PreserveInput
 the *revised* document's pending changes; see the section above and its one-sided round trip). Reproducing
 Word's exact retention as an opt-in profile is possible later if a caller needs Word's accept-all semantics.
 
+N-way consolidation follows the same policy (issue #1020). `DocxCompare.Consolidate`, and every
+transport's consolidate op through it, accepts the base and every reviewer copy first. Word's Combine
+would instead keep the inputs' revisions, but the consolidate renderer cannot carry them through: before
+this policy the engine merged the accepted body while copying unchanged headers, footers and notes from the
+base verbatim, so their pending markup leaked into the redline under its original author and rejecting all
+changes no longer reproduced either the base or its accepted view in those parts.
+
 ### Relevant code
 
-- `Docxodus/DocxCompare.cs` — `ApplyFrontDoorRevisionPolicy` (pre-accept only).
+- `Docxodus/DocxCompare.cs` — `ApplyFrontDoorRevisionPolicy` (pre-accept only) and its N-way counterpart
+  `ApplyFrontDoorConsolidatePolicy`, which `Consolidate` and `Internal/DocxDiffOps.cs` apply.
 - `Docxodus/DocxDiff.cs` — `PreAcceptInputRevisions`, `PreserveInputRevisions`.
 
 ### Tests
@@ -928,6 +936,8 @@ Word's exact retention as an opt-in profile is possible later if a caller needs 
 `Docxodus.Tests/DocxCompareOriginalPendingRevisionsTests.cs` pins every row above through the front door
 (redline markup, accept-all, reject-all, and that no change by the earlier author survives);
 `DocxCompareTests.FrontDoorPolicy_*` pin the policy flags themselves.
+`ConsolidateFrontDoorTests` pins the N-way policy through `DocxCompare.Consolidate`, the facade, the
+stdio host and the MCP consolidate form.
 
 ---
 

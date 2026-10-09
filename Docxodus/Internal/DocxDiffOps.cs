@@ -632,6 +632,11 @@ internal static class DocxDiffOps
     // Settings reuse the diff settings object (same camelCase fields parsed by
     // ParseSettings) and additionally carry an optional integer
     // "conflictResolution" (0=BaseWins,1=FirstReviewerWins,2=StackAll).
+    //
+    // Every op below is a front door: it compares the accepted view of the base
+    // and of every reviewer (DocxCompare.ApplyFrontDoorConsolidatePolicy, issue
+    // #1020), so a wire "preAcceptInputRevisions" is always on for consolidate.
+    // "preserveInputRevisions" still wins over it, as the engine documents.
 
     /// <summary>Consolidate N reviewer documents against a base; return the merged DOCX bytes.</summary>
     public static byte[] Consolidate(byte[] baseBytes, string reviewersJson, string? settingsJson)
@@ -641,7 +646,7 @@ internal static class DocxDiffOps
 
         var baseDoc = new WmlDocument("base.docx", baseBytes);
         var reviewers = ParseReviewers(reviewersJson);
-        var settings = ParseConsolidateSettings(settingsJson);
+        var settings = FrontDoorConsolidateSettings(settingsJson);
         return DocxDiff.Consolidate(baseDoc, reviewers, settings).DocumentByteArray;
     }
 
@@ -667,7 +672,7 @@ internal static class DocxDiffOps
     {
         var baseDoc = new WmlDocument("base.docx", baseBytes);
         var reviewers = ParseReviewers(reviewersJson);
-        var settings = ParseConsolidateSettings(settingsJson);
+        var settings = FrontDoorConsolidateSettings(settingsJson);
         var consolidation = DocxDiff.CreateConsolidation(baseDoc, reviewers, settings);
         return new DocxDiffConsolidatedProducts(
             redline ? consolidation.Consolidate().DocumentByteArray : null,
@@ -683,7 +688,7 @@ internal static class DocxDiffOps
 
         var baseDoc = new WmlDocument("base.docx", baseBytes);
         var revs = DocxDiff.GetConsolidatedRevisions(
-            baseDoc, ParseReviewers(reviewersJson), ParseConsolidateSettings(settingsJson));
+            baseDoc, ParseReviewers(reviewersJson), FrontDoorConsolidateSettings(settingsJson));
         return SerializeConsolidatedRevisions(revs);
     }
 
@@ -695,7 +700,7 @@ internal static class DocxDiffOps
 
         var baseDoc = new WmlDocument("base.docx", baseBytes);
         return DocxDiff.GetConsolidatedEditScriptJson(
-            baseDoc, ParseReviewers(reviewersJson), ParseConsolidateSettings(settingsJson));
+            baseDoc, ParseReviewers(reviewersJson), FrontDoorConsolidateSettings(settingsJson));
     }
 
     /// <summary>Consolidate; return the per-token conflict report as JSON.</summary>
@@ -706,7 +711,7 @@ internal static class DocxDiffOps
 
         var baseDoc = new WmlDocument("base.docx", baseBytes);
         var conflicts = DocxDiff.GetConflicts(
-            baseDoc, ParseReviewers(reviewersJson), ParseConsolidateSettings(settingsJson));
+            baseDoc, ParseReviewers(reviewersJson), FrontDoorConsolidateSettings(settingsJson));
         return SerializeConflicts(conflicts);
     }
 
@@ -749,6 +754,15 @@ internal static class DocxDiffOps
         }
         return reviewers;
     }
+
+    /// <summary>
+    /// The settings every consolidate op runs with: the wire settings
+    /// (<see cref="ParseConsolidateSettings"/>) under the front-door input-revision policy
+    /// (<see cref="DocxCompare.ApplyFrontDoorConsolidatePolicy"/>), so the base and every reviewer are
+    /// compared on their accepted view as two-way comparison compares them (issue #1020).
+    /// </summary>
+    private static DocxDiffConsolidateSettings FrontDoorConsolidateSettings(string? settingsJson) =>
+        DocxCompare.ApplyFrontDoorConsolidatePolicy(ParseConsolidateSettings(settingsJson));
 
     /// <summary>
     /// Parse consolidate settings: the same JSON object carries the diff fields

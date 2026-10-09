@@ -4220,6 +4220,8 @@ class DocxDiffSettings:
     date_time_for_revisions: str | None = None
     #: Accept every tracked revision already present in both inputs before diffing (default False).
     #: ``preserve_input_revisions`` wins when both policies are enabled.
+    #: The ``docx_diff_consolidate`` family always pre-accepts the base and every reviewer,
+    #: whatever this says: it compares the accepted view, as Word's Compare does.
     pre_accept_input_revisions: bool = False
     #: Preserve the inputs' existing tracked revisions, as Word's Combine does (default False).
     #: Word's Compare pre-accepts them instead (see ``pre_accept_input_revisions``).

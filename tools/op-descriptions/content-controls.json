@@ -1,5 +1,5 @@
 {
-  "$comment": "One description of the native content-control session ops and how each transport names them (issue #982). SessionOpDescriptionDriftTests checks every transport against it; see docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names; argNames, defaults, requires and absent on a transport are recorded divergences, not the target. scope is the MCP story filter; the stdio host takes the same filter as scopes, a ProjectionScopes flag integer. flattens (on mcp) records an object argument whose fields the MCP tool takes as top-level properties instead: field name -> MCP property.",
+  "$comment": "One description of the native content-control session ops and how each transport names them (issue #982). SessionOpDescriptionDriftTests checks every transport against it; see docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names; argNames, defaults, requires and absent on a transport are recorded divergences, not the target. scope is the story filter: MCP's token, or (on the stdio host and in Python) a ProjectionScopes flag integer, which DocxSessionJson.ParseProjectionScopes reads on both. flattens (on mcp) records an object argument whose fields the MCP tool takes as top-level properties instead: field name -> MCP property.",
   "family": "content-controls",
   "ops": [
     {
@@ -13,7 +13,7 @@
         "wasm": { "method": "ListContentControls" },
         "npm": { "method": "listContentControls" },
         "python": { "method": "list_content_controls" },
-        "stdio": { "op": "list_content_controls", "argNames": { "scope": "scopes" } },
+        "stdio": { "op": "list_content_controls" },
         "mcp": { "tool": "docxodus_content_controls", "action": "list" }
       }
     },

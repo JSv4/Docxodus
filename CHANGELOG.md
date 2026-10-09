@@ -211,6 +211,18 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- The stdio host (and so the `docx-scalpel` Python client) takes the same argument names as MCP for 16
+  session-op arguments (issue #1023). It used to spell them differently: `scopes` for `scope` on the
+  four listings, `op` for `format`/`paragraphFormat` on the formatting ops, `anchorId` for
+  `bodyAnchorId` on the header/footer ops, `format` for `numberFormat`, `start` for `startOffset`,
+  `value` for `startValue`, `author` for `revisionAuthor`, `columnSpan`/`content` for
+  `colSpan`/`mergeContent`, and `firstAnchorId` for `merge_paragraphs`' `anchorId`. A caller who
+  sent MCP's name got an error, or, for the optional ones, had the argument silently ignored. The host
+  now takes the MCP name and still accepts the old spelling as a deprecated alias (sending both with
+  different values is refused). `scope` accepts MCP's token (`"body"`, `"headers"`, ...) or a
+  `ProjectionScopes` mask on both transports, through one shared parser. The Python client sends the
+  new names; its methods are unchanged.
+
 - Superscript and subscript runs are drawn at Word's size and raise (issues #1016 and #1003). The HTML
   converter used the browser's `vertical-align: super`/`sub` with `font-size: smaller`, which raises a
   superscript about a third of the size plus a pixel at 0.83 of the size. Word reference PDFs put it at
@@ -243,8 +255,24 @@ All notable changes to this project will be documented in this file.
   before already compared the accepted view of the body, but it copied carried-over parts (headers,
   footers, unchanged notes) verbatim, so another reviewer's pending changes there leaked into the
   redline under their original author. Identical packages now return the baseline unchanged, as
-  `DocxCompare.Compare` does. N-way consolidate is unchanged. The Python `docx_diff_*` functions stay
-  on the raw engine, which they mirror; their docstrings now say so and show the opt-in.
+  `DocxCompare.Compare` does. The Python two-way `docx_diff_*` functions stay on the raw engine, which
+  they mirror; their docstrings now say so and show the opt-in.
+- **Breaking default: N-way consolidate now compares the accepted view of its inputs on every surface
+  (issue #1020).** The
+  new `DocxCompare.Consolidate` is the consolidate counterpart of `DocxCompare.Compare`: it accepts the
+  base's and every reviewer's own pending tracked changes before merging, as two-way comparison does.
+  Every transport's consolidate routes through the same policy: the MCP `docxodus_compare` consolidate
+  form, the browser's `docxDiffConsolidate` / `docxDiffGetConflicts` /
+  `docxDiffGetConsolidatedRevisions` / `docxDiffGetConsolidatedEditScript`, and Python's
+  `docx_diff_consolidate` and its three siblings. Before, they ran the engine's defaults, which already
+  merged the accepted view of the body but copied carried-over parts (headers, footers, unchanged notes)
+  from the base verbatim, so a base carrying pending changes there leaked them into the consolidated
+  redline under their original author. What changes for a caller who passes nothing: those parts come out
+  accepted, and rejecting every change in the consolidated redline now gives the base's accepted view
+  rather than the base with its pending changes. On those surfaces `preAcceptInputRevisions: false` is
+  ignored for consolidate; `preserveInputRevisions: true` still turns the pre-accept off. The raw .NET
+  `DocxDiff.Consolidate` is unchanged and keeps the old output. Comments and glossary parts are still
+  carried over as they were, as for two-way comparison.
 - The HTML converter reads `w:rtl` and `w:bidiVisual` as on/off values (issue #1011). It treated either
   element as "on" whenever it was present, so `<w:rtl w:val="0"/>`, which Google Docs writes on almost every
   run it exports, wrapped left-to-right text in right-to-left marks (U+200F). The browser then reordered the

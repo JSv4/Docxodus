@@ -714,13 +714,13 @@ internal static partial class Dispatcher
 
     private static string RunLinksAction(DocSession session, string action, JsonElement args) => action switch
     {
-        "list_hyperlinks" => $"{{\"hyperlinks\":{DocxSessionOps.ListHyperlinks(session.Handle, ParseLinkScopes(OptStr(args, "scope")))}}}",
+        "list_hyperlinks" => $"{{\"hyperlinks\":{DocxSessionOps.ListHyperlinks(session.Handle, Scopes(args))}}}",
         "add_hyperlink" => DocxSessionOps.AddHyperlink(session.Handle, Str(args, "anchorId"),
             Int(args, "startOffset"), Int(args, "length"), Str(args, "kind"), Str(args, "target")),
         "update_hyperlink" => DocxSessionOps.UpdateHyperlink(session.Handle,
             Str(args, "hyperlinkId"), Str(args, "kind"), Str(args, "target")),
         "remove_hyperlink" => DocxSessionOps.RemoveHyperlink(session.Handle, Str(args, "hyperlinkId")),
-        "list_bookmarks" => $"{{\"bookmarks\":{DocxSessionOps.ListBookmarks(session.Handle, ParseLinkScopes(OptStr(args, "scope")))}}}",
+        "list_bookmarks" => $"{{\"bookmarks\":{DocxSessionOps.ListBookmarks(session.Handle, Scopes(args))}}}",
         "add_bookmark" => BookmarkRangeAction(session, args, move: false),
         "move_bookmark" => BookmarkRangeAction(session, args, move: true),
         "rename_bookmark" => DocxSessionOps.RenameBookmark(session.Handle, Str(args, "name"), Str(args, "newName")),
@@ -745,17 +745,9 @@ internal static partial class Dispatcher
                 Str(args, "startAnchorId"), Int(args, "startOffset"),
                 Str(args, "endAnchorId"), Int(args, "endOffset"));
 
-    private static ProjectionScopes ParseLinkScopes(string? scope) => scope switch
-    {
-        null or "all" => ProjectionScopes.All,
-        "body" => ProjectionScopes.Body,
-        "headers" => ProjectionScopes.Headers,
-        "footers" => ProjectionScopes.Footers,
-        "footnotes" => ProjectionScopes.Footnotes,
-        "endnotes" => ProjectionScopes.Endnotes,
-        "comments" => ProjectionScopes.Comments,
-        _ => throw new McpToolException($"unknown link scope: {scope}"),
-    };
+    /// <summary>The parts a listing reads, by the parser every transport shares (issue #1023).</summary>
+    private static ProjectionScopes Scopes(JsonElement args) => DocxSessionJson.ParseProjectionScopes(
+        args.ValueKind == JsonValueKind.Object && args.TryGetProperty("scope", out var scope) ? scope : null);
 
     private static bool IsMutatingLinksAction(string action) =>
         action is not ("list_hyperlinks" or "list_bookmarks");
@@ -775,7 +767,7 @@ internal static partial class Dispatcher
         action switch
         {
             "list" => $"{{\"images\":{DocxSessionOps.ListImages(session.Handle,
-                ParseLinkScopes(OptStr(args, "scope")))}}}",
+                Scopes(args))}}}",
             "insert" => DocxSessionOps.InsertImage(session.Handle, Str(args, "anchorId"),
                 Int(args, "characterOffset"), Str(args, "imageBase64"), RawObjectOrEmpty(args, "options")),
             "replace" => DocxSessionOps.ReplaceImage(session.Handle,
@@ -820,7 +812,7 @@ internal static partial class Dispatcher
         DocSession session, string action, JsonElement args) => action switch
     {
         "list" => $"{{\"contentControls\":{DocxSessionOps.ListContentControls(
-            session.Handle, ParseLinkScopes(OptStr(args, "scope")))}}}",
+            session.Handle, Scopes(args))}}}",
         "fill_text" => DocxSessionOps.FillContentControlText(session.Handle,
             Str(args, "anchorId"), Str(args, "text"), BuildContentControlOptionsJson(args)),
         "fill_rich_text" => DocxSessionOps.FillContentControlRichText(session.Handle,

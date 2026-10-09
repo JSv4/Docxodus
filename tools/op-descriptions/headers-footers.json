@@ -15,7 +15,7 @@
         "wasm": { "method": "SetHeaderText" },
         "npm": { "method": "setHeaderText" },
         "python": { "method": "set_header_text" },
-        "stdio": { "op": "set_header_text", "argNames": { "bodyAnchorId": "anchorId" } },
+        "stdio": { "op": "set_header_text" },
         "mcp": { "tool": "docxodus_create", "action": "set_header_text" }
       }
     },
@@ -32,7 +32,7 @@
         "wasm": { "method": "SetFooterText" },
         "npm": { "method": "setFooterText" },
         "python": { "method": "set_footer_text" },
-        "stdio": { "op": "set_footer_text", "argNames": { "bodyAnchorId": "anchorId" } },
+        "stdio": { "op": "set_footer_text" },
         "mcp": { "tool": "docxodus_create", "action": "set_footer_text" }
       }
     },
@@ -49,7 +49,7 @@
         "wasm": { "method": "InsertPageNumberField" },
         "npm": { "method": "insertPageNumberField", "defaults": { "field": "currentPage" } },
         "python": { "method": "insert_page_number_field", "defaults": { "field": "currentPage" } },
-        "stdio": { "op": "insert_page_number_field", "argNames": { "numberFormat": "format" } },
+        "stdio": { "op": "insert_page_number_field" },
         "mcp": { "tool": "docxodus_create", "action": "insert_page_number_field", "defaults": { "field": "currentPage" } }
       }
     },
@@ -65,7 +65,7 @@
         "wasm": { "method": "EnsureHeaderFooterVisible" },
         "npm": { "method": "ensureHeaderFooterVisible" },
         "python": { "method": "ensure_header_footer_visible" },
-        "stdio": { "op": "ensure_header_footer_visible", "argNames": { "bodyAnchorId": "anchorId" } },
+        "stdio": { "op": "ensure_header_footer_visible" },
         "mcp": { "tool": "docxodus_create", "action": "ensure_header_footer_visible" }
       }
     },
