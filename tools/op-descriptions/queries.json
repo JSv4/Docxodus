@@ -12,7 +12,7 @@
         "npm": { "method": "project" },
         "python": { "method": "project" },
         "stdio": { "op": "project" },
-        "mcp": { "absent": "reachable only as docxodus_get_content format=markdown (no anchorId), selected by format not action" }
+        "mcp": { "absent": "reached by format, not action: docxodus_get_content format=markdown without anchorId; text is the same projection with markdown syntax stripped" }
       }
     },
     {
@@ -29,7 +29,7 @@
         "npm": { "method": "projectAnchor", "defaults": { "depth": 2 } },
         "python": { "method": "project_anchor", "defaults": { "depth": 2 } },
         "stdio": { "op": "project_anchor", "defaults": { "depth": 2 } },
-        "mcp": { "absent": "reachable only as docxodus_get_content format=markdown with anchorId, selected by format not action, with depth pinned to SubtreeAndFollowingSiblings" }
+        "mcp": { "absent": "reached by format, not action: docxodus_get_content format=markdown with anchorId, depth pinned to SubtreeAndFollowingSiblings; not one to one, so no route is recorded" }
       }
     },
     {
@@ -39,10 +39,10 @@
       "args": [],
       "transports": {
         "wasm": { "method": "ListAnchors" },
-        "npm": { "absent": "no DocxSession method; the editor calls the bridge export directly" },
-        "python": { "absent": "no Python method (the stdio host has no op for it)" },
-        "stdio": { "absent": "no stdio op" },
-        "mcp": { "absent": "no MCP action" }
+        "npm": { "absent": "kept off: an internal of the browser block editor, which calls the bridge export directly (npm/src/editor.ts); a DocxSession method would be a public API for the editor's own DOM bookkeeping" },
+        "python": { "absent": "kept off: the editor's cheap anchor-map refresh; Python reads the same anchorIndex from project()" },
+        "stdio": { "absent": "kept off: the editor's cheap anchor-map refresh; the stdio host's project op returns the same anchorIndex" },
+        "mcp": { "absent": "kept off: the editor's cheap anchor-map refresh; an agent reads the anchorIndex from docxodus_get_content format=markdown" }
       }
     },
     {
@@ -52,10 +52,10 @@
       "args": [],
       "transports": {
         "wasm": { "method": "ListBlocks" },
-        "npm": { "absent": "no DocxSession method; the editor calls the bridge export directly" },
-        "python": { "absent": "no Python method (the stdio host has no op for it)" },
-        "stdio": { "absent": "no stdio op" },
-        "mcp": { "absent": "no MCP action" }
+        "npm": { "absent": "kept off: an internal of the browser block editor, which calls the bridge export directly (npm/src/editor.ts); a DocxSession method would be a public API for the editor's own DOM bookkeeping" },
+        "python": { "absent": "kept off: browser-editor internal with no stdio op to call; a Python caller reads anchors and structure through project()" },
+        "stdio": { "absent": "kept off: an internal of the browser block editor (its DOM reconcile and remount path); the stdio host serves no editor" },
+        "mcp": { "absent": "kept off: browser-editor internal; an agent reads structure through docxodus_get_content format=markdown|blocks" }
       }
     },
     {
@@ -67,10 +67,10 @@
       ],
       "transports": {
         "wasm": { "method": "ListRenderedBlocks" },
-        "npm": { "absent": "no DocxSession method; the editor calls the bridge export directly" },
-        "python": { "absent": "no Python method (the stdio host has no op for it)" },
-        "stdio": { "absent": "no stdio op" },
-        "mcp": { "absent": "no MCP action" }
+        "npm": { "absent": "kept off: an internal of the browser block editor, which calls the bridge export directly (npm/src/editor.ts); a DocxSession method would be a public API for the editor's own DOM bookkeeping" },
+        "python": { "absent": "kept off: browser-editor internal with no stdio op to call; a Python caller reads anchors and structure through project()" },
+        "stdio": { "absent": "kept off: an internal of the browser block editor (its DOM reconcile and remount path); the stdio host serves no editor" },
+        "mcp": { "absent": "kept off: browser-editor internal; an agent reads structure through docxodus_get_content format=markdown|blocks" }
       }
     },
     {
@@ -85,7 +85,7 @@
         "npm": { "method": "listInlineSpans" },
         "python": { "method": "list_inline_spans" },
         "stdio": { "op": "list_inline_spans" },
-        "mcp": { "absent": "reachable only as docxodus_get_content format=spans, selected by format not action" }
+        "mcp": { "absent": "reached by format, not action: docxodus_get_content format=spans with anchorId, result wrapped in {spans}; not one to one, so no route is recorded" }
       }
     },
     {
@@ -100,7 +100,7 @@
         "npm": { "method": "getAnchorInfo" },
         "python": { "method": "get_anchor_info" },
         "stdio": { "op": "get_anchor_info" },
-        "mcp": { "absent": "no MCP action" }
+        "mcp": { "absent": "kept off: an agent reads each anchor's kind, scope and text preview from the anchorIndex of docxodus_get_content format=markdown" }
       }
     },
     {
@@ -115,7 +115,7 @@
         "npm": { "method": "getAnchorInfos" },
         "python": { "method": "get_anchor_infos" },
         "stdio": { "op": "get_anchor_infos" },
-        "mcp": { "absent": "no MCP action" }
+        "mcp": { "absent": "kept off: an agent reads each anchor's kind, scope and text preview from the anchorIndex of docxodus_get_content format=markdown" }
       }
     },
     {
@@ -130,7 +130,7 @@
         "npm": { "method": "getBlockMetadata" },
         "python": { "method": "get_block_metadata" },
         "stdio": { "op": "get_block_metadata" },
-        "mcp": { "absent": "no MCP action" }
+        "mcp": { "absent": "kept off: docxodus_get_content format=blocks returns this metadata for every block at once" }
       }
     },
     {
@@ -145,7 +145,7 @@
         "npm": { "method": "getBlockMetadatas" },
         "python": { "method": "get_block_metadatas" },
         "stdio": { "op": "get_block_metadatas" },
-        "mcp": { "absent": "docxodus_get_content format=blocks calls it over every anchor in the projection; no anchorIds argument and selected by format not action" }
+        "mcp": { "absent": "reached by format, not action: docxodus_get_content format=blocks calls it over every anchor in the projection (no anchorIds argument); not one to one, so no route is recorded" }
       }
     },
     {
@@ -161,7 +161,7 @@
         "npm": { "method": "findByText" },
         "python": { "method": "find_by_text" },
         "stdio": { "op": "find_by_text" },
-        "mcp": { "absent": "no MCP action" }
+        "mcp": { "absent": "kept off: docxodus_search mode=text is MCP's literal search (through grep, with context and citations); a second first-match finder would duplicate it" }
       }
     },
     {
@@ -177,7 +177,7 @@
         "npm": { "method": "findAllByText" },
         "python": { "method": "find_all_by_text" },
         "stdio": { "op": "find_all_by_text" },
-        "mcp": { "absent": "no MCP action" }
+        "mcp": { "absent": "kept off: docxodus_search mode=text is MCP's literal search (through grep, with context and citations); a second all-matches finder would duplicate it" }
       }
     },
     {
@@ -194,7 +194,7 @@
         "npm": { "method": "findByRegex", "defaults": { "regexOptions": 0 } },
         "python": { "method": "find_by_regex", "defaults": { "regexOptions": 0 } },
         "stdio": { "op": "find_by_regex", "defaults": { "regexOptions": 0 } },
-        "mcp": { "absent": "no MCP action" }
+        "mcp": { "absent": "kept off: docxodus_search mode=regex is MCP's pattern search (through grep, with context and citations); a second regex finder would duplicate it" }
       }
     },
     {
@@ -212,7 +212,7 @@
         "npm": { "method": "findByKind" },
         "python": { "method": "find_by_kind" },
         "stdio": { "op": "find_by_kind" },
-        "mcp": { "absent": "reachable only as docxodus_search mode=kind (kind passed as query, no scope), selected by mode not action" }
+        "mcp": { "absent": "reached by mode, not action: docxodus_search mode=kind takes the kind as query and no scope; not one to one, so no route is recorded" }
       }
     },
     {
@@ -228,7 +228,7 @@
         "npm": { "method": "findByLabel" },
         "python": { "method": "find_by_label" },
         "stdio": { "op": "find_by_label" },
-        "mcp": { "absent": "no MCP action" }
+        "mcp": { "absent": "kept off: docxodus_annotate list returns every annotation with its labelId, which is the label lookup an agent needs" }
       }
     },
     {
@@ -247,7 +247,7 @@
         "npm": { "method": "findPlaceholders", "defaults": { "kinds": 7, "scope": 1, "boundary": 0 } },
         "python": { "method": "find_placeholders", "defaults": { "kinds": 7, "scope": 1, "boundary": 0 } },
         "stdio": { "op": "find_placeholders", "defaults": { "kinds": 7, "scope": 1, "boundary": 0 } },
-        "mcp": { "absent": "no MCP action" }
+        "mcp": { "absent": "kept off: an agent finds template text with docxodus_search mode=text|regex, and the delivery gate (docxodus_get_content format=verification, requireNoPlaceholders) refuses a document that still has placeholders" }
       }
     },
     {
@@ -262,7 +262,7 @@
         "npm": { "method": "remainingPlaceholders", "defaults": { "kinds": 7 } },
         "python": { "method": "remaining_placeholders", "defaults": { "kinds": 7 } },
         "stdio": { "op": "remaining_placeholders", "defaults": { "kinds": 7 } },
-        "mcp": { "absent": "no MCP action" }
+        "mcp": { "absent": "kept off: the delivery gate (docxodus_get_content format=verification, requireNoPlaceholders) is MCP's check for leftover placeholders" }
       }
     },
     {
@@ -284,7 +284,7 @@
         "npm": { "method": "grep" },
         "python": { "method": "grep" },
         "stdio": { "op": "grep" },
-        "mcp": { "absent": "reachable only as docxodus_search mode=text|regex, selected by mode not action, with caseSensitive in place of regexOptions, a string scope, and no whitespace or boundary" }
+        "mcp": { "absent": "reached by mode, not action: docxodus_search mode=text|regex, with caseSensitive in place of regexOptions, a string scope, and no whitespace or boundary; not one to one, so no route is recorded" }
       }
     },
     {
@@ -306,7 +306,7 @@
         "npm": { "method": "grepCrossBlock" },
         "python": { "method": "grep_cross_block" },
         "stdio": { "op": "grep_cross_block" },
-        "mcp": { "absent": "no MCP action" }
+        "mcp": { "absent": "kept off: docxodus_search matches within a block, which is what an agent can then edit by anchor; a match spanning blocks has no single anchor to edit" }
       }
     },
     {
@@ -319,7 +319,7 @@
         "npm": { "method": "getVersion" },
         "python": { "method": "get_version" },
         "stdio": { "op": "get_version" },
-        "mcp": { "absent": "reachable only as docxodus_get_content format=version, selected by format not action" }
+        "mcp": { "absent": "reached by format, not action: docxodus_get_content format=version, recorded as its route", "route": { "tool": "docxodus_get_content", "selector": { "format": "version" } } }
       }
     },
     {
@@ -329,10 +329,10 @@
       "args": [],
       "transports": {
         "wasm": { "method": "GetPackageContentHash" },
-        "npm": { "absent": "no DocxSession method; previewBatch calls the bridge export internally" },
-        "python": { "absent": "no Python method (the stdio host has no op for it)" },
-        "stdio": { "absent": "no stdio op" },
-        "mcp": { "absent": "no MCP action" }
+        "npm": { "absent": "kept off: previewBatch and the batch receipts call the bridge export and report the result as packageHash" },
+        "python": { "absent": "kept off: no stdio op to call; batch, preview and transaction results report the same hash as package_hash" },
+        "stdio": { "absent": "kept off: execute_batch, preview_batch and commit_preview report the same hash as packageHash, where a caller compares it" },
+        "mcp": { "absent": "kept off: docxodus_mutations results and retained previews report the same hash as packageHash, where an agent compares it" }
       }
     },
     {
@@ -394,7 +394,7 @@
         "npm": { "method": "exists" },
         "python": { "method": "exists" },
         "stdio": { "op": "exists" },
-        "mcp": { "absent": "no MCP action; an agent resolves anchors through docxodus_search and docxodus_get_content" }
+        "mcp": { "absent": "kept off: an anchor that no longer resolves fails the call with anchor_not_found, and docxodus_get_content format=check_preconditions guards an anchor before an edit" }
       }
     }
   ]

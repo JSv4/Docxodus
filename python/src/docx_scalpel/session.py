@@ -56,6 +56,7 @@ from .types import (
     BulkEditResult,
     CharSpan,
     CommentListEntry,
+    NoteListEntry,
     ContentControlFillOptions,
     ContentControlInfo,
     CrossBlockMatch,
@@ -98,6 +99,7 @@ from .types import (
     MutationPreconditions,
     NumberFormat,
     PageSetupOp,
+    ParagraphBorderEdge,
     ParagraphFormatOp,
     PageCitation,
     PageCitationRequest,
@@ -1682,6 +1684,20 @@ class DocxSession:
             )
         )
 
+    def insert_horizontal_rule(
+        self,
+        anchor_id: str,
+        position: Position,
+        rule: ParagraphBorderEdge | None = None,
+    ) -> EditResult:
+        """Insert an empty paragraph drawn as a horizontal rule (a bottom paragraph border)
+        before or after ``anchor_id``. ``rule`` sets the border edge; ``None`` takes the
+        default single 1.5pt line. The rule paragraph comes back in ``EditResult.created``."""
+        args: dict[str, Any] = {"anchorId": anchor_id, "position": position.value}
+        if rule is not None:
+            args["rule"] = rule.to_wire()
+        return EditResult._from_wire(self._call("insert_horizontal_rule", args))
+
     def split_paragraph(self, anchor_id: str, character_offset: int) -> EditResult:
         return EditResult._from_wire(
             self._call(
@@ -2057,6 +2073,16 @@ class DocxSession:
                 },
             )
         )
+
+    def list_notes(self, endnotes: bool) -> tuple[NoteListEntry, ...]:
+        """The document's footnotes (``endnotes=False``) or endnotes (``endnotes=True``) in citation order.
+
+        Each entry carries the note's ``w:id``, its definition anchor (kind ``fn``/``en``) and
+        its ``ordinal``, the number Word displays for it. Notes are found through their body
+        references, so Word's separator notes and a note nothing cites are not listed.
+        """
+        result = self._call("list_notes", {"endnotes": endnotes})
+        return tuple(NoteListEntry._from_wire(n) for n in result)
 
     # -- Comments (issue #300) --------------------------------------------
 

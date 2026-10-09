@@ -38,6 +38,7 @@ import type {
   ImageOccurrence,
   FloatingImageLayout,
   InlineSpan,
+  NoteListEntry,
   NumberFormat,
   PageNumberField,
   PageNumberingOp,
@@ -1263,6 +1264,20 @@ export class DocxSession {
         options ? JSON.stringify(options) : "",
       ),
     ) as EditResult;
+  }
+
+  /**
+   * The document's footnotes (`endnotes` false) or endnotes (`endnotes` true) in citation order.
+   * Each entry is the note's `w:id`, its definition anchor (kind `fn`/`en`, the anchor
+   * {@link replaceText} and {@link deleteBlock} take) and its 1-based `ordinal`, which is the
+   * number Word displays for it. Notes are found through their body references, so Word's
+   * separator notes and a note nothing cites are not listed.
+   */
+  listNotes(endnotes: boolean): NoteListEntry[] {
+    if (!this.wasm.ListNotes) {
+      throw new Error("ListNotes is not available in this WASM build");
+    }
+    return JSON.parse(this.wasm.ListNotes(this.handle, endnotes)) as NoteListEntry[];
   }
 
   /** Create an endnote — see {@link insertFootnote}; writes the endnotes part and a

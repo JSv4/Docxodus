@@ -45,10 +45,10 @@
       ],
       "transports": {
         "wasm": { "method": "ListNotes" },
-        "npm": { "absent": "no DocxSession method; the editor calls the ListNotes bridge export directly" },
-        "python": { "absent": "no client method" },
-        "stdio": { "absent": "no stdio op" },
-        "mcp": { "absent": "no MCP action" }
+        "npm": { "method": "listNotes" },
+        "python": { "method": "list_notes" },
+        "stdio": { "op": "list_notes" },
+        "mcp": { "tool": "docxodus_create", "action": "list_notes" }
       }
     }
   ]

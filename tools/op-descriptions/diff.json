@@ -14,7 +14,7 @@
         "npm": { "method": "getDiff", "defaults": { "format": 0 } },
         "python": { "method": "get_diff", "defaults": { "format": 0 } },
         "stdio": { "op": "get_diff", "defaults": { "format": 0 } },
-        "mcp": { "absent": "no MCP action" }
+        "mcp": { "absent": "kept off: MCP reports change from the opening baseline as the structured docxodus_get_content format=semantic_changes rather than this markdown or text diff of the same baseline" }
       }
     },
     {
@@ -27,7 +27,7 @@
         "npm": { "method": "getEditSummary" },
         "python": { "method": "get_edit_summary" },
         "stdio": { "op": "get_edit_summary" },
-        "mcp": { "absent": "folded into docxodus_get_content format=info (with version and section info), selected by format not action" }
+        "mcp": { "absent": "reached by format, not action: folded into docxodus_get_content format=info (the editSummary field, beside version and section info); not one to one, so no route is recorded" }
       }
     },
     {
@@ -40,7 +40,7 @@
         "npm": { "method": "getSemanticChanges" },
         "python": { "method": "get_semantic_changes" },
         "stdio": { "op": "get_semantic_changes" },
-        "mcp": { "absent": "reachable only as docxodus_get_content format=semantic_changes, selected by format not action" }
+        "mcp": { "absent": "reached by format, not action: docxodus_get_content format=semantic_changes, recorded as its route", "route": { "tool": "docxodus_get_content", "selector": { "format": "semantic_changes" } } }
       }
     }
   ]
