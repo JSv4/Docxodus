@@ -1,0 +1,75 @@
+{
+  "$comment": "One description of the reference-field session ops (issue #982). See docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names; argNames, defaults, requires and flattens on a transport are recorded divergences, not the target. flattens: the transport spreads the fields of the canonical object argument across its own top-level arguments (MCP reads them with the same DocxSessionJson parser the other transports apply to options).",
+  "family": "reference-fields",
+  "ops": [
+    {
+      "op": "insertTableOfContents",
+      "facade": "InsertTableOfContents",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "position", "type": "position", "required": false, "default": "before" },
+        { "name": "options", "type": "object", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "InsertTableOfContents" },
+        "npm": { "method": "insertTableOfContents" },
+        "python": { "method": "insert_table_of_contents", "argsFrom": "session.py:_insert_reference_field" },
+        "stdio": { "op": "insert_table_of_contents" },
+        "mcp": { "tool": "docxodus_create", "action": "insert_table_of_contents", "flattens": { "options": { "levels": "levels", "hyperlinks": "hyperlinks", "title": "title", "rightTabPos": "rightTabPos" } }, "$comment": "MCP's argument parser also reads hideTabAndPageNumbersInWeb and useOutlineLevels, but the docxodus_create schema does not advertise them." }
+      }
+    },
+    {
+      "op": "insertTableOfFigures",
+      "facade": "InsertTableOfFigures",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "position", "type": "position", "required": false, "default": "before" },
+        { "name": "options", "type": "object", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "InsertTableOfFigures" },
+        "npm": { "method": "insertTableOfFigures" },
+        "python": { "method": "insert_table_of_figures", "argsFrom": "session.py:_insert_reference_field" },
+        "stdio": { "op": "insert_table_of_figures" },
+        "mcp": { "tool": "docxodus_create", "action": "insert_table_of_figures", "flattens": { "options": { "captionLabel": "captionLabel", "hyperlinks": "hyperlinks", "rightTabPos": "rightTabPos" } } }
+      }
+    },
+    {
+      "op": "insertTableOfAuthorities",
+      "facade": "InsertTableOfAuthorities",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "position", "type": "position", "required": false, "default": "before" },
+        { "name": "options", "type": "object", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "InsertTableOfAuthorities" },
+        "npm": { "method": "insertTableOfAuthorities" },
+        "python": { "method": "insert_table_of_authorities", "argsFrom": "session.py:_insert_reference_field" },
+        "stdio": { "op": "insert_table_of_authorities" },
+        "mcp": { "tool": "docxodus_create", "action": "insert_table_of_authorities", "flattens": { "options": { "category": "category", "hyperlinks": "hyperlinks", "entryPageSeparator": "entryPageSeparator", "rightTabPos": "rightTabPos" } } }
+      }
+    },
+    {
+      "op": "insertCrossReference",
+      "facade": "InsertCrossReference",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "characterOffset", "type": "int", "required": true },
+        { "name": "bookmarkName", "type": "string", "required": true },
+        { "name": "options", "type": "object", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "InsertCrossReference" },
+        "npm": { "method": "insertCrossReference" },
+        "python": { "method": "insert_cross_reference" },
+        "stdio": { "op": "insert_cross_reference" },
+        "mcp": { "tool": "docxodus_links", "action": "insert_cross_reference", "flattens": { "options": { "referenceNumber": "referenceNumber", "hyperlink": "hyperlink", "includePosition": "includePosition" } } }
+      }
+    }
+  ]
+}

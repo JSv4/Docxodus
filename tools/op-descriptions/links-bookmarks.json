@@ -1,0 +1,173 @@
+{
+  "$comment": "One description of the hyperlink and bookmark session ops and how each transport names them (issue #982). SessionOpDescriptionDriftTests checks every transport against it; see docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names; argNames, defaults, requires and absent on a transport are recorded divergences, not the target. scope is the MCP story filter; the stdio host takes the same filter as scopes, a ProjectionScopes flag integer.",
+  "family": "links-bookmarks",
+  "ops": [
+    {
+      "op": "addHyperlink",
+      "facade": "AddHyperlink",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "startOffset", "type": "int", "required": true },
+        { "name": "length", "type": "int", "required": true },
+        { "name": "kind", "type": "enum", "required": true, "values": ["external", "internal"] },
+        { "name": "target", "type": "string", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "AddHyperlink" },
+        "npm": { "method": "addHyperlink" },
+        "python": { "method": "add_hyperlink" },
+        "stdio": { "op": "add_hyperlink", "argNames": { "startOffset": "start" } },
+        "mcp": { "tool": "docxodus_links", "action": "add_hyperlink" }
+      }
+    },
+    {
+      "op": "updateHyperlink",
+      "facade": "UpdateHyperlink",
+      "result": "EditResult",
+      "args": [
+        { "name": "hyperlinkId", "type": "string", "required": true },
+        { "name": "kind", "type": "enum", "required": true, "values": ["external", "internal"] },
+        { "name": "target", "type": "string", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "UpdateHyperlink" },
+        "npm": { "method": "updateHyperlink" },
+        "python": { "method": "update_hyperlink" },
+        "stdio": { "op": "update_hyperlink" },
+        "mcp": { "tool": "docxodus_links", "action": "update_hyperlink" }
+      }
+    },
+    {
+      "op": "removeHyperlink",
+      "facade": "RemoveHyperlink",
+      "result": "EditResult",
+      "args": [
+        { "name": "hyperlinkId", "type": "string", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "RemoveHyperlink" },
+        "npm": { "method": "removeHyperlink" },
+        "python": { "method": "remove_hyperlink" },
+        "stdio": { "op": "remove_hyperlink" },
+        "mcp": { "tool": "docxodus_links", "action": "remove_hyperlink" }
+      }
+    },
+    {
+      "op": "listHyperlinks",
+      "facade": "ListHyperlinks",
+      "result": "HyperlinkInfo[]",
+      "args": [
+        { "name": "scope", "type": "enum", "required": false, "default": "all", "values": ["body", "headers", "footers", "footnotes", "endnotes", "comments", "all"] }
+      ],
+      "transports": {
+        "wasm": { "method": "ListHyperlinks" },
+        "npm": { "method": "listHyperlinks" },
+        "python": { "method": "list_hyperlinks" },
+        "stdio": { "op": "list_hyperlinks", "argNames": { "scope": "scopes" } },
+        "mcp": { "tool": "docxodus_links", "action": "list_hyperlinks" }
+      }
+    },
+    {
+      "op": "addBookmark",
+      "facade": "AddBookmark",
+      "result": "EditResult",
+      "args": [
+        { "name": "name", "type": "string", "required": true },
+        { "name": "startAnchorId", "type": "anchor", "required": true },
+        { "name": "startOffset", "type": "int", "required": true },
+        { "name": "endAnchorId", "type": "anchor", "required": true },
+        { "name": "endOffset", "type": "int", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "AddBookmark" },
+        "npm": { "method": "addBookmark" },
+        "python": { "method": "add_bookmark", "argsFrom": "types.py:DocumentRange.to_wire" },
+        "stdio": { "op": "add_bookmark" },
+        "mcp": { "tool": "docxodus_links", "action": "add_bookmark" }
+      }
+    },
+    {
+      "op": "moveBookmark",
+      "facade": "MoveBookmark",
+      "result": "EditResult",
+      "args": [
+        { "name": "name", "type": "string", "required": true },
+        { "name": "startAnchorId", "type": "anchor", "required": true },
+        { "name": "startOffset", "type": "int", "required": true },
+        { "name": "endAnchorId", "type": "anchor", "required": true },
+        { "name": "endOffset", "type": "int", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "MoveBookmark" },
+        "npm": { "method": "moveBookmark" },
+        "python": { "method": "move_bookmark", "argsFrom": "types.py:DocumentRange.to_wire" },
+        "stdio": { "op": "move_bookmark" },
+        "mcp": { "tool": "docxodus_links", "action": "move_bookmark" }
+      }
+    },
+    {
+      "op": "renameBookmark",
+      "facade": "RenameBookmark",
+      "result": "EditResult",
+      "args": [
+        { "name": "name", "type": "string", "required": true },
+        { "name": "newName", "type": "string", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "RenameBookmark" },
+        "npm": { "method": "renameBookmark" },
+        "python": { "method": "rename_bookmark" },
+        "stdio": { "op": "rename_bookmark" },
+        "mcp": { "tool": "docxodus_links", "action": "rename_bookmark" }
+      }
+    },
+    {
+      "op": "removeBookmark",
+      "facade": "RemoveBookmark",
+      "result": "EditResult",
+      "args": [
+        { "name": "name", "type": "string", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "RemoveBookmark" },
+        "npm": { "method": "removeBookmark" },
+        "python": { "method": "remove_bookmark" },
+        "stdio": { "op": "remove_bookmark" },
+        "mcp": { "tool": "docxodus_links", "action": "remove_bookmark" }
+      }
+    },
+    {
+      "op": "listBookmarks",
+      "facade": "ListBookmarks",
+      "result": "BookmarkInfo[]",
+      "args": [
+        { "name": "scope", "type": "enum", "required": false, "default": "all", "values": ["body", "headers", "footers", "footnotes", "endnotes", "comments", "all"] }
+      ],
+      "transports": {
+        "wasm": { "method": "ListBookmarks" },
+        "npm": { "method": "listBookmarks" },
+        "python": { "method": "list_bookmarks" },
+        "stdio": { "op": "list_bookmarks", "argNames": { "scope": "scopes" } },
+        "mcp": { "tool": "docxodus_links", "action": "list_bookmarks" }
+      }
+    },
+    {
+      "op": "findByBookmark",
+      "facade": "FindByBookmark",
+      "result": "AnchorTarget[]",
+      "args": [
+        { "name": "bookmarkName", "type": "string", "required": true },
+        { "name": "citation", "type": "object", "required": false },
+        { "name": "maxResults", "type": "int", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "FindByBookmark" },
+        "npm": { "method": "findByBookmark" },
+        "python": { "method": "find_by_bookmark" },
+        "stdio": { "op": "find_by_bookmark" },
+        "mcp": { "absent": "no action: docxodus_search reaches it as mode bookmark, with the name under query" }
+      }
+    }
+  ]
+}

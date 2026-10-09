@@ -1,0 +1,139 @@
+{
+  "$comment": "One description of the revisions session ops and how each transport names them (issue #982). SessionOpDescriptionDriftTests checks every transport against it; see docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names (the JSON keys a stdio or MCP caller sends; the WASM bridge, npm and Python take them positionally). Numeric flag enums (scopes, kinds, regex options, depth, diff format) are typed int; string-token enums are typed enum. An argument's own default is the one DocxSessionOps (or the request record it parses into) applies on every transport; a transport that supplies its own default for an argument the facade requires lists it under defaults, a different spelling under argNames. Both are recorded divergences, not the target. An absent transport says why; an MCP route the description cannot express (a tool selected by format or mode rather than action, or an action that reshapes or drops arguments) is recorded absent and names the real route.",
+  "family": "revisions",
+  "ops": [
+    {
+      "op": "acceptRevision",
+      "facade": "AcceptRevision",
+      "result": "EditResult",
+      "args": [
+        { "name": "revisionId", "type": "string", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "AcceptRevision" },
+        "npm": { "method": "acceptRevision" },
+        "python": { "method": "accept_revision" },
+        "stdio": { "op": "accept_revision" },
+        "mcp": { "tool": "docxodus_track_changes", "action": "accept" }
+      }
+    },
+    {
+      "op": "rejectRevision",
+      "facade": "RejectRevision",
+      "result": "EditResult",
+      "args": [
+        { "name": "revisionId", "type": "string", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "RejectRevision" },
+        "npm": { "method": "rejectRevision" },
+        "python": { "method": "reject_revision" },
+        "stdio": { "op": "reject_revision" },
+        "mcp": { "tool": "docxodus_track_changes", "action": "reject" }
+      }
+    },
+    {
+      "op": "acceptAllRevisions",
+      "facade": "AcceptAllRevisions",
+      "result": "EditResult",
+      "args": [],
+      "transports": {
+        "wasm": { "method": "AcceptAllRevisions" },
+        "npm": { "method": "acceptAllRevisions" },
+        "python": { "method": "accept_all_revisions" },
+        "stdio": { "op": "accept_all_revisions" },
+        "mcp": { "tool": "docxodus_track_changes", "action": "accept_all" }
+      }
+    },
+    {
+      "op": "rejectAllRevisions",
+      "facade": "RejectAllRevisions",
+      "result": "EditResult",
+      "args": [],
+      "transports": {
+        "wasm": { "method": "RejectAllRevisions" },
+        "npm": { "method": "rejectAllRevisions" },
+        "python": { "method": "reject_all_revisions" },
+        "stdio": { "op": "reject_all_revisions" },
+        "mcp": { "tool": "docxodus_track_changes", "action": "reject_all" }
+      }
+    },
+    {
+      "op": "listRevisions",
+      "facade": "ListRevisions",
+      "result": "RevisionListEntry[]",
+      "args": [
+        { "name": "author", "type": "string", "required": false },
+        { "name": "changeType", "type": "string", "required": false },
+        { "name": "family", "type": "string", "required": false },
+        { "name": "resolutionStatus", "type": "string", "required": false },
+        { "name": "partUri", "type": "string", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "ListRevisions" },
+        "npm": { "method": "listRevisions" },
+        "python": { "method": "list_revisions" },
+        "stdio": { "op": "list_revisions" },
+        "mcp": { "tool": "docxodus_track_changes", "action": "list" }
+      }
+    },
+    {
+      "op": "listRevisionRepairs",
+      "facade": "ListRevisionRepairs",
+      "result": "RevisionRepairProposal[]",
+      "args": [],
+      "transports": {
+        "wasm": { "method": "ListRevisionRepairs" },
+        "npm": { "method": "listRevisionRepairs" },
+        "python": { "method": "list_revision_repairs" },
+        "stdio": { "op": "list_revision_repairs" },
+        "mcp": { "tool": "docxodus_track_changes", "action": "repairs" }
+      }
+    },
+    {
+      "op": "repairRevisions",
+      "facade": "RepairRevisions",
+      "result": "RevisionRepairResult",
+      "args": [
+        { "name": "repairs", "type": "array", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "RepairRevisions" },
+        "npm": { "method": "repairRevisions" },
+        "python": { "method": "repair_revisions" },
+        "stdio": { "op": "repair_revisions", "defaults": { "repairs": [] } },
+        "mcp": { "tool": "docxodus_track_changes", "action": "repair" }
+      }
+    },
+    {
+      "op": "setTrackedChanges",
+      "facade": "SetTrackedChanges",
+      "result": "void",
+      "args": [
+        { "name": "mode", "type": "enum", "required": true, "values": ["accept", "render_inline", "strip_deletions"] }
+      ],
+      "transports": {
+        "wasm": { "method": "SetTrackedChanges" },
+        "npm": { "method": "setTrackedChanges" },
+        "python": { "method": "set_tracked_changes" },
+        "stdio": { "op": "set_tracked_changes" },
+        "mcp": { "tool": "docxodus_track_changes", "action": "set_mode" }
+      }
+    },
+    {
+      "op": "setRevisionAuthor",
+      "facade": "SetRevisionAuthor",
+      "result": "void",
+      "args": [
+        { "name": "revisionAuthor", "type": "string", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "SetRevisionAuthor" },
+        "npm": { "method": "setRevisionAuthor" },
+        "python": { "method": "set_revision_author" },
+        "stdio": { "op": "set_revision_author", "argNames": { "revisionAuthor": "author" } },
+        "mcp": { "tool": "docxodus_track_changes", "action": "set_mode" }
+      }
+    }
+  ]
+}

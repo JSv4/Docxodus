@@ -1,0 +1,156 @@
+{
+  "$comment": "One description of the native content-control session ops and how each transport names them (issue #982). SessionOpDescriptionDriftTests checks every transport against it; see docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names; argNames, defaults, requires and absent on a transport are recorded divergences, not the target. scope is the MCP story filter; the stdio host takes the same filter as scopes, a ProjectionScopes flag integer. flattens (on mcp) records an object argument whose fields the MCP tool takes as top-level properties instead: field name -> MCP property.",
+  "family": "content-controls",
+  "ops": [
+    {
+      "op": "listContentControls",
+      "facade": "ListContentControls",
+      "result": "ContentControlInfo[]",
+      "args": [
+        { "name": "scope", "type": "enum", "required": false, "default": "all", "values": ["body", "headers", "footers", "footnotes", "endnotes", "comments", "all"] }
+      ],
+      "transports": {
+        "wasm": { "method": "ListContentControls" },
+        "npm": { "method": "listContentControls" },
+        "python": { "method": "list_content_controls" },
+        "stdio": { "op": "list_content_controls", "argNames": { "scope": "scopes" } },
+        "mcp": { "tool": "docxodus_content_controls", "action": "list" }
+      }
+    },
+    {
+      "op": "fillContentControlText",
+      "facade": "FillContentControlText",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "text", "type": "string", "required": true },
+        { "name": "options", "type": "object", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "FillContentControlText" },
+        "npm": { "method": "fillContentControlText" },
+        "python": { "method": "fill_content_control_text" },
+        "stdio": { "op": "fill_content_control_text" },
+        "mcp": { "tool": "docxodus_content_controls", "action": "fill_text", "flattens": { "options": { "bindingPolicy": "bindingPolicy", "nestedControls": "nestedControls", "childFills": "childFills" } } }
+      }
+    },
+    {
+      "op": "fillContentControlRichText",
+      "facade": "FillContentControlRichText",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "markdown", "type": "markdown", "required": true },
+        { "name": "options", "type": "object", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "FillContentControlRichText" },
+        "npm": { "method": "fillContentControlRichText" },
+        "python": { "method": "fill_content_control_rich_text" },
+        "stdio": { "op": "fill_content_control_rich_text" },
+        "mcp": { "tool": "docxodus_content_controls", "action": "fill_rich_text", "flattens": { "options": { "bindingPolicy": "bindingPolicy", "nestedControls": "nestedControls", "childFills": "childFills" } } }
+      }
+    },
+    {
+      "op": "fillContentControlPicture",
+      "facade": "FillContentControlPicture",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "imageBase64", "type": "string", "required": true },
+        { "name": "options", "type": "object", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "FillContentControlPicture" },
+        "npm": { "method": "fillContentControlPicture" },
+        "python": { "method": "fill_content_control_picture" },
+        "stdio": { "op": "fill_content_control_picture" },
+        "mcp": { "tool": "docxodus_content_controls", "action": "fill_picture", "flattens": { "options": { "bindingPolicy": "bindingPolicy", "nestedControls": "nestedControls", "childFills": "childFills" } } }
+      }
+    },
+    {
+      "op": "selectContentControlItem",
+      "facade": "SelectContentControlItem",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "value", "type": "string", "required": true },
+        { "name": "options", "type": "object", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "SelectContentControlItem" },
+        "npm": { "method": "selectContentControlItem" },
+        "python": { "method": "select_content_control_item" },
+        "stdio": { "op": "select_content_control_item" },
+        "mcp": { "tool": "docxodus_content_controls", "action": "select_item", "flattens": { "options": { "bindingPolicy": "bindingPolicy", "nestedControls": "nestedControls", "childFills": "childFills" } } }
+      }
+    },
+    {
+      "op": "setContentControlChecked",
+      "facade": "SetContentControlChecked",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "checked", "type": "boolean", "required": true },
+        { "name": "options", "type": "object", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "SetContentControlChecked" },
+        "npm": { "method": "setContentControlChecked" },
+        "python": { "method": "set_content_control_checked" },
+        "stdio": { "op": "set_content_control_checked" },
+        "mcp": { "tool": "docxodus_content_controls", "action": "set_checked", "flattens": { "options": { "bindingPolicy": "bindingPolicy", "nestedControls": "nestedControls", "childFills": "childFills" } } }
+      }
+    },
+    {
+      "op": "setContentControlDate",
+      "facade": "SetContentControlDate",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "value", "type": "string", "required": true },
+        { "name": "displayText", "type": "string", "required": false },
+        { "name": "options", "type": "object", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "SetContentControlDate" },
+        "npm": { "method": "setContentControlDate" },
+        "python": { "method": "set_content_control_date" },
+        "stdio": { "op": "set_content_control_date" },
+        "mcp": { "tool": "docxodus_content_controls", "action": "set_date", "flattens": { "options": { "bindingPolicy": "bindingPolicy", "nestedControls": "nestedControls", "childFills": "childFills" } } }
+      }
+    },
+    {
+      "op": "addRepeatingSectionItem",
+      "facade": "AddRepeatingSectionItem",
+      "result": "EditResult",
+      "args": [
+        { "name": "sectionAnchorId", "type": "anchor", "required": true },
+        { "name": "afterItemAnchorId", "type": "anchor", "required": false },
+        { "name": "options", "type": "object", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "AddRepeatingSectionItem" },
+        "npm": { "method": "addRepeatingSectionItem" },
+        "python": { "method": "add_repeating_section_item" },
+        "stdio": { "op": "add_repeating_section_item" },
+        "mcp": { "tool": "docxodus_content_controls", "action": "add_repeating_item", "flattens": { "options": { "bindingPolicy": "bindingPolicy", "nestedControls": "nestedControls", "childFills": "childFills" } } }
+      }
+    },
+    {
+      "op": "removeRepeatingSectionItem",
+      "facade": "RemoveRepeatingSectionItem",
+      "result": "EditResult",
+      "args": [
+        { "name": "itemAnchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "RemoveRepeatingSectionItem" },
+        "npm": { "method": "removeRepeatingSectionItem" },
+        "python": { "method": "remove_repeating_section_item" },
+        "stdio": { "op": "remove_repeating_section_item" },
+        "mcp": { "tool": "docxodus_content_controls", "action": "remove_repeating_item" }
+      }
+    }
+  ]
+}
