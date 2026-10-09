@@ -324,6 +324,12 @@ def docx_diff_compare(
     Mirrors .NET ``DocxDiff.Compare``. The result satisfies the redline
     contract: accepting its revisions yields ``right``, rejecting them yields
     ``left`` (at the per-block text level).
+
+    This is the raw engine with its defaults, not the ``DocxCompare`` front door
+    the ``redline`` CLI, the browser and the MCP compare tool use. Pending tracked
+    changes in an input's headers, footers or unchanged notes are copied into the
+    redline. To compare as Word's Compare does, pass
+    ``DocxDiffSettings(pre_accept_input_revisions=True)``.
     """
     result = _call("docx_diff_compare", _diff_args(left, right, settings))
     if not isinstance(result, dict) or "docxB64" not in result:
@@ -349,6 +355,9 @@ def docx_diff_compare_products(
     ``products`` selects from ``"redline"``, ``"revisions"``, ``"editScript"``,
     ``"semanticChanges"``; ``None`` selects all four. Unrequested products are
     ``None`` on the result.
+
+    Like :func:`docx_diff_compare`, this runs the raw engine; pass
+    ``DocxDiffSettings(pre_accept_input_revisions=True)`` to compare as Word does.
     """
     args = _diff_args(left, right, settings)
     if products is not None:
@@ -388,6 +397,9 @@ def docx_diff_compare_batch(
 
     A candidate that fails carries :attr:`DocxDiffBatchResult.error` instead of products;
     the rest of the batch still comes back.
+
+    Like :func:`docx_diff_compare`, this runs the raw engine; pass
+    ``DocxDiffSettings(pre_accept_input_revisions=True)`` to compare as Word does.
     """
     items = (
         list(candidates.items())

@@ -572,6 +572,13 @@ so the tool can neither read nor write outside the server's scope. The response 
 generated revisions by author; the written file is a plain DOCX an agent then opens with
 `docxodus_open` to inspect, comment on, resolve, or prove with `prove_reversibility`.
 
+Two-way and fan-out comparisons go through the `DocxCompare` front door (issue #1006), the same
+policy as the `redline` CLI and the browser's `compareDocuments`: each input's own pending tracked
+changes are accepted before comparing, as Word's Compare does, and identical packages return the
+baseline unchanged. The raw engine already compares the accepted view of the body, but it copies
+carried-over parts (headers, footers, unchanged notes) verbatim, so their pending markup used to leak
+into the redline under its original authors. N-way consolidate still runs the engine's own defaults.
+
 A third form, `mode: "fan_out"` (issue #617), reads `revisedPaths` as *separate* comparisons
 rather than one merge: the baseline is compared against each entry on its own and each redline is
 written to the matching `outputPaths` entry, with the response carrying one result per pair. The
