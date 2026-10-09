@@ -94,7 +94,7 @@
         "npm": { "method": "findByAnnotation" },
         "python": { "method": "find_by_annotation" },
         "stdio": { "op": "find_by_annotation" },
-        "mcp": { "absent": "reached by mode, not action: docxodus_search mode=annotation takes the id as query plus citation and maxResults (docxodus_annotate find takes only the id); a mode route can't be recorded until the arguments map one to one" }
+        "mcp": { "absent": "reached by mode, not action: docxodus_search mode=annotation takes the id as query plus citation and maxResults, result wrapped in {matches} (docxodus_annotate find takes only the id); not one to one, so no route is recorded" }
       }
     }
   ]

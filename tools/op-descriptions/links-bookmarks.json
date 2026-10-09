@@ -166,7 +166,7 @@
         "npm": { "method": "findByBookmark" },
         "python": { "method": "find_by_bookmark" },
         "stdio": { "op": "find_by_bookmark" },
-        "mcp": { "absent": "reached by mode, not action: docxodus_search mode=bookmark takes the name as query; not one to one, so no route is recorded" }
+        "mcp": { "absent": "reached by mode, not action: docxodus_search mode=bookmark takes the name as query, result wrapped in {matches}; not one to one, so no route is recorded" }
       }
     }
   ]

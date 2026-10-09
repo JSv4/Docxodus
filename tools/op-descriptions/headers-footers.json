@@ -145,7 +145,7 @@
         "npm": { "method": "getSectionInfo" },
         "python": { "method": "get_section_info" },
         "stdio": { "op": "get_section_info" },
-        "mcp": { "absent": "reached by format, not action: the sectionInfo field of docxodus_get_content format=info, for anchorId or the first body paragraph; not one to one, so no route is recorded" }
+        "mcp": { "absent": "reached by format, not action: the sectionInfo field of docxodus_get_content format=info, for anchorId or else the first body paragraph, heading or list item; not one to one, so no route is recorded" }
       }
     }
   ]

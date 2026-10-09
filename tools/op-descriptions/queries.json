@@ -12,7 +12,7 @@
         "npm": { "method": "project" },
         "python": { "method": "project" },
         "stdio": { "op": "project" },
-        "mcp": { "absent": "reached by format, not action: docxodus_get_content format=markdown without anchorId; text is the same projection with markdown syntax stripped" }
+        "mcp": { "absent": "reached by format, not action: docxodus_get_content format=markdown without anchorId returns this op's result unchanged. That is one to one like getVersion; #1026 recorded only the two routes the issue named, so this is the next route to record" }
       }
     },
     {
@@ -394,7 +394,7 @@
         "npm": { "method": "exists" },
         "python": { "method": "exists" },
         "stdio": { "op": "exists" },
-        "mcp": { "absent": "kept off: an anchor that no longer resolves fails the call with anchor_not_found, and docxodus_get_content format=check_preconditions guards an anchor before an edit" }
+        "mcp": { "absent": "kept off: an anchor that no longer resolves fails the call with anchor_not_found, and a mutation's preconditions (or docxodus_get_content format=check_preconditions) with an anchor guard such as expectedKind check it before an edit" }
       }
     }
   ]

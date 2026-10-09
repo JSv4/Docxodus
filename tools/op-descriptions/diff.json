@@ -14,7 +14,7 @@
         "npm": { "method": "getDiff", "defaults": { "format": 0 } },
         "python": { "method": "get_diff", "defaults": { "format": 0 } },
         "stdio": { "op": "get_diff", "defaults": { "format": 0 } },
-        "mcp": { "absent": "kept off: MCP reports change from the opening baseline as the structured docxodus_get_content format=semantic_changes rather than this markdown or text diff of the same baseline" }
+        "mcp": { "absent": "kept off: MCP reports change from the opening baseline as the versioned docxodus_get_content format=semantic_changes rather than this anchor-keyed projection diff (JSON, unified or side-by-side) of the same baseline" }
       }
     },
     {

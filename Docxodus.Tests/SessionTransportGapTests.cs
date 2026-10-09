@@ -182,11 +182,12 @@ public sealed class SessionTransportGapTests : IDisposable
 
     // ─── MCP ────────────────────────────────────────────────────────────
 
-    private (string SessionId, int Handle, string Paragraph) OpenMcp()
+    private (string SessionId, int Handle, string Paragraph) OpenMcp(bool captureDeliveryEvidence = false)
     {
         var path = Path.Combine(_root, $"{Guid.NewGuid():N}.docx");
         File.WriteAllBytes(path, DocxSession.CreateBlankDocxBytes());
-        var sessionId = J(Dispatcher.Call(_store, "docxodus_open", J(new { path }))).GetProperty("sessionId").GetString()!;
+        var sessionId = J(Dispatcher.Call(_store, "docxodus_open", J(new { path, captureDeliveryEvidence })))
+            .GetProperty("sessionId").GetString()!;
         var handle = _store.Get(sessionId).Handle;
         return (sessionId, handle, Paragraph(handle));
     }
@@ -386,5 +387,24 @@ public sealed class SessionTransportGapTests : IDisposable
 
         Assert.False(stale.GetProperty("success").GetBoolean(), stale.GetRawText());
         Assert.Equal(1700, Section(handle, paragraph).MarginRightTwips);
+    }
+
+    [Fact]
+    public void Mcp_ADirectLayoutCall_IsRecordedAsADescribedTransaction_AndListNotesIsNot()
+    {
+        var (sessionId, handle, paragraph) = OpenMcp(captureDeliveryEvidence: true);
+        // Seeding the paragraph ran outside any transport, so it is the one unlabeled step.
+        var before = J(DocxSessionOps.GetDeliveryEvidenceStatus(handle));
+
+        AssertSucceeded(Create(sessionId, "set_page_setup", new()
+        {
+            ["anchorId"] = paragraph, ["op"] = new { marginBottomTwips = 1600 },
+        }));
+        _ = Create(sessionId, "list_notes", new() { ["endnotes"] = false });
+
+        var after = J(DocxSessionOps.GetDeliveryEvidenceStatus(handle));
+        Assert.Equal(before.GetProperty("transactionCount").GetInt32() + 1, after.GetProperty("transactionCount").GetInt32());
+        Assert.Equal(before.GetProperty("unlabeledTransactionCount").GetInt32(),
+            after.GetProperty("unlabeledTransactionCount").GetInt32());
     }
 }
