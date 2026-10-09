@@ -1412,7 +1412,53 @@ public sealed record DiffEntry
     public string? After { get; init; }
 }
 
-public sealed record MarkdownPatch(string ScopeAnchorId, string Markdown);
+/// <summary>
+/// The projection change one mutation produced (<see cref="EditResult.Patch"/>). Block-scoped: it
+/// carries the markdown of the top-level blocks the edit changed, not the whole document (issue
+/// #1022).
+/// </summary>
+/// <remarks>
+/// <para>A top-level block is a child of the body, of a header or footer, a note definition, or a
+/// comment, addressed by its anchor id. <see cref="Blocks"/> lists every block that changed or was
+/// added since the previous patch, in document order, each with its current markdown and the block
+/// it now follows; <see cref="RemovedAnchorIds"/> lists blocks that are gone. A client keeping one
+/// entry per block applies a patch by deleting the removed ids, then, block by block, deleting the
+/// id if present and re-inserting it after <see cref="MarkdownPatchBlock.AfterAnchorId"/>.</para>
+/// <para>When a block-local patch cannot be exact the patch is the whole document:
+/// <see cref="IsFullDocument"/> is true and <see cref="Markdown"/> is the full projection. That
+/// happens for an edit that renumbered a list, changed a style, edited a header or footer, or added,
+/// removed or renumbered a story part or a note; for the first patch after an op failed and rolled
+/// back, a preview was committed, or the session's index had to be rebuilt; and always under a
+/// non-<see cref="AnchorIdRendering.FullUnid"/> rendering.</para>
+/// <para><see cref="DocxSession.Undo"/> and <see cref="DocxSession.Redo"/> return no patch: a
+/// client mirroring the projection re-reads it (<see cref="DocxSession.Project"/>) after them, and
+/// the next patch covers only what changes afterwards.</para>
+/// </remarks>
+/// <param name="ScopeAnchorId">The anchor the op addressed (its smallest enclosing block).</param>
+/// <param name="Markdown">The changed blocks' markdown concatenated in document order, or the whole
+/// projection when <see cref="IsFullDocument"/>.</param>
+public sealed record MarkdownPatch(string ScopeAnchorId, string Markdown)
+{
+    /// <summary>True when <see cref="Markdown"/> is the whole projection rather than changed blocks;
+    /// <see cref="Blocks"/> and <see cref="RemovedAnchorIds"/> are then empty.</summary>
+    public bool IsFullDocument { get; init; }
+
+    /// <summary>Blocks changed or added since the previous patch, in document order.</summary>
+    public IReadOnlyList<MarkdownPatchBlock> Blocks { get; init; } = Array.Empty<MarkdownPatchBlock>();
+
+    /// <summary>Anchor ids of blocks removed since the previous patch (or whose id changed, such as
+    /// a paragraph that became a heading; the new id appears in <see cref="Blocks"/>). May name a
+    /// block that was added and removed again in between, which a client simply ignores.</summary>
+    public IReadOnlyList<string> RemovedAnchorIds { get; init; } = Array.Empty<string>();
+}
+
+/// <summary>One changed top-level block in a <see cref="MarkdownPatch"/>.</summary>
+/// <param name="AnchorId">The block's anchor id (<c>kind:scope:unid</c>).</param>
+/// <param name="AfterAnchorId">The anchor id of the block it now follows in its scope, or null when
+/// it is the scope's first block.</param>
+/// <param name="Markdown">The block's own markdown, without the separators the full projection puts
+/// between blocks; empty for a block that renders nothing.</param>
+public sealed record MarkdownPatchBlock(string AnchorId, string? AfterAnchorId, string Markdown);
 
 /// <summary>One top-level render unit in a <see cref="RenderPlan"/> — a body block
 /// (<c>p</c>/<c>h</c>/<c>li</c>), one whole table (<c>tbl</c>, its rows/cells/cell

@@ -178,6 +178,7 @@ export type {
   StyleInfo,
   TableStyleFormatting,
   MarkdownPatch,
+  MarkdownPatchBlock,
   NumberFormat,
   PageCitation,
   PageCitationFragment,

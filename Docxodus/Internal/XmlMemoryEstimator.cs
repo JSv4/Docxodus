@@ -61,14 +61,20 @@ internal static class XmlMemoryEstimator
     public static long Estimate(XDocument doc)
     {
         long total = 0;
-        var stack = new Stack<XElement>();
-
         for (var node = doc.FirstNode; node is not null; node = node.NextNode)
-        {
-            if (node is XElement root) stack.Push(root);
-            else total += NodeCost(node);
-        }
+            total += Estimate(node);
+        return total;
+    }
 
+    /// <summary>Approximate retained bytes of one node and, for an element, its whole subtree —
+    /// the unit the undo ring's shared snapshot blocks are measured in.</summary>
+    public static long Estimate(XNode node)
+    {
+        if (node is not XElement root) return NodeCost(node);
+
+        long total = 0;
+        var stack = new Stack<XElement>();
+        stack.Push(root);
         while (stack.Count > 0)
         {
             var element = stack.Pop();
@@ -77,10 +83,10 @@ internal static class XmlMemoryEstimator
             for (var attribute = element.FirstAttribute; attribute is not null; attribute = attribute.NextAttribute)
                 total += AttributeBytes + StringCost(attribute.Value);
 
-            for (var node = element.FirstNode; node is not null; node = node.NextNode)
+            for (var child = element.FirstNode; child is not null; child = child.NextNode)
             {
-                if (node is XElement child) stack.Push(child);
-                else total += NodeCost(node);
+                if (child is XElement childElement) stack.Push(childElement);
+                else total += NodeCost(child);
             }
         }
 

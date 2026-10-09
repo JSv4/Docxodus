@@ -14,9 +14,11 @@ namespace Docxodus.Internal;
 /// pre-op snapshots; the redo stack holds post-op snapshots. Recording a new
 /// pre-op clears the redo stack (the standard "edit invalidates redo" behavior).
 ///
-/// <para><b>Two bounds, both enforced.</b> A depth alone does not bound memory: each
-/// entry is a full deep clone of every snapshot-scoped part, so its cost scales with
-/// the DOCUMENT, and a fixed depth on a large document is an unbounded amount of RAM.
+/// <para><b>Two bounds, both enforced.</b> A depth alone does not bound memory: an entry
+/// can hold a whole package checkpoint, or XML that shares little with its neighbours, so
+/// its cost can scale with the DOCUMENT, and a fixed depth on a large document is an
+/// unbounded amount of RAM. (Ordinary per-op snapshots share every unchanged block with
+/// each other, issue #1022, and the shared payloads below are counted once.)
 /// A 50-deep ring over a long filing is fifty whole-document DOMs held live — fine on a
 /// server, fatal in a browser WASM heap. Entries therefore carry a measured cost and the
 /// ring evicts the oldest until it is under BOTH the depth cap and the byte budget.</para>
@@ -65,9 +67,10 @@ internal sealed class UndoRing<T>
     /// <param name="costOf">Approximate retained cost of one snapshot. Null (or a zero budget)
     /// leaves the ring depth-bounded only, exactly as before.</param>
     /// <param name="sharedPayloadsOf">Payloads a snapshot may share, by reference, with other
-    /// snapshots (image bytes, issue #965), and their sizes. The ring counts each distinct payload
-    /// once across both stacks, however many entries hold it; <paramref name="costOf"/> covers
-    /// only what a snapshot holds alone.</param>
+    /// snapshots (image bytes, issue #965; part XML, issue #1022), and their sizes. The ring counts
+    /// each distinct payload once across both stacks, however many entries hold it, and the members
+    /// of an <see cref="ISharedPayloadGroup"/> payload once each as well; <paramref name="costOf"/>
+    /// covers only what a snapshot holds alone.</param>
     public UndoRing(
         int capacity,
         long budgetBytes = 0,
@@ -102,13 +105,34 @@ internal sealed class UndoRing<T>
     private long ComputeSharedBytes()
     {
         if (_budgetBytes <= 0 || _sharedPayloadsOf is null) return 0;
-        var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        // Reused across recomputes: the sets reach the size of the retained history once and are
+        // then cleared rather than reallocated, so a recompute per edit allocates nothing.
+        var seen = _seenPayloads ??= new HashSet<object>(ReferenceEqualityComparer.Instance);
+        var seenMembers = _seenMembers ??= new HashSet<object>(ReferenceEqualityComparer.Instance);
+        seen.Clear();
+        seenMembers.Clear();
         long total = 0;
         foreach (var entry in _undo.Concat(_redo))
             foreach (var (payload, bytes) in _sharedPayloadsOf(entry.Snapshot))
-                if (seen.Add(payload)) total += bytes;
+            {
+                if (!seen.Add(payload)) continue;
+                total += bytes;
+                // A group (a chunk of snapshot blocks, issue #1022) shares its members with other
+                // groups too: count each member once however many groups hold it.
+                if (payload is ISharedPayloadGroup group)
+                {
+                    for (int i = 0; i < group.MemberCount; i++)
+                    {
+                        var (member, memberBytes) = group.Member(i);
+                        if (seenMembers.Add(member)) total += memberBytes;
+                    }
+                }
+            }
         return total;
     }
+
+    private HashSet<object>? _seenPayloads;
+    private HashSet<object>? _seenMembers;
 
     /// <summary>True once the byte budget (rather than the depth cap) has discarded at least
     /// one entry. Sticky for the session's lifetime — it answers "was history ever trimmed for

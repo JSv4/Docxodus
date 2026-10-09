@@ -137,7 +137,8 @@ Every Python value type is `@dataclass(frozen=True, slots=True)`. Wire keys rema
 | `EditErrorCode` (22) | `EditErrorCode(Enum)`, values match `EnumToSnake` output | e.g. `"anchor_not_found"` |
 | `EditError` | `EditError(code, message, anchor_id=None)` | `{code, message, anchorId?}` |
 | `EditResult` | `EditResult(success, created=(), removed=(), modified=(), patch=None, error=None)` | tuples, not lists |
-| `MarkdownPatch` | `MarkdownPatch(scope_anchor_id, markdown)` | `{scopeAnchorId, markdown}` |
+| `MarkdownPatch` | `MarkdownPatch(scope_anchor_id, markdown, full_document=False, blocks=(), removed_anchor_ids=())` | `{scopeAnchorId, markdown, fullDocument, blocks, removedAnchorIds}`; block-scoped since #1022 |
+| `MarkdownPatchBlock` | `MarkdownPatchBlock(anchor_id, after_anchor_id, markdown)` | `{anchorId, afterAnchorId, markdown}` |
 | `AnchorTarget` | `AnchorTarget(id, kind, scope, unid, part_uri, text_preview)` | flat (see `AppendAnchorTarget`) |
 | `AnchorInfo` | `AnchorInfo(id, kind, scope, text_preview)` | `{id, kind, scope, textPreview}` |
 | `TextMatch` | `TextMatch(text, enclosing_anchor, span, fragments, context_before, context_after, groups)` | |

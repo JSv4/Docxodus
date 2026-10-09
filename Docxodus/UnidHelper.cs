@@ -120,6 +120,28 @@ internal static class UnidHelper
     }
 
     /// <summary>
+    /// <see cref="AssignToAllElementsDeterministic"/> restricted to one top-level block that already
+    /// carries its own Unid: assigns every missing Unid below <paramref name="block"/> and nothing
+    /// else. The values are identical to what the whole-scope walk would assign, because that walk
+    /// reaches the block with the block's own Unid as the parent seed and derives a descendant's
+    /// Unid only from its ancestors and its preceding siblings, all of which lie inside the block.
+    /// Content-control identities are not touched: the caller must fall back to the whole-scope
+    /// walk for any block holding a <c>w:sdt</c>, whose identity is decided story-wide.
+    /// </summary>
+    /// <returns><c>true</c> when at least one Unid was assigned.</returns>
+    internal static bool AssignWithinBlock(XElement block)
+    {
+        var blockUnid = (string?)block.Attribute(PtOpenXml.Unid)
+            ?? throw new InvalidOperationException("block-scoped Unid assignment needs a block that has its own Unid");
+        var live = new HashSet<XElement>();
+        CollectLiveAncestors(block, prune: false, live);
+        if (live.Count == 0) return false;
+        AssignDescendantsDeterministic(block, blockUnid, live, new Dictionary<string, string>(StringComparer.Ordinal),
+            prune: false);
+        return true;
+    }
+
+    /// <summary>
     /// Return an element's existing Unid, or derive the exact deterministic value that
     /// <see cref="AssignToAllElementsDeterministic"/> would assign without changing the XML tree.
     /// Read-only inspection fallbacks use this when an element lies outside the normal projected

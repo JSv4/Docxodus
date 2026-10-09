@@ -125,6 +125,7 @@ public sealed partial class DocxSession
         _history.RecordForRedo(preOp.PackageBytes is null ? TakeSnapshot() : TakePackageSnapshot());
         RestoreSnapshot(preOp);
         _version = nextVersion;
+        RewindPatchBaseline();
         _deliveryEvidence?.RecordLineage(Verification.DeliveryLineageAction.Undo);
         return true;
     }
@@ -140,6 +141,7 @@ public sealed partial class DocxSession
         _history.PushBackForUndo(postOp.PackageBytes is null ? TakeSnapshot() : TakePackageSnapshot());
         RestoreSnapshot(postOp);
         _version = nextVersion;
+        RewindPatchBaseline();
         _deliveryEvidence?.RecordLineage(Verification.DeliveryLineageAction.Redo);
         return true;
     }
@@ -150,6 +152,7 @@ public sealed partial class DocxSession
 
     private void OnHistoryRecordPreOp()
     {
+        _mutationEpoch = checked(_mutationEpoch + 1);
         if (_transactions.Count > 0)
         {
             _transactionPendingMutations = checked(_transactionPendingMutations + 1);

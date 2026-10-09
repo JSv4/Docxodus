@@ -1,8 +1,9 @@
 // Measures what one DocxSession edit costs as a document grows, and how much undo history the
-// default memory budget keeps (issue #965). Builds a synthetic document of N 40-word paragraphs
-// plus K embedded images of M MiB each, then applies E ReplaceText edits to distinct paragraphs.
+// default memory budget keeps (issues #965, #1022). Builds a synthetic document of N 40-word
+// paragraphs plus K embedded images of M MiB each, then applies E ReplaceText edits to distinct
+// paragraphs, with the per-op markdown patch on (the default) or off.
 //
-//   dotnet run -c Release -- [paragraphs=4000] [images=4] [imageMiB=2] [edits=20]
+//   dotnet run -c Release -- [paragraphs=4000] [images=4] [imageMiB=2] [edits=20] [patch=on|off]
 
 using System.Diagnostics;
 using System.Text;
@@ -13,11 +14,12 @@ var paragraphs = args.Length > 0 ? int.Parse(args[0]) : 4000;
 var images = args.Length > 1 ? int.Parse(args[1]) : 4;
 var imageMiB = args.Length > 2 ? double.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture) : 2;
 var edits = args.Length > 3 ? int.Parse(args[3]) : 20;
+var patch = args.Length <= 4 || args[4] != "off";
 
 var docx = BuildDocument(paragraphs, images, (int)(imageMiB * 1024 * 1024));
-Console.WriteLine($"document: {paragraphs} paragraphs, {images} images x {imageMiB} MiB, {docx.Length / 1024} KiB on disk");
+Console.WriteLine($"document: {paragraphs} paragraphs, {images} images x {imageMiB} MiB, {docx.Length / 1024} KiB on disk, markdown patch {(patch ? "on" : "off")}");
 
-using var session = new DocxSession(docx);
+using var session = new DocxSession(docx, new DocxSessionSettings { EmitMarkdownPatch = patch });
 var anchors = session.Project().AnchorIndex.Values
     .Where(t => t.Anchor.Scope == "body" && t.Anchor.Kind == "p")
     .Select(t => t.Anchor.Id)
@@ -30,6 +32,7 @@ session.Undo();
 
 var times = new List<double>();
 var allocated = new List<long>();
+long undoAfterFirst = 0;
 for (var i = 0; i < edits; i++)
 {
     var anchor = anchors[(i * step) % anchors.Count];
@@ -39,11 +42,14 @@ for (var i = 0; i < edits; i++)
     watch.Stop();
     times.Add(watch.Elapsed.TotalMilliseconds);
     allocated.Add(GC.GetAllocatedBytesForCurrentThread() - before);
+    if (i == 0) undoAfterFirst = session.UndoMemoryBytes;
 }
 
 times.Sort();
 Console.WriteLine($"per edit: median {times[times.Count / 2]:F1} ms, max {times[^1]:F1} ms");
-Console.WriteLine($"allocated per edit: median {allocated.OrderBy(a => a).ElementAt(allocated.Count / 2) / (1024.0 * 1024):F1} MiB");
+Console.WriteLine($"allocated per edit: median {allocated.OrderBy(a => a).ElementAt(allocated.Count / 2) / 1024.0:F1} KiB");
+if (session.UndoCount == edits)
+    Console.WriteLine($"undo bytes added per step: {(session.UndoMemoryBytes - undoAfterFirst) / (double)(edits - 1) / 1024.0:F1} KiB");
 Console.WriteLine($"undo: {session.UndoCount} of {edits} steps kept, {session.UndoMemoryBytes / (1024.0 * 1024):F1} MiB counted against the budget, trimmed for memory: {session.UndoHistoryTrimmedForMemory}");
 GC.Collect();
 GC.WaitForPendingFinalizers();
