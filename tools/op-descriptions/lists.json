@@ -63,7 +63,7 @@
         "wasm": { "method": "SetListStartOverride" },
         "npm": { "method": "setListStartOverride" },
         "python": { "method": "set_list_start_override" },
-        "stdio": { "op": "set_list_start_override", "argNames": { "startValue": "value" } },
+        "stdio": { "op": "set_list_start_override" },
         "mcp": { "tool": "docxodus_list", "action": "set_start" }
       }
     },

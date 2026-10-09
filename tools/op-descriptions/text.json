@@ -137,7 +137,7 @@
         "wasm": { "method": "MergeParagraphs" },
         "npm": { "method": "mergeParagraphs" },
         "python": { "method": "merge_paragraphs" },
-        "stdio": { "op": "merge_paragraphs", "argNames": { "anchorId": "firstAnchorId" } },
+        "stdio": { "op": "merge_paragraphs" },
         "mcp": { "tool": "docxodus_edit", "action": "merge_paragraphs" }
       }
     }

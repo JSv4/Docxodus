@@ -162,6 +162,37 @@ internal static class DocxSessionJson
     public static string? AliasedString(JsonElement args, string name, string deprecatedAlias) =>
         AliasedArgument(args, name, deprecatedAlias) is { ValueKind: JsonValueKind.String } v ? v.GetString() : null;
 
+    /// <summary><see cref="AliasedArgument"/> read as an optional integer.</summary>
+    public static int? AliasedInt(JsonElement args, string name, string deprecatedAlias) =>
+        AliasedArgument(args, name, deprecatedAlias) is { ValueKind: JsonValueKind.Number } v ? v.GetInt32() : null;
+
+    /// <summary>
+    /// The parts a listing op reads (issue #1023): MCP's token (<c>body</c>, <c>headers</c>,
+    /// <c>footers</c>, <c>footnotes</c>, <c>endnotes</c>, <c>comments</c>, <c>all</c>) or a
+    /// <see cref="ProjectionScopes"/> mask, which can name several parts at once. Absent or null is
+    /// every part.
+    /// </summary>
+    public static ProjectionScopes ParseProjectionScopes(JsonElement? value) => value switch
+    {
+        null or { ValueKind: JsonValueKind.Null } => ProjectionScopes.All,
+        { ValueKind: JsonValueKind.Number } n => (ProjectionScopes)n.GetInt32(),
+        { ValueKind: JsonValueKind.String } s => ParseProjectionScopes(s.GetString()),
+        { } other => throw new FormatException($"scope must be a token or a number, not {other.ValueKind}"),
+    };
+
+    /// <summary>The string form of <see cref="ParseProjectionScopes(JsonElement?)"/>.</summary>
+    public static ProjectionScopes ParseProjectionScopes(string? token) => token switch
+    {
+        null or "all" => ProjectionScopes.All,
+        "body" => ProjectionScopes.Body,
+        "headers" => ProjectionScopes.Headers,
+        "footers" => ProjectionScopes.Footers,
+        "footnotes" => ProjectionScopes.Footnotes,
+        "endnotes" => ProjectionScopes.Endnotes,
+        "comments" => ProjectionScopes.Comments,
+        _ => throw new FormatException($"unknown scope: {token}"),
+    };
+
     /// <summary><see cref="AliasedArgument"/> read as an optional boolean.</summary>
     public static bool? AliasedBool(JsonElement args, string name, string deprecatedAlias) =>
         AliasedArgument(args, name, deprecatedAlias) is { ValueKind: JsonValueKind.True or JsonValueKind.False } v
