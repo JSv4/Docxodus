@@ -199,6 +199,14 @@ All notable changes to this project will be documented in this file.
   picture to check whether it changed. `UndoMemoryBytes` reports the shared total, so it is lower than
   before on documents with pictures. `benchmarks/session-edit-cost` measures per-edit cost and undo
   retention; the remaining cost that grows with the document is tracked in #1022.
+- The native-comment ops take the same argument names and defaults on every transport (issue #1014).
+  The comment being replied to, updated, resolved or removed is `commentAnchorId` on the stdio host
+  (and so the Python client), as it already was on MCP. The host still accepts its old spellings,
+  `parentAnchorId` for a reply and `anchorId` for the others, as deprecated aliases, and refuses a call
+  that gives both with different values. `DocxSessionOps` now owns the two defaults MCP alone applied:
+  an add or reply without `markdown` adds an empty comment, and a resolve without `resolved` resolves.
+  The stdio host used to refuse both calls. `tools/op-descriptions/comments.json` records no
+  divergences any more.
 - The MCP `docxodus_compare` tool compares through the `DocxCompare` front door (issue #1006), as the
   `redline` CLI and the browser's `compareDocuments` already did. Two-way and fan-out comparisons now
   accept each input's own pending tracked changes first, as Word's Compare does. The raw engine it ran

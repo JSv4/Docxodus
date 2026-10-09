@@ -2123,7 +2123,7 @@ class DocxSession:
         return EditResult._from_wire(
             self._call(
                 "update_comment",
-                {"anchorId": comment_anchor_id, "markdown": markdown},
+                {"commentAnchorId": comment_anchor_id, "markdown": markdown},
             )
         )
 
@@ -2142,7 +2142,7 @@ class DocxSession:
         comment definition and paragraph anchors are returned in ``EditResult.created``.
         """
         args: dict[str, Any] = {
-            "parentAnchorId": parent_comment_anchor_id,
+            "commentAnchorId": parent_comment_anchor_id,
             "author": author,
             "markdown": markdown,
         }
@@ -2163,7 +2163,7 @@ class DocxSession:
         return EditResult._from_wire(
             self._call(
                 "set_comment_resolved",
-                {"anchorId": comment_anchor_id, "resolved": resolved},
+                {"commentAnchorId": comment_anchor_id, "resolved": resolved},
             )
         )
 
@@ -2172,7 +2172,7 @@ class DocxSession:
         package, and any ``commentsExtended``/``commentsIds`` threading entries keyed
         by it."""
         return EditResult._from_wire(
-            self._call("remove_comment", {"anchorId": comment_anchor_id})
+            self._call("remove_comment", {"commentAnchorId": comment_anchor_id})
         )
 
     def list_comments(self) -> tuple[CommentListEntry, ...]:
