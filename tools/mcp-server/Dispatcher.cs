@@ -26,7 +26,7 @@ namespace Docxodus.McpServer;
 /// per the MCP convention that business-level tool failures belong in the result, not the
 /// envelope.
 /// </summary>
-internal static class Dispatcher
+internal static partial class Dispatcher
 {
     public static string Call(SessionStore store, string tool, JsonElement args)
     {
@@ -694,21 +694,12 @@ internal static class Dispatcher
 
     private static string RunCommentAction(DocSession session, string action, JsonElement args)
     {
+        // The argument parsing is generated from tools/op-descriptions/comments.json
+        // (Generated/CommentsOps.cs); this shell adds the list envelope and the guard.
         if (action == "list")
-            return $"{{\"comments\":{DocxSessionOps.ListComments(session.Handle)}}}";
-        return Guarded(session, ParsePreconditions(args, MutationTarget(args)), () => action switch
-        {
-        "add" => AddComment(session, args),
-        "reply" => DocxSessionOps.AddCommentReply(
-            session.Handle, Str(args, "commentAnchorId"), Str(args, "author"),
-            OptStr(args, "initials"), OptStr(args, "date"), OptStr(args, "markdown")),
-        "update" => DocxSessionOps.UpdateComment(
-            session.Handle, Str(args, "commentAnchorId"), Str(args, "markdown")),
-        "resolve" => DocxSessionOps.SetCommentResolved(
-            session.Handle, Str(args, "commentAnchorId"), OptBool(args, "resolved")),
-        "remove" => DocxSessionOps.RemoveComment(session.Handle, Str(args, "commentAnchorId")),
-        _ => throw new McpToolException($"unknown docxodus_comment action: {action}"),
-        });
+            return $"{{\"comments\":{RunGeneratedCommentsAction(session.Handle, "docxodus_comment", action, args)}}}";
+        return Guarded(session, ParsePreconditions(args, MutationTarget(args)),
+            () => RunGeneratedCommentsAction(session.Handle, "docxodus_comment", action, args));
     }
 
     private static bool IsMutatingCommentAction(string action) => action != "list";
@@ -868,24 +859,6 @@ internal static class Dispatcher
             && value.ValueKind is JsonValueKind.True or JsonValueKind.False)
             return value.GetBoolean();
         throw new McpToolException($"missing boolean \"{name}\"");
-    }
-
-    private static string AddComment(DocSession session, JsonElement args)
-    {
-        var anchorId = OptStr(args, "anchorId");
-        var revisionId = OptStr(args, "revisionId");
-        var hasSpan = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("span", out _);
-        if ((anchorId is null) == (revisionId is null) || (revisionId is not null && hasSpan))
-            throw new McpToolException(
-                "docxodus_comment add requires exactly one target: anchorId (with optional span) or revisionId");
-
-        return revisionId is not null
-            ? DocxSessionOps.AddCommentToRevision(
-                session.Handle, revisionId, Str(args, "author"), OptStr(args, "initials"),
-                OptStr(args, "date"), OptStr(args, "markdown"))
-            : DocxSessionOps.AddComment(
-                session.Handle, anchorId!, ParseSpan(args, "span"), Str(args, "author"),
-                OptStr(args, "initials"), OptStr(args, "date"), OptStr(args, "markdown"));
     }
 
     // ─── Annotate (annotation overlay) ─────────────────────────────────
@@ -1767,24 +1740,8 @@ internal static class Dispatcher
                 RequireStrings(args, "anchorId");
                 break;
 
-            case ("docxodus_comment", "add"):
-                ValidateCommentAddArguments(args);
-                break;
-            case ("docxodus_comment", "reply"):
-                RequireStrings(args, "commentAnchorId", "author");
-                ValidateOptionalString(args, "initials");
-                ValidateOptionalString(args, "date");
-                ValidateOptionalString(args, "markdown");
-                break;
-            case ("docxodus_comment", "update"):
-                RequireStrings(args, "commentAnchorId", "markdown");
-                break;
-            case ("docxodus_comment", "resolve"):
-                RequireStrings(args, "commentAnchorId");
-                ValidateOptionalBool(args, "resolved");
-                break;
-            case ("docxodus_comment", "remove"):
-                RequireStrings(args, "commentAnchorId");
+            case ("docxodus_comment", _):
+                ValidateGeneratedCommentsArguments(tool, action, args);
                 break;
 
             case ("docxodus_links", "add_hyperlink"):
@@ -1891,22 +1848,6 @@ internal static class Dispatcher
         if (!args.TryGetProperty(name, out var value)
             || value.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
             throw new McpToolException($"argument \"{name}\" must be a string or null");
-    }
-
-    private static void ValidateCommentAddArguments(JsonElement args)
-    {
-        var anchorId = OptionalStringValue(args, "anchorId");
-        var revisionId = OptionalStringValue(args, "revisionId");
-        if ((anchorId is null) == (revisionId is null))
-            throw new McpToolException(
-                "docxodus_comment add requires exactly one target: anchorId or revisionId");
-        RequireStrings(args, "author");
-        ValidateOptionalString(args, "initials");
-        ValidateOptionalString(args, "date");
-        ValidateOptionalString(args, "markdown");
-        if (revisionId is not null && args.TryGetProperty("span", out _))
-            throw new McpToolException("revisionId comment targets cannot include span");
-        ValidateOptionalSpan(args, "span");
     }
 
     private static void RequireStrings(JsonElement args, params string[] names)

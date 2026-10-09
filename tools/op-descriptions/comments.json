@@ -1,6 +1,22 @@
 {
-  "$comment": "One description of the native-comment session ops and how each transport names them (issue #982). SessionOpDescriptionDriftTests checks every transport against it; see docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names; a transport that spells one differently lists it under argNames, and a transport-specific default under defaults. Both are recorded divergences, not the target. An argument's own default is the one DocxSessionOps applies on every transport. This family has no divergences left: issue #1014 gave every transport one name and one default per argument.",
+  "$comment": "One description of the native-comment session ops and how each transport names them (issue #982). SessionOpDescriptionDriftTests checks every transport against it; see docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names; a transport that spells one differently lists it under argNames, and a transport-specific default under defaults. Both are recorded divergences, not the target. An argument's own default is the one DocxSessionOps applies on every transport. This family has no divergences left: issue #1014 gave every transport one name and one default per argument. It is generated (issue #1027): tools/op-codegen emits the stdio host's and the MCP server's argument parsing, the MCP schema properties and the WASM [JSExport] shims from this file. The argument order is the facade's parameter order and the WASM shim's. A stdio deprecatedAliases entry is an old spelling the stdio host still accepts; mcp.<tool>.properties carries the schema prose for each property the tool advertises, in the order it advertises them; wasm.doc is the shim's XML summary.",
   "family": "comments",
+  "generate": true,
+  "mcp": {
+    "docxodus_comment": {
+      "properties": {
+        "anchorId": { "description": "add: the body paragraph to comment on. Mutually exclusive with revisionId." },
+        "span": { "description": "add: character range within the paragraph. Omit to comment on the whole block." },
+        "revisionId": { "description": "add: alternatively, the id from docxodus_track_changes list. The exact live revision extent is targeted; unknown/already-resolved ids fail with revision_not_found." },
+        "author": { "description": "add/reply: comment author (required)." },
+        "initials": { "description": "add/reply: optional author initials." },
+        "date": { "description": "add/reply: optional ISO-8601 timestamp; w:date is written only when provided (omitting keeps output deterministic)." },
+        "markdown": { "description": "add/reply/update: the comment body (same markdown subset as other payloads). Required for update; add and reply without it create an empty comment." },
+        "commentAnchorId": { "description": "reply: parent comment; resolve/update/remove: target comment definition anchor (kind cmt)." },
+        "resolved": { "description": "resolve: true marks done (default); false reopens while preserving thread parentage." }
+      }
+    }
+  },
   "ops": [
     {
       "op": "addComment",
@@ -15,7 +31,10 @@
         { "name": "markdown", "type": "markdown", "required": false, "default": "" }
       ],
       "transports": {
-        "wasm": { "method": "AddComment" },
+        "wasm": {
+          "method": "AddComment",
+          "doc": "Add a native Word comment on body paragraph <paramref name=\"anchorId\"/> (issue #300). <paramref name=\"spanJson\"/> is <c>\"\"</c> for the whole block or <c>{\"start\":int,\"length\":int}</c>; <paramref name=\"initials\"/>/<paramref name=\"date\"/> are <c>\"\"</c> when absent (date is ISO-8601 and written only when provided). Returns the created definition anchor (kind <c>cmt</c>) plus its <c>p</c>/scope-<c>cmt</c> paragraph anchors in <c>created</c>."
+        },
         "npm": { "method": "addComment" },
         "python": { "method": "add_comment" },
         "stdio": { "op": "add_comment" },
@@ -34,7 +53,10 @@
         { "name": "markdown", "type": "markdown", "required": false, "default": "" }
       ],
       "transports": {
-        "wasm": { "method": "AddCommentToRevision" },
+        "wasm": {
+          "method": "AddCommentToRevision",
+          "doc": "Add a native Word comment around the exact live extent of a tracked revision. Unknown or already-resolved ids return <c>revision_not_found</c>."
+        },
         "npm": { "method": "addCommentToRevision" },
         "python": { "method": "add_comment_to_revision" },
         "stdio": { "op": "add_comment" },
@@ -53,27 +75,14 @@
         { "name": "markdown", "type": "markdown", "required": false, "default": "" }
       ],
       "transports": {
-        "wasm": { "method": "AddCommentReply" },
+        "wasm": {
+          "method": "AddCommentReply",
+          "doc": "Add a native reply with an adjacent reference; <c>w15:paraIdParent</c> links it to the immediate parent so it inherits the thread root's range."
+        },
         "npm": { "method": "addCommentReply" },
         "python": { "method": "add_comment_reply" },
-        "stdio": { "op": "add_comment_reply" },
+        "stdio": { "op": "add_comment_reply", "deprecatedAliases": { "commentAnchorId": "parentAnchorId" } },
         "mcp": { "tool": "docxodus_comment", "action": "reply" }
-      }
-    },
-    {
-      "op": "updateComment",
-      "facade": "UpdateComment",
-      "result": "EditResult",
-      "args": [
-        { "name": "commentAnchorId", "type": "anchor", "required": true },
-        { "name": "markdown", "type": "markdown", "required": true }
-      ],
-      "transports": {
-        "wasm": { "method": "UpdateComment" },
-        "npm": { "method": "updateComment" },
-        "python": { "method": "update_comment" },
-        "stdio": { "op": "update_comment" },
-        "mcp": { "tool": "docxodus_comment", "action": "update" }
       }
     },
     {
@@ -85,11 +94,33 @@
         { "name": "resolved", "type": "boolean", "required": false, "default": true }
       ],
       "transports": {
-        "wasm": { "method": "SetCommentResolved" },
+        "wasm": {
+          "method": "SetCommentResolved",
+          "doc": "Set <c>w15:done</c> for one comment (<c>false</c> reopens it), creating the paraId-keyed metadata parts when the comment was previously flat."
+        },
         "npm": { "method": "setCommentResolved" },
         "python": { "method": "set_comment_resolved" },
-        "stdio": { "op": "set_comment_resolved" },
+        "stdio": { "op": "set_comment_resolved", "deprecatedAliases": { "commentAnchorId": "anchorId" } },
         "mcp": { "tool": "docxodus_comment", "action": "resolve" }
+      }
+    },
+    {
+      "op": "updateComment",
+      "facade": "UpdateComment",
+      "result": "EditResult",
+      "args": [
+        { "name": "commentAnchorId", "type": "anchor", "required": true },
+        { "name": "markdown", "type": "markdown", "required": true }
+      ],
+      "transports": {
+        "wasm": {
+          "method": "UpdateComment",
+          "doc": "Replace a comment's body text, addressed by its definition anchor (kind <c>cmt</c>); identity attributes (author/initials/date) are preserved."
+        },
+        "npm": { "method": "updateComment" },
+        "python": { "method": "update_comment" },
+        "stdio": { "op": "update_comment", "deprecatedAliases": { "commentAnchorId": "anchorId" } },
+        "mcp": { "tool": "docxodus_comment", "action": "update" }
       }
     },
     {
@@ -100,10 +131,13 @@
         { "name": "commentAnchorId", "type": "anchor", "required": true }
       ],
       "transports": {
-        "wasm": { "method": "RemoveComment" },
+        "wasm": {
+          "method": "RemoveComment",
+          "doc": "Remove a comment: definition + body marker triple + threading entries."
+        },
         "npm": { "method": "removeComment" },
         "python": { "method": "remove_comment" },
-        "stdio": { "op": "remove_comment" },
+        "stdio": { "op": "remove_comment", "deprecatedAliases": { "commentAnchorId": "anchorId" } },
         "mcp": { "tool": "docxodus_comment", "action": "remove" }
       }
     },
@@ -113,7 +147,10 @@
       "result": "CommentListEntry[]",
       "args": [],
       "transports": {
-        "wasm": { "method": "ListComments" },
+        "wasm": {
+          "method": "ListComments",
+          "doc": "The document's comments in part order: <c>[{\"anchorId\",\"author\",\"initials\"?,\"date\"?,\"text\",\"parentAnchorId\"?,\"resolved\"?}]</c>."
+        },
         "npm": { "method": "listComments" },
         "python": { "method": "list_comments" },
         "stdio": { "op": "list_comments" },
