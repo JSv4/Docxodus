@@ -109,11 +109,22 @@ public sealed record FamilyDescription(
                 }
             }
 
-            static string? Text(JsonElement e, string key) => e.TryGetProperty(key, out var v) ? v.GetString() : null;
-            var wasm = transports.GetProperty("wasm");
-            var stdio = transports.GetProperty("stdio");
-            var mcpTransport = transports.GetProperty("mcp");
-            var aliases = stdio.TryGetProperty("deprecatedAliases", out var al)
+            static string? Text(JsonElement e, string key) =>
+                e.ValueKind == JsonValueKind.Object && e.TryGetProperty(key, out var v) ? v.GetString() : null;
+            JsonElement Transport(string key) => transports.TryGetProperty(key, out var t) ? t : default;
+            var wasm = Transport("wasm");
+            var stdio = Transport("stdio");
+            var mcpTransport = Transport("mcp");
+            if (generate)
+            {
+                foreach (var (transport, key) in new[] { (wasm, "wasm.method"), (stdio, "stdio.op"), (mcpTransport, "mcp.tool"), (mcpTransport, "mcp.action") })
+                {
+                    if (string.IsNullOrEmpty(Text(transport, key.Split('.')[1])))
+                        throw new CodegenException($"{family}/{name}: a generated op needs transports.{key}");
+                }
+            }
+
+            var aliases = stdio.ValueKind == JsonValueKind.Object && stdio.TryGetProperty("deprecatedAliases", out var al)
                 ? al.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.GetString()!, StringComparer.Ordinal)
                 : new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var aliased in aliases.Keys)

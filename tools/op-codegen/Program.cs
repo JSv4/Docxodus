@@ -22,7 +22,7 @@ try
 {
     expected = PlumbingGenerator.Render(PlumbingGenerator.Generate(root), Read);
 }
-catch (CodegenException e)
+catch (Exception e) when (e is CodegenException or System.Text.Json.JsonException or KeyNotFoundException or InvalidOperationException)
 {
     Console.Error.WriteLine($"op-codegen: {e.Message}");
     return 2;
@@ -42,7 +42,9 @@ foreach (var (path, text) in expected)
 
     var full = Path.Combine(root, path);
     Directory.CreateDirectory(Path.GetDirectoryName(full)!);
-    var bom = current is not null && current.StartsWith('﻿');
+    // File.ReadAllText drops a byte-order mark, so look for one in the bytes.
+    var bytes = File.Exists(full) ? File.ReadAllBytes(full) : Array.Empty<byte>();
+    var bom = bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF;
     File.WriteAllText(full, text, new UTF8Encoding(bom));
     Console.WriteLine($"wrote: {path}");
 }

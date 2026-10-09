@@ -90,7 +90,7 @@ dotnet run --project tools/op-codegen              # rewrite the generated files
 dotnet run --project tools/op-codegen -- --check   # exit 1 if any is stale
 ```
 
-`GeneratedSessionPlumbingTests` runs the generator in memory and fails when a checked-in file differs from its output (`OPG001`), so a description change without a regenerate, or a hand edit of generated code, fails the build's tests. It also checks that a description change does change the output (`OPG003`), that the description lists arguments in the facade's parameter order with matching types (`OPG004`), and that no MCP schema names a property twice (`OPG005`).
+`GeneratedSessionPlumbingTests` runs the generator in memory and fails when a checked-in file differs from its output (`OPG001`), so a description change without a regenerate, or a hand edit of generated code, fails the build's tests. It also checks that a description change does change the output (`OPG003`), that the description lists arguments in the facade's parameter order with matching types (`OPG004`), that no MCP schema names a property twice (`OPG005`), that each tool's schema carries its generated actions and properties in order (`OPG009`), and that no generated code lives outside the generator's outputs: no orphaned generated file, and no generated WASM shim defined outside its region (`OPG010`).
 
 The generator relies on a few rules, and refuses a description that breaks them rather than guessing:
 
@@ -98,7 +98,7 @@ The generator relies on a few rules, and refuses a description that breaks them 
 - **Types it knows.** `anchor`, `string` and `markdown` are strings; `boolean`; and `charSpan`, an optional `{ start, length }` object. Anything else fails generation with the argument named, and supporting it means adding one reader per transport to `Emitters.cs`.
 - **Defaults belong to the facade.** An optional argument is passed to the facade as null when absent. On WASM, where JavaScript passes every argument, an optional string with no default arrives as `""` and becomes null; one with a default passes through for the facade to apply.
 - **One name, several ops.** When two ops share a stdio op or an MCP action, as `addComment` and `addCommentToRevision` share `add_comment` and `docxodus_comment add`, the caller picks one by naming exactly one required argument that the others lack (`anchorId` or `revisionId`). Naming none or both is refused, and so is naming another op's optional argument (`span` with `revisionId`).
-- **No divergences.** A family marked `generate` cannot record `argNames`, `defaults`, `requires`, `flattens`, `absent` or MCP `aliases`, because generated code has one spelling and one default per argument.
+- **No divergences.** A family marked `generate` cannot record `argNames`, `defaults`, `requires`, `flattens`, `absent` or `aliases` on any transport, because generated code has one spelling and one default per argument.
 
 What stays hand-written for a generated family:
 
@@ -114,7 +114,7 @@ What stays hand-written for a generated family:
 4. In the stdio dispatcher, replace the family's cases with `_ when IsGenerated<Family>Op(op) => DispatchGenerated<Family>Op(op, args)`. In the MCP dispatcher, have the tool shell call `RunGenerated<Family>Action`, and route the family's batch-step validation cases to `ValidateGenerated<Family>Arguments`. In `ToolCatalog`, make the tool's schema a `$$"""` literal and splice in `{{GeneratedMcpSchema.<Tool>Actions}}` and `{{GeneratedMcpSchema.<Tool>Properties}}`.
 5. Delete the hand-written parsing the generated code replaced. Run the generator again with `--check`, the drift tests and the transport tests.
 
-If a family's ops are spread over an MCP tool whose other actions are hand-written, splice the generated action members and properties next to the hand-written ones; `OPG005` catches a property both sides advertise. A tool whose actions span two generated families is not supported yet: each family's dispatch method throws on actions it does not know.
+If a family's ops are spread over an MCP tool whose other actions are hand-written, splice the generated action members and properties next to the hand-written ones; `OPG005` catches a property both sides advertise. A stdio op or MCP tool shared by two generated families is not supported yet (each family's dispatch method throws on names it does not know), and the generator refuses it.
 
 ### What stays hand-written
 

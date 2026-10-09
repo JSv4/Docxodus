@@ -362,7 +362,7 @@ internal static class WasmEmitter
     private static IEnumerable<string> Wrap(string text, int width)
     {
         var line = new StringBuilder();
-        foreach (var word in text.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        foreach (var word in text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
         {
             if (line.Length > 0 && line.Length + 1 + word.Length > width)
             {

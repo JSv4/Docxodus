@@ -44,11 +44,23 @@ public static class PlumbingGenerator
             .ToList();
 
     /// <summary>The generated output for every family marked for generation.</summary>
-    public static IReadOnlyList<GeneratedOutput> Generate(string repoRoot) =>
-        LoadFamilies(repoRoot)
-            .Where(f => f.Family.Generate)
-            .SelectMany(f => GenerateFamily(f.Family, f.File))
-            .ToList();
+    public static IReadOnlyList<GeneratedOutput> Generate(string repoRoot)
+    {
+        var families = LoadFamilies(repoRoot).Where(f => f.Family.Generate).ToList();
+
+        // Each family's generated dispatch owns its stdio ops and MCP tools outright: it throws on
+        // a name it does not know, and the schema constants are named by tool.
+        foreach (var (what, key) in new (string, Func<OpDescription, string>)[] { ("stdio op", o => o.StdioOp), ("MCP tool", o => o.McpTool) })
+        {
+            var shared = families.SelectMany(f => f.Family.Ops.Select(key).Distinct().Select(k => (Key: k, f.Family.Family)))
+                .GroupBy(x => x.Key).FirstOrDefault(g => g.Count() > 1);
+            if (shared is not null)
+                throw new CodegenException(
+                    $"the {what} {shared.Key} spans the generated families {string.Join(" and ", shared.Select(x => x.Family))}, which the generator does not support yet");
+        }
+
+        return families.SelectMany(f => GenerateFamily(f.Family, f.File)).ToList();
+    }
 
     /// <summary>The generated output for one family.</summary>
     /// <param name="sourceFile">The description's file name, quoted in the generated headers.</param>
@@ -240,6 +252,12 @@ internal sealed record SharedName(string Key, IReadOnlyList<OpDescription> Ops)
         {
             if (arg.Select(a => (a.Type, a.Required, a.HasDefault)).Distinct().Count() > 1)
                 throw new CodegenException($"{Key}: the ops sharing this name describe {arg.Key} differently");
+        }
+
+        foreach (var arg in Common)
+        {
+            if (Ops.Select(o => o.StdioAliases.TryGetValue(arg.Name, out var alias) ? alias : null).Distinct().Count() > 1)
+                throw new CodegenException($"{Key}: the ops sharing this name give {arg.Name} different deprecated aliases");
         }
 
         foreach (var op in Ops) _ = Selector(op);
