@@ -126,13 +126,43 @@ internal static class DocxDiffOps
         bool semanticChanges)
     {
         var (left, right, settings) = Prepare(leftBytes, rightBytes, settingsJson);
-        var comparison = DocxDiff.CreateComparison(left, right, settings);
-        return new DocxDiffProducts(
-            redline ? comparison.ToRedline().DocumentByteArray : null,
+        return Products(DocxDiff.CreateComparison(left, right, settings), exactNoOp: null,
+            redline, revisions, editScript, semanticChanges);
+    }
+
+    /// <summary>
+    /// <see cref="CompareProducts"/> through the <see cref="DocxCompare"/> front door (issue #1006): the
+    /// comparison runs over the accepted view of each input (<see cref="DocxCompare.ApplyFrontDoorRevisionPolicy"/>),
+    /// and identical packages return the front door's exact clone as the redline. The redline is the one
+    /// <see cref="DocxCompare.Compare"/> returns for the same inputs and settings.
+    /// </summary>
+    public static DocxDiffProducts CompareFrontDoorProducts(
+        byte[] leftBytes,
+        byte[] rightBytes,
+        DocxDiffSettings settings,
+        bool redline,
+        bool revisions,
+        bool editScript,
+        bool semanticChanges)
+    {
+        RequireBytes(leftBytes, nameof(leftBytes));
+        RequireBytes(rightBytes, nameof(rightBytes));
+        ArgumentNullException.ThrowIfNull(settings);
+        var left = new WmlDocument("original.docx", leftBytes);
+        var right = new WmlDocument("modified.docx", rightBytes);
+        var comparison = DocxDiff.CreateComparison(left, right, DocxCompare.ApplyFrontDoorRevisionPolicy(settings));
+        return Products(comparison, DocxCompare.ExactNoOpResult(left, right),
+            redline, revisions, editScript, semanticChanges);
+    }
+
+    private static DocxDiffProducts Products(
+        DocxDiffComparison comparison, WmlDocument? exactNoOp,
+        bool redline, bool revisions, bool editScript, bool semanticChanges) =>
+        new(
+            redline ? (exactNoOp ?? comparison.ToRedline()).DocumentByteArray : null,
             revisions ? SerializeRevisions(comparison.GetRevisions()) : null,
             editScript ? comparison.GetEditScriptJson() : null,
             semanticChanges ? comparison.GetSemanticChangesJson(indented: false) : null);
-    }
 
     /// <summary>
     /// Wire form of <see cref="CompareProducts"/> shared by the WASM bridge and the stdio host.
@@ -208,17 +238,33 @@ internal static class DocxDiffOps
     /// other ninety-nine comparisons.</para>
     /// </remarks>
     public static string CompareBatchJson(
-        byte[] baselineBytes, string candidatesJson, string? settingsJson, string? productsJson)
+        byte[] baselineBytes, string candidatesJson, string? settingsJson, string? productsJson) =>
+        CompareBatch(baselineBytes, candidatesJson, ParseSettings(settingsJson), frontDoor: false, productsJson);
+
+    /// <summary>
+    /// <see cref="CompareBatchJson"/> through the <see cref="DocxCompare"/> front door (issue #1006): each
+    /// candidate is compared as <see cref="CompareFrontDoorProducts"/> compares one pair.
+    /// </summary>
+    public static string CompareBatchFrontDoorJson(
+        byte[] baselineBytes, string candidatesJson, DocxDiffSettings settings, string? productsJson)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        return CompareBatch(baselineBytes, candidatesJson, DocxCompare.ApplyFrontDoorRevisionPolicy(settings),
+            frontDoor: true, productsJson);
+    }
+
+    private static string CompareBatch(
+        byte[] baselineBytes, string candidatesJson, DocxDiffSettings settings, bool frontDoor, string? productsJson)
     {
         if (baselineBytes == null || baselineBytes.Length == 0)
             throw new ArgumentException("No baseline document data provided", nameof(baselineBytes));
 
         var selection = ParseProductSelection(productsJson);
-        var settings = ParseSettings(settingsJson);
         var candidates = ParseNamedDocuments(candidatesJson, nameof(candidatesJson));
 
         // ONE read of the baseline for the whole batch — the point of the op.
-        var baseline = DocxDiff.CreateSnapshot(new WmlDocument("baseline.docx", baselineBytes), settings);
+        var baselineDocument = new WmlDocument("baseline.docx", baselineBytes);
+        var baseline = DocxDiff.CreateSnapshot(baselineDocument, settings);
 
         var sb = new StringBuilder(1024);
         sb.Append("{\"results\":[");
@@ -231,11 +277,11 @@ internal static class DocxDiffOps
             {
                 // The document is constructed INSIDE the try: a candidate that is not a readable
                 // Wordprocessing package is that candidate's error, not the batch's.
+                var candidate = new WmlDocument($"{name}.docx", bytes);
                 var comparison = DocxDiff.CreateComparison(
-                    baseline,
-                    DocxDiff.CreateSnapshot(new WmlDocument($"{name}.docx", bytes), settings),
-                    settings);
-                AppendProducts(sb, comparison, selection);
+                    baseline, DocxDiff.CreateSnapshot(candidate, settings), settings);
+                AppendProducts(sb, comparison,
+                    frontDoor ? DocxCompare.ExactNoOpResult(baselineDocument, candidate) : null, selection);
             }
             catch (Exception ex)
             {
@@ -316,12 +362,12 @@ internal static class DocxDiffOps
     /// <summary>Append the selected products of one comparison as object members (leading comma),
     /// in the same wire shapes <see cref="CompareProductsJson"/> emits.</summary>
     private static void AppendProducts(
-        StringBuilder sb, DocxDiffComparison comparison,
+        StringBuilder sb, DocxDiffComparison comparison, WmlDocument? exactNoOp,
         (bool Redline, bool Revisions, bool EditScript, bool SemanticChanges) selection)
     {
         if (selection.Redline)
             sb.Append(",\"redlineB64\":").Append(DocxSessionJson.JsonString(
-                Convert.ToBase64String(comparison.ToRedline().DocumentByteArray)));
+                Convert.ToBase64String((exactNoOp ?? comparison.ToRedline()).DocumentByteArray)));
         if (selection.Revisions)
         {
             using var parsed = JsonDocument.Parse(SerializeRevisions(comparison.GetRevisions()));
