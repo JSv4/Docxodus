@@ -1497,9 +1497,14 @@ function mapDocxDiffRevision(r: any): DocxDiffRevision {
  * Consolidate several reviewers' edits against a shared base DOCX and return the
  * merged redlined result as a DOCX (native multi-author tracked-changes markup).
  *
+ * Compares the accepted view of the base and of every reviewer, as Word's Compare
+ * does: tracked changes the inputs already carry (body, headers, footers, notes)
+ * are accepted first, so they never reach the redline under their original
+ * authors. `preserveInputRevisions` still turns that pre-accept off.
+ *
  * @param base - The shared base document all reviewers edited from.
  * @param reviewers - The reviewers' edited copies + author names.
- * @param settings - Optional {@link DocxDiffConsolidateSettings}; omit for engine defaults.
+ * @param settings - Optional {@link DocxDiffConsolidateSettings}; omit for defaults.
  * @returns Consolidated redlined DOCX as Uint8Array.
  * @throws Error if consolidation fails.
  */
@@ -1534,7 +1539,8 @@ export async function docxDiffConsolidate(
  *
  * @param base - The shared base document all reviewers edited from.
  * @param reviewers - The reviewers' edited copies + author names.
- * @param settings - Optional {@link DocxDiffConsolidateSettings}; omit for engine defaults.
+ * @param settings - Optional {@link DocxDiffConsolidateSettings}; omit for defaults. The base and every
+ *   reviewer are always compared on their accepted view (see {@link docxDiffConsolidate}).
  * @returns Array of {@link DocxDiffConflict}.
  * @throws Error if the operation fails.
  */
@@ -1582,7 +1588,8 @@ export async function docxDiffGetConflicts(
  *
  * @param base - The shared base document all reviewers edited from.
  * @param reviewers - The reviewers' edited copies + author names.
- * @param settings - Optional {@link DocxDiffConsolidateSettings}; omit for engine defaults.
+ * @param settings - Optional {@link DocxDiffConsolidateSettings}; omit for defaults. The base and every
+ *   reviewer are always compared on their accepted view (see {@link docxDiffConsolidate}).
  * @returns Array of {@link DocxDiffConsolidatedRevision}.
  * @throws Error if the operation fails.
  */
@@ -1622,7 +1629,8 @@ export async function docxDiffGetConsolidatedRevisions(
  *
  * @param base - The shared base document all reviewers edited from.
  * @param reviewers - The reviewers' edited copies + author names.
- * @param settings - Optional {@link DocxDiffConsolidateSettings}; omit for engine defaults.
+ * @param settings - Optional {@link DocxDiffConsolidateSettings}; omit for defaults. The base and every
+ *   reviewer are always compared on their accepted view (see {@link docxDiffConsolidate}).
  * @returns The consolidated edit script serialized as indented JSON.
  * @throws Error if the operation fails.
  */

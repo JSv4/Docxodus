@@ -1,12 +1,14 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 
 namespace Docxodus;
 
 /// <summary>
-/// The shared front door for two-document DOCX comparison. The CLI (<c>tools/redline</c>), the WASM
+/// The shared front door for DOCX comparison — two-way (<see cref="Compare"/>) and N-way
+/// (<see cref="Consolidate"/>). The CLI (<c>tools/redline</c>), the WASM
 /// bridge (<c>DocumentComparer</c>), and — transitively — the npm wrappers all route their
 /// "compare these two documents → redlined DOCX" call through <see cref="Compare"/>, so the
 /// comparison POLICY lives in exactly one place (mirroring the single-owner facade pattern used by
@@ -18,6 +20,10 @@ namespace Docxodus;
 /// that flag at its opt-in default for callers who want the engine's unopinionated behavior. Calling
 /// <see cref="DocxDiff.Compare"/> directly with a fresh <see cref="DocxDiffSettings"/> is therefore
 /// NOT equivalent to calling this — see <see cref="ApplyFrontDoorRevisionPolicy"/>.</para>
+///
+/// <para>N-way consolidation (<see cref="Consolidate"/>) follows the same policy: the base and every
+/// reviewer copy are compared on their accepted view (issue #1020). The transports' consolidate ops
+/// (<see cref="Internal.DocxDiffOps"/>) route through <see cref="ApplyFrontDoorConsolidatePolicy"/>.</para>
 ///
 /// <para>Before v11.0.0 this type also owned the one <c>WmlComparer</c>-vs-<c>DocxDiff</c> engine
 /// branch in the codebase. The legacy engine is gone; what remains is the policy it used to share.</para>
@@ -45,6 +51,30 @@ public static class DocxCompare
         return ExactNoOpResult(left, right)
             ?? DocxDiff.Compare(left, right, ApplyFrontDoorRevisionPolicy(settings));
     }
+
+    /// <summary>
+    /// Consolidate N reviewer copies of <paramref name="baseDocument"/> into one redline, with the
+    /// front-door input-revision policy applied on top of <paramref name="settings"/>: the base and
+    /// every reviewer copy are compared on their ACCEPTED view, as <see cref="Compare"/> compares two
+    /// documents.
+    ///
+    /// <para>The raw <see cref="DocxDiff.Consolidate"/> already diffs the accepted body, but copies the
+    /// parts no reviewer changed — headers, footers, unchanged notes — from the base verbatim, so a base
+    /// that carries pending tracked changes there leaks that markup into the redline under its original
+    /// author. Accepting every input first makes the whole output describe one accepted starting point.
+    /// Word's Combine instead keeps the inputs' revisions; the consolidate renderer cannot carry them
+    /// through faithfully, so the front door takes the same accepted-view policy as Compare.
+    /// <see cref="DocxDiffSettings.PreserveInputRevisions"/> still wins over the pre-accept, as the
+    /// engine documents; for consolidate that only turns the pre-accept off.</para>
+    /// </summary>
+    /// <param name="baseDocument">The shared original every reviewer edited.</param>
+    /// <param name="reviewers">The reviewer copies, each with the author its changes are attributed to.</param>
+    /// <param name="settings">Consolidation settings; <c>null</c> takes <see cref="DocxDiffConsolidateSettings"/> defaults.</param>
+    public static WmlDocument Consolidate(
+        WmlDocument baseDocument,
+        IReadOnlyList<DocxDiffReviewer> reviewers,
+        DocxDiffConsolidateSettings? settings = null) =>
+        DocxDiff.Consolidate(baseDocument, reviewers, ApplyFrontDoorConsolidatePolicy(settings));
 
     /// <summary>
     /// The front door's redline for an exact same-package comparison, or <c>null</c> when the engine
@@ -109,5 +139,23 @@ public static class DocxCompare
         var result = settings is null ? new DocxDiffSettings() : settings.Clone();
         result.PreAcceptInputRevisions = true;
         return result;
+    }
+
+    /// <summary>
+    /// Layer the front-door input-revision policy (<see cref="ApplyFrontDoorRevisionPolicy"/>)
+    /// onto N-way consolidation settings. Returns a new settings object; the caller's is not modified. A
+    /// <c>null</c> <see cref="DocxDiffConsolidateSettings.Diff"/> is passed through for the engine to reject,
+    /// exactly as the raw <see cref="DocxDiff.Consolidate"/> rejects it.
+    /// </summary>
+    internal static DocxDiffConsolidateSettings ApplyFrontDoorConsolidatePolicy(DocxDiffConsolidateSettings? settings)
+    {
+        if (settings is null)
+            return new DocxDiffConsolidateSettings { Diff = ApplyFrontDoorRevisionPolicy(null) };
+
+        return new DocxDiffConsolidateSettings
+        {
+            Diff = settings.Diff is null ? null! : ApplyFrontDoorRevisionPolicy(settings.Diff),
+            ConflictResolution = settings.ConflictResolution,
+        };
     }
 }
