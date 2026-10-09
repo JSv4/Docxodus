@@ -25,14 +25,14 @@
       "result": "EditResult",
       "args": [
         { "name": "annotationId", "type": "string", "required": true },
-        { "name": "update", "type": "object", "required": true }
+        { "name": "update", "type": "object", "required": false, "default": {} }
       ],
       "transports": {
         "wasm": { "method": "UpdateAnnotation" },
         "npm": { "method": "updateAnnotation" },
         "python": { "method": "update_annotation" },
         "stdio": { "op": "update_annotation" },
-        "mcp": { "tool": "docxodus_annotate", "action": "update", "defaults": { "update": {} } }
+        "mcp": { "tool": "docxodus_annotate", "action": "update" }
       }
     },
     {

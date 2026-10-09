@@ -985,11 +985,14 @@ class DocxSession:
     def project_anchor(
         self,
         anchor_id: str,
-        depth: ProjectionDepth = ProjectionDepth.SUBTREE_AND_FOLLOWING_SIBLINGS,
+        depth: ProjectionDepth | None = None,
         citation: PageCitationRequest | None = None,
     ) -> MarkdownProjection:
         """Scoped re-projection rooted at ``anchor_id``."""
-        args: dict[str, Any] = {"anchorId": anchor_id, "depth": int(depth)}
+        # An omitted depth takes the engine's default (SUBTREE_AND_FOLLOWING_SIBLINGS).
+        args: dict[str, Any] = {"anchorId": anchor_id}
+        if depth is not None:
+            args["depth"] = int(depth)
         if citation is not None:
             args["citation"] = citation.to_wire()
         return MarkdownProjection._from_wire(self._call("project_anchor", args))
@@ -1060,17 +1063,21 @@ class DocxSession:
 
     def find_placeholders(
         self,
-        kinds: PlaceholderKinds = PlaceholderKinds.ALL,
-        scope: ProjectionScopes = ProjectionScopes.BODY,
+        kinds: PlaceholderKinds | None = None,
+        scope: ProjectionScopes | None = None,
         context_chars: int | None = None,
-        boundary: ContextBoundary = ContextBoundary.CHAR,
+        boundary: ContextBoundary | None = None,
         citation: PageCitationRequest | None = None,
     ) -> tuple[TemplatePlaceholder, ...]:
-        args: dict[str, Any] = {
-            "kinds": int(kinds),
-            "scope": int(scope),
-            "boundary": int(boundary),
-        }
+        # An omitted argument takes the engine's default: all kinds, the body, 80 characters of
+        # context cut at a character.
+        args: dict[str, Any] = {}
+        if kinds is not None:
+            args["kinds"] = int(kinds)
+        if scope is not None:
+            args["scope"] = int(scope)
+        if boundary is not None:
+            args["boundary"] = int(boundary)
         if context_chars is not None:
             args["contextChars"] = context_chars
         if citation is not None:
@@ -1082,9 +1089,10 @@ class DocxSession:
         return tuple(TemplatePlaceholder._from_wire(p) for p in result)
 
     def remaining_placeholders(
-        self, kinds: PlaceholderKinds = PlaceholderKinds.ALL
+        self, kinds: PlaceholderKinds | None = None
     ) -> tuple[TemplatePlaceholder, ...]:
-        result = self._call("remaining_placeholders", {"kinds": int(kinds)})
+        args: dict[str, Any] = {} if kinds is None else {"kinds": int(kinds)}
+        result = self._call("remaining_placeholders", args)
         return tuple(TemplatePlaceholder._from_wire(p) for p in result)
 
     def fill_placeholders(
@@ -1213,10 +1221,12 @@ class DocxSession:
     def find_by_regex(
         self,
         pattern: str,
-        regex_options: RegexOptions = RegexOptions.NONE,
+        regex_options: RegexOptions | None = None,
         options: FindOptions | None = None,
     ) -> tuple[AnchorTarget, ...]:
-        args: dict[str, Any] = {"pattern": pattern, "regexOptions": int(regex_options)}
+        args: dict[str, Any] = {"pattern": pattern}
+        if regex_options is not None:
+            args["regexOptions"] = int(regex_options)
         if options is not None:
             args["options"] = options.to_wire()
         result = self._call("find_by_regex", args)
@@ -1547,8 +1557,10 @@ class DocxSession:
     def get_edit_summary(self) -> EditSummary:
         return EditSummary._from_wire(self._call("get_edit_summary", {}))
 
-    def get_diff(self, format: DiffFormat = DiffFormat.JSON) -> str:
-        return str(self._call("get_diff", {"format": int(format)}))
+    def get_diff(self, format: DiffFormat | None = None) -> str:
+        """The diff against the opening projection; an omitted ``format`` is JSON."""
+        args: dict[str, Any] = {} if format is None else {"format": int(format)}
+        return str(self._call("get_diff", args))
 
     def get_semantic_changes(self) -> SemanticChangeSet:
         """Return stable semantic changes from the opening package to current state."""
@@ -1732,7 +1744,7 @@ class DocxSession:
     def insert_page_number_field(
         self,
         anchor_id: str,
-        field: PageNumberField = PageNumberField.CURRENT_PAGE,
+        field: PageNumberField | None = None,
         format: NumberFormat | None = None,
     ) -> EditResult:
         """Append a page-number field to the paragraph ``anchor_id`` (typically a header/footer
@@ -1749,7 +1761,9 @@ class DocxSession:
         setting for ordinary page numbering: a switch here overrides it for this one field and keeps
         overriding it if the section later changes. ``NumberFormat.BULLET`` is rejected.
         """
-        args: dict[str, Any] = {"anchorId": anchor_id, "field": field.value}
+        args: dict[str, Any] = {"anchorId": anchor_id}
+        if field is not None:
+            args["field"] = field.value
         if format is not None:
             args["numberFormat"] = format.value
         return EditResult._from_wire(self._call("insert_page_number_field", args))
@@ -1886,9 +1900,10 @@ class DocxSession:
             op["start"] = start
         if format is not None:
             op["format"] = format.value
-        return EditResult._from_wire(
-            self._call("set_page_numbering", {"anchorId": anchor_id, "op": op})
-        )
+        args: dict[str, Any] = {"anchorId": anchor_id}
+        if op:
+            args["op"] = op
+        return EditResult._from_wire(self._call("set_page_numbering", args))
 
     def clear_page_numbering(self, anchor_id: str) -> EditResult:
         """Remove the section's page-numbering start/format: it reverts to continuing the previous
@@ -1980,9 +1995,10 @@ class DocxSession:
             footer_distance_twips=footer_distance_twips,
         ).to_wire()
         wire = {**(op.to_wire() if op is not None else {}), **fields}
-        return EditResult._from_wire(
-            self._call("set_page_setup", {"anchorId": anchor_id, "op": wire})
-        )
+        args: dict[str, Any] = {"anchorId": anchor_id}
+        if wire:
+            args["op"] = wire
+        return EditResult._from_wire(self._call("set_page_setup", args))
 
     # -- Footnotes / endnotes ---------------------------------------------
 
@@ -2481,10 +2497,15 @@ class DocxSession:
             args["shadingScope"] = scope
         return EditResult._from_wire(self._call("set_cell_shading", args))
 
-    def set_repeat_header_row(self, cell_anchor_id: str, repeat: bool) -> EditResult:
-        return EditResult._from_wire(self._call("set_repeat_header_row", {
-            "cellAnchorId": cell_anchor_id, "repeat": repeat,
-        }))
+    def set_repeat_header_row(
+        self, cell_anchor_id: str, repeat: bool | None = None,
+    ) -> EditResult:
+        """Mark (or with ``repeat=False`` unmark) the row containing the cell as a repeating
+        header row. An omitted ``repeat`` marks it."""
+        args: dict[str, Any] = {"cellAnchorId": cell_anchor_id}
+        if repeat is not None:
+            args["repeat"] = repeat
+        return EditResult._from_wire(self._call("set_repeat_header_row", args))
 
     def set_table_row_options(
         self, cell_anchor_id: str, options: TableRowOptions,

@@ -8,7 +8,7 @@
       "result": "EditResult",
       "args": [
         { "name": "anchorId", "type": "anchor", "required": true },
-        { "name": "position", "type": "position", "required": true },
+        { "name": "position", "type": "position", "required": false, "default": "after" },
         { "name": "rows", "type": "int", "required": true },
         { "name": "columns", "type": "int", "required": true },
         { "name": "options", "type": "object", "required": false }
@@ -18,7 +18,7 @@
         "npm": { "method": "insertTable" },
         "python": { "method": "insert_table" },
         "stdio": { "op": "insert_table" },
-        "mcp": { "tool": "docxodus_table", "action": "insert", "aliases": [ { "tool": "docxodus_create", "action": "insert_table" } ], "defaults": { "position": "after" }, "flattens": { "options": { "borderless": "borderless", "cellAlignment": "cellAlignment", "cellContents": "cellContents", "columnWidths": "columnWidths" } } }
+        "mcp": { "tool": "docxodus_table", "action": "insert", "aliases": [ { "tool": "docxodus_create", "action": "insert_table" } ], "flattens": { "options": { "borderless": "borderless", "cellAlignment": "cellAlignment", "cellContents": "cellContents", "columnWidths": "columnWidths" } } }
       }
     },
     {
@@ -27,14 +27,14 @@
       "result": "EditResult",
       "args": [
         { "name": "cellAnchorId", "type": "anchor", "required": true },
-        { "name": "position", "type": "position", "required": true }
+        { "name": "position", "type": "position", "required": false, "default": "after" }
       ],
       "transports": {
         "wasm": { "method": "InsertTableRow" },
         "npm": { "method": "insertTableRow" },
         "python": { "method": "insert_table_row" },
         "stdio": { "op": "insert_table_row" },
-        "mcp": { "tool": "docxodus_table", "action": "insert_row", "defaults": { "position": "after" } }
+        "mcp": { "tool": "docxodus_table", "action": "insert_row" }
       }
     },
     {
@@ -43,14 +43,14 @@
       "result": "EditResult",
       "args": [
         { "name": "cellAnchorId", "type": "anchor", "required": true },
-        { "name": "position", "type": "position", "required": true }
+        { "name": "position", "type": "position", "required": false, "default": "after" }
       ],
       "transports": {
         "wasm": { "method": "InsertTableColumn" },
         "npm": { "method": "insertTableColumn" },
         "python": { "method": "insert_table_column" },
         "stdio": { "op": "insert_table_column" },
-        "mcp": { "tool": "docxodus_table", "action": "insert_column", "defaults": { "position": "after" } }
+        "mcp": { "tool": "docxodus_table", "action": "insert_column" }
       }
     },
     {
@@ -89,8 +89,8 @@
       "result": "EditResult",
       "args": [
         { "name": "cellAnchorId", "type": "anchor", "required": true },
-        { "name": "rowSpan", "type": "int", "required": true },
-        { "name": "colSpan", "type": "int", "required": true },
+        { "name": "rowSpan", "type": "int", "required": false, "default": 1 },
+        { "name": "colSpan", "type": "int", "required": false, "default": 1 },
         { "name": "mergeContent", "type": "enum", "required": false, "default": "append", "values": ["append", "discard", "reject"] }
       ],
       "transports": {
@@ -98,7 +98,7 @@
         "npm": { "method": "mergeCells" },
         "python": { "method": "merge_cells" },
         "stdio": { "op": "merge_cells" },
-        "mcp": { "tool": "docxodus_table", "action": "merge_cells", "defaults": { "rowSpan": 1, "colSpan": 1 } }
+        "mcp": { "tool": "docxodus_table", "action": "merge_cells" }
       }
     },
     {
@@ -138,15 +138,15 @@
       "result": "EditResult",
       "args": [
         { "name": "cellAnchorId", "type": "anchor", "required": true },
-        { "name": "fill", "type": "string", "required": true },
+        { "name": "fill", "type": "string", "required": false, "default": "" },
         { "name": "shadingScope", "type": "enum", "required": false, "default": "cell", "values": ["cell", "row"] }
       ],
       "transports": {
         "wasm": { "method": "SetCellShading" },
         "npm": { "method": "setCellShading" },
         "python": { "method": "set_cell_shading" },
-        "stdio": { "op": "set_cell_shading", "defaults": { "fill": "" } },
-        "mcp": { "tool": "docxodus_table", "action": "set_shading", "defaults": { "fill": "" } }
+        "stdio": { "op": "set_cell_shading" },
+        "mcp": { "tool": "docxodus_table", "action": "set_shading" }
       }
     },
     {
@@ -174,9 +174,9 @@
         { "name": "repeat", "type": "boolean", "required": false, "default": true }
       ],
       "transports": {
-        "wasm": { "method": "SetRepeatHeaderRow", "requires": ["repeat"] },
-        "npm": { "method": "setRepeatHeaderRow", "requires": ["repeat"] },
-        "python": { "method": "set_repeat_header_row", "requires": ["repeat"] },
+        "wasm": { "method": "SetRepeatHeaderRow" },
+        "npm": { "method": "setRepeatHeaderRow" },
+        "python": { "method": "set_repeat_header_row" },
         "stdio": { "op": "set_repeat_header_row" },
         "mcp": { "tool": "docxodus_table", "action": "set_repeat_header_row" }
       }

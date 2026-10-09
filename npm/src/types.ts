@@ -1763,11 +1763,11 @@ export interface DocxodusWasmExports {
     BeginTransaction: (handle: number) => number;
     CommitTransaction: (transactionHandle: number) => void;
     RollbackTransaction: (transactionHandle: number) => void;
-    ProjectAnchor: (handle: number, anchorId: string, depth: number) => string;
+    ProjectAnchor: (handle: number, anchorId: string, depth: number | null) => string;
     ProjectAnchorWithCitations: (
       handle: number,
       anchorId: string,
-      depth: number,
+      depth: number | null,
       requestJson: string,
     ) => string;
     /** Ordered top-level render units per scope container (JSON {@link RenderPlan}) —
@@ -1804,8 +1804,8 @@ export interface DocxodusWasmExports {
     RenderBlockHtml: (
       handle: number,
       anchorId: string,
-      cssPrefix: string,
-      fabricateClasses: boolean
+      cssPrefix: string | null,
+      fabricateClasses: boolean | null
     ) => string;
     RenderBlockHtmlForReview?: (
       handle: number,
@@ -1870,7 +1870,7 @@ export interface DocxodusWasmExports {
     SetColumnWidths: (handle: number, cellAnchor: string, widthsJson: string) => string;
     SetTableBorders: (handle: number, cellAnchor: string, specJson: string) => string;
     SetCellShading: (handle: number, cellAnchor: string, fill: string, scope: string) => string;
-    SetRepeatHeaderRow: (handle: number, cellAnchor: string, repeat: boolean) => string;
+    SetRepeatHeaderRow: (handle: number, cellAnchor: string, repeat: boolean | null) => string;
     SetTableRowOptions: (handle: number, cellAnchor: string, repeatHeader: boolean | null,
       allowBreakAcrossPages: boolean | null, heightTwips: number | null, heightRule: string) => string;
     SetHeaderText: (handle: number, anchor: string, kind: string, markdown: string) => string;
@@ -1992,18 +1992,24 @@ export interface DocxodusWasmExports {
       spanLength: number,
       newInner: string,
     ) => string;
-    FindPlaceholders: (handle: number, kinds: number, scope: number, contextChars: number | null, boundary: number) => string;
+    FindPlaceholders: (
+      handle: number,
+      kinds: number | null,
+      scope: number | null,
+      contextChars: number | null,
+      boundary: number | null,
+    ) => string;
     FindPlaceholdersWithCitations: (
       handle: number,
-      kinds: number,
-      scope: number,
+      kinds: number | null,
+      scope: number | null,
       contextChars: number | null,
-      boundary: number,
+      boundary: number | null,
       requestJson: string,
     ) => string;
     GetEditSummary: (handle: number) => string;
-    RemainingPlaceholders: (handle: number, kinds: number) => string;
-    GetDiff: (handle: number, format: number) => string;
+    RemainingPlaceholders: (handle: number, kinds: number | null) => string;
+    GetDiff: (handle: number, format: number | null) => string;
     GetSemanticChanges: (handle: number) => string;
     VerifyDeliverable: (handle: number) => string;
     VerifyDeliverableWithRequest?: (handle: number, requestJson: string) => string;
@@ -2016,7 +2022,7 @@ export interface DocxodusWasmExports {
     Exists: (handle: number, anchorId: string) => boolean;
     FindByText: (handle: number, needle: string, optionsJson: string) => string;
     FindAllByText: (handle: number, needle: string, optionsJson: string) => string;
-    FindByRegex: (handle: number, pattern: string, regexOptions: number, optionsJson: string) => string;
+    FindByRegex: (handle: number, pattern: string, regexOptions: number | null, optionsJson: string) => string;
     FindByKind: (handle: number, kind: string, scope: string) => string;
     FindByKindWithCitations: (handle: number, kind: string, scope: string, requestJson: string) => string;
     GetAnchorInfo: (handle: number, anchorId: string) => string;
