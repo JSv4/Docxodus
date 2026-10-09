@@ -351,6 +351,26 @@ as `anchorId` to append `PAGE`/`NUMPAGES` inside the header/footer, exactly as i
 any other paragraph. No MCP-only editing logic is involved; all three routes are thin calls into
 `DocxSessionOps`.
 
+Section layout and the note listing (issue #1026) are thin calls into `DocxSessionOps` as well.
+Each section action takes `anchorId`, any body block of the section, and the object arguments
+are taken whole under their canonical name `op`, the same object the other transports send:
+
+- `set_page_setup`: `op` is `{pageWidthTwips?, pageHeightTwips?, landscape?, marginTopTwips?,
+  marginBottomTwips?, marginLeftTwips?, marginRightTwips?, headerDistanceTwips?,
+  footerDistanceTwips?}`. Omitted fields stay unchanged, and invalid geometry fails with
+  `invalid_page_setup` without touching the section.
+- `set_page_numbering`: `op` is `{start?, format?}`, the section's `w:pgNumType`.
+  `clear_page_numbering` removes it.
+- `set_header_footer_kind_enabled`: `kind: first|even` and a required `enabled` turn Word's
+  "Different first page" or "Different odd & even pages" switch on or off.
+- `list_notes` (read-only): a required `endnotes` boolean picks footnotes or endnotes. The result
+  is `{"notes":[{id, defAnchorId, ordinal}]}` in citation order, where `ordinal` is the number Word
+  displays. Like the other listings it runs outside the mutation guard, and it is not a
+  `docxodus_mutations` step.
+
+The four section actions are batchable `docxodus_mutations` steps, and a direct call is
+recorded as delivery evidence like every other mutation.
+
 ### `docxodus_list` — list membership
 
 `apply_format` (promotes/demotes a paragraph to a real, auto-numbered `w:numPr` list via

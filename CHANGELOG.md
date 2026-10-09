@@ -6,6 +6,19 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Session ops that some transports had left out by omission now reach them (issue #1026). On MCP,
+  `docxodus_create` gains `set_page_setup` and `set_page_numbering` (each taking the canonical `op`
+  object), `clear_page_numbering`, `set_header_footer_kind_enabled` (`kind` plus a required
+  `enabled`) and a read-only `list_notes` (a required `endnotes` boolean). The four section actions
+  are also `docxodus_mutations` steps. The stdio host and Python gain `insert_horizontal_rule`
+  (`anchorId`, `position` and an optional `rule` border edge) and `list_notes`; npm gains
+  `DocxSession.listNotes`, and Python a `NoteListEntry` type. Every op a transport still leaves out
+  now records why in `tools/op-descriptions/`, naming the route a caller takes instead where there is
+  one. The descriptions can also record an MCP route through a selector rather than an action
+  (`"route": {"tool": …, "selector": {…}}`); `getVersion` (`docxodus_get_content format=version`) and
+  `getSemanticChanges` (`format=semantic_changes`) are recorded that way, and `SessionOpRouteTests`
+  checks that the schema advertises each selector value and that calling it returns the facade's
+  result.
 - The HTML converter can emit Word lists as `<ol>`/`<ul>`/`<li>` (issue #895). The new opt-in
   `WmlToHtmlConverterSettings.SemanticLists` (`semanticLists` in the npm `ConversionOptions`,
   `semantic_lists` in the Python `HtmlOptions`) groups adjacent list paragraphs of one list into an

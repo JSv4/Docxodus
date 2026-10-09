@@ -242,9 +242,9 @@ checkpoint and, with the default initial capture, compares it with the exact ope
 | **Native links/bookmarks** | `list_hyperlinks`, `add_hyperlink`, `update_hyperlink`, `remove_hyperlink`, `list_bookmarks`, `add_bookmark`, `move_bookmark`, `rename_bookmark`, `remove_bookmark` |
 | **Native images** | `get_image_capabilities`, `list_images`, `insert_image`, `replace_image`, `embed_linked_image`, `set_image_dimensions`, `set_image_metadata`, `set_image_floating_layout`, `remove_image` |
 | **A: text mutations** | `replace_text`, `replace_text_range`, `replace_text_at_span`, `replace_inner`, `replace_match`, `delete_block`, `move_block`, `delete_range`, `delete_section` |
-| **B: structural** | `insert_paragraph`, `split_paragraph`, `merge_paragraphs` |
+| **B: structural** | `insert_paragraph`, `split_paragraph`, `merge_paragraphs`, `insert_horizontal_rule` |
 | **B: headers/footers/page numbers** | `set_header_text`, `set_footer_text`, `ensure_header_footer_visible`, `set_header_footer_kind_enabled`, `insert_page_number_field`, `set_page_numbering`, `clear_page_numbering`, `set_page_setup` |
-| **B: footnotes/endnotes** | `insert_footnote`, `insert_endnote` |
+| **B: footnotes/endnotes** | `insert_footnote`, `insert_endnote`, `list_notes` |
 | **B: native comments** | `add_comment`, `add_comment_to_revision`, `add_comment_reply`, `update_comment`, `set_comment_resolved`, `remove_comment`, `list_comments` |
 | **C: formatting** | `apply_format`, `apply_format_by_substring`, `set_paragraph_style`, `set_paragraph_format`, `set_list_level`, `remove_list_membership`, `apply_list_format`, `apply_list_format_range`, `set_list_start_override`, `clear_list_start_override` |
 | **D: tables** | `get_table_metadata`, `resolve_table_cell_anchor`, `resolve_table_cell_coordinate`, `insert_table`, `insert_table_row`, `insert_table_column`, `delete_table_row`, `delete_table_column`, `merge_cells`, `unmerge_cells`, `set_column_widths`, `set_table_borders`, `set_cell_shading`, `set_repeat_header_row`, `set_table_row_options`, `replace_cell_content` |
