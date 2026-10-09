@@ -20,6 +20,16 @@ internal static class DocxSessionOps
     /// before).</summary>
     public const Position ReferenceFieldDefaultPosition = Position.Before;
 
+    /// <summary>The text a new comment or reply gets when the caller sends none: an empty comment.
+    /// Owned here so every transport agrees (issue #1014: MCP defaulted it, the stdio host required
+    /// it).</summary>
+    public const string DefaultCommentMarkdown = "";
+
+    /// <summary>What resolving a comment does when the caller names no state: resolve it. Owned
+    /// here so every transport agrees (issue #1014: MCP defaulted it, the stdio host required
+    /// it).</summary>
+    public const bool DefaultCommentResolved = true;
+
     /// <summary>Keep the first <paramref name="maxResults"/> items; null keeps them all. The one
     /// truncation every listing op shares, so a transport never re-parses a result to cut it.</summary>
     private static IReadOnlyList<T> Limit<T>(IReadOnlyList<T> items, int? maxResults)
@@ -860,31 +870,34 @@ internal static class DocxSessionOps
     // ─── Comments (issue #300) ──────────────────────────────────────────
 
     public static string AddComment(int handle, string anchorId, CharSpan? span, string author,
-        string? initials, string? dateIso, string markdown,
+        string? initials, string? dateIso, string? markdown,
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, anchorId, s => s.AddComment(
-            anchorId, span, author, markdown, initials, DocxSessionJson.ParseCommentDate(dateIso)));
+            anchorId, span, author, markdown ?? DefaultCommentMarkdown, initials,
+            DocxSessionJson.ParseCommentDate(dateIso)));
 
     public static string AddCommentToRevision(int handle, string revisionId, string author,
-        string? initials, string? dateIso, string markdown,
+        string? initials, string? dateIso, string? markdown,
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, null, s => s.AddCommentToRevision(
-            revisionId, author, markdown, initials, DocxSessionJson.ParseCommentDate(dateIso)));
+            revisionId, author, markdown ?? DefaultCommentMarkdown, initials,
+            DocxSessionJson.ParseCommentDate(dateIso)));
 
     public static string AddCommentReply(int handle, string parentCommentAnchorId, string author,
-        string? initials, string? dateIso, string markdown,
+        string? initials, string? dateIso, string? markdown,
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, parentCommentAnchorId, s => s.AddCommentReply(
-            parentCommentAnchorId, author, markdown, initials, DocxSessionJson.ParseCommentDate(dateIso)));
+            parentCommentAnchorId, author, markdown ?? DefaultCommentMarkdown, initials,
+            DocxSessionJson.ParseCommentDate(dateIso)));
 
     public static string UpdateComment(int handle, string commentAnchorId, string markdown,
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, commentAnchorId, s => s.UpdateComment(commentAnchorId, markdown));
 
-    public static string SetCommentResolved(int handle, string commentAnchorId, bool resolved,
+    public static string SetCommentResolved(int handle, string commentAnchorId, bool? resolved,
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, commentAnchorId,
-            s => s.SetCommentResolved(commentAnchorId, resolved));
+            s => s.SetCommentResolved(commentAnchorId, resolved ?? DefaultCommentResolved));
 
     public static string RemoveComment(int handle, string commentAnchorId,
         MutationPreconditions? preconditions = null) =>

@@ -701,11 +701,11 @@ internal static class Dispatcher
         "add" => AddComment(session, args),
         "reply" => DocxSessionOps.AddCommentReply(
             session.Handle, Str(args, "commentAnchorId"), Str(args, "author"),
-            OptStr(args, "initials"), OptStr(args, "date"), OptStr(args, "markdown") ?? ""),
+            OptStr(args, "initials"), OptStr(args, "date"), OptStr(args, "markdown")),
         "update" => DocxSessionOps.UpdateComment(
             session.Handle, Str(args, "commentAnchorId"), Str(args, "markdown")),
         "resolve" => DocxSessionOps.SetCommentResolved(
-            session.Handle, Str(args, "commentAnchorId"), BoolOpt(args, "resolved", true)),
+            session.Handle, Str(args, "commentAnchorId"), OptBool(args, "resolved")),
         "remove" => DocxSessionOps.RemoveComment(session.Handle, Str(args, "commentAnchorId")),
         _ => throw new McpToolException($"unknown docxodus_comment action: {action}"),
         });
@@ -882,10 +882,10 @@ internal static class Dispatcher
         return revisionId is not null
             ? DocxSessionOps.AddCommentToRevision(
                 session.Handle, revisionId, Str(args, "author"), OptStr(args, "initials"),
-                OptStr(args, "date"), OptStr(args, "markdown") ?? "")
+                OptStr(args, "date"), OptStr(args, "markdown"))
             : DocxSessionOps.AddComment(
                 session.Handle, anchorId!, ParseSpan(args, "span"), Str(args, "author"),
-                OptStr(args, "initials"), OptStr(args, "date"), OptStr(args, "markdown") ?? "");
+                OptStr(args, "initials"), OptStr(args, "date"), OptStr(args, "markdown"));
     }
 
     // ─── Annotate (annotation overlay) ─────────────────────────────────

@@ -118,7 +118,8 @@ and two clients.
 Concretely, a new session op touches: the matching `DocxSession.<Area>.cs` partial → `DocxSessionOps.cs` →
 `DocxSessionJson.cs` → `wasm/DocxodusWasm/DocxSessionBridge.cs` → `npm/src/types.ts` +
 `npm/src/core.ts` → `tools/python-host/Dispatcher.cs` → `python/src/docx_scalpel/{types,session}.py`
-→ `tools/mcp-server/{ToolCatalog,Dispatcher}.cs`.
+→ `tools/mcp-server/{ToolCatalog,Dispatcher}.cs` → its family's description in `tools/op-descriptions/`
+(`SessionOpDescriptionDriftTests` fails until the op is described or listed in `not-described.json`).
 
 **Described ops are a ripple site.** An op family with a file in `tools/op-descriptions/` is
 checked against every transport by `SessionOpDescriptionDriftTests`; change the description in the

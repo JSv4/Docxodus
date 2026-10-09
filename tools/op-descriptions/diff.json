@@ -1,0 +1,47 @@
+{
+  "$comment": "One description of the diff session ops and how each transport names them (issue #982). SessionOpDescriptionDriftTests checks every transport against it; see docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names (the JSON keys a stdio or MCP caller sends; the WASM bridge, npm and Python take them positionally). Numeric flag enums (scopes, kinds, regex options, depth, diff format) are typed int; string-token enums are typed enum. An argument's own default is the one DocxSessionOps (or the request record it parses into) applies on every transport; a transport that supplies its own default for an argument the facade requires lists it under defaults, a different spelling under argNames. Both are recorded divergences, not the target. An absent transport says why; an MCP route the description cannot express (a tool selected by format or mode rather than action, or an action that reshapes or drops arguments) is recorded absent and names the real route.",
+  "family": "diff",
+  "ops": [
+    {
+      "op": "getDiff",
+      "facade": "GetDiff",
+      "result": "string",
+      "args": [
+        { "name": "format", "type": "int", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "GetDiff" },
+        "npm": { "method": "getDiff", "defaults": { "format": 0 } },
+        "python": { "method": "get_diff", "defaults": { "format": 0 } },
+        "stdio": { "op": "get_diff", "defaults": { "format": 0 } },
+        "mcp": { "absent": "no MCP action" }
+      }
+    },
+    {
+      "op": "getEditSummary",
+      "facade": "GetEditSummary",
+      "result": "EditSummary",
+      "args": [],
+      "transports": {
+        "wasm": { "method": "GetEditSummary" },
+        "npm": { "method": "getEditSummary" },
+        "python": { "method": "get_edit_summary" },
+        "stdio": { "op": "get_edit_summary" },
+        "mcp": { "absent": "folded into docxodus_get_content format=info (with version and section info), selected by format not action" }
+      }
+    },
+    {
+      "op": "getSemanticChanges",
+      "facade": "GetSemanticChanges",
+      "result": "SemanticChangeSet",
+      "args": [],
+      "transports": {
+        "wasm": { "method": "GetSemanticChanges" },
+        "npm": { "method": "getSemanticChanges" },
+        "python": { "method": "get_semantic_changes" },
+        "stdio": { "op": "get_semantic_changes" },
+        "mcp": { "absent": "reachable only as docxodus_get_content format=semantic_changes, selected by format not action" }
+      }
+    }
+  ]
+}

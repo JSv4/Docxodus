@@ -1,5 +1,5 @@
 {
-  "$comment": "One description of the native-comment session ops and how each transport names them (issue #982). SessionOpDescriptionDriftTests checks every transport against it; see docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names; a transport that spells one differently lists it under argNames, and a transport-specific default under defaults. Both are recorded divergences, not the target; this family's are tracked in issue #1014.",
+  "$comment": "One description of the native-comment session ops and how each transport names them (issue #982). SessionOpDescriptionDriftTests checks every transport against it; see docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names; a transport that spells one differently lists it under argNames, and a transport-specific default under defaults. Both are recorded divergences, not the target. An argument's own default is the one DocxSessionOps applies on every transport. This family has no divergences left: issue #1014 gave every transport one name and one default per argument.",
   "family": "comments",
   "ops": [
     {
@@ -12,14 +12,14 @@
         { "name": "author", "type": "string", "required": true },
         { "name": "initials", "type": "string", "required": false },
         { "name": "date", "type": "string", "required": false },
-        { "name": "markdown", "type": "markdown", "required": true }
+        { "name": "markdown", "type": "markdown", "required": false, "default": "" }
       ],
       "transports": {
         "wasm": { "method": "AddComment" },
         "npm": { "method": "addComment" },
         "python": { "method": "add_comment" },
         "stdio": { "op": "add_comment" },
-        "mcp": { "tool": "docxodus_comment", "action": "add", "defaults": { "markdown": "" } }
+        "mcp": { "tool": "docxodus_comment", "action": "add" }
       }
     },
     {
@@ -31,14 +31,14 @@
         { "name": "author", "type": "string", "required": true },
         { "name": "initials", "type": "string", "required": false },
         { "name": "date", "type": "string", "required": false },
-        { "name": "markdown", "type": "markdown", "required": true }
+        { "name": "markdown", "type": "markdown", "required": false, "default": "" }
       ],
       "transports": {
         "wasm": { "method": "AddCommentToRevision" },
         "npm": { "method": "addCommentToRevision" },
         "python": { "method": "add_comment_to_revision" },
         "stdio": { "op": "add_comment" },
-        "mcp": { "tool": "docxodus_comment", "action": "add", "defaults": { "markdown": "" } }
+        "mcp": { "tool": "docxodus_comment", "action": "add" }
       }
     },
     {
@@ -50,14 +50,14 @@
         { "name": "author", "type": "string", "required": true },
         { "name": "initials", "type": "string", "required": false },
         { "name": "date", "type": "string", "required": false },
-        { "name": "markdown", "type": "markdown", "required": true }
+        { "name": "markdown", "type": "markdown", "required": false, "default": "" }
       ],
       "transports": {
         "wasm": { "method": "AddCommentReply" },
         "npm": { "method": "addCommentReply" },
         "python": { "method": "add_comment_reply" },
-        "stdio": { "op": "add_comment_reply", "argNames": { "commentAnchorId": "parentAnchorId" } },
-        "mcp": { "tool": "docxodus_comment", "action": "reply", "defaults": { "markdown": "" } }
+        "stdio": { "op": "add_comment_reply" },
+        "mcp": { "tool": "docxodus_comment", "action": "reply" }
       }
     },
     {
@@ -72,7 +72,7 @@
         "wasm": { "method": "UpdateComment" },
         "npm": { "method": "updateComment" },
         "python": { "method": "update_comment" },
-        "stdio": { "op": "update_comment", "argNames": { "commentAnchorId": "anchorId" } },
+        "stdio": { "op": "update_comment" },
         "mcp": { "tool": "docxodus_comment", "action": "update" }
       }
     },
@@ -82,14 +82,14 @@
       "result": "EditResult",
       "args": [
         { "name": "commentAnchorId", "type": "anchor", "required": true },
-        { "name": "resolved", "type": "boolean", "required": true }
+        { "name": "resolved", "type": "boolean", "required": false, "default": true }
       ],
       "transports": {
         "wasm": { "method": "SetCommentResolved" },
         "npm": { "method": "setCommentResolved" },
         "python": { "method": "set_comment_resolved" },
-        "stdio": { "op": "set_comment_resolved", "argNames": { "commentAnchorId": "anchorId" } },
-        "mcp": { "tool": "docxodus_comment", "action": "resolve", "defaults": { "resolved": true } }
+        "stdio": { "op": "set_comment_resolved" },
+        "mcp": { "tool": "docxodus_comment", "action": "resolve" }
       }
     },
     {
@@ -103,7 +103,7 @@
         "wasm": { "method": "RemoveComment" },
         "npm": { "method": "removeComment" },
         "python": { "method": "remove_comment" },
-        "stdio": { "op": "remove_comment", "argNames": { "commentAnchorId": "anchorId" } },
+        "stdio": { "op": "remove_comment" },
         "mcp": { "tool": "docxodus_comment", "action": "remove" }
       }
     },

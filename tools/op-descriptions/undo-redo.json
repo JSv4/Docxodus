@@ -1,0 +1,32 @@
+{
+  "$comment": "One description of the undo-redo session ops and how each transport names them (issue #982). SessionOpDescriptionDriftTests checks every transport against it; see docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names (the JSON keys a stdio or MCP caller sends; the WASM bridge, npm and Python take them positionally). Numeric flag enums (scopes, kinds, regex options, depth, diff format) are typed int; string-token enums are typed enum. An argument's own default is the one DocxSessionOps (or the request record it parses into) applies on every transport; a transport that supplies its own default for an argument the facade requires lists it under defaults, a different spelling under argNames. Both are recorded divergences, not the target. An absent transport says why; an MCP route the description cannot express (a tool selected by format or mode rather than action, or an action that reshapes or drops arguments) is recorded absent and names the real route.",
+  "family": "undo-redo",
+  "ops": [
+    {
+      "op": "undo",
+      "facade": "Undo",
+      "result": "bool",
+      "args": [],
+      "transports": {
+        "wasm": { "method": "Undo" },
+        "npm": { "method": "undo" },
+        "python": { "method": "undo" },
+        "stdio": { "op": "undo" },
+        "mcp": { "tool": "docxodus_edit", "action": "undo" }
+      }
+    },
+    {
+      "op": "redo",
+      "facade": "Redo",
+      "result": "bool",
+      "args": [],
+      "transports": {
+        "wasm": { "method": "Redo" },
+        "npm": { "method": "redo" },
+        "python": { "method": "redo" },
+        "stdio": { "op": "redo" },
+        "mcp": { "tool": "docxodus_edit", "action": "redo" }
+      }
+    }
+  ]
+}

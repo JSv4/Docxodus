@@ -1,0 +1,167 @@
+{
+  "$comment": "One description of the rendering session ops and how each transport names them (issue #982). SessionOpDescriptionDriftTests checks every transport against it; see docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names (the JSON keys a stdio or MCP caller sends; the WASM bridge, npm and Python take them positionally). Numeric flag enums (scopes, kinds, regex options, depth, diff format) are typed int; string-token enums are typed enum. An argument's own default is the one DocxSessionOps (or the request record it parses into) applies on every transport; a transport that supplies its own default for an argument the facade requires lists it under defaults, a different spelling under argNames. Both are recorded divergences, not the target. An absent transport says why; an MCP route the description cannot express (a tool selected by format or mode rather than action, or an action that reshapes or drops arguments) is recorded absent and names the real route.",
+  "family": "rendering",
+  "ops": [
+    {
+      "op": "renderHtml",
+      "facade": "RenderHtml",
+      "result": "string",
+      "args": [
+        { "name": "cssPrefix", "type": "string", "required": true },
+        { "name": "fabricateClasses", "type": "boolean", "required": true },
+        { "name": "paginated", "type": "boolean", "required": true },
+        { "name": "scale", "type": "number", "required": true },
+        { "name": "renderTrackedChanges", "type": "boolean", "required": false, "default": false }
+      ],
+      "transports": {
+        "wasm": { "method": "RenderHtml" },
+        "npm": { "absent": "no DocxSession method; the editor calls the bridge export directly" },
+        "python": { "absent": "no Python method (the stdio host has no op for it)" },
+        "stdio": { "absent": "no stdio op" },
+        "mcp": { "absent": "no MCP action; docxodus_get_content format=html and docxodus_preview call it with a pinned profile" }
+      }
+    },
+    {
+      "op": "renderBlockHtml",
+      "facade": "RenderBlockHtml",
+      "result": "string",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "cssPrefix", "type": "string", "required": true },
+        { "name": "fabricateClasses", "type": "boolean", "required": true },
+        { "name": "renderTrackedChanges", "type": "boolean", "required": false, "default": false }
+      ],
+      "transports": {
+        "wasm": { "method": "RenderBlockHtml" },
+        "npm": { "method": "renderBlock", "defaults": { "cssPrefix": "docx-", "fabricateClasses": false } },
+        "python": { "absent": "no Python method (the stdio host has no op for it)" },
+        "stdio": { "absent": "no stdio op" },
+        "mcp": { "absent": "no MCP action; docxodus_get_content format=html and docxodus_preview call it with a pinned profile" }
+      }
+    },
+    {
+      "op": "renderBlocksHtml",
+      "facade": "RenderBlocksHtml",
+      "result": "json",
+      "args": [
+        { "name": "anchorIds", "type": "array", "required": true },
+        { "name": "cssPrefix", "type": "string", "required": true },
+        { "name": "fabricateClasses", "type": "boolean", "required": true },
+        { "name": "renderTrackedChanges", "type": "boolean", "required": false, "default": false }
+      ],
+      "transports": {
+        "wasm": { "method": "RenderBlocksHtml" },
+        "npm": { "absent": "no DocxSession method; the editor calls the bridge export directly" },
+        "python": { "absent": "no Python method (the stdio host has no op for it)" },
+        "stdio": { "absent": "no stdio op" },
+        "mcp": { "absent": "no MCP action" }
+      }
+    },
+    {
+      "op": "renderEditorHtml",
+      "facade": "RenderEditorHtml",
+      "result": "string",
+      "args": [
+        { "name": "options", "type": "object", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "RenderEditorHtml" },
+        "npm": { "absent": "no DocxSession method; the editor calls the bridge export directly" },
+        "python": { "absent": "no Python method (the stdio host has no op for it)" },
+        "stdio": { "absent": "no stdio op" },
+        "mcp": { "absent": "no MCP action" }
+      }
+    },
+    {
+      "op": "renderEditorBlockHtml",
+      "facade": "RenderEditorBlockHtml",
+      "result": "string",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "options", "type": "object", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "RenderEditorBlockHtml" },
+        "npm": { "absent": "no DocxSession method; the editor calls the bridge export directly" },
+        "python": { "absent": "no Python method (the stdio host has no op for it)" },
+        "stdio": { "absent": "no stdio op" },
+        "mcp": { "absent": "no MCP action" }
+      }
+    },
+    {
+      "op": "renderEditorBlocksHtml",
+      "facade": "RenderEditorBlocksHtml",
+      "result": "json",
+      "args": [
+        { "name": "anchorIds", "type": "array", "required": true },
+        { "name": "options", "type": "object", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "RenderEditorBlocksHtml" },
+        "npm": { "absent": "no DocxSession method; the editor calls the bridge export directly" },
+        "python": { "absent": "no Python method (the stdio host has no op for it)" },
+        "stdio": { "absent": "no stdio op" },
+        "mcp": { "absent": "no MCP action" }
+      }
+    },
+    {
+      "op": "renderEditorChromeHtml",
+      "facade": "RenderEditorChromeHtml",
+      "result": "string",
+      "args": [
+        { "name": "options", "type": "object", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "RenderEditorChromeHtml" },
+        "npm": { "absent": "no DocxSession method; the editor calls the bridge export directly" },
+        "python": { "absent": "no Python method (the stdio host has no op for it)" },
+        "stdio": { "absent": "no stdio op" },
+        "mcp": { "absent": "no MCP action" }
+      }
+    },
+    {
+      "op": "renderEditorRangeHtml",
+      "facade": "RenderEditorRangeHtml",
+      "result": "string[]",
+      "args": [
+        { "name": "anchorIds", "type": "array", "required": true },
+        { "name": "options", "type": "object", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "RenderEditorRangeHtml" },
+        "npm": { "absent": "no DocxSession method; the editor calls the bridge export directly" },
+        "python": { "absent": "no Python method (the stdio host has no op for it)" },
+        "stdio": { "absent": "no stdio op" },
+        "mcp": { "absent": "no MCP action" }
+      }
+    },
+    {
+      "op": "renderPreviewHtml",
+      "facade": "RenderPreviewHtml",
+      "result": "string",
+      "args": [],
+      "transports": {
+        "wasm": { "method": "RenderPreviewHtml" },
+        "npm": { "absent": "no DocxSession method; previewBatch calls the bridge export internally" },
+        "python": { "absent": "no Python method (the stdio host has no op for it)" },
+        "stdio": { "absent": "no stdio op" },
+        "mcp": { "absent": "no MCP action" }
+      }
+    },
+    {
+      "op": "renderPreviewBlockHtml",
+      "facade": "RenderPreviewBlockHtml",
+      "result": "string",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "RenderPreviewBlockHtml" },
+        "npm": { "absent": "no DocxSession method; previewBatch calls the bridge export internally" },
+        "python": { "absent": "no Python method (the stdio host has no op for it)" },
+        "stdio": { "absent": "no stdio op" },
+        "mcp": { "absent": "no MCP action" }
+      }
+    }
+  ]
+}

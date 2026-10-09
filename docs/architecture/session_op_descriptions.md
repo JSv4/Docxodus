@@ -1,6 +1,6 @@
 # Session op descriptions
 
-Status: first slice landed (the comment family). Tracking issue: #982.
+Status: every family described and checked (stages 1 and 2, issue #982). Generation (stage 3) is tracked in #1027.
 
 ## The problem
 
@@ -25,10 +25,17 @@ Describe each op **once**, as data. Then **check** every layer against the descr
 A description lives in `tools/op-descriptions/<family>.json`. For each op it records:
 
 - `op`: the canonical name, and `facade`, the `DocxSessionOps` method that owns it.
-- `args`: each argument's canonical wire name, its type, and whether it is required.
+- `args`: each argument's canonical wire name, its type, whether it is required, and the `default` the facade applies when it is not.
 - `result`: the result type.
-- `transports`: each layer's name for the op (the WASM export, npm method, Python method, stdio op, MCP tool and action).
-- Recorded divergences: `argNames`, where a transport spells an argument differently, and `defaults`, where a transport supplies a default the description does not.
+- `transports`: each layer's name for the op (the WASM export, npm method, Python method, stdio op, MCP tool and action). MCP may list `aliases`, further tool/action pairs that call the same op with the same arguments. A Python wrapper that builds its arguments in a helper names it in `argsFrom` (`file:[Class.]function`).
+- Recorded divergences, per transport:
+  - `argNames`: the transport spells an argument differently from its canonical name (the MCP name, where the stdio host and MCP differ);
+  - `defaults`: the transport supplies its own default for an argument;
+  - `requires`: the transport requires an argument the facade treats as optional;
+  - `flattens` (MCP): the tool takes an object argument's fields as separate top-level properties, recorded as field to MCP property;
+  - `absent`: the transport does not expose the op at all, with the reason.
+
+`tools/op-descriptions/not-described.json` lists the `DocxSessionOps` methods deliberately left out, each with its reason: the lifecycle, transaction, preview and delivery-evidence entry points, which are stateful or composite, plus a few internal or not separately exposed methods.
 
 Divergences are recorded so that they stay visible and can't grow. They are not the target. Each one should eventually be removed in the facade, the way #960 removed per-transport defaults, and then deleted from the file.
 
@@ -42,8 +49,10 @@ The options considered in #982 were:
 
 ## Adoption, one family at a time
 
-**Stage 1: describe and check (landed for comments).** `Docxodus.Tests/SessionOpDescriptionDriftTests.cs` reads the description and fails on any of these:
+**Stage 1: describe and check (landed for comments).** `Docxodus.Tests/SessionOpDescriptionDriftTests.cs` reads the descriptions and fails on any of these:
 
+- A public `DocxSessionOps` method is neither described nor listed in `not-described.json` (`OPD000`), so a new op cannot bypass the description.
+- A description is malformed: a divergence names an unknown argument, or a transport is neither named nor recorded absent with a reason (`OPD006`).
 - The facade method is missing (reflection).
 - The MCP tool's schema does not advertise the action or one of the arguments, under its recorded name.
 - The WASM bridge does not export the op.
@@ -52,9 +61,9 @@ The options considered in #982 were:
 - The stdio host or the MCP server, called for real on a seeded session, refuses the described arguments.
 - The stdio host or the MCP server accepts a call that omits a required argument. The exception is an MCP default the description records, which must still be in effect.
 
-Writing the comment family's description surfaced four differences between the stdio host and MCP that no test had pinned. They are listed in #1014.
+The static checks run over every described op in every family; the checks that call the stdio host and the MCP server for real run on the comment family. Writing the comment family's description surfaced four differences between the stdio host and MCP that no test had pinned. #1014 removed them: the comment is `commentAnchorId` on every transport (the stdio host still accepts `parentAnchorId` and `anchorId` as deprecated aliases), and `DocxSessionOps` owns the `markdown` and `resolved` defaults. The description now records those defaults on the arguments themselves, and the family has no divergences left.
 
-**Stage 2: describe the remaining families.** Text, structure, formatting, tables, notes, revisions, annotations and the rest. Each family is one small PR adding a JSON file and a `[MemberData]` source. Each family's PR records whatever divergences it finds, and files issues for them.
+**Stage 2: describe the remaining families (landed).** Every family is described: about 150 ops in 19 files, from `text` and `tables` to `rendering`. Describing them recorded 186 divergences, filed by kind: argument names that differ between the stdio host and MCP (#1023), defaults supplied by a transport instead of the facade (#1024), object arguments MCP spreads into top-level properties (#1025), and transports that do not expose an op (#1026). Each is to be removed in the facade, as #960 and #1014 did, and then deleted from the file.
 
 **Stage 3: generate.** Once a family's description is complete and its divergences resolved, generate the layers that are pure repetition:
 

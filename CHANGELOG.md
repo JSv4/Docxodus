@@ -16,6 +16,14 @@ All notable changes to this project will be documented in this file.
   `1.1.`, keep their generated marker spans under `list-style-type: none`. Item indents are measured
   from the item they are nested in. Paginated output ignores the setting, and with it off the output
   is unchanged.
+- Every session op family is now described as data and checked against every transport (issue #982).
+  `tools/op-descriptions/` holds 19 family files covering about 150 `DocxSessionOps` ops, and
+  `not-described.json` lists the lifecycle, transaction, preview and delivery-evidence methods left out
+  on purpose, each with its reason. `SessionOpDescriptionDriftTests` now runs its static checks over
+  every described op. It also fails when a public facade method is neither described nor listed, so a
+  new op cannot bypass the description. The descriptions record 186 places where a transport names,
+  defaults, flattens or omits an argument or op differently, filed as #1023–#1026; generating the
+  per-transport layers from the descriptions is #1027.
 - Session op families can be described once, as data, and checked against every transport (issue
   #982, first slice). `tools/op-descriptions/comments.json` describes the native-comment ops: the
   facade method, each argument's wire name, type and whether it is required, and each transport's
@@ -201,7 +209,22 @@ All notable changes to this project will be documented in this file.
   above the note text (Word: 3 pt; before: 4.59 pt). Line pitch is unchanged. Converting the HTML back
   to a document keeps the run's own size. Word's raise varies by face; the per-face measurements are in
   `docs/ooxml_corner_cases.md`.
-
+- A `DocxSession` edit on a document with large pictures no longer copies every picture into its undo
+  snapshot (issue #965). Consecutive snapshots now share each unchanged picture's bytes, and the undo
+  memory budget (`UndoMemoryBudgetBytes`) counts each shared copy once rather than once per step. On
+  4,000 paragraphs with four 2 MiB pictures, an edit allocates 15.8 MiB instead of 33.4 MiB, and the
+  default budget keeps all 20 undo steps instead of 11. Undoing a text edit no longer rereads every
+  picture to check whether it changed. `UndoMemoryBytes` reports the shared total, so it is lower than
+  before on documents with pictures. `benchmarks/session-edit-cost` measures per-edit cost and undo
+  retention; the remaining cost that grows with the document is tracked in #1022.
+- The native-comment ops take the same argument names and defaults on every transport (issue #1014).
+  The comment being replied to, updated, resolved or removed is `commentAnchorId` on the stdio host
+  (and so the Python client), as it already was on MCP. The host still accepts its old spellings,
+  `parentAnchorId` for a reply and `anchorId` for the others, as deprecated aliases, and refuses a call
+  that gives both with different values. `DocxSessionOps` now owns the two defaults MCP alone applied:
+  an add or reply without `markdown` adds an empty comment, and a resolve without `resolved` resolves.
+  The stdio host used to refuse both calls. `tools/op-descriptions/comments.json` records no
+  divergences any more.
 - The MCP `docxodus_compare` tool compares through the `DocxCompare` front door (issue #1006), as the
   `redline` CLI and the browser's `compareDocuments` already did. Two-way and fan-out comparisons now
   accept each input's own pending tracked changes first, as Word's Compare does. The raw engine it ran

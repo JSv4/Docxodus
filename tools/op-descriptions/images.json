@@ -1,0 +1,135 @@
+{
+  "$comment": "One description of the native image session ops and how each transport names them (issue #982). SessionOpDescriptionDriftTests checks every transport against it; see docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names; argNames, defaults, requires and absent on a transport are recorded divergences, not the target. scope is the MCP story filter; the stdio host takes the same filter as scopes, a ProjectionScopes flag integer. GetImageCapabilities is not described: it takes no session handle.",
+  "family": "images",
+  "ops": [
+    {
+      "op": "insertImage",
+      "facade": "InsertImage",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "characterOffset", "type": "int", "required": true },
+        { "name": "imageBase64", "type": "string", "required": true },
+        { "name": "options", "type": "object", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "InsertImage" },
+        "npm": { "method": "insertImage" },
+        "python": { "method": "insert_image" },
+        "stdio": { "op": "insert_image" },
+        "mcp": { "tool": "docxodus_images", "action": "insert" }
+      }
+    },
+    {
+      "op": "replaceImage",
+      "facade": "ReplaceImage",
+      "result": "EditResult",
+      "args": [
+        { "name": "imageId", "type": "string", "required": true },
+        { "name": "imageBase64", "type": "string", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "ReplaceImage" },
+        "npm": { "method": "replaceImage" },
+        "python": { "method": "replace_image" },
+        "stdio": { "op": "replace_image" },
+        "mcp": { "tool": "docxodus_images", "action": "replace" }
+      }
+    },
+    {
+      "op": "removeImage",
+      "facade": "RemoveImage",
+      "result": "EditResult",
+      "args": [
+        { "name": "imageId", "type": "string", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "RemoveImage" },
+        "npm": { "method": "removeImage" },
+        "python": { "method": "remove_image" },
+        "stdio": { "op": "remove_image" },
+        "mcp": { "tool": "docxodus_images", "action": "remove" }
+      }
+    },
+    {
+      "op": "listImages",
+      "facade": "ListImages",
+      "result": "ImageOccurrence[]",
+      "args": [
+        { "name": "scope", "type": "enum", "required": false, "default": "all", "values": ["body", "headers", "footers", "footnotes", "endnotes", "comments", "all"] }
+      ],
+      "transports": {
+        "wasm": { "method": "ListImages" },
+        "npm": { "method": "listImages" },
+        "python": { "method": "list_images" },
+        "stdio": { "op": "list_images", "argNames": { "scope": "scopes" } },
+        "mcp": { "tool": "docxodus_images", "action": "list" }
+      }
+    },
+    {
+      "op": "setImageDimensions",
+      "facade": "SetImageDimensions",
+      "result": "EditResult",
+      "args": [
+        { "name": "imageId", "type": "string", "required": true },
+        { "name": "dimensions", "type": "object", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "SetImageDimensions" },
+        "npm": { "method": "setImageDimensions" },
+        "python": { "method": "set_image_dimensions" },
+        "stdio": { "op": "set_image_dimensions", "defaults": { "dimensions": {} } },
+        "mcp": { "tool": "docxodus_images", "action": "set_dimensions" }
+      }
+    },
+    {
+      "op": "setImageFloatingLayout",
+      "facade": "SetImageFloatingLayout",
+      "result": "EditResult",
+      "args": [
+        { "name": "imageId", "type": "string", "required": true },
+        { "name": "layout", "type": "object", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "SetImageFloatingLayout" },
+        "npm": { "method": "setImageFloatingLayout" },
+        "python": { "method": "set_image_floating_layout" },
+        "stdio": { "op": "set_image_floating_layout" },
+        "mcp": { "tool": "docxodus_images", "action": "set_floating_layout" }
+      }
+    },
+    {
+      "op": "setImageMetadata",
+      "facade": "SetImageMetadata",
+      "result": "EditResult",
+      "args": [
+        { "name": "imageId", "type": "string", "required": true },
+        { "name": "altText", "type": "string", "required": false },
+        { "name": "title", "type": "string", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "SetImageMetadata" },
+        "npm": { "method": "setImageMetadata" },
+        "python": { "method": "set_image_metadata" },
+        "stdio": { "op": "set_image_metadata" },
+        "mcp": { "tool": "docxodus_images", "action": "set_metadata", "requires": ["altText", "title"] }
+      }
+    },
+    {
+      "op": "embedLinkedImage",
+      "facade": "EmbedLinkedImage",
+      "result": "EditResult",
+      "args": [
+        { "name": "imageId", "type": "string", "required": true },
+        { "name": "imageBase64", "type": "string", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "EmbedLinkedImage" },
+        "npm": { "method": "embedLinkedImage" },
+        "python": { "method": "embed_linked_image" },
+        "stdio": { "op": "embed_linked_image" },
+        "mcp": { "tool": "docxodus_images", "action": "embed_linked" }
+      }
+    }
+  ]
+}

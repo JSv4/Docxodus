@@ -1,0 +1,100 @@
+{
+  "$comment": "One description of the formatting session ops (issue #982). See docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names (the MCP name where the stdio host and MCP differ); argNames, defaults and requires on a transport are recorded divergences, not the target.",
+  "family": "formatting",
+  "ops": [
+    {
+      "op": "applyFormat",
+      "facade": "ApplyFormat",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "span", "type": "charSpan", "required": false },
+        { "name": "format", "type": "object", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "ApplyFormat" },
+        "npm": { "method": "applyFormat" },
+        "python": { "method": "apply_format" },
+        "stdio": { "op": "apply_format", "argNames": { "format": "op" }, "defaults": { "format": {} } },
+        "mcp": { "tool": "docxodus_format", "action": "apply_format", "defaults": { "format": {} } }
+      }
+    },
+    {
+      "op": "applyFormatBySubstring",
+      "facade": "ApplyFormatBySubstring",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "substring", "type": "string", "required": true },
+        { "name": "format", "type": "object", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "ApplyFormatBySubstring" },
+        "npm": { "method": "applyFormatBySubstring" },
+        "python": { "method": "apply_format_by_substring" },
+        "stdio": { "op": "apply_format_by_substring", "argNames": { "format": "op" }, "defaults": { "format": {} } },
+        "mcp": { "tool": "docxodus_format", "action": "apply_format_by_substring", "defaults": { "format": {} } }
+      }
+    },
+    {
+      "op": "setParagraphFormat",
+      "facade": "SetParagraphFormat",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "paragraphFormat", "type": "object", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "SetParagraphFormat" },
+        "npm": { "method": "setParagraphFormat" },
+        "python": { "method": "set_paragraph_format" },
+        "stdio": { "op": "set_paragraph_format", "argNames": { "paragraphFormat": "op" }, "defaults": { "paragraphFormat": {} } },
+        "mcp": { "tool": "docxodus_format", "action": "set_paragraph_format", "defaults": { "paragraphFormat": {} } }
+      }
+    },
+    {
+      "op": "setParagraphStyle",
+      "facade": "SetParagraphStyle",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "styleId", "type": "string", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "SetParagraphStyle" },
+        "npm": { "method": "setParagraphStyle" },
+        "python": { "method": "set_paragraph_style" },
+        "stdio": { "op": "set_paragraph_style" },
+        "mcp": { "tool": "docxodus_format", "action": "set_paragraph_style" }
+      }
+    },
+    {
+      "op": "getFormatting",
+      "facade": "GetFormatting",
+      "result": "FormattingInspection?",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "GetFormatting" },
+        "npm": { "method": "getFormatting" },
+        "python": { "method": "get_formatting" },
+        "stdio": { "op": "get_formatting" },
+        "mcp": { "absent": "no action; read as docxodus_get_content format=formatting (a format selector, result wrapped in {formatting})" }
+      }
+    },
+    {
+      "op": "listStyles",
+      "facade": "ListStyles",
+      "result": "StyleInfo[]",
+      "args": [],
+      "transports": {
+        "wasm": { "method": "ListStyles" },
+        "npm": { "method": "listStyles" },
+        "python": { "method": "list_styles" },
+        "stdio": { "op": "list_styles" },
+        "mcp": { "absent": "no action; read as docxodus_get_content format=styles (a format selector, result wrapped in {styles})" }
+      }
+    }
+  ]
+}
