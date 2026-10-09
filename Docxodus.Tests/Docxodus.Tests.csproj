@@ -26,6 +26,7 @@
     <ProjectReference Include="..\tools\mcp-server\mcpserver.csproj" />
     <ProjectReference Include="..\tools\python-host\pyhost.csproj" />
     <ProjectReference Include="..\tools\delivery\delivery.csproj" />
+    <ProjectReference Include="..\tools\op-codegen\opcodegen.csproj" />
   </ItemGroup>
 
 </Project>

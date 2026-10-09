@@ -1,5 +1,5 @@
 {
-  "$comment": "One description of the structural session ops (issue #982). See docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names (the MCP name where the stdio host and MCP differ); argNames, defaults, requires and flattens on a transport are recorded divergences, not the target. flattens: the transport spreads the fields of the canonical object argument across its own top-level arguments.",
+  "$comment": "One description of the structural session ops (issue #982). See docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names (the MCP name where the stdio host and MCP differ); argNames, defaults and requires on a transport are recorded divergences, not the target. flatAliases (on mcp) records the deprecated flat top-level MCP properties that still alias fields of the object argument MCP now takes nested (issue #1025): argument -> (field -> MCP property). tools/mcp-server/ObjectArguments.cs is the code they are checked against; no new flat alias should be added.",
   "family": "structure",
   "ops": [
     {
@@ -79,7 +79,7 @@
         "npm": { "method": "insertHorizontalRule" },
         "python": { "absent": "no Python wrapper" },
         "stdio": { "absent": "no stdio op" },
-        "mcp": { "tool": "docxodus_create", "action": "insert_horizontal_rule", "flattens": { "rule": { "style": "ruleStyle" } }, "$comment": "MCP ruleStyle (single | double | thick) becomes rule.style; the other border-edge fields (size, color, space) are not reachable." }
+        "mcp": { "tool": "docxodus_create", "action": "insert_horizontal_rule", "flatAliases": { "rule": { "style": "ruleStyle" } }, "$comment": "The deprecated flat ruleStyle keeps its narrower enum (single | double | thick); rule.style takes any OOXML border style." }
       }
     },
     {

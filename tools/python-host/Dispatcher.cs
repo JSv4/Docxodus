@@ -23,7 +23,7 @@ namespace Docxodus.PyHost;
 /// JSON shapes are interchangeable between TypeScript and Python clients —
 /// the Python wrapper normalizes camelCase to snake_case on the decode side.
 /// </summary>
-internal static class Dispatcher
+internal static partial class Dispatcher
 {
     public static string Dispatch(string op, JsonElement args)
     {
@@ -216,19 +216,8 @@ internal static class Dispatcher
             Handle(args), Str(args, "anchorId"), Int(args, "characterOffset"),
             Str(args, "bookmarkName"), ParseCrossReferenceOptions(args)),
 
-        "add_comment" => AddComment(args),
-        // The comment is commentAnchorId on every transport (issue #1014); parentAnchorId and
-        // anchorId are this host's deprecated spellings of it.
-        "add_comment_reply" => DocxSessionOps.AddCommentReply(
-            Handle(args), CommentAnchor(args, "parentAnchorId"), Str(args, "author"),
-            OptStr(args, "initials"), OptStr(args, "date"), OptStr(args, "markdown")),
-        "update_comment" => DocxSessionOps.UpdateComment(
-            Handle(args), CommentAnchor(args, "anchorId"), Str(args, "markdown")),
-        "set_comment_resolved" => DocxSessionOps.SetCommentResolved(
-            Handle(args), CommentAnchor(args, "anchorId"), OptBool(args, "resolved")),
-        "remove_comment" => DocxSessionOps.RemoveComment(
-            Handle(args), CommentAnchor(args, "anchorId")),
-        "list_comments" => DocxSessionOps.ListComments(Handle(args)),
+        // Generated from tools/op-descriptions/comments.json (Generated/CommentsOps.cs).
+        _ when IsGeneratedCommentsOp(op) => DispatchGeneratedCommentsOp(op, args),
 
         "list_hyperlinks" => DocxSessionOps.ListHyperlinks(
             Handle(args), Scopes(args)),
@@ -754,27 +743,6 @@ internal static class Dispatcher
             : DocxSessionOps.Grep(Handle(args), pattern, request);
     }
 
-    private static string AddComment(JsonElement args)
-    {
-        var anchorId = OptStr(args, "anchorId");
-        var revisionId = OptStr(args, "revisionId");
-        var hasSpan = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("span", out _);
-        if ((anchorId is null) == (revisionId is null) || (revisionId is not null && hasSpan))
-            throw new FormatException(
-                "add_comment requires exactly one target: anchorId (with optional span) or revisionId");
-
-        return revisionId is not null
-            ? DocxSessionOps.AddCommentToRevision(
-                Handle(args), revisionId, Str(args, "author"), OptStr(args, "initials"),
-                OptStr(args, "date"), OptStr(args, "markdown"))
-            : DocxSessionOps.AddComment(
-                Handle(args), anchorId!, ParseOptionalSpan(args, "span"), Str(args, "author"),
-                OptStr(args, "initials"), OptStr(args, "date"), OptStr(args, "markdown"));
-    }
-
-    private static string CommentAnchor(JsonElement args, string deprecatedAlias) =>
-        Aliased(args, "commentAnchorId", deprecatedAlias);
-
     // ─── Arg helpers ────────────────────────────────────────────────────
 
     private static int Handle(JsonElement args)
@@ -992,22 +960,8 @@ internal static class Dispatcher
         return DocxSessionJson.ParseFindOptions(o);
     }
 
-    private static CrossReferenceOptions? ParseCrossReferenceOptions(JsonElement args)
-    {
-        if (args.ValueKind != JsonValueKind.Object
-            || !args.TryGetProperty("options", out var options)
-            || options.ValueKind != JsonValueKind.Object)
-            return null;
-        return new CrossReferenceOptions
-        {
-            ReferenceNumber = options.TryGetProperty("referenceNumber", out var number)
-                && number.ValueKind == JsonValueKind.True,
-            Hyperlink = options.TryGetProperty("hyperlink", out var link)
-                && link.ValueKind == JsonValueKind.True,
-            IncludePosition = options.TryGetProperty("includePosition", out var position)
-                && position.ValueKind == JsonValueKind.True,
-        };
-    }
+    private static CrossReferenceOptions? ParseCrossReferenceOptions(JsonElement args) =>
+        OptionsOrNull(args, DocxSessionJson.ParseCrossReferenceOptions);
 
     private static ReplaceOptions? ParseReplaceOptions(JsonElement args)
     {
@@ -1018,15 +972,7 @@ internal static class Dispatcher
             && o.TryGetProperty("preconditions", out var nestedPreconditions))
             preconditions = DocxSessionJson.ParseMutationPreconditions(nestedPreconditions);
         if (!hasOptions && preconditions is null) return null;
-        return new ReplaceOptions
-        {
-            IgnoreCase = hasOptions && DocxSessionJson.TryGetBool(o, "ignoreCase", false),
-            MaxReplacements = hasOptions && o.TryGetProperty("maxReplacements", out var mr) && mr.ValueKind == JsonValueKind.Number
-                ? mr.GetInt32() : (int?)null,
-            ExpectedMatchCount = hasOptions && o.TryGetProperty("expectedMatchCount", out var emc) && emc.ValueKind == JsonValueKind.Number
-                ? emc.GetInt32() : (int?)null,
-            Preconditions = preconditions,
-        };
+        return DocxSessionJson.ParseReplaceOptions(hasOptions ? o : default) with { Preconditions = preconditions };
     }
 
     private static string ExecuteBatch(JsonElement args, bool preview = false)

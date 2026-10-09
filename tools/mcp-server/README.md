@@ -83,7 +83,11 @@ tools, and three sessionless operations — the same arithmetic as the tool refe
 `docs/architecture/docx_agent_server.md`. Everything except the three sessionless tools takes the
 `sessionId` that `docxodus_open` returns, and addresses content by the anchor ids the markdown
 projection and search tools hand back. Each grouped tool takes an `action` discriminator plus
-action-specific arguments.
+action-specific arguments. Actions whose engine op takes an options object take it nested, as
+`options` (or `rule` for `insert_horizontal_rule`, `spec` for `set_borders`), exactly as the other
+transports do. The older flat spellings of those fields (`caseSensitive`, `ruleStyle`,
+`borderScope`, `bindingPolicy`, …) still work but are deprecated. See "Object arguments" in
+`docs/architecture/docx_agent_server.md`.
 
 | Tool | Kind | Purpose |
 |---|---|---|
