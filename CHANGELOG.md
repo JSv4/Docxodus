@@ -231,9 +231,10 @@ All notable changes to this project will be documented in this file.
   before already compared the accepted view of the body, but it copied carried-over parts (headers,
   footers, unchanged notes) verbatim, so another reviewer's pending changes there leaked into the
   redline under their original author. Identical packages now return the baseline unchanged, as
-  `DocxCompare.Compare` does. N-way consolidate is unchanged. The Python `docx_diff_*` functions stay
-  on the raw engine, which they mirror; their docstrings now say so and show the opt-in.
-- **N-way consolidate now compares the accepted view of its inputs on every surface (issue #1020).** The
+  `DocxCompare.Compare` does. The Python two-way `docx_diff_*` functions stay on the raw engine, which
+  they mirror; their docstrings now say so and show the opt-in.
+- **Breaking default: N-way consolidate now compares the accepted view of its inputs on every surface
+  (issue #1020).** The
   new `DocxCompare.Consolidate` is the consolidate counterpart of `DocxCompare.Compare`: it accepts the
   base's and every reviewer's own pending tracked changes before merging, as two-way comparison does.
   Every transport's consolidate routes through the same policy: the MCP `docxodus_compare` consolidate
