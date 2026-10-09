@@ -927,22 +927,8 @@ internal static partial class Dispatcher
         return DocxSessionJson.ParseFindOptions(o);
     }
 
-    private static CrossReferenceOptions? ParseCrossReferenceOptions(JsonElement args)
-    {
-        if (args.ValueKind != JsonValueKind.Object
-            || !args.TryGetProperty("options", out var options)
-            || options.ValueKind != JsonValueKind.Object)
-            return null;
-        return new CrossReferenceOptions
-        {
-            ReferenceNumber = options.TryGetProperty("referenceNumber", out var number)
-                && number.ValueKind == JsonValueKind.True,
-            Hyperlink = options.TryGetProperty("hyperlink", out var link)
-                && link.ValueKind == JsonValueKind.True,
-            IncludePosition = options.TryGetProperty("includePosition", out var position)
-                && position.ValueKind == JsonValueKind.True,
-        };
-    }
+    private static CrossReferenceOptions? ParseCrossReferenceOptions(JsonElement args) =>
+        OptionsOrNull(args, DocxSessionJson.ParseCrossReferenceOptions);
 
     private static ReplaceOptions? ParseReplaceOptions(JsonElement args)
     {
@@ -953,15 +939,7 @@ internal static partial class Dispatcher
             && o.TryGetProperty("preconditions", out var nestedPreconditions))
             preconditions = DocxSessionJson.ParseMutationPreconditions(nestedPreconditions);
         if (!hasOptions && preconditions is null) return null;
-        return new ReplaceOptions
-        {
-            IgnoreCase = hasOptions && DocxSessionJson.TryGetBool(o, "ignoreCase", false),
-            MaxReplacements = hasOptions && o.TryGetProperty("maxReplacements", out var mr) && mr.ValueKind == JsonValueKind.Number
-                ? mr.GetInt32() : (int?)null,
-            ExpectedMatchCount = hasOptions && o.TryGetProperty("expectedMatchCount", out var emc) && emc.ValueKind == JsonValueKind.Number
-                ? emc.GetInt32() : (int?)null,
-            Preconditions = preconditions,
-        };
+        return DocxSessionJson.ParseReplaceOptions(hasOptions ? o : default) with { Preconditions = preconditions };
     }
 
     private static string ExecuteBatch(JsonElement args, bool preview = false)

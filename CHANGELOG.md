@@ -211,6 +211,18 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- MCP takes the same options object as every other transport for 15 session ops (issue #1025):
+  `options` on `replace_text_range`, `insert_table` (both tools), the three reference tables,
+  `insert_cross_reference` and the seven content-control fills; `rule` on `insert_horizontal_rule`;
+  and `spec` on `set_borders`. MCP used to spread these objects across top-level properties, so some
+  fields could not be reached at all: `replace_text_range`'s `maxReplacements` and
+  `expectedMatchCount`, and the horizontal rule's size, colour and spacing. The table of contents'
+  `hideTabAndPageNumbersInWeb` and `useOutlineLevels` were read but never advertised. MCP now parses
+  the nested object with the same `DocxSessionJson` parser as the stdio host, and the schema advertises
+  it. The flat properties (`caseSensitive`, `ruleStyle`, `borderScope`, `bindingPolicy`, `levels`, …)
+  are still accepted as deprecated aliases. Sending a field both ways with different values is refused.
+  With neither `caseSensitive` nor `options.ignoreCase` sent, MCP still matches case-insensitively.
+
 - The stdio host (and so the `docx-scalpel` Python client) takes the same argument names as MCP for 16
   session-op arguments (issue #1023). It used to spell them differently: `scopes` for `scope` on the
   four listings, `op` for `format`/`paragraphFormat` on the formatting ops, `anchorId` for
