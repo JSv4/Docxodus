@@ -8,14 +8,14 @@
       "result": "EditResult",
       "args": [
         { "name": "anchorId", "type": "anchor", "required": true },
-        { "name": "listFormat", "type": "enum", "required": true, "values": ["bullet", "decimal", "lowerLetter", "upperLetter", "lowerRoman", "upperRoman", "decimalParenthesis", "lowerLetterParenthesis", "upperLetterParenthesis", "lowerRomanParenthesis", "upperRomanParenthesis", "none"] }
+        { "name": "listFormat", "type": "enum", "required": false, "default": "none", "values": ["bullet", "decimal", "lowerLetter", "upperLetter", "lowerRoman", "upperRoman", "decimalParenthesis", "lowerLetterParenthesis", "upperLetterParenthesis", "lowerRomanParenthesis", "upperRomanParenthesis", "none"] }
       ],
       "transports": {
         "wasm": { "method": "ApplyListFormat" },
         "npm": { "method": "applyListFormat" },
         "python": { "method": "apply_list_format" },
-        "stdio": { "op": "apply_list_format", "defaults": { "listFormat": "none" } },
-        "mcp": { "tool": "docxodus_list", "action": "apply_format", "defaults": { "listFormat": "none" }, "aliases": [ { "tool": "docxodus_format", "action": "apply_list_format" } ] }
+        "stdio": { "op": "apply_list_format" },
+        "mcp": { "tool": "docxodus_list", "action": "apply_format", "aliases": [ { "tool": "docxodus_format", "action": "apply_list_format" } ] }
       }
     },
     {
@@ -25,14 +25,14 @@
       "args": [
         { "name": "firstAnchorId", "type": "anchor", "required": true },
         { "name": "lastAnchorId", "type": "anchor", "required": true },
-        { "name": "listFormat", "type": "enum", "required": true, "values": ["bullet", "decimal", "lowerLetter", "upperLetter", "lowerRoman", "upperRoman", "decimalParenthesis", "lowerLetterParenthesis", "upperLetterParenthesis", "lowerRomanParenthesis", "upperRomanParenthesis", "none"] }
+        { "name": "listFormat", "type": "enum", "required": false, "default": "none", "values": ["bullet", "decimal", "lowerLetter", "upperLetter", "lowerRoman", "upperRoman", "decimalParenthesis", "lowerLetterParenthesis", "upperLetterParenthesis", "lowerRomanParenthesis", "upperRomanParenthesis", "none"] }
       ],
       "transports": {
         "wasm": { "method": "ApplyListFormatRange" },
         "npm": { "method": "applyListFormatRange" },
         "python": { "method": "apply_list_format_range" },
-        "stdio": { "op": "apply_list_format_range", "defaults": { "listFormat": "none" } },
-        "mcp": { "tool": "docxodus_list", "action": "apply_format_range", "defaults": { "listFormat": "none" } }
+        "stdio": { "op": "apply_list_format_range" },
+        "mcp": { "tool": "docxodus_list", "action": "apply_format_range" }
       }
     },
     {

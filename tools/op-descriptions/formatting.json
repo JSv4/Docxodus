@@ -9,14 +9,14 @@
       "args": [
         { "name": "anchorId", "type": "anchor", "required": true },
         { "name": "span", "type": "charSpan", "required": false },
-        { "name": "format", "type": "object", "required": true }
+        { "name": "format", "type": "object", "required": false, "default": {} }
       ],
       "transports": {
         "wasm": { "method": "ApplyFormat" },
         "npm": { "method": "applyFormat" },
         "python": { "method": "apply_format" },
-        "stdio": { "op": "apply_format", "defaults": { "format": {} } },
-        "mcp": { "tool": "docxodus_format", "action": "apply_format", "defaults": { "format": {} } }
+        "stdio": { "op": "apply_format" },
+        "mcp": { "tool": "docxodus_format", "action": "apply_format" }
       }
     },
     {
@@ -26,14 +26,14 @@
       "args": [
         { "name": "anchorId", "type": "anchor", "required": true },
         { "name": "substring", "type": "string", "required": true },
-        { "name": "format", "type": "object", "required": true }
+        { "name": "format", "type": "object", "required": false, "default": {} }
       ],
       "transports": {
         "wasm": { "method": "ApplyFormatBySubstring" },
         "npm": { "method": "applyFormatBySubstring" },
         "python": { "method": "apply_format_by_substring" },
-        "stdio": { "op": "apply_format_by_substring", "defaults": { "format": {} } },
-        "mcp": { "tool": "docxodus_format", "action": "apply_format_by_substring", "defaults": { "format": {} } }
+        "stdio": { "op": "apply_format_by_substring" },
+        "mcp": { "tool": "docxodus_format", "action": "apply_format_by_substring" }
       }
     },
     {
@@ -42,14 +42,14 @@
       "result": "EditResult",
       "args": [
         { "name": "anchorId", "type": "anchor", "required": true },
-        { "name": "paragraphFormat", "type": "object", "required": true }
+        { "name": "paragraphFormat", "type": "object", "required": false, "default": {} }
       ],
       "transports": {
         "wasm": { "method": "SetParagraphFormat" },
         "npm": { "method": "setParagraphFormat" },
         "python": { "method": "set_paragraph_format" },
-        "stdio": { "op": "set_paragraph_format", "defaults": { "paragraphFormat": {} } },
-        "mcp": { "tool": "docxodus_format", "action": "set_paragraph_format", "defaults": { "paragraphFormat": {} } }
+        "stdio": { "op": "set_paragraph_format" },
+        "mcp": { "tool": "docxodus_format", "action": "set_paragraph_format" }
       }
     },
     {

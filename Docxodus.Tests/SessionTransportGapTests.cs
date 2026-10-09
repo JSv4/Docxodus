@@ -107,12 +107,17 @@ public sealed class SessionTransportGapTests : IDisposable
     }
 
     [Fact]
-    public void Stdio_InsertHorizontalRule_RequiresPosition()
+    public void Stdio_InsertHorizontalRule_WithoutPosition_InsertsAfter_TheFacadeDefault()
     {
         using var s = new StdioSession();
         var paragraph = Paragraph(s.Handle);
-        var e = Assert.ThrowsAny<Exception>(() => s.Call("insert_horizontal_rule", new() { ["anchorId"] = paragraph }));
-        Assert.Contains("\"position\"", e.Message);
+
+        var result = s.Call("insert_horizontal_rule", new() { ["anchorId"] = paragraph });
+
+        AssertSucceeded(result);
+        var created = result.GetProperty("created").EnumerateArray().First().GetProperty("id").GetString()!;
+        var order = SessionRegistry.Get(s.Handle).Project().AnchorIndex.Keys.ToList();
+        Assert.True(order.IndexOf(created) > order.IndexOf(paragraph), "the rule should follow its anchor");
     }
 
     [Fact]
@@ -216,10 +221,21 @@ public sealed class SessionTransportGapTests : IDisposable
     }
 
     [Fact]
-    public void Mcp_SetPageSetup_RequiresTheOpObject()
+    public void Mcp_SetPageSetup_WithoutOp_LeavesTheSectionUnchanged_TheFacadeDefault()
+    {
+        var (sessionId, handle, paragraph) = OpenMcp();
+        var before = Section(handle, paragraph);
+        Create(sessionId, "set_page_setup", new() { ["anchorId"] = paragraph });
+        var after = Section(handle, paragraph);
+        Assert.Equal(before.PageWidthTwips, after.PageWidthTwips);
+        Assert.Equal(before.PageHeightTwips, after.PageHeightTwips);
+    }
+
+    [Fact]
+    public void Mcp_SetPageSetup_RefusesAnOpThatIsNotAnObject()
     {
         var (sessionId, _, paragraph) = OpenMcp();
-        var e = Assert.Throws<McpToolException>(() => Create(sessionId, "set_page_setup", new() { ["anchorId"] = paragraph }));
+        var e = Assert.Throws<McpToolException>(() => Create(sessionId, "set_page_setup", new() { ["anchorId"] = paragraph, ["op"] = "wide" }));
         Assert.Contains("\"op\"", e.Message);
     }
 

@@ -752,13 +752,15 @@ export class DocxSession {
    */
   projectAnchor(
     anchorId: string,
-    depth: ProjectionDepth = ProjectionDepth.SubtreeAndFollowingSiblings,
+    depth?: ProjectionDepth,
     citation?: PageCitationRequest,
   ): DocxSessionProjection {
+    // An omitted depth takes the engine's default (SubtreeAndFollowingSiblings), declared once in
+    // DocxSessionOps.
     return JSON.parse(
       citation
-        ? this.wasm.ProjectAnchorWithCitations(this.handle, anchorId, depth, JSON.stringify(citation))
-        : this.wasm.ProjectAnchor(this.handle, anchorId, depth),
+        ? this.wasm.ProjectAnchorWithCitations(this.handle, anchorId, depth ?? null, JSON.stringify(citation))
+        : this.wasm.ProjectAnchor(this.handle, anchorId, depth ?? null),
     ) as DocxSessionProjection;
   }
 
@@ -773,11 +775,13 @@ export class DocxSession {
     anchorId: string,
     options?: { cssPrefix?: string; fabricateClasses?: boolean },
   ): string {
+    // Omitted options take the engine's defaults ("docx-", no fabricated classes), declared once
+    // in DocxSessionOps.
     const html = this.wasm.RenderBlockHtml(
       this.handle,
       anchorId,
-      options?.cssPrefix ?? "docx-",
-      options?.fabricateClasses ?? false,
+      options?.cssPrefix ?? null,
+      options?.fabricateClasses ?? null,
     );
     // Rendered HTML always begins with '<'; a leading '{' signals an error object.
     if (html.charCodeAt(0) === 0x7b /* '{' */) {
@@ -1010,11 +1014,12 @@ export class DocxSession {
   /**
    * Mark (or unmark) the row containing the anchor as a repeating header row
    * (`w:trPr/w:tblHeader`), so a multi-page table re-shows it on every page. Word only honors
-   * the flag on a run of rows starting at the table's first row.
+   * the flag on a run of rows starting at the table's first row. An omitted `repeat` marks the
+   * row (the engine's default, `true`).
    */
-  setRepeatHeaderRow(cellAnchorId: string, repeat: boolean): EditResult {
+  setRepeatHeaderRow(cellAnchorId: string, repeat?: boolean): EditResult {
     return JSON.parse(
-      this.wasm.SetRepeatHeaderRow(this.handle, cellAnchorId, repeat),
+      this.wasm.SetRepeatHeaderRow(this.handle, cellAnchorId, repeat ?? null),
     ) as EditResult;
   }
 
@@ -1070,11 +1075,12 @@ export class DocxSession {
    */
   insertPageNumberField(
     anchorId: string,
-    field: PageNumberField = "currentPage",
+    field?: PageNumberField,
     format?: NumberFormat
   ): EditResult {
+    // An omitted field takes the engine's default ("currentPage"), declared once in DocxSessionOps.
     return JSON.parse(
-      this.wasm.InsertPageNumberField(this.handle, anchorId, field, format ?? "")
+      this.wasm.InsertPageNumberField(this.handle, anchorId, field ?? "", format ?? "")
     ) as EditResult;
   }
 
@@ -1968,18 +1974,21 @@ export class DocxSession {
    * @see docs/architecture/docx_mutation_api.md#findplaceholders
    */
   findPlaceholders(
-    kinds: number = PlaceholderKinds.All,
-    scope: number = 1,
+    kinds?: number,
+    scope?: number,
     contextChars?: number,
-    boundary: number = ContextBoundary.Char,
+    boundary?: number,
     citation?: PageCitationRequest,
   ): TemplatePlaceholder[] {
-    // An omitted contextChars takes the engine's default (80), declared once in DocxSession.
+    // Omitted arguments take the engine's defaults (all kinds, the body, 80 characters, cut at a
+    // character), declared once in DocxSessionOps and DocxSession.
     const json = citation
       ? this.wasm.FindPlaceholdersWithCitations(
-          this.handle, kinds, scope, contextChars ?? null, boundary, JSON.stringify(citation),
+          this.handle, kinds ?? null, scope ?? null, contextChars ?? null, boundary ?? null,
+          JSON.stringify(citation),
         )
-      : this.wasm.FindPlaceholders(this.handle, kinds, scope, contextChars ?? null, boundary);
+      : this.wasm.FindPlaceholders(
+          this.handle, kinds ?? null, scope ?? null, contextChars ?? null, boundary ?? null);
     return JSON.parse(json) as TemplatePlaceholder[];
   }
 
@@ -1995,8 +2004,8 @@ export class DocxSession {
   /**
    * Discoverability alias for {@link findPlaceholders}. Same return shape.
    */
-  remainingPlaceholders(kinds: number = PlaceholderKinds.All): TemplatePlaceholder[] {
-    return JSON.parse(this.wasm.RemainingPlaceholders(this.handle, kinds)) as TemplatePlaceholder[];
+  remainingPlaceholders(kinds?: number): TemplatePlaceholder[] {
+    return JSON.parse(this.wasm.RemainingPlaceholders(this.handle, kinds ?? null)) as TemplatePlaceholder[];
   }
 
   /**
@@ -2015,9 +2024,11 @@ export class DocxSession {
    */
   getDiff(format?: typeof DiffFormat.Json): DiffEntry[];
   getDiff(format: typeof DiffFormat.Unified | typeof DiffFormat.SideBySide): string;
-  getDiff(format: number = DiffFormat.Json): DiffEntry[] | string {
-    const raw = this.wasm.GetDiff(this.handle, format);
-    if (format === DiffFormat.Json) {
+  getDiff(format?: number): DiffEntry[] | string {
+    // An omitted format reaches the engine as null and takes its default (JSON, declared once in
+    // DocxSessionOps); the overloads above promise the parsed form for it.
+    const raw = this.wasm.GetDiff(this.handle, format ?? null);
+    if (format == null || format === DiffFormat.Json) {
       return JSON.parse(raw) as DiffEntry[];
     }
     return raw;
@@ -2141,9 +2152,10 @@ export class DocxSession {
    * same shape as {@link findByText} (its `ignoreCase` composes with the regex
    * flag). Defaults to `regexOptions = 0` (none).
    */
-  findByRegex(pattern: string, regexOptions = 0, options?: FindOptions): AnchorTargetRef[] {
+  findByRegex(pattern: string, regexOptions?: number, options?: FindOptions): AnchorTargetRef[] {
     return JSON.parse(
-      this.wasm.FindByRegex(this.handle, pattern, regexOptions, options ? JSON.stringify(options) : ""),
+      this.wasm.FindByRegex(
+        this.handle, pattern, regexOptions ?? null, options ? JSON.stringify(options) : ""),
     ) as AnchorTargetRef[];
   }
 

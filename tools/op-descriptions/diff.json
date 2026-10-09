@@ -7,13 +7,13 @@
       "facade": "GetDiff",
       "result": "string",
       "args": [
-        { "name": "format", "type": "int", "required": true }
+        { "name": "format", "type": "int", "required": false, "default": 0 }
       ],
       "transports": {
         "wasm": { "method": "GetDiff" },
-        "npm": { "method": "getDiff", "defaults": { "format": 0 } },
-        "python": { "method": "get_diff", "defaults": { "format": 0 } },
-        "stdio": { "op": "get_diff", "defaults": { "format": 0 } },
+        "npm": { "method": "getDiff" },
+        "python": { "method": "get_diff" },
+        "stdio": { "op": "get_diff" },
         "mcp": { "absent": "kept off: MCP reports change from the opening baseline as the versioned docxodus_get_content format=semantic_changes rather than this anchor-keyed projection diff (JSON, unified or side-by-side) of the same baseline" }
       }
     },

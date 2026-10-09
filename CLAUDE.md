@@ -94,7 +94,7 @@ usually ripple through all of it.
 | Export package | `npm-export/` | `@docxodus/export` — deterministic standalone HTML + PDF through a pinned Chromium. Has its own `dist/`, tests, and `docxodus doctor` preflight. See `standalone_paginated_export.md`. |
 | Workflow evals | `eval/` + `Docxodus.Tests/Eval/` | Deterministic document-workflow scenarios scored on task completion, target precision, and collateral change. Corpus and contract in `eval/README.md`. |
 | Pages demo | `docs/demo/` | Static pages hosting the **shipped** surface via `createRibbonEditor`. They contain no editor UI of their own — change `npm/src/ribbon.ts`, not these files. |
-| Out-of-solution tools | `tools/diffharness/`, `tools/manifest-fuzz/`, `tools/screenshots/`, `benchmarks/` | Not in `Docxodus.sln`; build them by path. LibreOffice-backed diff verification, AFL manifest fuzzing, README screenshot capture, a form-document edit benchmark, and a `DocxDiff` perf/output-parity stress harness. |
+| Out-of-solution tools | `tools/diffharness/`, `tools/manifest-fuzz/`, `tools/screenshots/`, `tools/op-codegen/`, `benchmarks/` | Not in `Docxodus.sln`; build them by path (the test project references `op-codegen`). LibreOffice-backed diff verification, AFL manifest fuzzing, README screenshot capture, the session-plumbing generator, a form-document edit benchmark, and a `DocxDiff` perf/output-parity stress harness. |
 
 ### The single-owner rule
 
@@ -123,7 +123,10 @@ Concretely, a new session op touches: the matching `DocxSession.<Area>.cs` parti
 
 **Described ops are a ripple site.** An op family with a file in `tools/op-descriptions/` is
 checked against every transport by `SessionOpDescriptionDriftTests`; change the description in the
-same change as the op. See `docs/architecture/session_op_descriptions.md`.
+same change as the op. A family marked `"generate": true` (so far `comments`) has its stdio and MCP
+argument parsing, MCP schema properties and WASM shims generated from the description: edit the
+description, then run `dotnet run --project tools/op-codegen`; `GeneratedSessionPlumbingTests` fails on
+stale output. See `docs/architecture/session_op_descriptions.md`.
 
 **The generated-PDF benchmark is a ripple site for PageMap shape.**
 `npm/tests/visual-parity/pdf-result.ts` validates the supported `convertDocxToPdf` envelope with

@@ -42,15 +42,15 @@
       "result": "EditResult",
       "args": [
         { "name": "anchorId", "type": "anchor", "required": true },
-        { "name": "field", "type": "enum", "required": true, "values": ["currentPage", "totalPages", "pageOfTotal"] },
+        { "name": "field", "type": "enum", "required": false, "default": "currentPage", "values": ["currentPage", "totalPages", "pageOfTotal"] },
         { "name": "numberFormat", "type": "enum", "required": false, "values": ["decimal", "upperLetter", "lowerLetter", "upperRoman", "lowerRoman"] }
       ],
       "transports": {
         "wasm": { "method": "InsertPageNumberField" },
-        "npm": { "method": "insertPageNumberField", "defaults": { "field": "currentPage" } },
-        "python": { "method": "insert_page_number_field", "defaults": { "field": "currentPage" } },
+        "npm": { "method": "insertPageNumberField" },
+        "python": { "method": "insert_page_number_field" },
         "stdio": { "op": "insert_page_number_field" },
-        "mcp": { "tool": "docxodus_create", "action": "insert_page_number_field", "defaults": { "field": "currentPage" } }
+        "mcp": { "tool": "docxodus_create", "action": "insert_page_number_field" }
       }
     },
     {
@@ -75,13 +75,13 @@
       "result": "EditResult",
       "args": [
         { "name": "anchorId", "type": "anchor", "required": true },
-        { "name": "op", "type": "object", "required": true }
+        { "name": "op", "type": "object", "required": false, "default": {} }
       ],
       "transports": {
         "wasm": { "method": "SetPageNumbering" },
         "npm": { "method": "setPageNumbering" },
-        "python": { "method": "set_page_numbering", "defaults": { "op": {} } },
-        "stdio": { "op": "set_page_numbering", "defaults": { "op": {} } },
+        "python": { "method": "set_page_numbering" },
+        "stdio": { "op": "set_page_numbering" },
         "mcp": { "tool": "docxodus_create", "action": "set_page_numbering" }
       }
     },
@@ -123,13 +123,13 @@
       "result": "EditResult",
       "args": [
         { "name": "anchorId", "type": "anchor", "required": true },
-        { "name": "op", "type": "object", "required": true }
+        { "name": "op", "type": "object", "required": false, "default": {} }
       ],
       "transports": {
         "wasm": { "method": "SetPageSetup" },
         "npm": { "method": "setPageSetup" },
-        "python": { "method": "set_page_setup", "defaults": { "op": {} } },
-        "stdio": { "op": "set_page_setup", "defaults": { "op": {} } },
+        "python": { "method": "set_page_setup" },
+        "stdio": { "op": "set_page_setup" },
         "mcp": { "tool": "docxodus_create", "action": "set_page_setup" }
       }
     },

@@ -27,13 +27,13 @@
       "result": "string",
       "args": [
         { "name": "anchorId", "type": "anchor", "required": true },
-        { "name": "cssPrefix", "type": "string", "required": true },
-        { "name": "fabricateClasses", "type": "boolean", "required": true },
+        { "name": "cssPrefix", "type": "string", "required": false, "default": "docx-" },
+        { "name": "fabricateClasses", "type": "boolean", "required": false, "default": false },
         { "name": "renderTrackedChanges", "type": "boolean", "required": false, "default": false }
       ],
       "transports": {
         "wasm": { "method": "RenderBlockHtml" },
-        "npm": { "method": "renderBlock", "defaults": { "cssPrefix": "docx-", "fabricateClasses": false } },
+        "npm": { "method": "renderBlock" },
         "python": { "absent": "kept off: the editor's authoring render profile; Python renders through Session.to_html (stdio session_to_html) with caller-chosen options" },
         "stdio": { "absent": "kept off: the editor's authoring render profile (comments and annotations off, headers and footers tied to pagination); the stdio host renders through session_to_html, the HtmlConversionOps path with caller-chosen options" },
         "mcp": { "absent": "reached by format with a pinned profile: docxodus_get_content format=html with anchorId and docxodus_preview with anchorId call it with fixed options; not one to one, so no route is recorded" }

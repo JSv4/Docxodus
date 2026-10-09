@@ -294,7 +294,16 @@ internal static class ToolCatalog
                 "spanStart": { "type": "integer", "description": "replace_text_at_span_with_format: start offset in paragraph text." },
                 "spanLength": { "type": "integer", "description": "replace_text_at_span_with_format: length to replace; zero inserts at a run boundary." },
                 "format": { "type": "object", "description": "replace_text_at_span_with_format: FormatOp (same fields as docxodus_format, e.g. bold/italic). Applied only to the replacement as one atomic undo/version unit; empty replacement only deletes." },
-                "caseSensitive": { "type": "boolean", "description": "replace_text_range only. Default false." },
+                "options": {
+                  "type": "object",
+                  "description": "replace_text_range options.",
+                  "properties": {
+                    "ignoreCase": { "type": "boolean", "description": "Match case-insensitively. Default true over MCP." },
+                    "maxReplacements": { "type": "integer", "minimum": 1, "description": "Replace at most this many matches, in document order." },
+                    "expectedMatchCount": { "type": "integer", "minimum": 0, "description": "Refuse the replacement unless exactly this many matches exist." }
+                  }
+                },
+                "caseSensitive": { "type": "boolean", "description": "replace_text_range. Deprecated: use options.ignoreCase (its negation). Default false." },
                 "toAnchorIdExclusive": { "type": "string", "description": "delete_range: end boundary, exclusive." },
                 "fromAnchorId": { "type": "string", "description": "delete_range: start boundary (use anchorId as the field name for the start would be ambiguous with toAnchorIdExclusive; both are required together)." },
                 "headingAnchorId": { "type": "string", "description": "delete_section: heading whose section (heading + everything until the next same-or-higher heading) should be removed." },
@@ -393,25 +402,54 @@ internal static class ToolCatalog
                 "level": { "type": "integer", "minimum": 1, "maximum": 6, "description": "insert_heading: 1-6." },
                 "markdown": { "type": "string", "description": "insert_paragraph / insert_footnote / insert_endnote / set_header_text / set_footer_text payload." },
                 "rows": { "type": "integer" }, "columns": { "type": "integer" },
-                "cellContents": { "type": "array", "items": { "type": "string" }, "description": "insert_table: row-major markdown per cell." },
-                "cellAlignment": { "type": "string", "enum": ["left", "center", "right", "justify"] },
-                "columnWidths": { "type": "array", "items": { "type": "integer" }, "description": "insert_table: twips per column, left to right." },
-                "borderless": { "type": "boolean" },
-                "ruleStyle": { "type": "string", "enum": ["single", "double", "thick"], "description": "insert_horizontal_rule." },
+                "options": {
+                  "type": "object",
+                  "description": "insert_table, insert_table_of_contents, insert_table_of_figures and insert_table_of_authorities options. Each field names the action that reads it.",
+                  "properties": {
+                    "cellContents": { "type": "array", "items": { "type": "string" }, "description": "insert_table: row-major markdown per cell." },
+                    "cellAlignment": { "type": "string", "enum": ["left", "center", "right", "justify"], "description": "insert_table." },
+                    "columnWidths": { "type": "array", "items": { "type": "integer" }, "description": "insert_table: twips per column, left to right." },
+                    "borderless": { "type": "boolean", "description": "insert_table: no table borders (default false)." },
+                    "levels": { "type": "string", "description": "insert_table_of_contents: heading levels to list, a level or range within 1-9 (default \"1-3\")." },
+                    "title": { "type": ["string", "null"], "description": "insert_table_of_contents: heading above the table (default \"Contents\"); empty or null inserts none." },
+                    "hideTabAndPageNumbersInWeb": { "type": "boolean", "description": "insert_table_of_contents: hide tab leaders and page numbers in Web Layout view (default true)." },
+                    "useOutlineLevels": { "type": "boolean", "description": "insert_table_of_contents: also list paragraphs by their outline level (default true)." },
+                    "captionLabel": { "type": "string", "description": "insert_table_of_figures: the caption label to list, e.g. \"Figure\" or \"Exhibit\" (default \"Figure\")." },
+                    "category": { "type": "string", "enum": ["cases", "statutes", "other_authorities", "rules", "treatises", "regulations", "constitutional_provisions"], "description": "insert_table_of_authorities: which category of marked authority to list (default cases)." },
+                    "entryPageSeparator": { "type": "string", "description": "insert_table_of_authorities: separator between an entry and its page numbers." },
+                    "hyperlinks": { "type": "boolean", "description": "Reference tables: make each entry a hyperlink to its target (default true)." },
+                    "rightTabPos": { "type": "integer", "description": "Reference tables: right-aligned dot-leader tab stop in twips (default 9350)." }
+                  }
+                },
+                "rule": {
+                  "type": "object",
+                  "description": "insert_horizontal_rule: the rule's border edge. Omitted is a single 1.5pt (12 eighths) auto-coloured rule; in a rule object, each field left out takes the border-edge default.",
+                  "properties": {
+                    "style": { "type": "string", "description": "OOXML border style: single (default), double, thick, dotted, dashed, …" },
+                    "size": { "type": "integer", "description": "Weight in eighths of a point (default 6 = 0.75pt)." },
+                    "color": { "type": "string", "description": "Hex RRGGBB (no '#') or auto (default)." },
+                    "space": { "type": "integer", "description": "Padding between the rule and the text, in points (default 1)." }
+                  }
+                },
+                "cellContents": { "type": "array", "items": { "type": "string" }, "description": "insert_table. Deprecated: use options.cellContents." },
+                "cellAlignment": { "type": "string", "enum": ["left", "center", "right", "justify"], "description": "insert_table. Deprecated: use options.cellAlignment." },
+                "columnWidths": { "type": "array", "items": { "type": "integer" }, "description": "insert_table. Deprecated: use options.columnWidths." },
+                "borderless": { "type": "boolean", "description": "insert_table. Deprecated: use options.borderless." },
+                "ruleStyle": { "type": "string", "enum": ["single", "double", "thick"], "description": "insert_horizontal_rule. Deprecated: use rule.style." },
                 "characterOffset": { "type": "integer", "description": "insert_footnote/insert_endnote: character offset within the citing paragraph." },
                 "kind": { "type": "string", "enum": ["default", "first", "even"], "description": "set_header_text/set_footer_text/ensure_header_footer_visible/set_header_footer_kind_enabled: running-story kind. first/even authoring also enables the corresponding Word visibility setting; ensure_header_footer_visible enables it for an already-referenced story; set_header_footer_kind_enabled turns Word's 'Different first page' (first) or 'Different odd & even pages' (even) switch on or off (default cannot be disabled)." },
                 "enabled": { "type": "boolean", "description": "set_header_footer_kind_enabled (required): true turns the switch for kind on, false off." },
-                "op": { "type": "object", "description": "set_page_setup (required): { pageWidthTwips?, pageHeightTwips?, landscape?, marginTopTwips?, marginBottomTwips?, marginLeftTwips?, marginRightTwips?, headerDistanceTwips?, footerDistanceTwips? } for the section owning anchorId, in twips (1440 = 1 inch); omitted fields stay unchanged, landscape without a size swaps the page's width and height, and invalid geometry fails with invalid_page_setup without changing anything. set_page_numbering (required): { start?, format? } where start is the section's first page number and format a number format such as decimal, lowerRoman, upperRoman, lowerLetter or upperLetter; omitted fields stay unchanged." },
+                "op": { "type": "object", "description": "set_page_setup: { pageWidthTwips?, pageHeightTwips?, landscape?, marginTopTwips?, marginBottomTwips?, marginLeftTwips?, marginRightTwips?, headerDistanceTwips?, footerDistanceTwips? } for the section owning anchorId, in twips (1440 = 1 inch); omitted fields stay unchanged, landscape without a size swaps the page's width and height, and invalid geometry fails with invalid_page_setup without changing anything. set_page_numbering: { start?, format? } where start is the section's first page number and format a number format such as decimal, lowerRoman, upperRoman, lowerLetter or upperLetter; omitted fields stay unchanged. Omitting op changes nothing (an empty op)." },
                 "endnotes": { "type": "boolean", "description": "list_notes (required): false lists footnotes, true endnotes, each as { id, defAnchorId, ordinal } in citation order (ordinal is the displayed number)." },
                 "field": { "type": "string", "enum": ["current_page", "total_pages", "page_of_total"], "description": "insert_page_number_field: current_page appends a PAGE field, total_pages a NUMPAGES field, page_of_total Word's \"Page X of Y\" gallery entry (the text 'Page ', PAGE, ' of ', NUMPAGES)." },
                 "numberFormat": { "type": "string", "enum": ["decimal", "upperLetter", "lowerLetter", "upperRoman", "lowerRoman"], "description": "insert_page_number_field: optional explicit \\* switch format." },
-                "levels": { "type": "string", "description": "insert_table_of_contents: heading levels to list, a level or range within 1-9 (default \"1-3\")." },
-                "title": { "type": "string", "description": "insert_table_of_contents: heading above the table (default \"Contents\"); empty inserts none." },
-                "captionLabel": { "type": "string", "description": "insert_table_of_figures: the caption label to list, e.g. \"Figure\" or \"Exhibit\" (default \"Figure\")." },
-                "category": { "type": "string", "enum": ["cases", "statutes", "other_authorities", "rules", "treatises", "regulations", "constitutional_provisions"], "description": "insert_table_of_authorities: which category of marked authority to list (default cases)." },
-                "hyperlinks": { "type": "boolean", "description": "Reference tables: make each entry a hyperlink to its target (default true)." },
-                "entryPageSeparator": { "type": "string", "description": "insert_table_of_authorities: separator between an entry and its page numbers." },
-                "rightTabPos": { "type": "integer", "description": "Reference tables: right-aligned dot-leader tab stop in twips (default 9350)." }
+                "levels": { "type": "string", "description": "insert_table_of_contents: heading levels to list, a level or range within 1-9 (default \"1-3\"). Deprecated: use options.levels." },
+                "title": { "type": "string", "description": "insert_table_of_contents: heading above the table (default \"Contents\"); empty inserts none. Deprecated: use options.title." },
+                "captionLabel": { "type": "string", "description": "insert_table_of_figures: the caption label to list, e.g. \"Figure\" or \"Exhibit\" (default \"Figure\"). Deprecated: use options.captionLabel." },
+                "category": { "type": "string", "enum": ["cases", "statutes", "other_authorities", "rules", "treatises", "regulations", "constitutional_provisions"], "description": "insert_table_of_authorities: which category of marked authority to list (default cases). Deprecated: use options.category." },
+                "hyperlinks": { "type": "boolean", "description": "Reference tables: make each entry a hyperlink to its target (default true). Deprecated: use options.hyperlinks." },
+                "entryPageSeparator": { "type": "string", "description": "insert_table_of_authorities: separator between an entry and its page numbers. Deprecated: use options.entryPageSeparator." },
+                "rightTabPos": { "type": "integer", "description": "Reference tables: right-aligned dot-leader tab stop in twips (default 9350). Deprecated: use options.rightTabPos." }
               },
               "required": ["sessionId", "action"]
             }
@@ -439,22 +477,14 @@ internal static class ToolCatalog
         new ToolDefinition(
             "docxodus_comment",
             "Create and manage native Word review comments (real w:comment markup — visible in Word/Google Docs/LibreOffice's Reviewing pane): comment on a character span or tracked revision, reply in the same native thread, resolve/reopen, update, remove, or list. Comments are addressed by their cmt anchor (from add/reply's created list or the projection's # Comments section). list reports each comment's numeric id (the w:id rendered HTML carries as data-comment-id) plus parentAnchorId/resolved when Word extension metadata exists. For the semantic highlight/label overlay see docxodus_annotate.",
-            """
+            $$"""
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
                 "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
-                "action": { "type": "string", "enum": ["add", "reply", "resolve", "update", "remove", "list"] },
-                "anchorId": { "type": "string", "description": "add: the body paragraph to comment on. Mutually exclusive with revisionId." },
-                "span": { "type": "object", "properties": { "start": { "type": "integer" }, "length": { "type": "integer" } }, "description": "add: character range within the paragraph. Omit to comment on the whole block." },
-                "revisionId": { "type": "string", "description": "add: alternatively, the id from docxodus_track_changes list. The exact live revision extent is targeted; unknown/already-resolved ids fail with revision_not_found." },
-                "author": { "type": "string", "description": "add/reply: comment author (required)." },
-                "initials": { "type": "string", "description": "add/reply: optional author initials." },
-                "date": { "type": "string", "description": "add/reply: optional ISO-8601 timestamp; w:date is written only when provided (omitting keeps output deterministic)." },
-                "markdown": { "type": "string", "description": "add/reply/update: the comment body (same markdown subset as other payloads). Required for update; add and reply without it create an empty comment." },
-                "commentAnchorId": { "type": "string", "description": "reply: parent comment; resolve/update/remove: target comment definition anchor (kind cmt)." },
-                "resolved": { "type": "boolean", "description": "resolve: true marks done (default); false reopens while preserving thread parentage." }
+                "action": { "type": "string", "enum": [{{GeneratedMcpSchema.DocxodusCommentActions}}] },
+                {{GeneratedMcpSchema.DocxodusCommentProperties}}
               },
               "required": ["sessionId", "action"]
             }
@@ -514,9 +544,18 @@ internal static class ToolCatalog
                 "endOffset": { "type": "integer", "description": "add/move_bookmark exclusive end boundary." },
                 "characterOffset": { "type": "integer", "description": "insert_cross_reference: zero-based character boundary in anchorId's paragraph where the field is inserted." },
                 "bookmarkName": { "type": "string", "description": "insert_cross_reference: existing bookmark the REF field targets; a missing or incoherent bookmark fails with missing_bookmark_target." },
-                "referenceNumber": { "type": "boolean", "description": "insert_cross_reference: emit the \\r switch — show the target's auto-number instead of its text (cached 0 when the target is unnumbered)." },
-                "hyperlink": { "type": "boolean", "description": "insert_cross_reference: emit the \\h switch — the field jumps to the bookmark like a link." },
-                "includePosition": { "type": "boolean", "description": "insert_cross_reference: emit the \\p switch — show above/below relative position (appended to the number under referenceNumber)." }
+                "options": {
+                  "type": "object",
+                  "description": "insert_cross_reference switches. Each defaults to false.",
+                  "properties": {
+                    "referenceNumber": { "type": "boolean", "description": "Emit the \\r switch — show the target's auto-number instead of its text (cached 0 when the target is unnumbered)." },
+                    "hyperlink": { "type": "boolean", "description": "Emit the \\h switch — the field jumps to the bookmark like a link." },
+                    "includePosition": { "type": "boolean", "description": "Emit the \\p switch — show above/below relative position (appended to the number under referenceNumber)." }
+                  }
+                },
+                "referenceNumber": { "type": "boolean", "description": "insert_cross_reference. Deprecated: use options.referenceNumber." },
+                "hyperlink": { "type": "boolean", "description": "insert_cross_reference. Deprecated: use options.hyperlink." },
+                "includePosition": { "type": "boolean", "description": "insert_cross_reference. Deprecated: use options.includePosition." }
               },
               "required": ["sessionId", "action"]
             }
@@ -565,9 +604,19 @@ internal static class ToolCatalog
                 "sectionAnchorId": { "type": "string", "description": "add_repeating_item section control." },
                 "afterItemAnchorId": { "type": "string", "description": "Optional direct item after which the clone is inserted." },
                 "itemAnchorId": { "type": "string", "description": "remove_repeating_item direct item." },
-                "bindingPolicy": { "type": "string", "enum": ["preserve", "detach_target"], "description": "Default preserve. detach_target removes only the selected target's own native w:dataBinding or w15:dataBinding element; a bound ancestor still fails closed." },
-                "nestedControls": { "type": "string", "enum": ["refuse", "preserve", "replace"], "description": "fill_text/fill_rich_text on a target containing nested controls. Default refuse. preserve keeps every nested control in place and replaces only the content outside them; replace discards the whole payload, nested controls included (each is reported removed; a locked or data-bound nested control refuses)." },
-                "childFills": { "type": "object", "additionalProperties": { "type": "string" }, "description": "With nestedControls=preserve: plain-text fills for nested text/rich-text controls of the target, keyed by their sdt anchor, applied in the same operation. A key that is not a nested textual control, or a child that fails its own gates, fails the whole call without mutating." }
+                "options": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "description": "Fill options for every mutating action except remove_repeating_item.",
+                  "properties": {
+                    "bindingPolicy": { "type": "string", "enum": ["preserve", "detach_target"], "description": "Default preserve. detach_target removes only the selected target's own native w:dataBinding or w15:dataBinding element; a bound ancestor still fails closed." },
+                    "nestedControls": { "type": "string", "enum": ["refuse", "preserve", "replace"], "description": "fill_text/fill_rich_text on a target containing nested controls. Default refuse. preserve keeps every nested control in place and replaces only the content outside them; replace discards the whole payload, nested controls included (each is reported removed; a locked or data-bound nested control refuses)." },
+                    "childFills": { "type": "object", "additionalProperties": { "type": "string" }, "description": "With nestedControls=preserve: plain-text fills for nested text/rich-text controls of the target, keyed by their sdt anchor, applied in the same operation. A key that is not a nested textual control, or a child that fails its own gates, fails the whole call without mutating." }
+                  }
+                },
+                "bindingPolicy": { "type": "string", "enum": ["preserve", "detach_target"], "description": "Deprecated: use options.bindingPolicy." },
+                "nestedControls": { "type": "string", "enum": ["refuse", "preserve", "replace"], "description": "Deprecated: use options.nestedControls." },
+                "childFills": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Deprecated: use options.childFills." }
               },
               "required": ["sessionId", "action"]
             }
@@ -728,10 +777,20 @@ internal static class ToolCatalog
                 "tableAnchorId": { "type": "string", "description": "get_metadata/resolve_cell_coordinate: the table's canonical tbl anchor." },
                 "position": { "type": "string", "enum": ["before", "after"], "description": "insert: relative to anchorId. insert_row/insert_column: relative to cellAnchorId." },
                 "rows": { "type": "integer" }, "columns": { "type": "integer" },
-                "cellContents": { "type": "array", "items": { "type": "string" } },
-                "cellAlignment": { "type": "string", "enum": ["left", "center", "right", "justify"] },
-                "columnWidths": { "type": "array", "items": { "type": "integer" } },
-                "borderless": { "type": "boolean" },
+                "options": {
+                  "type": "object",
+                  "description": "insert options.",
+                  "properties": {
+                    "cellContents": { "type": "array", "items": { "type": "string" }, "description": "Row-major markdown per cell." },
+                    "cellAlignment": { "type": "string", "enum": ["left", "center", "right", "justify"] },
+                    "columnWidths": { "type": "array", "items": { "type": "integer" }, "description": "Twips per column, left to right." },
+                    "borderless": { "type": "boolean", "description": "No table borders (default false)." }
+                  }
+                },
+                "cellContents": { "type": "array", "items": { "type": "string" }, "description": "insert. Deprecated: use options.cellContents." },
+                "cellAlignment": { "type": "string", "enum": ["left", "center", "right", "justify"], "description": "insert. Deprecated: use options.cellAlignment." },
+                "columnWidths": { "type": "array", "items": { "type": "integer" }, "description": "insert. Deprecated: use options.columnWidths." },
+                "borderless": { "type": "boolean", "description": "insert. Deprecated: use options.borderless." },
                 "cellAnchorId": { "type": "string", "description": "resolve_cell_anchor and every cell mutation: the cell's canonical tc anchor, returned by insert/insert_row/insert_column, get_metadata, resolve_cell_coordinate, or docxodus_search mode=kind query=tc. Legacy p/h/li anchors physically inside a cell are translated temporarily for migration; new callers must use tc." },
                 "rowIndex": { "type": "integer", "minimum": 0, "description": "resolve_cell_coordinate: zero-based physical row index." },
                 "columnIndex": { "type": "integer", "minimum": 0, "description": "resolve_cell_coordinate: zero-based table-grid column (honors gridBefore/gridAfter and gridSpan)." },
@@ -740,10 +799,20 @@ internal static class ToolCatalog
                 "colSpan": { "type": "integer", "minimum": 1, "description": "merge_cells: how many cells right the rectangle runs from the anchor's cell (default 1). Becomes w:gridSpan. rowSpan x colSpan must be > 1. unmerge_cells addressed at a vertical continuation unmerges the whole run." },
                 "mergeContent": { "type": "string", "enum": ["append", "discard", "reject"], "description": "merge_cells: what to do with the absorbed cells' content — append it to the surviving cell (default, lossless), discard it, or refuse the merge when any absorbed cell is non-empty." },
                 "widths": { "type": "array", "items": { "type": "integer" }, "description": "set_column_widths: one positive twip width per column, left→right (1440 = 1 inch). Rewrites w:tblGrid + every cell width and pins the table to fixed layout." },
-                "borderScope": { "type": "string", "enum": ["all", "outside", "inside"], "description": "set_borders: which edges to write (default all). Untargeted edges are left unchanged." },
-                "borderStyle": { "type": "string", "description": "set_borders: OOXML border style — single (default), double, thick, dotted, dashed, …, or none to remove the targeted edges." },
-                "borderSize": { "type": "integer", "description": "set_borders: weight in eighths of a point (default 4 = 0.5pt)." },
-                "borderColor": { "type": "string", "description": "set_borders: hex RRGGBB (no '#') or auto (default)." },
+                "spec": {
+                  "type": "object",
+                  "description": "set_borders: which edges to write and how.",
+                  "properties": {
+                    "scope": { "type": "string", "enum": ["all", "outside", "inside"], "description": "Which edges to write (default all). Untargeted edges are left unchanged." },
+                    "style": { "type": "string", "description": "OOXML border style — single (default), double, thick, dotted, dashed, …, or none to remove the targeted edges." },
+                    "size": { "type": "integer", "description": "Weight in eighths of a point (default 4 = 0.5pt)." },
+                    "color": { "type": "string", "description": "Hex RRGGBB (no '#') or auto (default)." }
+                  }
+                },
+                "borderScope": { "type": "string", "enum": ["all", "outside", "inside"], "description": "set_borders. Deprecated: use spec.scope." },
+                "borderStyle": { "type": "string", "description": "set_borders. Deprecated: use spec.style." },
+                "borderSize": { "type": "integer", "description": "set_borders. Deprecated: use spec.size." },
+                "borderColor": { "type": "string", "description": "set_borders. Deprecated: use spec.color." },
                 "fill": { "type": "string", "description": "set_shading: hex RRGGBB (leading '#' tolerated) or auto; omit/empty to remove the shading." },
                 "shadingScope": { "type": "string", "enum": ["cell", "row"], "description": "set_shading: just the anchor's cell (default) or every cell of its row — header-row banding." },
                 "repeat": { "type": "boolean", "description": "set_repeat_header_row: true (default) marks the anchor's row as a repeating header row (w:tblHeader; Word honors it on a run of rows starting at row 1), false unmarks. set_row_options: deprecated alias of repeatHeader." },

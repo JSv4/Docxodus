@@ -206,16 +206,16 @@ public static partial class DocxSessionBridge
     /// the standard MarkdownProjection shape (markdown + anchorIndex).
     /// </summary>
     [JSExport]
-    public static string ProjectAnchor(int h, string anchorId, int depth) =>
-        DocxSessionOps.ProjectAnchor(h, anchorId, (ProjectionDepth)depth);
+    public static string ProjectAnchor(int h, string anchorId, int? depth) =>
+        DocxSessionOps.ProjectAnchor(h, anchorId, (ProjectionDepth?)depth);
 
     [JSExport]
     public static string ProjectAnchorWithCitations(
-        int h, string anchorId, int depth, string requestJson)
+        int h, string anchorId, int? depth, string requestJson)
     {
         using var doc = JsonDocument.Parse("{\"citation\":" + requestJson + "}");
         return DocxSessionOps.ProjectAnchor(
-            h, anchorId, (ProjectionDepth)depth,
+            h, anchorId, (ProjectionDepth?)depth,
             DocxSessionJson.ParsePageCitationRequest(doc.RootElement));
     }
 
@@ -226,7 +226,7 @@ public static partial class DocxSessionBridge
     /// '&lt;', so the leading character disambiguates success from error).
     /// </summary>
     [JSExport]
-    public static string RenderBlockHtml(int h, string anchorId, string cssPrefix, bool fabricateClasses)
+    public static string RenderBlockHtml(int h, string anchorId, string? cssPrefix, bool? fabricateClasses)
     {
         try { return DocxSessionOps.RenderBlockHtml(h, anchorId, cssPrefix, fabricateClasses); }
         // Reflection-free error JSON: the trimmed WASM build disables reflection-based
@@ -383,7 +383,7 @@ public static partial class DocxSessionBridge
 
     [JSExport]
     public static string MoveBlock(int h, string sourceAnchor, string targetAnchor, string posStr) =>
-        DocxSessionOps.MoveBlock(h, sourceAnchor, targetAnchor, DocxSessionJson.ParsePos(posStr));
+        DocxSessionOps.MoveBlock(h, sourceAnchor, targetAnchor, DocxSessionJson.ParseOptionalPos(posStr));
 
     /// <summary>
     /// Bridge for <see cref="DocxSession.ValidMoveTargets"/>. Returns a JSON array of the anchor
@@ -416,7 +416,7 @@ public static partial class DocxSessionBridge
 
     [JSExport]
     public static string InsertParagraph(int h, string anchor, string posStr, string md) =>
-        DocxSessionOps.InsertParagraph(h, anchor, DocxSessionJson.ParsePos(posStr), md);
+        DocxSessionOps.InsertParagraph(h, anchor, DocxSessionJson.ParseOptionalPos(posStr), md);
 
     [JSExport]
     public static string SplitParagraph(int h, string anchor, int offset) =>
@@ -433,7 +433,7 @@ public static partial class DocxSessionBridge
     /// </summary>
     [JSExport]
     public static string InsertHorizontalRule(int h, string anchor, string posStr, string ruleJson) =>
-        DocxSessionOps.InsertHorizontalRule(h, anchor, DocxSessionJson.ParsePos(posStr), ruleJson);
+        DocxSessionOps.InsertHorizontalRule(h, anchor, DocxSessionJson.ParseOptionalPos(posStr), ruleJson);
 
     /// <summary>
     /// Insert a rows×cols table before/after the anchor. <paramref name="optionsJson"/> is a
@@ -442,7 +442,7 @@ public static partial class DocxSessionBridge
     /// </summary>
     [JSExport]
     public static string InsertTable(int h, string anchor, string posStr, int rows, int cols, string optionsJson) =>
-        DocxSessionOps.InsertTable(h, anchor, DocxSessionJson.ParsePos(posStr), rows, cols, optionsJson);
+        DocxSessionOps.InsertTable(h, anchor, DocxSessionJson.ParseOptionalPos(posStr), rows, cols, optionsJson);
 
     [JSExport]
     public static string GetTableMetadata(int h, string tableAnchor) =>
@@ -459,11 +459,11 @@ public static partial class DocxSessionBridge
 
     [JSExport]
     public static string InsertTableRow(int h, string cellAnchor, string posStr) =>
-        DocxSessionOps.InsertTableRow(h, cellAnchor, DocxSessionJson.ParsePos(posStr));
+        DocxSessionOps.InsertTableRow(h, cellAnchor, DocxSessionJson.ParseOptionalPos(posStr));
 
     [JSExport]
     public static string InsertTableColumn(int h, string cellAnchor, string posStr) =>
-        DocxSessionOps.InsertTableColumn(h, cellAnchor, DocxSessionJson.ParsePos(posStr));
+        DocxSessionOps.InsertTableColumn(h, cellAnchor, DocxSessionJson.ParseOptionalPos(posStr));
 
     [JSExport]
     public static string DeleteTableRow(int h, string cellAnchor) =>
@@ -504,13 +504,13 @@ public static partial class DocxSessionBridge
     /// <summary>Shade the cell containing <paramref name="cellAnchor"/> (scope "cell") or its whole
     /// row (scope "row"). <paramref name="fill"/> is a hex RRGGBB triplet or "auto"; "" clears.</summary>
     [JSExport]
-    public static string SetCellShading(int h, string cellAnchor, string fill, string? scope) =>
+    public static string SetCellShading(int h, string cellAnchor, string? fill, string? scope) =>
         DocxSessionOps.SetCellShading(h, cellAnchor, fill, scope);
 
     /// <summary>Mark/unmark the row containing <paramref name="cellAnchor"/> as a repeating
     /// header row (w:trPr/w:tblHeader).</summary>
     [JSExport]
-    public static string SetRepeatHeaderRow(int h, string cellAnchor, bool repeat) =>
+    public static string SetRepeatHeaderRow(int h, string cellAnchor, bool? repeat) =>
         DocxSessionOps.SetRepeatHeaderRow(h, cellAnchor, repeat);
 
     [JSExport]
@@ -544,7 +544,7 @@ public static partial class DocxSessionBridge
     [JSExport]
     public static string InsertPageNumberField(int h, string anchor, string field, string format) =>
         DocxSessionOps.InsertPageNumberField(h, anchor,
-            DocxSessionJson.ParsePageNumberField(field),
+            DocxSessionJson.ParseOptionalPageNumberField(field),
             DocxSessionJson.ParseNumberFormatOrNull(format));
 
     /// <summary>
@@ -669,63 +669,117 @@ public static partial class DocxSessionBridge
         return DocxSessionOps.InsertCrossReference(h, anchor, characterOffset, bookmarkName, options);
     }
 
+    // BEGIN GENERATED comments
+    // Generated by tools/op-codegen from tools/op-descriptions/comments.json.
+    // Do not edit by hand: change the description and run
+    // `dotnet run --project tools/op-codegen` (docs/architecture/session_op_descriptions.md).
+
     /// <summary>
-    /// Add a native Word comment on body paragraph <paramref name="anchor"/> (issue #300).
+    /// Add a native Word comment on body paragraph <paramref name="anchorId"/> (issue #300).
     /// <paramref name="spanJson"/> is <c>""</c> for the whole block or
-    /// <c>{"start":int,"length":int}</c>; <paramref name="initials"/>/<paramref name="date"/>
-    /// are <c>""</c> when absent (date is ISO-8601 and written only when provided). Returns the
-    /// created definition anchor (kind <c>cmt</c>) plus its <c>p</c>/scope-<c>cmt</c> paragraph
-    /// anchors in <c>created</c>.
+    /// <c>{"start":int,"length":int}</c>; <paramref name="initials"/>/<paramref name="date"/> are
+    /// <c>""</c> when absent (date is ISO-8601 and written only when provided). Returns the created
+    /// definition anchor (kind <c>cmt</c>) plus its <c>p</c>/scope-<c>cmt</c> paragraph anchors in
+    /// <c>created</c>.
     /// </summary>
     [JSExport]
-    public static string AddComment(int h, string anchor, string spanJson, string author,
-        string initials, string date, string markdown) =>
-        DocxSessionOps.AddComment(h, anchor, ParseSpan(spanJson), author,
+    public static string AddComment(
+        int h,
+        string anchorId,
+        string spanJson,
+        string author,
+        string initials,
+        string date,
+        string markdown) =>
+        DocxSessionOps.AddComment(
+            h,
+            anchorId,
+            ParseSpan(spanJson),
+            author,
             string.IsNullOrEmpty(initials) ? null : initials,
             string.IsNullOrEmpty(date) ? null : date,
             markdown);
 
-    /// <summary>Add a native Word comment around the exact live extent of a tracked revision.
-    /// Unknown or already-resolved ids return <c>revision_not_found</c>.</summary>
+    /// <summary>
+    /// Add a native Word comment around the exact live extent of a tracked revision. Unknown or
+    /// already-resolved ids return <c>revision_not_found</c>.
+    /// </summary>
     [JSExport]
-    public static string AddCommentToRevision(int h, string revisionId, string author,
-        string initials, string date, string markdown) =>
-        DocxSessionOps.AddCommentToRevision(h, revisionId, author,
+    public static string AddCommentToRevision(
+        int h,
+        string revisionId,
+        string author,
+        string initials,
+        string date,
+        string markdown) =>
+        DocxSessionOps.AddCommentToRevision(
+            h,
+            revisionId,
+            author,
             string.IsNullOrEmpty(initials) ? null : initials,
             string.IsNullOrEmpty(date) ? null : date,
             markdown);
 
-    /// <summary>Add a native reply with an adjacent reference; <c>w15:paraIdParent</c> links it
-    /// to the immediate parent so it inherits the thread root's range.</summary>
+    /// <summary>
+    /// Add a native reply with an adjacent reference; <c>w15:paraIdParent</c> links it to the
+    /// immediate parent so it inherits the thread root's range.
+    /// </summary>
     [JSExport]
-    public static string AddCommentReply(int h, string parentCommentAnchor, string author,
-        string initials, string date, string markdown) =>
-        DocxSessionOps.AddCommentReply(h, parentCommentAnchor, author,
+    public static string AddCommentReply(
+        int h,
+        string commentAnchorId,
+        string author,
+        string initials,
+        string date,
+        string markdown) =>
+        DocxSessionOps.AddCommentReply(
+            h,
+            commentAnchorId,
+            author,
             string.IsNullOrEmpty(initials) ? null : initials,
             string.IsNullOrEmpty(date) ? null : date,
             markdown);
 
-    /// <summary>Replace a comment's body text, addressed by its definition anchor (kind
-    /// <c>cmt</c>); identity attributes (author/initials/date) are preserved.</summary>
+    /// <summary>
+    /// Set <c>w15:done</c> for one comment (<c>false</c> reopens it), creating the paraId-keyed
+    /// metadata parts when the comment was previously flat.
+    /// </summary>
     [JSExport]
-    public static string UpdateComment(int h, string commentAnchor, string markdown) =>
-        DocxSessionOps.UpdateComment(h, commentAnchor, markdown);
+    public static string SetCommentResolved(int h, string commentAnchorId, bool resolved) =>
+        DocxSessionOps.SetCommentResolved(
+            h,
+            commentAnchorId,
+            resolved);
 
-    /// <summary>Set <c>w15:done</c> for one comment (<c>false</c> reopens it), creating the
-    /// paraId-keyed metadata parts when the comment was previously flat.</summary>
+    /// <summary>
+    /// Replace a comment's body text, addressed by its definition anchor (kind <c>cmt</c>);
+    /// identity attributes (author/initials/date) are preserved.
+    /// </summary>
     [JSExport]
-    public static string SetCommentResolved(int h, string commentAnchor, bool resolved) =>
-        DocxSessionOps.SetCommentResolved(h, commentAnchor, resolved);
+    public static string UpdateComment(int h, string commentAnchorId, string markdown) =>
+        DocxSessionOps.UpdateComment(
+            h,
+            commentAnchorId,
+            markdown);
 
-    /// <summary>Remove a comment: definition + body marker triple + threading entries.</summary>
+    /// <summary>
+    /// Remove a comment: definition + body marker triple + threading entries.
+    /// </summary>
     [JSExport]
-    public static string RemoveComment(int h, string commentAnchor) =>
-        DocxSessionOps.RemoveComment(h, commentAnchor);
+    public static string RemoveComment(int h, string commentAnchorId) =>
+        DocxSessionOps.RemoveComment(
+            h,
+            commentAnchorId);
 
-    /// <summary>The document's comments in part order:
-    /// <c>[{"anchorId","author","initials"?,"date"?,"text","parentAnchorId"?,"resolved"?}]</c>.</summary>
+    /// <summary>
+    /// The document's comments in part order:
+    /// <c>[{"anchorId","author","initials"?,"date"?,"text","parentAnchorId"?,"resolved"?}]</c>.
+    /// </summary>
     [JSExport]
-    public static string ListComments(int h) => DocxSessionOps.ListComments(h);
+    public static string ListComments(int h) =>
+        DocxSessionOps.ListComments(h);
+
+    // END GENERATED comments
 
     [JSExport]
     public static string ListHyperlinks(int h, int scopes) =>
@@ -769,7 +823,7 @@ public static partial class DocxSessionBridge
         DocxSessionOps.SetImageDimensions(h, imageId, dimensionsJson);
 
     [JSExport]
-    public static string SetImageMetadata(int h, string imageId, string altText, string title) =>
+    public static string SetImageMetadata(int h, string imageId, string? altText, string? title) =>
         DocxSessionOps.SetImageMetadata(h, imageId, altText, title);
 
     [JSExport]
@@ -1001,7 +1055,7 @@ public static partial class DocxSessionBridge
     /// </summary>
     [JSExport]
     public static string ApplyListFormat(int h, string anchor, string kind) =>
-        DocxSessionOps.ApplyListFormat(h, anchor, DocxSessionJson.ParseListFormat(kind));
+        DocxSessionOps.ApplyListFormat(h, anchor, DocxSessionJson.ParseOptionalListFormat(kind));
 
     /// <summary>
     /// Bridge for <see cref="DocxSession.ApplyListFormatRange"/>. Applies one list format across
@@ -1012,7 +1066,7 @@ public static partial class DocxSessionBridge
     /// </summary>
     [JSExport]
     public static string ApplyListFormatRange(int h, string firstAnchor, string lastAnchor, string kind) =>
-        DocxSessionOps.ApplyListFormatRange(h, firstAnchor, lastAnchor, DocxSessionJson.ParseListFormat(kind));
+        DocxSessionOps.ApplyListFormatRange(h, firstAnchor, lastAnchor, DocxSessionJson.ParseOptionalListFormat(kind));
 
     /// <summary>
     /// Bridge for <see cref="DocxSession.SetListStartOverride"/>. Restarts the anchored list
@@ -1124,15 +1178,15 @@ public static partial class DocxSessionBridge
     /// uses the <see cref="ProjectionScopes"/> flag layout. Returns a JSON array of placeholders.
     /// </summary>
     [JSExport]
-    public static string FindPlaceholders(int h, int kinds, int scope, int? contextChars, int boundary) =>
-        DocxSessionOps.FindPlaceholders(h, (PlaceholderKinds)kinds, (ProjectionScopes)scope, contextChars, (ContextBoundary)boundary);
+    public static string FindPlaceholders(int h, int? kinds, int? scope, int? contextChars, int? boundary) =>
+        DocxSessionOps.FindPlaceholders(h, (PlaceholderKinds?)kinds, (ProjectionScopes?)scope, contextChars, (ContextBoundary?)boundary);
 
     [JSExport]
     public static string FindPlaceholdersWithCitations(
-        int h, int kinds, int scope, int? contextChars, int boundary, string requestJson) =>
+        int h, int? kinds, int? scope, int? contextChars, int? boundary, string requestJson) =>
         DocxSessionOps.FindPlaceholders(
-            h, (PlaceholderKinds)kinds, (ProjectionScopes)scope, contextChars,
-            (ContextBoundary)boundary, ParseRequiredCitationRequest(requestJson));
+            h, (PlaceholderKinds?)kinds, (ProjectionScopes?)scope, contextChars,
+            (ContextBoundary?)boundary, ParseRequiredCitationRequest(requestJson));
 
     /// <summary>
     /// Bridge for <see cref="DocxSession.GetEditSummary"/>. Returns a JSON object
@@ -1147,8 +1201,8 @@ public static partial class DocxSessionBridge
     /// alias for <see cref="FindPlaceholders"/> — same return shape.
     /// </summary>
     [JSExport]
-    public static string RemainingPlaceholders(int h, int kinds) =>
-        DocxSessionOps.RemainingPlaceholders(h, (PlaceholderKinds)kinds);
+    public static string RemainingPlaceholders(int h, int? kinds) =>
+        DocxSessionOps.RemainingPlaceholders(h, (PlaceholderKinds?)kinds);
 
     /// <summary>
     /// Bridge for <see cref="DocxSession.GetDiff"/>. <paramref name="format"/> uses
@@ -1158,8 +1212,8 @@ public static partial class DocxSessionBridge
     /// surfaced to JS as a thrown error.
     /// </summary>
     [JSExport]
-    public static string GetDiff(int h, int format) =>
-        DocxSessionOps.GetDiff(h, (DiffFormat)format);
+    public static string GetDiff(int h, int? format) =>
+        DocxSessionOps.GetDiff(h, (DiffFormat?)format);
 
     /// <summary>
     /// Return canonical semantic-change JSON between the package opened for this session and
@@ -1390,8 +1444,8 @@ public static partial class DocxSessionBridge
     /// <paramref name="optionsJson"/> matches the <see cref="FindByText"/> shape.
     /// </summary>
     [JSExport]
-    public static string FindByRegex(int h, string pattern, int regexOptions, string optionsJson) =>
-        DocxSessionOps.FindByRegex(h, pattern, (RegexOptions)regexOptions, ParseFindOptions(optionsJson));
+    public static string FindByRegex(int h, string pattern, int? regexOptions, string optionsJson) =>
+        DocxSessionOps.FindByRegex(h, pattern, (RegexOptions?)regexOptions, ParseFindOptions(optionsJson));
 
     /// <summary>
     /// Bridge for <see cref="DocxSession.FindByKind"/>. <paramref name="scope"/> may be
