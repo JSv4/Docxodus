@@ -526,7 +526,8 @@ internal static class Dispatcher
             Str(args, "replace"), ParseFormatOp(args), preconditions),
         "replace_text_range" => DocxSessionOps.ReplaceTextRange(
             session.Handle, Str(args, "anchorId"), Str(args, "find"), Str(args, "replace"),
-            new ReplaceOptions { IgnoreCase = !BoolOpt(args, "caseSensitive", false) }, preconditions),
+            DocxSessionJson.ParseReplaceOptions(ObjectArguments.Read(args, "docxodus_edit", "replace_text_range")),
+            preconditions),
         "delete_block" => DocxSessionOps.DeleteBlock(session.Handle, Str(args, "anchorId")),
         "move_block" => DocxSessionOps.MoveBlock(
             session.Handle, Str(args, "sourceAnchorId"), Str(args, "targetAnchorId"), ParsePos(args)),
@@ -599,10 +600,10 @@ internal static class Dispatcher
             session.Handle, Str(args, "anchorId"), ParsePos(args),
             new string('#', Math.Clamp(Int(args, "level"), 1, 6)) + " " + Str(args, "text")),
         "insert_table" => DocxSessionOps.InsertTable(
-            session.Handle, Str(args, "anchorId"), ParsePos(args),
-            Int(args, "rows"), Int(args, "columns"), BuildTableInsertOptionsJson(args)),
+            session.Handle, Str(args, "anchorId"), ParsePos(args), Int(args, "rows"), Int(args, "columns"),
+            ObjectArguments.ReadJson(args, "docxodus_create", "insert_table")),
         "insert_horizontal_rule" => DocxSessionOps.InsertHorizontalRule(
-            session.Handle, Str(args, "anchorId"), ParsePos(args), BuildRuleEdgeJson(args)),
+            session.Handle, Str(args, "anchorId"), ParsePos(args), RuleEdgeJson(args)),
         "insert_footnote" => DocxSessionOps.InsertFootnote(
             session.Handle, Str(args, "anchorId"), Int(args, "characterOffset"), Str(args, "markdown")),
         "insert_endnote" => DocxSessionOps.InsertEndnote(
@@ -615,13 +616,13 @@ internal static class Dispatcher
         // for "levels 1-3, hyperlinked", never for \o "1-3" \h.
         "insert_table_of_contents" => DocxSessionOps.InsertTableOfContents(
             session.Handle, Str(args, "anchorId"), DocxSessionJson.ParseOptionalPos(OptStr(args, "position")),
-            ReferenceFieldOptions(args, DocxSessionJson.ParseTableOfContentsOptions)),
+            DocxSessionJson.ParseTableOfContentsOptions(ObjectArguments.Read(args, "docxodus_create", "insert_table_of_contents"))),
         "insert_table_of_figures" => DocxSessionOps.InsertTableOfFigures(
             session.Handle, Str(args, "anchorId"), DocxSessionJson.ParseOptionalPos(OptStr(args, "position")),
-            ReferenceFieldOptions(args, DocxSessionJson.ParseTableOfFiguresOptions)),
+            DocxSessionJson.ParseTableOfFiguresOptions(ObjectArguments.Read(args, "docxodus_create", "insert_table_of_figures"))),
         "insert_table_of_authorities" => DocxSessionOps.InsertTableOfAuthorities(
             session.Handle, Str(args, "anchorId"), DocxSessionJson.ParseOptionalPos(OptStr(args, "position")),
-            ReferenceFieldOptions(args, DocxSessionJson.ParseTableOfAuthoritiesOptions)),
+            DocxSessionJson.ParseTableOfAuthoritiesOptions(ObjectArguments.Read(args, "docxodus_create", "insert_table_of_authorities"))),
         "set_header_text" => DocxSessionOps.SetHeaderText(
             session.Handle, Str(args, "bodyAnchorId"),
             DocxSessionJson.ParseHeaderFooterKind(Str(args, "kind")), Str(args, "markdown")),
@@ -634,24 +635,12 @@ internal static class Dispatcher
         _ => throw new McpToolException($"unknown docxodus_create action: {action}"),
         });
 
-    private static string BuildTableInsertOptionsJson(JsonElement args)
+    /// <summary>The rule's border edge as the facade takes it: "" (no edge, the default rule) when
+    /// the caller set no field.</summary>
+    private static string RuleEdgeJson(JsonElement args)
     {
-        var opts = new Dictionary<string, object?>
-        {
-            ["borderless"] = BoolOpt(args, "borderless", false),
-            ["cellAlignment"] = OptStr(args, "cellAlignment"),
-        };
-        if (args.ValueKind == JsonValueKind.Object && args.TryGetProperty("cellContents", out var cc) && cc.ValueKind == JsonValueKind.Array)
-            opts["cellContents"] = cc;
-        if (args.ValueKind == JsonValueKind.Object && args.TryGetProperty("columnWidths", out var cw) && cw.ValueKind == JsonValueKind.Array)
-            opts["columnWidths"] = cw;
-        return JsonSerializer.Serialize(opts);
-    }
-
-    private static string BuildRuleEdgeJson(JsonElement args)
-    {
-        var style = OptStr(args, "ruleStyle");
-        return style is null ? "" : JsonSerializer.Serialize(new { style });
+        var rule = ObjectArguments.Read(args, "docxodus_create", "insert_horizontal_rule");
+        return rule.EnumerateObject().Any() ? rule.GetRawText() : "";
     }
 
     // ─── List ───────────────────────────────────────────────────────────
@@ -736,12 +725,8 @@ internal static class Dispatcher
         "remove_bookmark" => DocxSessionOps.RemoveBookmark(session.Handle, Str(args, "name")),
         "insert_cross_reference" => DocxSessionOps.InsertCrossReference(session.Handle,
             Str(args, "anchorId"), Int(args, "characterOffset"), Str(args, "bookmarkName"),
-            new CrossReferenceOptions
-            {
-                ReferenceNumber = BoolOpt(args, "referenceNumber", false),
-                Hyperlink = BoolOpt(args, "hyperlink", false),
-                IncludePosition = BoolOpt(args, "includePosition", false),
-            }),
+            DocxSessionJson.ParseCrossReferenceOptions(
+                ObjectArguments.Read(args, "docxodus_links", "insert_cross_reference"))),
         _ => throw new McpToolException($"unknown docxodus_links action: {action}"),
     };
 
@@ -823,36 +808,28 @@ internal static class Dispatcher
         "list" => $"{{\"contentControls\":{DocxSessionOps.ListContentControls(
             session.Handle, Scopes(args))}}}",
         "fill_text" => DocxSessionOps.FillContentControlText(session.Handle,
-            Str(args, "anchorId"), Str(args, "text"), BuildContentControlOptionsJson(args)),
+            Str(args, "anchorId"), Str(args, "text"), ContentControlOptionsJson(args, action)),
         "fill_rich_text" => DocxSessionOps.FillContentControlRichText(session.Handle,
-            Str(args, "anchorId"), Str(args, "markdown"), BuildContentControlOptionsJson(args)),
+            Str(args, "anchorId"), Str(args, "markdown"), ContentControlOptionsJson(args, action)),
         "set_checked" => DocxSessionOps.SetContentControlChecked(session.Handle,
-            Str(args, "anchorId"), RequiredBool(args, "checked"), BuildContentControlOptionsJson(args)),
+            Str(args, "anchorId"), RequiredBool(args, "checked"), ContentControlOptionsJson(args, action)),
         "set_date" => DocxSessionOps.SetContentControlDate(session.Handle,
             Str(args, "anchorId"), Str(args, "value"), OptionalStringValue(args, "displayText"),
-            BuildContentControlOptionsJson(args)),
+            ContentControlOptionsJson(args, action)),
         "select_item" => DocxSessionOps.SelectContentControlItem(session.Handle,
-            Str(args, "anchorId"), Str(args, "value"), BuildContentControlOptionsJson(args)),
+            Str(args, "anchorId"), Str(args, "value"), ContentControlOptionsJson(args, action)),
         "fill_picture" => DocxSessionOps.FillContentControlPicture(session.Handle,
-            Str(args, "anchorId"), Str(args, "imageBase64"), BuildContentControlOptionsJson(args)),
+            Str(args, "anchorId"), Str(args, "imageBase64"), ContentControlOptionsJson(args, action)),
         "add_repeating_item" => DocxSessionOps.AddRepeatingSectionItem(session.Handle,
             Str(args, "sectionAnchorId"), OptionalStringValue(args, "afterItemAnchorId"),
-            BuildContentControlOptionsJson(args)),
+            ContentControlOptionsJson(args, action)),
         "remove_repeating_item" => DocxSessionOps.RemoveRepeatingSectionItem(session.Handle,
             Str(args, "itemAnchorId")),
         _ => throw new McpToolException($"unknown docxodus_content_controls action: {action}"),
     };
 
-    private static string BuildContentControlOptionsJson(JsonElement args)
-    {
-        var options = new Dictionary<string, object>(StringComparer.Ordinal);
-        if (OptionalStringValue(args, "bindingPolicy") is { } policy) options["bindingPolicy"] = policy;
-        if (OptionalStringValue(args, "nestedControls") is { } nested) options["nestedControls"] = nested;
-        if (args.ValueKind == JsonValueKind.Object && args.TryGetProperty("childFills", out var fills)
-            && fills.ValueKind == JsonValueKind.Object)
-            options["childFills"] = fills;
-        return options.Count == 0 ? "{}" : JsonSerializer.Serialize(options);
-    }
+    private static string ContentControlOptionsJson(JsonElement args, string action) =>
+        ObjectArguments.ReadJson(args, "docxodus_content_controls", action);
 
     private static bool RequiredBool(JsonElement args, string name)
     {
@@ -986,14 +963,6 @@ internal static class Dispatcher
 
         return DeliveryOps.VerifyChangeReceiptJson(receiptJson, artifactsJson);
     }
-
-    /// <summary>
-    /// A reference field's options, read from the FLAT tool arguments rather than a nested object —
-    /// an agent writing a tool call should not have to nest, and the grouped-intent tools are flat
-    /// everywhere else. Absent keys fall back to the engine defaults.
-    /// </summary>
-    private static T ReferenceFieldOptions<T>(JsonElement args, Func<JsonElement, T> parse)
-        where T : class => parse(args);
 
     private static string Compare(SessionStore store, JsonElement args)
     {
@@ -1560,7 +1529,7 @@ internal static class Dispatcher
                 break;
             case ("docxodus_edit", "replace_text_range"):
                 RequireStrings(args, "anchorId", "find", "replace");
-                ValidateOptionalBool(args, "caseSensitive");
+                ValidateReplaceOptions(ObjectArguments.Read(args, tool, action));
                 break;
             case ("docxodus_edit", "replace_text_at_span_with_format"):
                 RequireStrings(args, "anchorId", "replace");
@@ -1633,32 +1602,27 @@ internal static class Dispatcher
                 RequireStrings(args, "anchorId");
                 RequireNumbers(args, "rows", "columns");
                 ValidateOptionalEnum(args, "position", "before", "after");
-                ValidateOptionalArray(args, "cellContents");
-                ValidateOptionalArray(args, "columnWidths");
-                ValidateOptionalEnum(args, "cellAlignment", "left", "center", "right", "justify");
-                ValidateOptionalBool(args, "borderless");
+                ValidateTableInsertOptions(ObjectArguments.Read(args, tool, action));
                 break;
             case ("docxodus_create", "insert_horizontal_rule"):
                 RequireStrings(args, "anchorId");
                 ValidateOptionalEnum(args, "position", "before", "after");
+                // The flat alias keeps its own narrower enum; rule.style is any OOXML border style.
                 ValidateOptionalEnum(args, "ruleStyle", "single", "double", "thick");
+                ValidateRuleEdge(ObjectArguments.Read(args, tool, action));
                 break;
             case ("docxodus_create", "insert_table_of_contents"):
-                RequireStrings(args, "anchorId");
-                ValidateOptionalEnum(args, "position", "before", "after");
-                ValidateOptionalBool(args, "hyperlinks");
-                break;
             case ("docxodus_create", "insert_table_of_figures"):
-                RequireStrings(args, "anchorId");
-                ValidateOptionalEnum(args, "position", "before", "after");
-                ValidateOptionalBool(args, "hyperlinks");
-                break;
             case ("docxodus_create", "insert_table_of_authorities"):
+            {
                 RequireStrings(args, "anchorId");
                 ValidateOptionalEnum(args, "position", "before", "after");
-                ValidateOptionalBool(args, "hyperlinks");
-                ValidateOptionalEnum(args, "category", DocxSessionJson.AuthorityCategoryNames);
+                var options = ObjectArguments.Read(args, tool, action);
+                ValidateOptionalBool(options, "hyperlinks");
+                if (action == "insert_table_of_authorities")
+                    ValidateOptionalEnum(options, "category", DocxSessionJson.AuthorityCategoryNames);
                 break;
+            }
             case ("docxodus_create", "insert_footnote"):
             case ("docxodus_create", "insert_endnote"):
                 RequireStrings(args, "anchorId", "markdown");
@@ -1684,10 +1648,7 @@ internal static class Dispatcher
                 RequireStrings(args, "anchorId");
                 RequireNumbers(args, "rows", "columns");
                 ValidateOptionalEnum(args, "position", "before", "after");
-                ValidateOptionalArray(args, "cellContents");
-                ValidateOptionalArray(args, "columnWidths");
-                ValidateOptionalEnum(args, "cellAlignment", "left", "center", "right", "justify");
-                ValidateOptionalBool(args, "borderless");
+                ValidateTableInsertOptions(ObjectArguments.Read(args, tool, action));
                 break;
             case ("docxodus_table", "insert_row"):
             case ("docxodus_table", "insert_column"):
@@ -1714,10 +1675,7 @@ internal static class Dispatcher
                 break;
             case ("docxodus_table", "set_borders"):
                 RequireStrings(args, "cellAnchorId");
-                ValidateOptionalEnum(args, "borderScope", "all", "outside", "inside");
-                ValidateOptionalString(args, "borderStyle");
-                ValidateOptionalNumber(args, "borderSize");
-                ValidateOptionalString(args, "borderColor");
+                ValidateTableBorderSpec(ObjectArguments.Read(args, tool, action));
                 break;
             case ("docxodus_table", "set_shading"):
                 RequireStrings(args, "cellAnchorId");
@@ -1831,38 +1789,34 @@ internal static class Dispatcher
 
             case ("docxodus_content_controls", "fill_text"):
                 RequireStrings(args, "anchorId", "text");
-                ValidateOptionalEnum(args, "bindingPolicy", "preserve", "detach_target");
-                ValidateOptionalEnum(args, "nestedControls", "refuse", "preserve", "replace");
-                ValidateOptionalChildFills(args);
+                ValidateContentControlOptions(ObjectArguments.Read(args, tool, action));
                 break;
             case ("docxodus_content_controls", "fill_rich_text"):
                 RequireStrings(args, "anchorId", "markdown");
-                ValidateOptionalEnum(args, "bindingPolicy", "preserve", "detach_target");
-                ValidateOptionalEnum(args, "nestedControls", "refuse", "preserve", "replace");
-                ValidateOptionalChildFills(args);
+                ValidateContentControlOptions(ObjectArguments.Read(args, tool, action));
                 break;
             case ("docxodus_content_controls", "set_checked"):
                 RequireStrings(args, "anchorId");
                 _ = RequiredBool(args, "checked");
-                ValidateOptionalEnum(args, "bindingPolicy", "preserve", "detach_target");
+                ValidateContentControlOptions(ObjectArguments.Read(args, tool, action));
                 break;
             case ("docxodus_content_controls", "set_date"):
                 RequireStrings(args, "anchorId", "value");
                 ValidateOptionalString(args, "displayText");
-                ValidateOptionalEnum(args, "bindingPolicy", "preserve", "detach_target");
+                ValidateContentControlOptions(ObjectArguments.Read(args, tool, action));
                 break;
             case ("docxodus_content_controls", "select_item"):
                 RequireStrings(args, "anchorId", "value");
-                ValidateOptionalEnum(args, "bindingPolicy", "preserve", "detach_target");
+                ValidateContentControlOptions(ObjectArguments.Read(args, tool, action));
                 break;
             case ("docxodus_content_controls", "fill_picture"):
                 RequireStrings(args, "anchorId", "imageBase64");
-                ValidateOptionalEnum(args, "bindingPolicy", "preserve", "detach_target");
+                ValidateContentControlOptions(ObjectArguments.Read(args, tool, action));
                 break;
             case ("docxodus_content_controls", "add_repeating_item"):
                 RequireStrings(args, "sectionAnchorId");
                 ValidateOptionalString(args, "afterItemAnchorId");
-                ValidateOptionalEnum(args, "bindingPolicy", "preserve", "detach_target");
+                ValidateContentControlOptions(ObjectArguments.Read(args, tool, action));
                 break;
             case ("docxodus_content_controls", "remove_repeating_item"):
                 RequireStrings(args, "itemAnchorId");
@@ -1979,15 +1933,43 @@ internal static class Dispatcher
         ValidateOptionalEnum(args, name, values);
     }
 
-    private static void ValidateOptionalChildFills(JsonElement args)
+    // ─── Object arguments (issue #1025), read through ObjectArguments.Read so a batch step is
+    // checked against the same merged object the direct call runs on ────────────────────
+
+    private static void ValidateReplaceOptions(JsonElement options)
     {
-        if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty("childFills", out var fills)) return;
-        if (fills.ValueKind != JsonValueKind.Object)
-            throw new McpToolException("childFills must be an object of {anchorId: text}");
-        foreach (var property in fills.EnumerateObject())
-            if (property.Value.ValueKind != JsonValueKind.String)
-                throw new McpToolException($"childFills[\"{property.Name}\"] must be a string");
+        ValidateOptionalBool(options, "ignoreCase");
+        ValidateOptionalNumber(options, "maxReplacements");
+        ValidateOptionalNumber(options, "expectedMatchCount");
     }
+
+    private static void ValidateTableInsertOptions(JsonElement options)
+    {
+        ValidateOptionalArray(options, "cellContents");
+        ValidateOptionalArray(options, "columnWidths");
+        ValidateOptionalEnum(options, "cellAlignment", "left", "center", "right", "justify");
+        ValidateOptionalBool(options, "borderless");
+    }
+
+    private static void ValidateRuleEdge(JsonElement rule)
+    {
+        ValidateOptionalString(rule, "style");
+        ValidateOptionalNumber(rule, "size");
+        ValidateOptionalString(rule, "color");
+        ValidateOptionalNumber(rule, "space");
+    }
+
+    private static void ValidateTableBorderSpec(JsonElement spec)
+    {
+        ValidateOptionalEnum(spec, "scope", "all", "outside", "inside");
+        ValidateOptionalString(spec, "style");
+        ValidateOptionalNumber(spec, "size");
+        ValidateOptionalString(spec, "color");
+    }
+
+    /// <summary>The content-control options, checked by the parser the facade itself applies.</summary>
+    private static void ValidateContentControlOptions(JsonElement options) =>
+        _ = DocxSessionJson.ParseContentControlFillOptions(options.GetRawText());
 
     private static void ValidateOptionalEnum(JsonElement args, string name, params string[] values)
     {
@@ -2055,7 +2037,7 @@ internal static class Dispatcher
         {
         "insert" => DocxSessionOps.InsertTable(
             session.Handle, Str(args, "anchorId"), ParsePos(args),
-            Int(args, "rows"), Int(args, "columns"), BuildTableInsertOptionsJson(args)),
+            Int(args, "rows"), Int(args, "columns"), ObjectArguments.ReadJson(args, "docxodus_table", "insert")),
         "insert_row" => DocxSessionOps.InsertTableRow(session.Handle, Str(args, "cellAnchorId"), ParsePos(args)),
         "insert_column" => DocxSessionOps.InsertTableColumn(session.Handle, Str(args, "cellAnchorId"), ParsePos(args)),
         "delete_row" => DocxSessionOps.DeleteTableRow(session.Handle, Str(args, "cellAnchorId")),
@@ -2069,7 +2051,7 @@ internal static class Dispatcher
         "set_column_widths" => DocxSessionOps.SetColumnWidths(
             session.Handle, Str(args, "cellAnchorId"), RawArray(args, "widths")),
         "set_borders" => DocxSessionOps.SetTableBorders(
-            session.Handle, Str(args, "cellAnchorId"), BuildTableBorderSpecJson(args)),
+            session.Handle, Str(args, "cellAnchorId"), ObjectArguments.ReadJson(args, "docxodus_table", "set_borders")),
         "set_shading" => DocxSessionOps.SetCellShading(
             session.Handle, Str(args, "cellAnchorId"), OptStr(args, "fill") ?? "",
             OptStr(args, "shadingScope")),
@@ -2109,18 +2091,6 @@ internal static class Dispatcher
         return value.GetRawText();
     }
 
-    private static string BuildTableBorderSpecJson(JsonElement args)
-    {
-        var spec = new Dictionary<string, object?>
-        {
-            ["scope"] = OptStr(args, "borderScope"),
-            ["style"] = OptStr(args, "borderStyle"),
-            ["color"] = OptStr(args, "borderColor"),
-        };
-        if (args.ValueKind == JsonValueKind.Object && args.TryGetProperty("borderSize", out var sz) && sz.ValueKind == JsonValueKind.Number)
-            spec["size"] = sz.GetInt32();
-        return JsonSerializer.Serialize(spec);
-    }
 
     // ─── Arg helpers ────────────────────────────────────────────────────
 

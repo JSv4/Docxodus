@@ -1,5 +1,5 @@
 {
-  "$comment": "One description of the reference-field session ops (issue #982). See docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names; argNames, defaults, requires and flattens on a transport are recorded divergences, not the target. flattens: the transport spreads the fields of the canonical object argument across its own top-level arguments (MCP reads them with the same DocxSessionJson parser the other transports apply to options).",
+  "$comment": "One description of the reference-field session ops (issue #982). See docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names; argNames, defaults and requires on a transport are recorded divergences, not the target. flatAliases (on mcp) records the deprecated flat top-level MCP properties that still alias fields of the object argument MCP now takes nested (issue #1025): argument -> (field -> MCP property). tools/mcp-server/ObjectArguments.cs is the code they are checked against; no new flat alias should be added.",
   "family": "reference-fields",
   "ops": [
     {
@@ -16,7 +16,7 @@
         "npm": { "method": "insertTableOfContents" },
         "python": { "method": "insert_table_of_contents", "argsFrom": "session.py:_insert_reference_field" },
         "stdio": { "op": "insert_table_of_contents" },
-        "mcp": { "tool": "docxodus_create", "action": "insert_table_of_contents", "flattens": { "options": { "levels": "levels", "hyperlinks": "hyperlinks", "title": "title", "rightTabPos": "rightTabPos" } }, "$comment": "MCP's argument parser also reads hideTabAndPageNumbersInWeb and useOutlineLevels, but the docxodus_create schema does not advertise them." }
+        "mcp": { "tool": "docxodus_create", "action": "insert_table_of_contents", "flatAliases": { "options": { "levels": "levels", "hyperlinks": "hyperlinks", "title": "title", "rightTabPos": "rightTabPos", "hideTabAndPageNumbersInWeb": "hideTabAndPageNumbersInWeb", "useOutlineLevels": "useOutlineLevels" } }, "$comment": "The flat hideTabAndPageNumbersInWeb and useOutlineLevels were read but never advertised; the schema advertises them only as options fields." }
       }
     },
     {
@@ -33,7 +33,7 @@
         "npm": { "method": "insertTableOfFigures" },
         "python": { "method": "insert_table_of_figures", "argsFrom": "session.py:_insert_reference_field" },
         "stdio": { "op": "insert_table_of_figures" },
-        "mcp": { "tool": "docxodus_create", "action": "insert_table_of_figures", "flattens": { "options": { "captionLabel": "captionLabel", "hyperlinks": "hyperlinks", "rightTabPos": "rightTabPos" } } }
+        "mcp": { "tool": "docxodus_create", "action": "insert_table_of_figures", "flatAliases": { "options": { "captionLabel": "captionLabel", "hyperlinks": "hyperlinks", "rightTabPos": "rightTabPos" } } }
       }
     },
     {
@@ -50,7 +50,7 @@
         "npm": { "method": "insertTableOfAuthorities" },
         "python": { "method": "insert_table_of_authorities", "argsFrom": "session.py:_insert_reference_field" },
         "stdio": { "op": "insert_table_of_authorities" },
-        "mcp": { "tool": "docxodus_create", "action": "insert_table_of_authorities", "flattens": { "options": { "category": "category", "hyperlinks": "hyperlinks", "entryPageSeparator": "entryPageSeparator", "rightTabPos": "rightTabPos" } } }
+        "mcp": { "tool": "docxodus_create", "action": "insert_table_of_authorities", "flatAliases": { "options": { "category": "category", "hyperlinks": "hyperlinks", "entryPageSeparator": "entryPageSeparator", "rightTabPos": "rightTabPos" } } }
       }
     },
     {
@@ -68,7 +68,7 @@
         "npm": { "method": "insertCrossReference" },
         "python": { "method": "insert_cross_reference" },
         "stdio": { "op": "insert_cross_reference" },
-        "mcp": { "tool": "docxodus_links", "action": "insert_cross_reference", "flattens": { "options": { "referenceNumber": "referenceNumber", "hyperlink": "hyperlink", "includePosition": "includePosition" } } }
+        "mcp": { "tool": "docxodus_links", "action": "insert_cross_reference", "flatAliases": { "options": { "referenceNumber": "referenceNumber", "hyperlink": "hyperlink", "includePosition": "includePosition" } } }
       }
     }
   ]

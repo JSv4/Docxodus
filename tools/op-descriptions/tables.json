@@ -1,5 +1,5 @@
 {
-  "$comment": "One description of the table session ops and how each transport names them (issue #982). SessionOpDescriptionDriftTests checks every transport against it; see docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names; argNames, defaults, requires and absent on a transport are recorded divergences, not the target. flattens (on mcp) records an object argument whose fields the MCP tool takes as top-level properties instead: field name -> MCP property.",
+  "$comment": "One description of the table session ops and how each transport names them (issue #982). SessionOpDescriptionDriftTests checks every transport against it; see docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names; argNames, defaults, requires and absent on a transport are recorded divergences, not the target. flatAliases (on mcp) records the deprecated flat top-level MCP properties that still alias fields of the object argument MCP now takes nested (issue #1025): argument -> (field -> MCP property). tools/mcp-server/ObjectArguments.cs is the code they are checked against; no new flat alias should be added.",
   "family": "tables",
   "ops": [
     {
@@ -18,7 +18,7 @@
         "npm": { "method": "insertTable" },
         "python": { "method": "insert_table" },
         "stdio": { "op": "insert_table" },
-        "mcp": { "tool": "docxodus_table", "action": "insert", "aliases": [ { "tool": "docxodus_create", "action": "insert_table" } ], "defaults": { "position": "after" }, "flattens": { "options": { "borderless": "borderless", "cellAlignment": "cellAlignment", "cellContents": "cellContents", "columnWidths": "columnWidths" } } }
+        "mcp": { "tool": "docxodus_table", "action": "insert", "aliases": [ { "tool": "docxodus_create", "action": "insert_table" } ], "defaults": { "position": "after" }, "flatAliases": { "options": { "borderless": "borderless", "cellAlignment": "cellAlignment", "cellContents": "cellContents", "columnWidths": "columnWidths" } } }
       }
     },
     {
@@ -194,7 +194,7 @@
         "npm": { "method": "setTableBorders" },
         "python": { "method": "set_table_borders" },
         "stdio": { "op": "set_table_borders" },
-        "mcp": { "tool": "docxodus_table", "action": "set_borders", "flattens": { "spec": { "scope": "borderScope", "style": "borderStyle", "size": "borderSize", "color": "borderColor" } } }
+        "mcp": { "tool": "docxodus_table", "action": "set_borders", "flatAliases": { "spec": { "scope": "borderScope", "style": "borderStyle", "size": "borderSize", "color": "borderColor" } } }
       }
     },
     {

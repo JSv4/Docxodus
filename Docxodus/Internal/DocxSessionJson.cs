@@ -470,6 +470,38 @@ internal static class DocxSessionJson
         };
     }
 
+    /// <summary>Parse a <c>replaceTextRange</c> options object, <c>{ ignoreCase?, maxReplacements?,
+    /// expectedMatchCount? }</c>. Preconditions are not read here: each transport passes them
+    /// separately.</summary>
+    public static ReplaceOptions ParseReplaceOptions(JsonElement options)
+    {
+        if (options.ValueKind != JsonValueKind.Object) return new ReplaceOptions();
+        return new ReplaceOptions
+        {
+            IgnoreCase = TryGetBool(options, "ignoreCase", false),
+            MaxReplacements = options.TryGetProperty("maxReplacements", out var mr) && mr.ValueKind == JsonValueKind.Number
+                ? mr.GetInt32() : null,
+            ExpectedMatchCount = options.TryGetProperty("expectedMatchCount", out var emc) && emc.ValueKind == JsonValueKind.Number
+                ? emc.GetInt32() : null,
+        };
+    }
+
+    /// <summary>Parse an <c>insertCrossReference</c> options object, <c>{ referenceNumber?,
+    /// hyperlink?, includePosition? }</c>. Each switch is on only when it is literally true.</summary>
+    public static CrossReferenceOptions ParseCrossReferenceOptions(JsonElement options)
+    {
+        if (options.ValueKind != JsonValueKind.Object) return new CrossReferenceOptions();
+        return new CrossReferenceOptions
+        {
+            ReferenceNumber = options.TryGetProperty("referenceNumber", out var number)
+                && number.ValueKind == JsonValueKind.True,
+            Hyperlink = options.TryGetProperty("hyperlink", out var link)
+                && link.ValueKind == JsonValueKind.True,
+            IncludePosition = options.TryGetProperty("includePosition", out var position)
+                && position.ValueKind == JsonValueKind.True,
+        };
+    }
+
     // ─── Reference-field options (issue #607) ───────────────────────────
     //
     // Every wire field is optional and falls back to the .NET default, so a transport can send

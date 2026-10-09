@@ -1,5 +1,5 @@
 {
-  "$comment": "One description of the native content-control session ops and how each transport names them (issue #982). SessionOpDescriptionDriftTests checks every transport against it; see docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names; argNames, defaults, requires and absent on a transport are recorded divergences, not the target. scope is the story filter: MCP's token, or (on the stdio host and in Python) a ProjectionScopes flag integer, which DocxSessionJson.ParseProjectionScopes reads on both. flattens (on mcp) records an object argument whose fields the MCP tool takes as top-level properties instead: field name -> MCP property.",
+  "$comment": "One description of the native content-control session ops and how each transport names them (issue #982). SessionOpDescriptionDriftTests checks every transport against it; see docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names; argNames, defaults, requires and absent on a transport are recorded divergences, not the target. scope is the story filter: MCP's token, or (on the stdio host and in Python) a ProjectionScopes flag integer, which DocxSessionJson.ParseProjectionScopes reads on both. flatAliases (on mcp) records the deprecated flat top-level MCP properties that still alias fields of the object argument MCP now takes nested (issue #1025): argument -> (field -> MCP property). tools/mcp-server/ObjectArguments.cs is the code they are checked against; no new flat alias should be added.",
   "family": "content-controls",
   "ops": [
     {
@@ -31,7 +31,7 @@
         "npm": { "method": "fillContentControlText" },
         "python": { "method": "fill_content_control_text" },
         "stdio": { "op": "fill_content_control_text" },
-        "mcp": { "tool": "docxodus_content_controls", "action": "fill_text", "flattens": { "options": { "bindingPolicy": "bindingPolicy", "nestedControls": "nestedControls", "childFills": "childFills" } } }
+        "mcp": { "tool": "docxodus_content_controls", "action": "fill_text", "flatAliases": { "options": { "bindingPolicy": "bindingPolicy", "nestedControls": "nestedControls", "childFills": "childFills" } } }
       }
     },
     {
@@ -48,7 +48,7 @@
         "npm": { "method": "fillContentControlRichText" },
         "python": { "method": "fill_content_control_rich_text" },
         "stdio": { "op": "fill_content_control_rich_text" },
-        "mcp": { "tool": "docxodus_content_controls", "action": "fill_rich_text", "flattens": { "options": { "bindingPolicy": "bindingPolicy", "nestedControls": "nestedControls", "childFills": "childFills" } } }
+        "mcp": { "tool": "docxodus_content_controls", "action": "fill_rich_text", "flatAliases": { "options": { "bindingPolicy": "bindingPolicy", "nestedControls": "nestedControls", "childFills": "childFills" } } }
       }
     },
     {
@@ -65,7 +65,7 @@
         "npm": { "method": "fillContentControlPicture" },
         "python": { "method": "fill_content_control_picture" },
         "stdio": { "op": "fill_content_control_picture" },
-        "mcp": { "tool": "docxodus_content_controls", "action": "fill_picture", "flattens": { "options": { "bindingPolicy": "bindingPolicy", "nestedControls": "nestedControls", "childFills": "childFills" } } }
+        "mcp": { "tool": "docxodus_content_controls", "action": "fill_picture", "flatAliases": { "options": { "bindingPolicy": "bindingPolicy", "nestedControls": "nestedControls", "childFills": "childFills" } } }
       }
     },
     {
@@ -82,7 +82,7 @@
         "npm": { "method": "selectContentControlItem" },
         "python": { "method": "select_content_control_item" },
         "stdio": { "op": "select_content_control_item" },
-        "mcp": { "tool": "docxodus_content_controls", "action": "select_item", "flattens": { "options": { "bindingPolicy": "bindingPolicy", "nestedControls": "nestedControls", "childFills": "childFills" } } }
+        "mcp": { "tool": "docxodus_content_controls", "action": "select_item", "flatAliases": { "options": { "bindingPolicy": "bindingPolicy", "nestedControls": "nestedControls", "childFills": "childFills" } } }
       }
     },
     {
@@ -99,7 +99,7 @@
         "npm": { "method": "setContentControlChecked" },
         "python": { "method": "set_content_control_checked" },
         "stdio": { "op": "set_content_control_checked" },
-        "mcp": { "tool": "docxodus_content_controls", "action": "set_checked", "flattens": { "options": { "bindingPolicy": "bindingPolicy", "nestedControls": "nestedControls", "childFills": "childFills" } } }
+        "mcp": { "tool": "docxodus_content_controls", "action": "set_checked", "flatAliases": { "options": { "bindingPolicy": "bindingPolicy", "nestedControls": "nestedControls", "childFills": "childFills" } } }
       }
     },
     {
@@ -117,7 +117,7 @@
         "npm": { "method": "setContentControlDate" },
         "python": { "method": "set_content_control_date" },
         "stdio": { "op": "set_content_control_date" },
-        "mcp": { "tool": "docxodus_content_controls", "action": "set_date", "flattens": { "options": { "bindingPolicy": "bindingPolicy", "nestedControls": "nestedControls", "childFills": "childFills" } } }
+        "mcp": { "tool": "docxodus_content_controls", "action": "set_date", "flatAliases": { "options": { "bindingPolicy": "bindingPolicy", "nestedControls": "nestedControls", "childFills": "childFills" } } }
       }
     },
     {
@@ -134,7 +134,7 @@
         "npm": { "method": "addRepeatingSectionItem" },
         "python": { "method": "add_repeating_section_item" },
         "stdio": { "op": "add_repeating_section_item" },
-        "mcp": { "tool": "docxodus_content_controls", "action": "add_repeating_item", "flattens": { "options": { "bindingPolicy": "bindingPolicy", "nestedControls": "nestedControls", "childFills": "childFills" } } }
+        "mcp": { "tool": "docxodus_content_controls", "action": "add_repeating_item", "flatAliases": { "options": { "bindingPolicy": "bindingPolicy", "nestedControls": "nestedControls", "childFills": "childFills" } } }
       }
     },
     {

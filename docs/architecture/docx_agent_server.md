@@ -219,6 +219,32 @@ operations (`docxodus_compare`, `docxodus_deliver`, `docxodus_verify_receipt`). 
 `action` string; see `tools/mcp-server/ToolCatalog.cs` for the exact JSON Schema advertised over
 `tools/list` (this section is the narrative version).
 
+### Object arguments: `options`, `rule`, `spec`
+
+Fifteen actions take one object argument, the same object the facade, the stdio host, WASM and
+npm take, and MCP parses it with the same `DocxSessionJson` parser (issue #1025):
+
+| Object | Actions |
+|---|---|
+| `options` | `docxodus_edit` `replace_text_range`; `docxodus_create` `insert_table`, `insert_table_of_contents`, `insert_table_of_figures`, `insert_table_of_authorities`; `docxodus_table` `insert`; `docxodus_links` `insert_cross_reference`; every mutating `docxodus_content_controls` action except `remove_repeating_item` |
+| `rule` | `docxodus_create` `insert_horizontal_rule` |
+| `spec` | `docxodus_table` `set_borders` |
+
+So every field the facade supports is reachable, for example
+`{"action":"replace_text_range", …, "options":{"maxReplacements":1}}` or
+`{"action":"insert_horizontal_rule", …, "rule":{"style":"dotted","size":24,"color":"FF0000"}}`.
+
+Before #1025, MCP spread these objects across top-level properties (`caseSensitive`,
+`ruleStyle`, `borderScope`/`borderStyle`/`borderSize`/`borderColor`, `bindingPolicy`, `levels`, …)
+and could not reach some fields at all. The flat properties are still accepted as deprecated
+aliases, and the schema still lists them, marked deprecated. `tools/mcp-server/ObjectArguments.cs`
+is the one table of them and the one place they are folded into the object. A field sent both
+ways must carry the same value, or the call is refused, as with every other deprecated alias.
+`caseSensitive` is the negation of `options.ignoreCase`. With neither sent, MCP still matches
+case-insensitively, which was its default before the object existed. The flat `ruleStyle` keeps its
+narrower `single | double | thick` enum, while `rule.style` takes any OOXML border style. New
+options are added as object fields only, never as new flat properties.
+
 ### Lifecycle
 
 | Tool | Arguments | Result |
@@ -402,7 +428,7 @@ external tools (e.g. OpenContracts) and never appears in Word's Reviewing UI.
 `list_bookmarks`/`add_bookmark`/`move_bookmark`/`rename_bookmark`/`remove_bookmark` map directly to
 the first-class session API, and `insert_cross_reference` (issue #545) inserts a Word-faithful
 `REF` field targeting an existing bookmark at a character offset — a real field Word re-resolves
-on refresh, not an internal hyperlink. Its `referenceNumber`/`hyperlink`/`includePosition`
+on refresh, not an internal hyperlink. Its `options.referenceNumber`/`hyperlink`/`includePosition`
 booleans are the field's `\r`/`\h`/`\p` switches, and the written `w:fldSimple` carries a
 cached result run (the bookmarked text, or the target's auto-number under `referenceNumber`) so
 non-recomputing renderers show a faithful snapshot. A missing or incoherent bookmark fails with
@@ -492,7 +518,7 @@ identities, and a section whose item carries markup whose identity is semantic (
 comment or note references, permissions, custom-XML or tracked-revision ranges) is refused
 rather than duplicated.
 
-`bindingPolicy` defaults to `preserve`: a data-bound control fails closed with
+`options.bindingPolicy` defaults to `preserve`: a data-bound control fails closed with
 `content_control_bound`. `detach_target` removes only the selected control's own
 `w:dataBinding`/`w15:dataBinding` element; a binding on any ancestor still fails closed, and the
 custom-XML part itself is never touched. The full core and cross-language contract is in
@@ -808,8 +834,8 @@ transports, and malformed input returns a structured invalid verdict rather than
 `insert`, `insert_row`, `insert_column`, `delete_row`, `delete_column`, `replace_cell_content`,
 the read actions `get_metadata`, `resolve_cell_anchor`, `resolve_cell_coordinate`, plus the
 post-insert styling actions (issue #315 Stage A): `set_column_widths` (`widths`, one
-positive twip value per column), `set_borders` (`borderScope` `all`/`outside`/`inside`,
-`borderStyle` — `none` removes the targeted edges — `borderSize`, `borderColor`), `set_shading`
+positive twip value per column), `set_borders` (`spec`: `scope` `all`/`outside`/`inside`,
+`style` — `none` removes the targeted edges — `size`, `color`), `set_shading`
 (`fill` hex/`auto`, omit to clear; `shadingScope` `cell`/`row` — row is header-row banding), and
 `set_repeat_header_row` (`repeat`, default true), `set_row_options` (`repeatHeader` — `repeat`
 is accepted as a deprecated alias — `allowBreakAcrossPages`, `heightTwips`, `heightRule`),
