@@ -21,14 +21,14 @@
       "result": "MarkdownProjection",
       "args": [
         { "name": "anchorId", "type": "anchor", "required": true },
-        { "name": "depth", "type": "int", "required": true },
+        { "name": "depth", "type": "int", "required": false, "default": 2 },
         { "name": "citation", "type": "object", "required": false }
       ],
       "transports": {
         "wasm": { "method": "ProjectAnchor" },
-        "npm": { "method": "projectAnchor", "defaults": { "depth": 2 } },
-        "python": { "method": "project_anchor", "defaults": { "depth": 2 } },
-        "stdio": { "op": "project_anchor", "defaults": { "depth": 2 } },
+        "npm": { "method": "projectAnchor" },
+        "python": { "method": "project_anchor" },
+        "stdio": { "op": "project_anchor" },
         "mcp": { "absent": "reachable only as docxodus_get_content format=markdown with anchorId, selected by format not action, with depth pinned to SubtreeAndFollowingSiblings" }
       }
     },
@@ -186,14 +186,14 @@
       "result": "AnchorTarget[]",
       "args": [
         { "name": "pattern", "type": "string", "required": true },
-        { "name": "regexOptions", "type": "int", "required": true },
+        { "name": "regexOptions", "type": "int", "required": false, "default": 0 },
         { "name": "options", "type": "object", "required": false }
       ],
       "transports": {
         "wasm": { "method": "FindByRegex" },
-        "npm": { "method": "findByRegex", "defaults": { "regexOptions": 0 } },
-        "python": { "method": "find_by_regex", "defaults": { "regexOptions": 0 } },
-        "stdio": { "op": "find_by_regex", "defaults": { "regexOptions": 0 } },
+        "npm": { "method": "findByRegex" },
+        "python": { "method": "find_by_regex" },
+        "stdio": { "op": "find_by_regex" },
         "mcp": { "absent": "no MCP action" }
       }
     },
@@ -236,17 +236,17 @@
       "facade": "FindPlaceholders",
       "result": "TemplatePlaceholder[]",
       "args": [
-        { "name": "kinds", "type": "int", "required": true },
-        { "name": "scope", "type": "int", "required": true },
+        { "name": "kinds", "type": "int", "required": false, "default": 7 },
+        { "name": "scope", "type": "int", "required": false, "default": 1 },
         { "name": "contextChars", "type": "int", "required": false, "default": 80 },
-        { "name": "boundary", "type": "int", "required": true },
+        { "name": "boundary", "type": "int", "required": false, "default": 0 },
         { "name": "citation", "type": "object", "required": false }
       ],
       "transports": {
         "wasm": { "method": "FindPlaceholders" },
-        "npm": { "method": "findPlaceholders", "defaults": { "kinds": 7, "scope": 1, "boundary": 0 } },
-        "python": { "method": "find_placeholders", "defaults": { "kinds": 7, "scope": 1, "boundary": 0 } },
-        "stdio": { "op": "find_placeholders", "defaults": { "kinds": 7, "scope": 1, "boundary": 0 } },
+        "npm": { "method": "findPlaceholders" },
+        "python": { "method": "find_placeholders" },
+        "stdio": { "op": "find_placeholders" },
         "mcp": { "absent": "no MCP action" }
       }
     },
@@ -255,13 +255,13 @@
       "facade": "RemainingPlaceholders",
       "result": "TemplatePlaceholder[]",
       "args": [
-        { "name": "kinds", "type": "int", "required": true }
+        { "name": "kinds", "type": "int", "required": false, "default": 7 }
       ],
       "transports": {
         "wasm": { "method": "RemainingPlaceholders" },
-        "npm": { "method": "remainingPlaceholders", "defaults": { "kinds": 7 } },
-        "python": { "method": "remaining_placeholders", "defaults": { "kinds": 7 } },
-        "stdio": { "op": "remaining_placeholders", "defaults": { "kinds": 7 } },
+        "npm": { "method": "remainingPlaceholders" },
+        "python": { "method": "remaining_placeholders" },
+        "stdio": { "op": "remaining_placeholders" },
         "mcp": { "absent": "no MCP action" }
       }
     },

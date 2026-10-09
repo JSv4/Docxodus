@@ -27,13 +27,13 @@
       "result": "string",
       "args": [
         { "name": "anchorId", "type": "anchor", "required": true },
-        { "name": "cssPrefix", "type": "string", "required": true },
-        { "name": "fabricateClasses", "type": "boolean", "required": true },
+        { "name": "cssPrefix", "type": "string", "required": false, "default": "docx-" },
+        { "name": "fabricateClasses", "type": "boolean", "required": false, "default": false },
         { "name": "renderTrackedChanges", "type": "boolean", "required": false, "default": false }
       ],
       "transports": {
         "wasm": { "method": "RenderBlockHtml" },
-        "npm": { "method": "renderBlock", "defaults": { "cssPrefix": "docx-", "fabricateClasses": false } },
+        "npm": { "method": "renderBlock" },
         "python": { "absent": "no Python method (the stdio host has no op for it)" },
         "stdio": { "absent": "no stdio op" },
         "mcp": { "absent": "no MCP action; docxodus_get_content format=html and docxodus_preview call it with a pinned profile" }

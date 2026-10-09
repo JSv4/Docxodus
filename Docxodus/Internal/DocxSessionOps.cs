@@ -30,6 +30,69 @@ internal static class DocxSessionOps
     /// it).</summary>
     public const bool DefaultCommentResolved = true;
 
+    // The defaults below were each supplied by one or more transports until issue #1024 moved them
+    // here. Every transport now passes through what the caller sent, so an omitted argument means
+    // the same thing on the WASM bridge, npm, the stdio host, Python and MCP.
+
+    /// <summary>Where a paragraph, table, rule, row or column goes, and where a moved block lands,
+    /// when the caller names no position: after the anchor. (The reference-field inserts have their
+    /// own default, <see cref="ReferenceFieldDefaultPosition"/>.)</summary>
+    public const Position DefaultInsertPosition = Position.After;
+
+    /// <summary>The list format applied when the caller names none: <see cref="ListFormat.None"/>,
+    /// which removes the paragraphs' list membership. Both the stdio host and MCP had read an omitted
+    /// format this way before issue #1024; it is kept so no caller's edit changes.</summary>
+    public const ListFormat DefaultListFormat = ListFormat.None;
+
+    /// <summary>The page-number field inserted when the caller names none: the current page.</summary>
+    public const PageNumberField DefaultPageNumberField = PageNumberField.CurrentPage;
+
+    /// <summary>How many rows, and how many columns, a merge covers along an axis the caller leaves
+    /// out: one, so naming only <c>colSpan</c> merges across a row and only <c>rowSpan</c> down a
+    /// column.</summary>
+    public const int DefaultMergeSpan = 1;
+
+    /// <summary>The shading fill when the caller sends none: empty, which removes the shading (as
+    /// an empty or null fill always has).</summary>
+    public const string DefaultCellFill = "";
+
+    /// <summary>What marking a row as a repeating header row does when the caller names no state:
+    /// mark it.</summary>
+    public const bool DefaultRepeatHeaderRow = true;
+
+    /// <summary>The diff format when the caller names none: anchor-keyed JSON.</summary>
+    public const DiffFormat DefaultDiffFormat = DiffFormat.Json;
+
+    /// <summary>How much an anchored projection covers when the caller names no depth: the anchor's
+    /// subtree and its following siblings (the <see cref="DocxSession.ProjectAnchor"/> default).</summary>
+    public const ProjectionDepth DefaultProjectionDepth = ProjectionDepth.SubtreeAndFollowingSiblings;
+
+    /// <summary>The regex options when the caller sends none: none (case-sensitive).</summary>
+    public const RegexOptions DefaultRegexOptions = RegexOptions.None;
+
+    /// <summary>The placeholder kinds a placeholder search looks for when the caller names none:
+    /// all of them (the <see cref="DocxSession.FindPlaceholders"/> default).</summary>
+    public const PlaceholderKinds DefaultPlaceholderKinds = PlaceholderKinds.All;
+
+    /// <summary>Where a placeholder search looks when the caller names no scope: the body.</summary>
+    public const ProjectionScopes DefaultPlaceholderScope = ProjectionScopes.Body;
+
+    /// <summary>Where a placeholder's context snippet is cut when the caller names no boundary: at
+    /// a character count.</summary>
+    public const ContextBoundary DefaultContextBoundary = ContextBoundary.Char;
+
+    /// <summary>The CSS class prefix a single-block render uses when the caller sends none: the
+    /// editor's <c>docx-</c>. (An empty prefix is a real value, not the default.)</summary>
+    public const string DefaultBlockCssPrefix = "docx-";
+
+    /// <summary>Whether a single-block render fabricates CSS classes when the caller does not say:
+    /// it does not.</summary>
+    public const bool DefaultFabricateClasses = false;
+
+    /// <summary>What an omitted annotation update stands for: the empty update, which changes
+    /// nothing.</summary>
+    private const string EmptyObjectJson = "{}";
+
     /// <summary>Keep the first <paramref name="maxResults"/> items; null keeps them all. The one
     /// truncation every listing op shares, so a transport never re-parses a result to cut it.</summary>
     private static IReadOnlyList<T> Limit<T>(IReadOnlyList<T> items, int? maxResults)
@@ -410,20 +473,20 @@ internal static class DocxSessionOps
     public static string ListAnchors(int handle) =>
         DocxSessionJson.SerializeAnchorIndex(SessionRegistry.Get(handle).AnchorIndex());
 
-    public static string ProjectAnchor(int handle, string anchorId, ProjectionDepth depth,
+    public static string ProjectAnchor(int handle, string anchorId, ProjectionDepth? depth,
         PageCitationRequest? citationRequest = null) =>
         DocxSessionJson.SerializeProjection(
-            SessionRegistry.Get(handle).ProjectAnchor(anchorId, depth, citationRequest));
+            SessionRegistry.Get(handle).ProjectAnchor(anchorId, depth ?? DefaultProjectionDepth, citationRequest));
 
     /// <summary>
     /// Render a single block from the live session to faithful HTML — the editor's
     /// incremental per-block re-render. Resolves against the live document (no Save /
     /// byte round-trip). Returns the block's HTML element (no html/head wrapper).
     /// </summary>
-    public static string RenderBlockHtml(int handle, string anchorId, string cssPrefix,
-        bool fabricateClasses, bool renderTrackedChanges = false) =>
+    public static string RenderBlockHtml(int handle, string anchorId, string? cssPrefix,
+        bool? fabricateClasses, bool renderTrackedChanges = false) =>
         HtmlConversionOps.RenderBlockHtml(SessionRegistry.Get(handle), anchorId,
-            EditorBlockRenderOptions(cssPrefix, fabricateClasses, renderTrackedChanges));
+            EditorBlockRenderOptions(cssPrefix, fabricateClasses ?? DefaultFabricateClasses, renderTrackedChanges));
 
     /// <summary>
     /// Batch single-block render: N anchors, one throwaway document, one converter run.
@@ -443,10 +506,10 @@ internal static class DocxSessionOps
     /// its citation marker from the DOM.
     /// </summary>
     private static HtmlConversionOptions EditorBlockRenderOptions(
-        string cssPrefix, bool fabricateClasses, bool renderTrackedChanges) =>
+        string? cssPrefix, bool fabricateClasses, bool renderTrackedChanges) =>
         new HtmlConversionOptions
         {
-            CssClassPrefix = cssPrefix ?? "docx-",
+            CssClassPrefix = cssPrefix ?? DefaultBlockCssPrefix,
             FabricateCssClasses = fabricateClasses,
             RenderFootnotesAndEndnotes = true,
             RenderTrackedChanges = renderTrackedChanges,
@@ -593,11 +656,13 @@ internal static class DocxSessionOps
 
     /// <summary><paramref name="contextChars"/> null takes
     /// <see cref="DocxSession.DefaultContextChars"/>.</summary>
-    public static string FindPlaceholders(int handle, PlaceholderKinds kinds, ProjectionScopes scope,
-        int? contextChars, ContextBoundary boundary, PageCitationRequest? citationRequest = null) =>
+    public static string FindPlaceholders(int handle, PlaceholderKinds? kinds, ProjectionScopes? scope,
+        int? contextChars, ContextBoundary? boundary, PageCitationRequest? citationRequest = null) =>
         DocxSessionJson.SerializePlaceholders(
             SessionRegistry.Get(handle).FindPlaceholders(
-                kinds, scope, contextChars ?? DocxSession.DefaultContextChars, boundary, citationRequest));
+                kinds ?? DefaultPlaceholderKinds, scope ?? DefaultPlaceholderScope,
+                contextChars ?? DocxSession.DefaultContextChars, boundary ?? DefaultContextBoundary,
+                citationRequest));
 
     public static string FindByAnnotation(
         int handle, string annotationId, PageCitationRequest? citationRequest = null, int? maxResults = null) =>
@@ -653,8 +718,9 @@ internal static class DocxSessionOps
     public static string FindAllByText(int handle, string needle, FindOptions? options) =>
         DocxSessionJson.SerializeAnchorTargets(SessionRegistry.Get(handle).FindAllByText(needle, options));
 
-    public static string FindByRegex(int handle, string pattern, RegexOptions regexOptions, FindOptions? options) =>
-        DocxSessionJson.SerializeAnchorTargets(SessionRegistry.Get(handle).FindByRegex(pattern, regexOptions, options));
+    public static string FindByRegex(int handle, string pattern, RegexOptions? regexOptions, FindOptions? options) =>
+        DocxSessionJson.SerializeAnchorTargets(SessionRegistry.Get(handle).FindByRegex(
+            pattern, regexOptions ?? DefaultRegexOptions, options));
 
     public static string FindByKind(
         int handle, string kind, string? scope, PageCitationRequest? citationRequest = null,
@@ -665,11 +731,12 @@ internal static class DocxSessionOps
     public static string GetEditSummary(int handle) =>
         DocxSessionJson.SerializeEditSummary(SessionRegistry.Get(handle).GetEditSummary());
 
-    public static string RemainingPlaceholders(int handle, PlaceholderKinds kinds) =>
-        DocxSessionJson.SerializePlaceholders(SessionRegistry.Get(handle).RemainingPlaceholders(kinds));
+    public static string RemainingPlaceholders(int handle, PlaceholderKinds? kinds) =>
+        DocxSessionJson.SerializePlaceholders(SessionRegistry.Get(handle).RemainingPlaceholders(
+            kinds ?? DefaultPlaceholderKinds));
 
-    public static string GetDiff(int handle, DiffFormat format) =>
-        SessionRegistry.Get(handle).GetDiff(format);
+    public static string GetDiff(int handle, DiffFormat? format) =>
+        SessionRegistry.Get(handle).GetDiff(format ?? DefaultDiffFormat);
 
     // ─── Tier A: text mutations ─────────────────────────────────────────
 
@@ -708,9 +775,9 @@ internal static class DocxSessionOps
             s => s.ReplaceTextAtSpan(anchorId, spanStart, spanLength, replace));
 
     public static string ReplaceTextAtSpanWithFormat(int handle, string anchorId, int spanStart, int spanLength,
-        string replace, FormatOp format, MutationPreconditions? preconditions = null) =>
+        string replace, FormatOp? format, MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, anchorId,
-            s => s.ReplaceTextAtSpanWithFormat(anchorId, spanStart, spanLength, replace, format));
+            s => s.ReplaceTextAtSpanWithFormat(anchorId, spanStart, spanLength, replace, format ?? new FormatOp()));
 
     /// <summary>
     /// Bracket-aware variant of <see cref="ReplaceTextAtSpan"/>. Parses the brackets out
@@ -745,9 +812,9 @@ internal static class DocxSessionOps
     // ─── Tier B: structural ─────────────────────────────────────────────
 
     public static string MoveBlock(int handle, string sourceAnchorId, string targetAnchorId,
-        Position position, MutationPreconditions? preconditions = null) =>
+        Position? position, MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, sourceAnchorId,
-            s => s.MoveBlock(sourceAnchorId, targetAnchorId, position));
+            s => s.MoveBlock(sourceAnchorId, targetAnchorId, position ?? DefaultInsertPosition));
 
     /// <summary>The blocks <paramref name="sourceAnchorId"/> may legally move next to, and on which
     /// side — what a drag UI gates its drop targets on, so it never offers a drop the engine
@@ -756,10 +823,10 @@ internal static class DocxSessionOps
         DocxSessionJson.SerializeMoveTargets(
             SessionRegistry.Get(handle).ValidMoveTargets(sourceAnchorId));
 
-    public static string InsertParagraph(int handle, string anchorId, Position position, string markdown,
+    public static string InsertParagraph(int handle, string anchorId, Position? position, string markdown,
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, anchorId,
-            s => s.InsertParagraph(anchorId, position, markdown));
+            s => s.InsertParagraph(anchorId, position ?? DefaultInsertPosition, markdown));
 
     public static string SplitParagraph(int handle, string anchorId, int characterOffset,
         MutationPreconditions? preconditions = null) =>
@@ -771,10 +838,10 @@ internal static class DocxSessionOps
         Mutate(handle, preconditions, firstAnchorId,
             s => s.MergeParagraphs(firstAnchorId, secondAnchorId));
 
-    public static string InsertHorizontalRule(int handle, string anchorId, Position position, string ruleJson,
+    public static string InsertHorizontalRule(int handle, string anchorId, Position? position, string ruleJson,
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, anchorId, s => s.InsertHorizontalRule(
-            anchorId, position, string.IsNullOrEmpty(ruleJson) ? null : ParseRuleEdge(ruleJson)));
+            anchorId, position ?? DefaultInsertPosition, string.IsNullOrEmpty(ruleJson) ? null : ParseRuleEdge(ruleJson)));
 
     private static ParagraphBorderEdge? ParseRuleEdge(string json)
     {
@@ -795,19 +862,20 @@ internal static class DocxSessionOps
         Mutate(handle, preconditions, anchorId, s => s.SetFooterText(anchorId, kind, markdown));
 
     public static string InsertPageNumberField(
-        int handle, string anchorId, PageNumberField field, NumberFormat? format = null,
+        int handle, string anchorId, PageNumberField? field, NumberFormat? format = null,
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, anchorId,
-            s => s.InsertPageNumberField(anchorId, field, format));
+            s => s.InsertPageNumberField(anchorId, field ?? DefaultPageNumberField, format));
 
     public static string EnsureHeaderFooterVisible(int handle, string anchorId, HeaderFooterKind kind,
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, anchorId,
             s => s.EnsureHeaderFooterVisible(anchorId, kind));
 
-    public static string SetPageNumbering(int handle, string anchorId, PageNumberingOp op,
+    /// <summary>An omitted <paramref name="op"/> is the empty op, which changes nothing.</summary>
+    public static string SetPageNumbering(int handle, string anchorId, PageNumberingOp? op,
         MutationPreconditions? preconditions = null) =>
-        Mutate(handle, preconditions, anchorId, s => s.SetPageNumbering(anchorId, op));
+        Mutate(handle, preconditions, anchorId, s => s.SetPageNumbering(anchorId, op ?? new PageNumberingOp()));
 
     public static string ClearPageNumbering(int handle, string anchorId,
         MutationPreconditions? preconditions = null) =>
@@ -831,9 +899,10 @@ internal static class DocxSessionOps
         MutationPreconditions? preconditions = null) =>
         SetPageSetup(handle, anchorId, DocxSessionJson.ParsePageSetupOp(opJson), preconditions);
 
-    public static string SetPageSetup(int handle, string anchorId, PageSetupOp op,
+    /// <summary>An omitted <paramref name="op"/> is the empty op, which changes nothing.</summary>
+    public static string SetPageSetup(int handle, string anchorId, PageSetupOp? op,
         MutationPreconditions? preconditions = null) =>
-        Mutate(handle, preconditions, anchorId, s => s.SetPageSetup(anchorId, op));
+        Mutate(handle, preconditions, anchorId, s => s.SetPageSetup(anchorId, op ?? new PageSetupOp()));
 
     // ─── Reference fields (issue #607) ──────────────────────────────────
 
@@ -1153,22 +1222,24 @@ internal static class DocxSessionOps
 
     // ─── Tier C: formatting ─────────────────────────────────────────────
 
-    public static string ApplyFormat(int handle, string anchorId, CharSpan? span, FormatOp op,
-        MutationPreconditions? preconditions = null) =>
-        Mutate(handle, preconditions, anchorId, s => s.ApplyFormat(anchorId, span, op));
+    // An omitted FormatOp or ParagraphFormatOp is the empty op, which changes nothing.
 
-    public static string ApplyFormatBySubstring(int handle, string anchorId, string substring, FormatOp op,
+    public static string ApplyFormat(int handle, string anchorId, CharSpan? span, FormatOp? op,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.ApplyFormat(anchorId, span, op ?? new FormatOp()));
+
+    public static string ApplyFormatBySubstring(int handle, string anchorId, string substring, FormatOp? op,
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, anchorId,
-            s => s.ApplyFormatToSubstring(anchorId, substring, op));
+            s => s.ApplyFormatToSubstring(anchorId, substring, op ?? new FormatOp()));
 
     public static string SetParagraphStyle(int handle, string anchorId, string styleId,
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, anchorId, s => s.SetParagraphStyle(anchorId, styleId));
 
-    public static string SetParagraphFormat(int handle, string anchorId, ParagraphFormatOp op,
+    public static string SetParagraphFormat(int handle, string anchorId, ParagraphFormatOp? op,
         MutationPreconditions? preconditions = null) =>
-        Mutate(handle, preconditions, anchorId, s => s.SetParagraphFormat(anchorId, op));
+        Mutate(handle, preconditions, anchorId, s => s.SetParagraphFormat(anchorId, op ?? new ParagraphFormatOp()));
 
     public static string SetListLevel(int handle, string anchorId, int levelDelta,
         MutationPreconditions? preconditions = null) =>
@@ -1178,14 +1249,14 @@ internal static class DocxSessionOps
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, anchorId, s => s.RemoveListMembership(anchorId));
 
-    public static string ApplyListFormat(int handle, string anchorId, ListFormat kind,
+    public static string ApplyListFormat(int handle, string anchorId, ListFormat? kind,
         MutationPreconditions? preconditions = null) =>
-        Mutate(handle, preconditions, anchorId, s => s.ApplyListFormat(anchorId, kind));
+        Mutate(handle, preconditions, anchorId, s => s.ApplyListFormat(anchorId, kind ?? DefaultListFormat));
 
-    public static string ApplyListFormatRange(int handle, string firstAnchorId, string lastAnchorId, ListFormat kind,
+    public static string ApplyListFormatRange(int handle, string firstAnchorId, string lastAnchorId, ListFormat? kind,
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, firstAnchorId,
-            s => s.ApplyListFormatRange(firstAnchorId, lastAnchorId, kind));
+            s => s.ApplyListFormatRange(firstAnchorId, lastAnchorId, kind ?? DefaultListFormat));
 
     public static string SetListStartOverride(int handle, string anchorId, int value,
         MutationPreconditions? preconditions = null) =>
@@ -1215,18 +1286,18 @@ internal static class DocxSessionOps
         Mutate(handle, preconditions, cellAnchorId,
             s => s.ReplaceCellContent(cellAnchorId, markdown));
 
-    public static string InsertTable(int handle, string anchorId, Position position, int rows, int cols,
+    public static string InsertTable(int handle, string anchorId, Position? position, int rows, int cols,
         string optionsJson, MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, anchorId, s => s.InsertTable(
-            anchorId, position, rows, cols, DocxSessionJson.ParseTableInsertOptions(optionsJson)));
+            anchorId, position ?? DefaultInsertPosition, rows, cols, DocxSessionJson.ParseTableInsertOptions(optionsJson)));
 
-    public static string InsertTableRow(int handle, string cellAnchorId, Position position,
+    public static string InsertTableRow(int handle, string cellAnchorId, Position? position,
         MutationPreconditions? preconditions = null) =>
-        Mutate(handle, preconditions, cellAnchorId, s => s.InsertTableRow(cellAnchorId, position));
+        Mutate(handle, preconditions, cellAnchorId, s => s.InsertTableRow(cellAnchorId, position ?? DefaultInsertPosition));
 
-    public static string InsertTableColumn(int handle, string cellAnchorId, Position position,
+    public static string InsertTableColumn(int handle, string cellAnchorId, Position? position,
         MutationPreconditions? preconditions = null) =>
-        Mutate(handle, preconditions, cellAnchorId, s => s.InsertTableColumn(cellAnchorId, position));
+        Mutate(handle, preconditions, cellAnchorId, s => s.InsertTableColumn(cellAnchorId, position ?? DefaultInsertPosition));
 
     public static string DeleteTableRow(int handle, string cellAnchorId,
         MutationPreconditions? preconditions = null) =>
@@ -1240,12 +1311,12 @@ internal static class DocxSessionOps
 
     /// <summary><paramref name="content"/> is "append" (default) | "discard" | "reject" —
     /// what happens to the content of the cells the merge absorbs.</summary>
-    public static string MergeCells(int handle, string cellAnchorId, int rowSpan, int colSpan,
+    public static string MergeCells(int handle, string cellAnchorId, int? rowSpan, int? colSpan,
         string? content, MutationPreconditions? preconditions = null)
     {
         var options = new TableMergeOptions { Content = DocxSessionJson.ParseTableMergeContent(content) };
-        return Mutate(handle, preconditions, cellAnchorId,
-            s => s.MergeCells(cellAnchorId, rowSpan, colSpan, options));
+        return Mutate(handle, preconditions, cellAnchorId, s => s.MergeCells(
+            cellAnchorId, rowSpan ?? DefaultMergeSpan, colSpan ?? DefaultMergeSpan, options));
     }
 
     public static string UnmergeCells(int handle, string cellAnchorId,
@@ -1272,19 +1343,20 @@ internal static class DocxSessionOps
 
     /// <summary><paramref name="fill"/> is a hex RRGGBB triplet or "auto"; "" clears the shading.
     /// <paramref name="scope"/> is "cell" | "row"; null or "" takes "cell".</summary>
-    public static string SetCellShading(int handle, string cellAnchorId, string fill, string? scope,
+    public static string SetCellShading(int handle, string cellAnchorId, string? fill, string? scope,
         MutationPreconditions? preconditions = null)
     {
         var parsedScope = DocxSessionJson.ParseTableShadingScope(scope);
+        fill ??= DefaultCellFill;
         return Mutate(handle, preconditions, cellAnchorId, s => s.SetCellShading(
-            cellAnchorId, string.IsNullOrEmpty(fill) ? null : fill, parsedScope));
+            cellAnchorId, fill.Length == 0 ? null : fill, parsedScope));
     }
 
     /// <summary><paramref name="repeat"/> null marks the row (the op's purpose); false unmarks it.</summary>
     public static string SetRepeatHeaderRow(int handle, string cellAnchorId, bool? repeat,
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, cellAnchorId,
-            s => s.SetRepeatHeaderRow(cellAnchorId, repeat ?? true));
+            s => s.SetRepeatHeaderRow(cellAnchorId, repeat ?? DefaultRepeatHeaderRow));
 
     public static string SetTableRowOptions(int handle, string cellAnchorId, bool? repeatHeader,
         bool? allowBreakAcrossPages, int? heightTwips, string? heightRule,
@@ -1324,10 +1396,12 @@ internal static class DocxSessionOps
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, null, s => s.RemoveAnnotation(annotationId));
 
-    public static string UpdateAnnotation(int handle, string annotationId, string updateJson,
+    /// <summary>An omitted <paramref name="updateJson"/> is the empty update, which changes
+    /// nothing.</summary>
+    public static string UpdateAnnotation(int handle, string annotationId, string? updateJson,
         MutationPreconditions? preconditions = null) =>
         Mutate(handle, preconditions, null, s => s.UpdateAnnotation(
-            annotationId, DocxSessionJson.DeserializeAnnotationUpdate(updateJson)));
+            annotationId, DocxSessionJson.DeserializeAnnotationUpdate(updateJson ?? EmptyObjectJson)));
 
     public static string MoveAnnotation(int handle, string annotationId, string newAnchorId,
         CharSpan? newSpan, MutationPreconditions? preconditions = null) =>

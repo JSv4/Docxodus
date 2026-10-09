@@ -569,19 +569,21 @@ internal static partial class Dispatcher
             session.Handle, Str(args, "anchorId"), Int(args, "levelDelta")),
         "remove_list_membership" => DocxSessionOps.RemoveListMembership(session.Handle, Str(args, "anchorId")),
         "apply_list_format" => DocxSessionOps.ApplyListFormat(
-            session.Handle, Str(args, "anchorId"), DocxSessionJson.ParseListFormat(OptStr(args, "listFormat"))),
+            session.Handle, Str(args, "anchorId"), DocxSessionJson.ParseOptionalListFormat(OptStr(args, "listFormat"))),
         _ => throw new McpToolException($"unknown docxodus_format action: {action}"),
         });
 
-    private static FormatOp ParseFormatOp(JsonElement args) =>
+    // An omitted format reaches the facade as null, and DocxSessionOps applies its default (the
+    // empty op) — issue #1024.
+    private static FormatOp? ParseFormatOp(JsonElement args) =>
         args.ValueKind == JsonValueKind.Object && args.TryGetProperty("format", out var f) && f.ValueKind == JsonValueKind.Object
             ? DocxSessionJson.ParseFormatOp(f.GetRawText())
-            : new FormatOp();
+            : null;
 
-    private static ParagraphFormatOp ParseParagraphFormatOp(JsonElement args) =>
+    private static ParagraphFormatOp? ParseParagraphFormatOp(JsonElement args) =>
         args.ValueKind == JsonValueKind.Object && args.TryGetProperty("paragraphFormat", out var f) && f.ValueKind == JsonValueKind.Object
             ? DocxSessionJson.ParseParagraphFormatOp(f.GetRawText())
-            : new ParagraphFormatOp();
+            : null;
 
     // ─── Create ─────────────────────────────────────────────────────────
 
@@ -610,7 +612,7 @@ internal static partial class Dispatcher
             session.Handle, Str(args, "anchorId"), Int(args, "characterOffset"), Str(args, "markdown")),
         "insert_page_number_field" => DocxSessionOps.InsertPageNumberField(
             session.Handle, Str(args, "anchorId"),
-            DocxSessionJson.ParsePageNumberField(OptStr(args, "field")),
+            DocxSessionJson.ParseOptionalPageNumberField(OptStr(args, "field")),
             DocxSessionJson.ParseNumberFormatOrNull(OptStr(args, "numberFormat"))),
         // Reference fields (issue #607). The switches are typed options here too: an agent asks
         // for "levels 1-3, hyperlinked", never for \o "1-3" \h.
@@ -658,10 +660,10 @@ internal static partial class Dispatcher
         return Guarded(session, ParsePreconditions(args, MutationTarget(args)), () => action switch
         {
         "apply_format" => DocxSessionOps.ApplyListFormat(
-            session.Handle, Str(args, "anchorId"), DocxSessionJson.ParseListFormat(OptStr(args, "listFormat"))),
+            session.Handle, Str(args, "anchorId"), DocxSessionJson.ParseOptionalListFormat(OptStr(args, "listFormat"))),
         "apply_format_range" => DocxSessionOps.ApplyListFormatRange(
             session.Handle, Str(args, "firstAnchorId"), Str(args, "lastAnchorId"),
-            DocxSessionJson.ParseListFormat(OptStr(args, "listFormat"))),
+            DocxSessionJson.ParseOptionalListFormat(OptStr(args, "listFormat"))),
         "set_level" => DocxSessionOps.SetListLevel(session.Handle, Str(args, "anchorId"), Int(args, "levelDelta")),
         "set_start" => DocxSessionOps.SetListStartOverride(
             session.Handle, Str(args, "anchorId"), Int(args, "startValue")),
@@ -773,12 +775,12 @@ internal static partial class Dispatcher
 
     private static string SetImageMetadata(DocSession session, JsonElement args)
     {
-        if (!args.TryGetProperty("altText", out var alt) || alt.ValueKind is not (JsonValueKind.String or JsonValueKind.Null)
-            || !args.TryGetProperty("title", out var title) || title.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
+        // A null value removes the alt text or title, so each must be present: an omitted one is
+        // refused rather than read as null (the stdio host applies the same rule).
+        if (!DocxSessionJson.TryGetPresentNullableString(args, "altText", out var alt)
+            || !DocxSessionJson.TryGetPresentNullableString(args, "title", out var title))
             throw new McpToolException("docxodus_images set_metadata requires altText and title as string or null");
-        return DocxSessionOps.SetImageMetadata(session.Handle, Str(args, "imageId"),
-            alt.ValueKind == JsonValueKind.Null ? null : alt.GetString(),
-            title.ValueKind == JsonValueKind.Null ? null : title.GetString());
+        return DocxSessionOps.SetImageMetadata(session.Handle, Str(args, "imageId"), alt, title);
     }
 
     // ─── Native content controls (issue #452) ─────────────────────────
@@ -846,7 +848,7 @@ internal static partial class Dispatcher
             "update" => DocxSessionOps.UpdateAnnotation(
                 session.Handle, Str(args, "annotationId"),
                 args.TryGetProperty("update", out var u) && u.ValueKind == JsonValueKind.Object
-                    ? u.GetRawText() : "{}"),
+                    ? u.GetRawText() : null),
             "remove" => DocxSessionOps.RemoveAnnotation(session.Handle, Str(args, "annotationId")),
             "move" => DocxSessionOps.MoveAnnotation(
                 session.Handle, Str(args, "annotationId"), Str(args, "newAnchorId"), ParseSpan(args, "newSpan")),
@@ -1986,15 +1988,15 @@ internal static partial class Dispatcher
         "replace_cell_content" => DocxSessionOps.ReplaceCellContent(
             session.Handle, Str(args, "cellAnchorId"), Str(args, "markdown")),
         "merge_cells" => DocxSessionOps.MergeCells(
-            session.Handle, Str(args, "cellAnchorId"), OptInt(args, "rowSpan") ?? 1,
-            OptInt(args, "colSpan") ?? 1, OptStr(args, "mergeContent")),
+            session.Handle, Str(args, "cellAnchorId"), OptInt(args, "rowSpan"),
+            OptInt(args, "colSpan"), OptStr(args, "mergeContent")),
         "unmerge_cells" => DocxSessionOps.UnmergeCells(session.Handle, Str(args, "cellAnchorId")),
         "set_column_widths" => DocxSessionOps.SetColumnWidths(
             session.Handle, Str(args, "cellAnchorId"), RawArray(args, "widths")),
         "set_borders" => DocxSessionOps.SetTableBorders(
             session.Handle, Str(args, "cellAnchorId"), ObjectArguments.ReadJson(args, "docxodus_table", "set_borders")),
         "set_shading" => DocxSessionOps.SetCellShading(
-            session.Handle, Str(args, "cellAnchorId"), OptStr(args, "fill") ?? "",
+            session.Handle, Str(args, "cellAnchorId"), OptStr(args, "fill"),
             OptStr(args, "shadingScope")),
         "set_repeat_header_row" => DocxSessionOps.SetRepeatHeaderRow(
             session.Handle, Str(args, "cellAnchorId"), OptBool(args, "repeat")),
@@ -2126,8 +2128,9 @@ internal static partial class Dispatcher
         args.ValueKind == JsonValueKind.Object && args.TryGetProperty(name, out var v) && (v.ValueKind == JsonValueKind.True || v.ValueKind == JsonValueKind.False)
             ? v.GetBoolean() : null;
 
-    private static Position ParsePos(JsonElement args) =>
-        DocxSessionJson.ParsePos(OptStr(args, "position"));
+    /// <summary>The optional <c>position</c>: null when omitted, so the facade applies its default.</summary>
+    private static Position? ParsePos(JsonElement args) =>
+        DocxSessionJson.ParseOptionalPos(OptStr(args, "position"));
 
     private static CharSpan? ParseSpan(JsonElement args, string name)
     {

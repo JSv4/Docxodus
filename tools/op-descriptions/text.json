@@ -63,14 +63,14 @@
         { "name": "spanStart", "type": "int", "required": true },
         { "name": "spanLength", "type": "int", "required": true },
         { "name": "replace", "type": "string", "required": true },
-        { "name": "format", "type": "object", "required": true }
+        { "name": "format", "type": "object", "required": false, "default": {} }
       ],
       "transports": {
         "wasm": { "method": "ReplaceTextAtSpanWithFormat" },
         "npm": { "method": "replaceMatch" },
         "python": { "method": "replace_text_at_span" },
-        "stdio": { "op": "replace_text_at_span_with_format", "defaults": { "format": {} } },
-        "mcp": { "tool": "docxodus_edit", "action": "replace_text_at_span_with_format", "defaults": { "format": {} } }
+        "stdio": { "op": "replace_text_at_span_with_format" },
+        "mcp": { "tool": "docxodus_edit", "action": "replace_text_at_span_with_format" }
       }
     },
     {
@@ -98,7 +98,7 @@
       "result": "EditResult",
       "args": [
         { "name": "anchorId", "type": "anchor", "required": true },
-        { "name": "position", "type": "position", "required": true },
+        { "name": "position", "type": "position", "required": false, "default": "after" },
         { "name": "markdown", "type": "markdown", "required": true }
       ],
       "transports": {
@@ -106,7 +106,7 @@
         "npm": { "method": "insertParagraph" },
         "python": { "method": "insert_paragraph" },
         "stdio": { "op": "insert_paragraph" },
-        "mcp": { "tool": "docxodus_edit", "action": "insert_paragraph", "defaults": { "position": "after" }, "aliases": [ { "tool": "docxodus_create", "action": "insert_paragraph" } ] }
+        "mcp": { "tool": "docxodus_edit", "action": "insert_paragraph", "aliases": [ { "tool": "docxodus_create", "action": "insert_paragraph" } ] }
       }
     },
     {

@@ -24,14 +24,14 @@
       "args": [
         { "name": "sourceAnchorId", "type": "anchor", "required": true },
         { "name": "targetAnchorId", "type": "anchor", "required": true },
-        { "name": "position", "type": "position", "required": true }
+        { "name": "position", "type": "position", "required": false, "default": "after" }
       ],
       "transports": {
         "wasm": { "method": "MoveBlock" },
         "npm": { "method": "moveBlock" },
         "python": { "method": "move_block" },
         "stdio": { "op": "move_block" },
-        "mcp": { "tool": "docxodus_edit", "action": "move_block", "defaults": { "position": "after" } }
+        "mcp": { "tool": "docxodus_edit", "action": "move_block" }
       }
     },
     {
@@ -71,7 +71,7 @@
       "result": "EditResult",
       "args": [
         { "name": "anchorId", "type": "anchor", "required": true },
-        { "name": "position", "type": "position", "required": true },
+        { "name": "position", "type": "position", "required": false, "default": "after" },
         { "name": "rule", "type": "object", "required": false }
       ],
       "transports": {
@@ -79,7 +79,7 @@
         "npm": { "method": "insertHorizontalRule" },
         "python": { "absent": "no Python wrapper" },
         "stdio": { "absent": "no stdio op" },
-        "mcp": { "tool": "docxodus_create", "action": "insert_horizontal_rule", "defaults": { "position": "after" }, "flatAliases": { "rule": { "style": "ruleStyle" } }, "$comment": "The deprecated flat ruleStyle keeps its narrower enum (single | double | thick); rule.style takes any OOXML border style." }
+        "mcp": { "tool": "docxodus_create", "action": "insert_horizontal_rule", "flatAliases": { "rule": { "style": "ruleStyle" } }, "$comment": "The deprecated flat ruleStyle keeps its narrower enum (single | double | thick); rule.style takes any OOXML border style." }
       }
     },
     {

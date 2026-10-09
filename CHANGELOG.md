@@ -132,6 +132,10 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- The stdio host (and so `docx-scalpel`) refuses `set_image_metadata` without both `altText` and
+  `title`, each a string or an explicit null, as MCP already did (issue #1024). It used to read an
+  omitted value as null and delete it; see the `### Fixed` entry for #1024 for the other defaults.
+
 - **Breaking default: a comparison that names no author now stamps `"Docxodus"`, not
   `"Open-Xml-PowerTools"` (issue #961).** `DocxDiffSettings.AuthorForRevisions` defaults to the new
   `DocxDiffSettings.DefaultAuthorForRevisions` (`"Docxodus"`), and the engine's internal settings read
@@ -234,6 +238,36 @@ All notable changes to this project will be documented in this file.
   different values is refused). `scope` accepts MCP's token (`"body"`, `"headers"`, ...) or a
   `ProjectionScopes` mask on both transports, through one shared parser. The Python client sends the
   new names; its methods are unchanged.
+
+- An argument a session-op caller leaves out now takes one default, declared once in
+  `DocxSessionOps`, on every transport (issue #1024). The stdio host, MCP, npm and Python supplied 47
+  defaults of their own between them (an insert's `position`, `listFormat`, `field`, `rowSpan`/`colSpan`, `fill`,
+  the empty `format`/`paragraphFormat`/`op`/`update` objects, and the query flags `format`, `depth`,
+  `regexOptions`, `kinds`, `scope`, `boundary`, `cssPrefix` and `fabricateClasses`), so two transports
+  could disagree and one that supplied none refused the call. Each transport now passes through what the
+  caller sent, and the defaults themselves are unchanged. Behaviour changes for callers:
+  - The stdio host (and Python through it) now accepts calls it used to refuse with a missing-argument
+    error: `insert_paragraph`, `move_block`, `insert_table`, `insert_table_row` and
+    `insert_table_column` without `position` (after), `insert_page_number_field` without `field`
+    (current page), `merge_cells` without `rowSpan` or `colSpan` (1), and `update_annotation` without
+    `update` (an empty update, which changes nothing).
+  - `set_image_metadata` on the stdio host now requires both `altText` and `title`, as a string or as
+    an explicit null, as MCP already did. A null removes the value, and the host used to read an omitted
+    one as null, so a call that named only the title silently deleted the picture's alt text. MCP kept
+    requiring both rather than learning the same silent clear.
+  - The stdio host now refuses `set_image_dimensions` without `dimensions` and `repair_revisions`
+    without `repairs` as a missing argument. It used to fill in an empty object or list, which the
+    session then refused with a failed result (`invalid_image_dimensions`, `revision_repair_rejected`);
+    a caller matching on those codes for an omitted argument now gets an argument error instead
+    (`internal_error` inside a batch).
+  - `setRepeatHeaderRow` (npm) and `set_repeat_header_row` (Python) take `repeat` as optional, marking
+    the row when it is left out, as the stdio host and MCP already did.
+  - The npm and Python methods that had a default of their own (`getDiff`, `projectAnchor`,
+    `findByRegex`, `findPlaceholders`, `remainingPlaceholders`, `insertPageNumberField`, `renderBlock`,
+    their Python counterparts, and Python's `set_page_numbering` and `set_page_setup`) keep the same
+    optional parameters but send nothing for one left out.
+  - A stdio argument the facade defaults (`position`, `field`, `rowSpan`, `colSpan`) is refused when
+    sent with the wrong type, rather than read as absent and given the default.
 
 - Superscript and subscript runs are drawn at Word's size and raise (issues #1016 and #1003). The HTML
   converter used the browser's `vertical-align: super`/`sub` with `font-size: smaller`, which raises a

@@ -78,7 +78,7 @@
         "wasm": { "method": "SetImageDimensions" },
         "npm": { "method": "setImageDimensions" },
         "python": { "method": "set_image_dimensions" },
-        "stdio": { "op": "set_image_dimensions", "defaults": { "dimensions": {} } },
+        "stdio": { "op": "set_image_dimensions" },
         "mcp": { "tool": "docxodus_images", "action": "set_dimensions" }
       }
     },
@@ -104,15 +104,15 @@
       "result": "EditResult",
       "args": [
         { "name": "imageId", "type": "string", "required": true },
-        { "name": "altText", "type": "string", "required": false },
-        { "name": "title", "type": "string", "required": false }
+        { "name": "altText", "type": "string", "required": true, "nullable": true },
+        { "name": "title", "type": "string", "required": true, "nullable": true }
       ],
       "transports": {
         "wasm": { "method": "SetImageMetadata" },
         "npm": { "method": "setImageMetadata" },
         "python": { "method": "set_image_metadata" },
         "stdio": { "op": "set_image_metadata" },
-        "mcp": { "tool": "docxodus_images", "action": "set_metadata", "requires": ["altText", "title"] }
+        "mcp": { "tool": "docxodus_images", "action": "set_metadata" }
       }
     },
     {

@@ -101,7 +101,7 @@
         "wasm": { "method": "RepairRevisions" },
         "npm": { "method": "repairRevisions" },
         "python": { "method": "repair_revisions" },
-        "stdio": { "op": "repair_revisions", "defaults": { "repairs": [] } },
+        "stdio": { "op": "repair_revisions" },
         "mcp": { "tool": "docxodus_track_changes", "action": "repair" }
       }
     },
