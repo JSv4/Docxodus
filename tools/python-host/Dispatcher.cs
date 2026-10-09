@@ -168,21 +168,24 @@ internal static class Dispatcher
             Handle(args), Str(args, "anchorId"), ParsePos(args, "position"), Str(args, "markdown")),
         "split_paragraph" => DocxSessionOps.SplitParagraph(
             Handle(args), Str(args, "anchorId"), Int(args, "characterOffset")),
+        // Argument names are MCP's on every transport (issue #1023); this host's old spellings
+        // are deprecated aliases: firstAnchorId here, anchorId for the header/footer body paragraph,
+        // format for the page number's format, and the rest below.
         "merge_paragraphs" => DocxSessionOps.MergeParagraphs(
-            Handle(args), Str(args, "firstAnchorId"), Str(args, "secondAnchorId")),
+            Handle(args), Aliased(args, "anchorId", "firstAnchorId"), Str(args, "secondAnchorId")),
 
         "set_header_text" => DocxSessionOps.SetHeaderText(
-            Handle(args), Str(args, "anchorId"),
+            Handle(args), Aliased(args, "bodyAnchorId", "anchorId"),
             DocxSessionJson.ParseHeaderFooterKind(Str(args, "kind")), Str(args, "markdown")),
         "set_footer_text" => DocxSessionOps.SetFooterText(
-            Handle(args), Str(args, "anchorId"),
+            Handle(args), Aliased(args, "bodyAnchorId", "anchorId"),
             DocxSessionJson.ParseHeaderFooterKind(Str(args, "kind")), Str(args, "markdown")),
         "insert_page_number_field" => DocxSessionOps.InsertPageNumberField(
             Handle(args), Str(args, "anchorId"),
             DocxSessionJson.ParsePageNumberField(Str(args, "field")),
-            DocxSessionJson.ParseNumberFormatOrNull(OptStr(args, "format"))),
+            DocxSessionJson.ParseNumberFormatOrNull(DocxSessionJson.AliasedString(args, "numberFormat", "format"))),
         "ensure_header_footer_visible" => DocxSessionOps.EnsureHeaderFooterVisible(
-            Handle(args), Str(args, "anchorId"),
+            Handle(args), Aliased(args, "bodyAnchorId", "anchorId"),
             DocxSessionJson.ParseHeaderFooterKind(Str(args, "kind"))),
         "set_page_numbering" => DocxSessionOps.SetPageNumbering(
             Handle(args), Str(args, "anchorId"), ParsePageNumberingOp(args, "op")),
@@ -228,16 +231,16 @@ internal static class Dispatcher
         "list_comments" => DocxSessionOps.ListComments(Handle(args)),
 
         "list_hyperlinks" => DocxSessionOps.ListHyperlinks(
-            Handle(args), (ProjectionScopes)IntOptional(args, "scopes", (int)ProjectionScopes.All)),
+            Handle(args), Scopes(args)),
         "add_hyperlink" => DocxSessionOps.AddHyperlink(
-            Handle(args), Str(args, "anchorId"), Int(args, "start"), Int(args, "length"),
+            Handle(args), Str(args, "anchorId"), AliasedInt(args, "startOffset", "start"), Int(args, "length"),
             Str(args, "kind"), Str(args, "target")),
         "update_hyperlink" => DocxSessionOps.UpdateHyperlink(
             Handle(args), Str(args, "hyperlinkId"), Str(args, "kind"), Str(args, "target")),
         "remove_hyperlink" => DocxSessionOps.RemoveHyperlink(Handle(args), Str(args, "hyperlinkId")),
         "get_image_capabilities" => DocxSessionOps.GetImageCapabilities(),
         "list_images" => DocxSessionOps.ListImages(
-            Handle(args), (ProjectionScopes)IntOptional(args, "scopes", (int)ProjectionScopes.All)),
+            Handle(args), Scopes(args)),
         "insert_image" => DocxSessionOps.InsertImage(
             Handle(args), Str(args, "anchorId"), Int(args, "characterOffset"),
             Str(args, "imageBase64"), JsonObjectOrEmpty(args, "options")),
@@ -253,7 +256,7 @@ internal static class Dispatcher
             Handle(args), Str(args, "imageId"), JsonObject(args, "layout")),
         "remove_image" => DocxSessionOps.RemoveImage(Handle(args), Str(args, "imageId")),
         "list_content_controls" => DocxSessionOps.ListContentControls(
-            Handle(args), (ProjectionScopes)IntOptional(args, "scopes", (int)ProjectionScopes.All)),
+            Handle(args), Scopes(args)),
         "fill_content_control_text" => DocxSessionOps.FillContentControlText(
             Handle(args), Str(args, "anchorId"), Str(args, "text"),
             JsonObjectOrEmpty(args, "options")),
@@ -279,7 +282,7 @@ internal static class Dispatcher
         "remove_repeating_section_item" => DocxSessionOps.RemoveRepeatingSectionItem(
             Handle(args), Str(args, "itemAnchorId")),
         "list_bookmarks" => DocxSessionOps.ListBookmarks(
-            Handle(args), (ProjectionScopes)IntOptional(args, "scopes", (int)ProjectionScopes.All)),
+            Handle(args), Scopes(args)),
         "add_bookmark" => DocxSessionOps.AddBookmark(
             Handle(args), Str(args, "name"), Str(args, "startAnchorId"), Int(args, "startOffset"),
             Str(args, "endAnchorId"), Int(args, "endOffset")),
@@ -301,13 +304,13 @@ internal static class Dispatcher
         "reject_all_revisions" => DocxSessionOps.RejectAllRevisions(Handle(args)),
 
         "apply_format" => DocxSessionOps.ApplyFormat(
-            Handle(args), Str(args, "anchorId"), ParseOptionalSpan(args, "span"), ParseFormatOp(args, "op")),
+            Handle(args), Str(args, "anchorId"), ParseOptionalSpan(args, "span"), ParseFormatOp(args, "format", "op")),
         "apply_format_by_substring" => DocxSessionOps.ApplyFormatBySubstring(
-            Handle(args), Str(args, "anchorId"), Str(args, "substring"), ParseFormatOp(args, "op")),
+            Handle(args), Str(args, "anchorId"), Str(args, "substring"), ParseFormatOp(args, "format", "op")),
         "set_paragraph_style" => DocxSessionOps.SetParagraphStyle(
             Handle(args), Str(args, "anchorId"), Str(args, "styleId")),
         "set_paragraph_format" => DocxSessionOps.SetParagraphFormat(
-            Handle(args), Str(args, "anchorId"), ParseParagraphFormatOp(args, "op")),
+            Handle(args), Str(args, "anchorId"), ParseParagraphFormatOp(args, "paragraphFormat", "op")),
         "set_list_level" => DocxSessionOps.SetListLevel(
             Handle(args), Str(args, "anchorId"), Int(args, "levelDelta")),
         "remove_list_membership" => DocxSessionOps.RemoveListMembership(
@@ -318,7 +321,7 @@ internal static class Dispatcher
             Handle(args), Str(args, "firstAnchorId"), Str(args, "lastAnchorId"),
             DocxSessionJson.ParseListFormat(OptStr(args, "listFormat"))),
         "set_list_start_override" => DocxSessionOps.SetListStartOverride(
-            Handle(args), Str(args, "anchorId"), Int(args, "value")),
+            Handle(args), Str(args, "anchorId"), AliasedInt(args, "startValue", "value")),
         "clear_list_start_override" => DocxSessionOps.ClearListStartOverride(
             Handle(args), Str(args, "anchorId")),
 
@@ -338,8 +341,8 @@ internal static class Dispatcher
         "delete_table_row" => DocxSessionOps.DeleteTableRow(Handle(args), Str(args, "cellAnchorId")),
         "delete_table_column" => DocxSessionOps.DeleteTableColumn(Handle(args), Str(args, "cellAnchorId")),
         "merge_cells" => DocxSessionOps.MergeCells(
-            Handle(args), Str(args, "cellAnchorId"), Int(args, "rowSpan"), Int(args, "columnSpan"),
-            OptStr(args, "content")),
+            Handle(args), Str(args, "cellAnchorId"), Int(args, "rowSpan"), AliasedInt(args, "colSpan", "columnSpan"),
+            DocxSessionJson.AliasedString(args, "mergeContent", "content")),
         "unmerge_cells" => DocxSessionOps.UnmergeCells(Handle(args), Str(args, "cellAnchorId")),
         "set_column_widths" => DocxSessionOps.SetColumnWidths(
             Handle(args), Str(args, "cellAnchorId"), RawArray(args, "widths")),
@@ -567,10 +570,9 @@ internal static class Dispatcher
 
     private static string SetRevisionAuthor(JsonElement args)
     {
-        string? author = args.TryGetProperty("author", out var a) && a.ValueKind == JsonValueKind.String
-            ? a.GetString()
-            : null;
-        DocxSessionOps.SetRevisionAuthor(Handle(args), author);
+        // revisionAuthor, as on MCP (issue #1023); author is this host's deprecated spelling.
+        DocxSessionOps.SetRevisionAuthor(Handle(args),
+            DocxSessionJson.AliasedString(args, "revisionAuthor", "author"));
         return "null";
     }
 
@@ -771,8 +773,7 @@ internal static class Dispatcher
     }
 
     private static string CommentAnchor(JsonElement args, string deprecatedAlias) =>
-        DocxSessionJson.AliasedString(args, "commentAnchorId", deprecatedAlias)
-        ?? throw new FormatException("args missing string \"commentAnchorId\"");
+        Aliased(args, "commentAnchorId", deprecatedAlias);
 
     // ─── Arg helpers ────────────────────────────────────────────────────
 
@@ -905,19 +906,36 @@ internal static class Dispatcher
             s.TryGetProperty("length", out var ln) && ln.ValueKind == JsonValueKind.Number ? ln.GetInt32() : 0);
     }
 
-    private static FormatOp ParseFormatOp(JsonElement args, string name)
-    {
-        if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var op) || op.ValueKind != JsonValueKind.Object)
-            return new FormatOp();
-        return DocxSessionJson.ParseFormatOp(op.GetRawText());
-    }
+    private static FormatOp ParseFormatOp(JsonElement args, string name, string? deprecatedAlias = null) =>
+        Argument(args, name, deprecatedAlias) is { ValueKind: JsonValueKind.Object } op
+            ? DocxSessionJson.ParseFormatOp(op.GetRawText())
+            : new FormatOp();
 
-    private static ParagraphFormatOp ParseParagraphFormatOp(JsonElement args, string name)
-    {
-        if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var op) || op.ValueKind != JsonValueKind.Object)
-            return new ParagraphFormatOp();
-        return DocxSessionJson.ParseParagraphFormatOp(op.GetRawText());
-    }
+    private static ParagraphFormatOp ParseParagraphFormatOp(JsonElement args, string name, string deprecatedAlias) =>
+        Argument(args, name, deprecatedAlias) is { ValueKind: JsonValueKind.Object } op
+            ? DocxSessionJson.ParseParagraphFormatOp(op.GetRawText())
+            : new ParagraphFormatOp();
+
+    /// <summary>The argument under <paramref name="name"/>, or under its deprecated alias when it has one.</summary>
+    private static JsonElement? Argument(JsonElement args, string name, string? deprecatedAlias) =>
+        deprecatedAlias is not null
+            ? DocxSessionJson.AliasedArgument(args, name, deprecatedAlias)
+            : args.ValueKind == JsonValueKind.Object && args.TryGetProperty(name, out var v) ? v : null;
+
+    /// <summary>A required string argument that this host also accepts under a deprecated alias.</summary>
+    private static string Aliased(JsonElement args, string name, string deprecatedAlias) =>
+        DocxSessionJson.AliasedString(args, name, deprecatedAlias)
+        ?? throw new FormatException($"args missing string \"{name}\"");
+
+    /// <summary>A required number argument that this host also accepts under a deprecated alias.</summary>
+    private static int AliasedInt(JsonElement args, string name, string deprecatedAlias) =>
+        DocxSessionJson.AliasedInt(args, name, deprecatedAlias)
+        ?? throw new FormatException($"args missing number \"{name}\"");
+
+    /// <summary>The parts a listing reads: <c>scope</c>, MCP's token or a mask, or this host's
+    /// deprecated <c>scopes</c> mask (issue #1023).</summary>
+    private static ProjectionScopes Scopes(JsonElement args) =>
+        DocxSessionJson.ParseProjectionScopes(DocxSessionJson.AliasedArgument(args, "scope", "scopes"));
 
     private static string[] ParseAnchorIdArray(JsonElement args)
     {

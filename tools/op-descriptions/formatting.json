@@ -15,7 +15,7 @@
         "wasm": { "method": "ApplyFormat" },
         "npm": { "method": "applyFormat" },
         "python": { "method": "apply_format" },
-        "stdio": { "op": "apply_format", "argNames": { "format": "op" }, "defaults": { "format": {} } },
+        "stdio": { "op": "apply_format", "defaults": { "format": {} } },
         "mcp": { "tool": "docxodus_format", "action": "apply_format", "defaults": { "format": {} } }
       }
     },
@@ -32,7 +32,7 @@
         "wasm": { "method": "ApplyFormatBySubstring" },
         "npm": { "method": "applyFormatBySubstring" },
         "python": { "method": "apply_format_by_substring" },
-        "stdio": { "op": "apply_format_by_substring", "argNames": { "format": "op" }, "defaults": { "format": {} } },
+        "stdio": { "op": "apply_format_by_substring", "defaults": { "format": {} } },
         "mcp": { "tool": "docxodus_format", "action": "apply_format_by_substring", "defaults": { "format": {} } }
       }
     },
@@ -48,7 +48,7 @@
         "wasm": { "method": "SetParagraphFormat" },
         "npm": { "method": "setParagraphFormat" },
         "python": { "method": "set_paragraph_format" },
-        "stdio": { "op": "set_paragraph_format", "argNames": { "paragraphFormat": "op" }, "defaults": { "paragraphFormat": {} } },
+        "stdio": { "op": "set_paragraph_format", "defaults": { "paragraphFormat": {} } },
         "mcp": { "tool": "docxodus_format", "action": "set_paragraph_format", "defaults": { "paragraphFormat": {} } }
       }
     },

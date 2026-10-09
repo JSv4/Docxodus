@@ -1,5 +1,5 @@
 {
-  "$comment": "One description of the hyperlink and bookmark session ops and how each transport names them (issue #982). SessionOpDescriptionDriftTests checks every transport against it; see docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names; argNames, defaults, requires and absent on a transport are recorded divergences, not the target. scope is the MCP story filter; the stdio host takes the same filter as scopes, a ProjectionScopes flag integer.",
+  "$comment": "One description of the hyperlink and bookmark session ops and how each transport names them (issue #982). SessionOpDescriptionDriftTests checks every transport against it; see docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names; argNames, defaults, requires and absent on a transport are recorded divergences, not the target. scope is the story filter: MCP's token, or (on the stdio host and in Python) a ProjectionScopes flag integer, which DocxSessionJson.ParseProjectionScopes reads on both.",
   "family": "links-bookmarks",
   "ops": [
     {
@@ -17,7 +17,7 @@
         "wasm": { "method": "AddHyperlink" },
         "npm": { "method": "addHyperlink" },
         "python": { "method": "add_hyperlink" },
-        "stdio": { "op": "add_hyperlink", "argNames": { "startOffset": "start" } },
+        "stdio": { "op": "add_hyperlink" },
         "mcp": { "tool": "docxodus_links", "action": "add_hyperlink" }
       }
     },
@@ -64,7 +64,7 @@
         "wasm": { "method": "ListHyperlinks" },
         "npm": { "method": "listHyperlinks" },
         "python": { "method": "list_hyperlinks" },
-        "stdio": { "op": "list_hyperlinks", "argNames": { "scope": "scopes" } },
+        "stdio": { "op": "list_hyperlinks" },
         "mcp": { "tool": "docxodus_links", "action": "list_hyperlinks" }
       }
     },
@@ -148,7 +148,7 @@
         "wasm": { "method": "ListBookmarks" },
         "npm": { "method": "listBookmarks" },
         "python": { "method": "list_bookmarks" },
-        "stdio": { "op": "list_bookmarks", "argNames": { "scope": "scopes" } },
+        "stdio": { "op": "list_bookmarks" },
         "mcp": { "tool": "docxodus_links", "action": "list_bookmarks" }
       }
     },

@@ -97,7 +97,7 @@
         "wasm": { "method": "MergeCells" },
         "npm": { "method": "mergeCells" },
         "python": { "method": "merge_cells" },
-        "stdio": { "op": "merge_cells", "argNames": { "colSpan": "columnSpan", "mergeContent": "content" } },
+        "stdio": { "op": "merge_cells" },
         "mcp": { "tool": "docxodus_table", "action": "merge_cells", "defaults": { "rowSpan": 1, "colSpan": 1 } }
       }
     },

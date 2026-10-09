@@ -199,6 +199,18 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- The stdio host (and so the `docx-scalpel` Python client) takes the same argument names as MCP for 16
+  session-op arguments (issue #1023). It used to spell them differently: `scopes` for `scope` on the
+  four listings, `op` for `format`/`paragraphFormat` on the formatting ops, `anchorId` for
+  `bodyAnchorId` on the header/footer ops, `format` for `numberFormat`, `start` for `startOffset`,
+  `value` for `startValue`, `author` for `revisionAuthor`, `columnSpan`/`content` for
+  `colSpan`/`mergeContent`, and `firstAnchorId` for `merge_paragraphs`' `anchorId`. A caller who
+  sent MCP's name got an error, or, for the optional ones, had the argument silently ignored. The host
+  now takes the MCP name and still accepts the old spelling as a deprecated alias (sending both with
+  different values is refused). `scope` accepts MCP's token (`"body"`, `"headers"`, ...) or a
+  `ProjectionScopes` mask on both transports, through one shared parser. The Python client sends the
+  new names; its methods are unchanged.
+
 - Superscript and subscript runs are drawn at Word's size and raise (issues #1016 and #1003). The HTML
   converter used the browser's `vertical-align: super`/`sub` with `font-size: smaller`, which raises a
   superscript about a third of the size plus a pixel at 0.83 of the size. Word reference PDFs put it at
