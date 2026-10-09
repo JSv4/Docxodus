@@ -1,0 +1,401 @@
+{
+  "$comment": "One description of the queries session ops and how each transport names them (issue #982). SessionOpDescriptionDriftTests checks every transport against it; see docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names (the JSON keys a stdio or MCP caller sends; the WASM bridge, npm and Python take them positionally). Numeric flag enums (scopes, kinds, regex options, depth, diff format) are typed int; string-token enums are typed enum. An argument's own default is the one DocxSessionOps (or the request record it parses into) applies on every transport; a transport that supplies its own default for an argument the facade requires lists it under defaults, a different spelling under argNames. Both are recorded divergences, not the target. An absent transport says why; an MCP route the description cannot express (a tool selected by format or mode rather than action, or an action that reshapes or drops arguments) is recorded absent and names the real route.",
+  "family": "queries",
+  "ops": [
+    {
+      "op": "project",
+      "facade": "Project",
+      "result": "MarkdownProjection",
+      "args": [],
+      "transports": {
+        "wasm": { "method": "Project" },
+        "npm": { "method": "project" },
+        "python": { "method": "project" },
+        "stdio": { "op": "project" },
+        "mcp": { "absent": "reachable only as docxodus_get_content format=markdown (no anchorId), selected by format not action" }
+      }
+    },
+    {
+      "op": "projectAnchor",
+      "facade": "ProjectAnchor",
+      "result": "MarkdownProjection",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "depth", "type": "int", "required": true },
+        { "name": "citation", "type": "object", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "ProjectAnchor" },
+        "npm": { "method": "projectAnchor", "defaults": { "depth": 2 } },
+        "python": { "method": "project_anchor", "defaults": { "depth": 2 } },
+        "stdio": { "op": "project_anchor", "defaults": { "depth": 2 } },
+        "mcp": { "absent": "reachable only as docxodus_get_content format=markdown with anchorId, selected by format not action, with depth pinned to SubtreeAndFollowingSiblings" }
+      }
+    },
+    {
+      "op": "listAnchors",
+      "facade": "ListAnchors",
+      "result": "json",
+      "args": [],
+      "transports": {
+        "wasm": { "method": "ListAnchors" },
+        "npm": { "absent": "no DocxSession method; the editor calls the bridge export directly" },
+        "python": { "absent": "no Python method (the stdio host has no op for it)" },
+        "stdio": { "absent": "no stdio op" },
+        "mcp": { "absent": "no MCP action" }
+      }
+    },
+    {
+      "op": "listBlocks",
+      "facade": "ListBlocks",
+      "result": "RenderPlan",
+      "args": [],
+      "transports": {
+        "wasm": { "method": "ListBlocks" },
+        "npm": { "absent": "no DocxSession method; the editor calls the bridge export directly" },
+        "python": { "absent": "no Python method (the stdio host has no op for it)" },
+        "stdio": { "absent": "no stdio op" },
+        "mcp": { "absent": "no MCP action" }
+      }
+    },
+    {
+      "op": "listRenderedBlocks",
+      "facade": "ListRenderedBlocks",
+      "result": "RenderPlan",
+      "args": [
+        { "name": "renderTrackedChanges", "type": "boolean", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "ListRenderedBlocks" },
+        "npm": { "absent": "no DocxSession method; the editor calls the bridge export directly" },
+        "python": { "absent": "no Python method (the stdio host has no op for it)" },
+        "stdio": { "absent": "no stdio op" },
+        "mcp": { "absent": "no MCP action" }
+      }
+    },
+    {
+      "op": "listInlineSpans",
+      "facade": "ListInlineSpans",
+      "result": "InlineSpan[]",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "ListInlineSpans" },
+        "npm": { "method": "listInlineSpans" },
+        "python": { "method": "list_inline_spans" },
+        "stdio": { "op": "list_inline_spans" },
+        "mcp": { "absent": "reachable only as docxodus_get_content format=spans, selected by format not action" }
+      }
+    },
+    {
+      "op": "getAnchorInfo",
+      "facade": "GetAnchorInfo",
+      "result": "AnchorInfo?",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "GetAnchorInfo" },
+        "npm": { "method": "getAnchorInfo" },
+        "python": { "method": "get_anchor_info" },
+        "stdio": { "op": "get_anchor_info" },
+        "mcp": { "absent": "no MCP action" }
+      }
+    },
+    {
+      "op": "getAnchorInfos",
+      "facade": "GetAnchorInfos",
+      "result": "json",
+      "args": [
+        { "name": "anchorIds", "type": "array", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "GetAnchorInfos" },
+        "npm": { "method": "getAnchorInfos" },
+        "python": { "method": "get_anchor_infos" },
+        "stdio": { "op": "get_anchor_infos" },
+        "mcp": { "absent": "no MCP action" }
+      }
+    },
+    {
+      "op": "getBlockMetadata",
+      "facade": "GetBlockMetadata",
+      "result": "BlockMetadata?",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "GetBlockMetadata" },
+        "npm": { "method": "getBlockMetadata" },
+        "python": { "method": "get_block_metadata" },
+        "stdio": { "op": "get_block_metadata" },
+        "mcp": { "absent": "no MCP action" }
+      }
+    },
+    {
+      "op": "getBlockMetadatas",
+      "facade": "GetBlockMetadatas",
+      "result": "json",
+      "args": [
+        { "name": "anchorIds", "type": "array", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "GetBlockMetadatas" },
+        "npm": { "method": "getBlockMetadatas" },
+        "python": { "method": "get_block_metadatas" },
+        "stdio": { "op": "get_block_metadatas" },
+        "mcp": { "absent": "docxodus_get_content format=blocks calls it over every anchor in the projection; no anchorIds argument and selected by format not action" }
+      }
+    },
+    {
+      "op": "findByText",
+      "facade": "FindByText",
+      "result": "AnchorTarget?",
+      "args": [
+        { "name": "needle", "type": "string", "required": true },
+        { "name": "options", "type": "object", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "FindByText" },
+        "npm": { "method": "findByText" },
+        "python": { "method": "find_by_text" },
+        "stdio": { "op": "find_by_text" },
+        "mcp": { "absent": "no MCP action" }
+      }
+    },
+    {
+      "op": "findAllByText",
+      "facade": "FindAllByText",
+      "result": "AnchorTarget[]",
+      "args": [
+        { "name": "needle", "type": "string", "required": true },
+        { "name": "options", "type": "object", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "FindAllByText" },
+        "npm": { "method": "findAllByText" },
+        "python": { "method": "find_all_by_text" },
+        "stdio": { "op": "find_all_by_text" },
+        "mcp": { "absent": "no MCP action" }
+      }
+    },
+    {
+      "op": "findByRegex",
+      "facade": "FindByRegex",
+      "result": "AnchorTarget[]",
+      "args": [
+        { "name": "pattern", "type": "string", "required": true },
+        { "name": "regexOptions", "type": "int", "required": true },
+        { "name": "options", "type": "object", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "FindByRegex" },
+        "npm": { "method": "findByRegex", "defaults": { "regexOptions": 0 } },
+        "python": { "method": "find_by_regex", "defaults": { "regexOptions": 0 } },
+        "stdio": { "op": "find_by_regex", "defaults": { "regexOptions": 0 } },
+        "mcp": { "absent": "no MCP action" }
+      }
+    },
+    {
+      "op": "findByKind",
+      "facade": "FindByKind",
+      "result": "AnchorTarget[]",
+      "args": [
+        { "name": "kind", "type": "string", "required": true },
+        { "name": "scope", "type": "string", "required": false },
+        { "name": "citation", "type": "object", "required": false },
+        { "name": "maxResults", "type": "int", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "FindByKind" },
+        "npm": { "method": "findByKind" },
+        "python": { "method": "find_by_kind" },
+        "stdio": { "op": "find_by_kind" },
+        "mcp": { "absent": "reachable only as docxodus_search mode=kind (kind passed as query, no scope), selected by mode not action" }
+      }
+    },
+    {
+      "op": "findByLabel",
+      "facade": "FindByLabel",
+      "result": "json",
+      "args": [
+        { "name": "labelId", "type": "string", "required": true },
+        { "name": "citation", "type": "object", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "FindByLabel" },
+        "npm": { "method": "findByLabel" },
+        "python": { "method": "find_by_label" },
+        "stdio": { "op": "find_by_label" },
+        "mcp": { "absent": "no MCP action" }
+      }
+    },
+    {
+      "op": "findPlaceholders",
+      "facade": "FindPlaceholders",
+      "result": "TemplatePlaceholder[]",
+      "args": [
+        { "name": "kinds", "type": "int", "required": true },
+        { "name": "scope", "type": "int", "required": true },
+        { "name": "contextChars", "type": "int", "required": false, "default": 80 },
+        { "name": "boundary", "type": "int", "required": true },
+        { "name": "citation", "type": "object", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "FindPlaceholders" },
+        "npm": { "method": "findPlaceholders", "defaults": { "kinds": 7, "scope": 1, "boundary": 0 } },
+        "python": { "method": "find_placeholders", "defaults": { "kinds": 7, "scope": 1, "boundary": 0 } },
+        "stdio": { "op": "find_placeholders", "defaults": { "kinds": 7, "scope": 1, "boundary": 0 } },
+        "mcp": { "absent": "no MCP action" }
+      }
+    },
+    {
+      "op": "remainingPlaceholders",
+      "facade": "RemainingPlaceholders",
+      "result": "TemplatePlaceholder[]",
+      "args": [
+        { "name": "kinds", "type": "int", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "RemainingPlaceholders" },
+        "npm": { "method": "remainingPlaceholders", "defaults": { "kinds": 7 } },
+        "python": { "method": "remaining_placeholders", "defaults": { "kinds": 7 } },
+        "stdio": { "op": "remaining_placeholders", "defaults": { "kinds": 7 } },
+        "mcp": { "absent": "no MCP action" }
+      }
+    },
+    {
+      "op": "grep",
+      "facade": "Grep",
+      "result": "TextMatch[]",
+      "args": [
+        { "name": "pattern", "type": "string", "required": true },
+        { "name": "regexOptions", "type": "int", "required": false, "default": 0 },
+        { "name": "scope", "type": "int", "required": false, "default": 1 },
+        { "name": "contextChars", "type": "int", "required": false, "default": 80 },
+        { "name": "whitespace", "type": "int", "required": false, "default": 0 },
+        { "name": "boundary", "type": "int", "required": false, "default": 0 },
+        { "name": "citation", "type": "object", "required": false },
+        { "name": "maxResults", "type": "int", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "Grep" },
+        "npm": { "method": "grep" },
+        "python": { "method": "grep" },
+        "stdio": { "op": "grep" },
+        "mcp": { "absent": "reachable only as docxodus_search mode=text|regex, selected by mode not action, with caseSensitive in place of regexOptions, a string scope, and no whitespace or boundary" }
+      }
+    },
+    {
+      "op": "grepCrossBlock",
+      "facade": "GrepCrossBlock",
+      "result": "CrossBlockMatch[]",
+      "args": [
+        { "name": "pattern", "type": "string", "required": true },
+        { "name": "regexOptions", "type": "int", "required": false, "default": 0 },
+        { "name": "scope", "type": "int", "required": false, "default": 1 },
+        { "name": "contextChars", "type": "int", "required": false, "default": 80 },
+        { "name": "whitespace", "type": "int", "required": false, "default": 0 },
+        { "name": "boundary", "type": "int", "required": false, "default": 0 },
+        { "name": "citation", "type": "object", "required": false },
+        { "name": "maxResults", "type": "int", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "GrepCrossBlock" },
+        "npm": { "method": "grepCrossBlock" },
+        "python": { "method": "grep_cross_block" },
+        "stdio": { "op": "grep_cross_block" },
+        "mcp": { "absent": "no MCP action" }
+      }
+    },
+    {
+      "op": "getVersion",
+      "facade": "GetVersionJson",
+      "result": "json",
+      "args": [],
+      "transports": {
+        "wasm": { "method": "GetVersion" },
+        "npm": { "method": "getVersion" },
+        "python": { "method": "get_version" },
+        "stdio": { "op": "get_version" },
+        "mcp": { "absent": "reachable only as docxodus_get_content format=version, selected by format not action" }
+      }
+    },
+    {
+      "op": "getPackageContentHash",
+      "facade": "GetPackageContentHash",
+      "result": "string",
+      "args": [],
+      "transports": {
+        "wasm": { "method": "GetPackageContentHash" },
+        "npm": { "absent": "no DocxSession method; previewBatch calls the bridge export internally" },
+        "python": { "absent": "no Python method (the stdio host has no op for it)" },
+        "stdio": { "absent": "no stdio op" },
+        "mcp": { "absent": "no MCP action" }
+      }
+    },
+    {
+      "op": "registerPageMap",
+      "facade": "RegisterPageMap",
+      "result": "PageMapRegistrationResult",
+      "args": [
+        { "name": "pageMap", "type": "object", "required": true },
+        { "name": "expectedRendererFingerprint", "type": "string", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "RegisterPageMap" },
+        "npm": { "method": "registerPageMap" },
+        "python": { "method": "register_page_map" },
+        "stdio": { "op": "register_page_map" },
+        "mcp": { "tool": "docxodus_pagination", "action": "register" }
+      }
+    },
+    {
+      "op": "getPageMapStatus",
+      "facade": "GetPageMapStatus",
+      "result": "PageMapStatus",
+      "args": [
+        { "name": "citation", "type": "object", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "GetPageMapStatus" },
+        "npm": { "method": "getPageMapStatus" },
+        "python": { "method": "get_page_map_status" },
+        "stdio": { "op": "get_page_map_status" },
+        "mcp": { "tool": "docxodus_pagination", "action": "status" }
+      }
+    },
+    {
+      "op": "getPageCitation",
+      "facade": "GetPageCitation",
+      "result": "PageCitation",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "citation", "type": "object", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "GetPageCitation" },
+        "npm": { "method": "getPageCitation" },
+        "python": { "method": "get_page_citation" },
+        "stdio": { "op": "get_page_citation" },
+        "mcp": { "tool": "docxodus_pagination", "action": "cite" }
+      }
+    },
+    {
+      "op": "exists",
+      "facade": "Exists",
+      "result": "bool",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "Exists" },
+        "npm": { "method": "exists" },
+        "python": { "method": "exists" },
+        "stdio": { "op": "exists" },
+        "mcp": { "absent": "no MCP action; an agent resolves anchors through docxodus_search and docxodus_get_content" }
+      }
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "$comment": "One description of the footnote and endnote session ops and how each transport names them (issue #982). SessionOpDescriptionDriftTests checks every transport against it; see docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names; argNames, defaults, requires and absent on a transport are recorded divergences, not the target. ",
+  "family": "notes",
+  "ops": [
+    {
+      "op": "insertFootnote",
+      "facade": "InsertFootnote",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "characterOffset", "type": "int", "required": true },
+        { "name": "markdown", "type": "markdown", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "InsertFootnote" },
+        "npm": { "method": "insertFootnote" },
+        "python": { "method": "insert_footnote" },
+        "stdio": { "op": "insert_footnote" },
+        "mcp": { "tool": "docxodus_create", "action": "insert_footnote" }
+      }
+    },
+    {
+      "op": "insertEndnote",
+      "facade": "InsertEndnote",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "characterOffset", "type": "int", "required": true },
+        { "name": "markdown", "type": "markdown", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "InsertEndnote" },
+        "npm": { "method": "insertEndnote" },
+        "python": { "method": "insert_endnote" },
+        "stdio": { "op": "insert_endnote" },
+        "mcp": { "tool": "docxodus_create", "action": "insert_endnote" }
+      }
+    },
+    {
+      "op": "listNotes",
+      "facade": "ListNotes",
+      "result": "NoteListEntry[]",
+      "args": [
+        { "name": "endnotes", "type": "boolean", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "ListNotes" },
+        "npm": { "absent": "no DocxSession method; the editor calls the ListNotes bridge export directly" },
+        "python": { "absent": "no client method" },
+        "stdio": { "absent": "no stdio op" },
+        "mcp": { "absent": "no MCP action" }
+      }
+    }
+  ]
+}

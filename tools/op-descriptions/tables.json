@@ -1,0 +1,267 @@
+{
+  "$comment": "One description of the table session ops and how each transport names them (issue #982). SessionOpDescriptionDriftTests checks every transport against it; see docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names; argNames, defaults, requires and absent on a transport are recorded divergences, not the target. flattens (on mcp) records an object argument whose fields the MCP tool takes as top-level properties instead: field name -> MCP property.",
+  "family": "tables",
+  "ops": [
+    {
+      "op": "insertTable",
+      "facade": "InsertTable",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "position", "type": "position", "required": true },
+        { "name": "rows", "type": "int", "required": true },
+        { "name": "columns", "type": "int", "required": true },
+        { "name": "options", "type": "object", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "InsertTable" },
+        "npm": { "method": "insertTable" },
+        "python": { "method": "insert_table" },
+        "stdio": { "op": "insert_table" },
+        "mcp": { "tool": "docxodus_table", "action": "insert", "aliases": [ { "tool": "docxodus_create", "action": "insert_table" } ], "defaults": { "position": "after" }, "flattens": { "options": { "borderless": "borderless", "cellAlignment": "cellAlignment", "cellContents": "cellContents", "columnWidths": "columnWidths" } } }
+      }
+    },
+    {
+      "op": "insertTableRow",
+      "facade": "InsertTableRow",
+      "result": "EditResult",
+      "args": [
+        { "name": "cellAnchorId", "type": "anchor", "required": true },
+        { "name": "position", "type": "position", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "InsertTableRow" },
+        "npm": { "method": "insertTableRow" },
+        "python": { "method": "insert_table_row" },
+        "stdio": { "op": "insert_table_row" },
+        "mcp": { "tool": "docxodus_table", "action": "insert_row", "defaults": { "position": "after" } }
+      }
+    },
+    {
+      "op": "insertTableColumn",
+      "facade": "InsertTableColumn",
+      "result": "EditResult",
+      "args": [
+        { "name": "cellAnchorId", "type": "anchor", "required": true },
+        { "name": "position", "type": "position", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "InsertTableColumn" },
+        "npm": { "method": "insertTableColumn" },
+        "python": { "method": "insert_table_column" },
+        "stdio": { "op": "insert_table_column" },
+        "mcp": { "tool": "docxodus_table", "action": "insert_column", "defaults": { "position": "after" } }
+      }
+    },
+    {
+      "op": "deleteTableRow",
+      "facade": "DeleteTableRow",
+      "result": "EditResult",
+      "args": [
+        { "name": "cellAnchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "DeleteTableRow" },
+        "npm": { "method": "deleteTableRow" },
+        "python": { "method": "delete_table_row" },
+        "stdio": { "op": "delete_table_row" },
+        "mcp": { "tool": "docxodus_table", "action": "delete_row" }
+      }
+    },
+    {
+      "op": "deleteTableColumn",
+      "facade": "DeleteTableColumn",
+      "result": "EditResult",
+      "args": [
+        { "name": "cellAnchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "DeleteTableColumn" },
+        "npm": { "method": "deleteTableColumn" },
+        "python": { "method": "delete_table_column" },
+        "stdio": { "op": "delete_table_column" },
+        "mcp": { "tool": "docxodus_table", "action": "delete_column" }
+      }
+    },
+    {
+      "op": "mergeCells",
+      "facade": "MergeCells",
+      "result": "EditResult",
+      "args": [
+        { "name": "cellAnchorId", "type": "anchor", "required": true },
+        { "name": "rowSpan", "type": "int", "required": true },
+        { "name": "colSpan", "type": "int", "required": true },
+        { "name": "mergeContent", "type": "enum", "required": false, "default": "append", "values": ["append", "discard", "reject"] }
+      ],
+      "transports": {
+        "wasm": { "method": "MergeCells" },
+        "npm": { "method": "mergeCells" },
+        "python": { "method": "merge_cells" },
+        "stdio": { "op": "merge_cells", "argNames": { "colSpan": "columnSpan", "mergeContent": "content" } },
+        "mcp": { "tool": "docxodus_table", "action": "merge_cells", "defaults": { "rowSpan": 1, "colSpan": 1 } }
+      }
+    },
+    {
+      "op": "unmergeCells",
+      "facade": "UnmergeCells",
+      "result": "EditResult",
+      "args": [
+        { "name": "cellAnchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "UnmergeCells" },
+        "npm": { "method": "unmergeCells" },
+        "python": { "method": "unmerge_cells" },
+        "stdio": { "op": "unmerge_cells" },
+        "mcp": { "tool": "docxodus_table", "action": "unmerge_cells" }
+      }
+    },
+    {
+      "op": "replaceCellContent",
+      "facade": "ReplaceCellContent",
+      "result": "EditResult",
+      "args": [
+        { "name": "cellAnchorId", "type": "anchor", "required": true },
+        { "name": "markdown", "type": "markdown", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "ReplaceCellContent" },
+        "npm": { "method": "replaceCellContent" },
+        "python": { "method": "replace_cell_content" },
+        "stdio": { "op": "replace_cell_content" },
+        "mcp": { "tool": "docxodus_table", "action": "replace_cell_content" }
+      }
+    },
+    {
+      "op": "setCellShading",
+      "facade": "SetCellShading",
+      "result": "EditResult",
+      "args": [
+        { "name": "cellAnchorId", "type": "anchor", "required": true },
+        { "name": "fill", "type": "string", "required": true },
+        { "name": "shadingScope", "type": "enum", "required": false, "default": "cell", "values": ["cell", "row"] }
+      ],
+      "transports": {
+        "wasm": { "method": "SetCellShading" },
+        "npm": { "method": "setCellShading" },
+        "python": { "method": "set_cell_shading" },
+        "stdio": { "op": "set_cell_shading", "defaults": { "fill": "" } },
+        "mcp": { "tool": "docxodus_table", "action": "set_shading", "defaults": { "fill": "" } }
+      }
+    },
+    {
+      "op": "setColumnWidths",
+      "facade": "SetColumnWidths",
+      "result": "EditResult",
+      "args": [
+        { "name": "cellAnchorId", "type": "anchor", "required": true },
+        { "name": "widths", "type": "array", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "SetColumnWidths" },
+        "npm": { "method": "setColumnWidths" },
+        "python": { "method": "set_column_widths" },
+        "stdio": { "op": "set_column_widths" },
+        "mcp": { "tool": "docxodus_table", "action": "set_column_widths" }
+      }
+    },
+    {
+      "op": "setRepeatHeaderRow",
+      "facade": "SetRepeatHeaderRow",
+      "result": "EditResult",
+      "args": [
+        { "name": "cellAnchorId", "type": "anchor", "required": true },
+        { "name": "repeat", "type": "boolean", "required": false, "default": true }
+      ],
+      "transports": {
+        "wasm": { "method": "SetRepeatHeaderRow", "requires": ["repeat"] },
+        "npm": { "method": "setRepeatHeaderRow", "requires": ["repeat"] },
+        "python": { "method": "set_repeat_header_row", "requires": ["repeat"] },
+        "stdio": { "op": "set_repeat_header_row" },
+        "mcp": { "tool": "docxodus_table", "action": "set_repeat_header_row" }
+      }
+    },
+    {
+      "op": "setTableBorders",
+      "facade": "SetTableBorders",
+      "result": "EditResult",
+      "args": [
+        { "name": "cellAnchorId", "type": "anchor", "required": true },
+        { "name": "spec", "type": "object", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "SetTableBorders" },
+        "npm": { "method": "setTableBorders" },
+        "python": { "method": "set_table_borders" },
+        "stdio": { "op": "set_table_borders" },
+        "mcp": { "tool": "docxodus_table", "action": "set_borders", "flattens": { "spec": { "scope": "borderScope", "style": "borderStyle", "size": "borderSize", "color": "borderColor" } } }
+      }
+    },
+    {
+      "op": "setTableRowOptions",
+      "facade": "SetTableRowOptions",
+      "result": "EditResult",
+      "args": [
+        { "name": "cellAnchorId", "type": "anchor", "required": true },
+        { "name": "repeatHeader", "type": "boolean", "required": false },
+        { "name": "allowBreakAcrossPages", "type": "boolean", "required": false },
+        { "name": "heightTwips", "type": "int", "required": false },
+        { "name": "heightRule", "type": "enum", "required": false, "default": "atLeast", "values": ["auto", "atLeast", "exact"] }
+      ],
+      "transports": {
+        "wasm": { "method": "SetTableRowOptions" },
+        "npm": { "method": "setTableRowOptions" },
+        "python": { "method": "set_table_row_options" },
+        "stdio": { "op": "set_table_row_options" },
+        "mcp": { "tool": "docxodus_table", "action": "set_row_options" }
+      }
+    },
+    {
+      "op": "getTableMetadata",
+      "facade": "GetTableMetadata",
+      "result": "TableMetadataResult",
+      "args": [
+        { "name": "tableAnchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "GetTableMetadata" },
+        "npm": { "method": "getTableMetadata" },
+        "python": { "method": "get_table_metadata" },
+        "stdio": { "op": "get_table_metadata" },
+        "mcp": { "tool": "docxodus_table", "action": "get_metadata" }
+      }
+    },
+    {
+      "op": "resolveTableCellAnchor",
+      "facade": "ResolveTableCellAnchor",
+      "result": "TableCellResolutionResult",
+      "args": [
+        { "name": "cellAnchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "ResolveTableCellAnchor" },
+        "npm": { "method": "resolveTableCellAnchor" },
+        "python": { "method": "resolve_table_cell_anchor" },
+        "stdio": { "op": "resolve_table_cell_anchor" },
+        "mcp": { "tool": "docxodus_table", "action": "resolve_cell_anchor" }
+      }
+    },
+    {
+      "op": "resolveTableCellCoordinate",
+      "facade": "ResolveTableCellCoordinate",
+      "result": "TableCellResolutionResult",
+      "args": [
+        { "name": "tableAnchorId", "type": "anchor", "required": true },
+        { "name": "rowIndex", "type": "int", "required": true },
+        { "name": "columnIndex", "type": "int", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "ResolveTableCellCoordinate" },
+        "npm": { "method": "resolveTableCellCoordinate" },
+        "python": { "method": "resolve_table_cell_coordinate" },
+        "stdio": { "op": "resolve_table_cell_coordinate" },
+        "mcp": { "tool": "docxodus_table", "action": "resolve_cell_coordinate" }
+      }
+    }
+  ]
+}
