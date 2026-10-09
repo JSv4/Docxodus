@@ -95,6 +95,14 @@ public sealed partial class DocxSession
         _doc!.Dispose();
         _stream!.Position = 0;
         _doc = WordprocessingDocument.Open(_stream, isEditable: true);
+
+        // The reopened parts hold exactly the snapshot's bytes: share its arrays rather than reading
+        // them back, so the undo budget keeps counting each image once.
+        var restored = snapshot.ImageParts.ToDictionary(p => p.PartUri, p => p.Bytes, StringComparer.Ordinal);
+        foreach (var owner in OwnedPartRelationships.StoryParts(_doc))
+            foreach (var relationship in OwnedPartRelationships.ImageRelationships(owner.Part))
+                if (restored.TryGetValue(relationship.Target.Uri.ToString(), out var bytes))
+                    _imageBytes.AddOrUpdate(relationship.Target, bytes);
     }
 
     /// <summary>A text/format/layout-only undo already has the snapshot's binary topology. Avoid

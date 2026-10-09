@@ -129,6 +129,20 @@ public class DocxSessionSnapshotImageSharingTests
         Assert.Equal(replacement, LiveImageBytes(session));
     }
 
+    /// <summary>An undo that restores image topology reopens the package; the restored parts must
+    /// still share the snapshot's arrays, or every older snapshot's copy is counted a second time.</summary>
+    [Fact]
+    public void UndoThatRestoresAnImage_KeepsSharingTheSnapshotsBytes()
+    {
+        using var session = new DocxSession(DocumentWithImage(5));
+        var original = Assert.Single(session.TakeSnapshot().ImageParts).Bytes;
+        Assert.True(session.ReplaceImage(Assert.Single(session.ListImages()).Id, Png(32, 32, 2048, fill: 7)).Success);
+
+        Assert.True(session.Undo());
+
+        Assert.Same(original, Assert.Single(session.TakeSnapshot().ImageParts).Bytes);
+    }
+
     [Fact]
     public void UndoRing_CountsAPayloadSharedByManyEntriesOnce()
     {
