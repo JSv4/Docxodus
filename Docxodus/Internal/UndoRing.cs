@@ -37,11 +37,13 @@ internal sealed class UndoRing<T>
     private readonly int _capacity;
     private readonly long _budgetBytes;
     private readonly Func<T, long>? _costOf;
+    private readonly Func<T, IEnumerable<(object Payload, long Bytes)>>? _sharedPayloadsOf;
     private readonly Action<T>? _onRecordPreOp;
     private readonly Action<T>? _onPopUndo;
 
     private long _undoBytes;
     private long _redoBytes;
+    private long? _sharedBytes;
 
     private readonly record struct Entry(T Snapshot, long CostBytes);
 
@@ -62,16 +64,22 @@ internal sealed class UndoRing<T>
     /// undo and redo sides together. Values &lt;= 0 disable the budget bound (depth only).</param>
     /// <param name="costOf">Approximate retained cost of one snapshot. Null (or a zero budget)
     /// leaves the ring depth-bounded only, exactly as before.</param>
+    /// <param name="sharedPayloadsOf">Payloads a snapshot may share, by reference, with other
+    /// snapshots (image bytes, issue #965), and their sizes. The ring counts each distinct payload
+    /// once across both stacks, however many entries hold it; <paramref name="costOf"/> covers
+    /// only what a snapshot holds alone.</param>
     public UndoRing(
         int capacity,
         long budgetBytes = 0,
         Func<T, long>? costOf = null,
         Action<T>? onRecordPreOp = null,
-        Action<T>? onPopUndo = null)
+        Action<T>? onPopUndo = null,
+        Func<T, IEnumerable<(object Payload, long Bytes)>>? sharedPayloadsOf = null)
     {
         _capacity = capacity > 0 ? capacity : 1;
         _budgetBytes = budgetBytes > 0 ? budgetBytes : 0;
         _costOf = costOf;
+        _sharedPayloadsOf = sharedPayloadsOf;
         _onRecordPreOp = onRecordPreOp;
         _onPopUndo = onPopUndo;
     }
@@ -84,7 +92,23 @@ internal sealed class UndoRing<T>
     public int RedoCount => _redo.Count;
 
     /// <summary>Approximate bytes currently retained across both stacks.</summary>
-    public long RetainedBytes => _undoBytes + _redoBytes;
+    public long RetainedBytes => _undoBytes + _redoBytes + SharedBytes;
+
+    /// <summary>The distinct shared payloads held by any entry, each counted once. Recomputed after
+    /// the stacks change rather than reference-counted, so every path that adds or drops entries
+    /// (including <see cref="RestoreState"/>) stays correct by construction.</summary>
+    private long SharedBytes => _sharedBytes ??= ComputeSharedBytes();
+
+    private long ComputeSharedBytes()
+    {
+        if (_budgetBytes <= 0 || _sharedPayloadsOf is null) return 0;
+        var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        long total = 0;
+        foreach (var entry in _undo.Concat(_redo))
+            foreach (var (payload, bytes) in _sharedPayloadsOf(entry.Snapshot))
+                if (seen.Add(payload)) total += bytes;
+        return total;
+    }
 
     /// <summary>True once the byte budget (rather than the depth cap) has discarded at least
     /// one entry. Sticky for the session's lifetime — it answers "was history ever trimmed for
@@ -97,6 +121,7 @@ internal sealed class UndoRing<T>
         var costBytes = CostOf(preOpSnapshot);
         _undo.AddLast(new Entry(preOpSnapshot, costBytes));
         _undoBytes += costBytes;
+        _sharedBytes = null;
         ClearRedo();
         Trim();
         _onRecordPreOp?.Invoke(preOpSnapshot);
@@ -109,6 +134,7 @@ internal sealed class UndoRing<T>
         var entry = _undo.Last!.Value;
         _undo.RemoveLast();
         _undoBytes -= entry.CostBytes;
+        _sharedBytes = null;
         _onPopUndo?.Invoke(entry.Snapshot);
         return (entry.Snapshot, true);
     }
@@ -119,6 +145,7 @@ internal sealed class UndoRing<T>
         var costBytes = CostOf(postOpSnapshot);
         _redo.AddLast(new Entry(postOpSnapshot, costBytes));
         _redoBytes += costBytes;
+        _sharedBytes = null;
         Trim();
     }
 
@@ -129,6 +156,7 @@ internal sealed class UndoRing<T>
         var entry = _redo.Last!.Value;
         _redo.RemoveLast();
         _redoBytes -= entry.CostBytes;
+        _sharedBytes = null;
         return (entry.Snapshot, true);
     }
 
@@ -138,6 +166,7 @@ internal sealed class UndoRing<T>
         var costBytes = CostOf(snapshot);
         _undo.AddLast(new Entry(snapshot, costBytes));
         _undoBytes += costBytes;
+        _sharedBytes = null;
         Trim();
     }
 
@@ -146,6 +175,7 @@ internal sealed class UndoRing<T>
         _undo.Clear();
         ClearRedo();
         _undoBytes = 0;
+        _sharedBytes = null;
     }
 
     /// <summary>Capture the exact undo/redo topology for an enclosing transaction.</summary>
@@ -172,6 +202,7 @@ internal sealed class UndoRing<T>
             _redo.AddLast(new Entry(snapshot, costBytes));
         _undoBytes = state.UndoBytes;
         _redoBytes = state.RedoBytes;
+        _sharedBytes = null;
         EvictedForMemory = state.EvictedForMemory;
     }
 
@@ -179,6 +210,7 @@ internal sealed class UndoRing<T>
     {
         _redo.Clear();
         _redoBytes = 0;
+        _sharedBytes = null;
     }
 
     /// <summary>
@@ -192,6 +224,7 @@ internal sealed class UndoRing<T>
         {
             _undoBytes -= _undo.First!.Value.CostBytes;
             _undo.RemoveFirst();
+            _sharedBytes = null;
         }
 
         if (_budgetBytes <= 0) return;
@@ -200,6 +233,7 @@ internal sealed class UndoRing<T>
         {
             _redoBytes -= _redo.First!.Value.CostBytes;
             _redo.RemoveFirst();
+            _sharedBytes = null;
             EvictedForMemory = true;
         }
 
@@ -209,6 +243,7 @@ internal sealed class UndoRing<T>
         {
             _undoBytes -= _undo.First!.Value.CostBytes;
             _undo.RemoveFirst();
+            _sharedBytes = null;
             EvictedForMemory = true;
         }
 

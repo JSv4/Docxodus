@@ -47,6 +47,7 @@ jobs:
         run: |
           dotnet build benchmarks/complex-form-doc/ComplexFormBenchmark.csproj -c Release
           dotnet build benchmarks/docxdiff-stress/DocxDiffStress.csproj -c Release
+          dotnet build benchmarks/session-edit-cost/SessionEditCost.csproj -c Release
           dotnet build tools/delivery/delivery.csproj -c Release
           dotnet build tools/diffharness/diffharness.csproj -c Release
           dotnet build tools/manifest-fuzz/afl/aflharness.csproj -c Release

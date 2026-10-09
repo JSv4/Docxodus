@@ -151,7 +151,8 @@ public sealed partial class DocxSession : IDisposable
             _settings.UndoMemoryBudgetBytes,
             static snapshot => snapshot.ApproximateBytes,
             onRecordPreOp: _ => OnHistoryRecordPreOp(),
-            onPopUndo: snapshot => OnHistoryPopUndo(snapshot));
+            onPopUndo: snapshot => OnHistoryPopUndo(snapshot),
+            sharedPayloadsOf: static snapshot => snapshot.SharedImagePayloads);
         _stream = new MemoryStream();
         _stream.Write(docxBytes, 0, docxBytes.Length);
         _stream.Position = 0;
@@ -1288,14 +1289,21 @@ public sealed partial class DocxSession : IDisposable
         internal long? LastFormatRevisionTicks { get; init; }
 
         /// <summary>
-        /// Approximate retained heap of this snapshot's cloned part trees, for the undo ring's
-        /// memory budget. Computed lazily and cached: the ring asks for it at most once per
-        /// snapshot, and a session with the budget disabled never asks at all.
+        /// Approximate retained heap this snapshot holds alone (its cloned part trees, or its
+        /// package bytes), for the undo ring's memory budget. Image bytes are not included: they
+        /// are shared by reference across snapshots (issue #965), so the ring counts each distinct
+        /// array once through <see cref="SharedImagePayloads"/>. Computed lazily and cached: the
+        /// ring asks for it at most once per snapshot, and a session with the budget disabled
+        /// never asks at all.
         /// </summary>
         internal long ApproximateBytes =>
             _approximateBytes ??= PackageBytes?.LongLength
-                ?? (Parts.Sum(p => Internal.XmlMemoryEstimator.Estimate(p.Xml))
-                    + ImageParts.Sum(p => (long)p.Bytes.Length));
+                ?? Parts.Sum(p => Internal.XmlMemoryEstimator.Estimate(p.Xml));
+
+        /// <summary>This snapshot's image bytes, which consecutive snapshots share by reference
+        /// while an image is unchanged.</summary>
+        internal System.Collections.Generic.IEnumerable<(object Payload, long Bytes)> SharedImagePayloads =>
+            ImageParts.Select(p => ((object)p.Bytes, (long)p.Bytes.Length));
 
         private long? _approximateBytes;
     }
@@ -1314,6 +1322,7 @@ public sealed partial class DocxSession : IDisposable
         var numberingParts = new System.Collections.Generic.List<(string, string)>();
         var hyperlinkRelationships = new System.Collections.Generic.List<(string, string, string, bool)>();
         var imageParts = new System.Collections.Generic.List<(string, string, byte[])>();
+        var imagePartUris = new System.Collections.Generic.HashSet<string>(StringComparer.Ordinal);
         var imageRelationships = new System.Collections.Generic.List<(string, string, string)>();
         var linkedImageRelationships = new System.Collections.Generic.List<(string, string, string)>();
         var main = _doc!.MainDocumentPart;
@@ -1349,9 +1358,9 @@ public sealed partial class DocxSession : IDisposable
             {
                 imageRelationships.Add((owner.PartUri, relationship.RelationshipId,
                     relationship.Target.Uri.ToString()));
-                if (imageParts.All(part => part.Item1 != relationship.Target.Uri.ToString()))
+                if (imagePartUris.Add(relationship.Target.Uri.ToString()))
                     imageParts.Add((relationship.Target.Uri.ToString(), relationship.Target.ContentType,
-                        Internal.OwnedPartRelationships.ReadPartBytes(relationship.Target)));
+                        SnapshotImageBytes(relationship.Target)));
             }
             foreach (var relationship in Internal.OwnedPartRelationships.ExternalImageRelationships(owner.Part))
                 linkedImageRelationships.Add((owner.PartUri, relationship.Id, relationship.Uri.ToString()));
