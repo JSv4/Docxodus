@@ -52,7 +52,7 @@ The options considered in #982 were:
 - The stdio host or the MCP server, called for real on a seeded session, refuses the described arguments.
 - The stdio host or the MCP server accepts a call that omits a required argument. The exception is an MCP default the description records, which must still be in effect.
 
-Writing the comment family's description surfaced four differences between the stdio host and MCP that no test had pinned. They are listed in #1014.
+Writing the comment family's description surfaced four differences between the stdio host and MCP that no test had pinned. #1014 removed them: the comment is `commentAnchorId` on every transport (the stdio host still accepts `parentAnchorId` and `anchorId` as deprecated aliases), and `DocxSessionOps` owns the `markdown` and `resolved` defaults. The description now records those defaults on the arguments themselves, and the family has no divergences left.
 
 **Stage 2: describe the remaining families.** Text, structure, formatting, tables, notes, revisions, annotations and the rest. Each family is one small PR adding a JSON file and a `[MemberData]` source. Each family's PR records whatever divergences it finds, and files issues for them.
 
