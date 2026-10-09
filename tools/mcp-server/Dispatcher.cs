@@ -1025,13 +1025,11 @@ internal static class Dispatcher
         if (revisedPath is not null)
         {
             var revised = store.Documents.Read(store.Documents.Resolve(revisedPath));
-            var settingsJson = OptStr(args, "author") is { } author
-                ? JsonSerializer.Serialize(new { authorForRevisions = author })
-                : null;
             // One memoized pass serves both products (issue #594) — this used to run the
-            // full comparison twice, once per product.
-            var products = DocxDiffOps.CompareProducts(
-                baseline, revised, settingsJson,
+            // full comparison twice, once per product. It goes through the DocxCompare front door,
+            // comparing the accepted view of each input as the CLI and the browser do (issue #1006).
+            var products = DocxDiffOps.CompareFrontDoorProducts(
+                baseline, revised, DocxDiffOps.FrontDoorSettings(OptStr(args, "author"), caseInsensitive: false),
                 redline: true, revisions: true, editScript: false, semanticChanges: false);
             redline = products.RedlineBytes!;
             revisionsJson = products.RevisionsJson!;
@@ -1131,8 +1129,8 @@ internal static class Dispatcher
             docB64 = Convert.ToBase64String(store.Documents.Read(store.Documents.Resolve(path!))),
         }));
 
-        using var batch = JsonDocument.Parse(DocxDiffOps.CompareBatchJson(
-            baseline, candidatesJson, null, "[\"redline\",\"revisions\"]"));
+        using var batch = JsonDocument.Parse(DocxDiffOps.CompareBatchFrontDoorJson(
+            baseline, candidatesJson, new DocxDiffSettings(), "[\"redline\",\"revisions\"]"));
 
         var summary = new StringBuilder(256);
         summary.Append("{\"results\":[");

@@ -199,7 +199,20 @@ All notable changes to this project will be documented in this file.
   an add or reply without `markdown` adds an empty comment, and a resolve without `resolved` resolves.
   The stdio host used to refuse both calls. `tools/op-descriptions/comments.json` records no
   divergences any more.
-
+- The MCP `docxodus_compare` tool compares through the `DocxCompare` front door (issue #1006), as the
+  `redline` CLI and the browser's `compareDocuments` already did. Two-way and fan-out comparisons now
+  accept each input's own pending tracked changes first, as Word's Compare does. The raw engine it ran
+  before already compared the accepted view of the body, but it copied carried-over parts (headers,
+  footers, unchanged notes) verbatim, so another reviewer's pending changes there leaked into the
+  redline under their original author. Identical packages now return the baseline unchanged, as
+  `DocxCompare.Compare` does. N-way consolidate is unchanged. The Python `docx_diff_*` functions stay
+  on the raw engine, which they mirror; their docstrings now say so and show the opt-in.
+- The HTML converter reads `w:rtl` and `w:bidiVisual` as on/off values (issue #1011). It treated either
+  element as "on" whenever it was present, so `<w:rtl w:val="0"/>`, which Google Docs writes on almost every
+  run it exports, wrapped left-to-right text in right-to-left marks (U+200F). The browser then reordered the
+  run's digits and punctuation: `2026. 10. 07.` displayed roughly as `.07 .10 .2026`. A table with
+  `<w:bidiVisual w:val="0"/>` was likewise laid out right to left. `w:val` values `0`, `false` and `off` now
+  switch both properties off, as Word reads them.
 - Symbol mapping no longer corrupts its process-wide tables when documents are processed on several
   threads at once (issue #974). `UnicodeMapper` keeps one map from `w:sym` elements to characters
   for the whole process, and `SymToChar` checked and added to it without a lock, so concurrent
