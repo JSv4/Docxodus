@@ -1,6 +1,6 @@
 # Session op descriptions
 
-Status: every family described and checked (stages 1 and 2, issue #982). Generation (stage 3) is tracked in #1027.
+Status: every family described and checked (stages 1 and 2, issue #982). Generation (stage 3, issue #1027) has landed for the comment family; the other families can adopt it once their divergences are resolved.
 
 ## The problem
 
@@ -35,6 +35,13 @@ A description lives in `tools/op-descriptions/<family>.json`. For each op it rec
   - `flatAliases` (MCP): deprecated flat top-level properties that the tool still accepts for fields of an object argument it takes nested, recorded as field to MCP property. These are not a divergence in what reaches the facade. `McpNestedOptionsTests` checks them against `tools/mcp-server/ObjectArguments.cs`;
   - `absent`: the transport does not expose the op at all, with the reason.
 
+A family that is generated (stage 3) also carries:
+
+- `"generate": true` at the top level.
+- `mcp.<tool>.properties.<name>.description`: the prose for each argument property the tool's schema advertises, in the order it advertises them. It is per tool, not per argument, because the schema merges every action's arguments into one property list ("add/reply: comment author").
+- `transports.wasm.doc`: the XML summary of the `[JSExport]` shim.
+- `transports.stdio.deprecatedAliases`: an old spelling of an argument the stdio host still accepts, as argument to old name. This is not a divergence: every transport takes the canonical name, and the alias only keeps old callers working.
+
 `tools/op-descriptions/not-described.json` lists the `DocxSessionOps` methods deliberately left out, each with its reason: the lifecycle, transaction, preview and delivery-evidence entry points, which are stateful or composite, plus a few internal or not separately exposed methods.
 
 Divergences are recorded so that they stay visible and can't grow. They are not the target. Each one should eventually be removed in the facade, the way #960 removed per-transport defaults, and then deleted from the file.
@@ -65,14 +72,49 @@ The static checks run over every described op in every family; the checks that c
 
 **Stage 2: describe the remaining families (landed).** Every family is described: about 150 ops in 19 files, from `text` and `tables` to `rendering`. Describing them recorded 186 divergences, filed by kind: argument names that differ between the stdio host and MCP (#1023), defaults supplied by a transport instead of the facade (#1024), object arguments MCP spreads into top-level properties (#1025), and transports that do not expose an op (#1026). Each is to be removed in the facade, as #960 and #1014 did, and then deleted from the file. #1023 removed the argument names: the stdio host takes MCP's name for every argument, keeps its old spelling as a deprecated alias (`DocxSessionJson.AliasedArgument` and its typed readers), and no description records `argNames` any more. `StdioArgumentNameTests` calls the host for each renamed argument and checks it took effect, since the live-call checks here cover only the comment family. #1025 removed the spread object arguments. MCP takes the nested `options`, `rule` or `spec` object and parses it with the same `DocxSessionJson` parser as the stdio host. The flat properties remain as deprecated aliases, recorded as `flatAliases`, and no description records `flattens` any more. `McpNestedOptionsTests` calls MCP for each of the fifteen ops and checks the option took effect.
 
-**Stage 3: generate.** Once a family's description is complete and its divergences resolved, generate the layers that are pure repetition:
+**Stage 3: generate (landed for comments).** Once a family's description is complete and its divergences resolved, the layers that are pure repetition are generated from it. `tools/op-codegen` is a small C# console project (not in `Docxodus.sln`; the test project references it). For every family marked `"generate": true` it writes:
 
-- the stdio host's argument parsing and the MCP argument parsing, both into calls on the facade;
-- the MCP `ToolCatalog` schema properties, which take their prose from a `description` field to be added to the file;
-- the WASM `[JSExport]` shims;
-- the TypeScript and Python type declarations and thin wrappers.
+| Output | Where | What it holds |
+|---|---|---|
+| stdio parsing | `tools/python-host/Generated/<Family>Ops.cs` | `IsGenerated<Family>Op` and `DispatchGenerated<Family>Op`: each op's arguments read from the request and passed to the facade, deprecated aliases included |
+| MCP parsing | `tools/mcp-server/Generated/<Family>Ops.cs` | `RunGenerated<Family>Action` (arguments into the facade call) and `ValidateGenerated<Family>Arguments` (the batch-step check that runs before any step does) |
+| MCP schema | the same file, class `GeneratedMcpSchema` | per tool, `<Tool>Actions` (the action enum members) and `<Tool>Properties` (the argument properties with their prose) |
+| WASM shims | `wasm/DocxodusWasm/DocxSessionBridge.cs`, between `// BEGIN GENERATED <family>` and `// END GENERATED <family>` | one `[JSExport]` method per op |
 
-A generator emits into checked-in files, which keeps review diffs readable and builds offline. A drift test, the stage-1 test reused, fails when the generated output is stale.
+Both dispatchers are `partial` classes, so the generated code calls each transport's own argument helpers (`Str`, `OptStr`, `OptBool`, the span parsers) and throws its own exception type with its own messages. The WASM shims sit in a marked region of the hand-written bridge instead of a file of their own because `SessionOpDescriptionDriftTests` reads the bridge's exports from that one file.
+
+Run it after changing a generated family's description:
+
+```bash
+dotnet run --project tools/op-codegen              # rewrite the generated files
+dotnet run --project tools/op-codegen -- --check   # exit 1 if any is stale
+```
+
+`GeneratedSessionPlumbingTests` runs the generator in memory and fails when a checked-in file differs from its output (`OPG001`), so a description change without a regenerate, or a hand edit of generated code, fails the build's tests. It also checks that a description change does change the output (`OPG003`), that the description lists arguments in the facade's parameter order with matching types (`OPG004`), that no MCP schema names a property twice (`OPG005`), that each tool's schema carries its generated actions and properties in order (`OPG009`), and that no generated code lives outside the generator's outputs: no orphaned generated file, and no generated WASM shim defined outside its region (`OPG010`).
+
+The generator relies on a few rules, and refuses a description that breaks them rather than guessing:
+
+- **Arguments are positional.** The description lists them in the facade's parameter order (after `handle`, leaving out `preconditions`). The WASM shim takes them in the same order, which is the order the npm wrapper passes them.
+- **Types it knows.** `anchor`, `string` and `markdown` are strings; `boolean`; and `charSpan`, an optional `{ start, length }` object. Anything else fails generation with the argument named, and supporting it means adding one reader per transport to `Emitters.cs`.
+- **Defaults belong to the facade.** An optional argument is passed to the facade as null when absent. On WASM, where JavaScript passes every argument, an optional string with no default arrives as `""` and becomes null; one with a default passes through for the facade to apply.
+- **One name, several ops.** When two ops share a stdio op or an MCP action, as `addComment` and `addCommentToRevision` share `add_comment` and `docxodus_comment add`, the caller picks one by naming exactly one required argument that the others lack (`anchorId` or `revisionId`). Naming none or both is refused, and so is naming another op's optional argument (`span` with `revisionId`).
+- **No divergences.** A family marked `generate` cannot record `argNames`, `defaults`, `requires`, `flattens`, `absent` or `aliases` on any transport, because generated code has one spelling and one default per argument.
+
+What stays hand-written for a generated family:
+
+- The grouped-intent tool shell in the MCP dispatcher: which tool routes to the family, the `Guarded` precondition wrapper, the result envelope (`docxodus_comment list` returns `{"comments": [...]}` where the stdio host returns the bare array), and the tool's lead schema properties (`sessionId`, `preconditions`), into which `ToolCatalog` splices the generated fragments.
+- The mutation lists both dispatchers keep: the stdio host's `IsMutation` and `IsBatchableMutation`, the MCP batch allowlist, and the MCP `MutationTarget` precondition inference. The description does not yet say which ops mutate.
+- The TypeScript and Python types and wrappers. They are not generated yet; the drift test still checks them against the description.
+
+**Adopting the next family:**
+
+1. Resolve the family's recorded divergences in the facade (#1023–#1026), and delete them from its description.
+2. Add `"generate": true`, the `mcp.<tool>.properties` prose (moved verbatim from `ToolCatalog`), each op's `wasm.doc`, and any stdio `deprecatedAliases`. Order the ops so that the MCP action enum comes out as it is today.
+3. Add an empty `// BEGIN GENERATED <family>` / `// END GENERATED <family>` region to `DocxSessionBridge.cs` where the family's shims are, delete the hand-written shims, and run the generator.
+4. In the stdio dispatcher, replace the family's cases with `_ when IsGenerated<Family>Op(op) => DispatchGenerated<Family>Op(op, args)`. In the MCP dispatcher, have the tool shell call `RunGenerated<Family>Action`, and route the family's batch-step validation cases to `ValidateGenerated<Family>Arguments`. In `ToolCatalog`, make the tool's schema a `$$"""` literal and splice in `{{GeneratedMcpSchema.<Tool>Actions}}` and `{{GeneratedMcpSchema.<Tool>Properties}}`.
+5. Delete the hand-written parsing the generated code replaced. Run the generator again with `--check`, the drift tests and the transport tests.
+
+If a family's ops are spread over an MCP tool whose other actions are hand-written, splice the generated action members and properties next to the hand-written ones; `OPG005` catches a property both sides advertise. A stdio op or MCP tool shared by two generated families is not supported yet (each family's dispatch method throws on names it does not know), and the generator refuses it.
 
 ### What stays hand-written
 

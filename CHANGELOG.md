@@ -32,6 +32,18 @@ All notable changes to this project will be documented in this file.
   it. Writing the description surfaced four argument-name and default differences between the stdio
   host and MCP, which are now recorded and pinned (#1014). The design, and the path from checking
   to generating the per-transport layers, is in `docs/architecture/session_op_descriptions.md`.
+- The comment ops' per-transport plumbing is now generated from their description (issue #1027).
+  `tools/op-codegen` reads `tools/op-descriptions/comments.json` and writes the stdio host's and the
+  MCP server's argument parsing (`Generated/CommentsOps.cs` in each), the MCP server's batch-step
+  validation, the `docxodus_comment` schema's action list and argument properties, and the WASM
+  `[JSExport]` shims, which go in a marked region of `DocxSessionBridge.cs`. The hand-written
+  dispatchers route the comment ops to the generated code. The description gained the MCP property
+  prose, the WASM doc comments and the stdio host's deprecated aliases (`parentAnchorId` and
+  `anchorId` for `commentAnchorId`). Behaviour is unchanged: the generated schema is the same text as
+  before. The WASM shims' parameters are renamed to the canonical argument names, which JavaScript does not
+  see because it passes them by position. `GeneratedSessionPlumbingTests` fails when the checked-in
+  output is stale; run `dotnet run --project tools/op-codegen` after changing a generated family's
+  description. Other families can adopt it once their recorded divergences are resolved.
 - `DocxEditor` reports edits the engine rejects (issue #969). The new `onEditFailed` option receives
   the engine's error code and message and the anchor involved; with no handler, the editor logs the
   rejection with `console.warn` instead of dropping it.
