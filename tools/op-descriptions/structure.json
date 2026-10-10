@@ -77,8 +77,8 @@
       "transports": {
         "wasm": { "method": "InsertHorizontalRule" },
         "npm": { "method": "insertHorizontalRule" },
-        "python": { "absent": "no Python wrapper" },
-        "stdio": { "absent": "no stdio op" },
+        "python": { "method": "insert_horizontal_rule" },
+        "stdio": { "op": "insert_horizontal_rule" },
         "mcp": { "tool": "docxodus_create", "action": "insert_horizontal_rule", "flatAliases": { "rule": { "style": "ruleStyle" } }, "$comment": "The deprecated flat ruleStyle keeps its narrower enum (single | double | thick); rule.style takes any OOXML border style." }
       }
     },
@@ -91,10 +91,10 @@
       ],
       "transports": {
         "wasm": { "method": "ValidMoveTargets" },
-        "npm": { "absent": "no DocxSession wrapper; npm/src/editor.ts calls the bridge export directly" },
-        "python": { "absent": "no Python wrapper" },
-        "stdio": { "absent": "no stdio op" },
-        "mcp": { "absent": "no MCP action" }
+        "npm": { "absent": "kept off: the block editor's drag-and-drop gate, called through the bridge export by npm/src/editor.ts" },
+        "python": { "absent": "kept off: a drag-and-drop UI gate with no stdio op to call; move_block refuses an illegal move itself" },
+        "stdio": { "absent": "kept off: a drag-and-drop UI gate; move_block refuses an illegal move itself" },
+        "mcp": { "absent": "kept off: a drag-and-drop UI gate; docxodus_edit move_block refuses an illegal move itself" }
       }
     }
   ]

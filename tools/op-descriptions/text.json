@@ -51,7 +51,7 @@
         "npm": { "method": "replaceMatch" },
         "python": { "method": "replace_text_at_span" },
         "stdio": { "op": "replace_text_at_span" },
-        "mcp": { "absent": "no MCP action; docxodus_edit exposes only replace_text_at_span_with_format" }
+        "mcp": { "absent": "kept off: docxodus_edit replace_text_at_span_with_format runs this op and then applies its optional format, so a plain action would duplicate it" }
       }
     },
     {
@@ -89,7 +89,7 @@
         "npm": { "method": "replaceInner" },
         "python": { "method": "replace_inner" },
         "stdio": { "op": "replace_inner" },
-        "mcp": { "absent": "no MCP action" }
+        "mcp": { "absent": "kept off: it fills the brackets of a findPlaceholders match, and MCP has no placeholder finder (see queries/findPlaceholders); an agent edits the text directly with replace_text_range or replace_text_at_span_with_format" }
       }
     },
     {

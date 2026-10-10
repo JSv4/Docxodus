@@ -15,10 +15,10 @@
       ],
       "transports": {
         "wasm": { "method": "RenderHtml" },
-        "npm": { "absent": "no DocxSession method; the editor calls the bridge export directly" },
-        "python": { "absent": "no Python method (the stdio host has no op for it)" },
-        "stdio": { "absent": "no stdio op" },
-        "mcp": { "absent": "no MCP action; docxodus_get_content format=html and docxodus_preview call it with a pinned profile" }
+        "npm": { "absent": "kept off: the editor's authoring render, called through the bridge export by npm/src/editor.ts; npm callers render through convertDocxToHtml" },
+        "python": { "absent": "kept off: the editor's authoring render profile; Python renders through Session.to_html (stdio session_to_html) with caller-chosen options" },
+        "stdio": { "absent": "kept off: the editor's authoring render profile (comments and annotations off, headers and footers tied to pagination); the stdio host renders through session_to_html, the HtmlConversionOps path with caller-chosen options" },
+        "mcp": { "absent": "reached by format with a pinned profile: docxodus_get_content format=html (tracked changes rendered) and docxodus_preview call it with fixed options; not one to one, so no route is recorded" }
       }
     },
     {
@@ -34,9 +34,9 @@
       "transports": {
         "wasm": { "method": "RenderBlockHtml" },
         "npm": { "method": "renderBlock" },
-        "python": { "absent": "no Python method (the stdio host has no op for it)" },
-        "stdio": { "absent": "no stdio op" },
-        "mcp": { "absent": "no MCP action; docxodus_get_content format=html and docxodus_preview call it with a pinned profile" }
+        "python": { "absent": "kept off: the editor's authoring render profile; Python renders through Session.to_html (stdio session_to_html) with caller-chosen options" },
+        "stdio": { "absent": "kept off: the editor's authoring render profile (comments and annotations off, headers and footers tied to pagination); the stdio host renders through session_to_html, the HtmlConversionOps path with caller-chosen options" },
+        "mcp": { "absent": "reached by format with a pinned profile: docxodus_get_content format=html with anchorId and docxodus_preview with anchorId call it with fixed options; not one to one, so no route is recorded" }
       }
     },
     {
@@ -51,10 +51,10 @@
       ],
       "transports": {
         "wasm": { "method": "RenderBlocksHtml" },
-        "npm": { "absent": "no DocxSession method; the editor calls the bridge export directly" },
-        "python": { "absent": "no Python method (the stdio host has no op for it)" },
-        "stdio": { "absent": "no stdio op" },
-        "mcp": { "absent": "no MCP action" }
+        "npm": { "absent": "kept off: an internal of the browser block editor, which calls the bridge export directly (npm/src/editor.ts); a DocxSession method would be a public API for the editor's own DOM bookkeeping" },
+        "python": { "absent": "kept off: the editor's authoring render profile; Python renders through Session.to_html (stdio session_to_html) with caller-chosen options" },
+        "stdio": { "absent": "kept off: the editor's authoring render profile (comments and annotations off, headers and footers tied to pagination); the stdio host renders through session_to_html, the HtmlConversionOps path with caller-chosen options" },
+        "mcp": { "absent": "kept off: browser-editor render internal; an agent reads HTML through docxodus_get_content format=html or docxodus_preview" }
       }
     },
     {
@@ -66,10 +66,10 @@
       ],
       "transports": {
         "wasm": { "method": "RenderEditorHtml" },
-        "npm": { "absent": "no DocxSession method; the editor calls the bridge export directly" },
-        "python": { "absent": "no Python method (the stdio host has no op for it)" },
-        "stdio": { "absent": "no stdio op" },
-        "mcp": { "absent": "no MCP action" }
+        "npm": { "absent": "kept off: an internal of the browser block editor, which calls the bridge export directly (npm/src/editor.ts); a DocxSession method would be a public API for the editor's own DOM bookkeeping" },
+        "python": { "absent": "kept off: browser-editor internal with no stdio op to call; a Python caller renders through Session.to_html" },
+        "stdio": { "absent": "kept off: an internal of the browser block editor (its DOM reconcile and remount path); the stdio host serves no editor" },
+        "mcp": { "absent": "kept off: browser-editor render internal; an agent reads HTML through docxodus_get_content format=html or docxodus_preview" }
       }
     },
     {
@@ -82,10 +82,10 @@
       ],
       "transports": {
         "wasm": { "method": "RenderEditorBlockHtml" },
-        "npm": { "absent": "no DocxSession method; the editor calls the bridge export directly" },
-        "python": { "absent": "no Python method (the stdio host has no op for it)" },
-        "stdio": { "absent": "no stdio op" },
-        "mcp": { "absent": "no MCP action" }
+        "npm": { "absent": "kept off: an internal of the browser block editor, which calls the bridge export directly (npm/src/editor.ts); a DocxSession method would be a public API for the editor's own DOM bookkeeping" },
+        "python": { "absent": "kept off: browser-editor internal with no stdio op to call; a Python caller renders through Session.to_html" },
+        "stdio": { "absent": "kept off: an internal of the browser block editor (its DOM reconcile and remount path); the stdio host serves no editor" },
+        "mcp": { "absent": "kept off: browser-editor render internal; an agent reads HTML through docxodus_get_content format=html or docxodus_preview" }
       }
     },
     {
@@ -98,10 +98,10 @@
       ],
       "transports": {
         "wasm": { "method": "RenderEditorBlocksHtml" },
-        "npm": { "absent": "no DocxSession method; the editor calls the bridge export directly" },
-        "python": { "absent": "no Python method (the stdio host has no op for it)" },
-        "stdio": { "absent": "no stdio op" },
-        "mcp": { "absent": "no MCP action" }
+        "npm": { "absent": "kept off: an internal of the browser block editor, which calls the bridge export directly (npm/src/editor.ts); a DocxSession method would be a public API for the editor's own DOM bookkeeping" },
+        "python": { "absent": "kept off: browser-editor internal with no stdio op to call; a Python caller renders through Session.to_html" },
+        "stdio": { "absent": "kept off: an internal of the browser block editor (its DOM reconcile and remount path); the stdio host serves no editor" },
+        "mcp": { "absent": "kept off: browser-editor render internal; an agent reads HTML through docxodus_get_content format=html or docxodus_preview" }
       }
     },
     {
@@ -113,10 +113,10 @@
       ],
       "transports": {
         "wasm": { "method": "RenderEditorChromeHtml" },
-        "npm": { "absent": "no DocxSession method; the editor calls the bridge export directly" },
-        "python": { "absent": "no Python method (the stdio host has no op for it)" },
-        "stdio": { "absent": "no stdio op" },
-        "mcp": { "absent": "no MCP action" }
+        "npm": { "absent": "kept off: an internal of the browser block editor, which calls the bridge export directly (npm/src/editor.ts); a DocxSession method would be a public API for the editor's own DOM bookkeeping" },
+        "python": { "absent": "kept off: browser-editor internal with no stdio op to call; a Python caller renders through Session.to_html" },
+        "stdio": { "absent": "kept off: an internal of the browser block editor (its DOM reconcile and remount path); the stdio host serves no editor" },
+        "mcp": { "absent": "kept off: browser-editor render internal; an agent reads HTML through docxodus_get_content format=html or docxodus_preview" }
       }
     },
     {
@@ -129,10 +129,10 @@
       ],
       "transports": {
         "wasm": { "method": "RenderEditorRangeHtml" },
-        "npm": { "absent": "no DocxSession method; the editor calls the bridge export directly" },
-        "python": { "absent": "no Python method (the stdio host has no op for it)" },
-        "stdio": { "absent": "no stdio op" },
-        "mcp": { "absent": "no MCP action" }
+        "npm": { "absent": "kept off: an internal of the browser block editor, which calls the bridge export directly (npm/src/editor.ts); a DocxSession method would be a public API for the editor's own DOM bookkeeping" },
+        "python": { "absent": "kept off: browser-editor internal with no stdio op to call; a Python caller renders through Session.to_html" },
+        "stdio": { "absent": "kept off: an internal of the browser block editor (its DOM reconcile and remount path); the stdio host serves no editor" },
+        "mcp": { "absent": "kept off: browser-editor render internal; an agent reads HTML through docxodus_get_content format=html or docxodus_preview" }
       }
     },
     {
@@ -142,10 +142,10 @@
       "args": [],
       "transports": {
         "wasm": { "method": "RenderPreviewHtml" },
-        "npm": { "absent": "no DocxSession method; previewBatch calls the bridge export internally" },
-        "python": { "absent": "no Python method (the stdio host has no op for it)" },
-        "stdio": { "absent": "no stdio op" },
-        "mcp": { "absent": "no MCP action" }
+        "npm": { "absent": "kept off: the preview render profile, which previewBatch applies itself through the bridge export when previewHtml is requested" },
+        "python": { "absent": "kept off: the preview render profile, which preview_batch applies when previewHtml is requested; Python renders standalone through Session.to_html" },
+        "stdio": { "absent": "kept off: the preview render profile, which preview_batch applies itself when previewHtml is requested" },
+        "mcp": { "absent": "kept off: the preview render profile, which docxodus_mutations applies itself for previewHtml scoped|full" }
       }
     },
     {
@@ -157,10 +157,10 @@
       ],
       "transports": {
         "wasm": { "method": "RenderPreviewBlockHtml" },
-        "npm": { "absent": "no DocxSession method; previewBatch calls the bridge export internally" },
-        "python": { "absent": "no Python method (the stdio host has no op for it)" },
-        "stdio": { "absent": "no stdio op" },
-        "mcp": { "absent": "no MCP action" }
+        "npm": { "absent": "kept off: the preview render profile, which previewBatch applies itself through the bridge export when previewHtml is requested" },
+        "python": { "absent": "kept off: the preview render profile, which preview_batch applies when previewHtml is requested; Python renders standalone through Session.to_html" },
+        "stdio": { "absent": "kept off: the preview render profile, which preview_batch applies itself when previewHtml is requested" },
+        "mcp": { "absent": "kept off: the preview render profile, which docxodus_mutations applies itself for previewHtml scoped|full" }
       }
     }
   ]

@@ -80,7 +80,7 @@
         "npm": { "method": "getFormatting" },
         "python": { "method": "get_formatting" },
         "stdio": { "op": "get_formatting" },
-        "mcp": { "absent": "no action; read as docxodus_get_content format=formatting (a format selector, result wrapped in {formatting})" }
+        "mcp": { "absent": "reached by format, not action: docxodus_get_content format=formatting with anchorId, result wrapped in {formatting}; not one to one, so no route is recorded" }
       }
     },
     {
@@ -93,7 +93,7 @@
         "npm": { "method": "listStyles" },
         "python": { "method": "list_styles" },
         "stdio": { "op": "list_styles" },
-        "mcp": { "absent": "no action; read as docxodus_get_content format=styles (a format selector, result wrapped in {styles})" }
+        "mcp": { "absent": "reached by format, not action: docxodus_get_content format=styles, result wrapped in {styles}; not one to one, so no route is recorded" }
       }
     }
   ]

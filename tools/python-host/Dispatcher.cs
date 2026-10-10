@@ -208,6 +208,12 @@ internal static partial class Dispatcher
             Handle(args), Str(args, "anchorId"), DocxSessionJson.ParseOptionalPos(OptStr(args, "position")),
             OptionsOrNull(args, DocxSessionJson.ParseTableOfAuthoritiesOptions)),
 
+        // Issue #1026: the rule is the canonical optional border-edge object; "" takes the default edge.
+        "insert_horizontal_rule" => DocxSessionOps.InsertHorizontalRule(
+            Handle(args), Str(args, "anchorId"), OptPos(args), RawObjectOrEmpty(args, "rule")),
+
+        "list_notes" => DocxSessionOps.ListNotes(
+            Handle(args), OptBool(args, "endnotes") ?? throw new FormatException("args missing boolean \"endnotes\"")),
         "insert_footnote" => DocxSessionOps.InsertFootnote(
             Handle(args), Str(args, "anchorId"), Int(args, "characterOffset"), Str(args, "markdown")),
         "insert_endnote" => DocxSessionOps.InsertEndnote(
@@ -1125,7 +1131,7 @@ internal static partial class Dispatcher
     private static bool IsMutation(string op) => op is
         "replace_text" or "delete_block" or "move_block" or "delete_range" or "delete_section"
         or "replace_text_range" or "replace_text_at_span" or "replace_text_at_span_with_format" or "replace_inner"
-        or "insert_paragraph" or "split_paragraph" or "merge_paragraphs"
+        or "insert_paragraph" or "split_paragraph" or "merge_paragraphs" or "insert_horizontal_rule"
         or "set_header_text" or "set_footer_text" or "insert_page_number_field"
         or "ensure_header_footer_visible" or "set_page_numbering" or "clear_page_numbering"
         or "set_header_footer_kind_enabled" or "set_page_setup"

@@ -593,8 +593,13 @@ internal static partial class Dispatcher
         return RunCreateAction(session, Str(args, "action"), args);
     }
 
-    private static string RunCreateAction(DocSession session, string action, JsonElement args) =>
-        Guarded(session, ParsePreconditions(args, MutationTarget(args)), () => action switch
+    private static string RunCreateAction(DocSession session, string action, JsonElement args)
+    {
+        // A read beside the note-inserting actions, so it runs outside the mutation guard and is
+        // neither a batch step nor recorded as delivery evidence.
+        if (action == "list_notes")
+            return $"{{\"notes\":{DocxSessionOps.ListNotes(session.Handle, RequiredBool(args, "endnotes"))}}}";
+        return Guarded(session, ParsePreconditions(args, MutationTarget(args)), () => action switch
         {
         "insert_paragraph" => DocxSessionOps.InsertParagraph(
             session.Handle, Str(args, "anchorId"), ParsePos(args), Str(args, "markdown")),
@@ -634,8 +639,17 @@ internal static partial class Dispatcher
         "ensure_header_footer_visible" => DocxSessionOps.EnsureHeaderFooterVisible(
             session.Handle, Str(args, "bodyAnchorId"),
             DocxSessionJson.ParseHeaderFooterKind(Str(args, "kind"))),
+        // Section layout (issue #1026): the op objects are taken whole, under the canonical name.
+        "set_page_setup" => DocxSessionOps.SetPageSetup(
+            session.Handle, Str(args, "anchorId"), (OptionalObject(args, "op") is { } setup ? DocxSessionJson.ParsePageSetupOp(setup) : null)),
+        "set_page_numbering" => DocxSessionOps.SetPageNumbering(
+            session.Handle, Str(args, "anchorId"), (OptionalObject(args, "op") is { } numbering ? DocxSessionJson.ParsePageNumberingOp(numbering) : null)),
+        "clear_page_numbering" => DocxSessionOps.ClearPageNumbering(session.Handle, Str(args, "anchorId")),
+        "set_header_footer_kind_enabled" => DocxSessionOps.SetHeaderFooterKindEnabled(
+            session.Handle, Str(args, "anchorId"), Str(args, "kind"), RequiredBool(args, "enabled")),
         _ => throw new McpToolException($"unknown docxodus_create action: {action}"),
         });
+    }
 
     /// <summary>The rule's border edge as the facade takes it: "" (no edge, the default rule) when
     /// the caller set no field.</summary>
@@ -1431,7 +1445,8 @@ internal static partial class Dispatcher
                 or "insert_page_number_field" or "insert_table_of_contents"
                 or "insert_table_of_figures" or "insert_table_of_authorities"
                 or "set_header_text" or "set_footer_text"
-                or "ensure_header_footer_visible",
+                or "ensure_header_footer_visible" or "set_page_setup" or "set_page_numbering"
+                or "clear_page_numbering" or "set_header_footer_kind_enabled",
             "docxodus_table" => action is "insert" or "insert_row" or "insert_column"
                 or "delete_row" or "delete_column" or "replace_cell_content" or "merge_cells"
                 or "unmerge_cells" or "set_column_widths" or "set_borders" or "set_shading"
@@ -1617,6 +1632,22 @@ internal static partial class Dispatcher
             case ("docxodus_create", "ensure_header_footer_visible"):
                 RequireStrings(args, "bodyAnchorId", "kind");
                 ValidateRequiredEnum(args, "kind", "default", "first", "even");
+                break;
+            case ("docxodus_create", "set_page_setup"):
+                RequireStrings(args, "anchorId");
+                if (OptionalObject(args, "op") is { } setupOp) _ = DocxSessionJson.ParsePageSetupOp(setupOp);
+                break;
+            case ("docxodus_create", "set_page_numbering"):
+                RequireStrings(args, "anchorId");
+                if (OptionalObject(args, "op") is { } numberingOp) _ = DocxSessionJson.ParsePageNumberingOp(numberingOp);
+                break;
+            case ("docxodus_create", "clear_page_numbering"):
+                RequireStrings(args, "anchorId");
+                break;
+            case ("docxodus_create", "set_header_footer_kind_enabled"):
+                RequireStrings(args, "anchorId", "kind");
+                ValidateRequiredEnum(args, "kind", "default", "first", "even");
+                _ = RequiredBool(args, "enabled");
                 break;
 
             case ("docxodus_table", "insert"):
@@ -1831,6 +1862,17 @@ internal static partial class Dispatcher
         if (args.TryGetProperty(name, out var value) && value.ValueKind != JsonValueKind.Number)
             throw new McpToolException($"argument \"{name}\" must be a number");
         if (args.TryGetProperty(name, out value)) _ = value.GetInt32();
+    }
+
+    /// <summary>An object argument the facade defaults (issue #1024): null when omitted or JSON null,
+    /// refused when it is some other type.</summary>
+    private static JsonElement? OptionalObject(JsonElement args, string name)
+    {
+        if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var value)
+            || value.ValueKind == JsonValueKind.Null) return null;
+        if (value.ValueKind != JsonValueKind.Object)
+            throw new McpToolException($"argument \"{name}\" must be an object");
+        return value;
     }
 
     private static void ValidateOptionalObject(JsonElement args, string name)
