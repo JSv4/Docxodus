@@ -1,7 +1,7 @@
-baseline-test-a.woff2, baseline-test-b.woff2
+baseline-test-a.woff2, baseline-test-b.woff2, baseline-test-c.woff2
 ============================================
 
-Subsets of two open fonts, cut down to the characters of line-baselines.docx (plus "Hg", the probe the export
+Subsets of open fonts, cut down to the characters of the baseline fixtures (plus "Hg", the probe the export
 measures natural line height with) and renamed, as the
 license below requires for a modified font:
 
@@ -9,6 +9,8 @@ license below requires for a modified font:
                          SHA-256 of the source TTF below). Carlito shares Calibri's metrics.
   baseline-test-b.woff2  "Docxodus Baseline Test B", from Liberation Sans Regular (Debian fonts-liberation).
                          Liberation Sans shares Arial's metrics.
+  baseline-test-c.woff2  "Docxodus Baseline Test C", from Liberation Serif Regular (Debian fonts-liberation).
+                         Liberation Serif shares Times New Roman's metrics; used for exact line spacing.
 
 They exist so the exported-baseline test (tests/export-line-baselines.spec.ts, issue #908) lays its
 fixture out with Calibri's and Arial's vertical metrics on any machine, without installing fonts
@@ -21,11 +23,12 @@ then renaming name IDs 1, 3, 4, 6 and 16 with fontTools. Docxodus itself remains
 font files carry the terms below, and they are test fixtures: not part of any published package.
 
   Carlito:         Copyright (c) 2010-2013 by tyPoland Lukasz Dziedzic with Reserved Font Name "Carlito".
-  Liberation Sans: Digitized data copyright (c) 2010 Google Corporation with Reserved Font Arimo, Tinos
+  Liberation Sans / Serif: Digitized data copyright (c) 2010 Google Corporation with Reserved Font Arimo, Tinos
                    and Cousine. Copyright (c) 2012 Red Hat, Inc. with Reserved Font Name Liberation.
 
   f6418f708baede9789daef5d458c0f53d2a888af9820e8062934e504fedc6595  /usr/share/fonts/truetype/crosextra/Carlito-Regular.ttf
   4659bc0c58c5028dd488ec928d41d9265db43d9b669fc14ca8b0832daca7b144  /usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf
+  705903ae1382f0150f115d6f10a30f5b2f3d6ade649c474afe6366c39174fb65  /usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf
 
 Copyright (c) 2010-2013 by tyPoland Lukasz Dziedzic with Reserved Font Name "Carlito".
 

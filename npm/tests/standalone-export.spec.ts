@@ -844,12 +844,10 @@ test.describe('standalone paginated HTML', () => {
   });
 
   test('lays a page out again instead of failing when its last line would be clipped', async ({ page }) => {
-    // Issue #848. 54 one-line paragraphs at exact 12pt fill the 648pt body band exactly, so the
-    // placement model puts all 54 on page 1. At exact spacing below the font's own height (16pt
-    // text), CSS centres each glyph box on its 12pt line, so the last line's descenders hang ~3px
-    // past the band and the page clips them. The export withholds that overflow from page 1's
-    // budget and lays the document out again, moving the last line to page 2.
-    const source = bodyFillDocx({ paragraphs: 54, fontHalfPoints: 32, lineTwips: 240 });
+    // Issue #848. The converter gives this minimum-spaced paragraph a 14pt CSS line box.
+    // 46 such boxes fit the 648pt band, but the 24pt glyphs extend past its bottom. This must
+    // still trigger the corrective pass: only authored EXACT spacing permits glyph overhang.
+    const source = bodyFillDocx({ paragraphs: 46, fontHalfPoints: 48, lineTwips: 280, lineRule: 'atLeast' });
 
     const result = await convert(page, source);
 
@@ -860,8 +858,8 @@ test.describe('standalone paginated HTML', () => {
       return Array.from(parsed.querySelectorAll('.page-box')).map((box) =>
         Array.from(box.querySelectorAll('.page-content p')).map((p) => p.textContent?.trim()));
     }, result.html);
-    expect(pages[0]).toHaveLength(53);
-    expect(pages[1]).toEqual(['Line 54 of the body, typography and spacing.']);
+    expect(pages[0]).toHaveLength(45);
+    expect(pages[1]).toEqual(['Line 46 of the body, typography and spacing.']);
     // A correction rebuilds the attempt and truncates its own entries, so the report records one
     // pass through the render phases, in the same order as any successful render.
     const order = result.renderReport.readiness

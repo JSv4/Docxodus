@@ -15,6 +15,8 @@ export interface BodyFillOptions {
   fontHalfPoints: number;
   /** Exact line height in twips (240 = 12pt). */
   lineTwips: number;
+  /** Use minimum spacing to exercise glyph overflow outside the exact-spacing contract. */
+  lineRule?: 'exact' | 'atLeast';
   /**
    * Put a one-row, one-cell table after the first paragraph. The converter gives a table that
    * follows a paragraph with no space after it a 7.5pt top margin of its own (Word's implicit
@@ -32,7 +34,7 @@ export interface BodyFillOptions {
 
 export function bodyFillDocx(options: BodyFillOptions): Uint8Array {
   const pPr = (before = 0) =>
-    `<w:pPr><w:spacing w:before="${before}" w:after="0" w:line="${options.lineTwips}" w:lineRule="exact"/></w:pPr>`;
+    `<w:pPr><w:spacing w:before="${before}" w:after="0" w:line="${options.lineTwips}" w:lineRule="${options.lineRule ?? 'exact'}"/></w:pPr>`;
   const rPr = `<w:rPr><w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/><w:sz w:val="${options.fontHalfPoints}"/></w:rPr>`;
   const paragraph = (text: string, before = 0) =>
     `<w:p>${pPr(before)}<w:r>${rPr}<w:t xml:space="preserve">${text}</w:t></w:r></w:p>`;

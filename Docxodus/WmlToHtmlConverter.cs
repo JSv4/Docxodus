@@ -6925,6 +6925,7 @@ namespace Docxodus
         }
 
         private const string AutomaticLineSpacingMultiplierCssProperty = "--docx-auto-line-spacing";
+        private const string ExactLineSpacingCssProperty = "--docx-exact-line-height";
 
         /// <summary>
         /// OOXML auto line spacing is a multiple of the font's native single-line height, not a
@@ -7251,6 +7252,7 @@ namespace Docxodus
             {
                 var points = exactLine/20m;
                 style.Add("line-height", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0#}pt", points));
+                style.Add(ExactLineSpacingCssProperty, string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0#}pt", points));
             }
             if (lineRule == "atLeast" && line is { } atLeastLine)
             {
@@ -7408,7 +7410,7 @@ namespace Docxodus
                 if (!paragraphHasExactLineHeight)
                     return unstyledContent;
 
-                var exactRun = new XElement(Xhtml.span, unstyledContent);
+                var exactRun = new XElement(Xhtml.span, new XAttribute("data-docx-exact-run", "true"), unstyledContent);
                 exactRun.AddAnnotation(new Dictionary<string, string>
                 {
                     { "vertical-align", "top" },
@@ -7490,6 +7492,7 @@ namespace Docxodus
                 style.AddIfMissing("margin", "0");
                 style.AddIfMissing("padding", "0");
                 var xe = new XElement(Xhtml.span,
+                    paragraphHasExactLineHeight ? new XAttribute("data-docx-exact-run", "true") : null,
                     isListMarker ? new XAttribute("data-list-marker", "true") : null,
                     langAttribute,
                     runStartMark,

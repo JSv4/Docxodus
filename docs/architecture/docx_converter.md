@@ -400,6 +400,12 @@ Directional marks ensure proper text rendering:
 | `w:spacing/@w:line` (auto) | `line-height: N%` (where N = line/240*100) |
 | `w:spacing/@w:line` (exact) | `line-height: Npt` |
 
+Exact spacing also carries `--docx-exact-line-height` and marks the converted runs with
+`data-docx-exact-run`. After paragraph placement, the paginator uses the browser's font metrics
+to put their baselines at 80% of the exact line height without enlarging any line box. Fitting
+exact-spaced text may paint into the page margins, bounded by the paper and running stories;
+see the measured #882 entry in `docs/ooxml_corner_cases.md`.
+
 ### Indentation
 
 | Word Property | CSS Property |

@@ -2768,6 +2768,62 @@ always carry them; a generated regression must emit them too.
 
 ---
 
+## Exact line spacing fixes the baseline independently of font size (#882)
+
+An exact line can be shorter than the font it contains. Word keeps the declared line pitch and
+places the baseline at approximately **80% of that height**, rather than centering the font box
+or subtracting the font's descent. Glyphs can overlap adjacent lines and extend into the margins;
+the measured Word PDFs clip them at the paper edge, not at every line or at the body margin.
+
+The reproducer is a Letter page with 1in margins and three paragraphs of this form:
+
+```xml
+<w:p>
+  <w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr>
+  <w:r><w:rPr><w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/>
+    <w:sz w:val="32"/></w:rPr><w:t>Line 1 of the body, typography and spacing.</w:t></w:r>
+</w:p>
+```
+
+First baseline below the top margin, in points:
+
+| Exact line | Font size | Word | LibreOffice 25.8 | Docxodus before | Docxodus after |
+|---:|---:|---:|---:|---:|---:|
+| 12 | 10 | 9.53 | 9.60 | 9.00 | 9.60 |
+| 12 | 16 | 9.53 | 9.60 | 11.25 | 9.60 |
+| 12 | 24 | 9.53 | 9.60 | 14.25 | 9.60 |
+| 18 | 16 | 14.53 | 14.40 | 14.25 | 14.40 |
+| 24 | 16 | 19.28 | 19.20 | 17.25 | 19.20 |
+
+Word's numbers come from the PDF text origins captured on 2026-10-10. Its PDFs identify the creator
+as Microsoft Word and embed TimesNewRomanPSMT for the requested Liberation Serif. The browser
+regression uses a renamed Liberation Serif subset with the same vertical metrics. LibreOffice's
+numbers are the earlier measurements recorded in #882. The small deviations from `0.8 × line`
+reflect Word's quantized text origins.
+
+The full-page fixture has 54 paragraphs at 16pt on exact 12pt lines. Word keeps all 54 on one page,
+with first and last baselines at 81.53pt and 717.725pt from the paper top. The initial issue assumed
+Word kept descenders inside the line and clipped glyph tops; the captured output disproves that
+assumption. Docxodus previously centered the glyph boxes and treated their overhang as misplaced
+content, so the export's corrective pass moved line 54 onto a second page.
+
+`WmlToHtmlConverter` now retains the exact-spacing distinction in the paragraph CSS and marks its
+runs. `alignExactLineBaselines` in `npm/src/line-metrics.ts` measures Chromium's baseline for each
+font shape and applies a relative offset after pagination has split paragraphs. Keeping those
+offsets out of measurement also preserves the range fragmenter's exclusion of positioned content.
+Line boxes retain their exact heights, including mixed font sizes and hyperlink runs.
+
+`preserveExactLineInk` expands the body's paint clip only for inline text in a paragraph whose
+line boxes fit the body. The permitted ink must remain inside the paper and outside header,
+footer, and footnote stories. Misplaced blocks and other overflow still use the corrective pass.
+The clip is an explicit pixel inset: Chromium ignores `overflow-clip-margin` when only one axis
+clips. PageMap measurement and offline re-verification honor that same inset.
+
+Fixtures and the numbers-only Word record: `npm/tests/fixtures/exact-line-spacing/`.
+Tests: `npm/tests/exact-line-spacing.spec.ts`. The #848 corrective-pass test in
+`standalone-export.spec.ts` now uses minimum-spaced text, keeping its overflow coverage independent
+of the authored exact-spacing exception.
+
 ## Contributing
 
 When adding new corner cases to this document:
