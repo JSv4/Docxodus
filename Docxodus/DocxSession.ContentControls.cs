@@ -1,8 +1,6 @@
 // Copyright (c) John Scrudato IV. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
-#nullable enable
-
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -243,6 +241,7 @@ public sealed partial class DocxSession
             return EditResult.Fail(EditErrorCode.ContentControlMalformed,
                 "date content control has no w:date properties", anchorId);
         var shown = displayText ?? value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        if (XmlText.ValidatePayload(shown, anchorId) is { } textError) return EditResult.Fail(textError);
         return MutateContentControl(candidate, options, () =>
         {
             date.SetAttributeValue(W.fullDate, value.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'",
@@ -256,6 +255,7 @@ public sealed partial class DocxSession
     {
         if (ResolveContentControlForMutation(anchorId, ContentControlOperation.SelectItem, options,
             out var candidate, out var error) is false) return error!;
+        if (XmlText.ValidatePayload(value, anchorId) is { } textError) return EditResult.Fail(textError);
         var props = candidate!.Element.Element(W.sdtPr)!;
         var list = props.Element(W.dropDownList) ?? props.Element(W.comboBox)!;
         var isComboBox = list.Name == W.comboBox;
@@ -429,6 +429,7 @@ public sealed partial class DocxSession
         var operation = rich ? ContentControlOperation.FillRichText : ContentControlOperation.FillText;
         if (ResolveContentControlForMutation(anchorId, operation, options,
             out var candidate, out var error) is false) return error!;
+        if (XmlText.ValidatePayload(payload, anchorId) is { } textError) return EditResult.Fail(textError);
         var content = candidate!.Element.Element(W.sdtContent)!;
         var placement = candidate.Info.Placement;
         var nested = NestedContentControls(candidate.Element);
@@ -831,6 +832,8 @@ public sealed partial class DocxSession
         }
         foreach (var childAnchor in childFills.Keys)
         {
+            if (XmlText.ValidatePayload(childFills[childAnchor], childAnchor) is { } textError)
+                return EditResult.Fail(textError);
             var child = registry.FirstOrDefault(value =>
                 string.Equals(value.Info.AnchorId, childAnchor, StringComparison.Ordinal));
             if (child is null || !child.Element.Ancestors().Any(ancestor => ReferenceEquals(ancestor, candidate.Element)))

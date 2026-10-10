@@ -137,6 +137,8 @@ public sealed partial class DocxSession
         string instruction, int rightTabPos, string? title, bool wrapInContentControl)
     {
         if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
+        if ((XmlText.ValidatePayload(instruction, anchorId) ?? XmlText.ValidatePayload(title ?? "", anchorId)) is { } textError)
+            return EditResult.Fail(textError);
 
         var target = FindAnchor(anchorId);
         if (target is null)

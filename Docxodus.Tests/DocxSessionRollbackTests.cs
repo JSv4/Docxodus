@@ -1,5 +1,3 @@
-#nullable enable
-
 // Copyright (c) John Scrudato IV. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
@@ -20,24 +18,26 @@ namespace Docxodus.Tests;
 /// <see cref="EditResult"/> envelope implies but never used to guarantee: <b>a failed op leaves the
 /// document byte-identical to what it was before the call, and leaves nothing on the undo ring</b>.</para>
 ///
-/// <para><b>Why a NUL character is the trigger.</b> These are not synthetic faults. Markdown payloads
-/// reach <see cref="DocxSession"/> from LLM output, clipboard paste, and scraped text — all of which
-/// routinely carry a stray <c>U+0000</c> or an unpaired surrogate. XML cannot represent either, so
-/// the write throws <see cref="System.ArgumentException"/> from deep inside the op, well after it has
-/// started mutating. <see cref="DocxSession.InsertFootnote"/> is the sharpest case: it creates the
-/// FootnotesPart, its two Word-reserved notes, the <c>w:footnotePr</c> settings declaration and the
-/// FootnoteText/FootnoteReference styles, and only THEN writes the note body that throws.</para>
+/// <para>A one-shot LINQ-to-XML change handler throws after the main tree changes, so these
+/// tests still exercise actual rollback after invalid text is refused before mutation. New note,
+/// header and comment parts may already exist when the fault is raised.</para>
 /// </summary>
 public class DocxSessionRollbackTests
 {
     private static readonly XNamespace W =
         "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
-    /// <summary>A payload XML cannot encode — the realistic "stray control character" case.</summary>
-    private const string NulPayload = "note\0text";
+    private const string Payload = "note text";
 
-    /// <summary>An unpaired high surrogate: the other shape of the same class of bad input.</summary>
-    private const string LoneSurrogatePayload = "before\ud800after";
+    internal static T FailDuringMutation<T>(DocxSession session, System.Func<T> mutate)
+    {
+        var document = session.LiveDocument.MainDocumentPart!.GetXDocument();
+        void Fail(object? sender, XObjectChangeEventArgs args) =>
+            throw new IOException("simulated mid-mutation failure");
+        document.Changed += Fail;
+        try { return mutate(); }
+        finally { document.Changed -= Fail; }
+    }
 
     private static string FirstBodyParagraph(DocxSession s) =>
         s.Project().AnchorIndex.Values
@@ -91,7 +91,7 @@ public class DocxSessionRollbackTests
         var anchor = FirstBodyParagraph(s);
         var before = PackageParts(s.Save());
 
-        var result = s.InsertFootnote(anchor, 0, NulPayload);
+        var result = FailDuringMutation(s, () => s.InsertFootnote(anchor, 0, Payload));
 
         Assert.False(result.Success);
         Assert.Equal(EditErrorCode.InternalError, result.Error!.Code);
@@ -109,7 +109,7 @@ public class DocxSessionRollbackTests
         using var s = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
         var anchor = FirstBodyParagraph(s);
 
-        Assert.False(s.InsertFootnote(anchor, 0, NulPayload).Success);
+        Assert.False(FailDuringMutation(s, () => s.InsertFootnote(anchor, 0, Payload)).Success);
 
         using var ms = new MemoryStream(s.Save());
         using var doc = WordprocessingDocument.Open(ms, false);
@@ -131,7 +131,7 @@ public class DocxSessionRollbackTests
         var anchor = FirstBodyParagraph(s);
 
         // No history yet: a failed op must not leave a record behind.
-        Assert.False(s.InsertFootnote(anchor, 0, NulPayload).Success);
+        Assert.False(FailDuringMutation(s, () => s.InsertFootnote(anchor, 0, Payload)).Success);
         Assert.False(s.Undo());
 
         // One real edit, then a failure, then undo: the undo must reverse the REAL edit.
@@ -139,7 +139,7 @@ public class DocxSessionRollbackTests
         Assert.True(s.ReplaceText(anchor, "changed").Success);
         var afterEdit = PackageParts(s.Save());
 
-        Assert.False(s.InsertFootnote(anchor, 0, NulPayload).Success);
+        Assert.False(FailDuringMutation(s, () => s.InsertFootnote(anchor, 0, Payload)).Success);
         AssertPackageUnchanged(afterEdit, PackageParts(s.Save()));
 
         Assert.True(s.Undo());
@@ -147,8 +147,8 @@ public class DocxSessionRollbackTests
         Assert.False(s.Undo());
     }
 
-    /// <summary><see cref="DocxSession.SetHeaderText"/> creates a HeaderPart, its relationship and a
-    /// <c>w:headerReference</c> in the section before writing the story that throws. All three must
+    /// <summary><see cref="DocxSession.SetHeaderText"/> creates a HeaderPart and its relationship
+    /// before inserting the <c>w:headerReference</c> that triggers the fault. All three must
     /// be reconciled away — a leaked reference to a deleted part is a document Word refuses to open.
     /// </summary>
     [Fact]
@@ -158,7 +158,7 @@ public class DocxSessionRollbackTests
         var anchor = FirstBodyParagraph(s);
         var before = PackageParts(s.Save());
 
-        var result = s.SetHeaderText(anchor, HeaderFooterKind.Default, NulPayload);
+        var result = FailDuringMutation(s, () => s.SetHeaderText(anchor, HeaderFooterKind.Default, Payload));
 
         Assert.False(result.Success);
         Assert.Equal(EditErrorCode.InternalError, result.Error!.Code);
@@ -172,7 +172,8 @@ public class DocxSessionRollbackTests
     }
 
     /// <summary>Same contract for the comments part, which <see cref="DocxSession.AddComment"/>
-    /// find-or-creates (along with the CommentText/CommentReference styles) before writing the body.
+    /// find-or-creates (along with the CommentText/CommentReference styles) before placing the
+    /// range markers that trigger the fault.
     /// </summary>
     [Fact]
     public void DS424_AddComment_ThrowsMidOp_RollsBackCommentsPart()
@@ -181,7 +182,7 @@ public class DocxSessionRollbackTests
         var anchor = FirstBodyParagraph(s);
         var before = PackageParts(s.Save());
 
-        var result = s.AddComment(anchor, new CharSpan(0, 5), "Reviewer", NulPayload);
+        var result = FailDuringMutation(s, () => s.AddComment(anchor, new CharSpan(0, 5), "Reviewer", Payload));
 
         Assert.False(result.Success);
         Assert.Equal(EditErrorCode.InternalError, result.Error!.Code);
@@ -194,8 +195,7 @@ public class DocxSessionRollbackTests
         Assert.Empty(doc.MainDocumentPart.GetXDocument().Descendants(W + "commentRangeStart"));
     }
 
-    /// <summary>The unpaired-surrogate shape of the same bad input, through a body-text op whose
-    /// mutation is confined to the main part.</summary>
+    /// <summary>A body-text op whose mutation is confined to the main part.</summary>
     [Fact]
     public void DS425_ReplaceText_ThrowsMidOp_RollsBackBody()
     {
@@ -203,7 +203,7 @@ public class DocxSessionRollbackTests
         var anchor = FirstBodyParagraph(s);
         var before = PackageParts(s.Save());
 
-        var result = s.ReplaceText(anchor, LoneSurrogatePayload);
+        var result = FailDuringMutation(s, () => s.ReplaceText(anchor, Payload));
 
         Assert.False(result.Success);
         Assert.Equal(EditErrorCode.InternalError, result.Error!.Code);
@@ -259,7 +259,7 @@ public class DocxSessionRollbackTests
         using var s = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
         var anchor = FirstBodyParagraph(s);
 
-        Assert.False(s.InsertFootnote(anchor, 0, NulPayload).Success);
+        Assert.False(FailDuringMutation(s, () => s.InsertFootnote(anchor, 0, Payload)).Success);
 
         // The same anchor still resolves, and a well-formed footnote now succeeds.
         Assert.True(s.Exists(anchor));

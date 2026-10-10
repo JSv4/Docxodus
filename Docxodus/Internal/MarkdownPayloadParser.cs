@@ -1,5 +1,3 @@
-#nullable enable
-
 // Copyright (c) John Scrudato IV. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
@@ -63,7 +61,8 @@ internal static class MarkdownPayloadParser
 
     public static ParseResult Parse(string markdown)
     {
-        if (markdown is null) return ParseResult.Fail(EditErrorCode.MalformedMarkdown, "null payload");
+        if (XmlText.ValidatePayload(markdown) is { } error)
+            return ParseResult.Fail(error.Code, error.Message);
         try
         {
             var rawBlocks = SplitBlocks(markdown);

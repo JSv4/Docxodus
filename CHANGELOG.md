@@ -258,6 +258,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Text edits reject characters XML cannot represent before changing the document, regardless of
+  `EmitMarkdownPatch` (issue #1039). Markdown and plain-text payloads, content-control fills and
+  reference-field text return `MalformedMarkdown` for unpaired surrogates or forbidden controls,
+  preserving undo/redo history and preventing later save or transaction failures. Span replacement
+  also refuses boundaries inside an existing surrogate pair.
 - Undo and redo preserve later edits to parts created earlier in the history (issue #1033).
   Restoring a footnote, endnote, header, footer, comment, numbering, styles, settings, comment
   threading, or annotation part now preserves its package URI and relationship identity. The SDK
