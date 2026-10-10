@@ -6,6 +6,11 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- LibreOffice tracked-drawing diagnostics and a reproducible interoperability matrix (issue #1045).
+  The isolated Linux rendering helper reports conversion failures, timeouts and missing artifacts
+  explicitly while preserving the source DOCX and its native revisions. The matrix retains
+  DrawingML and VML insertion/deletion comparisons, schema validation and accept/reject controls;
+  LibreOffice 24.2.7.2 and 25.8.7.3 both fail on tracked anchored header groups with text boxes.
 - Session ops that some transports had left out by omission now reach them (issue #1026). On MCP,
   `docxodus_create` gains `set_page_setup` and `set_page_numbering` (each taking the canonical `op`
   object), `clear_page_numbering`, `set_header_footer_kind_enabled` (`kind` plus a required
