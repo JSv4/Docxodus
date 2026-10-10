@@ -21,7 +21,9 @@ This document tracks edge cases and quirks in Open XML document processing where
    - [`w:ind` has two spellings for each edge: `w:start`/`w:left` and `w:end`/`w:right`](#wind-has-two-spellings-for-each-edge-wstartwleft-and-wendwright)
 5. [Theme Colors](#theme-colors)
    - [`w:color`/`w:fill` are a CACHE; `w:themeColor`/`w:themeFill` are the authority](#wcolorwfill-are-a-cache-wthemecolorwthemefill-are-the-authority)
-6. [Contributing](#contributing)
+6. [Tracked Drawings](#tracked-drawings)
+   - [LibreOffice fails on tracked anchored header groups with text boxes](#libreoffice-fails-on-tracked-anchored-header-groups-with-text-boxes)
+7. [Contributing](#contributing)
 
 ---
 
@@ -2823,6 +2825,118 @@ Fixtures and the numbers-only Word record: `npm/tests/fixtures/exact-line-spacin
 Tests: `npm/tests/exact-line-spacing.spec.ts`. The #848 corrective-pass test in
 `standalone-export.spec.ts` now uses minimum-spaced text, keeping its overflow coverage independent
 of the authored exact-spacing exception.
+
+## Tracked Drawings
+
+### LibreOffice fails on tracked anchored header groups with text boxes
+
+**Status:** Renderer limitation reproduced; explicit failure handling added (#1045).
+**Measured:** 2026-10-10, Linux, LibreOffice 24.2.7.2 and 25.8.7.3.
+
+The smallest failing combination in this investigation is a `w:ins` or `w:del` around a run
+containing an anchored DrawingML group in a header, where the group contains text boxes. The
+revision wrapper has this shape (drawing internals abbreviated):
+
+```xml
+<w:hdr>
+  <w:p>
+    <w:ins w:id="7" w:author="Reviewer" w:date="2024-01-01T00:00:00Z">
+      <w:r><w:drawing>
+        <wp:anchor ...>
+          <a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup">
+            <wpg:wgp>...<wps:wsp>...<wps:txbx><w:txbxContent>...</w:txbxContent></wps:txbx>...</wps:wsp>...</wpg:wgp>
+          </a:graphicData></a:graphic>
+        </wp:anchor>
+      </w:drawing></w:r>
+    </w:ins>
+  </w:p>
+</w:hdr>
+```
+
+`tools/diffharness/lo/tracked_drawings_fixture.py` supplies the complete literal XML, namespace
+declarations and relationships. It creates two rectangles with invented text, without images or
+external content. Replacing `w:ins` with `w:del` reproduces the same import failure. Both directly
+authored revisions and public `DocxCompare.Compare` output fail, so the comparison engine alone
+does not explain the problem.
+
+The isolation matrix varies four dimensions independently and includes plain, insertion and
+deletion versions of each combination: 2 × 2 × 2 × 2 × 3 = 48 packages.
+
+| Control, relative to the failing tracked header group | LibreOffice 24.2.7.2 | LibreOffice 25.8.7.3 |
+|---|---|---|
+| Anchored group with text boxes in a header, inserted or deleted | Application error, no PDF | Application error, no PDF |
+| Same group without revision wrapper | Renders | Renders |
+| Single shape with text box | Renders | Renders |
+| Group without text boxes | Renders | Renders |
+| Inline group with text boxes | Renders | Renders |
+| Anchored group with text boxes in the body | Renders | Renders |
+| VML header text-box controls, plain and tracked | Renders | Renders |
+| Accepted/rejected DrawingML comparison views | Renders | Renders |
+
+Each version rendered 46 of the 48 matrix packages. With the original controls, four generated
+insertion/deletion comparisons, their accept/reject views and paragraph-mark diagnostics, each
+version rendered 67 of 73 packages. The same six packages failed with `Unspecified Application
+Error` and no fresh PDF: the two matrix revisions, two directly authored header-group revisions,
+and two DrawingML comparison outputs. Exit codes can differ between launches; failure handling
+uses the actual process result and artifact presence rather than requiring a particular code.
+
+All 57 input packages and 16 generated views have zero Office 2019 Open XML SDK validator errors.
+The runner ties every validation record to the fixture's SHA-256. Native drawing/picture counts
+in accepted comparison views match the right input, and rejected views match the left input.
+Word desktop was not measured in this investigation. Docxodus's comparison and revision processor
+produce schema-valid packages with those content results; this finding concerns LibreOffice's
+import/conversion path, rather than Docxodus's HTML renderer.
+
+#### Alternative encoding and preservation policy
+
+Tracking only the paragraph mark (`w:pPr/w:rPr/w:ins` or `w:del`), leaving the drawing run outside
+the revision, allows conversion. It fails the content contract: both accepted and rejected views
+retain the drawing. For an insertion, rejection must remove it; for a deletion, acceptance must
+remove it. Those diagnostic fixtures and both views remain in the matrix.
+
+Inline placement also converts, but changes positioning semantics. The VML control demonstrates
+a supported import path; it does not establish a general lossless conversion of a DrawingML
+group. No equivalent safe revision encoding was identified by these experiments. The core
+comparison output therefore retains the native DrawingML and its revision wrappers.
+
+`tools/diffharness/lo/lo_render.py` provides explicit conversion handling for Linux harness callers:
+
+- It converts a byte copy using an isolated LibreOffice profile and temporary output directory.
+- JSON reports the renderer version, process result, diagnostics, source SHA-256, revision/drawing
+  metadata and source preservation. `status` is `rendered`, `failed` or `unavailable`.
+- Nonzero exit, timeout, missing fresh PDF, invalid PDF signature and workspace/output failures
+  are distinct failure codes. The CLI exits nonzero for every unsuccessful conversion.
+- A timeout terminates the renderer's isolated process group. A successful PDF is published by
+  replacing its destination entry, so an existing symlink or hard link cannot overwrite the DOCX.
+- It preserves the input and performs no revision flattening or shape rewrite. A known drawing
+  combination is diagnostic metadata, not a blanket rejection of unmeasured renderer versions.
+
+`rendered` confirms a fresh PDF conversion and signature, not visual fidelity. Callers must honor
+the JSON status and `pdf` field; a pre-existing destination PDF is not evidence of success.
+
+#### Reproduce and verify
+
+From the repository root, with .NET 10 and LibreOffice installed:
+
+```sh
+python3 tools/diffharness/lo/tracked_drawings_fixture.py "$PWD" /tmp/tracked-drawings-fixtures
+python3 tools/diffharness/lo/tracked_drawings_matrix.py /tmp/tracked-drawings-fixtures /tmp/tracked-drawings-current
+python3 tools/diffharness/lo/tracked_drawings_matrix.py /tmp/tracked-drawings-fixtures /tmp/tracked-drawings-older --soffice /path/to/older/soffice
+python3 -m unittest discover -s tools/diffharness/lo -p 'test_*.py'
+```
+
+Use an empty fixture directory initially. Each matrix run writes `results.json` containing every
+conversion observation, including the six failures. Exit 0 means the measured baseline matches
+24.2.7.2 or 25.8.7.3; it does not mean every fixture rendered. Unexpected control failures or
+changed measured behavior exit 1. An unmeasured version exits 2 unless a control failed, and its
+observations remain available for investigation. The older version was the official 24.2.7.2
+Linux archive, extracted locally without changing the system installation.
+
+Relevant core paths are `DocxCompare.Compare`, `IrMarkupRenderer`'s header markup and
+`RevisionProcessor.AcceptRevisions` / `RejectRevisions`. This change adds harness handling and
+interoperability evidence without changing those core paths. Unit tests cover failure reporting,
+artifact freshness, process cleanup and source preservation, and run in CI without requiring a
+LibreOffice installation.
 
 ## Contributing
 

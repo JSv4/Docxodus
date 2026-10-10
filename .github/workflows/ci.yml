@@ -23,6 +23,9 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Test LibreOffice rendering diagnostics
+        run: python3 -m unittest discover -s tools/diffharness/lo -p 'test_*.py'
+
       - name: Restore dependencies
         run: |
           dotnet restore Docxodus/Docxodus.csproj
