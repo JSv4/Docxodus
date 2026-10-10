@@ -245,6 +245,7 @@ internal static class IrMarkupRenderer
         var state = new RenderState(irLeft, irRight, settings);
         state.LeftStyleIds = ReadStyleIds(left);
         state.InsertedParagraphStyleIds = CollectInsertedParagraphStyleIds(script, state);
+        state.ChangedDefaultParagraphStyleId = ReadChangedDefaultParagraphStyleId(left, right, state);
 
         // Word-parity input-revision preservation (PreserveInputRevisions): map each accepted working-copy
         // body block back to its ORIGINAL source element. A revision-free LEFT keeps the established path:
@@ -1578,6 +1579,7 @@ internal static class IrMarkupRenderer
             var rightPPr = memberPara.Element(W.pPr);
             if (rightPPr != null)
                 newPara.Add(StripUnids(new XElement(rightPPr)));
+            BindChangedDefaultParagraphStyle(newPara, state);
             // The LAST member owns the ORIGINAL left pilcrow (its mark stays unmarked), so it is the
             // paired-paragraph analogue: stamp pPrChange/mark-rPr history against the left paragraph
             // (reference compare output does — the ¶INS members are new paragraphs and carry none).
@@ -1749,6 +1751,8 @@ internal static class IrMarkupRenderer
                     DropUnresolvableStyleRef(stamped, state);
                 newPara.Add(stamped);
             }
+            if (cell.Mark != IrCrossParagraphMark.Deleted)
+                BindChangedDefaultParagraphStyle(newPara, state);
             if (cell.Mark == IrCrossParagraphMark.Equal && leftPara != null && rightPara != null)
                 ApplyBlockFormatChanges(newPara, leftPara, rightPara, state);
 
@@ -4551,6 +4555,7 @@ internal static class IrMarkupRenderer
 
         var dest = StripUnids(new XElement(src));
         state.RegisterMediaReferences(dest);
+        BindChangedDefaultParagraphStyle(dest, state);
         MarkWholeParagraphAs(dest, RevKind.MoveTo, state);
         BracketParagraphWithMoveRange(dest, isFrom: false, moveName, state);
         sink.Add(dest);
@@ -4613,7 +4618,11 @@ internal static class IrMarkupRenderer
     {
         var tbl = StripUnids(new XElement(src));
         if (!isFrom)
+        {
             state.RegisterMediaReferences(tbl);
+            foreach (var paragraph in tbl.Descendants(W.p))
+                BindChangedDefaultParagraphStyle(paragraph, state);
+        }
         MarkWholeTable(tbl, isFrom ? RevKind.MoveFrom : RevKind.MoveTo, state);
 
         var (start, end) = CreateMoveRange(isFrom, moveName, state);
@@ -4666,7 +4675,21 @@ internal static class IrMarkupRenderer
         }
         var clone = new XElement(src);
         if (fromRight)
+        {
             state.RegisterMediaReferences(clone);
+            if (state.ChangedDefaultParagraphStyleId is not null)
+            {
+                var leftParagraphs = SourceElement(equalLeftAnchor, state.Left)?.DescendantsAndSelf(W.p).ToArray();
+                var rightParagraphs = src.DescendantsAndSelf(W.p).ToArray();
+                var clones = clone.DescendantsAndSelf(W.p).ToArray();
+                for (int i = 0; i < clones.Length; i++)
+                {
+                    BindChangedDefaultParagraphStyle(clones[i], state);
+                    if (leftParagraphs?.Length == clones.Length)
+                        ApplyBlockFormatChanges(clones[i], leftParagraphs[i], rightParagraphs[i], state);
+                }
+            }
+        }
         sink.Add(StripUnids(clone));
     }
 
@@ -4745,7 +4768,11 @@ internal static class IrMarkupRenderer
     {
         StripUnids(clone);
         if (fromRight)
+        {
             state.RegisterMediaReferences(clone);
+            foreach (var paragraph in clone.DescendantsAndSelf(W.p))
+                BindChangedDefaultParagraphStyle(paragraph, state);
+        }
 
         if (clone.Name == W.p)
         {
@@ -4782,7 +4809,11 @@ internal static class IrMarkupRenderer
 
         var sdt = StripUnids(new XElement(src));
         if (fromRight)
+        {
             state.RegisterMediaReferences(sdt);
+            foreach (var paragraph in sdt.Descendants(W.p))
+                BindChangedDefaultParagraphStyle(paragraph, state);
+        }
 
         var boundaries = MarkWholeSdtEnvelope(sdt, kind, state);
         sink.Add(boundaries.Before);
@@ -6205,6 +6236,17 @@ internal static class IrMarkupRenderer
 
         var leftPPr = leftPara.Element(W.pPr);
         var rightPPr = rightPara.Element(W.pPr);
+        if (trackPPr && state.ChangedDefaultParagraphStyleId is not null)
+        {
+            // An implicit RIGHT default must become an explicit reference under the retained LEFT
+            // default. Archive the original LEFT pPr, so Reject restores its own default selection.
+            if (rightPPr?.Element(W.pStyle) is null)
+            {
+                BindChangedDefaultParagraphStyle(newPara, state);
+                rightPPr = new XElement(rightPPr ?? new XElement(W.pPr));
+                rightPPr.AddFirst(new XElement(W.pStyle, new XAttribute(W.val, state.ChangedDefaultParagraphStyleId)));
+            }
+        }
 
         // Policy-gated pPr delta: ModeledOnly compares the modeled ParaKey (the delta a consumer-grade
         // report can describe; unmodeled-only deltas stay untracked — the documented rPr-parallel blind
@@ -8033,6 +8075,61 @@ internal static class IrMarkupRenderer
         return ids;
     }
 
+    /// <summary>Default roles establish correspondence independently of display names. Admit only
+    /// unique paragraph definitions and resolvable chains; a cross-type id collision cannot be used
+    /// as a paragraph reference in the merged styles part.</summary>
+    private static string? ReadChangedDefaultParagraphStyleId(WmlDocument left, WmlDocument right, RenderState state)
+    {
+        if (state.Settings.PreserveInputRevisions || !state.Settings.TrackParagraphFormatChanges ||
+            state.Left.Styles.DefaultParagraphStyleId is not { } leftId ||
+            state.Right.Styles.DefaultParagraphStyleId is not { } rightId || leftId == rightId)
+            return null;
+
+        XElement? Styles(WmlDocument document, Uri? partUri)
+        {
+            if (partUri is null)
+                return null;
+            using var stream = new MemoryStream(document.DocumentByteArray, writable: false);
+            using var zip = new System.IO.Compression.ZipArchive(stream, System.IO.Compression.ZipArchiveMode.Read);
+            using var input = zip.GetEntry(partUri.OriginalString.TrimStart('/'))?.Open();
+            return input is null ? null : XDocument.Load(input).Root;
+        }
+        var leftRoot = Styles(left, state.Left.Styles.PartUri);
+        var rightRoot = Styles(right, state.Right.Styles.PartUri);
+        if (leftRoot is null || rightRoot is null)
+            return null;
+        bool UniqueDefault(XElement root) => root.Elements(W.style).Count(style =>
+            (string?)style.Attribute(W.type) == "paragraph" && IsOn((string?)style.Attribute(W._default))) == 1;
+        if (!UniqueDefault(leftRoot) || !UniqueDefault(rightRoot))
+            return null;
+        var rightStyles = rightRoot.Elements(W.style).Where(style => style.Attribute(W.styleId) is not null)
+            .GroupBy(style => (string)style.Attribute(W.styleId)!, StringComparer.Ordinal).ToArray();
+        if (rightStyles.Any(group => group.Count() != 1))
+            return null;
+        var stylesById = rightStyles.ToDictionary(group => group.Key, group => group.Single(), StringComparer.Ordinal);
+        var chain = new HashSet<string>(StringComparer.Ordinal);
+        if (!TryAddRightParagraphStyleChain(rightId, stylesById, chain) || chain.Any(id =>
+            leftRoot.Elements(W.style).Any(style => (string?)style.Attribute(W.styleId) == id &&
+                (string?)style.Attribute(W.type) != "paragraph")))
+            return null;
+        return rightId;
+    }
+
+    private static void BindChangedDefaultParagraphStyle(XElement paragraph, RenderState state)
+    {
+        if (state.ChangedDefaultParagraphStyleId is not { } id || paragraph.Name != W.p)
+            return;
+        var pPr = paragraph.Element(W.pPr);
+        if (pPr?.Element(W.pStyle) is not null)
+            return;
+        if (pPr is null)
+        {
+            pPr = new XElement(W.pPr);
+            paragraph.AddFirst(pPr);
+        }
+        pPr.AddFirst(new XElement(W.pStyle, new XAttribute(W.val, id)));
+    }
+
     /// <summary>Drop a stamped-current pPr's <c>w:pStyle</c> when the referenced style is not
     /// defined in the LEFT styles part. Word expresses a PAIRED paragraph's format change within
     /// the left style universe — an unresolvable style reference is dropped and the delta lives in
@@ -9358,11 +9455,17 @@ internal static class IrMarkupRenderer
         /// the output, so Word has no reason to lower it to direct properties. Null = no inserted styles.</summary>
         public HashSet<string>? InsertedParagraphStyleIds { get; set; }
 
+        /// <summary>A revised default paragraph style selected by native pPr revisions when the
+        /// two packages assign the default role to different ids. The left default stays authoritative
+        /// for deleted content and restored implicit references after rejection.</summary>
+        public string? ChangedDefaultParagraphStyleId { get; set; }
+
         /// <summary>Whether a paired paragraph's right-side <c>w:pStyle</c> resolves in the output's
-        /// style universe: the LEFT definitions plus the right-only styles inserted content imports.</summary>
+        /// style universe: the LEFT definitions, styles inserted content imports, and the revised default.</summary>
         public bool PairedParagraphStyleResolves(string styleId) =>
             (LeftStyleIds?.Contains(styleId) ?? true) ||
-            (InsertedParagraphStyleIds?.Contains(styleId) ?? false);
+            (InsertedParagraphStyleIds?.Contains(styleId) ?? false) ||
+            styleId == ChangedDefaultParagraphStyleId;
 
         /// <summary>Accepted-working-element → ORIGINAL right body element(s) map for
         /// <c>PreserveInputRevisions</c> (see <see cref="IrMarkupRenderer.BuildPreservedOriginalIndex"/>).
