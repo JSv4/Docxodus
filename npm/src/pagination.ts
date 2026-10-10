@@ -6,6 +6,7 @@
  */
 
 import { formatPageNumber } from "./page-number-format.js";
+import { alignExactLineBaselines, insetClipBounds, preserveExactLineInk } from "./line-metrics.js";
 import {
   DEFAULT_MARGIN,
   DEFAULT_PAGE_HEIGHT,
@@ -532,8 +533,16 @@ function visibleWithinPage(
     const style = view.getComputedStyle(ancestor);
     const clipsX = clips(style.overflowX);
     const clipsY = clips(style.overflowY);
-    if (!clipsX && !clipsY) continue;
+    if (!clipsX && !clipsY && !style.clipPath.startsWith("inset(")) continue;
     const ancestorRect = ancestor.getBoundingClientRect();
+    const scale = ancestorRect.width / ancestor.offsetWidth || 1;
+    const inset = insetClipBounds(style.clipPath, ancestorRect, scale);
+    if (inset) {
+      left = Math.max(left, inset.left);
+      top = Math.max(top, inset.top);
+      right = Math.min(right, inset.right);
+      bottom = Math.min(bottom, inset.bottom);
+    }
     if (clipsX) {
       left = Math.max(left, ancestorRect.left);
       right = Math.min(right, ancestorRect.right);
@@ -4606,6 +4615,17 @@ export class PaginationEngine {
         contentArea.style.height = `${Math.max(0, contentAreaHeight - notesHeightPt)}pt`;
       }
     }
+
+    // Paint offsets must follow range fragmentation: positioned runs are deliberately excluded
+    // from that structural algorithm, even though these offsets leave every line box unchanged.
+    alignExactLineBaselines(contentArea);
+    const paper = pageBox.getBoundingClientRect();
+    const header = pageBox.querySelector<HTMLElement>(`.${this.cssPrefix}header`);
+    const footer = pageBox.querySelector<HTMLElement>(`.${this.cssPrefix}footer`);
+    preserveExactLineInk(contentArea,
+      Math.max(paper.top, header?.getBoundingClientRect().bottom ?? paper.top),
+      Math.min(paper.bottom, footer?.getBoundingClientRect().top ?? paper.bottom,
+        notesEl?.getBoundingClientRect().top ?? paper.bottom), paper);
 
     return {
       pageNumber,

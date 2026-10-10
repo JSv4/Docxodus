@@ -258,6 +258,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Exact line spacing follows Word's baseline placement, including text taller than its line
+  (issue #882). A page filled by 54 exact 12pt lines now keeps all 54 lines, with their glyphs
+  visible in the margins. The paginator preserves the declared line heights and still corrects
+  misplaced blocks or ink that would overlap a running story.
 - Text edits reject characters XML cannot represent before changing the document, regardless of
   `EmitMarkdownPatch` (issue #1039). Markdown and plain-text payloads, content-control fills and
   reference-field text return `MalformedMarkdown` for unpaired surrogates or forbidden controls,

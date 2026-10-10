@@ -99,53 +99,11 @@ export function applyUnroundedNormalLineHeights(root: Element): number {
 /** The elements the converter writes a Word paragraph as. */
 const PARAGRAPH_SELECTOR = "p, h1, h2, h3, h4, h5, h6";
 
-/**
- * Put every exported baseline where Word puts it, to a fraction of a pixel (issue #942).
- *
- * Word sets a line's baseline its natural line height less the font's descent below the line's top: the
- * font's ascent, with any line gap above it. Chromium instead rounds the ascent and descent to whole pixels
- * and floors half the remaining leading, so the baseline lands up to a pixel off; for 11 pt Calibri and 12 pt
- * Arial it is one pixel high. Word also puts a font's line gap above the text where CSS splits it, which moves
- * Arial's baseline a little further. That offset is the same on every line of a paragraph, whatever its position, so
- * it is measured once per paragraph shape in a probe and taken back with relative positioning, which moves the
- * glyphs without changing any line box: pagination and line pitch are untouched.
- *
- * Each direct inline child of a paragraph is moved, composing with a `top` it already has. A child positioned
- * some other way, or holding an image, an SVG or an absolutely positioned element (for which a relative child
- * would become the containing block), is left alone. Run once the page tree is final: the moved boxes count
- * toward a page band's overflow, which the export's clipping check must not see.
- * Returns how many children moved.
- */
-export function alignBaselinesToWord(root: Element): number {
-  const document = root.ownerDocument;
-  const view = document.defaultView;
-  if (!view) return 0;
-  const host = document.body ?? document.documentElement;
-  const descents = new Map<string, number>();
+/** How far Chromium puts the first baseline below the top of a paragraph shaped like this one. */
+function baselineOffsets(document: Document): (paragraph: CSSStyleDeclaration, child: CSSStyleDeclaration) => number {
   const offsets = new Map<string, number>();
-  const ratioFor = naturalLineHeightRatios(document);
-
-  /** The font's descent as a fraction of its size, read where rounding is negligible. */
-  const descentRatio = (style: CSSStyleDeclaration): number => {
-    // The canvas font shorthand takes no percentage stretch (computed styles give one), and ignores a value it
-    // cannot parse, so the stretch is left out and an assignment that did not take counts as unmeasurable.
-    const font = `${style.fontStyle} ${style.fontWeight} ${PROBE_FONT_SIZE_PX}px ${style.fontFamily}`;
-    let ratio = descents.get(font);
-    if (ratio === undefined) {
-      const context = document.createElement("canvas").getContext("2d");
-      ratio = Number.NaN;
-      if (context) {
-        context.font = font;
-        if (context.font.includes(`${PROBE_FONT_SIZE_PX}px`))
-          ratio = context.measureText(LATIN_PROBE).fontBoundingBoxDescent / PROBE_FONT_SIZE_PX;
-      }
-      descents.set(font, ratio);
-    }
-    return ratio;
-  };
-
-  /** How far Chromium puts the first baseline below the top of a paragraph shaped like this one. */
-  const chromiumOffset = (paragraph: CSSStyleDeclaration, child: CSSStyleDeclaration): number => {
+  const host = document.body ?? document.documentElement;
+  return (paragraph, child) => {
     const key = [paragraph.fontStyle, paragraph.fontWeight, paragraph.fontStretch, paragraph.fontFamily,
       paragraph.fontSize, paragraph.lineHeight, child.fontStyle, child.fontWeight, child.fontStretch,
       child.fontFamily, child.fontSize, child.lineHeight, child.verticalAlign, child.top].join("|");
@@ -171,6 +129,150 @@ export function alignBaselinesToWord(root: Element): number {
       offsets.set(key, offset);
     }
     return offset;
+  };
+}
+
+/**
+ * Word places an exact-spaced line's baseline at 80% of its height, independent of font size
+ * (issue #882; fixtures/exact-line-spacing/word.json). Move each run by its own font's offset,
+ * retaining the converter's top alignment so mixed font sizes cannot enlarge the line boxes.
+ */
+export function alignExactLineBaselines(root: Element): void {
+  const view = root.ownerDocument.defaultView;
+  if (!view) return;
+  const offsetFor = baselineOffsets(root.ownerDocument);
+  for (const run of Array.from(root.querySelectorAll<HTMLElement>("[data-docx-exact-run]"))) {
+    const paragraph = run.closest(PARAGRAPH_SELECTOR);
+    if (!paragraph || !movable(run, view)) continue;
+    const style = view.getComputedStyle(paragraph);
+    if (!style.getPropertyValue("--docx-exact-line-height")) continue;
+    const height = Number.parseFloat(style.lineHeight);
+    const runStyle = view.getComputedStyle(run);
+    if (!(height > 0) || runStyle.display !== "inline" || runStyle.verticalAlign !== "top") continue;
+    const top = Number.parseFloat(runStyle.top) || 0;
+    const offset = offsetFor(style, runStyle) - top;
+    const shift = height * 0.8 - offset;
+    if (!Number.isFinite(shift)) continue;
+    run.style.position = "relative";
+    run.style.top = `${(top + shift).toFixed(4)}px`;
+  }
+}
+
+const EXACT_INK_ATTRIBUTE = "data-docx-exact-ink";
+
+/**
+ * Exact line boxes still occupy their declared height when their glyphs extend outside them.
+ * Word lets that ink enter the margins. Expand only the paint clip, after placement, for plain
+ * inline text whose paragraph fits its band and whose ink cannot enter a running story or leave
+ * the paper. Block geometry and pagination budgets remain unchanged.
+ */
+export function preserveExactLineInk(content: HTMLElement, topLimit: number, bottomLimit: number, paper: DOMRect): void {
+  const view = content.ownerDocument.defaultView;
+  if (!view) return;
+  const band = content.getBoundingClientRect();
+  const scale = band.width / content.offsetWidth || 1;
+  let above = 0;
+  let below = 0;
+  for (const paragraph of Array.from(content.querySelectorAll<HTMLElement>(PARAGRAPH_SELECTOR))) {
+    if (!view.getComputedStyle(paragraph).getPropertyValue("--docx-exact-line-height")) continue;
+    const box = paragraph.getBoundingClientRect();
+    if (box.top < band.top - 0.5 || box.bottom > band.bottom + 0.5) continue;
+    if (!paragraph.querySelector("[data-docx-exact-run]") || paragraph.querySelector("img, svg, canvas, video, object, iframe"))
+      continue;
+    if (Array.from(paragraph.querySelectorAll<HTMLElement>("*")).some(element => {
+      const style = view.getComputedStyle(element);
+      return style.display !== "inline" || !["static", "relative"].includes(style.position);
+    })) continue;
+    const range = content.ownerDocument.createRange();
+    range.selectNodeContents(paragraph);
+    const rects = Array.from(range.getClientRects()).filter(rect => rect.width > 0 && rect.height > 0);
+    if (rects.length === 0) continue;
+    const top = Math.min(...rects.map(rect => rect.top));
+    const bottom = Math.max(...rects.map(rect => rect.bottom));
+    if (top < topLimit || bottom > bottomLimit) continue;
+    const extra = Math.max(0, band.top - top, bottom - band.bottom);
+    if (extra === 0) continue;
+    paragraph.setAttribute(EXACT_INK_ATTRIBUTE, "true");
+    above = Math.max(above, band.top - top);
+    below = Math.max(below, bottom - band.bottom);
+  }
+  if (above > 0 || below > 0) {
+    const up = Math.ceil(above / scale * 64) / 64;
+    const down = Math.ceil(below / scale * 64) / 64;
+    // overflow-clip-margin is ignored by Chromium when the other axis stays visible. A pixel
+    // inset clips each vertical edge independently and keeps horizontal clipping at the paper.
+    content.style.overflowY = "visible";
+    content.style.clipPath = `inset(${-up}px ${(band.right - paper.right) / scale}px ${-down}px ${(paper.left - band.left) / scale}px)`;
+  }
+}
+
+/** Read the pixel inset used for the exact-text paint clip, including CSS's 1-4 value shorthand. */
+export function insetClipBounds(value: string, box: DOMRect, scale: number):
+  { top: number; right: number; bottom: number; left: number } | null {
+  const match = /^inset\(((?:-?\d+(?:\.\d+)?px\s*){1,4})\)$/.exec(value);
+  if (!match) return null;
+  const parts = match[1].trim().split(/\s+/).map(Number.parseFloat);
+  const [top, right = top, bottom = top, left = right] = parts;
+  return { top: box.top + top * scale, right: box.right - right * scale,
+    bottom: box.bottom - bottom * scale, left: box.left + left * scale };
+}
+
+/** Only inline ink in a fitting exact-spaced paragraph may use the expanded paint clip. */
+export function isPreservedExactLineInk(element: HTMLElement, content: HTMLElement): boolean {
+  const paragraph = element.closest<HTMLElement>(`[${EXACT_INK_ATTRIBUTE}]`);
+  const view = content.ownerDocument.defaultView;
+  if (!paragraph || !view || element === paragraph || !content.contains(paragraph)) return false;
+  if (view.getComputedStyle(element).display !== "inline") return false;
+  const band = content.getBoundingClientRect();
+  const box = paragraph.getBoundingClientRect();
+  const clip = insetClipBounds(view.getComputedStyle(content).clipPath, band, band.width / content.offsetWidth || 1);
+  const ink = element.getBoundingClientRect();
+  return clip !== null && box.top >= band.top - 0.5 && box.bottom <= band.bottom + 0.5
+    && ink.top >= clip.top - 0.02 && ink.bottom <= clip.bottom + 0.02;
+}
+
+/**
+ * Put every exported baseline where Word puts it, to a fraction of a pixel (issue #942).
+ *
+ * Word sets a line's baseline its natural line height less the font's descent below the line's top: the
+ * font's ascent, with any line gap above it. Chromium instead rounds the ascent and descent to whole pixels
+ * and floors half the remaining leading, so the baseline lands up to a pixel off; for 11 pt Calibri and 12 pt
+ * Arial it is one pixel high. Word also puts a font's line gap above the text where CSS splits it, which moves
+ * Arial's baseline a little further. That offset is the same on every line of a paragraph, whatever its position, so
+ * it is measured once per paragraph shape in a probe and taken back with relative positioning, which moves the
+ * glyphs without changing any line box: pagination and line pitch are untouched.
+ *
+ * Each direct inline child of a paragraph is moved, composing with a `top` it already has. A child positioned
+ * some other way, or holding an image, an SVG or an absolutely positioned element (for which a relative child
+ * would become the containing block), is left alone. Run once the page tree is final: the moved boxes count
+ * toward a page band's overflow, which the export's clipping check must not see.
+ * Returns how many children moved.
+ */
+export function alignBaselinesToWord(root: Element): number {
+  const document = root.ownerDocument;
+  const view = document.defaultView;
+  if (!view) return 0;
+  const descents = new Map<string, number>();
+  const ratioFor = naturalLineHeightRatios(document);
+  const chromiumOffset = baselineOffsets(document);
+
+  /** The font's descent as a fraction of its size, read where rounding is negligible. */
+  const descentRatio = (style: CSSStyleDeclaration): number => {
+    // The canvas font shorthand takes no percentage stretch (computed styles give one), and ignores a value it
+    // cannot parse, so the stretch is left out and an assignment that did not take counts as unmeasurable.
+    const font = `${style.fontStyle} ${style.fontWeight} ${PROBE_FONT_SIZE_PX}px ${style.fontFamily}`;
+    let ratio = descents.get(font);
+    if (ratio === undefined) {
+      const context = document.createElement("canvas").getContext("2d");
+      ratio = Number.NaN;
+      if (context) {
+        context.font = font;
+        if (context.font.includes(`${PROBE_FONT_SIZE_PX}px`))
+          ratio = context.measureText(LATIN_PROBE).fontBoundingBoxDescent / PROBE_FONT_SIZE_PX;
+      }
+      descents.set(font, ratio);
+    }
+    return ratio;
   };
 
   const moves: Array<{ element: HTMLElement; top: number }> = [];

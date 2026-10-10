@@ -8,7 +8,7 @@
 
 import limitsContractJson from "./export-resource-limits-v1.json";
 import { assertWellFormedUnicode, canonicalJson } from "./canonical.js";
-import { alignBaselinesToWord, applyUnroundedNormalLineHeights } from "./line-metrics.js";
+import { alignBaselinesToWord, applyUnroundedNormalLineHeights, isPreservedExactLineInk } from "./line-metrics.js";
 import { measureRenderedSource, PaginationEngine, type PageMap } from "./pagination.js";
 import {
   createWorkerDocxodus,
@@ -2774,7 +2774,7 @@ function findClippedContent(document: Document): ClippedBodyPage[] {
           element,
           bottom: element.getBoundingClientRect().bottom,
         }))
-        .filter(({ bottom }) => bottom > boundary + 1)
+        .filter(({ element, bottom }) => bottom > boundary + 1 && !isPreservedExactLineInk(element, content))
         .sort((left, right) => right.bottom - left.bottom);
       // Collapsed trailing margins contribute to scrollHeight even though no
       // descendant pixels are clipped (a common final blank Word paragraph).
