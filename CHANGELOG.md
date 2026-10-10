@@ -268,6 +268,11 @@ All notable changes to this project will be documented in this file.
   through native paragraph-property revisions; rejection restores the original style reference or
   implicit default. Style display names do not merge unrelated custom styles, and direct overrides,
   inherited formatting, inserted content, splits and moves retain their formatting.
+
+- Comparing a new heading that shares a body paragraph's leading words now keeps the closer
+  body-to-body edit paired (issue #1052). Equal shared-word counts are resolved by normalized
+  content overlap before positional preference; the heading remains a native paragraph insertion.
+  Candidate checks retain order boundaries and the rare-word index used for large replacement gaps.
 - Comparing a shared paragraph style whose parent changes now preserves inherited formatting
   reversibly (issue #1044). Affected styles and descendants carry effective property snapshots in
   native paragraph/run formatting revisions, including child overrides and run toggles. Their parent
