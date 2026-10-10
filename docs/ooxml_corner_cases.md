@@ -3012,3 +3012,42 @@ style changes can still pair; style names and font sizes are not a blanket match
 Tests cover styled and unstyled insertions, genuine heading edits, body edits, paragraph boundaries,
 splits/merges, unrelated rewrites, native inserted paragraph marks, both endpoints, schema validity,
 and agreement between the indexed tie decision and exhaustive search.
+
+### Document-default changes with table consumers
+
+**Status:** Fixed (issue #1051, October 2026)
+
+A literal `w:docDefaults` font/spacing change with otherwise identical style definitions used to
+be lost whenever either input contained a table. The paragraph-only style projection deliberately
+excluded tables: putting defaults into paragraph styles would raise their precedence above conditional
+table formatting. Removing that gate alone would produce the wrong appearance.
+
+Minimal synthetic input (same `Normal` definition and newly invented body/cell sentences on both sides):
+
+```xml
+<w:docDefaults>
+  <w:rPrDefault><w:rPr><w:rFonts w:ascii="DejaVu Serif" w:hAnsi="DejaVu Serif"
+    w:eastAsia="DejaVu Serif" w:cs="DejaVu Serif"/><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr></w:rPrDefault>
+  <w:pPrDefault><w:pPr><w:spacing w:before="0" w:after="360" w:line="360" w:lineRule="auto"/></w:pPr></w:pPrDefault>
+</w:docDefaults>
+```
+
+The original declares DejaVu Sans, sizes 20, after 0, and line 240. Add an unchanged one-cell table
+and the old accepted result retains those original values in both body and cell paragraphs.
+
+| Consumer | Word | LibreOffice | Docxodus before | Docxodus after |
+|---|---|---|---|---|
+| Body and cell default font/spacing | Not measured | Not measured | Original defaults survive acceptance | Acceptance uses revised defaults; rejection restores original |
+| Conditional first-row after/font override | Not measured | Not measured | Unchanged, but other inherited axes remain old | Override remains authoritative; other axes follow revised defaults |
+
+`IrDocDefaultsConsumerProjection` resolves detached right sources with both defaults sets through
+`FormattingAssembler`, materializes only affected literal font/size/spacing axes, and carries the old
+direct properties in native `pPrChange`/`rPrChange`. The package keeps left defaults and style definitions.
+The projection includes paragraph marks, including empty paragraphs. Inserted marks omit formatting
+history so rejecting it cannot erase their structural insertion marker. Source slices receive unique
+native revision IDs after emission; cached IR snapshots retain their original sources.
+
+Synthetic tests cover conditional and direct precedence, inherited styles, edited text, inserted/deleted
+paragraphs, row insertion, splits/merges, removed declarations, snapshot reuse, and Office 2019 validation.
+The existing paragraph-only control remains green. Other package presentation changes and the original
+unsupported consumer gates keep their existing behavior.

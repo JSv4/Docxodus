@@ -87,7 +87,7 @@ namespace Docxodus.Ir.Diff;
 /// endnote part markup yet. The body still round-trips; note-scope markup + id uniqueness across scopes is
 /// Task 4.</para>
 /// </remarks>
-internal static class IrMarkupRenderer
+internal static partial class IrMarkupRenderer
 {
     /// <summary>TRANSIENT marker attribute carrying a source <c>w:hyperlink</c>'s document-order ordinal onto
     /// each emitted wrapper clone, so <see cref="CoalesceAdjacentHyperlinks"/> can rejoin ONLY the fragments of
@@ -243,6 +243,7 @@ internal static class IrMarkupRenderer
         }
 
         var state = new RenderState(irLeft, irRight, settings);
+        state.RightSource = ProjectTableDocDefaults(left, right, state);
         state.LeftStyleIds = ReadStyleIds(left);
         state.InsertedParagraphStyleIds = CollectInsertedParagraphStyleIds(script, state);
         state.ChangedDefaultParagraphStyleId = ReadChangedDefaultParagraphStyleId(left, right, state);
@@ -594,6 +595,8 @@ internal static class IrMarkupRenderer
                 // cloned content came from it, so its prefixes win. Runs last so it sees every part
                 // the passes above wrote into.
                 PartNamespaces.Of(new[] { right, left }).DeclareIn(wDoc);
+
+                RenumberProjectedProperties(wDoc, state);
 
                 // The passes above insert and re-parent properties, rows and table shells at positions
                 // each chose locally; put every table, row, pPr and rPr the output holds back into schema
@@ -5084,6 +5087,10 @@ internal static class IrMarkupRenderer
                 pPr.Add(rPr);
         }
         var markName = IsDeleteGrade(kind) ? W.del : W.ins;
+        // A projected mark history is unnecessary on a newly inserted pilcrow, which vanishes
+        // on reject. Restoring that history first would erase its structural insertion marker.
+        if (markName == W.ins && state.ProjectedPropertyRevisionIds is not null)
+            rPr.Elements(W.rPrChange).Remove();
         // Remove any pre-existing ins/del marker (idempotence) then add the new one FIRST inside rPr.
         rPr.Elements().Where(e => e.Name == W.ins || e.Name == W.del).Remove();
         rPr.AddFirst(new XElement(markName, state.RevisionAttributes()));
@@ -6859,7 +6866,7 @@ internal static class IrMarkupRenderer
     private static bool HasThemeReference(XElement root) => root.DescendantsAndSelf().Attributes()
         .Any(attribute => attribute.Name.LocalName.IndexOf("theme", StringComparison.OrdinalIgnoreCase) >= 0);
 
-    private static bool HasUnsafePresentationConsumer(IrDocument document)
+    private static bool HasUnsafePresentationConsumer(IrDocument document, bool allowTables = false)
     {
         // This first style-level slice deliberately avoids shapes whose effective appearance includes a higher
         // precedence layer (table conditional styles and list labels), an independent package graph (drawing),
@@ -6871,7 +6878,8 @@ internal static class IrMarkupRenderer
             "sdt", "smartTag",
         };
         return document.Sources.Values.Any(source => source.Root?.DescendantsAndSelf().Any(element =>
-            element.Name.Namespace == W.w && unsafeNames.Contains(element.Name.LocalName)) == true) ||
+            element.Name.Namespace == W.w && unsafeNames.Contains(element.Name.LocalName) &&
+            !(allowTables && element.Name == W.tbl)) == true) ||
             document.Sources.Values.Any(source => source.Root is not null && HasThemeReference(source.Root));
     }
 
@@ -9436,6 +9444,8 @@ internal static class IrMarkupRenderer
         /// switches it per op to the contributing reviewer's IR (or <see cref="Left"/>/base for a base-sourced
         /// equal/delete) so the existing emit helpers can be reused per-reviewer.</summary>
         public IrDocument RightSource { get; set; }
+
+        public HashSet<string>? ProjectedPropertyRevisionIds { get; set; }
 
         /// <summary>When non-null, overrides Settings.AuthorForRevisions for emitted revision attributes
         /// (composite multi-author rendering). Null for normal two-way render → behavior unchanged.</summary>
