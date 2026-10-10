@@ -1,5 +1,3 @@
-#nullable enable
-
 // Copyright (c) John Scrudato IV. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
@@ -116,6 +114,49 @@ public class UndoRingMemoryTests
     }
 
     // ─── Estimator ───────────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData("clear", false)]
+    [InlineData("clear", true)]
+    [InlineData("undo", false)]
+    [InlineData("undo", true)]
+    [InlineData("redo", false)]
+    [InlineData("redo", true)]
+    [InlineData("restore", false)]
+    [InlineData("restore", true)]
+    public void UR007_DiscardedSharedPayloadsAreCollectibleWithoutAnotherRecount(string action, bool grouped)
+    {
+        var ring = new UndoRing<object>(capacity: 10, budgetBytes: 10000,
+            sharedPayloadsOf: static payload => new[] { (payload, 100L) });
+        var weak = RecordThenDiscard(ring, action, grouped);
+
+        System.GC.Collect();
+        System.GC.WaitForPendingFinalizers();
+        System.GC.Collect();
+
+        Assert.False(weak.IsAlive, "memory accounting must not retain discarded history");
+        System.GC.KeepAlive(ring);
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static System.WeakReference RecordThenDiscard(UndoRing<object> ring, string action, bool grouped)
+    {
+        var empty = ring.CaptureState();
+        object payload = grouped ? new FrozenBlock(new XElement("discarded")) : new object();
+        object snapshot = grouped ? new FrozenChunk(new[] { (FrozenBlock)payload }) : payload;
+        if (action == "redo") ring.RecordForRedo(snapshot);
+        else ring.RecordPreOp(snapshot);
+        Assert.True(ring.RetainedBytes > 0);
+
+        switch (action)
+        {
+            case "clear": ring.Clear(); break;
+            case "undo": ring.PopForUndo(); break;
+            case "redo": ring.PopForRedo(); break;
+            case "restore": ring.RestoreState(empty); break;
+        }
+        return new System.WeakReference(payload);
+    }
 
     /// <summary>The estimate must grow with the document, and must exceed serialized length —
     /// budgeting against serialized size is the under-count this estimator exists to avoid.</summary>

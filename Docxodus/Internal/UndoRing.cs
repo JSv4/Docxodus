@@ -1,5 +1,3 @@
-#nullable enable
-
 // Copyright (c) John Scrudato IV. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
@@ -109,26 +107,34 @@ internal sealed class UndoRing<T>
         // then cleared rather than reallocated, so a recompute per edit allocates nothing.
         var seen = _seenPayloads ??= new HashSet<object>(ReferenceEqualityComparer.Instance);
         var seenMembers = _seenMembers ??= new HashSet<object>(ReferenceEqualityComparer.Instance);
-        seen.Clear();
-        seenMembers.Clear();
-        long total = 0;
-        foreach (var entry in _undo.Concat(_redo))
-            foreach (var (payload, bytes) in _sharedPayloadsOf(entry.Snapshot))
-            {
-                if (!seen.Add(payload)) continue;
-                total += bytes;
-                // A group (a chunk of snapshot blocks, issue #1022) shares its members with other
-                // groups too: count each member once however many groups hold it.
-                if (payload is ISharedPayloadGroup group)
+        try
+        {
+            long total = 0;
+            foreach (var entry in _undo.Concat(_redo))
+                foreach (var (payload, bytes) in _sharedPayloadsOf(entry.Snapshot))
                 {
-                    for (int i = 0; i < group.MemberCount; i++)
+                    if (!seen.Add(payload)) continue;
+                    total += bytes;
+                    // A group (a chunk of snapshot blocks, issue #1022) shares its members with other
+                    // groups too: count each member once however many groups hold it.
+                    if (payload is ISharedPayloadGroup group)
                     {
-                        var (member, memberBytes) = group.Member(i);
-                        if (seenMembers.Add(member)) total += memberBytes;
+                        for (int i = 0; i < group.MemberCount; i++)
+                        {
+                            var (member, memberBytes) = group.Member(i);
+                            if (seenMembers.Add(member)) total += memberBytes;
+                        }
                     }
                 }
-            }
-        return total;
+            return total;
+        }
+        finally
+        {
+            // Keep the allocated capacity, never the payloads: history may be popped, cleared or
+            // restored without another recount to release them.
+            seen.Clear();
+            seenMembers.Clear();
+        }
     }
 
     private HashSet<object>? _seenPayloads;
