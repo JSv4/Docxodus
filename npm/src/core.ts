@@ -132,6 +132,7 @@ export type {
   BookmarkRangeSegment,
   CharSpan,
   CommentListEntry,
+  NoteListEntry,
   ContentControlBindingInfo,
   ContentControlBindingPolicy,
   ContentControlFillOptions,

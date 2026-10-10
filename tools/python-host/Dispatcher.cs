@@ -121,7 +121,7 @@ internal static partial class Dispatcher
         "project" => DocxSessionOps.Project(Handle(args)),
         "project_anchor" => DocxSessionOps.ProjectAnchor(
             Handle(args), Str(args, "anchorId"),
-            (ProjectionDepth)IntOptional(args, "depth", 2),
+            (ProjectionDepth?)OptInt(args, "depth"),
             DocxSessionJson.ParsePageCitationRequest(args)),
         "get_version" => DocxSessionOps.GetVersionJson(Handle(args)),
         "register_page_map" => DocxSessionOps.RegisterPageMap(
@@ -148,7 +148,7 @@ internal static partial class Dispatcher
         "delete_block" => DocxSessionOps.DeleteBlock(Handle(args), Str(args, "anchorId")),
         "move_block" => DocxSessionOps.MoveBlock(
             Handle(args), Str(args, "sourceAnchorId"), Str(args, "targetAnchorId"),
-            DocxSessionJson.ParsePos(Str(args, "position"))),
+            OptPos(args)),
         "delete_range" => DocxSessionOps.DeleteRange(
             Handle(args), Str(args, "fromAnchorId"), Str(args, "toAnchorIdExclusive")),
         "delete_section" => DocxSessionOps.DeleteSection(
@@ -165,7 +165,7 @@ internal static partial class Dispatcher
             Int(args, "spanStart"), Int(args, "spanLength"), Str(args, "newInner")),
 
         "insert_paragraph" => DocxSessionOps.InsertParagraph(
-            Handle(args), Str(args, "anchorId"), ParsePos(args, "position"), Str(args, "markdown")),
+            Handle(args), Str(args, "anchorId"), OptPos(args), Str(args, "markdown")),
         "split_paragraph" => DocxSessionOps.SplitParagraph(
             Handle(args), Str(args, "anchorId"), Int(args, "characterOffset")),
         // Argument names are MCP's on every transport (issue #1023); this host's old spellings
@@ -182,7 +182,7 @@ internal static partial class Dispatcher
             DocxSessionJson.ParseHeaderFooterKind(Str(args, "kind")), Str(args, "markdown")),
         "insert_page_number_field" => DocxSessionOps.InsertPageNumberField(
             Handle(args), Str(args, "anchorId"),
-            DocxSessionJson.ParsePageNumberField(Str(args, "field")),
+            DocxSessionJson.ParseOptionalPageNumberField(DefaultedStr(args, "field")),
             DocxSessionJson.ParseNumberFormatOrNull(DocxSessionJson.AliasedString(args, "numberFormat", "format"))),
         "ensure_header_footer_visible" => DocxSessionOps.EnsureHeaderFooterVisible(
             Handle(args), Aliased(args, "bodyAnchorId", "anchorId"),
@@ -208,6 +208,12 @@ internal static partial class Dispatcher
             Handle(args), Str(args, "anchorId"), DocxSessionJson.ParseOptionalPos(OptStr(args, "position")),
             OptionsOrNull(args, DocxSessionJson.ParseTableOfAuthoritiesOptions)),
 
+        // Issue #1026: the rule is the canonical optional border-edge object; "" takes the default edge.
+        "insert_horizontal_rule" => DocxSessionOps.InsertHorizontalRule(
+            Handle(args), Str(args, "anchorId"), OptPos(args), RawObjectOrEmpty(args, "rule")),
+
+        "list_notes" => DocxSessionOps.ListNotes(
+            Handle(args), OptBool(args, "endnotes") ?? throw new FormatException("args missing boolean \"endnotes\"")),
         "insert_footnote" => DocxSessionOps.InsertFootnote(
             Handle(args), Str(args, "anchorId"), Int(args, "characterOffset"), Str(args, "markdown")),
         "insert_endnote" => DocxSessionOps.InsertEndnote(
@@ -238,9 +244,9 @@ internal static partial class Dispatcher
         "embed_linked_image" => DocxSessionOps.EmbedLinkedImage(
             Handle(args), Str(args, "imageId"), Str(args, "imageBase64")),
         "set_image_dimensions" => DocxSessionOps.SetImageDimensions(
-            Handle(args), Str(args, "imageId"), JsonObjectOrEmpty(args, "dimensions")),
+            Handle(args), Str(args, "imageId"), JsonObject(args, "dimensions")),
         "set_image_metadata" => DocxSessionOps.SetImageMetadata(
-            Handle(args), Str(args, "imageId"), OptStr(args, "altText"), OptStr(args, "title")),
+            Handle(args), Str(args, "imageId"), PresentNullableStr(args, "altText"), PresentNullableStr(args, "title")),
         "set_image_floating_layout" => DocxSessionOps.SetImageFloatingLayout(
             Handle(args), Str(args, "imageId"), JsonObject(args, "layout")),
         "remove_image" => DocxSessionOps.RemoveImage(Handle(args), Str(args, "imageId")),
@@ -285,8 +291,7 @@ internal static partial class Dispatcher
         "list_revisions" => DocxSessionOps.ListRevisions(
             Handle(args), DocxSessionJson.ParseRevisionListFilter(args)),
         "list_revision_repairs" => DocxSessionOps.ListRevisionRepairs(Handle(args)),
-        "repair_revisions" => DocxSessionOps.RepairRevisions(Handle(args),
-            args.TryGetProperty("repairs", out var repairs) ? repairs.GetRawText() : "[]"),
+        "repair_revisions" => DocxSessionOps.RepairRevisions(Handle(args), RawArray(args, "repairs")),
         "accept_revision" => DocxSessionOps.AcceptRevision(Handle(args), Str(args, "revisionId")),
         "reject_revision" => DocxSessionOps.RejectRevision(Handle(args), Str(args, "revisionId")),
         "accept_all_revisions" => DocxSessionOps.AcceptAllRevisions(Handle(args)),
@@ -305,10 +310,10 @@ internal static partial class Dispatcher
         "remove_list_membership" => DocxSessionOps.RemoveListMembership(
             Handle(args), Str(args, "anchorId")),
         "apply_list_format" => DocxSessionOps.ApplyListFormat(
-            Handle(args), Str(args, "anchorId"), DocxSessionJson.ParseListFormat(OptStr(args, "listFormat"))),
+            Handle(args), Str(args, "anchorId"), DocxSessionJson.ParseOptionalListFormat(OptStr(args, "listFormat"))),
         "apply_list_format_range" => DocxSessionOps.ApplyListFormatRange(
             Handle(args), Str(args, "firstAnchorId"), Str(args, "lastAnchorId"),
-            DocxSessionJson.ParseListFormat(OptStr(args, "listFormat"))),
+            DocxSessionJson.ParseOptionalListFormat(OptStr(args, "listFormat"))),
         "set_list_start_override" => DocxSessionOps.SetListStartOverride(
             Handle(args), Str(args, "anchorId"), AliasedInt(args, "startValue", "value")),
         "clear_list_start_override" => DocxSessionOps.ClearListStartOverride(
@@ -321,16 +326,17 @@ internal static partial class Dispatcher
         "resolve_table_cell_coordinate" => DocxSessionOps.ResolveTableCellCoordinate(
             Handle(args), Str(args, "tableAnchorId"), Int(args, "rowIndex"), Int(args, "columnIndex")),
         "insert_table" => DocxSessionOps.InsertTable(
-            Handle(args), Str(args, "anchorId"), ParsePos(args, "position"),
+            Handle(args), Str(args, "anchorId"), OptPos(args),
             Int(args, "rows"), Int(args, "columns"), RawObjectOrEmpty(args, "options")),
         "insert_table_row" => DocxSessionOps.InsertTableRow(
-            Handle(args), Str(args, "cellAnchorId"), ParsePos(args, "position")),
+            Handle(args), Str(args, "cellAnchorId"), OptPos(args)),
         "insert_table_column" => DocxSessionOps.InsertTableColumn(
-            Handle(args), Str(args, "cellAnchorId"), ParsePos(args, "position")),
+            Handle(args), Str(args, "cellAnchorId"), OptPos(args)),
         "delete_table_row" => DocxSessionOps.DeleteTableRow(Handle(args), Str(args, "cellAnchorId")),
         "delete_table_column" => DocxSessionOps.DeleteTableColumn(Handle(args), Str(args, "cellAnchorId")),
         "merge_cells" => DocxSessionOps.MergeCells(
-            Handle(args), Str(args, "cellAnchorId"), Int(args, "rowSpan"), AliasedInt(args, "colSpan", "columnSpan"),
+            Handle(args), Str(args, "cellAnchorId"), DefaultedInt(args, "rowSpan"),
+            DefaultedInt(args, "colSpan", "columnSpan"),
             DocxSessionJson.AliasedString(args, "mergeContent", "content")),
         "unmerge_cells" => DocxSessionOps.UnmergeCells(Handle(args), Str(args, "cellAnchorId")),
         "set_column_widths" => DocxSessionOps.SetColumnWidths(
@@ -338,7 +344,7 @@ internal static partial class Dispatcher
         "set_table_borders" => DocxSessionOps.SetTableBorders(
             Handle(args), Str(args, "cellAnchorId"), RawObjectOrEmpty(args, "spec")),
         "set_cell_shading" => DocxSessionOps.SetCellShading(
-            Handle(args), Str(args, "cellAnchorId"), OptStr(args, "fill") ?? "",
+            Handle(args), Str(args, "cellAnchorId"), OptStr(args, "fill"),
             DocxSessionJson.AliasedString(args, "shadingScope", "scope")),
         "set_repeat_header_row" => DocxSessionOps.SetRepeatHeaderRow(
             Handle(args), Str(args, "cellAnchorId"), OptBool(args, "repeat")),
@@ -360,16 +366,16 @@ internal static partial class Dispatcher
 
         "find_placeholders" => DocxSessionOps.FindPlaceholders(
             Handle(args),
-            (PlaceholderKinds)IntOptional(args, "kinds", (int)PlaceholderKinds.All),
-            (ProjectionScopes)IntOptional(args, "scope", (int)ProjectionScopes.Body),
+            (PlaceholderKinds?)OptInt(args, "kinds"),
+            (ProjectionScopes?)OptInt(args, "scope"),
             OptInt(args, "contextChars"),
-            (ContextBoundary)IntOptional(args, "boundary", (int)ContextBoundary.Char),
+            (ContextBoundary?)OptInt(args, "boundary"),
             DocxSessionJson.ParsePageCitationRequest(args)),
         "get_edit_summary" => DocxSessionOps.GetEditSummary(Handle(args)),
         "remaining_placeholders" => DocxSessionOps.RemainingPlaceholders(
-            Handle(args), (PlaceholderKinds)IntOptional(args, "kinds", 7)),
+            Handle(args), (PlaceholderKinds?)OptInt(args, "kinds")),
         "get_diff" => DocxSessionOps.GetDiff(
-            Handle(args), (DiffFormat)IntOptional(args, "format", 0)),
+            Handle(args), (DiffFormat?)OptInt(args, "format")),
         "get_semantic_changes" => DocxSessionOps.GetSemanticChanges(Handle(args)),
         "find_by_annotation" => DocxSessionOps.FindByAnnotation(
             Handle(args), Str(args, "annotationId"), DocxSessionJson.ParsePageCitationRequest(args),
@@ -388,7 +394,7 @@ internal static partial class Dispatcher
         "remove_annotation" => DocxSessionOps.RemoveAnnotation(
             Handle(args), Str(args, "annotationId")),
         "update_annotation" => DocxSessionOps.UpdateAnnotation(
-            Handle(args), Str(args, "annotationId"), JsonObject(args, "update")),
+            Handle(args), Str(args, "annotationId"), OptJsonObject(args, "update")),
         "move_annotation" => DocxSessionOps.MoveAnnotation(
             Handle(args),
             Str(args, "annotationId"),
@@ -409,7 +415,7 @@ internal static partial class Dispatcher
         "find_all_by_text" => DocxSessionOps.FindAllByText(Handle(args), Str(args, "needle"), ParseFindOptions(args)),
         "find_by_regex" => DocxSessionOps.FindByRegex(
             Handle(args), Str(args, "pattern"),
-            (RegexOptions)IntOptional(args, "regexOptions", 0),
+            (RegexOptions?)OptInt(args, "regexOptions"),
             ParseFindOptions(args)),
         "find_by_kind" => DocxSessionOps.FindByKind(
             Handle(args), Str(args, "kind"),
@@ -848,22 +854,55 @@ internal static partial class Dispatcher
             && v.ValueKind == JsonValueKind.Object
                 ? v.GetRawText() : "";
 
-    private static PageNumberingOp ParsePageNumberingOp(JsonElement args, string name)
+    // An omitted argument reaches the facade as null, so DocxSessionOps applies its default
+    // (issue #1024): this host supplies none of its own.
+
+    private static PageNumberingOp? ParsePageNumberingOp(JsonElement args, string name)
     {
         if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var op))
-            return new PageNumberingOp();
+            return null;
         return DocxSessionJson.ParsePageNumberingOp(op);
     }
 
-    private static PageSetupOp ParsePageSetupOp(JsonElement args, string name)
+    private static PageSetupOp? ParsePageSetupOp(JsonElement args, string name)
     {
         if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var op))
-            return new PageSetupOp();
+            return null;
         return DocxSessionJson.ParsePageSetupOp(op);
     }
 
     private static Position ParsePos(JsonElement args, string name) =>
         DocxSessionJson.ParsePos(Str(args, name));
+
+    // The readers below are for an argument the facade defaults: absent (or JSON null) reaches the
+    // facade as null, but a value of the wrong type is refused rather than read as absent, so a
+    // mistyped argument never quietly becomes the default edit.
+
+    /// <summary>The optional <c>position</c>: null when omitted.</summary>
+    private static Position? OptPos(JsonElement args) =>
+        DocxSessionJson.ParseOptionalPos(DefaultedStr(args, "position"));
+
+    private static string? DefaultedStr(JsonElement args, string name) =>
+        Defaulted(args, name, null, JsonValueKind.String, "a string")?.GetString();
+
+    private static int? DefaultedInt(JsonElement args, string name, string? deprecatedAlias = null) =>
+        Defaulted(args, name, deprecatedAlias, JsonValueKind.Number, "a number")?.GetInt32();
+
+    private static JsonElement? Defaulted(JsonElement args, string name, string? deprecatedAlias,
+        JsonValueKind kind, string what)
+    {
+        var value = Argument(args, name, deprecatedAlias);
+        if (value is null || value.Value.ValueKind == JsonValueKind.Null) return null;
+        if (value.Value.ValueKind != kind)
+            throw new FormatException($"argument \"{name}\" must be {what} when present");
+        return value;
+    }
+
+    /// <summary>A string that must be present but may be null, where null means "remove".</summary>
+    private static string? PresentNullableStr(JsonElement args, string name) =>
+        DocxSessionJson.TryGetPresentNullableString(args, name, out var value)
+            ? value
+            : throw new FormatException($"argument \"{name}\" is required, as a string or as null to remove it");
 
     private static CharSpan? ParseOptionalSpan(JsonElement args, string name)
     {
@@ -874,15 +913,15 @@ internal static partial class Dispatcher
             s.TryGetProperty("length", out var ln) && ln.ValueKind == JsonValueKind.Number ? ln.GetInt32() : 0);
     }
 
-    private static FormatOp ParseFormatOp(JsonElement args, string name, string? deprecatedAlias = null) =>
+    private static FormatOp? ParseFormatOp(JsonElement args, string name, string? deprecatedAlias = null) =>
         Argument(args, name, deprecatedAlias) is { ValueKind: JsonValueKind.Object } op
             ? DocxSessionJson.ParseFormatOp(op.GetRawText())
-            : new FormatOp();
+            : null;
 
-    private static ParagraphFormatOp ParseParagraphFormatOp(JsonElement args, string name, string deprecatedAlias) =>
+    private static ParagraphFormatOp? ParseParagraphFormatOp(JsonElement args, string name, string deprecatedAlias) =>
         Argument(args, name, deprecatedAlias) is { ValueKind: JsonValueKind.Object } op
             ? DocxSessionJson.ParseParagraphFormatOp(op.GetRawText())
-            : new ParagraphFormatOp();
+            : null;
 
     /// <summary>The argument under <paramref name="name"/>, or under its deprecated alias when it has one.</summary>
     private static JsonElement? Argument(JsonElement args, string name, string? deprecatedAlias) =>
@@ -927,22 +966,8 @@ internal static partial class Dispatcher
         return DocxSessionJson.ParseFindOptions(o);
     }
 
-    private static CrossReferenceOptions? ParseCrossReferenceOptions(JsonElement args)
-    {
-        if (args.ValueKind != JsonValueKind.Object
-            || !args.TryGetProperty("options", out var options)
-            || options.ValueKind != JsonValueKind.Object)
-            return null;
-        return new CrossReferenceOptions
-        {
-            ReferenceNumber = options.TryGetProperty("referenceNumber", out var number)
-                && number.ValueKind == JsonValueKind.True,
-            Hyperlink = options.TryGetProperty("hyperlink", out var link)
-                && link.ValueKind == JsonValueKind.True,
-            IncludePosition = options.TryGetProperty("includePosition", out var position)
-                && position.ValueKind == JsonValueKind.True,
-        };
-    }
+    private static CrossReferenceOptions? ParseCrossReferenceOptions(JsonElement args) =>
+        OptionsOrNull(args, DocxSessionJson.ParseCrossReferenceOptions);
 
     private static ReplaceOptions? ParseReplaceOptions(JsonElement args)
     {
@@ -953,15 +978,7 @@ internal static partial class Dispatcher
             && o.TryGetProperty("preconditions", out var nestedPreconditions))
             preconditions = DocxSessionJson.ParseMutationPreconditions(nestedPreconditions);
         if (!hasOptions && preconditions is null) return null;
-        return new ReplaceOptions
-        {
-            IgnoreCase = hasOptions && DocxSessionJson.TryGetBool(o, "ignoreCase", false),
-            MaxReplacements = hasOptions && o.TryGetProperty("maxReplacements", out var mr) && mr.ValueKind == JsonValueKind.Number
-                ? mr.GetInt32() : (int?)null,
-            ExpectedMatchCount = hasOptions && o.TryGetProperty("expectedMatchCount", out var emc) && emc.ValueKind == JsonValueKind.Number
-                ? emc.GetInt32() : (int?)null,
-            Preconditions = preconditions,
-        };
+        return DocxSessionJson.ParseReplaceOptions(hasOptions ? o : default) with { Preconditions = preconditions };
     }
 
     private static string ExecuteBatch(JsonElement args, bool preview = false)
@@ -1114,7 +1131,7 @@ internal static partial class Dispatcher
     private static bool IsMutation(string op) => op is
         "replace_text" or "delete_block" or "move_block" or "delete_range" or "delete_section"
         or "replace_text_range" or "replace_text_at_span" or "replace_text_at_span_with_format" or "replace_inner"
-        or "insert_paragraph" or "split_paragraph" or "merge_paragraphs"
+        or "insert_paragraph" or "split_paragraph" or "merge_paragraphs" or "insert_horizontal_rule"
         or "set_header_text" or "set_footer_text" or "insert_page_number_field"
         or "ensure_header_footer_visible" or "set_page_numbering" or "clear_page_numbering"
         or "set_header_footer_kind_enabled" or "set_page_setup"
@@ -1155,6 +1172,17 @@ internal static partial class Dispatcher
     {
         if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.Object)
             throw new FormatException($"args missing object \"{name}\"");
+        return v.GetRawText();
+    }
+
+    /// <summary>An optional object argument's JSON: null when omitted, refused when present but not
+    /// an object.</summary>
+    private static string? OptJsonObject(JsonElement args, string name)
+    {
+        if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var v)
+            || v.ValueKind == JsonValueKind.Null) return null;
+        if (v.ValueKind != JsonValueKind.Object)
+            throw new FormatException($"optional argument \"{name}\" must be an object when present");
         return v.GetRawText();
     }
 

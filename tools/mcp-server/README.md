@@ -83,7 +83,11 @@ tools, and three sessionless operations — the same arithmetic as the tool refe
 `docs/architecture/docx_agent_server.md`. Everything except the three sessionless tools takes the
 `sessionId` that `docxodus_open` returns, and addresses content by the anchor ids the markdown
 projection and search tools hand back. Each grouped tool takes an `action` discriminator plus
-action-specific arguments.
+action-specific arguments. Actions whose engine op takes an options object take it nested, as
+`options` (or `rule` for `insert_horizontal_rule`, `spec` for `set_borders`), exactly as the other
+transports do. The older flat spellings of those fields (`caseSensitive`, `ruleStyle`,
+`borderScope`, `bindingPolicy`, …) still work but are deprecated. See "Object arguments" in
+`docs/architecture/docx_agent_server.md`.
 
 | Tool | Kind | Purpose |
 |---|---|---|
@@ -97,7 +101,7 @@ action-specific arguments.
 | `docxodus_history` | grouped-intent | Publish/read exact versions, consume ordered timestamped log tails, reconstruct/render history, or append a guarded restore. Opt-in host storage; never overwrites the open session on restore. |
 | `docxodus_edit` | grouped-intent | Insert, replace, and delete text and blocks; split and merge paragraphs; undo and redo. |
 | `docxodus_format` | grouped-intent | Character and paragraph formatting, and list level. |
-| `docxodus_create` | grouped-intent | New paragraphs, headings, tables, horizontal rules, footnotes/endnotes, running headers/footers, and page-number fields. |
+| `docxodus_create` | grouped-intent | New paragraphs, headings, tables, horizontal rules, footnotes/endnotes, running headers/footers, and page-number fields; a section's page setup, page numbering and first-page/odd-even switches; and a read-only footnote/endnote listing. |
 | `docxodus_list` | grouped-intent | Promote, demote, and renumber list membership; restart numbering (Word's *Set Numbering Value…*). |
 | `docxodus_comment` | grouped-intent | Native Word review comments (real `w:comment` markup): add on an anchor/span or tracked revision id, reply in-thread, resolve/reopen, update, remove, list. |
 | `docxodus_annotate` | grouped-intent | Anchor-addressed highlight/label annotations — a custom-XML overlay for external tools, distinct from comments. |

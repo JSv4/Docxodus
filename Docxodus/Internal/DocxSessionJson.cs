@@ -102,12 +102,28 @@ internal static class DocxSessionJson
     private static string NormalizeToken(string token) =>
         token.Replace("_", string.Empty).ToLowerInvariant();
 
-    /// <summary>"before" | "after"; absent → <see cref="Position.After"/>.</summary>
-    public static Position ParsePos(string? s) => ParseOptionalPos(s) ?? Position.After;
+    /// <summary>
+    /// Read an argument that must be present but may be JSON null: a string, or null. False when it
+    /// is absent or another type. For an argument whose null means "remove" (an image's alt text or
+    /// title), so a caller that leaves it out is refused rather than silently clearing it; each
+    /// transport raises its own error.
+    /// </summary>
+    public static bool TryGetPresentNullableString(JsonElement args, string name, out string? value)
+    {
+        value = null;
+        if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var v)) return false;
+        if (v.ValueKind == JsonValueKind.Null) return true;
+        if (v.ValueKind != JsonValueKind.String) return false;
+        value = v.GetString();
+        return true;
+    }
 
-    /// <summary>"before" | "after"; absent → null, for an op whose facade owns a different
-    /// default (the reference-field inserts, see
-    /// <see cref="DocxSessionOps.ReferenceFieldDefaultPosition"/>).</summary>
+    /// <summary>"before" | "after"; absent → <see cref="DocxSessionOps.DefaultInsertPosition"/>.</summary>
+    public static Position ParsePos(string? s) => ParseOptionalPos(s) ?? DocxSessionOps.DefaultInsertPosition;
+
+    /// <summary>"before" | "after"; absent → null, so the facade applies the op's own default
+    /// (<see cref="DocxSessionOps.DefaultInsertPosition"/>, or
+    /// <see cref="DocxSessionOps.ReferenceFieldDefaultPosition"/> for the reference-field inserts).</summary>
     public static Position? ParseOptionalPos(string? s) => ParseToken<Position?>(s, "position", null,
         ("before", Position.Before), ("after", Position.After));
 
@@ -426,9 +442,14 @@ internal static class DocxSessionJson
             ("even", HeaderFooterKind.Even));
 
     /// <summary>"currentPage" | "totalPages" (alias "numPages") | "pageOfTotal", in camelCase or
-    /// snake_case; absent → <see cref="PageNumberField.CurrentPage"/>.</summary>
+    /// snake_case; absent → <see cref="DocxSessionOps.DefaultPageNumberField"/>.</summary>
     public static PageNumberField ParsePageNumberField(string? s) =>
-        ParseToken(s, "page-number field", PageNumberField.CurrentPage,
+        ParseOptionalPageNumberField(s) ?? DocxSessionOps.DefaultPageNumberField;
+
+    /// <summary>As <see cref="ParsePageNumberField"/>, but absent → null, so the facade applies
+    /// its default.</summary>
+    public static PageNumberField? ParseOptionalPageNumberField(string? s) =>
+        ParseToken<PageNumberField?>(s, "page-number field", null,
             ("currentPage", PageNumberField.CurrentPage), ("totalPages", PageNumberField.TotalPages),
             ("numPages", PageNumberField.TotalPages), ("pageOfTotal", PageNumberField.PageOfTotal));
 
@@ -467,6 +488,38 @@ internal static class DocxSessionJson
         {
             Start = start,
             Format = ParseNumberFormatOrNull(TryGetString(root, "format", null)),
+        };
+    }
+
+    /// <summary>Parse a <c>replaceTextRange</c> options object, <c>{ ignoreCase?, maxReplacements?,
+    /// expectedMatchCount? }</c>. Preconditions are not read here: each transport passes them
+    /// separately.</summary>
+    public static ReplaceOptions ParseReplaceOptions(JsonElement options)
+    {
+        if (options.ValueKind != JsonValueKind.Object) return new ReplaceOptions();
+        return new ReplaceOptions
+        {
+            IgnoreCase = TryGetBool(options, "ignoreCase", false),
+            MaxReplacements = options.TryGetProperty("maxReplacements", out var mr) && mr.ValueKind == JsonValueKind.Number
+                ? mr.GetInt32() : null,
+            ExpectedMatchCount = options.TryGetProperty("expectedMatchCount", out var emc) && emc.ValueKind == JsonValueKind.Number
+                ? emc.GetInt32() : null,
+        };
+    }
+
+    /// <summary>Parse an <c>insertCrossReference</c> options object, <c>{ referenceNumber?,
+    /// hyperlink?, includePosition? }</c>. Each switch is on only when it is literally true.</summary>
+    public static CrossReferenceOptions ParseCrossReferenceOptions(JsonElement options)
+    {
+        if (options.ValueKind != JsonValueKind.Object) return new CrossReferenceOptions();
+        return new CrossReferenceOptions
+        {
+            ReferenceNumber = options.TryGetProperty("referenceNumber", out var number)
+                && number.ValueKind == JsonValueKind.True,
+            Hyperlink = options.TryGetProperty("hyperlink", out var link)
+                && link.ValueKind == JsonValueKind.True,
+            IncludePosition = options.TryGetProperty("includePosition", out var position)
+                && position.ValueKind == JsonValueKind.True,
         };
     }
 
@@ -888,10 +941,15 @@ internal static class DocxSessionJson
     /// <summary>
     /// Parse a list-format kind token (camelCase of the <see cref="ListFormat"/> member, any case:
     /// "bullet", "decimal" (aliases "number", "numbered"), "lowerLetter", "upperRoman",
-    /// "decimalParenthesis", …, or "none"). Absent → <see cref="ListFormat.None"/>; an unrecognized
-    /// token is rejected rather than read as "none", which would remove the list.
+    /// "decimalParenthesis", …, or "none"). Absent → <see cref="DocxSessionOps.DefaultListFormat"/>;
+    /// an unrecognized token is rejected rather than read as "none", which would remove the list.
     /// </summary>
-    public static ListFormat ParseListFormat(string? kind) => ParseToken(kind, "list format", ListFormat.None,
+    public static ListFormat ParseListFormat(string? kind) =>
+        ParseOptionalListFormat(kind) ?? DocxSessionOps.DefaultListFormat;
+
+    /// <summary>As <see cref="ParseListFormat"/>, but absent → null, so the facade applies its
+    /// default.</summary>
+    public static ListFormat? ParseOptionalListFormat(string? kind) => ParseToken<ListFormat?>(kind, "list format", null,
         ("bullet", ListFormat.Bullet), ("decimal", ListFormat.Decimal), ("number", ListFormat.Decimal),
         ("numbered", ListFormat.Decimal), ("lowerLetter", ListFormat.LowerLetter),
         ("upperLetter", ListFormat.UpperLetter), ("lowerRoman", ListFormat.LowerRoman),

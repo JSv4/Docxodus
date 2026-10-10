@@ -6,6 +6,19 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Session ops that some transports had left out by omission now reach them (issue #1026). On MCP,
+  `docxodus_create` gains `set_page_setup` and `set_page_numbering` (each taking the canonical `op`
+  object), `clear_page_numbering`, `set_header_footer_kind_enabled` (`kind` plus a required
+  `enabled`) and a read-only `list_notes` (a required `endnotes` boolean). The four section actions
+  are also `docxodus_mutations` steps. The stdio host and Python gain `insert_horizontal_rule`
+  (`anchorId`, `position` and an optional `rule` border edge) and `list_notes`; npm gains
+  `DocxSession.listNotes`, and Python a `NoteListEntry` type. Every op a transport still leaves out
+  now records why in `tools/op-descriptions/`, naming the route a caller takes instead where there is
+  one. The descriptions can also record an MCP route through a selector rather than an action
+  (`"route": {"tool": …, "selector": {…}}`); `getVersion` (`docxodus_get_content format=version`) and
+  `getSemanticChanges` (`format=semantic_changes`) are recorded that way, and `SessionOpRouteTests`
+  checks that the schema advertises each selector value and that calling it returns the facade's
+  result.
 - The HTML converter can emit Word lists as `<ol>`/`<ul>`/`<li>` (issue #895). The new opt-in
   `WmlToHtmlConverterSettings.SemanticLists` (`semanticLists` in the npm `ConversionOptions`,
   `semantic_lists` in the Python `HtmlOptions`) groups adjacent list paragraphs of one list into an
@@ -162,6 +175,10 @@ All notable changes to this project will be documented in this file.
   rollback still rebuild the index from scratch, and every case a block-local update could get wrong
   falls back to the full rebuild. `ReplaceTextAtSpanWithFormat` no longer computes a discarded patch
   for its text step.
+- The stdio host (and so `docx-scalpel`) refuses `set_image_metadata` without both `altText` and
+  `title`, each a string or an explicit null, as MCP already did (issue #1024). It used to read an
+  omitted value as null and delete it; see the `### Fixed` entry for #1024 for the other defaults.
+
 - **Breaking default: a comparison that names no author now stamps `"Docxodus"`, not
   `"Open-Xml-PowerTools"` (issue #961).** `DocxDiffSettings.AuthorForRevisions` defaults to the new
   `DocxDiffSettings.DefaultAuthorForRevisions` (`"Docxodus"`), and the engine's internal settings read
@@ -241,6 +258,18 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- MCP takes the same options object as every other transport for 15 session ops (issue #1025):
+  `options` on `replace_text_range`, `insert_table` (both tools), the three reference tables,
+  `insert_cross_reference` and the seven content-control fills; `rule` on `insert_horizontal_rule`;
+  and `spec` on `set_borders`. MCP used to spread these objects across top-level properties, so some
+  fields could not be reached at all: `replace_text_range`'s `maxReplacements` and
+  `expectedMatchCount`, and the horizontal rule's size, colour and spacing. The table of contents'
+  `hideTabAndPageNumbersInWeb` and `useOutlineLevels` were read but never advertised. MCP now parses
+  the nested object with the same `DocxSessionJson` parser as the stdio host, and the schema advertises
+  it. The flat properties (`caseSensitive`, `ruleStyle`, `borderScope`, `bindingPolicy`, `levels`, …)
+  are still accepted as deprecated aliases. Sending a field both ways with different values is refused.
+  With neither `caseSensitive` nor `options.ignoreCase` sent, MCP still matches case-insensitively.
+
 - The stdio host (and so the `docx-scalpel` Python client) takes the same argument names as MCP for 16
   session-op arguments (issue #1023). It used to spell them differently: `scopes` for `scope` on the
   four listings, `op` for `format`/`paragraphFormat` on the formatting ops, `anchorId` for
@@ -252,6 +281,36 @@ All notable changes to this project will be documented in this file.
   different values is refused). `scope` accepts MCP's token (`"body"`, `"headers"`, ...) or a
   `ProjectionScopes` mask on both transports, through one shared parser. The Python client sends the
   new names; its methods are unchanged.
+
+- An argument a session-op caller leaves out now takes one default, declared once in
+  `DocxSessionOps`, on every transport (issue #1024). The stdio host, MCP, npm and Python supplied 47
+  defaults of their own between them (an insert's `position`, `listFormat`, `field`, `rowSpan`/`colSpan`, `fill`,
+  the empty `format`/`paragraphFormat`/`op`/`update` objects, and the query flags `format`, `depth`,
+  `regexOptions`, `kinds`, `scope`, `boundary`, `cssPrefix` and `fabricateClasses`), so two transports
+  could disagree and one that supplied none refused the call. Each transport now passes through what the
+  caller sent, and the defaults themselves are unchanged. Behaviour changes for callers:
+  - The stdio host (and Python through it) now accepts calls it used to refuse with a missing-argument
+    error: `insert_paragraph`, `move_block`, `insert_table`, `insert_table_row` and
+    `insert_table_column` without `position` (after), `insert_page_number_field` without `field`
+    (current page), `merge_cells` without `rowSpan` or `colSpan` (1), and `update_annotation` without
+    `update` (an empty update, which changes nothing).
+  - `set_image_metadata` on the stdio host now requires both `altText` and `title`, as a string or as
+    an explicit null, as MCP already did. A null removes the value, and the host used to read an omitted
+    one as null, so a call that named only the title silently deleted the picture's alt text. MCP kept
+    requiring both rather than learning the same silent clear.
+  - The stdio host now refuses `set_image_dimensions` without `dimensions` and `repair_revisions`
+    without `repairs` as a missing argument. It used to fill in an empty object or list, which the
+    session then refused with a failed result (`invalid_image_dimensions`, `revision_repair_rejected`);
+    a caller matching on those codes for an omitted argument now gets an argument error instead
+    (`internal_error` inside a batch).
+  - `setRepeatHeaderRow` (npm) and `set_repeat_header_row` (Python) take `repeat` as optional, marking
+    the row when it is left out, as the stdio host and MCP already did.
+  - The npm and Python methods that had a default of their own (`getDiff`, `projectAnchor`,
+    `findByRegex`, `findPlaceholders`, `remainingPlaceholders`, `insertPageNumberField`, `renderBlock`,
+    their Python counterparts, and Python's `set_page_numbering` and `set_page_setup`) keep the same
+    optional parameters but send nothing for one left out.
+  - A stdio argument the facade defaults (`position`, `field`, `rowSpan`, `colSpan`) is refused when
+    sent with the wrong type, rather than read as absent and given the default.
 
 - Superscript and subscript runs are drawn at Word's size and raise (issues #1016 and #1003). The HTML
   converter used the browser's `vertical-align: super`/`sub` with `font-size: smaller`, which raises a

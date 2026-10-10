@@ -16,7 +16,7 @@
         "npm": { "method": "addAnnotation" },
         "python": { "method": "add_annotation" },
         "stdio": { "op": "add_annotation" },
-        "mcp": { "absent": "docxodus_annotate add flattens the annotation object into top-level annotationId/labelId/label/color/author arguments with its own defaults (color #FFEB3B); not expressible as argNames" }
+        "mcp": { "absent": "kept as a different shape: docxodus_annotate add takes the annotation object's fields as top-level annotationId/labelId/label/color/author arguments with its own color default (#FFEB3B); recorded here until the MCP nested-object work (#1025) can describe it" }
       }
     },
     {
@@ -25,14 +25,14 @@
       "result": "EditResult",
       "args": [
         { "name": "annotationId", "type": "string", "required": true },
-        { "name": "update", "type": "object", "required": true }
+        { "name": "update", "type": "object", "required": false, "default": {} }
       ],
       "transports": {
         "wasm": { "method": "UpdateAnnotation" },
         "npm": { "method": "updateAnnotation" },
         "python": { "method": "update_annotation" },
         "stdio": { "op": "update_annotation" },
-        "mcp": { "tool": "docxodus_annotate", "action": "update", "defaults": { "update": {} } }
+        "mcp": { "tool": "docxodus_annotate", "action": "update" }
       }
     },
     {
@@ -94,7 +94,7 @@
         "npm": { "method": "findByAnnotation" },
         "python": { "method": "find_by_annotation" },
         "stdio": { "op": "find_by_annotation" },
-        "mcp": { "absent": "docxodus_annotate find takes the id as query and accepts no citation or maxResults; docxodus_search mode=annotation (query, citation, maxResults) selects by mode, not action" }
+        "mcp": { "absent": "reached by mode, not action: docxodus_search mode=annotation takes the id as query plus citation and maxResults, result wrapped in {matches} (docxodus_annotate find takes only the id); not one to one, so no route is recorded" }
       }
     }
   ]

@@ -3743,6 +3743,24 @@ class MutationBatchResult:
 
 
 @dataclass(frozen=True, slots=True)
+class NoteListEntry:
+    """One footnote or endnote in citation order — see ``Session.list_notes``.
+
+    ``id`` is the note's ``w:id``; ``def_anchor_id`` addresses its definition (kind ``fn``
+    or ``en``) for ``replace_text`` and ``delete_block``; ``ordinal`` is its 1-based
+    citation position, which is the number Word displays for it.
+    """
+
+    id: str
+    def_anchor_id: str
+    ordinal: int
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "NoteListEntry":
+        return cls(id=str(d["id"]), def_anchor_id=d["defAnchorId"], ordinal=int(d["ordinal"]))
+
+
+@dataclass(frozen=True, slots=True)
 class CommentListEntry:
     """One native Word comment, in comments-part order — see ``Session.list_comments``.
 

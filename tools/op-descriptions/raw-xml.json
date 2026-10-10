@@ -11,10 +11,10 @@
       ],
       "transports": {
         "wasm": { "method": "RawGetXml" },
-        "npm": { "absent": "no DocxSession method; exposed as a function on the session's raw property object (raw.getXml)" },
+        "npm": { "absent": "not a DocxSession method by design: grouped on the session's raw property (raw.getXml) so raw XML access is explicit at the call site" },
         "python": { "method": "get_xml" },
         "stdio": { "op": "raw_get_xml" },
-        "mcp": { "absent": "no MCP tool exposes raw XML" }
+        "mcp": { "absent": "kept off by design: MCP gives an agent typed, validated edits only, so raw OOXML stays off the agent surface" }
       }
     },
     {
@@ -28,10 +28,10 @@
       ],
       "transports": {
         "wasm": { "method": "RawInsertXml" },
-        "npm": { "absent": "no DocxSession method; exposed as a function on the session's raw property object (raw.insertXml)" },
+        "npm": { "absent": "not a DocxSession method by design: grouped on the session's raw property (raw.insertXml) so raw XML access is explicit at the call site" },
         "python": { "method": "insert_xml" },
         "stdio": { "op": "raw_insert_xml" },
-        "mcp": { "absent": "no MCP tool exposes raw XML" }
+        "mcp": { "absent": "kept off by design: MCP gives an agent typed, validated edits only; inserting raw OOXML would bypass that" }
       }
     },
     {
@@ -44,10 +44,10 @@
       ],
       "transports": {
         "wasm": { "method": "RawReplaceXml" },
-        "npm": { "absent": "no DocxSession method; exposed as a function on the session's raw property object (raw.replaceXml)" },
+        "npm": { "absent": "not a DocxSession method by design: grouped on the session's raw property (raw.replaceXml) so raw XML access is explicit at the call site" },
         "python": { "method": "replace_xml" },
         "stdio": { "op": "raw_replace_xml" },
-        "mcp": { "absent": "no MCP tool exposes raw XML" }
+        "mcp": { "absent": "kept off by design: MCP gives an agent typed, validated edits only; replacing raw OOXML would bypass that" }
       }
     }
   ]
