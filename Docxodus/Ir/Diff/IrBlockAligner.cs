@@ -943,6 +943,31 @@ internal static class IrBlockAligner
 
         var leftIndex = new ContentWordIndex(leftBlocks, ls, similarity);
         var rightIndex = new ContentWordIndex(rightBlocks, rs, similarity);
+        var leftBelow = new int[rs.Count];
+        var leftAbove = new int[rs.Count];
+        int rightFrom = rs[0], rightTo = rs[^1];
+        for (int i = leftFrom; i < leftTo; i++)
+            if (leftMatch[i] != -1 && leftKind[i] != IrAlignmentKind.Moved && leftKind[i] != IrAlignmentKind.MovedModified)
+            {
+                rightFrom = Math.Min(rightFrom, leftMatch[i]);
+                rightTo = Math.Max(rightTo, leftMatch[i]);
+            }
+        int below = int.MinValue, rightSlot = 0;
+        for (int j = rightFrom; j <= rightTo && rightSlot < rs.Count; j++)
+        {
+            if (j == rs[rightSlot]) { leftBelow[rightSlot++] = below; continue; }
+            if (rightMatch[j] != -1 && rightKind[j] != IrAlignmentKind.Moved && rightKind[j] != IrAlignmentKind.MovedModified)
+                below = Math.Max(below, rightMatch[j]);
+        }
+        int above = int.MaxValue;
+        rightSlot = rs.Count - 1;
+        for (int j = rightTo; j >= rightFrom && rightSlot >= 0; j--)
+        {
+            if (j == rs[rightSlot]) { leftAbove[rightSlot--] = above; continue; }
+            if (rightMatch[j] != -1 && rightKind[j] != IrAlignmentKind.Moved && rightKind[j] != IrAlignmentKind.MovedModified)
+                above = Math.Min(above, rightMatch[j]);
+        }
+        int lastPairedLeft = int.MinValue, lastPairedRight = int.MinValue;
         var pairedLeft = new HashSet<int>();
         var pairedRight = new HashSet<int>();
         for (int k = 0; k < slots; k++)
@@ -975,10 +1000,16 @@ internal static class IrBlockAligner
             // pair still shares boilerplate vocabulary (every list item shares "item") while the
             // shifted counterpart shares strictly more. Word's matcher follows the stronger content
             // diagonal in that case; the slot pair only claims its partners when NO still-free
-            // paragraph on either side offers strictly more shared content words (a tie keeps the
-            // slot pair — positional preference on equal evidence).
+            // paragraph on either side offers strictly more shared content words. With equal shared
+            // counts, a smaller content vocabulary has stronger normalized overlap: an inserted
+            // heading that borrows a body's leading phrase must not steal that body's close edit.
+            // Equal normalized evidence still retains the positional preference.
             if (leftIndex.Outbids(rp, li, evidence, leftMatch, similarity) ||
-                rightIndex.Outbids(lp, rj, evidence, rightMatch, similarity))
+                rightIndex.Outbids(lp, rj, evidence, rightMatch, similarity) ||
+                leftIndex.OutbidsOnNormalizedTie(rp, li, evidence, leftMatch, similarity,
+                    Math.Max(leftBelow[k], lastPairedLeft), leftAbove[k]) ||
+                rightIndex.OutbidsOnNormalizedTie(lp, rj, evidence, rightMatch, similarity,
+                    Math.Max(maxBelow[k], lastPairedRight), minAbove[k]))
                 continue;
 
             leftKind[li] = IrAlignmentKind.Modified;
@@ -987,6 +1018,8 @@ internal static class IrBlockAligner
             rightMatch[rj] = li;
             pairedLeft.Add(li);
             pairedRight.Add(rj);
+            lastPairedLeft = li;
+            lastPairedRight = rj;
         }
 
         // Removed once at the end: removing each pair as it formed scanned the leftover list per pair.
@@ -1009,19 +1042,37 @@ internal static class IrBlockAligner
     {
         private readonly IrNodeList<IrBlock> _blocks;
         private readonly Dictionary<string, List<int>> _postings = new();
+        private readonly Dictionary<int, int> _contentWordCounts = new();
+        private readonly int _minimumWords;
 
         public ContentWordIndex(IrNodeList<IrBlock> blocks, List<int> candidates, IrBlockSimilarity similarity)
         {
             _blocks = blocks;
+            int minimumWords = int.MaxValue, maximumWords = 0;
             foreach (int index in candidates)
+            {
+                int count = 0;
                 foreach (var key in similarity.PairingWordKeys((IrParagraph)blocks[index]).Keys)
                 {
                     if (FunctionWords.Contains(key))
                         continue;
+                    count++;
                     if (!_postings.TryGetValue(key, out var list))
                         _postings[key] = list = new List<int>();
                     list.Add(index);
                 }
+                _contentWordCounts[index] = count;
+                minimumWords = Math.Min(minimumWords, count);
+                maximumWords = Math.Max(maximumWords, count);
+            }
+            _minimumWords = minimumWords;
+            // Smaller vocabularies are the only candidates that can win a normalized tie. Sorting
+            // lets each probe stop before the same-sized boilerplate paragraphs, retaining the
+            // index's bounded work instead of comparing every tied paragraph with every slot.
+            if (maximumWords > minimumWords)
+                foreach (var list in _postings.Values)
+                    list.Sort((a, b) => _contentWordCounts[a] != _contentWordCounts[b]
+                        ? _contentWordCounts[a].CompareTo(_contentWordCounts[b]) : a.CompareTo(b));
         }
 
         /// <summary>Whether a still-free paragraph of this side other than <paramref name="slotPartner"/>
@@ -1053,6 +1104,40 @@ internal static class IrBlockAligner
                         continue;
                     competitorChecksOnThisThread++;
                     if (SharedContentWordCount((IrParagraph)_blocks[candidate], target, similarity) > evidence)
+                        return true;
+                }
+            return false;
+        }
+
+        /// <summary>With the target and shared count fixed, content-word Jaccard rises exactly when
+        /// the candidate has fewer distinct content words. Probe one more rare word than the strict
+        /// count guard: n - evidence + 1 words reach every candidate sharing at least evidence words.
+        /// Candidates must remain free and lie within the current pairing's non-crossing bounds.</summary>
+        public bool OutbidsOnNormalizedTie(IrParagraph target, int slotPartner, int evidence, int[] match,
+            IrBlockSimilarity similarity, int lowerBound, int upperBound)
+        {
+            int slotWords = _contentWordCounts[slotPartner];
+            if (slotWords <= evidence || _minimumWords >= slotWords)
+                return false;
+            var postings = new List<List<int>>();
+            foreach (var key in similarity.PairingWordKeys(target).Keys)
+                if (!FunctionWords.Contains(key) && _postings.TryGetValue(key, out var list))
+                    postings.Add(list);
+            int probe = postings.Count - evidence + 1;
+            if (probe <= 0)
+                return false;
+            postings.Sort((a, b) => a.Count.CompareTo(b.Count));
+            var seen = new HashSet<int>();
+            for (int p = 0; p < probe; p++)
+                foreach (int candidate in postings[p])
+                {
+                    if (_contentWordCounts[candidate] >= slotWords)
+                        break;
+                    if (candidate == slotPartner || candidate <= lowerBound || candidate >= upperBound ||
+                        match[candidate] != -1 || !seen.Add(candidate))
+                        continue;
+                    competitorChecksOnThisThread++;
+                    if (SharedContentWordCount((IrParagraph)_blocks[candidate], target, similarity) == evidence)
                         return true;
                 }
             return false;

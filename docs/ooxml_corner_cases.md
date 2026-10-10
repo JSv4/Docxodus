@@ -2980,3 +2980,35 @@ on rejection and need only the revised reference. This uses default roles rather
 display names, so unrelated custom styles named `Normal` remain separate. Synthetic regression
 tests cover both explicit and implicit references, inheritance, overrides, structural edits,
 accepted/rejected text, native property revisions, and Office 2019 schema validation.
+
+### A new heading borrowing a body paragraph's leading phrase
+
+An anchored replacement region can contain both a new heading and a close edit of the original
+body paragraph. Counting shared content words alone can tie those two candidates, even though
+one is a much closer correspondence. A fully synthetic example is:
+
+```text
+Original body: Bronze radar channel cabinet enabled.
+New heading:  Bronze radar channel cabinet service calendar for the coastal crew.
+Revised body: Bronze radar channel cabinet disabled.
+```
+
+The heading has a paragraph style with `w:keepNext`, `w:outlineLvl w:val="1"`, and a 14pt run
+size. Both candidates share the four leading content words with the original body. The heading
+adds several unmatched concepts, while the revised body changes one word.
+
+| Alignment | Word | LibreOffice | Docxodus before #1052 | Docxodus after #1052 |
+|---|---|---|---|---|
+| Original body counterpart | Not measured | Not measured | New heading | Revised body |
+| New heading classification | Not measured | Not measured | Modified body | Inserted paragraph |
+| Accepted/rejected paragraph text | Not measured | Not measured | Correct | Correct |
+
+`IrBlockAligner.SameSlotPair` retains its positional preference when evidence is equal. A still-free,
+non-crossing candidate can now outbid a same-slot pairing when it shares the same content-word
+count but has strictly stronger content-word Jaccard overlap. With target and shared count fixed,
+this means fewer unmatched distinct content words. The rare-word index probes one additional word
+for a tie and considers only shorter candidate vocabularies. Genuine heading edits and paragraph
+style changes can still pair; style names and font sizes are not a blanket matching prohibition.
+Tests cover styled and unstyled insertions, genuine heading edits, body edits, paragraph boundaries,
+splits/merges, unrelated rewrites, native inserted paragraph marks, both endpoints, schema validity,
+and agreement between the indexed tie decision and exhaustive search.
