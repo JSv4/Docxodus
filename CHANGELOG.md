@@ -263,6 +263,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Comparisons preserve font and spacing changes when the two documents assign their default
+  paragraph style to different IDs (issue #1050). Revised paragraphs select the revised definition
+  through native paragraph-property revisions; rejection restores the original style reference or
+  implicit default. Style display names do not merge unrelated custom styles, and direct overrides,
+  inherited formatting, inserted content, splits and moves retain their formatting.
 - Comparing a shared paragraph style whose parent changes now preserves inherited formatting
   reversibly (issue #1044). Affected styles and descendants carry effective property snapshots in
   native paragraph/run formatting revisions, including child overrides and run toggles. Their parent

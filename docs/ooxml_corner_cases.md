@@ -2947,3 +2947,36 @@ When adding new corner cases to this document:
 3. **Reference the spec**: Link to relevant ECMA-376 sections
 4. **Identify the code**: Point to the specific Docxodus files/functions involved
 5. **Propose a fix**: If possible, outline how the issue might be resolved
+
+### Different default paragraph style IDs in a comparison
+
+A style's display name does not establish its identity. Two packages can each name their default
+paragraph style `Normal`, while giving it different IDs and different fonts or spacing. An implicit
+paragraph uses its own package's default; copying it into a left-based comparison without an
+explicit reference would select the left default in both revision views.
+
+Minimal synthetic inputs have identical `<w:p><w:r><w:t>Jade beacon remains bright.</w:t></w:r></w:p>`
+content, and these distinct default definitions:
+
+```xml
+<!-- Original -->
+<w:style w:type="paragraph" w:default="1" w:styleId="BaseText">
+  <w:name w:val="Normal"/><w:pPr><w:spacing w:after="0" w:line="240"/></w:pPr>
+  <w:rPr><w:rFonts w:ascii="DejaVu Sans"/><w:sz w:val="20"/></w:rPr>
+</w:style>
+<!-- Revised uses FreshText, DejaVu Serif, size 28, after 360, line 360. -->
+```
+
+| View | Word | LibreOffice | Docxodus before #1050 | Docxodus after #1050 |
+|---|---|---|---|---|
+| Accepted font / size / after / line | Not measured | Not measured | Sans / 20 / 0 / 240 | Serif / 28 / 360 / 360 |
+| Rejected font / size / after / line | Not measured | Not measured | Sans / 20 / 0 / 240 | Sans / 20 / 0 / 240 |
+
+`IrMarkupRenderer` retains the left default definition, imports the revised definition without its
+package-wide default flag, and adds `w:pStyle` to revised implicit consumers. A paired paragraph's
+`w:pPrChange` archives its original reference (or its absence). Acceptance keeps the revised
+reference; rejection restores the original selection. Insertions and move destinations disappear
+on rejection and need only the revised reference. This uses default roles rather than matching
+display names, so unrelated custom styles named `Normal` remain separate. Synthetic regression
+tests cover both explicit and implicit references, inheritance, overrides, structural edits,
+accepted/rejected text, native property revisions, and Office 2019 schema validation.
