@@ -161,10 +161,9 @@ public class DocxSessionIncrementalIndexOracleTests
         var p = Pick(paragraphs);
         var choice = random.Next(31);
         // Without history ops: no undo, redo, rollback, save, projection, batch or failing op — a
-        // plain edit instead. Nor the ops that create a notes, comments or header part: redo can
-        // re-create such a part under a new name and then miss later content restored by name
-        // (#1033, on main too).
-        if (!historyOps && choice is 6 or 7 or 8 or 10 or 11 or 12 or 13 or 14 or 24 or 28 or 29) choice = 0;
+        // plain edit instead. Story-creating edits participate too: undo/redo must restore their
+        // topology and every later edit to those parts (issue #1033).
+        if (!historyOps && choice is 6 or 7 or 8 or 10 or 11 or 24 or 28 or 29) choice = 0;
         switch (choice)
         {
             case 0:

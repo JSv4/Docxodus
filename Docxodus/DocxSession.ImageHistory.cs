@@ -1,8 +1,6 @@
 // Copyright (c) John Scrudato IV. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
-#nullable enable
-
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -139,6 +137,9 @@ public sealed partial class DocxSession
                 continue;
             if (!PartBytesEqual(live, expected.Bytes))
                 return false;
+            // Restoring XML-part topology can reopen the graph without changing the images.
+            // After verifying the bytes, seed the new SDK part with the snapshot's shared array.
+            _imageBytes.AddOrUpdate(live, expected.Bytes);
         }
         return true;
     }

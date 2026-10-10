@@ -258,6 +258,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Undo and redo preserve later edits to parts created earlier in the history (issue #1033).
+  Restoring a footnote, endnote, header, footer, comment, numbering, styles, settings, comment
+  threading, or annotation part now preserves its package URI and relationship identity. The SDK
+  could previously recreate it under a new filename, causing subsequent snapshots to miss its
+  content, hyperlinks, or images. One shared restore path handles every snapshot-scoped XML part.
 - MCP takes the same options object as every other transport for 15 session ops (issue #1025):
   `options` on `replace_text_range`, `insert_table` (both tools), the three reference tables,
   `insert_cross_reference` and the seven content-control fills; `rule` on `insert_horizontal_rule`;

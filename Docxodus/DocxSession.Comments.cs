@@ -117,7 +117,7 @@ public sealed partial class DocxSession
     // established: find-or-create the WordprocessingCommentsPart + the CommentText/
     // CommentReference styles, bracket a character span with w:commentRangeStart/End, append
     // the run-level w:commentReference, and add the w:comment definition. Mechanics live in
-    // Internal.CommentOps; part create/delete is undo/redo-reconciled by ReconcileCommentsPart.
+    // Internal.CommentOps; part create/delete is undo/redo-reconciled by ReconcileSnapshotParts.
     //
     // Editing a comment body needs no bespoke path beyond UpdateComment: comment paragraphs
     // project as kind p, scope cmt, so ReplaceText already accepts them; DeleteBlock already
