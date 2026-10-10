@@ -258,6 +258,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Comparing a shared paragraph style whose parent changes now preserves inherited formatting
+  reversibly (issue #1044). Affected styles and descendants carry effective property snapshots in
+  native paragraph/run formatting revisions, including child overrides and run toggles. Their parent
+  links are flattened so properties removed by the new parent cannot leak into acceptance; rejection
+  restores the original effective appearance. Unrelated styles retain their existing definitions.
 - Exact line spacing follows Word's baseline placement, including text taller than its line
   (issue #882). A page filled by 54 exact 12pt lines now keeps all 54 lines, with their glyphs
   visible in the margins. The paginator preserves the declared line heights and still corrects

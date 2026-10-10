@@ -7198,6 +7198,16 @@ internal static class IrMarkupRenderer
         if (outXDoc.Root is not { } root || rightStyles.GetXDocument().Root is not { } rightRoot)
             return rightImportedStyles;
         var leftOriginalRoot = new XElement(root);   // frozen snapshot for left-effective resolution
+        var changedStyleParents = rightRoot.Elements(W.style).Where(rightStyle =>
+        {
+            var leftStyle = leftOriginalRoot.Elements(W.style).FirstOrDefault(style =>
+                (string?)style.Attribute(W.type) == (string?)rightStyle.Attribute(W.type) &&
+                (string?)style.Attribute(W.styleId) == (string?)rightStyle.Attribute(W.styleId));
+            return leftStyle is not null &&
+                (string?)leftStyle.Element(W.basedOn)?.Attribute(W.val) !=
+                (string?)rightStyle.Element(W.basedOn)?.Attribute(W.val);
+        }).Select(style => new StyleIdentity((string?)style.Attribute(W.type) ?? "",
+            (string?)style.Attribute(W.styleId) ?? "")).ToHashSet();
         var stockDocDefaults = insertedStyleNormalization is null
             ? null
             : XElement.Parse(leftHadTheme ? WordStockDocDefaults.ClassicXml : WordStockDocDefaults.ModernXml);
@@ -7245,6 +7255,16 @@ internal static class IrMarkupRenderer
             }
             if (styleId is null)
                 continue;
+
+            // basedOn itself has no native property revision. Freeze the two effective payloads
+            // on the style whose parent changed, so descendants keep inheriting from that style
+            // and rejection can restore the old appearance without switching package metadata.
+            if (type == "paragraph" &&
+                StyleChainContainsChangedParent(leftOriginalRoot, type, styleId, changedStyleParents))
+            {
+                TrackStyleParentChange(leftStyle, leftOriginalRoot, rightRoot, type, styleId, state);
+                continue;
+            }
 
             if (StyleDefinitionPayloadsEqual(leftStyle, rightStyle))
             {
@@ -7317,6 +7337,57 @@ internal static class IrMarkupRenderer
 
         leftStyles.PutXDocument();
         return rightImportedStyles;
+    }
+
+    private static bool StyleChainContainsChangedParent(
+        XElement root, string type, string styleId, HashSet<StyleIdentity> changedParents)
+    {
+        if (changedParents.Count == 0)
+            return false;
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        string? id = styleId;
+        while (id is not null && seen.Add(id))
+        {
+            if (changedParents.Contains(new StyleIdentity(type, id)))
+                return true;
+            var style = root.Elements(W.style).FirstOrDefault(element =>
+                (string?)element.Attribute(W.type) == type && (string?)element.Attribute(W.styleId) == id);
+            id = (string?)style?.Element(W.basedOn)?.Attribute(W.val);
+        }
+        return false;
+    }
+
+    private static void TrackStyleParentChange(
+        XElement outputStyle, XElement leftRoot, XElement rightRoot,
+        string type, string styleId, RenderState state)
+    {
+        var retainedRunDefaults = LeftDocDefaultsProps(leftRoot, paragraphAxis: false) ?? new XElement(W.rPr);
+        var (leftPPr, leftRPr) = ResolveEffectiveStyleFormatting(leftRoot, type, styleId, retainedRunDefaults);
+        var (rightPPr, rightRPr) = ResolveEffectiveStyleFormatting(rightRoot, type, styleId, retainedRunDefaults);
+        NormalizeStylePropertyOrder(leftPPr, StylePPrChildOrder);
+        NormalizeStylePropertyOrder(rightPPr, StylePPrChildOrder);
+        NormalizeStylePropertyOrder(leftRPr, StyleRPrChildOrder);
+        NormalizeStylePropertyOrder(rightRPr, StyleRPrChildOrder);
+        bool paragraphChanged = type == "paragraph" && !XNode.DeepEquals(leftPPr, rightPPr);
+        bool runChanged = !XNode.DeepEquals(leftRPr, rightRPr);
+        if (!paragraphChanged && !runChanged)
+            return;
+
+        // Keeping the old edge would leak any old inherited property absent from the new parent
+        // into Accept. Removing it is safe only with BOTH effective states materialized, including
+        // an unchanged axis. The graph is frozen here; the native revisions own its appearance.
+        outputStyle.Elements(W.basedOn).Remove();
+        AddDocDefaultsNeutralizers(rightPPr, LeftDocDefaultsProps(leftRoot, paragraphAxis: true),
+            rightPPr, paragraphAxis: true, LeftDocDefaultsProps(rightRoot, paragraphAxis: true));
+        AddDocDefaultsNeutralizers(rightRPr, LeftDocDefaultsProps(leftRoot, paragraphAxis: false),
+            rightRPr, paragraphAxis: false);
+        NormalizeStylePropertyOrder(rightPPr, StylePPrChildOrder);
+        NormalizeStylePropertyOrder(rightRPr, StyleRPrChildOrder);
+        if (paragraphChanged)
+            rightPPr.Add(new XElement(W.pPrChange, state.RevisionAttributes(), new XElement(leftPPr)));
+        if (runChanged)
+            rightRPr.Add(new XElement(W.rPrChange, state.RevisionAttributes(), new XElement(leftRPr)));
+        ReplaceStyleProperties(outputStyle, type == "paragraph" ? rightPPr : null, rightRPr);
     }
 
     /// <summary>
@@ -8489,7 +8560,7 @@ internal static class IrMarkupRenderer
     /// the resolved fonts into a tracked style update). Tracked-change and rsid noise excluded.
     /// </summary>
     private static (XElement PPr, XElement RPr) ResolveEffectiveStyleFormatting(
-        XElement stylesRoot, string? type, string styleId)
+        XElement stylesRoot, string? type, string styleId, XElement? toggleBaseline = null)
     {
         var accPPr = new XElement(W.pPr,
             stylesRoot.Element(W.docDefaults)?.Element(W.pPrDefault)?.Element(W.pPr)?.Elements());
@@ -8499,7 +8570,7 @@ internal static class IrMarkupRenderer
         var chain = new List<XElement>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var currentId = styleId;
-        while (currentId is not null && seen.Add(currentId) && chain.Count < 16)
+        while (currentId is not null && seen.Add(currentId))
         {
             var style = stylesRoot.Elements(W.style).FirstOrDefault(st =>
                 (string?)st.Attribute(W.type) == type &&
@@ -8516,10 +8587,35 @@ internal static class IrMarkupRenderer
             OverlayProps(accPPr, style.Element(W.pPr));
             OverlayProps(accRPr, style.Element(W.rPr));
         }
+        if (toggleBaseline is not null)
+        {
+            // A root style contributes toggles relative to the retained docDefaults, not absolute
+            // boolean values. Compose each source chain by XOR, then express its result against
+            // that common baseline. This avoids applying inherited bold/italic a second time.
+            var sourceDefaults = LeftDocDefaultsProps(stylesRoot, paragraphAxis: false);
+            foreach (var name in StyleToggleNames)
+            {
+                bool toggle = StyleToggleOn(sourceDefaults?.Element(name)) ^ StyleToggleOn(toggleBaseline.Element(name));
+                foreach (var style in chain)
+                    toggle ^= StyleToggleOn(style.Element(W.rPr)?.Element(name));
+                accRPr.Elements(name).Remove();
+                if (toggle)
+                    accRPr.Add(new XElement(name));
+            }
+        }
         StripStyleNoise(accPPr);
         StripStyleNoise(accRPr);
         return (accPPr, accRPr);
     }
+
+    private static readonly XName[] StyleToggleNames =
+    {
+        W.b, W.bCs, W.caps, W.emboss, W.i, W.iCs, W.imprint, W.outline, W.shadow,
+        W.smallCaps, W.strike, W.vanish,
+    };
+
+    private static bool StyleToggleOn(XElement? element) => element is not null &&
+        (string?)element.Attribute(W.val) is not ("0" or "false" or "off");
 
     /// <summary>The rFonts slot pairs: a concrete attribute and the theme reference that OUTRANKS it
     /// in the same slot. A layer declaring one member of a pair overrides the other from below.</summary>
@@ -8537,9 +8633,10 @@ internal static class IrMarkupRenderer
             if (prop.Name == W.pPrChange || prop.Name == W.rPrChange || prop.Name == W.rsid)
                 continue;
             var existing = acc.Element(prop.Name);
-            if (prop.Name == W.rFonts && existing is not null)
+            if ((prop.Name == W.rFonts || prop.Name == W.spacing || prop.Name == W.ind) && existing is not null)
             {
-                // Attribute-wise merge, but per SLOT: a theme attribute outranks the concrete one in
+                // Spacing and indentation inherit attribute by attribute. Fonts also merge per
+                // SLOT: a theme attribute outranks the concrete one in
                 // the same slot, so a layer that declares either member must clear the other from the
                 // accumulated element — materializing ascii="Times New Roman" while a lower layer's
                 // asciiTheme rides along would still render the theme font.
