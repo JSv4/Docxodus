@@ -146,7 +146,7 @@ class RenderTests(unittest.TestCase):
         state = Path("/proc") / str(child) / "stat"
         try:
             child_state = state.read_text().split()[2]
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
             return
         self.assertIn(child_state, ["Z", "X"])
 
