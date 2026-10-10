@@ -107,6 +107,10 @@ internal static partial class IrMarkupRenderer
         {
             var clone = new XElement(root);
             clone.Elements(W.docDefaults).Remove();
+            // A concurrent margin-only table-style edit cannot change the font/spacing cascade.
+            // Its consumer projection runs separately, after the defaults projection.
+            clone.Elements(W.style).Where(s => (string?)s.Attribute(W.type) == "table")
+                .Descendants().Where(e => e.Name == W.tblCellMar || e.Name == W.tcMar).Remove();
             StripStyleNoise(clone);
             return clone;
         }
@@ -116,7 +120,8 @@ internal static partial class IrMarkupRenderer
     private static bool IsFormattingConsumer(XElement element) => element.Name == W.p || element.Name == W.r;
 
     private static Dictionary<Uri, XDocument> AssembleConsumers(
-        WmlDocument right, IrDocument ir, XElement? defaults, bool replaceDefaults)
+        WmlDocument right, IrDocument ir, XElement? defaults, bool replaceDefaults,
+        Action<XElement>? configureStyles = null)
     {
         using var stream = new OpenXmlMemoryStreamDocument(right);
         using var doc = stream.GetWordprocessingDocument();
@@ -130,6 +135,7 @@ internal static partial class IrMarkupRenderer
             if (defaults is not null)
                 styles.AddFirst(new XElement(defaults));
         }
+        configureStyles?.Invoke(doc.MainDocumentPart!.StyleDefinitionsPart!.GetXDocument().Root!);
         FormattingAssembler.AssembleFormatting(doc, new FormattingAssemblerSettings
         {
             ClearStyles = false,
@@ -226,10 +232,39 @@ internal static partial class IrMarkupRenderer
         foreach (var part in document.ContentParts())
         {
             foreach (var revision in part.GetXDocument().Descendants().Where(e =>
-                         (e.Name == W.rPrChange || e.Name == W.pPrChange) &&
+                         (e.Name == W.rPrChange || e.Name == W.pPrChange || e.Name == W.tblPrChange || e.Name == W.tcPrChange) &&
                          ids.Contains((string?)e.Attribute(W.id) ?? "")))
                 revision.SetAttributeValue(W.id, state.NextId());
             part.PutXDocument();
+        }
+    }
+
+    private static void CarryUnchangedProjectedStories(WordprocessingDocument document, IrEditScript script, RenderState state)
+    {
+        if (state.ProjectedPropertyRevisionIds is null)
+            return;
+        // Unchanged header/footer stories normally remain in the left package without emission.
+        // Their inherited presentation still changed. Copy only a same-URI story whose original
+        // XML is equal on both sides and whose output is still the untouched left story. Edited
+        // stories keep the relationship rebinding and native markup their emitter produced.
+        var edited = script.HeaderFooterOps?.Where(diff => diff.Ops.Count > 0 && diff.LeftPartUri is not null)
+            .Select(diff => diff.LeftPartUri!).ToHashSet() ?? new HashSet<Uri>();
+        foreach (var part in document.ContentParts().Skip(1))
+        {
+            if (edited.Contains(part.Uri) ||
+                !state.Left.Sources.TryGetValue(part.Uri, out var originalLeft) ||
+                !state.Right.Sources.TryGetValue(part.Uri, out var originalRight) ||
+                !state.RightSource.Sources.TryGetValue(part.Uri, out var projected) ||
+                originalLeft.Root is null || originalRight.Root is null || projected.Root is null)
+                continue;
+            var output = part.GetXDocument();
+            if (output.Root is not null &&
+                IrHasher.CanonicalHash(originalLeft.Root).Equals(IrHasher.CanonicalHash(originalRight.Root)) &&
+                IrHasher.CanonicalHash(originalLeft.Root).Equals(IrHasher.CanonicalHash(output.Root)))
+            {
+                output.Root.ReplaceWith(StripUnids(new XElement(projected.Root)));
+                part.PutXDocument();
+            }
         }
     }
 }

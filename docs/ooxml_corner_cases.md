@@ -3051,3 +3051,49 @@ Synthetic tests cover conditional and direct precedence, inherited styles, edite
 paragraphs, row insertion, splits/merges, removed declarations, snapshot reuse, and Office 2019 validation.
 The existing paragraph-only control remains green. Other package presentation changes and the original
 unsupported consumer gates keep their existing behavior.
+
+### Shared table-style cell margins in comparisons
+
+**Status:** Fixed (issue #1053, October 2026)
+
+The comparison style updater tracks paragraph/run properties, but table-style geometry has no native
+style-level property history. A shared table style's `w:tblCellMar` therefore remained at its original
+values even after accepting all revisions. The equivalent direct-table change already worked.
+
+Minimal synthetic style payload (all body/cell wording is newly invented):
+
+```xml
+<w:style w:type="table" w:styleId="BeaconGrid">
+  <w:name w:val="Beacon Grid"/>
+  <w:tblPr><w:tblCellMar>
+    <w:top w:w="300" w:type="dxa"/><w:left w:w="120" w:type="dxa"/>
+    <w:bottom w:w="180" w:type="dxa"/><w:right w:w="120" w:type="dxa"/>
+  </w:tblCellMar></w:tblPr>
+</w:style>
+```
+
+The original uses top/bottom 0. Both packages reference the same style on an unchanged one-cell table.
+
+| Change | Word | LibreOffice | Docxodus before | Docxodus after |
+|---|---|---|---|---|
+| Shared style top/bottom 0/0 → 300/180 | Not measured | Not measured | Acceptance retains 0/0 | Acceptance 300/180; rejection 0/0 |
+| Direct table-margin control | Not measured | Not measured | Reversible | Reversible |
+| Conditional first-row top 75 → 95, direct bottom 65 | Not measured | Not measured | Conditional style change lost | Acceptance 95/65; rejection 75/65 |
+
+`IrTableStyleMarginProjection` keeps left table-style definitions and resolves right consumers under
+both the retained and revised style graphs. It expresses table defaults through native `tblPrChange`
+and changed cell/conditional exceptions through native `tcPrChange`, preserving each original direct
+shell for rejection. Imported children still need projection when their parent is a retained shared
+style. Unchanged same-URI header stories receive projected consumers when their original and carried
+XML match; edited stories keep the existing relationship-aware emitter.
+
+`FormattingAssembler` now merges margin axes independently, as required when a side is omitted from
+a higher-precedence layer. See [the SDK's ISO/IEC remarks for top margins](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.topmargin?view=openxml-3.0.1).
+`WordprocessingMLUtil` orders the merged margin children as well as the table/cell shells, so a direct
+bottom margin followed by a newly projected top margin remains valid OOXML.
+
+Synthetic regressions cover direct table/cell overrides, inherited and imported child styles,
+conditional regions and changes, unrelated tables, edited/nested/inserted tables, row insertion,
+removed declarations, logical margin axes, unchanged headers, combined document-default changes,
+accept/reject text and geometry, and Office 2019 validation. The implementation reuses the detached
+consumer sources introduced by the document-default fix rather than changing cached IR facts.
