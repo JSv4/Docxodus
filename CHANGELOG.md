@@ -258,6 +258,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Comparing a shared paragraph style whose parent changes now preserves inherited formatting
+  reversibly (issue #1044). Affected styles and descendants carry effective property snapshots in
+  native paragraph/run formatting revisions, including child overrides and run toggles. Their parent
+  links are flattened so properties removed by the new parent cannot leak into acceptance; rejection
+  restores the original effective appearance. Unrelated styles retain their existing definitions.
 - Comparison repairs misplaced paragraph breaks before diffing (issue #1043). Line, page and column
   breaks directly under a paragraph receive their required run parent, preserving attributes and
   position through insertion, deletion and accept/reject. Valid runs and structural paragraph children
