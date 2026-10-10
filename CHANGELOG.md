@@ -273,6 +273,11 @@ All notable changes to this project will be documented in this file.
   body-to-body edit paired (issue #1052). Equal shared-word counts are resolved by normalized
   content overlap before positional preference; the heading remains a native paragraph insertion.
   Candidate checks retain order boundaries and the rare-word index used for large replacement gaps.
+
+- Document-default font and paragraph-spacing changes now remain reversible when tables are
+  present (issue #1051). Native property revisions on affected body/cell consumers preserve
+  paragraph marks, partial direct overrides, and conditional table formatting without promoting
+  document defaults above those layers or mutating reusable comparison snapshots.
 - Comparing a shared paragraph style whose parent changes now preserves inherited formatting
   reversibly (issue #1044). Affected styles and descendants carry effective property snapshots in
   native paragraph/run formatting revisions, including child overrides and run toggles. Their parent
