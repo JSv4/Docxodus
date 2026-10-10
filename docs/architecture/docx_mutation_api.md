@@ -18,6 +18,15 @@ Three design forces, in order of weight:
 
 **Errors must be pattern-matchable, not stringly-typed.** Every mutation returns an `EditResult` envelope; failure carries a typed `EditErrorCode` with a remediation message. The same enum is exposed as a snake-case string union in TypeScript, so JS agents pattern-match the same way C# callers do. No method on the session throws across the boundary (the constructor and `Save()` are the only places that can — and only for fatal conditions like an invalid DOCX or IO failure).
 
+Text payloads are checked for XML-compatible characters before recording history or changing
+the document, independently of `EmitMarkdownPatch` (issue #1039). Markdown, plain replacements,
+content-control fills (including nested child fills, dates and combo boxes), and reference-field
+text share the same character check. Unpaired surrogates and XML-forbidden controls return
+`MalformedMarkdown` (`malformed_markdown` on the wire); valid surrogate pairs, tabs and newlines
+remain accepted. Span replacements also reject boundaries inside an existing surrogate pair
+with `OffsetOutOfRange`. These refusals preserve the version, undo/redo history and saveability;
+they do not populate `LastInternalError`.
+
 ## Document version and optimistic preconditions
 
 Every session exposes a monotonic `long Version`. It is `0` when the document is
@@ -452,10 +461,10 @@ incomplete:
 - a non-`FullUnid` `AnchorIdRendering`, whose ids depend on every anchor.
 
 With patches on, `Project()` also brings the incremental index up to date, so the common
-project-then-edit flow gets scoped patches. Content no XML writer can save (an unpaired surrogate)
-still makes a patch-producing op throw and roll back, as the whole-document projection used to: the
-changed blocks are checked (`EnsureSerializable`), and on the whole-document path every part is
-checked before the projection writes any part stream.
+project-then-edit flow gets scoped patches. Text payload validation runs before mutation with
+either patch setting (issue #1039). Patch generation also checks changed blocks for XML
+serializability (`EnsureSerializable`); on the whole-document path every part is checked before
+the projection writes any part stream, preserving rollback if another mutation produces invalid XML.
 
 `DocxSessionIncrementalIndexOracleTests` replays a mixed op sequence over the corpus as a client
 would — applying every patch it receives to a per-block model — and checks the model against a

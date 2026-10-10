@@ -285,9 +285,7 @@ public class DocxSessionIncrementalIndexOracleTests
                 return $"ExecuteBatch {p}, {second}";
             }
             case 29:
-                // Throws mid-op (an unpaired surrogate cannot be saved), so the op rolls back. Only
-                // the patch-producing path checks this, as before block-scoped patches.
-                if (!session.EmitsMarkdownPatch) goto case 0;
+                // Invalid XML text is refused before mutation, with either patch setting.
                 LastResult = session.ReplaceText(p, "bad\ud800payload");
                 return $"failing ReplaceText {p}";
             case 30:
@@ -404,6 +402,10 @@ public class DocxSessionIncrementalIndexOracleTests
         {
             var list = new List<(string, string)>();
             var root = part.GetXDocument().Root!;
+            // A restored tree has no owner annotation until the production index/projection
+            // prepares it. The independent emitter needs that owner to resolve hyperlinks too.
+            root.RemoveAnnotations<OpenXmlPart>();
+            root.AddAnnotation(part);
             // The projection leaves out a header or footer with no text at all.
             bool shown = !(name.StartsWith("hdr", StringComparison.Ordinal) || name.StartsWith("ftr", StringComparison.Ordinal))
                 || root.Descendants(W.t).Any(t => !string.IsNullOrWhiteSpace(t.Value));
@@ -492,9 +494,11 @@ public class DocxSessionIncrementalIndexOracleTests
         session.Project();
         var model = BlockModel(session);
         int scoped = 0, full = 0;
+        var trace = new List<string>();
         for (int step = 0; step < steps; step++)
         {
             var op = ApplyRandomOp(session, random, step);
+            trace.Add($"{step} {op}: {LastResult?.Success} {LastResult?.Error?.Code}; patch={LastResult?.Patch?.IsFullDocument} blocks={LastResult?.Patch?.Blocks.Count}");
             // Undo, redo and rollback return no patch and move the document through its history;
             // a mirroring client re-reads the projection after them, as the patch contract says.
             if (op is "Undo" or "Redo" || op.StartsWith("rolled-back", StringComparison.Ordinal)
@@ -519,7 +523,7 @@ public class DocxSessionIncrementalIndexOracleTests
             }
             if (!any) continue;
             var fresh = BlockModel(session);
-            if (ModelMismatch(model, fresh) is { } mismatch) Assert.Fail($"{label} step {step} ({op}): {mismatch}");
+            if (ModelMismatch(model, fresh) is { } mismatch) Assert.Fail($"{label} step {step} ({op}): {mismatch}\n" + string.Join("\n", trace));
             var projection = WmlToMarkdownConverter.Convert(session.LiveDocument, settings.ProjectionSettings).Markdown;
             if (ModelVersusProjection(fresh, projection) is { } projectionMismatch)
                 Assert.Fail($"{label} step {step} ({op}): {projectionMismatch}");

@@ -72,6 +72,8 @@ public sealed partial class DocxSession
             return new[] { EditResult.Fail(refusal) };
         if (string.IsNullOrEmpty(find))
             return new[] { EditResult.Fail(EditErrorCode.MalformedMarkdown, "find must be non-empty", anchorId) };
+        if ((XmlText.ValidatePayload(find, anchorId) ?? XmlText.ValidatePayload(replace, anchorId)) is { } textError)
+            return new[] { EditResult.Fail(textError) };
 
         var opts = options ?? new ReplaceOptions();
         var guards = opts.Preconditions;
@@ -182,6 +184,7 @@ public sealed partial class DocxSession
     {
         if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (format is null) return EditResult.Fail(EditErrorCode.MalformedMarkdown, "null format op", anchorId);
+        if (XmlText.ValidatePayload(replace, anchorId) is { } textError) return EditResult.Fail(textError);
 
         // These two operations touch only snapshot-scoped XML/styles and owned story images.
         // Reuse transaction rollback/history handling without serializing the entire OPC package.
@@ -244,6 +247,7 @@ public sealed partial class DocxSession
     public EditResult ReplaceTextAtSpan(string anchorId, int spanStart, int spanLength, string replace)
     {
         if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
+        if (XmlText.ValidatePayload(replace, anchorId) is { } textError) return EditResult.Fail(textError);
         var target = FindAnchor(anchorId);
         if (target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
@@ -257,9 +261,14 @@ public sealed partial class DocxSession
         replace = MaybeApplySmartQuotes(replace);
 
         var map = Internal.RunTextMap.Build(element);
-        if (spanStart < 0 || spanLength < 0 || spanStart + spanLength > map.FlatText.Length)
+        if (spanStart < 0 || spanLength < 0 || spanStart > map.FlatText.Length
+            || spanLength > map.FlatText.Length - spanStart)
             return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
                 $"span {spanStart}+{spanLength} out of [0, {map.FlatText.Length}]", anchorId);
+        if (!XmlText.IsCharacterBoundary(map.FlatText, spanStart)
+            || !XmlText.IsCharacterBoundary(map.FlatText, spanStart + spanLength))
+            return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
+                "span boundaries must not split a UTF-16 surrogate pair", anchorId);
 
         if (spanLength == 0)
             return InsertTextAtBoundary(target, element, map, spanStart, replace);
@@ -355,7 +364,7 @@ public sealed partial class DocxSession
             {
                 if (!CanSplitTextRun(seg.Run) || !ReferenceEquals(seg.Run.Parent, element)
                     || IsInsideComplexField(seg.Run)
-                    || char.IsSurrogatePair(map.FlatText, offset - 1))
+                    || !XmlText.IsCharacterBoundary(map.FlatText, offset))
                     return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
                         "interior insertion requires an ordinary character boundary in a text run with only optional leading tabs, outside fields and inline containers", anchorId);
                 after = seg.Run;

@@ -1,14 +1,11 @@
 // Copyright (c) John Scrudato IV. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
-#nullable enable
-
 using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Xml;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using Docxodus.Internal;
@@ -402,7 +399,7 @@ public sealed partial class DocxSession
     {
         if (MutationRefusal() is { } refusal) return EditResult.Fail(refusal);
         if (ResolveMutableImage(imageId, ImageOperation.SetMetadata, out var candidate) is { } imageError) return imageError;
-        if (!ValidXmlAttributeText(altText) || !ValidXmlAttributeText(title))
+        if (!XmlText.IsValid(altText) || !XmlText.IsValid(title))
             return EditResult.Fail(EditErrorCode.InvalidImageData,
                 "image metadata contains characters XML attributes cannot represent");
         if (MetadataTargets(candidate.Outer).All(target =>
@@ -1092,7 +1089,7 @@ public sealed partial class DocxSession
         widthEmu = 0;
         heightEmu = 0;
         layout = null;
-        if (!ValidXmlAttributeText(options.AltText) || !ValidXmlAttributeText(options.Title))
+        if (!XmlText.IsValid(options.AltText) || !XmlText.IsValid(options.Title))
             return EditResult.Fail(EditErrorCode.InvalidImageData,
                 "image metadata contains characters XML attributes cannot represent", anchorId);
         if (!Enum.IsDefined(options.Placement))
@@ -1176,13 +1173,6 @@ public sealed partial class DocxSession
 
     private static bool ValidRenderedPoints(double points) =>
         double.IsFinite(points) && points > 0 && points <= MaxImageRenderedPoints;
-
-    private static bool ValidXmlAttributeText(string? value)
-    {
-        if (value is null) return true;
-        try { XmlConvert.VerifyXmlChars(value); return true; }
-        catch (XmlException) { return false; }
-    }
 
     private static EditResult? ValidateFloatingLayout(FloatingImageLayout layout,
         string? anchorId = null)

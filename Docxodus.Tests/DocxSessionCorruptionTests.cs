@@ -19,10 +19,6 @@ namespace Docxodus.Tests;
 /// </summary>
 public class DocxSessionCorruptionTests
 {
-    /// <summary>XML cannot encode a NUL, so this payload throws from deep inside the op, after it has
-    /// started mutating; the same trigger <see cref="DocxSessionRollbackTests"/> uses.</summary>
-    private const string NulPayload = "note\0text";
-
     private static string FirstBodyParagraph(DocxSession s) =>
         s.Project().AnchorIndex.Values
             .First(t => t.Anchor.Scope == "body" && t.Anchor.Kind is "p" or "h").Anchor.Id;
@@ -47,7 +43,8 @@ public class DocxSessionCorruptionTests
     private static EditResult CorruptByFailedRollback(DocxSession s)
     {
         s.BeforeRestoreSnapshotForTests = () => throw new IOException("simulated restore failure");
-        var result = s.InsertFootnote(FirstBodyParagraph(s), 0, NulPayload);
+        var anchor = FirstBodyParagraph(s);
+        var result = DocxSessionRollbackTests.FailDuringMutation(s, () => s.InsertFootnote(anchor, 0, "Note"));
         s.BeforeRestoreSnapshotForTests = null;
         return result;
     }
@@ -87,8 +84,8 @@ public class DocxSessionCorruptionTests
         Assert.Equal(version, s.Version);
 
         // Reads are not refused, so a caller can inspect what happened before reopening. Save is not
-        // refused either, but it can fail on its own: here the half-applied op left a NUL in the
-        // footnote, which is exactly why the session must stop accepting edits.
+        // refused either, but the failed rollback left a partially constructed note and citation,
+        // which is why the session must stop accepting edits.
         Assert.NotEmpty(s.Project().AnchorIndex);
     }
 
@@ -97,7 +94,8 @@ public class DocxSessionCorruptionTests
     {
         using var s = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
 
-        var failed = s.InsertFootnote(FirstBodyParagraph(s), 0, NulPayload);
+        var anchor = FirstBodyParagraph(s);
+        var failed = DocxSessionRollbackTests.FailDuringMutation(s, () => s.InsertFootnote(anchor, 0, "Note"));
 
         Assert.Equal(EditErrorCode.InternalError, failed.Error!.Code);
         Assert.False(s.IsCorrupted);
@@ -133,7 +131,8 @@ public class DocxSessionCorruptionTests
             var anchor = FirstBodyParagraph(session);
             session.BeforeRestoreSnapshotForTests = () => throw new IOException("simulated restore failure");
 
-            Assert.Equal("session_corrupted", Code(DocxSessionOps.InsertFootnote(handle, anchor, 0, NulPayload)));
+            Assert.Equal("session_corrupted", Code(DocxSessionRollbackTests.FailDuringMutation(session,
+                () => DocxSessionOps.InsertFootnote(handle, anchor, 0, "Note"))));
             session.BeforeRestoreSnapshotForTests = null;
 
             Assert.Equal("session_corrupted", Code(DocxSessionOps.InsertParagraph(handle, anchor, Position.After, "x")));
