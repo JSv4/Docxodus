@@ -391,6 +391,28 @@ ring counts each shared chunk, block and shell once across the whole history
 step, and the budget keeps far more history than before. The price is that the session holds one
 frozen copy of the document for as long as it is open.
 
+#### Recreating parts during undo and redo (issue #1033)
+
+An XML snapshot also records the main document's relationships to every snapshot-scoped part:
+relationship id, target URI, content type, and relationship type. `DocxSession.PartHistory.cs`
+restores this topology in one place. It preserves relationship order because header/footer scope
+names depend on that order. Parts outside the snapshot scope, including unrelated custom XML,
+remain outside this restore.
+
+`AddNewPart` can give a recreated part a new filename even when its relationship id is retained.
+A footnotes part recreated as `footnotes2.xml` then misses the next snapshot's content, which was
+recorded under `footnotes.xml`; URI-keyed hyperlink and image restoration misses it too. The shared
+restore therefore creates missing XML parts at their recorded OPC URIs and reopens the SDK graph
+before restoring those relationships. Existing content is restored and flushed before that reopen.
+Image restoration verifies surviving bytes and reuses the snapshot's shared buffers for the new
+SDK part objects, so reopening does not duplicate unchanged media in subsequent snapshots.
+When topology already matches, ordinary text edits and their undo/redo keep the cached trees and
+shared snapshot blocks without reopening the package.
+
+`DocxSessionPartRestoreTests` checks repeated undo/redo against each saved state, including part
+URIs, content types, XML, relationship targets, and image bytes. The mixed history oracle also
+includes edits that create story parts.
+
 #### Block-scoped patches (issue #1022)
 
 `EditResult.Patch` used to be the whole document re-projected
@@ -1057,16 +1079,11 @@ session.InsertPageNumberField(footerPara, PageNumberField.CurrentPage);
 
 ### Undo/redo and the snapshot reconcile
 
-`SetHeaderText`/`SetFooterText` can *add* an OOXML part, which the session's per-part
-snapshot didn't previously track (only the annotations custom-XML part was
-create/delete-reconciled). `DocumentSnapshot` now also records each header/footer
-part's relationship id, and `RestoreSnapshot` reconciles them: on undo it deletes
-parts the snapshot lacks; on redo it re-creates the ones it has **with their original
-relationship id** (via `AddNewPart<HeaderPart>(relId)`) so the just-restored `sectPr`
-reference resolves. Content of surviving parts restores by URI as before. One edge is
-documented as intentional: the `w:evenAndOddHeaders` settings flag (only set by the
-`Even` kind) isn't reverted by undo — it's idempotent and has no visual effect without
-an even story.
+`SetHeaderText`/`SetFooterText` can add an OOXML part. The shared snapshot topology restore
+records each header/footer relationship and its exact part URI, deletes parts absent from the
+snapshot, and recreates missing ones under their original names. This keeps both the restored
+`sectPr` references and later content snapshots pointing at the same parts. Settings changes,
+including `w:evenAndOddHeaders`, are restored with the settings part.
 
 ### Which part supplies which kind — `SectionInfo.HeaderRefs`/`FooterRefs`
 
@@ -1341,12 +1358,10 @@ session.DeleteBlock(noteDef);                                  // drop it + the 
 
 ### Undo/redo and the snapshot reconcile
 
-Creating the first note *adds an OOXML part*, the same problem `SetHeaderText`/`SetFooterText`
-solved. `DocumentSnapshot` therefore records the footnotes/endnotes parts' relationship ids
-alongside the header/footer ones, and `RestoreSnapshot` runs a `ReconcileNoteParts` twin of
-`ReconcileHeaderFooterParts`: undo deletes a part the snapshot lacks, redo re-creates it with its
-original relationship id (`AddNewPart<FootnotesPart>(relId)`). Content of surviving parts restores
-by URI as before. `DS328` pins undo-removes-part / redo-restores-part.
+Creating the first note adds an OOXML part. The shared `ReconcileSnapshotParts` path preserves
+its relationship id and exact part URI, so undo removes it, redo recreates it, and subsequent redo
+steps still find its content, hyperlinks and images. `DS328` pins undo-removes-part /
+redo-restores-part; `DocxSessionPartRestoreTests` covers later edits and repeated history cycles.
 
 ### `FootnoteRefNotSupported` — narrowed, not retired
 
@@ -1586,8 +1601,8 @@ Native Word comment authoring — real `w:comment` markup the Reviewing pane sho
 Tier E annotation overlay (which stays: it solves a different problem, semantic tagging for
 external tools). Follows the #274/#276 part-creation pattern: the `WordprocessingCommentsPart`
 and the `CommentText`/`CommentReference` styles are find-or-created on first use, and part
-create/delete is undo/redo-reconciled by `ReconcileCommentsPart` (the `ReconcileNoteParts`
-twin — `DocumentSnapshot` carries the part's relationship id). Mechanics live in
+create/delete is undo/redo-reconciled by the shared `ReconcileSnapshotParts` path
+(`DocumentSnapshot` carries each part's relationship and exact URI). Mechanics live in
 `Internal/CommentOps.cs` (the `AnnotationOps` split). Exposed in .NET, WASM/npm
 (`addComment`/`addCommentToRevision`/`addCommentReply`/`setCommentResolved`/`updateComment`/`removeComment`/
 `listComments`), stdio/`docx-scalpel` (`add_comment`/`add_comment_to_revision`/

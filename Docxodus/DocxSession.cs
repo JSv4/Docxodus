@@ -982,15 +982,9 @@ public sealed partial class DocxSession : IDisposable
     /// via <see cref="Internal.AnnotationsCustomXml.Find"/>).
     /// </summary>
     /// <remarks>
-    /// Why narrow here: <see cref="RestoreSnapshot"/> handles undo-time create/delete
-    /// of CustomXmlParts via <c>AddCustomXmlPart(CustomXmlPartType.CustomXml)</c>,
-    /// which hard-codes the content type and creates no
-    /// <c>CustomXmlPropertiesPart</c> partner. That is correct for the annotations
-    /// part but would silently corrupt other CustomXmlParts that Word/SharePoint
-    /// rely on (SharePoint metadata, content-type-bound SDT data-binding parts,
-    /// inkml, etc.) by re-creating them with the wrong content type and missing
-    /// properties partner. Today no session op deletes non-annotation CustomXmlParts
-    /// — narrowing here pre-empts the footgun before such an op is added.
+    /// Only the annotations part is owned by session mutations. Other custom XML parts can have
+    /// their own content types and child properties parts, and must remain outside selective
+    /// snapshot restoration. Complete package transactions preserve those opaque parts separately.
     /// </remarks>
     private IEnumerable<OpenXmlPart> EnumerateProjectedPartsForSnapshot()
     {
@@ -1004,7 +998,7 @@ public sealed partial class DocxSession : IDisposable
         if (main.WordprocessingCommentsPart is not null) yield return main.WordprocessingCommentsPart;
         // Comment-threading metadata parts: content is snapshot-scoped so reply/resolve writes
         // and DeleteBlock/RemoveComment pruning are undoable; create/delete reconciliation is
-        // driven by DocumentSnapshot.CommentThreadingParts below.
+        // driven by DocumentSnapshot.PartRelationships below.
         if (main.WordprocessingCommentsExPart is not null) yield return main.WordprocessingCommentsExPart;
         if (main.WordprocessingCommentsIdsPart is not null) yield return main.WordprocessingCommentsIdsPart;
 
@@ -1345,29 +1339,12 @@ public sealed partial class DocxSession : IDisposable
     /// undo or the Save restore would leak structural changes into peer parts.
     /// </summary>
     /// <param name="Parts">Per-URI XML content of every snapshot-scoped part (content restore).</param>
-    /// <param name="HeaderFooterParts">Relationship id + kind + URI of each header/footer part that
-    /// existed at snapshot time. Drives create/delete reconciliation in <see cref="RestoreSnapshot"/>
-    /// so ops that add a header/footer part (SetHeaderText/SetFooterText) undo/redo cleanly; the
-    /// content is read back from <see cref="Parts"/> by URI when a part must be re-created.</param>
-    /// <param name="NoteParts">The same, for the footnotes/endnotes parts, which
-    /// InsertFootnote/InsertEndnote create on a document that had no notes.</param>
-    /// <param name="CommentParts">The same, for the comments part (0 or 1 entries), which
-    /// AddComment creates on a document that had no comments.</param>
-    /// <param name="CommentThreadingParts">The same, for commentsExtended/commentsIds, which
-    /// AddCommentReply/SetCommentResolved create when upgrading a flat comment.</param>
-    /// <param name="StyleParts">The styles relationship/URI when present, so undo can remove a
-    /// styles part synthesized by a direct-mode style mutation or recreate it on redo.</param>
-    /// <param name="NumberingParts">The numbering relationship/URI when present, so undo and
-    /// tracked rejection can remove a part created by a list mutation or recreate one on redo.</param>
+    /// <param name="PartRelationships">The main document's relationships to snapshot-scoped
+    /// parts, including their exact target URIs and content types, for topology restoration.</param>
     internal sealed record DocumentSnapshot(
         long Version,
         System.Collections.Generic.IReadOnlyList<PartSnapshot> Parts,
-        System.Collections.Generic.IReadOnlyList<(string RelId, bool IsHeader, string PartUri)> HeaderFooterParts,
-        System.Collections.Generic.IReadOnlyList<(string RelId, bool IsFootnote, string PartUri)> NoteParts,
-        System.Collections.Generic.IReadOnlyList<(string RelId, string PartUri)> CommentParts,
-        System.Collections.Generic.IReadOnlyList<(string RelId, bool IsCommentsEx, string PartUri)> CommentThreadingParts,
-        System.Collections.Generic.IReadOnlyList<(string RelId, string PartUri)> StyleParts,
-        System.Collections.Generic.IReadOnlyList<(string RelId, string PartUri)> NumberingParts,
+        IReadOnlyList<SnapshotPartRelationship> PartRelationships,
         System.Collections.Generic.IReadOnlyList<(string PartUri, string RelId, string Uri, bool IsExternal)> HyperlinkRelationships,
         System.Collections.Generic.IReadOnlyList<(string PartUri, string ContentType, byte[] Bytes)> ImageParts,
         System.Collections.Generic.IReadOnlyList<(string OwnerPartUri, string RelId, string TargetPartUri)> ImageRelationships,
@@ -1415,41 +1392,11 @@ public sealed partial class DocxSession : IDisposable
         foreach (var part in EnumerateProjectedPartsForSnapshot())
             parts.Add(PartSnapshotCache.Take(part));
 
-        var hfParts = new System.Collections.Generic.List<(string, bool, string)>();
-        var noteParts = new System.Collections.Generic.List<(string, bool, string)>();
-        var commentParts = new System.Collections.Generic.List<(string, string)>();
-        var commentThreadingParts = new System.Collections.Generic.List<(string, bool, string)>();
-        var styleParts = new System.Collections.Generic.List<(string, string)>();
-        var numberingParts = new System.Collections.Generic.List<(string, string)>();
         var hyperlinkRelationships = new System.Collections.Generic.List<(string, string, string, bool)>();
         var imageParts = new System.Collections.Generic.List<(string, string, byte[])>();
         var imagePartUris = new System.Collections.Generic.HashSet<string>(StringComparer.Ordinal);
         var imageRelationships = new System.Collections.Generic.List<(string, string, string)>();
         var linkedImageRelationships = new System.Collections.Generic.List<(string, string, string)>();
-        var main = _doc!.MainDocumentPart;
-        if (main is not null)
-        {
-            foreach (var h in main.HeaderParts) hfParts.Add((main.GetIdOfPart(h), true, h.Uri.ToString()));
-            foreach (var f in main.FooterParts) hfParts.Add((main.GetIdOfPart(f), false, f.Uri.ToString()));
-            if (main.FootnotesPart is not null)
-                noteParts.Add((main.GetIdOfPart(main.FootnotesPart), true, main.FootnotesPart.Uri.ToString()));
-            if (main.EndnotesPart is not null)
-                noteParts.Add((main.GetIdOfPart(main.EndnotesPart), false, main.EndnotesPart.Uri.ToString()));
-            if (main.WordprocessingCommentsPart is not null)
-                commentParts.Add((main.GetIdOfPart(main.WordprocessingCommentsPart), main.WordprocessingCommentsPart.Uri.ToString()));
-            if (main.WordprocessingCommentsExPart is not null)
-                commentThreadingParts.Add((main.GetIdOfPart(main.WordprocessingCommentsExPart), true,
-                    main.WordprocessingCommentsExPart.Uri.ToString()));
-            if (main.WordprocessingCommentsIdsPart is not null)
-                commentThreadingParts.Add((main.GetIdOfPart(main.WordprocessingCommentsIdsPart), false,
-                    main.WordprocessingCommentsIdsPart.Uri.ToString()));
-            if (main.StyleDefinitionsPart is not null)
-                styleParts.Add((main.GetIdOfPart(main.StyleDefinitionsPart),
-                    main.StyleDefinitionsPart.Uri.ToString()));
-            if (main.NumberingDefinitionsPart is not null)
-                numberingParts.Add((main.GetIdOfPart(main.NumberingDefinitionsPart),
-                    main.NumberingDefinitionsPart.Uri.ToString()));
-        }
         foreach (var owner in Internal.OwnedPartRelationships.StoryParts(_doc!))
         {
             foreach (var relationship in owner.Part.HyperlinkRelationships)
@@ -1466,8 +1413,7 @@ public sealed partial class DocxSession : IDisposable
             foreach (var relationship in Internal.OwnedPartRelationships.ExternalImageRelationships(owner.Part))
                 linkedImageRelationships.Add((owner.PartUri, relationship.Id, relationship.Uri.ToString()));
         }
-        return new DocumentSnapshot(_version, parts, hfParts, noteParts, commentParts,
-            commentThreadingParts, styleParts, numberingParts, hyperlinkRelationships, imageParts,
+        return new DocumentSnapshot(_version, parts, CapturePartRelationships(parts), hyperlinkRelationships, imageParts,
             imageRelationships, linkedImageRelationships);
     }
 
@@ -1482,12 +1428,7 @@ public sealed partial class DocxSession : IDisposable
         return new DocumentSnapshot(
             _version,
             Array.Empty<PartSnapshot>(),
-            Array.Empty<(string RelId, bool IsHeader, string PartUri)>(),
-            Array.Empty<(string RelId, bool IsFootnote, string PartUri)>(),
-            Array.Empty<(string RelId, string PartUri)>(),
-            Array.Empty<(string RelId, bool IsCommentsEx, string PartUri)>(),
-            Array.Empty<(string RelId, string PartUri)>(),
-            Array.Empty<(string RelId, string PartUri)>(),
+            Array.Empty<SnapshotPartRelationship>(),
             Array.Empty<(string PartUri, string RelId, string Uri, bool IsExternal)>(),
             Array.Empty<(string PartUri, string ContentType, byte[] Bytes)>(),
             Array.Empty<(string OwnerPartUri, string RelId, string TargetPartUri)>(),
@@ -1677,57 +1618,10 @@ public sealed partial class DocxSession : IDisposable
             xml.MaterializeInto(part, flushToStream: !flushedBySave.Contains(uri));
         }
 
-        var main = _doc!.MainDocumentPart;
-
-        // Header/footer part create/delete reconcile: SetHeaderText/SetFooterText can add a
-        // HeaderPart/FooterPart, so undo/redo must delete the parts the snapshot doesn't have and
-        // re-create (with the snapshot's relationship id, so the restored sectPr reference resolves)
-        // the ones it does. Content restore above already handled parts present in both by URI.
-        if (main is not null)
-        {
-            ReconcileHeaderFooterParts(main, snapshot, byUri);
-            // Same reconcile for the footnotes/endnotes parts, which InsertFootnote/InsertEndnote
-            // create on a document that had no notes.
-            ReconcileNoteParts(main, snapshot, byUri);
-            // And for the comments part, which AddComment creates on a document that had no comments.
-            ReconcileCommentsPart(main, snapshot, byUri);
-            // Reply/resolve can introduce commentsExtended/commentsIds; reconcile their topology
-            // after restoring the base comments part.
-            ReconcileCommentThreadingParts(main, snapshot, byUri);
-            ReconcileStylePart(main, snapshot, byUri);
-            ReconcileNumberingPart(main, snapshot, byUri);
-        }
-
+        // Recreate optional parts at their recorded URIs before restoring owner-local links and
+        // images. A fresh SDK-assigned filename would make later snapshots miss the same part.
+        ReconcileSnapshotParts(snapshot, byUri);
         RestoreHyperlinkRelationships(snapshot);
-
-        // The annotations CustomXmlPart is reconciled the same way (its own factory) — see
-        // EnumerateProjectedPartsForSnapshot for why AddCustomXmlPart(CustomXml) is unsafe for
-        // non-annotation custom-xml parts (wrong content type, no CustomXmlPropertiesPart partner).
-        if (main is not null)
-        {
-            var annotationsPart = Internal.AnnotationsCustomXml.Find(_doc);
-            var snapshotAnnotationsUri = snapshot.Parts
-                .FirstOrDefault(p => p.PartUri.StartsWith("/customXml/", StringComparison.OrdinalIgnoreCase))
-                ?.PartUri;
-
-            // Undo direction: snapshot has no annotations part but the live doc
-            // does → forward-op created it, roll it back by deleting.
-            if (annotationsPart is not null
-                && !byUri.ContainsKey(annotationsPart.Uri.ToString()))
-            {
-                main.DeletePart(annotationsPart);
-                annotationsPart = null;
-            }
-
-            // Redo direction: snapshot has an annotations part but the live doc
-            // doesn't → undo previously removed it, restore by re-adding.
-            if (annotationsPart is null && snapshotAnnotationsUri is not null
-                && byUri.TryGetValue(snapshotAnnotationsUri, out var annXml))
-            {
-                var newPart = main.AddCustomXmlPart(CustomXmlPartType.CustomXml);
-                newPart.PutXDocument(annXml.Materialize());
-            }
-        }
 
         // Binary media restoration can require recreating an exact OPC part URI. It is last
         // because it reopens the SDK package graph after low-level part/relationship repair.
@@ -1780,195 +1674,6 @@ public sealed partial class DocxSession : IDisposable
                     new Uri(relationship.Uri, UriKind.RelativeOrAbsolute),
                     relationship.IsExternal, relationship.RelId);
             }
-        }
-    }
-
-    /// <summary>
-    /// Reconcile the live document's header/footer parts against <paramref name="snapshot"/>:
-    /// delete parts created since the snapshot (relationship id present live, absent in snapshot)
-    /// and re-create parts removed since it (present in snapshot, absent live) with their original
-    /// relationship id + content, so the just-restored sectPr <c>headerReference</c>/<c>footerReference</c>
-    /// resolves. Parts present in both keep their content (restored by URI in <see cref="RestoreSnapshot"/>).
-    /// </summary>
-    private static void ReconcileHeaderFooterParts(
-        MainDocumentPart main, DocumentSnapshot snapshot,
-        System.Collections.Generic.Dictionary<string, PartSnapshot> byUri)
-    {
-        var snapByRel = new System.Collections.Generic.Dictionary<string, (bool IsHeader, string PartUri)>(StringComparer.Ordinal);
-        foreach (var (relId, isHeader, partUri) in snapshot.HeaderFooterParts)
-            snapByRel[relId] = (isHeader, partUri);
-
-        // Live header/footer parts keyed by relationship id (materialized so we can DeletePart
-        // without mutating a collection we're iterating).
-        var live = new System.Collections.Generic.Dictionary<string, OpenXmlPart>(StringComparer.Ordinal);
-        foreach (var h in main.HeaderParts) live[main.GetIdOfPart(h)] = h;
-        foreach (var f in main.FooterParts) live[main.GetIdOfPart(f)] = f;
-
-        // Delete parts the snapshot doesn't know about (undo of a create).
-        foreach (var kv in live)
-            if (!snapByRel.ContainsKey(kv.Key))
-                main.DeletePart(kv.Value);
-
-        // Re-create parts the snapshot has but the live doc lost (redo of a create / undo of a delete).
-        foreach (var kv in snapByRel)
-        {
-            if (live.ContainsKey(kv.Key)) continue;
-            if (!byUri.TryGetValue(kv.Value.PartUri, out var xml)) continue;
-            OpenXmlPart np = kv.Value.IsHeader
-                ? main.AddNewPart<HeaderPart>(kv.Key)
-                : main.AddNewPart<FooterPart>(kv.Key);
-            np.PutXDocument(xml.Materialize());
-        }
-    }
-
-    /// <summary>
-    /// The <see cref="ReconcileHeaderFooterParts"/> twin for the footnotes/endnotes parts: delete a
-    /// part created since <paramref name="snapshot"/> (undo of an InsertFootnote/InsertEndnote that
-    /// introduced notes) and re-create one the live document has since lost (redo), keeping the
-    /// original relationship id so the package relationship the restored XML expects still resolves.
-    /// Parts present in both keep their content, restored by URI in <see cref="RestoreSnapshot"/>.
-    /// </summary>
-    private static void ReconcileNoteParts(
-        MainDocumentPart main, DocumentSnapshot snapshot,
-        System.Collections.Generic.Dictionary<string, PartSnapshot> byUri)
-    {
-        var snapByRel = new System.Collections.Generic.Dictionary<string, (bool IsFootnote, string PartUri)>(StringComparer.Ordinal);
-        foreach (var (relId, isFootnote, partUri) in snapshot.NoteParts)
-            snapByRel[relId] = (isFootnote, partUri);
-
-        var live = new System.Collections.Generic.Dictionary<string, OpenXmlPart>(StringComparer.Ordinal);
-        if (main.FootnotesPart is not null) live[main.GetIdOfPart(main.FootnotesPart)] = main.FootnotesPart;
-        if (main.EndnotesPart is not null) live[main.GetIdOfPart(main.EndnotesPart)] = main.EndnotesPart;
-
-        foreach (var kv in live)
-            if (!snapByRel.ContainsKey(kv.Key))
-                main.DeletePart(kv.Value);
-
-        foreach (var kv in snapByRel)
-        {
-            if (live.ContainsKey(kv.Key)) continue;
-            if (!byUri.TryGetValue(kv.Value.PartUri, out var xml)) continue;
-            OpenXmlPart np = kv.Value.IsFootnote
-                ? main.AddNewPart<FootnotesPart>(kv.Key)
-                : main.AddNewPart<EndnotesPart>(kv.Key);
-            np.PutXDocument(xml.Materialize());
-        }
-    }
-
-    /// <summary>
-    /// The <see cref="ReconcileNoteParts"/> twin for the comments part: delete a part created
-    /// since <paramref name="snapshot"/> (undo of the AddComment that introduced comments) and
-    /// re-create one the live document has since lost (redo), keeping the original relationship
-    /// id. Content for a part present in both is restored by URI in <see cref="RestoreSnapshot"/>.
-    /// </summary>
-    private static void ReconcileCommentsPart(
-        MainDocumentPart main, DocumentSnapshot snapshot,
-        System.Collections.Generic.Dictionary<string, PartSnapshot> byUri)
-    {
-        var snapByRel = new System.Collections.Generic.Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (relId, partUri) in snapshot.CommentParts)
-            snapByRel[relId] = partUri;
-
-        var live = new System.Collections.Generic.Dictionary<string, OpenXmlPart>(StringComparer.Ordinal);
-        if (main.WordprocessingCommentsPart is not null)
-            live[main.GetIdOfPart(main.WordprocessingCommentsPart)] = main.WordprocessingCommentsPart;
-
-        foreach (var kv in live)
-            if (!snapByRel.ContainsKey(kv.Key))
-                main.DeletePart(kv.Value);
-
-        foreach (var kv in snapByRel)
-        {
-            if (live.ContainsKey(kv.Key)) continue;
-            if (!byUri.TryGetValue(kv.Value, out var xml)) continue;
-            var np = main.AddNewPart<WordprocessingCommentsPart>(kv.Key);
-            np.PutXDocument(xml.Materialize());
-        }
-    }
-
-    /// <summary>
-    /// Create/delete reconciliation for <c>commentsExtended.xml</c> and
-    /// <c>commentsIds.xml</c>. These used to be content-only snapshot parts because no session op
-    /// authored them; AddCommentReply/SetCommentResolved can now create either/both, so undo must
-    /// remove those parts and redo must restore their original relationship ids and XML.
-    /// </summary>
-    private static void ReconcileCommentThreadingParts(
-        MainDocumentPart main, DocumentSnapshot snapshot,
-        System.Collections.Generic.Dictionary<string, PartSnapshot> byUri)
-    {
-        var snapByRel = new System.Collections.Generic.Dictionary<string, (bool IsCommentsEx, string PartUri)>(StringComparer.Ordinal);
-        foreach (var (relId, isCommentsEx, partUri) in snapshot.CommentThreadingParts)
-            snapByRel[relId] = (isCommentsEx, partUri);
-
-        var live = new System.Collections.Generic.Dictionary<string, OpenXmlPart>(StringComparer.Ordinal);
-        if (main.WordprocessingCommentsExPart is not null)
-            live[main.GetIdOfPart(main.WordprocessingCommentsExPart)] = main.WordprocessingCommentsExPart;
-        if (main.WordprocessingCommentsIdsPart is not null)
-            live[main.GetIdOfPart(main.WordprocessingCommentsIdsPart)] = main.WordprocessingCommentsIdsPart;
-
-        foreach (var kv in live)
-            if (!snapByRel.ContainsKey(kv.Key))
-                main.DeletePart(kv.Value);
-
-        foreach (var kv in snapByRel)
-        {
-            if (live.ContainsKey(kv.Key)) continue;
-            if (!byUri.TryGetValue(kv.Value.PartUri, out var xml)) continue;
-            OpenXmlPart np = kv.Value.IsCommentsEx
-                ? main.AddNewPart<WordprocessingCommentsExPart>(kv.Key)
-                : main.AddNewPart<WordprocessingCommentsIdsPart>(kv.Key);
-            np.PutXDocument(xml.Materialize());
-        }
-    }
-
-    /// <summary>Restore numbering-part topology as well as content. In particular, rejecting or
-    /// undoing the first tracked list mutation in a document must remove the newly-created part;
-    /// redo recreates it with its original relationship id.</summary>
-    private static void ReconcileNumberingPart(
-        MainDocumentPart main, DocumentSnapshot snapshot,
-        System.Collections.Generic.Dictionary<string, PartSnapshot> byUri)
-    {
-        var snapshotPart = snapshot.NumberingParts.FirstOrDefault();
-        var live = main.NumberingDefinitionsPart;
-
-        if (live is not null
-            && (snapshotPart.RelId is null
-                || !string.Equals(main.GetIdOfPart(live), snapshotPart.RelId, StringComparison.Ordinal)))
-        {
-            main.DeletePart(live);
-            live = null;
-        }
-
-        if (live is null && snapshotPart.RelId is not null
-            && byUri.TryGetValue(snapshotPart.PartUri, out var xml))
-        {
-            var restored = main.AddNewPart<NumberingDefinitionsPart>(snapshotPart.RelId);
-            restored.PutXDocument(xml.Materialize());
-        }
-    }
-
-    /// <summary>Restore styles-part topology as well as content. Style synthesis can create the
-    /// optional part, so an ordinary undo must remove it and redo must recreate it.</summary>
-    private static void ReconcileStylePart(
-        MainDocumentPart main, DocumentSnapshot snapshot,
-        System.Collections.Generic.Dictionary<string, PartSnapshot> byUri)
-    {
-        var snapshotPart = snapshot.StyleParts.FirstOrDefault();
-        var live = main.StyleDefinitionsPart;
-
-        if (live is not null
-            && (snapshotPart.RelId is null
-                || !string.Equals(main.GetIdOfPart(live), snapshotPart.RelId, StringComparison.Ordinal)))
-        {
-            main.DeletePart(live);
-            live = null;
-        }
-
-        if (live is null && snapshotPart.RelId is not null
-            && byUri.TryGetValue(snapshotPart.PartUri, out var xml))
-        {
-            var restored = main.AddNewPart<StyleDefinitionsPart>(snapshotPart.RelId);
-            restored.PutXDocument(xml.Materialize());
         }
     }
 
