@@ -1,0 +1,79 @@
+[
+  {
+    "name": "default-style-id",
+    "group": "style-correspondence",
+    "left": "default-style-id-original.docx",
+    "right": "default-style-id-revised.docx",
+    "check": "effective-format"
+  },
+  {
+    "name": "named-style-id",
+    "group": "style-correspondence",
+    "left": "named-style-id-original.docx",
+    "right": "named-style-id-revised.docx",
+    "check": "effective-format"
+  },
+  {
+    "name": "same-style-id-control",
+    "group": "style-correspondence",
+    "left": "same-style-id-control-original.docx",
+    "right": "same-style-id-control-revised.docx",
+    "check": "effective-format"
+  },
+  {
+    "name": "defaults-plain-control",
+    "group": "effective-defaults",
+    "left": "defaults-plain-control-original.docx",
+    "right": "defaults-plain-control-revised.docx",
+    "check": "effective-format"
+  },
+  {
+    "name": "defaults-with-table",
+    "group": "effective-defaults",
+    "left": "defaults-with-table-original.docx",
+    "right": "defaults-with-table-revised.docx",
+    "check": "effective-format"
+  },
+  {
+    "name": "inserted-heading-gap",
+    "group": "paragraph-pairing",
+    "left": "inserted-heading-gap-original.docx",
+    "right": "inserted-heading-gap-revised.docx",
+    "check": "heading-pairing"
+  },
+  {
+    "name": "body-edits-control",
+    "group": "paragraph-pairing",
+    "left": "body-edits-control-original.docx",
+    "right": "body-edits-control-revised.docx",
+    "check": "heading-pairing"
+  },
+  {
+    "name": "table-style-cell-margins",
+    "group": "layout-properties",
+    "left": "table-style-cell-margins-original.docx",
+    "right": "table-style-cell-margins-revised.docx",
+    "check": "table-margins"
+  },
+  {
+    "name": "table-direct-margins-control",
+    "group": "layout-properties",
+    "left": "table-direct-margins-control-original.docx",
+    "right": "table-direct-margins-control-revised.docx",
+    "check": "table-margins"
+  },
+  {
+    "name": "section-margin-control",
+    "group": "layout-properties",
+    "left": "section-margin-control-original.docx",
+    "right": "section-margin-control-revised.docx",
+    "check": "section-margin"
+  },
+  {
+    "name": "paragraph-spacing-control",
+    "group": "layout-properties",
+    "left": "paragraph-spacing-control-original.docx",
+    "right": "paragraph-spacing-control-revised.docx",
+    "check": "effective-format"
+  }
+]

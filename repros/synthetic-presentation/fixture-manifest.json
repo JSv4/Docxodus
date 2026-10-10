@@ -1,0 +1,29 @@
+{
+  "inputs": {
+    "body-edits-control-original.docx": "eaaef315dcbe549dc1b29ea05c64811c99413d1a88f675ab2249bc8072198b20",
+    "body-edits-control-revised.docx": "fef338294b3c66d44537204770a6702b3735f2da5cddda1a49d7bbc7c320c35d",
+    "default-style-id-original.docx": "b8f1be265c8a4078ca1f9ecff7c858703e632c3cf62664f32c8191875edd52dc",
+    "default-style-id-revised.docx": "cd5486ed5330decebc28df8c33d83ca12530b761ce024c297f4b2aea68b974c1",
+    "defaults-plain-control-original.docx": "647c889b3e91ce61a23ef5a224aff880b758d9ae0196ed2f3c21645fcbcf9b25",
+    "defaults-plain-control-revised.docx": "98454d6c54a5c969a015bb03392f497f9f776477586e3c3b87f1c653bfa6aac3",
+    "defaults-with-table-original.docx": "b20afcdcd41c4b8a262bda68cd8cabfb2bdb07bdf13763b29dae9e3748dbd637",
+    "defaults-with-table-revised.docx": "73e2a0310bf63a559a41560f7873e27ad24fc55c8a4da700cbb0a7333926266e",
+    "inserted-heading-gap-original.docx": "eaaef315dcbe549dc1b29ea05c64811c99413d1a88f675ab2249bc8072198b20",
+    "inserted-heading-gap-revised.docx": "257f326b564cc44d91d31aaf4e44d455c0bcef908c547f6a34f10053cb9d590b",
+    "named-style-id-original.docx": "5adcbf36bb8640587daca34e645f568d1ecba881ca1b266cb8ec13fbfbf8d4e8",
+    "named-style-id-revised.docx": "dbd80483d53fa6ee7b636ed80ea1c2f0ff3fb5af4927277c58092bcf48e36963",
+    "paragraph-spacing-control-original.docx": "bc9551ff57e14ae8380c32d600a20e922d3254844a8f473c0ae5749eec22cdcb",
+    "paragraph-spacing-control-revised.docx": "c4dec70bc50b1425ccb0cf362ed746036857e5c7a08c6efa4066d4bc3b3a44d9",
+    "same-style-id-control-original.docx": "b8f1be265c8a4078ca1f9ecff7c858703e632c3cf62664f32c8191875edd52dc",
+    "same-style-id-control-revised.docx": "8bca9ca6ac29b8f44a880ff7bfdf9034d3df5affb402215cf56c5b5a6a9d1db3",
+    "section-margin-control-original.docx": "e8073e4ea1f9b552c16c86947792d03b1b4f7d38aa8f6a8ad73ab4f8108c5431",
+    "section-margin-control-revised.docx": "5a8b1f924f4523f0215558fd5e405ad8301cb0bfc847257f5faa53aac3024063",
+    "table-direct-margins-control-original.docx": "23173d81b5a56e4c3630ffc195ebeebfa57b47f6f82364919841ed3bc0c3d0d2",
+    "table-direct-margins-control-revised.docx": "90c90c82e5dfccdca48608867c919c44d8d2e4f0122482749a29dd4ef7d6cd17",
+    "table-style-cell-margins-original.docx": "65d98e7a3fabca057f796b626017d144221ca62b210ddccab5be73cba1a34b3b",
+    "table-style-cell-margins-revised.docx": "2a828e9aad702afa8c4d743ff90c6586fa78e737a17b8eda430e351fd8d244a1"
+  },
+  "case_count": 11,
+  "input_count": 22,
+  "generated_from_literal_xml": true
+}
