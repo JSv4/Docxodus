@@ -167,7 +167,8 @@ larger than the whole budget evicts itself rather than raising the ceiling.
 
 The byte budget exists because a count is not a memory bound. A retained entry is the complete
 serialized `MutationBatchResult`, which carries every step's `results` **twice** (once under
-`steps[].results` and once in the duplicate top-level `results`) plus `patch.markdown` and the
+`steps[].results` and once in the duplicate top-level `results`) plus each step's block-scoped
+`patch` (the changed blocks' markdown, or the whole document after a list renumber or a style change) and the
 revision/comment/annotation delta sets. Measured: a single-step `insert_paragraph` batch against a
 blank document already retains **~3.2 KB**, so 128 of those is ~400 KB — and a large scoped batch
 over a real document is orders of magnitude bigger, which is what the 32 MiB cap is there for. The

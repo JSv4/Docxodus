@@ -152,7 +152,7 @@ public sealed partial class DocxSession : IDisposable
             static snapshot => snapshot.ApproximateBytes,
             onRecordPreOp: _ => OnHistoryRecordPreOp(),
             onPopUndo: snapshot => OnHistoryPopUndo(snapshot),
-            sharedPayloadsOf: static snapshot => snapshot.SharedImagePayloads);
+            sharedPayloadsOf: static snapshot => snapshot.SharedPayloads);
         _stream = new MemoryStream();
         _stream.Write(docxBytes, 0, docxBytes.Length);
         _stream.Position = 0;
@@ -414,7 +414,14 @@ public sealed partial class DocxSession : IDisposable
     public MarkdownProjection Project()
     {
         ThrowIfDisposed();
-        return _cachedProjection ??=
+        if (_cachedProjection is not null) return _cachedProjection;
+        // With patches on, bring the incremental index up to date first: the ops that follow look
+        // anchors up in this projection, and without an index watching the trees their edits could
+        // not be patched block by block (issue #1022).
+        if (_settings.EmitMarkdownPatch && !_incrementalIndexUnsupported
+            && _settings.ProjectionSettings.AnchorIdRendering == AnchorIdRendering.FullUnid)
+            _ = AnchorIndex();
+        return _cachedProjection =
             WmlToMarkdownConverter.Convert(_doc!, _settings.ProjectionSettings);
     }
 
@@ -566,20 +573,65 @@ public sealed partial class DocxSession : IDisposable
     /// path therefore carry empty previews; consumers that need enrichment must call
     /// <see cref="Project"/> explicitly.
     /// </summary>
+    /// <remarks>
+    /// After a mutation the index is stale rather than gone: an <see cref="IncrementalAnchorIndex"/>
+    /// re-indexes only the blocks whose trees changed (issue #1022), and falls back to a full
+    /// rebuild whenever a block-local update could differ from one. Undo, redo and rollback drop it
+    /// outright (<see cref="ResetProjectionCache"/>).
+    /// </remarks>
     internal IReadOnlyDictionary<string, AnchorTarget> AnchorIndex()
     {
         ThrowIfDisposed();
         if (_cachedProjection is not null) return _cachedProjection.AnchorIndex;
-        return _cachedAnchorIndex ??=
-            WmlToMarkdownConverter.BuildAnchorIndexOnly(_doc!, _settings.ProjectionSettings);
+        if (_cachedAnchorIndex is not null && !_anchorIndexStale) return _cachedAnchorIndex;
+
+        // Take the stale index out of the cache before touching it: if a refresh or rebuild
+        // throws, the next lookup starts from nothing rather than serving a half-updated index.
+        var stale = _cachedAnchorIndex as IncrementalAnchorIndex;
+        _cachedAnchorIndex = null;
+        _anchorIndexStale = false;
+        if (stale is not null && stale.TryRefresh(_doc!)) return _cachedAnchorIndex = stale;
+
+        // A new index sees the document as it is now. If the stale index could not be refreshed, or
+        // any op has run since the last patch baseline (its changes made while no index watched),
+        // the next patch cannot list what changed block by block.
+        if (stale is not null || _mutationEpoch != _patchBaselineEpoch) _nextPatchFull = true;
+        IReadOnlyDictionary<string, AnchorTarget>? built = null;
+        if (!_incrementalIndexUnsupported)
+        {
+            built = IncrementalAnchorIndex.TryBuild(_doc!, _settings.ProjectionSettings,
+                trackPatchChanges: _settings.EmitMarkdownPatch);
+            // A document the incremental index cannot maintain (duplicate ids, an addressable
+            // element outside the block containers, a non-FullUnid rendering) would otherwise pay
+            // for an abandoned incremental build on top of the full one at every lookup.
+            _incrementalIndexUnsupported = built is null;
+        }
+        return _cachedAnchorIndex =
+            built ?? WmlToMarkdownConverter.BuildAnchorIndexOnly(_doc!, _settings.ProjectionSettings);
     }
+
+    /// <summary>Set when <see cref="IncrementalAnchorIndex.TryBuild"/> declined this document, so
+    /// lookups go straight to the full index. Cleared when the trees are replaced wholesale
+    /// (<see cref="ResetProjectionCache"/>), after which the document may be maintainable again.</summary>
+    private bool _incrementalIndexUnsupported;
 
     private IReadOnlyDictionary<string, AnchorTarget>? _cachedAnchorIndex;
 
-    /// <summary>Whether an anchor index is currently cached (a lookup now would be a dictionary
-    /// hit rather than a whole-document rebuild). Lets the block-render path choose a cheaper
-    /// resolution strategy right after a mutation invalidated the cache.</summary>
-    internal bool HasCachedAnchorIndex => _cachedProjection is not null || _cachedAnchorIndex is not null;
+    /// <summary>The projection settings this session indexes and projects with.</summary>
+    internal WmlToMarkdownConverterSettings ProjectionSettings => _settings.ProjectionSettings;
+
+    /// <summary>Whether mutation results carry a markdown patch.</summary>
+    internal bool EmitsMarkdownPatch => _settings.EmitMarkdownPatch;
+
+    /// <summary>Set by a mutation: <see cref="_cachedAnchorIndex"/> no longer describes the document
+    /// and must be refreshed (incrementally when it can be) before its next use.</summary>
+    private bool _anchorIndexStale;
+
+    /// <summary>Whether an anchor index is current (a lookup now is a dictionary hit). After a
+    /// mutation it is not — even an incremental refresh can fall back to a whole-document rebuild —
+    /// which lets the block-render path choose a cheaper resolution strategy.</summary>
+    internal bool HasCachedAnchorIndex =>
+        _cachedProjection is not null || (_cachedAnchorIndex is not null && !_anchorIndexStale);
 
     /// <summary>
     /// The ordered top-level render units per scope container — see <see cref="RenderPlan"/>.
@@ -800,6 +852,8 @@ public sealed partial class DocxSession : IDisposable
         }
         finally
         {
+            // The content is what it was before the strip: whatever no patch has reported yet
+            // must still reach the next one.
             RestoreSnapshot(snapshot);
         }
     }
@@ -1222,7 +1276,7 @@ public sealed partial class DocxSession : IDisposable
     {
         if (sweepOrphanedImages)
             SweepOrphanedStoryImageRelationships();
-        ResetProjectionCache();
+        MarkProjectionStale();
     }
 
     /// <summary>
@@ -1236,8 +1290,51 @@ public sealed partial class DocxSession : IDisposable
     private void ResetProjectionCache()
     {
         _cachedProjection = null;
-        _cachedAnchorIndex = null;
+        DropAnchorIndex();
+        _incrementalIndexUnsupported = false;
         if (_doc is not null) ListItemRetriever.ClearStaleAnnotations(_doc);
+    }
+
+    /// <summary>Forget the anchor index, and stop its change trackers recording for it.</summary>
+    private void DropAnchorIndex()
+    {
+        (_cachedAnchorIndex as IncrementalAnchorIndex)?.Detach();
+        _cachedAnchorIndex = null;
+        _anchorIndexStale = false;
+    }
+
+    /// <summary>
+    /// Counts every op that records history (each <c>RecordPreOp</c>), whatever happens to it
+    /// afterwards; never decreases. Comparing it with <see cref="_patchBaselineEpoch"/> tells an index
+    /// built from scratch whether any op ran since the last patch baseline, which that index could
+    /// not have seen.
+    /// </summary>
+    private long _mutationEpoch;
+
+    /// <summary>
+    /// <see cref="_mutationEpoch"/> when the last patch was emitted, or when <see cref="Undo"/> or
+    /// <see cref="Redo"/> last moved the document (they return no patch, and a client mirroring the
+    /// projection re-reads it after them, so the restored state is the new baseline).
+    /// </summary>
+    private long _patchBaselineEpoch;
+
+    /// <summary>Make the current state the patch baseline after an undo or redo.</summary>
+    private void RewindPatchBaseline()
+    {
+        _patchBaselineEpoch = _mutationEpoch;
+        _nextPatchFull = false;
+    }
+
+    /// <summary>
+    /// The mutation-path half of <see cref="InvalidateProjectionCache"/>: drop the projection, but
+    /// keep the anchor index for an incremental refresh of the blocks the edit changed.
+    /// </summary>
+    private void MarkProjectionStale()
+    {
+        _cachedProjection = null;
+        _anchorIndexStale = _cachedAnchorIndex is not null;
+        // Recounted list numbering can renumber paragraphs the edit never touched.
+        if (_doc is not null && ListItemRetriever.ClearStaleAnnotations(_doc)) _nextPatchFull = true;
     }
 
     /// <summary>
@@ -1264,7 +1361,7 @@ public sealed partial class DocxSession : IDisposable
     /// tracked rejection can remove a part created by a list mutation or recreate one on redo.</param>
     internal sealed record DocumentSnapshot(
         long Version,
-        System.Collections.Generic.IReadOnlyList<(string PartUri, XDocument Xml)> Parts,
+        System.Collections.Generic.IReadOnlyList<PartSnapshot> Parts,
         System.Collections.Generic.IReadOnlyList<(string RelId, bool IsHeader, string PartUri)> HeaderFooterParts,
         System.Collections.Generic.IReadOnlyList<(string RelId, bool IsFootnote, string PartUri)> NoteParts,
         System.Collections.Generic.IReadOnlyList<(string RelId, string PartUri)> CommentParts,
@@ -1289,30 +1386,34 @@ public sealed partial class DocxSession : IDisposable
         internal long? LastFormatRevisionTicks { get; init; }
 
         /// <summary>
-        /// Approximate retained heap this snapshot holds alone (its cloned part trees, or its
-        /// package bytes), for the undo ring's memory budget. Image bytes are not included: they
-        /// are shared by reference across snapshots (issue #965), so the ring counts each distinct
-        /// array once through <see cref="SharedImagePayloads"/>. Computed lazily and cached: the
-        /// ring asks for it at most once per snapshot, and a session with the budget disabled
-        /// never asks at all.
+        /// Approximate retained heap this snapshot holds alone — its package bytes, for a package
+        /// checkpoint — for the undo ring's memory budget. Everything an XML snapshot holds is
+        /// shared by reference with other snapshots (issue #965 for image bytes, issue #1022 for
+        /// part XML), so the ring counts it through <see cref="SharedPayloads"/>, each distinct
+        /// payload once.
         /// </summary>
-        internal long ApproximateBytes =>
-            _approximateBytes ??= PackageBytes?.LongLength
-                ?? Parts.Sum(p => Internal.XmlMemoryEstimator.Estimate(p.Xml));
+        internal long ApproximateBytes => PackageBytes?.LongLength ?? 0;
 
-        /// <summary>This snapshot's image bytes, which consecutive snapshots share by reference
-        /// while an image is unchanged.</summary>
-        internal System.Collections.Generic.IEnumerable<(object Payload, long Bytes)> SharedImagePayloads =>
-            ImageParts.Select(p => ((object)p.Bytes, (long)p.Bytes.Length));
-
-        private long? _approximateBytes;
+        /// <summary>Payloads consecutive snapshots share by reference while unchanged: image bytes,
+        /// and each part's shell and block chunks (whose blocks the ring also counts once each).</summary>
+        internal System.Collections.Generic.IEnumerable<(object Payload, long Bytes)> SharedPayloads
+        {
+            get
+            {
+                foreach (var image in ImageParts) yield return (image.Bytes, image.Bytes.Length);
+                foreach (var part in Parts)
+                    foreach (var payload in part.Payloads) yield return payload;
+            }
+        }
     }
 
     internal DocumentSnapshot TakeSnapshot()
     {
-        var parts = new System.Collections.Generic.List<(string, XDocument)>();
+        // Each part's XML is captured through its snapshot cache, which shares every block, chunk
+        // and shell unchanged since the previous snapshot of the same tree (issue #1022).
+        var parts = new System.Collections.Generic.List<PartSnapshot>();
         foreach (var part in EnumerateProjectedPartsForSnapshot())
-            parts.Add((part.Uri.ToString(), new XDocument(part.GetXDocument())));
+            parts.Add(PartSnapshotCache.Take(part));
 
         var hfParts = new System.Collections.Generic.List<(string, bool, string)>();
         var noteParts = new System.Collections.Generic.List<(string, bool, string)>();
@@ -1380,7 +1481,7 @@ public sealed partial class DocxSession : IDisposable
         var bytes = SerializePackageCheckpoint();
         return new DocumentSnapshot(
             _version,
-            Array.Empty<(string PartUri, XDocument Xml)>(),
+            Array.Empty<PartSnapshot>(),
             Array.Empty<(string RelId, bool IsHeader, string PartUri)>(),
             Array.Empty<(string RelId, bool IsFootnote, string PartUri)>(),
             Array.Empty<(string RelId, string PartUri)>(),
@@ -1547,7 +1648,7 @@ public sealed partial class DocxSession : IDisposable
             return;
         }
 
-        var byUri = snapshot.Parts.ToDictionary(p => p.PartUri, p => p.Xml);
+        var byUri = snapshot.Parts.ToDictionary(p => p.PartUri, StringComparer.Ordinal);
 
         // Restore content for all parts that exist in both snapshot and document.
         // Scoped via EnumerateProjectedPartsForSnapshot — only the annotations
@@ -1570,8 +1671,10 @@ public sealed partial class DocxSession : IDisposable
         {
             var uri = part.Uri.ToString();
             if (!byUri.TryGetValue(uri, out var xml)) continue;
-            if (flushedBySave.Contains(uri)) part.SetXDocumentCache(new XDocument(xml));
-            else part.PutXDocument(new XDocument(xml));
+            // A snapshot's frozen blocks are shared with other snapshots, so the part gets its own
+            // copy; the copy also seeds the part's snapshot cache, so the next edit's snapshot
+            // reuses this one rather than copying the whole part again.
+            xml.MaterializeInto(part, flushToStream: !flushedBySave.Contains(uri));
         }
 
         var main = _doc!.MainDocumentPart;
@@ -1605,7 +1708,7 @@ public sealed partial class DocxSession : IDisposable
             var annotationsPart = Internal.AnnotationsCustomXml.Find(_doc);
             var snapshotAnnotationsUri = snapshot.Parts
                 .FirstOrDefault(p => p.PartUri.StartsWith("/customXml/", StringComparison.OrdinalIgnoreCase))
-                .PartUri;
+                ?.PartUri;
 
             // Undo direction: snapshot has no annotations part but the live doc
             // does → forward-op created it, roll it back by deleting.
@@ -1622,7 +1725,7 @@ public sealed partial class DocxSession : IDisposable
                 && byUri.TryGetValue(snapshotAnnotationsUri, out var annXml))
             {
                 var newPart = main.AddCustomXmlPart(CustomXmlPartType.CustomXml);
-                newPart.PutXDocument(new XDocument(annXml));
+                newPart.PutXDocument(annXml.Materialize());
             }
         }
 
@@ -1689,7 +1792,7 @@ public sealed partial class DocxSession : IDisposable
     /// </summary>
     private static void ReconcileHeaderFooterParts(
         MainDocumentPart main, DocumentSnapshot snapshot,
-        System.Collections.Generic.Dictionary<string, XDocument> byUri)
+        System.Collections.Generic.Dictionary<string, PartSnapshot> byUri)
     {
         var snapByRel = new System.Collections.Generic.Dictionary<string, (bool IsHeader, string PartUri)>(StringComparer.Ordinal);
         foreach (var (relId, isHeader, partUri) in snapshot.HeaderFooterParts)
@@ -1714,7 +1817,7 @@ public sealed partial class DocxSession : IDisposable
             OpenXmlPart np = kv.Value.IsHeader
                 ? main.AddNewPart<HeaderPart>(kv.Key)
                 : main.AddNewPart<FooterPart>(kv.Key);
-            np.PutXDocument(new XDocument(xml));
+            np.PutXDocument(xml.Materialize());
         }
     }
 
@@ -1727,7 +1830,7 @@ public sealed partial class DocxSession : IDisposable
     /// </summary>
     private static void ReconcileNoteParts(
         MainDocumentPart main, DocumentSnapshot snapshot,
-        System.Collections.Generic.Dictionary<string, XDocument> byUri)
+        System.Collections.Generic.Dictionary<string, PartSnapshot> byUri)
     {
         var snapByRel = new System.Collections.Generic.Dictionary<string, (bool IsFootnote, string PartUri)>(StringComparer.Ordinal);
         foreach (var (relId, isFootnote, partUri) in snapshot.NoteParts)
@@ -1748,7 +1851,7 @@ public sealed partial class DocxSession : IDisposable
             OpenXmlPart np = kv.Value.IsFootnote
                 ? main.AddNewPart<FootnotesPart>(kv.Key)
                 : main.AddNewPart<EndnotesPart>(kv.Key);
-            np.PutXDocument(new XDocument(xml));
+            np.PutXDocument(xml.Materialize());
         }
     }
 
@@ -1760,7 +1863,7 @@ public sealed partial class DocxSession : IDisposable
     /// </summary>
     private static void ReconcileCommentsPart(
         MainDocumentPart main, DocumentSnapshot snapshot,
-        System.Collections.Generic.Dictionary<string, XDocument> byUri)
+        System.Collections.Generic.Dictionary<string, PartSnapshot> byUri)
     {
         var snapByRel = new System.Collections.Generic.Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (relId, partUri) in snapshot.CommentParts)
@@ -1779,7 +1882,7 @@ public sealed partial class DocxSession : IDisposable
             if (live.ContainsKey(kv.Key)) continue;
             if (!byUri.TryGetValue(kv.Value, out var xml)) continue;
             var np = main.AddNewPart<WordprocessingCommentsPart>(kv.Key);
-            np.PutXDocument(new XDocument(xml));
+            np.PutXDocument(xml.Materialize());
         }
     }
 
@@ -1791,7 +1894,7 @@ public sealed partial class DocxSession : IDisposable
     /// </summary>
     private static void ReconcileCommentThreadingParts(
         MainDocumentPart main, DocumentSnapshot snapshot,
-        System.Collections.Generic.Dictionary<string, XDocument> byUri)
+        System.Collections.Generic.Dictionary<string, PartSnapshot> byUri)
     {
         var snapByRel = new System.Collections.Generic.Dictionary<string, (bool IsCommentsEx, string PartUri)>(StringComparer.Ordinal);
         foreach (var (relId, isCommentsEx, partUri) in snapshot.CommentThreadingParts)
@@ -1814,7 +1917,7 @@ public sealed partial class DocxSession : IDisposable
             OpenXmlPart np = kv.Value.IsCommentsEx
                 ? main.AddNewPart<WordprocessingCommentsExPart>(kv.Key)
                 : main.AddNewPart<WordprocessingCommentsIdsPart>(kv.Key);
-            np.PutXDocument(new XDocument(xml));
+            np.PutXDocument(xml.Materialize());
         }
     }
 
@@ -1823,7 +1926,7 @@ public sealed partial class DocxSession : IDisposable
     /// redo recreates it with its original relationship id.</summary>
     private static void ReconcileNumberingPart(
         MainDocumentPart main, DocumentSnapshot snapshot,
-        System.Collections.Generic.Dictionary<string, XDocument> byUri)
+        System.Collections.Generic.Dictionary<string, PartSnapshot> byUri)
     {
         var snapshotPart = snapshot.NumberingParts.FirstOrDefault();
         var live = main.NumberingDefinitionsPart;
@@ -1840,7 +1943,7 @@ public sealed partial class DocxSession : IDisposable
             && byUri.TryGetValue(snapshotPart.PartUri, out var xml))
         {
             var restored = main.AddNewPart<NumberingDefinitionsPart>(snapshotPart.RelId);
-            restored.PutXDocument(new XDocument(xml));
+            restored.PutXDocument(xml.Materialize());
         }
     }
 
@@ -1848,7 +1951,7 @@ public sealed partial class DocxSession : IDisposable
     /// optional part, so an ordinary undo must remove it and redo must recreate it.</summary>
     private static void ReconcileStylePart(
         MainDocumentPart main, DocumentSnapshot snapshot,
-        System.Collections.Generic.Dictionary<string, XDocument> byUri)
+        System.Collections.Generic.Dictionary<string, PartSnapshot> byUri)
     {
         var snapshotPart = snapshot.StyleParts.FirstOrDefault();
         var live = main.StyleDefinitionsPart;
@@ -1865,7 +1968,7 @@ public sealed partial class DocxSession : IDisposable
             && byUri.TryGetValue(snapshotPart.PartUri, out var xml))
         {
             var restored = main.AddNewPart<StyleDefinitionsPart>(snapshotPart.RelId);
-            restored.PutXDocument(new XDocument(xml));
+            restored.PutXDocument(xml.Materialize());
         }
     }
 
@@ -1916,23 +2019,122 @@ public sealed partial class DocxSession : IDisposable
     /// cannot be missed by a new op.
     /// </summary>
     private MarkdownPatch? PatchFor(AnchorTarget target) =>
-        _settings.EmitMarkdownPatch ? ProjectScope(target) : null;
+        _settings.EmitMarkdownPatch && _patchSuppression == 0 ? ProjectScope(target) : null;
 
+    /// <summary>Non-zero while a composite op runs an inner op whose result it discards, so the
+    /// inner op skips a whole-document projection nobody reads.</summary>
+    private int _patchSuppression;
+
+    /// <summary>
+    /// The op's <see cref="MarkdownPatch"/>: the markdown of the top-level blocks changed since the
+    /// previous patch (issue #1022), or the whole projection when that cannot be exact.
+    /// </summary>
+    /// <remarks>
+    /// The changed blocks come from the incremental anchor index, which folds every tree change
+    /// since the last patch into its pending set as it refreshes. Every patch site runs after the
+    /// op's <see cref="InvalidateProjectionCache"/>, so refreshing here makes the set cover the op.
+    /// A whole-document patch is cached as the projection, as before, so the next op's lookup
+    /// does not rebuild the index.
+    /// </remarks>
     internal MarkdownPatch ProjectScope(AnchorTarget target)
     {
-        // Phase 3 implementation: re-project the whole document. The patch contract
-        // (smallest enclosing block) is honored by ScopeAnchorId; the markdown payload
-        // is the full projection until we optimize this in a later phase.
-        //
-        // Every Patch site runs AFTER the op's InvalidateProjectionCache, so the fresh
-        // projection built here IS the post-op state — cache it. Without this, a
-        // default-settings caller pays this Convert per op AND a second index build on
-        // the next op's FindAnchor.
-        var fresh = WmlToMarkdownConverter.Convert(_doc!, _settings.ProjectionSettings);
+        var settings = _settings.ProjectionSettings;
+        if (!_nextPatchFull && !_incrementalIndexUnsupported && settings.AnchorIdRendering == AnchorIdRendering.FullUnid
+            && AnchorIndex() is IncrementalAnchorIndex incremental && !_nextPatchFull
+            && incremental.TakePatchChanges(out var changed, out var removed)
+            // A header or footer scope appears in the projection only while it has text, so an
+            // edit there can make a whole scope appear or vanish: not expressible block by block.
+            && !changed.Any(c => c.Scope.StartsWith("hdr", StringComparison.Ordinal)
+                || c.Scope.StartsWith("ftr", StringComparison.Ordinal))
+            && !removed.Any(id => id.Contains(":hdr", StringComparison.Ordinal)
+                || id.Contains(":ftr", StringComparison.Ordinal)))
+        {
+            var blocks = new List<MarkdownPatchBlock>(changed.Count);
+            var markdown = new StringBuilder();
+            foreach (var (scope, block) in changed)
+            {
+                EnsureSerializable(block);
+                var id = WmlToMarkdownConverter.BlockAnchorId(block, scope);
+                if (id is null) continue;
+                var text = WmlToMarkdownConverter.EmitBlockMarkdown(_doc!, settings, scope, block);
+                // A block the projection does not render (a content control, a reserved note, an
+                // empty paragraph under Suppress) is not a block a client holds: if it rendered
+                // before, it is gone now.
+                if (text.Length == 0)
+                {
+                    removed.Add(id);
+                    continue;
+                }
+                blocks.Add(new MarkdownPatchBlock(id, PrecedingBlockAnchorId(block, scope), text));
+                markdown.Append(text);
+            }
+            _patchBaselineEpoch = _mutationEpoch;
+            return new MarkdownPatch(target.Anchor.Id, markdown.ToString())
+            {
+                Blocks = blocks,
+                RemovedAnchorIds = removed,
+            };
+        }
+
+        // Convert writes out every part it assigns Unids in; check first, so content no writer can
+        // save makes the op throw before any part stream is half-written (a half-written stream
+        // outlives the rollback, which restores the cached trees only).
+        foreach (var part in EnumerateProjectedParts())
+            if (part.GetXDocument().Root is { } root) EnsureSerializable(root);
+        var fresh = WmlToMarkdownConverter.Convert(_doc!, settings);
         _cachedProjection = fresh;
-        _cachedAnchorIndex = null;
-        return new MarkdownPatch(target.Anchor.Id, fresh.Markdown);
+        // The whole document is the client's new baseline: changes recorded so far are in it.
+        if (_cachedAnchorIndex is IncrementalAnchorIndex pending)
+            pending.TakePatchChanges(out _, out _);
+        _nextPatchFull = false;
+        _patchBaselineEpoch = _mutationEpoch;
+        return new MarkdownPatch(target.Anchor.Id, fresh.Markdown) { IsFullDocument = true };
     }
+
+    /// <summary>
+    /// Throw if <paramref name="block"/> holds content no XML writer can save, such as a lone
+    /// surrogate. The whole-document projection a scoped patch replaces wrote out every part it
+    /// assigned Unids in, so such content made the op throw mid-way and roll back; checking the
+    /// changed blocks keeps that guarantee at the cost of the blocks alone.
+    /// </summary>
+    private static void EnsureSerializable(XElement block)
+    {
+        foreach (var node in block.DescendantNodesAndSelf())
+        {
+            switch (node)
+            {
+                case XElement element:
+                    for (var attribute = element.FirstAttribute; attribute is not null; attribute = attribute.NextAttribute)
+                        System.Xml.XmlConvert.VerifyXmlChars(attribute.Value);
+                    break;
+                case XText text:
+                    System.Xml.XmlConvert.VerifyXmlChars(text.Value);
+                    break;
+                case XComment comment:
+                    System.Xml.XmlConvert.VerifyXmlChars(comment.Value);
+                    break;
+            }
+        }
+    }
+
+    /// <summary>The anchor id of the nearest preceding sibling block the projection renders, or
+    /// null: only a rendered block is one a client holds.</summary>
+    private string? PrecedingBlockAnchorId(XElement block, string scope)
+    {
+        for (var node = block.PreviousNode; node is not null; node = node.PreviousNode)
+            if (node is XElement sibling
+                && WmlToMarkdownConverter.BlockAnchorId(sibling, scope) is { } id
+                && WmlToMarkdownConverter.RendersBlock(_doc!, _settings.ProjectionSettings, scope, sibling))
+                return id;
+        return null;
+    }
+
+    /// <summary>
+    /// Set when the next patch must be the whole document because what changed since the last one
+    /// is not known block by block: the index was rebuilt over changes it never saw, or list
+    /// numbering was recounted.
+    /// </summary>
+    private bool _nextPatchFull;
 
     // Zero-width, semantically-significant bare paragraph children that must survive
     // ReplaceText. Discarding them silently destroys bookmark/comment/permission ranges that

@@ -145,6 +145,36 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **Breaking: `EditResult.Patch` is block-scoped (issue #1022).** A mutation's patch used to be the
+  whole document re-projected; it now carries only the top-level blocks (body paragraphs and tables,
+  header and footer blocks, note definitions, comments) changed or added since the previous patch.
+  `MarkdownPatch` gains `Blocks` (each block's anchor id, the anchor id of the block it now follows,
+  and its own markdown, in document order), `RemovedAnchorIds`, and `IsFullDocument`; `Markdown` is
+  now the changed blocks' markdown concatenated. On the wire the patch gains `fullDocument`,
+  `blocks` (`{anchorId, afterAnchorId, markdown}`) and `removedAnchorIds`; npm's `MarkdownPatch` and
+  Python's `MarkdownPatch` (with a new `MarkdownPatchBlock`) carry the same fields. **What silently
+  changes for a caller who passes nothing:** with the default `EmitMarkdownPatch = true`,
+  `patch.markdown` no longer contains the rest of the document — code that read it as the full
+  projection now sees only the changed blocks, and `undo()`/`redo()` (which return no patch) are no
+  longer followed by a patch that resynchronizes everything: a client mirroring the projection
+  re-reads it after them. A whole-document patch, flagged by `fullDocument`, is still sent where a
+  block-local one could be wrong: an edit that renumbered a list, changed a style, edited a header
+  or footer, or added, removed or renumbered a story part or a note; the first patch after an op
+  failed and rolled back or a preview was committed; any non-`FullUnid` anchor rendering. To get the
+  whole document at any time, call `Project()` (`project()` in npm and Python,
+  `docxodus_get_content` over MCP).
+- A `DocxSession` edit no longer costs the whole document (issue #1022). Each part tree's own change
+  events record which top-level blocks an edit touched: the anchor index re-indexes only those
+  blocks instead of rebuilding from every part, the undo snapshot reuses a frozen copy of every block
+  that did not change instead of deep-copying every part, and the patch emits only those blocks. On
+  4,000 paragraphs a `ReplaceText` with default settings allocates about 29 KiB instead of 21 MiB,
+  and about 31 KiB instead of 42 MiB at 8,000; with `EmitMarkdownPatch` off, about 25 KiB instead of
+  3.7 MiB. Each undo step retains about 1.5 KiB instead of 5.3 MiB at 4,000 paragraphs, so the default
+  budget keeps all 20 steps at 8,000 paragraphs where it kept 12. `UndoMemoryBytes` now counts shared
+  blocks once, so it reports about one copy of the document plus a few KiB per step. Undo, redo and
+  rollback still rebuild the index from scratch, and every case a block-local update could get wrong
+  falls back to the full rebuild. `ReplaceTextAtSpanWithFormat` no longer computes a discarded patch
+  for its text step.
 - The stdio host (and so `docx-scalpel`) refuses `set_image_metadata` without both `altText` and
   `title`, each a string or an explicit null, as MCP already did (issue #1024). It used to read an
   omitted value as null and delete it; see the `### Fixed` entry for #1024 for the other defaults.

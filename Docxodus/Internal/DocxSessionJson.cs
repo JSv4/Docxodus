@@ -1269,7 +1269,24 @@ internal static class DocxSessionJson
             sb.Append(",\"patch\":{")
               .Append("\"scopeAnchorId\":").Append(JsonString(r.Patch.ScopeAnchorId))
               .Append(",\"markdown\":").Append(JsonString(r.Patch.Markdown))
-              .Append('}');
+              .Append(",\"fullDocument\":").Append(r.Patch.IsFullDocument ? "true" : "false")
+              .Append(",\"blocks\":[");
+            for (int i = 0; i < r.Patch.Blocks.Count; i++)
+            {
+                var block = r.Patch.Blocks[i];
+                if (i > 0) sb.Append(',');
+                sb.Append("{\"anchorId\":").Append(JsonString(block.AnchorId))
+                  .Append(",\"afterAnchorId\":").Append(block.AfterAnchorId is null ? "null" : JsonString(block.AfterAnchorId))
+                  .Append(",\"markdown\":").Append(JsonString(block.Markdown))
+                  .Append('}');
+            }
+            sb.Append("],\"removedAnchorIds\":[");
+            for (int i = 0; i < r.Patch.RemovedAnchorIds.Count; i++)
+            {
+                if (i > 0) sb.Append(',');
+                sb.Append(JsonString(r.Patch.RemovedAnchorIds[i]));
+            }
+            sb.Append("]}");
         }
         sb.Append('}');
         return sb.ToString();
@@ -1940,7 +1957,22 @@ internal static class DocxSessionJson
         if (root.TryGetProperty("patch", out var pch) && pch.ValueKind == JsonValueKind.Object)
             patch = new MarkdownPatch(
                 TryGetString(pch, "scopeAnchorId", "") ?? "",
-                TryGetString(pch, "markdown", "") ?? "");
+                TryGetString(pch, "markdown", "") ?? "")
+            {
+                // A host that predates block-scoped patches sends neither field: its markdown is
+                // the whole document.
+                IsFullDocument = TryGetBool(pch, "fullDocument", !pch.TryGetProperty("blocks", out _)),
+                Blocks = pch.TryGetProperty("blocks", out var blocks) && blocks.ValueKind == JsonValueKind.Array
+                    ? blocks.EnumerateArray().Select(b => new MarkdownPatchBlock(
+                        TryGetString(b, "anchorId", "") ?? "",
+                        TryGetString(b, "afterAnchorId", null),
+                        TryGetString(b, "markdown", "") ?? "")).ToArray()
+                    : Array.Empty<MarkdownPatchBlock>(),
+                RemovedAnchorIds = pch.TryGetProperty("removedAnchorIds", out var removedIds)
+                    && removedIds.ValueKind == JsonValueKind.Array
+                    ? removedIds.EnumerateArray().Select(x => x.GetString() ?? "").ToArray()
+                    : Array.Empty<string>(),
+            };
 
         return new EditResult
         {

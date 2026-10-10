@@ -419,26 +419,8 @@ public static class WmlToMarkdownConverter
             ?? throw new InvalidOperationException("Document has no MainDocumentPart.");
 
         var scopes = new List<ScopeInfo>();
-        if (settings.Scopes.HasFlag(ProjectionScopes.Body))
-            scopes.Add(new ScopeInfo { Name = "body", Part = main, Root = main.GetXDocument().Root! });
-        if (settings.Scopes.HasFlag(ProjectionScopes.Headers))
-        {
-            var i = 1;
-            foreach (var hp in main.HeaderParts)
-                scopes.Add(new ScopeInfo { Name = $"hdr{i++}", Part = hp, Root = hp.GetXDocument().Root! });
-        }
-        if (settings.Scopes.HasFlag(ProjectionScopes.Footers))
-        {
-            var i = 1;
-            foreach (var fp in main.FooterParts)
-                scopes.Add(new ScopeInfo { Name = $"ftr{i++}", Part = fp, Root = fp.GetXDocument().Root! });
-        }
-        if (settings.Scopes.HasFlag(ProjectionScopes.Footnotes) && main.FootnotesPart != null)
-            scopes.Add(new ScopeInfo { Name = "fn", Part = main.FootnotesPart, Root = main.FootnotesPart.GetXDocument().Root! });
-        if (settings.Scopes.HasFlag(ProjectionScopes.Endnotes) && main.EndnotesPart != null)
-            scopes.Add(new ScopeInfo { Name = "en", Part = main.EndnotesPart, Root = main.EndnotesPart.GetXDocument().Root! });
-        if (settings.Scopes.HasFlag(ProjectionScopes.Comments) && main.WordprocessingCommentsPart != null)
-            scopes.Add(new ScopeInfo { Name = "cmt", Part = main.WordprocessingCommentsPart, Root = main.WordprocessingCommentsPart.GetXDocument().Root! });
+        foreach (var (name, part) in ProjectedScopes(main, settings))
+            scopes.Add(new ScopeInfo { Name = name, Part = part, Root = part.GetXDocument().Root! });
 
         var index = new Dictionary<string, AnchorTarget>(StringComparer.Ordinal);
         foreach (var scope in scopes)
@@ -461,7 +443,7 @@ public static class WmlToMarkdownConverter
                 var noteName = scope.Name == "fn" ? W.footnote : W.endnote;
                 foreach (var n in scope.Root.Elements(noteName))
                 {
-                    if (IsBoilerplateNote(n))
+                    if (IsSkippedNoteBlock(n, scope.Name))
                     {
                         skip.Add(n);
                         foreach (var d in n.Descendants()) skip.Add(d);
@@ -472,31 +454,10 @@ public static class WmlToMarkdownConverter
             foreach (var el in scope.Root.DescendantsAndSelf())
             {
                 if (skip.Contains(el)) continue;
-                var kind = KindFor(el);
-                if (kind == null) continue;
-                var unid = (string?)el.Attribute(PtOpenXml.Unid);
-                if (unid == null) continue;
-                // Suppress-mode: drop empty paragraphs from the AnchorIndex too,
-                // so callers iterating the index don't see anchors that have no
-                // corresponding line in the projection. Mirrors what EmitParagraph does.
-                if (settings.EmptyParagraphs == EmptyParagraphMode.Suppress
-                    && el.Name == W.p
-                    && kind is "p" or "h" or "li"
-                    && !el.Descendants(W.t).Any(t => !string.IsNullOrEmpty((string)t)))
-                    continue;
-                var id = $"{kind}:{scope.Name}:{unid}";
+                var id = AnchorKeyFor(el, scope.Name, settings, out var kind, out var unid);
+                if (id == null) continue;
                 if (index.ContainsKey(id)) continue;
-                var anchor = new Anchor(id, kind, scope.Name, unid);
-                index[id] = new AnchorTarget
-                {
-                    Anchor = anchor,
-                    PartUri = scope.Part.Uri.ToString(),
-                    Unid = unid,
-                    TextPreview = enrich ? ComputeTextPreview(el) : string.Empty,
-                    AutoNumberPrefix = enrich && kind is "p" or "h" or "li" && scope.Name == "body"
-                        ? Internal.ListNumberResolver.Resolve(el, doc)
-                        : null,
-                };
+                index[id] = CreateAnchorTarget(el, id, kind!, scope.Name, unid!, scope.Part.Uri.ToString(), enrich, doc);
             }
             // Persist newly-assigned Unids to the part. Skipped when nothing was
             // assigned — the flush is ~19 ms/part on a large document, per rebuild.
@@ -571,6 +532,81 @@ public static class WmlToMarkdownConverter
 
         return (index, scopes, renderMap);
     }
+
+    /// <summary>The projected scopes of a document in index order — <c>body</c>, <c>hdrN</c>,
+    /// <c>ftrN</c>, <c>fn</c>, <c>en</c>, <c>cmt</c> — with the part each one reads. The single
+    /// owner of scope naming: header and footer names come from part enumeration order.</summary>
+    internal static List<(string Name, OpenXmlPart Part)> ProjectedScopes(
+        MainDocumentPart main, WmlToMarkdownConverterSettings settings)
+    {
+        var scopes = new List<(string Name, OpenXmlPart Part)>();
+        if (settings.Scopes.HasFlag(ProjectionScopes.Body))
+            scopes.Add(("body", main));
+        if (settings.Scopes.HasFlag(ProjectionScopes.Headers))
+        {
+            var i = 1;
+            foreach (var hp in main.HeaderParts)
+                scopes.Add(($"hdr{i++}", hp));
+        }
+        if (settings.Scopes.HasFlag(ProjectionScopes.Footers))
+        {
+            var i = 1;
+            foreach (var fp in main.FooterParts)
+                scopes.Add(($"ftr{i++}", fp));
+        }
+        if (settings.Scopes.HasFlag(ProjectionScopes.Footnotes) && main.FootnotesPart != null)
+            scopes.Add(("fn", main.FootnotesPart));
+        if (settings.Scopes.HasFlag(ProjectionScopes.Endnotes) && main.EndnotesPart != null)
+            scopes.Add(("en", main.EndnotesPart));
+        if (settings.Scopes.HasFlag(ProjectionScopes.Comments) && main.WordprocessingCommentsPart != null)
+            scopes.Add(("cmt", main.WordprocessingCommentsPart));
+        return scopes;
+    }
+
+    /// <summary>Whether <paramref name="block"/>, a child of a notes part's root, is one of Word's
+    /// reserved separator notes, which the index leaves out along with everything inside it.</summary>
+    internal static bool IsSkippedNoteBlock(XElement block, string scopeName) =>
+        scopeName switch
+        {
+            "fn" => block.Name == W.footnote && IsBoilerplateNote(block),
+            "en" => block.Name == W.endnote && IsBoilerplateNote(block),
+            _ => false,
+        };
+
+    /// <summary>The anchor id <paramref name="el"/> is indexed under in <paramref name="scopeName"/>,
+    /// or null when the index leaves it out: no addressable kind, no Unid yet, or (in
+    /// <see cref="EmptyParagraphMode.Suppress"/>) an empty paragraph, mirroring what
+    /// <c>EmitParagraph</c> does.</summary>
+    internal static string? AnchorKeyFor(XElement el, string scopeName, WmlToMarkdownConverterSettings settings,
+        out string? kind, out string? unid)
+    {
+        unid = null;
+        kind = KindFor(el);
+        if (kind == null) return null;
+        unid = (string?)el.Attribute(PtOpenXml.Unid);
+        if (unid == null) return null;
+        if (settings.EmptyParagraphs == EmptyParagraphMode.Suppress
+            && el.Name == W.p
+            && kind is "p" or "h" or "li"
+            && !el.Descendants(W.t).Any(t => !string.IsNullOrEmpty((string)t)))
+            return null;
+        return $"{kind}:{scopeName}:{unid}";
+    }
+
+    /// <summary>One index entry. Without <paramref name="enrich"/> the preview stays empty and the
+    /// auto-number prefix null — the cheap form the session resolves anchors through.</summary>
+    internal static AnchorTarget CreateAnchorTarget(XElement el, string id, string kind, string scopeName,
+        string unid, string partUri, bool enrich, WordprocessingDocument doc) =>
+        new()
+        {
+            Anchor = new Anchor(id, kind, scopeName, unid),
+            PartUri = partUri,
+            Unid = unid,
+            TextPreview = enrich ? ComputeTextPreview(el) : string.Empty,
+            AutoNumberPrefix = enrich && kind is "p" or "h" or "li" && scopeName == "body"
+                ? Internal.ListNumberResolver.Resolve(el, doc)
+                : null,
+        };
 
     /// <summary>
     /// Classify an element to its anchor <c>kind</c>. Returns <c>null</c> for elements that
@@ -777,21 +813,24 @@ public static class WmlToMarkdownConverter
         ctx.Sb.AppendLine();
         ctx.Scope = scope.Name;
         foreach (var note in notes)
+            EmitNoteDefinition(note, ctx, kindPrefix);
+    }
+
+    private static void EmitNoteDefinition(XElement note, EmitContext ctx, string kindPrefix)
+    {
+        var unid = (string?)note.Attribute(PtOpenXml.Unid) ?? "0";
+        var label = $"{kindPrefix}-{NoteLabelSuffix(unid, ctx)}";
+        ctx.Sb.Append("[^").Append(label).Append("]: ");
+        // Notes contain paragraphs; flatten their text inline for the definition.
+        var first = true;
+        foreach (var p in note.Elements(W.p))
         {
-            var unid = (string?)note.Attribute(PtOpenXml.Unid) ?? "0";
-            var label = $"{kindPrefix}-{NoteLabelSuffix(unid, ctx)}";
-            ctx.Sb.Append("[^").Append(label).Append("]: ");
-            // Notes contain paragraphs; flatten their text inline for the definition.
-            var first = true;
-            foreach (var p in note.Elements(W.p))
-            {
-                if (!first) ctx.Sb.Append(' ');
-                first = false;
-                EmitInlineRuns(p, ctx);
-            }
-            ctx.Sb.AppendLine();
-            ctx.Sb.AppendLine();
+            if (!first) ctx.Sb.Append(' ');
+            first = false;
+            EmitInlineRuns(p, ctx);
         }
+        ctx.Sb.AppendLine();
+        ctx.Sb.AppendLine();
     }
 
     /// <summary>
@@ -823,22 +862,93 @@ public static class WmlToMarkdownConverter
         ctx.Sb.AppendLine();
         ctx.Scope = "cmt";
         foreach (var c in comments)
+            EmitComment(c, ctx);
+        ctx.Sb.AppendLine();
+    }
+
+    private static void EmitComment(XElement c, EmitContext ctx)
+    {
+        var unid = (string?)c.Attribute(PtOpenXml.Unid) ?? "0";
+        var author = (string?)c.Attribute(W.author) ?? "unknown";
+        var date = (string?)c.Attribute(W.date);
+        var renderedUnid = ctx.AnchorIdMap.Render(unid);
+        ctx.Sb.Append($"- {{#cmt:cmt:{renderedUnid}}} **{author}**");
+        if (!string.IsNullOrEmpty(date)) ctx.Sb.Append(" (").Append(date).Append(')');
+        ctx.Sb.Append(": ");
+        foreach (var p in c.Elements(W.p))
         {
-            var unid = (string?)c.Attribute(PtOpenXml.Unid) ?? "0";
-            var author = (string?)c.Attribute(W.author) ?? "unknown";
-            var date = (string?)c.Attribute(W.date);
-            var renderedUnid = ctx.AnchorIdMap.Render(unid);
-            ctx.Sb.Append($"- {{#cmt:cmt:{renderedUnid}}} **{author}**");
-            if (!string.IsNullOrEmpty(date)) ctx.Sb.Append(" (").Append(date).Append(')');
-            ctx.Sb.Append(": ");
-            foreach (var p in c.Elements(W.p))
-            {
-                EmitInlineRuns(p, ctx);
-                ctx.Sb.Append(' ');
-            }
-            ctx.Sb.AppendLine();
+            EmitInlineRuns(p, ctx);
+            ctx.Sb.Append(' ');
         }
         ctx.Sb.AppendLine();
+    }
+
+    /// <summary>
+    /// The anchor id of a top-level block — a child of <c>w:body</c>, of a header or footer root,
+    /// or of a notes or comments part root — or null for a block with no anchor kind or no Unid.
+    /// This is the key a <see cref="MarkdownPatch"/> addresses blocks by.
+    /// </summary>
+    internal static string? BlockAnchorId(XElement block, string scopeName)
+    {
+        var kind = KindFor(block);
+        var unid = (string?)block.Attribute(PtOpenXml.Unid);
+        return kind is null || unid is null ? null : $"{kind}:{scopeName}:{unid}";
+    }
+
+    /// <summary>
+    /// The markdown one top-level block contributes to the projection, on its own: a paragraph,
+    /// heading, list item or table of a body, header or footer story; one note definition; one
+    /// comment line. Context the full projection adds between blocks is left out — scope and
+    /// section headings, scope dividers, the blank line that closes a run of list items, and the
+    /// blank line after the comment list — so a block's markdown changes only when the block, or
+    /// list numbering, changes. Reserved notes and blocks the projection does not render (a
+    /// trailing <c>w:sectPr</c>, a block-level content control) contribute an empty string.
+    /// <see cref="AnchorIdRendering.FullUnid"/> only: other renderings depend on every anchor.
+    /// </summary>
+    /// <summary>Whether <paramref name="block"/> contributes anything to the projection — the
+    /// cheap form of <c>EmitBlockMarkdown(...).Length &gt; 0</c>.</summary>
+    internal static bool RendersBlock(WordprocessingDocument document, WmlToMarkdownConverterSettings settings,
+        string scopeName, XElement block) =>
+        scopeName switch
+        {
+            "fn" => block.Name == W.footnote && !IsBoilerplateNote(block),
+            "en" => block.Name == W.endnote && !IsBoilerplateNote(block),
+            "cmt" => block.Name == W.comment,
+            _ => block.Name == W.tbl
+                || (block.Name == W.p && (settings.EmptyParagraphs != EmptyParagraphMode.Suppress
+                    || EmitBlockMarkdown(document, settings, scopeName, block).Length > 0)),
+        };
+
+    internal static string EmitBlockMarkdown(WordprocessingDocument document, WmlToMarkdownConverterSettings settings,
+        string scopeName, XElement block)
+    {
+        if (settings.AnchorIdRendering != AnchorIdRendering.FullUnid)
+            throw new InvalidOperationException("block markdown needs FullUnid anchor rendering");
+        var ctx = new EmitContext { Settings = settings, Document = document, AnchorIdMap = new AnchorIdMap(), Scope = scopeName };
+        switch (scopeName)
+        {
+            case "fn":
+                if (block.Name == W.footnote && !IsBoilerplateNote(block)) EmitNoteDefinition(block, ctx, "fn");
+                break;
+            case "en":
+                if (block.Name == W.endnote && !IsBoilerplateNote(block)) EmitNoteDefinition(block, ctx, "en");
+                break;
+            case "cmt":
+                if (block.Name == W.comment) EmitComment(block, ctx);
+                break;
+            default:
+                if (block.Name == W.p)
+                {
+                    ctx.InsideListBlock = IsListItem(block);
+                    EmitParagraph(block, ctx);
+                }
+                else if (block.Name == W.tbl)
+                {
+                    EmitTable(block, ctx);
+                }
+                break;
+        }
+        return ctx.Sb.ToString();
     }
 
     private static string ShortUnid(string unid) =>

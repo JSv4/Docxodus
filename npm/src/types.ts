@@ -2332,9 +2332,41 @@ export interface MutationTransaction {
   request: Record<string, unknown>;
 }
 
-export interface MarkdownPatch {
-  scopeAnchorId: string;
+/** One changed top-level block in a {@link MarkdownPatch}. */
+export interface MarkdownPatchBlock {
+  /** The block's anchor id (`kind:scope:unid`). */
+  anchorId: string;
+  /** The block it now follows in its scope, or `null` when it is the scope's first block. */
+  afterAnchorId: string | null;
+  /** The block's own markdown, without the separators the full projection puts between blocks. */
   markdown: string;
+}
+
+/**
+ * The projection change one mutation produced. Block-scoped: it carries the markdown of the
+ * top-level blocks (body paragraphs/tables, header and footer blocks, note definitions, comments)
+ * that changed or were added since the previous patch, and the ids of blocks that are gone.
+ * A client keeping one entry per block applies it by deleting `removedAnchorIds`, then, for each
+ * of `blocks` in order, deleting that id if present and re-inserting it after `afterAnchorId`.
+ *
+ * When a block-local patch cannot be exact, `fullDocument` is true and `markdown` is the whole
+ * projection: an edit that renumbered a list, changed a style, edited a header or footer, or added,
+ * removed or renumbered a story part or a note; the first patch after an op failed and rolled back
+ * or a preview was committed; any non-`FullUnid` anchor rendering. `undo()` and `redo()` return no
+ * patch: re-read the projection after them; the next patch covers only later changes. Call
+ * `project()` for the whole document at any time.
+ */
+export interface MarkdownPatch {
+  /** The anchor the op addressed. */
+  scopeAnchorId: string;
+  /** The changed blocks' markdown in document order, or the whole projection when `fullDocument`. */
+  markdown: string;
+  /** True when `markdown` is the whole projection; `blocks` and `removedAnchorIds` are then empty. */
+  fullDocument: boolean;
+  /** Blocks changed or added since the previous patch, in document order. */
+  blocks: MarkdownPatchBlock[];
+  /** Ids of blocks removed since the previous patch (or whose id changed). */
+  removedAnchorIds: string[];
 }
 
 export interface EditResult {

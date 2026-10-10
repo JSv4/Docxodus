@@ -388,14 +388,16 @@ namespace Docxodus
         /// does. A paragraph counted before it was ever stamped is treated as a mismatch.
         /// Call it after each edit, before the next RetrieveListItem.
         /// </remarks>
-        internal static void ClearStaleAnnotations(WordprocessingDocument wordDoc)
+        /// <returns>True when it cleared the counters — the edit may have changed the number of a
+        /// list paragraph it did not touch — and false when every stamp still held.</returns>
+        internal static bool ClearStaleAnnotations(WordprocessingDocument wordDoc)
         {
             var main = wordDoc.MainDocumentPart;
             var numXDoc = main?.NumberingDefinitionsPart?.GetXDocument();
             var stylesXDoc = main?.StyleDefinitionsPart?.GetXDocument();
             // Without both parts nothing is numbered (RetrieveListItem returns early).
             if (main is null || numXDoc?.Root is null || stylesXDoc?.Root is null)
-                return;
+                return false;
 
             var definitions = new NumberingFactsHash();
             foreach (var e in numXDoc.Root.DescendantsAndSelf())
@@ -417,9 +419,10 @@ namespace Docxodus
                 ?.Attribute(W.styleId);
 
             if (StampNumberingPrefixes(wordDoc, definitions, numberingStyles, defaultStyle, verify: true))
-                return;
+                return false;
             ClearAnnotations(wordDoc);
             StampNumberingPrefixes(wordDoc, definitions, numberingStyles, defaultStyle, verify: false);
+            return true;
         }
 
         /// <summary>

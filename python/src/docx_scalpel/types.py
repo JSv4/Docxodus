@@ -74,6 +74,7 @@ __all__ = [
     "EditError",
     "EditResult",
     "MarkdownPatch",
+    "MarkdownPatchBlock",
     "AnchorTarget",
     "AnchorInfo",
     "PreconditionTarget",
@@ -3448,17 +3449,62 @@ class TableCellResolutionResult:
 
 
 @dataclass(frozen=True, slots=True)
+class MarkdownPatchBlock:
+    """One changed top-level block in a :class:`MarkdownPatch`.
+
+    ``after_anchor_id`` is the block it now follows in its scope, or ``None`` when it is the
+    scope's first block. ``markdown`` is the block's own markdown, without the separators the
+    full projection puts between blocks.
+    """
+
+    anchor_id: str
+    after_anchor_id: str | None
+    markdown: str
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "MarkdownPatchBlock":
+        return cls(
+            anchor_id=d["anchorId"],
+            after_anchor_id=d.get("afterAnchorId"),
+            markdown=d.get("markdown", ""),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class MarkdownPatch:
-    """A scoped markdown re-projection produced by a successful mutation."""
+    """The projection change one mutation produced, scoped to the blocks it changed.
+
+    ``blocks`` lists the top-level blocks (body paragraphs and tables, header and footer blocks,
+    note definitions, comments) changed or added since the previous patch, in document order;
+    ``removed_anchor_ids`` lists blocks that are gone. ``markdown`` is the changed blocks'
+    markdown concatenated. A client keeping one entry per block applies a patch by deleting the
+    removed ids, then, for each block in order, deleting that id if present and re-inserting it
+    after ``after_anchor_id``.
+
+    When a block-local patch cannot be exact, ``full_document`` is ``True`` and ``markdown`` is
+    the whole projection: an edit that renumbered a list, changed a style, edited a header or
+    footer, or added, removed or renumbered a story part or a note; the first patch after an op
+    failed and rolled back or a preview was committed; any non-``FullUnid`` anchor rendering.
+    ``undo()`` and ``redo()`` return no patch: re-read the projection after them; the next patch
+    covers only later changes. ``DocxSession.project()`` returns the whole document at any time.
+    """
 
     scope_anchor_id: str
     markdown: str
+    full_document: bool = False
+    blocks: tuple[MarkdownPatchBlock, ...] = ()
+    removed_anchor_ids: tuple[str, ...] = ()
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "MarkdownPatch":
         return cls(
             scope_anchor_id=d["scopeAnchorId"],
             markdown=d.get("markdown", ""),
+            # A host that predates block-scoped patches sends neither field: its markdown is the
+            # whole document.
+            full_document=bool(d.get("fullDocument", "blocks" not in d)),
+            blocks=tuple(MarkdownPatchBlock._from_wire(b) for b in d.get("blocks", ())),
+            removed_anchor_ids=tuple(d.get("removedAnchorIds", ())),
         )
 
 

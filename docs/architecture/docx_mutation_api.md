@@ -14,7 +14,7 @@ Three design forces, in order of weight:
 
 **The agent must not learn OOXML.** Every public method takes an anchor id (a string) and either a markdown payload (a string) or a small typed value (a `FormatOp`, a `CharSpan`). The agent never sees an `XElement`, never picks an SDK type, never has to know that bold is `w:b` inside `w:rPr`. The Raw escape hatch exists for the cases the markdown subset can't reach, but it's a separate namespace (`session.Raw.*`) so it's syntactically obvious when you've left the safe zone.
 
-**Edits must be reversible.** Agents make mistakes. The session keeps a bounded ring of pre-op snapshots (default 20 deep) so `Undo()` and `Redo()` work without the caller orchestrating anything. Ordinary single-op snapshots are per-part XML clones; an explicit transaction uses a complete package checkpoint because a batch can change arbitrary parts and relationships.
+**Edits must be reversible.** Agents make mistakes. The session keeps a bounded ring of pre-op snapshots (default 20 deep) so `Undo()` and `Redo()` work without the caller orchestrating anything. Ordinary single-op snapshots are per-part XML snapshots that share every unchanged block with the previous one (see [What one edit costs](#what-one-edit-costs-block-local-index-refresh-and-shared-snapshots-issue-1022)); an explicit transaction uses a complete package checkpoint because a batch can change arbitrary parts and relationships.
 
 **Errors must be pattern-matchable, not stringly-typed.** Every mutation returns an `EditResult` envelope; failure carries a typed `EditErrorCode` with a remediation message. The same enum is exposed as a snake-case string union in TypeScript, so JS agents pattern-match the same way C# callers do. No method on the session throws across the boundary (the constructor and `Save()` are the only places that can — and only for fatal conditions like an invalid DOCX or IO failure).
 
@@ -322,13 +322,136 @@ each step's `EditResult` through `DocxSessionJson`) are worth stating explicitly
         ┌───────────────────┼────────────────────────┐
         ▼                   ▼                        ▼
   WordprocessingDoc   AnchorIndex            UndoRing
-  (live XDocument     (refreshed lazily      (per-part XML
-   per part)           after each mutation)   snapshots, default 50)
+  (live XDocument     (refreshed per changed (per-part XML snapshots
+   per part)           block after a mutation) sharing unchanged blocks)
 ```
 
 The session owns one `WordprocessingDocument` open over its own `MemoryStream`. Mutations operate directly on the in-memory `XDocument` of the affected part. Re-projection uses the existing `WmlToMarkdownConverter` over the live document.
 
 For the full public surface — exact method signatures, settings, value types — read `Docxodus/DocxSession.cs` end-to-end. It's ~700 lines and organized by tier.
+
+### What one edit costs: block-local index refresh and shared snapshots (issue #1022)
+
+Every mutation does two pieces of bookkeeping besides the edit itself: it takes an undo snapshot
+before it runs, and it leaves the anchor index stale for the next lookup. Both used to cost the
+whole document — a deep copy of every snapshot-scoped part, and a walk of every projected part to
+rebuild the index — so a one-word edit on a 4,000-paragraph document allocated about 3.7 MiB and
+each undo step retained about 5.3 MiB. Both now cost what the edit touched.
+
+**Change tracking.** `Internal/PartChangeTracker` subscribes to each live part tree's LINQ-to-XML
+`Changing`/`Changed` events and records which *blocks* changed: the children of the part's block
+container (`w:body` for the main document, the root element for every other part). A change
+anywhere else — the root's or container's attributes, nodes beside the container — marks the
+part's *shell* instead. Events, rather than per-op declarations, are deliberate: ops have side
+effects outside the block they address (range markers and note references that cross blocks, a
+style a markdown payload creates, `Save`'s strip-and-restore of every Unid), and LINQ to XML
+reports every one of them, so no op can forget to say what it touched. The tracker is an annotation
+on the `XDocument` instance; a replaced tree (undo, redo, rollback, a package reopen) has no
+tracker, and every consumer treats a tree it has no record of as new.
+
+**Incremental anchor index.** `Internal/IncrementalAnchorIndex` holds exactly what
+`WmlToMarkdownConverter.BuildAnchorIndexOnly` returns — same keys, same entries, same document
+order (the query ops iterate it in order) — laid out as one segment per block in each scope. A
+mutation calls `InvalidateProjectionCache` as before, which now marks the index stale instead of
+dropping it; the next `AnchorIndex()` call re-indexes only the changed blocks: it drops their old
+segments, assigns any missing Unids inside each block (`UnidHelper.AssignWithinBlock`, which
+produces exactly the values the whole-scope walk would), and places each new segment after its
+nearest indexed preceding sibling. It refuses, and the session rebuilds from scratch, whenever a
+block-local update could differ from a full rebuild:
+
+- the scope list changed (a header, footer, notes or comments part came or went) or a scope's tree
+  was replaced;
+- a shell changed, or the styles part changed at all (`IsListItem` reads the style chain);
+- a changed block has no Unid of its own (its Unid would derive from its siblings' signatures), or
+  holds or held a `w:sdt` (content-control identity is decided story-wide);
+- an entry collides with an id already indexed (the full walk keeps the first occurrence).
+
+It is not used at all for an `Abbreviated` or `Sequential` `AnchorIdRendering` (alias keys depend
+on every anchor in a bucket), nor when the first full walk finds duplicate ids or an addressable
+element outside the block containers; the session then remembers that and builds only the full
+index until the trees are next replaced. Undo, redo and rollback call `ResetProjectionCache`, which
+drops the index outright. A tracker channel records only while its
+consumer is live, so a tree nobody maintains an index for accumulates nothing. The cached index is
+updated in place, so its enumerator is version-checked: enumerating it across a refresh throws
+rather than mixing two states; and it leaves the cache before a refresh starts, so a refresh that
+throws leaves nothing half-updated behind.
+
+**Shared snapshots.** `Internal/PartSnapshotCache` keeps, per live part tree, a frozen deep copy of
+every block keyed by the live block, and evicts a block's copy when its tracker reports a change. A
+snapshot (`PartSnapshot`) is the part's shell plus its frozen blocks in order, grouped in chunks
+whose boundaries are chosen by the frozen block's identity hash rather than by position, so an
+insert, delete or edit moves only its own chunk, and a restored tree (new live nodes seeded with
+the same frozen blocks) cuts the same chunks as the snapshot it came from. A snapshot after a one-block edit therefore allocates the
+edited block's copy, one new chunk and one reference per chunk, and shares everything else with the
+previous snapshot; an untouched part returns its previous snapshot whole. Frozen blocks are never
+attached to a tree or mutated: restoring materializes an independent copy, and seeds the restored
+tree's cache with the snapshot it came from, so the first edit after an undo is cheap too. The undo
+ring counts each shared chunk, block and shell once across the whole history
+(`ISharedPayloadGroup`), so `UndoMemoryBytes` is about one copy of the document plus a few KiB per
+step, and the budget keeps far more history than before. The price is that the session holds one
+frozen copy of the document for as long as it is open.
+
+#### Block-scoped patches (issue #1022)
+
+`EditResult.Patch` used to be the whole document re-projected
+after every op — at 4,000 paragraphs about 19 MiB allocated per edit, far more than anything else an
+edit did. It now carries only the top-level blocks that changed since the previous patch, taken
+from the incremental index's record of re-indexed blocks (`IncrementalAnchorIndex.TakePatchChanges`):
+
+- `Blocks` — each changed or added block, in document order: its anchor id, the anchor id of the
+  block it now follows in its scope (`null` for the first), and its own markdown
+  (`WmlToMarkdownConverter.EmitBlockMarkdown`: what the block contributes to the projection, minus
+  the separators the projection puts between blocks — scope headings, dividers, the blank line that
+  closes a run of list items).
+- `RemovedAnchorIds` — blocks that are gone, or whose id changed (a paragraph that became a heading).
+- `Markdown` — the changed blocks' markdown concatenated, so a caller that only logs or shows the
+  patch text sees what changed.
+
+A client keeping one entry per block applies a patch by deleting the removed ids, then, block by
+block, deleting the id if present and re-inserting it after its `AfterAnchorId`. Only blocks the
+projection renders appear: a block-level content control, a reserved note or an empty paragraph under
+`EmptyParagraphMode.Suppress` is never in `Blocks` or named as an `AfterAnchorId` (a block that stops
+rendering is listed as removed). A patch covers *everything* since the previous one, including ops
+that return no patch. `Undo` and `Redo` return no patch and move the baseline: a mirroring client
+re-reads the projection after them, and the next patch covers only later changes — the same patch a
+fresh session over the restored document would produce. The patch is the whole document instead
+(`IsFullDocument`, `Markdown` = the full projection) whenever a block-local one could be wrong or
+incomplete:
+
+- the incremental index was rebuilt over changes it never saw: after an op failed and rolled back, a
+  preview was committed, or any op ran while no index was watching (tracked with an epoch that every
+  history-recording op advances), or because a refresh fell back (a style, shell or story-list
+  change, a content control, a block without its own Unid);
+- list numbering was recounted (`ListItemRetriever.ClearStaleAnnotations` cleared its stamps), since
+  a renumber changes the markdown of list paragraphs the edit never touched;
+- a note was added, removed or renumbered, since references render a note's label through its id;
+- a header or footer changed, since a header or footer scope appears in the projection only while it
+  has text;
+- a non-`FullUnid` `AnchorIdRendering`, whose ids depend on every anchor.
+
+With patches on, `Project()` also brings the incremental index up to date, so the common
+project-then-edit flow gets scoped patches. Content no XML writer can save (an unpaired surrogate)
+still makes a patch-producing op throw and roll back, as the whole-document projection used to: the
+changed blocks are checked (`EnsureSerializable`), and on the whole-document path every part is
+checked before the projection writes any part stream.
+
+`DocxSessionIncrementalIndexOracleTests` replays a mixed op sequence over the corpus as a client
+would — applying every patch it receives to a per-block model — and checks the model against a
+fresh per-block projection after each patch.
+
+#### What still scales with the document
+
+List numbering is re-verified across every numbered
+paragraph on each mutation (`ListItemRetriever.ClearStaleAnnotations`): CPU- and allocation-linear on
+list-heavy documents. Resolving an anchor to its element (`AnchorTarget.Resolve`) and the snapshot's
+walk over the container's children are linear in time but allocate nothing.
+
+The differential oracles in `DocxSessionIncrementalIndexOracleTests` pin all of this: after every op
+of a mixed sequence over a sample of the test corpus, the maintained index must equal a fresh full
+rebuild (and the rebuild must have nothing left to assign), and a materialized snapshot must equal a
+deep copy of every snapshot-scoped part. A third test interleaves edits, undos and redos and
+checks that each one restores exactly the recorded state, which is what would expose a frozen block
+that had leaked into a live tree and been edited.
 
 ## How to think about anchors
 
@@ -2311,7 +2434,7 @@ var result = session.ReplaceText(
 
 // result.Success == true
 // result.Modified[0].Id == anchor   (kind/scope unchanged)
-// result.Patch.Markdown contains the freshly-projected scope
+// result.Patch.Blocks holds the heading's new markdown (block-scoped patch)
 // The paragraph's existing w:pPr (Heading1 style + numbering)
 // is preserved — only the runs were swapped.
 ```
@@ -2413,9 +2536,9 @@ that diffs a view against the session.
   chrome (marker `sup` text, hrefs, `li` ids/values, backrefs) positionally instead of
   re-rendering every citing block.
 - **`DocxSessionSettings.EmitMarkdownPatch`** (default `true`; wire
-  `emitMarkdownPatch`) — when `false`, mutation ops return `Patch = null` and skip the
-  per-op whole-document re-projection that builds it. Clients that re-render from HTML
-  (the editor) should turn it off.
+  `emitMarkdownPatch`) — when `false`, mutation ops return `Patch = null` and skip
+  emitting the changed blocks' markdown. Clients that re-render from HTML (the editor)
+  should turn it off.
 - **WASM-only companions** (`DocxSessionBridge`; not in the stdio host, same as
   `RenderHtml`/`RenderBlockHtml`): `ListAnchors` (the `{anchorIndex}` object without
   the markdown payload — the editor's per-op anchor-map refresh) and
@@ -2428,8 +2551,8 @@ that diffs a view against the session.
 
 ## Known limits and open questions
 
-- **`MarkdownPatch.Markdown` is currently the full re-projection.** The `ScopeAnchorId` field correctly identifies the smallest enclosing block, but the payload is the whole document re-projected. A future optimization (per the spec's open questions) is to emit only the markdown for the named scope. Cheap mitigation: callers that care can splice using their cached projection.
-- **Snapshot granularity is per-part XML clone.** For documents with very large embedded images or huge tables, per-element diffs would be more memory-efficient. Deferred until measured to be a problem.
+- **Some edits still produce a whole-document patch.** See [Block-scoped patches](#block-scoped-patches-issue-1022) for the cases; the patch says so (`IsFullDocument`).
+- **Snapshot granularity is the top-level block.** An edit inside a very large table re-copies that whole table into the next snapshot.
 - **Closing a session mid-flight from JS.** The WASM bridge holds sessions in a static dictionary keyed by handle; if a JS caller drops a `DocxSession` without calling `close()`, the .NET-side session is not eligible for GC. The npm wrapper exposes `Symbol.dispose` for TypeScript 5.2+ `using` blocks; older runtimes need explicit `.close()`.
 - **What closing does.** `Dispose` releases the render shell and the session package without
   writing either back: a package opened for editing rewrites its whole archive into the

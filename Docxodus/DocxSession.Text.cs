@@ -186,7 +186,18 @@ public sealed partial class DocxSession
         // These two operations touch only snapshot-scoped XML/styles and owned story images.
         // Reuse transaction rollback/history handling without serializing the entire OPC package.
         using var transaction = BeginTransaction(fullPackage: false);
-        var result = ReplaceTextAtSpan(anchorId, spanStart, spanLength, replace);
+        // When a format step follows, its result (and patch) is the one returned: the text step's
+        // patch would be a whole-document projection that is computed and thrown away.
+        EditResult result;
+        if (replace.Length > 0) _patchSuppression++;
+        try
+        {
+            result = ReplaceTextAtSpan(anchorId, spanStart, spanLength, replace);
+        }
+        finally
+        {
+            if (replace.Length > 0) _patchSuppression--;
+        }
         if (!result.Success) return result;
         if (replace.Length > 0)
         {
