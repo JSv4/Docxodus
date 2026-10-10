@@ -263,6 +263,10 @@ All notable changes to this project will be documented in this file.
   native paragraph/run formatting revisions, including child overrides and run toggles. Their parent
   links are flattened so properties removed by the new parent cannot leak into acceptance; rejection
   restores the original effective appearance. Unrelated styles retain their existing definitions.
+- Comparison repairs misplaced paragraph breaks before diffing (issue #1043). Line, page and column
+  breaks directly under a paragraph receive their required run parent, preserving attributes and
+  position through insertion, deletion and accept/reject. Valid runs and structural paragraph children
+  retain their existing shape.
 - Exact line spacing follows Word's baseline placement, including text taller than its line
   (issue #882). A page filled by 54 exact 12pt lines now keeps all 54 lines, with their glyphs
   visible in the margins. The paginator preserves the declared line heights and still corrects

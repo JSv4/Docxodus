@@ -28,6 +28,8 @@ namespace Docxodus;
 /// <c>w:pPr</c> elements: Word repairs those into one paragraph-properties element before the
 /// paragraph content, whereas leaving the second one after revision runs produces invalid OOXML
 /// and layout drift in LibreOffice. Ambiguous or revision-bearing duplicates are left untouched.
+/// Direct paragraph <c>w:br</c> children are given their required <c>w:r</c> parent, preserving
+/// their position and attributes before comparison can place them inside revision wrappers.
 /// Untouched documents are returned as the same instance (no copy).
 /// </summary>
 internal static class MarkupCompatibilityNormalizer
@@ -63,7 +65,7 @@ internal static class MarkupCompatibilityNormalizer
     internal static WmlDocument Normalize(WmlDocument doc)
     {
         // Two passes, because almost every document needs no repair at all and the expensive work
-        // is proving that. The first pass streams each part looking for the two shapes the repairs
+        // is proving that. The first pass streams each part looking for shapes the repairs
         // react to; it builds no DOM and reads the archive read-only, so it never pays for
         // ZipArchiveMode.Update's entry buffering either. Only a document that has a candidate part
         // reaches the second pass, and only its candidate parts are parsed and rewritten.
@@ -119,9 +121,10 @@ internal static class MarkupCompatibilityNormalizer
     }
 
     /// <summary>
-    /// Stream one part and answer the only two questions the repairs ask: is there an
+    /// Stream one part and find the shapes the repairs ask about: is there an
     /// <c>mc:AlternateContent</c> anywhere, and is there a paragraph carrying two or more DIRECT
-    /// <c>pPr</c> children. Matching is by local name, which keeps the gate a superset of what the
+    /// <c>pPr</c> children, or a direct <c>br</c> child. Matching is by local name, which keeps the
+    /// gate a superset of what the
     /// repairs actually act on (they are namespace-exact) — a false positive costs one parse of one
     /// part and still returns it unchanged, whereas a false negative would be a correctness bug.
     /// Malformed XML answers "no", which is what <see cref="NormalizePart"/> concludes anyway.
@@ -155,6 +158,9 @@ internal static class MarkupCompatibilityNormalizer
 
                 nameAtDepth[depth] = name;
                 pPrAtDepth[depth] = 0;
+
+                if (name == "br" && depth > 0 && nameAtDepth[depth - 1] == "p")
+                    return true;
 
                 if (name == "pPr" && depth > 0 && nameAtDepth[depth - 1] == "p"
                     && ++pPrAtDepth[depth - 1] > 1)
@@ -193,12 +199,26 @@ internal static class MarkupCompatibilityNormalizer
 
         var changed = ResolveAlternateContent(doc);
         changed |= CoalesceDisjointDuplicateParagraphProperties(doc);
+        changed |= WrapMisplacedParagraphBreaks(doc);
         if (!changed)
             return null;
 
         using var sw = new Utf8StringWriter();
         doc.Save(sw, SaveOptions.DisableFormatting);
         return sw.ToString();
+    }
+
+    private static bool WrapMisplacedParagraphBreaks(XDocument doc)
+    {
+        var changed = false;
+        // Only the known malformed shape is repaired. Structural paragraph children such as
+        // bookmarks, properties and content controls must retain their own content models.
+        foreach (var br in doc.Descendants(W.br).Where(e => e.Parent?.Name == W.p).ToList())
+        {
+            br.ReplaceWith(new XElement(W.r, new XElement(br)));
+            changed = true;
+        }
+        return changed;
     }
 
     /// <summary>Resolve supported <c>mc:AlternateContent</c> wrappers in an already parsed part.</summary>
