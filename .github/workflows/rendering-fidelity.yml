@@ -1,0 +1,120 @@
+name: Independent rendering fidelity
+on:
+  pull_request:
+    paths:
+      - 'Docxodus/**'
+      - 'npm/src/**'
+      - 'npm-export/src/**'
+      - 'tools/rendering-fidelity/**'
+      - '.github/workflows/rendering-fidelity.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: rendering-fidelity-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+jobs:
+  compare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      BENCH_LIBREOFFICE: /opt/libreoffice25.8/program/soffice
+      BASELINE_COMMIT: 6e0e6ca34407b2e805b5d784cb58a23d15e45853
+      CANDIDATE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Checkout immutable independent oracle
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: JSv4/docx-fidelity-bench
+          ref: 80df760778b0df293d179a8a2860f343da6df90a
+          path: oracle
+      - name: Checkout baseline renderer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.BASELINE_COMMIT }}
+          path: baseline-source
+      - name: Checkout candidate renderer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.CANDIDATE_COMMIT }}
+          path: candidate-source
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '22.23.3'
+      - name: Provision measurement tools and open fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libreoffice-writer poppler-utils qpdf fontconfig fonts-liberation2
+          dotnet workload install wasm-tools
+      - name: Install signed LibreOffice 25.8.7.3 reference runtime
+        run: |
+          install_dir="$RUNNER_TEMP/lo-reference-install"
+          mkdir -p "$install_dir"
+          archive_url='https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.7.3/deb/x86_64/LibreOffice_25.8.7.3_Linux_x86-64_deb.tar.gz'
+          curl --fail --location --retry 5 --retry-all-errors --proto '=https' --tlsv1.2 "$archive_url" -o "$install_dir/runtime.tar.gz"
+          curl --fail --location --retry 5 --proto '=https' --tlsv1.2 "$archive_url.asc" -o "$install_dir/runtime.asc"
+          curl --fail --location --retry 5 --proto '=https' --tlsv1.2 'https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xC2839ECAD9408FBE9531C3E9F434A1EFAFEEAEA3' -o "$install_dir/signing-key.asc"
+          mkdir "$install_dir/keyring"
+          chmod 700 "$install_dir/keyring"
+          gpg --homedir "$install_dir/keyring" --batch --import "$install_dir/signing-key.asc"
+          fingerprint=$(gpg --homedir "$install_dir/keyring" --with-colons --fingerprint C2839ECAD9408FBE9531C3E9F434A1EFAFEEAEA3 | awk -F: '$1 == "fpr" {print $10; exit}')
+          test "$fingerprint" = 'C2839ECAD9408FBE9531C3E9F434A1EFAFEEAEA3'
+          gpg --homedir "$install_dir/keyring" --batch --verify "$install_dir/runtime.asc" "$install_dir/runtime.tar.gz"
+          tar -xzf "$install_dir/runtime.tar.gz" -C "$install_dir"
+          sudo dpkg -i "$install_dir"/LibreOffice_*/DEBS/*.deb
+          sudo find /opt/libreoffice25.8/share/fonts -type f -iname '*.ttf' -delete
+          "$BENCH_LIBREOFFICE" --version
+      - name: Validate unchanged oracle
+        working-directory: oracle
+        run: |
+          python3 -m bench.audit
+          python3 -m unittest discover -s tests
+          node --test tests/test-adapter.mjs
+          python3 -m bench validate
+      - name: Build both exact renderer commits
+        working-directory: oracle
+        run: |
+          python3 -m bench build-docxodus --source ../baseline-source --commit "$BASELINE_COMMIT"
+          python3 -m bench build-docxodus --source ../candidate-source --commit "$CANDIDATE_COMMIT"
+      - name: Provision Chromium sandbox host
+        run: |
+          npm --prefix candidate-source/npm exec -- playwright install --with-deps chromium
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Capture one shared reference and calibrate
+        working-directory: oracle
+        run: |
+          python3 -m bench reference libreoffice --out references/shared
+          python3 -m bench run --reference references/shared/bundle.json --adapter libreoffice --candidate reference-calibration --out runs/calibration --gate close
+          python3 -c 'import json; r=json.load(open("runs/calibration/result.json")); assert r["summary"]["score"] == 100, r["summary"]'
+      - name: Measure baseline and cumulative candidate
+        working-directory: oracle
+        run: |
+          export DOCXODUS_SOURCE_ROOT="$GITHUB_WORKSPACE/baseline-source"
+          export DOCXODUS_EXPORT_MODULE="$DOCXODUS_SOURCE_ROOT/npm-export/dist/index.js"
+          python3 -m bench run --reference references/shared/bundle.json --adapter docxodus --candidate "$BASELINE_COMMIT" --out runs/baseline --gate report
+          export DOCXODUS_SOURCE_ROOT="$GITHUB_WORKSPACE/candidate-source"
+          export DOCXODUS_EXPORT_MODULE="$DOCXODUS_SOURCE_ROOT/npm-export/dist/index.js"
+          python3 -m bench run --reference references/shared/bundle.json --adapter docxodus --candidate "$CANDIDATE_COMMIT" --out runs/candidate --gate report
+      - name: Record all oracle comparison findings
+        working-directory: oracle
+        run: |
+          python3 -m bench compare runs/baseline/result.json runs/candidate/result.json --tolerance 0 > runs/comparison.txt || test "$?" = 1
+          cat runs/comparison.txt
+      - name: Require all mandatory passes and preserve every passing baseline measurement
+        env:
+          PYTHONPATH: ${{ github.workspace }}/oracle
+        run: python3 tools/rendering-fidelity/check-regressions.py oracle/runs/baseline/result.json oracle/runs/candidate/result.json
+      - name: Preserve complete evidence and immutable shared reference
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: independent-rendering-fidelity
+          path: |
+            oracle/runs/
+            oracle/references/
+          retention-days: 30
+          if-no-files-found: error

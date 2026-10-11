@@ -1491,12 +1491,14 @@ export class PaginationEngine {
             if (clone.id && clone.id !== itemId) return null;
             clone.id = itemId;
           }
-          const value = parseInt(item.getAttribute("value") || String(itemIndex + 1), 10);
-          const marker = this.formatOrderedListMarker(
-            Number.isFinite(value) ? value : itemIndex + 1,
-            listStyle.listStyleType,
-          );
-          clone.insertBefore(this.document.createTextNode(`${marker}. `), clone.firstChild);
+          if (!clone.querySelector('[data-endnote-number]')) {
+            const value = parseInt(item.getAttribute("value") || String(itemIndex + 1), 10);
+            const marker = this.formatOrderedListMarker(
+              Number.isFinite(value) ? value : itemIndex + 1,
+              listStyle.listStyleType,
+            );
+            clone.insertBefore(this.document.createTextNode(`${marker}. `), clone.firstChild);
+          }
         }
         blocks.push(this.measureElement(clone, dims, sectionIndex));
       }

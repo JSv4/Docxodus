@@ -2284,7 +2284,7 @@ namespace Docxodus
             // Footnote/Endnote reference links
             sb.AppendLine("a.footnote-ref, a.endnote-ref {");
             sb.AppendLine("    text-decoration: none;");
-            sb.AppendLine("    color: #0066cc;");
+            sb.AppendLine("    color: inherit;");
             sb.AppendLine("}");
 
             // Footnotes section
@@ -2292,6 +2292,19 @@ namespace Docxodus
             sb.AppendLine("    margin-top: 2em;");
             sb.AppendLine("    font-size: 0.9em;");
             sb.AppendLine("}");
+
+            if (settings.RenderPagination == PaginationMode.Paginated)
+            {
+                sb.AppendLine("section.endnotes {");
+                sb.AppendLine("    margin-top: 0;");
+                sb.AppendLine("    font-size: inherit;");
+                sb.AppendLine("}");
+                sb.AppendLine("section.endnotes ol {");
+                sb.AppendLine("    list-style-type: none;");
+                sb.AppendLine("    padding-left: 0;");
+                sb.AppendLine("    margin: 0;");
+                sb.AppendLine("}");
+            }
 
             // Footnote/Endnote list. Semantic lists nest the note bodies' own lists inside it, so
             // the rule then reaches only the notes list itself.
@@ -4131,7 +4144,7 @@ namespace Docxodus
 
             var endnotesSection = new XElement(Xhtml.section,
                 new XAttribute("class", "endnotes"),
-                new XElement(Xhtml.hr),
+                settings.RenderPagination == PaginationMode.Paginated ? null : new XElement(Xhtml.hr),
                 new XElement(Xhtml.ol,
                     new XAttribute("style", $"list-style-type: {NoteListStyleType(tracker?.EndnoteNumberFormat ?? "lowerRoman")};"),
                     orderedEndnotes.Select(en => RenderFootnoteItem(wordDoc, settings, en, "en", tracker))));
@@ -4179,7 +4192,8 @@ namespace Docxodus
                 .OfType<XElement>()
                 .LastOrDefault(e => e.Name == Xhtml.p);
 
-            if (lastParagraph != null)
+            var printNote = settings.RenderPagination == PaginationMode.Paginated;
+            if (lastParagraph != null && !printNote)
             {
                 // Add space and backref inside the last paragraph
                 lastParagraph.Add(new XText(" "), backref);
@@ -4190,6 +4204,14 @@ namespace Docxodus
             // clones retain both the p:en and en:en identities when a long paragraph splits.
             if (noteType == "en" && settings.RenderPagination == PaginationMode.Paginated)
             {
+                var firstParagraph = content.OfType<XElement>().FirstOrDefault(e => e.Name == Xhtml.p);
+                if (firstParagraph != null)
+                {
+                    var format = tracker?.EndnoteNumberFormat ?? "lowerRoman";
+                    firstParagraph.AddFirst(new XElement(Xhtml.span,
+                        new XAttribute("data-endnote-number", "true"),
+                        new XText(FormatNoteNumber(displayNumber, format))));
+                }
                 foreach (var paragraph in content.OfType<XElement>()
                     .Where(e => e.Name == Xhtml.p))
                 {
@@ -4207,8 +4229,16 @@ namespace Docxodus
                 SourceAnchorIdentityAttribute(settings, noteElement),
                 content);
 
+            // Browser-generated list markers and the generic note number inherit from their
+            // wrapper, outside the note paragraph's own font scope.
+            var noteStyle = new Dictionary<string, string>();
+            var noteParagraph = noteElement.Elements(W.p).FirstOrDefault();
+            if (noteParagraph != null) DefineStrutFont(noteStyle, noteParagraph);
+            if (printNote) noteStyle["list-style-type"] = "none";
+            li.AddAnnotation(noteStyle);
+
             // If no paragraph found, append backref directly to li (fallback)
-            if (lastParagraph == null)
+            if (lastParagraph == null && !printNote)
             {
                 li.Add(new XText(" "), backref);
             }
@@ -4382,6 +4412,11 @@ namespace Docxodus
                     new XElement(Xhtml.span,
                         new XAttribute("class", "footnote-content"),
                         content));
+
+                var noteStyle = new Dictionary<string, string>();
+                var noteParagraph = fn.Elements(W.p).FirstOrDefault();
+                if (noteParagraph != null) DefineStrutFont(noteStyle, noteParagraph);
+                footnoteItem.SetAttributeValue("style", string.Join("; ", noteStyle.Select(p => p.Key + ": " + p.Value)));
 
                 registry.Add(footnoteItem);
             }
@@ -5638,7 +5673,7 @@ namespace Docxodus
             if (settings.RenderPagination == PaginationMode.Paginated && breakType == "column")
             {
                 var prefix = settings.PaginationCssClassPrefix ?? "page-";
-                return new XElement(Xhtml.div,
+                return new XElement(Xhtml.span,
                     new XAttribute("class", prefix + "column-break"),
                     new XAttribute("data-column-break", "true"),
                     new XText(string.Empty));
@@ -5863,9 +5898,75 @@ namespace Docxodus
             if (settings.RenderPagination == PaginationMode.Paginated)
             {
                 AddPaginationDataAttributes(element, paragraph);
+                if ((string?)paragraph.Attribute("data-keep-lines") == "true")
+                    paragraph.Annotation<Dictionary<string, string>>()!["break-inside"] = "avoid";
+                return SplitColumnBreakParagraph(paragraph);
             }
 
             return paragraph;
+        }
+
+        private static object SplitColumnBreakParagraph(XElement paragraph)
+        {
+            if (!paragraph.Descendants().Any(e => (string?)e.Attribute("data-column-break") == "true"))
+                return paragraph;
+
+            // Split inside run wrappers as well as at direct paragraph children. A block div
+            // inside a p makes HTML parsing close the canonical source paragraph before its text.
+            static XElement CopyShell(XElement source)
+            {
+                var copy = new XElement(source.Name, source.Attributes());
+                foreach (var annotation in source.Annotations<object>())
+                    copy.AddAnnotation(annotation is Dictionary<string, string> style
+                        ? new Dictionary<string, string>(style) : annotation);
+                return copy;
+            }
+            static List<XElement> Split(XElement source)
+            {
+                var pieces = new List<XElement> { CopyShell(source) };
+                foreach (var node in source.Nodes().ToList())
+                {
+                    if (node is XElement child)
+                    {
+                        if ((string?)child.Attribute("data-column-break") == "true")
+                        {
+                            pieces.Add(CopyShell(source));
+                            continue;
+                        }
+                        var children = Split(child);
+                        pieces[^1].Add(children[0]);
+                        foreach (var tail in children.Skip(1))
+                        {
+                            var next = CopyShell(source);
+                            next.Add(tail);
+                            pieces.Add(next);
+                        }
+                    }
+                    else pieces[^1].Add(node);
+                }
+                return pieces;
+            }
+            var fragments = Split(paragraph);
+            var result = new List<XElement>();
+            for (var i = 0; i < fragments.Count; i++)
+            {
+                var fragment = fragments[i];
+                if (i == 0 && string.IsNullOrWhiteSpace(fragment.Value)
+                    && !fragment.Descendants().Any(e => e.Name == Xhtml.img || e.Name == Xhtml.br))
+                    continue;
+                var style = fragment.Annotation<Dictionary<string, string>>()!;
+                if (i > 0)
+                {
+                    style["break-before"] = "column";
+                    fragment.SetAttributeValue("data-column-break-before", "true");
+                    fragment.Attribute("id")?.Remove();
+                    fragment.Attribute("data-page-break-before")?.Remove();
+                    if (result.Count > 0) style["margin-top"] = "0";
+                }
+                if (i < fragments.Count - 1) style["margin-bottom"] = "0";
+                result.Add(fragment);
+            }
+            return result;
         }
 
         /// <summary>
@@ -6311,6 +6412,20 @@ namespace Docxodus
             }
             style.AddIfMissing("padding-top", "0");
             style.AddIfMissing("padding-bottom", "0");
+
+            var table = element.Ancestors(W.tbl).FirstOrDefault();
+            foreach (var side in new[] { W.top, W.right, W.bottom, W.left })
+            {
+                var logical = side == W.left ? W.start : side == W.right ? W.end : side;
+                var margin = tcPr?.Element(W.tcMar)?.Elements().FirstOrDefault(e => e.Name == side || e.Name == logical)
+                    ?? table?.Element(W.tblPr)?.Element(W.tblCellMar)?.Elements().FirstOrDefault(e => e.Name == side || e.Name == logical);
+                if ((string?)margin?.Attribute(W.type) is "dxa" or "nil")
+                {
+                    decimal? twips = (string?)margin.Attribute(W.type) == "nil" ? 0 : WordprocessingMLUtil.AttributeToTwips(margin.Attribute(W._w));
+                    if (twips != null)
+                        style["padding-" + side.LocalName] = string.Format(NumberFormatInfo.InvariantInfo, "{0:0.####}pt", twips / 20m);
+                }
+            }
 
             var cell = new XElement(Xhtml.td,
                 rowSpan,
