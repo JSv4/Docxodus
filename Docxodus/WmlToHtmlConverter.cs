@@ -2301,8 +2301,15 @@ namespace Docxodus
                 sb.AppendLine("}");
                 sb.AppendLine("section.endnotes ol {");
                 sb.AppendLine("    list-style-type: none;");
-                sb.AppendLine("    padding-left: 0;");
                 sb.AppendLine("    margin: 0;");
+                sb.AppendLine("}");
+                sb.AppendLine("section.endnotes hr {");
+                sb.AppendLine("    border: none;");
+                sb.AppendLine("    height: 1px;");
+                sb.AppendLine("    background-color: currentColor;");
+                sb.AppendLine("    width: 2in;");
+                sb.AppendLine("    max-width: 100%;");
+                sb.AppendLine("    margin: 0 0 4pt 0;");
                 sb.AppendLine("}");
             }
 
@@ -2313,6 +2320,9 @@ namespace Docxodus
                 : "section.footnotes ol, section.endnotes ol {");
             sb.AppendLine("    padding-left: 1.5em;");
             sb.AppendLine("}");
+
+            if (settings.RenderPagination == PaginationMode.Paginated)
+                sb.AppendLine("section.endnotes ol { padding-left: 0; }");
 
             // Back reference links
             sb.AppendLine("a.footnote-backref, a.endnote-backref {");
@@ -4144,7 +4154,7 @@ namespace Docxodus
 
             var endnotesSection = new XElement(Xhtml.section,
                 new XAttribute("class", "endnotes"),
-                settings.RenderPagination == PaginationMode.Paginated ? null : new XElement(Xhtml.hr),
+                new XElement(Xhtml.hr),
                 new XElement(Xhtml.ol,
                     new XAttribute("style", $"list-style-type: {NoteListStyleType(tracker?.EndnoteNumberFormat ?? "lowerRoman")};"),
                     orderedEndnotes.Select(en => RenderFootnoteItem(wordDoc, settings, en, "en", tracker))));
@@ -4204,13 +4214,13 @@ namespace Docxodus
             // clones retain both the p:en and en:en identities when a long paragraph splits.
             if (noteType == "en" && settings.RenderPagination == PaginationMode.Paginated)
             {
-                var firstParagraph = content.OfType<XElement>().FirstOrDefault(e => e.Name == Xhtml.p);
+                var firstParagraph = content.OfType<XElement>().SelectMany(e => e.DescendantsAndSelf())
+                    .FirstOrDefault(e => e.Name == Xhtml.p);
                 if (firstParagraph != null)
                 {
                     var format = tracker?.EndnoteNumberFormat ?? "lowerRoman";
-                    firstParagraph.AddFirst(new XElement(Xhtml.span,
-                        new XAttribute("data-endnote-number", "true"),
-                        new XText(FormatNoteNumber(displayNumber, format))));
+                    firstParagraph.AddFirst(RenderPaginatedNoteNumber(wordDoc, settings,
+                        noteElement, FormatNoteNumber(displayNumber, format), endnote: true));
                 }
                 foreach (var paragraph in content.OfType<XElement>()
                     .Where(e => e.Name == Xhtml.p))
@@ -4408,7 +4418,7 @@ namespace Docxodus
                     new XAttribute("data-display-number", displayNumber),
                     new XAttribute("class", "footnote-item"),
                     SourceAnchorIdentityAttribute(settings, fn),
-                    RenderPaginatedFootnoteNumber(wordDoc, settings, fn, displayNumber),
+                    RenderPaginatedNoteNumber(wordDoc, settings, fn, displayNumber),
                     new XElement(Xhtml.span,
                         new XAttribute("class", "footnote-content"),
                         content));
@@ -4435,24 +4445,26 @@ namespace Docxodus
         /// marker-only runs, is unchanged. A note with no <c>w:footnoteRef</c> run keeps the
         /// generic number.
         /// </summary>
-        private static XElement RenderPaginatedFootnoteNumber(WordprocessingDocument wordDoc,
-            WmlToHtmlConverterSettings settings, XElement footnote, string displayNumber)
+        private static XElement RenderPaginatedNoteNumber(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement footnote, string displayNumber, bool endnote = false)
         {
             var copy = new XElement(footnote);
-            var marker = copy.Descendants(W.footnoteRef).FirstOrDefault();
+            var marker = copy.Descendants(endnote ? W.endnoteRef : W.footnoteRef).FirstOrDefault();
             var run = marker?.Parent;
+            var number = new XElement(Xhtml.span,
+                new XAttribute("class", endnote ? "endnote-number" : "footnote-number"),
+                endnote ? new XAttribute("data-endnote-number", "true") : null);
             if (marker == null || run == null || run.Name != W.r)
             {
-                return new XElement(Xhtml.span,
-                    new XAttribute("class", "footnote-number"),
-                    new XText(displayNumber));
+                number.Add(new XText(displayNumber));
+                return number;
             }
 
             marker.ReplaceWith(new XElement(W.t, displayNumber));
-            return new XElement(Xhtml.span,
-                new XAttribute("class", "footnote-number"),
+            number.Add(
                 new XAttribute("data-note-run", "true"),
                 ConvertToHtmlTransform(wordDoc, settings, run, false, 0m));
+            return number;
         }
 
         private static XElement? RenderHeadersSection(WordprocessingDocument wordDoc,
@@ -6414,11 +6426,15 @@ namespace Docxodus
             style.AddIfMissing("padding-bottom", "0");
 
             var table = element.Ancestors(W.tbl).FirstOrDefault();
+            var rtlTable = IsOnOffPropertyEnabled(table?.Element(W.tblPr)?.Element(W.bidiVisual));
             foreach (var side in new[] { W.top, W.right, W.bottom, W.left })
             {
-                var logical = side == W.left ? W.start : side == W.right ? W.end : side;
-                var margin = tcPr?.Element(W.tcMar)?.Elements().FirstOrDefault(e => e.Name == side || e.Name == logical)
-                    ?? table?.Element(W.tblPr)?.Element(W.tblCellMar)?.Elements().FirstOrDefault(e => e.Name == side || e.Name == logical);
+                var logical = side == W.left ? (rtlTable ? W.end : W.start)
+                    : side == W.right ? (rtlTable ? W.start : W.end) : side;
+                var cellMargins = tcPr?.Element(W.tcMar);
+                var tableMargins = table?.Element(W.tblPr)?.Element(W.tblCellMar);
+                var margin = cellMargins?.Element(logical) ?? cellMargins?.Element(side)
+                    ?? tableMargins?.Element(logical) ?? tableMargins?.Element(side);
                 if ((string?)margin?.Attribute(W.type) is "dxa" or "nil")
                 {
                     decimal? twips = (string?)margin.Attribute(W.type) == "nil" ? 0 : WordprocessingMLUtil.AttributeToTwips(margin.Attribute(W._w));

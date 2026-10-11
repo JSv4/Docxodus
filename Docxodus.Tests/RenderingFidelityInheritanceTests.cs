@@ -54,7 +54,7 @@ public class RenderingFidelityInheritanceTests
         if (endnote)
         {
             Assert.Equal("i", html.Descendants().Single(e => e.Attribute("data-endnote-number") != null).Value);
-            Assert.Empty(html.Descendants().Single(e => (string?)e.Attribute("class") == "endnotes").Elements().Where(e => e.Name.LocalName == "hr"));
+            Assert.Single(html.Descendants().Single(e => (string?)e.Attribute("class") == "endnotes").Elements().Where(e => e.Name.LocalName == "hr"));
         }
     }
 

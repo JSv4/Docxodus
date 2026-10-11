@@ -35,10 +35,11 @@ test('column breaks retain both sides of the canonical paragraph in PageMap', as
 });
 
 test('flattened print endnotes retain their marker without list punctuation', async ({ page }) => {
-  await page.setContent(`<style>p{font:11pt/14pt serif;margin:0}ol{padding:0;margin:0}</style>
+  await page.setContent(`<style>p{font:11pt/14pt serif;margin:0}ol{padding:0;margin:0}
+    section.endnotes hr{width:144pt;height:1px;border:0;background:black;margin:0 0 4pt 0}</style>
     <div id="staging"><section ${geometry}>
       <p data-source-anchor-id="p:body:lead">Body</p>
-      <section class="endnotes"><ol><li id="en-1" value="1" data-source-anchor-id="en:en:note">
+      <section class="endnotes"><hr><ol><li id="en-1" value="1" data-source-anchor-id="en:en:note">
         <p data-source-anchor-id="p:en:paragraph"><span data-source-anchor-id="en:en:note"><span data-endnote-number="true">i</span> Note text</span></p>
       </li></ol></section>
     </section></div><div id="container"></div>`);
@@ -47,11 +48,16 @@ test('flattened print endnotes retain their marker without list punctuation', as
     const engine = new (window as any).DocxodusPagination.PaginationEngine(
       document.getElementById('staging'), document.getElementById('container'), { showPageNumbers: false });
     engine.paginate();
+    const rule = document.querySelector('#container hr') as HTMLElement;
     return { text: document.getElementById('container')!.textContent,
+      ruleWidth: rule.getBoundingClientRect().width * 0.75,
+      ruleBorder: getComputedStyle(rule).borderTopWidth,
       map: engine.materializePageMap(0, 'endnote-test') };
   });
   expect(result.text).toContain('i Note text');
   expect(result.text).not.toContain('1.');
   expect(result.text).not.toContain('i.');
+  expect(result.ruleWidth).toBeCloseTo(144, 1);
+  expect(result.ruleBorder).toBe('0px');
   expect(result.map.fragments.some((f: any) => f.anchorId === 'en:en:note')).toBe(true);
 });
