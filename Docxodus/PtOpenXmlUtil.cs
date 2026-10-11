@@ -1552,6 +1552,12 @@ listSeparator
                 firstLater.AddBeforeSelf(child);
         }
 
+        private static readonly Dictionary<XName, int> Order_cellMargins = new()
+        {
+            { W.top, 10 }, { W.left, 20 }, { W.start, 30 },
+            { W.bottom, 40 }, { W.right, 50 }, { W.end, 60 },
+        };
+
         private static Dictionary<XName, int> Order_tblPr = new Dictionary<XName, int>
         {
             { W.tblStyle, 10 },
@@ -1691,6 +1697,13 @@ listSeparator
                                 return Order_tblBorders[e.Name];
                             return 999;
                         }));
+
+                if (element.Name == W.tblCellMar || element.Name == W.tcMar)
+                {
+                    return new XElement(element.Name, element.Attributes(), element.Elements()
+                        .OrderBy(e => Order_cellMargins.TryGetValue(e.Name, out var rank) ? rank : 999)
+                        .Select(e => (XElement)WmlOrderElementsPerStandard(e)));
+                }
 
                 if (element.Name == W.pBdr)
                     return new XElement(element.Name,

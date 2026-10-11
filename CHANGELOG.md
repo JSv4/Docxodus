@@ -274,6 +274,10 @@ All notable changes to this project will be documented in this file.
   content overlap before positional preference; the heading remains a native paragraph insertion.
   Candidate checks retain order boundaries and the rare-word index used for large replacement gaps.
 
+- Shared table-style cell-margin changes now survive comparison acceptance and rejection
+  (issue #1053). Affected tables and conditional cells carry native property histories while
+  direct overrides and unrelated tables keep their precedence. Margin inheritance merges each
+  axis independently, and merged margin properties retain schema order.
 - Document-default font and paragraph-spacing changes now remain reversible when tables are
   present (issue #1051). Native property revisions on affected body/cell consumers preserve
   paragraph marks, partial direct overrides, and conditional table formatting without promoting

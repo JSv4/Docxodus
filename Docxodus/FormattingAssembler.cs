@@ -1967,6 +1967,8 @@ namespace Docxodus
 
         private static XName[] SpecialCaseChildProperties =
         {
+            W.tblCellMar,
+            W.tcMar,
             W.tblPr,
             W.trPr,
             W.tcPr,
@@ -1986,6 +1988,8 @@ namespace Docxodus
 
         private static XName[] MergeChildProperties =
         {
+            W.tblCellMar,
+            W.tcMar,
             W.tblPr,
             W.trPr,
             W.tcPr,

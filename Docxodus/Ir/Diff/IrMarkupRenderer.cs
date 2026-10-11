@@ -244,6 +244,7 @@ internal static partial class IrMarkupRenderer
 
         var state = new RenderState(irLeft, irRight, settings);
         state.RightSource = ProjectTableDocDefaults(left, right, state);
+        state.RightSource = ProjectTableStyleMargins(left, right, state);
         state.LeftStyleIds = ReadStyleIds(left);
         state.InsertedParagraphStyleIds = CollectInsertedParagraphStyleIds(script, state);
         state.ChangedDefaultParagraphStyleId = ReadChangedDefaultParagraphStyleId(left, right, state);
@@ -594,6 +595,7 @@ internal static partial class IrMarkupRenderer
                 // declare them on the output part roots, as Word does (issue #836). Right first: the
                 // cloned content came from it, so its prefixes win. Runs last so it sees every part
                 // the passes above wrote into.
+                CarryUnchangedProjectedStories(wDoc, script, state);
                 PartNamespaces.Of(new[] { right, left }).DeclareIn(wDoc);
 
                 RenumberProjectedProperties(wDoc, state);
