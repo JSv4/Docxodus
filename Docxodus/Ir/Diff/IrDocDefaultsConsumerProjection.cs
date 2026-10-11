@@ -9,17 +9,17 @@ namespace Docxodus.Ir.Diff;
 internal static partial class IrMarkupRenderer
 {
     /// <summary>
-    /// A defaults-only change cannot be projected into paragraph styles when tables are present:
-    /// doing so promotes defaults above conditional table formatting. Resolve each consumer under
+    /// A defaults change cannot be projected into paragraph styles when tables or lists are present:
+    /// doing so promotes defaults above conditional table or numbering formatting. Resolve each consumer under
     /// both defaults sets, and materialize only changed font/spacing axes on detached right sources.
     /// Native property histories restore the original direct properties under the retained left
     /// defaults. The script and cached IR remain unchanged; normal emit paths use these sources.
     /// </summary>
-    private static IrDocument ProjectTableDocDefaults(WmlDocument left, WmlDocument right, RenderState state)
+    private static IrDocument ProjectConsumerDocDefaults(WmlDocument left, WmlDocument right, RenderState state)
     {
         if (state.Settings.PreserveInputRevisions ||
-            !state.Right.Sources.Values.Any(x => x.Descendants(W.tbl).Any()) &&
-            !state.Left.Sources.Values.Any(x => x.Descendants(W.tbl).Any()))
+            XNode.DeepEquals(state.Left.Styles.DocDefaultsPPr, state.Right.Styles.DocDefaultsPPr) &&
+            XNode.DeepEquals(state.Left.Styles.DocDefaultsRPr, state.Right.Styles.DocDefaultsRPr))
             return state.Right;
 
         using var leftStream = new OpenXmlMemoryStreamDocument(left);
@@ -34,10 +34,17 @@ internal static partial class IrMarkupRenderer
             DocDefaultsPayloadsEqual(ls, rs) || !SameDefinitions(ls, rs) ||
             lm.GlossaryDocumentPart is not null || rm.GlossaryDocumentPart is not null ||
             !PartsEqual(lm.ThemePart, rm.ThemePart) ||
-            !PartsEqual(lm.NumberingDefinitionsPart, rm.NumberingDefinitionsPart) ||
             HasThemeReference(ls) || HasThemeReference(rs) ||
-            HasUnsafePresentationConsumer(state.Left, allowTables: true) ||
-            HasUnsafePresentationConsumer(state.Right, allowTables: true))
+            HasUnsafePresentationConsumer(state.Left, allowTables: true, allowNumbering: true) ||
+            HasUnsafePresentationConsumer(state.Right, allowTables: true, allowNumbering: true))
+            return state.Right;
+
+        // Keep the existing style projection for simple stories. Numbering/settings differences
+        // suppress that path, but do not suppress font/spacing histories on ordinary consumers.
+        bool needsConsumers = state.Left.Sources.Values.Concat(state.Right.Sources.Values)
+            .Any(x => x.Descendants().Any(e => e.Name == W.tbl || e.Name == W.numPr));
+        if (!needsConsumers && PartsEqual(lm.NumberingDefinitionsPart, rm.NumberingDefinitionsPart) &&
+            PartsEqual(lm.DocumentSettingsPart, rm.DocumentSettingsPart))
             return state.Right;
 
         // These font and spacing axes resolve through styles and direct properties. Settings
@@ -141,8 +148,12 @@ internal static partial class IrMarkupRenderer
         {
             ClearStyles = false,
             RemoveStyleNamesFromParagraphAndRunProperties = false,
-            CreateHtmlConverterAnnotationAttributes = false,
+            // Preserve the resolver's list-run marker so generated labels/tabs can be excluded
+            // from source correspondence. Their font is inherited through the paragraph mark.
+            CreateHtmlConverterAnnotationAttributes = true,
         });
+        foreach (var part in doc.ContentParts())
+            part.GetXDocument().Descendants(W.r).Where(r => r.Attribute(PtOpenXml.ListItemRun) is not null).Remove();
         return doc.ContentParts().ToDictionary(part => part.Uri, part => new XDocument(part.GetXDocument()));
     }
 

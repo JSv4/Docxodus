@@ -243,7 +243,7 @@ internal static partial class IrMarkupRenderer
         }
 
         var state = new RenderState(irLeft, irRight, settings);
-        state.RightSource = ProjectTableDocDefaults(left, right, state);
+        state.RightSource = ProjectConsumerDocDefaults(left, right, state);
         state.RightSource = ProjectTableStyleMargins(left, right, state);
         state.LeftStyleIds = ReadStyleIds(left);
         state.InsertedParagraphStyleIds = CollectInsertedParagraphStyleIds(script, state);
@@ -6868,7 +6868,7 @@ internal static partial class IrMarkupRenderer
     private static bool HasThemeReference(XElement root) => root.DescendantsAndSelf().Attributes()
         .Any(attribute => attribute.Name.LocalName.IndexOf("theme", StringComparison.OrdinalIgnoreCase) >= 0);
 
-    private static bool HasUnsafePresentationConsumer(IrDocument document, bool allowTables = false)
+    private static bool HasUnsafePresentationConsumer(IrDocument document, bool allowTables = false, bool allowNumbering = false)
     {
         // This first style-level slice deliberately avoids shapes whose effective appearance includes a higher
         // precedence layer (table conditional styles and list labels), an independent package graph (drawing),
@@ -6881,7 +6881,8 @@ internal static partial class IrMarkupRenderer
         };
         return document.Sources.Values.Any(source => source.Root?.DescendantsAndSelf().Any(element =>
             element.Name.Namespace == W.w && unsafeNames.Contains(element.Name.LocalName) &&
-            !(allowTables && element.Name == W.tbl)) == true) ||
+            !(allowTables && element.Name == W.tbl) &&
+            !(allowNumbering && element.Name == W.numPr)) == true) ||
             document.Sources.Values.Any(source => source.Root is not null && HasThemeReference(source.Root));
     }
 
