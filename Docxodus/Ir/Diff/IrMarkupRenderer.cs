@@ -8091,8 +8091,8 @@ internal static partial class IrMarkupRenderer
     private static string? ReadChangedDefaultParagraphStyleId(WmlDocument left, WmlDocument right, RenderState state)
     {
         if (state.Settings.PreserveInputRevisions || !state.Settings.TrackParagraphFormatChanges ||
-            state.Left.Styles.DefaultParagraphStyleId is not { } leftId ||
-            state.Right.Styles.DefaultParagraphStyleId is not { } rightId || leftId == rightId)
+            state.Right.Styles.DefaultParagraphStyleId is not { } rightId ||
+            state.Left.Styles.DefaultParagraphStyleId == rightId)
             return null;
 
         XElement? Styles(WmlDocument document, Uri? partUri)
@@ -8108,9 +8108,10 @@ internal static partial class IrMarkupRenderer
         var rightRoot = Styles(right, state.Right.Styles.PartUri);
         if (leftRoot is null || rightRoot is null)
             return null;
-        bool UniqueDefault(XElement root) => root.Elements(W.style).Count(style =>
-            (string?)style.Attribute(W.type) == "paragraph" && IsOn((string?)style.Attribute(W._default))) == 1;
-        if (!UniqueDefault(leftRoot) || !UniqueDefault(rightRoot))
+        bool DefaultCountIs(XElement root, int expected) => root.Elements(W.style).Count(style =>
+            (string?)style.Attribute(W.type) == "paragraph" && IsOn((string?)style.Attribute(W._default))) == expected;
+        if (!DefaultCountIs(leftRoot, state.Left.Styles.DefaultParagraphStyleId is null ? 0 : 1) ||
+            !DefaultCountIs(rightRoot, 1))
             return null;
         var rightStyles = rightRoot.Elements(W.style).Where(style => style.Attribute(W.styleId) is not null)
             .GroupBy(style => (string)style.Attribute(W.styleId)!, StringComparer.Ordinal).ToArray();
