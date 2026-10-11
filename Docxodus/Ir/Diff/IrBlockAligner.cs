@@ -1769,7 +1769,7 @@ internal static class IrBlockAligner
         {
             int idx = pj - pluralFrom;
             if (pluralContent[idx] < 0)
-                pluralContent[idx] = pluralBlocks[pj] is IrParagraph p ? ContentTokenCount(p, settings) : 0;
+                pluralContent[idx] = pluralBlocks[pj] is IrParagraph p ? similarity.ContentTokenCount(p) : 0;
             return pluralContent[idx];
         }
 
@@ -1888,7 +1888,7 @@ internal static class IrBlockAligner
         // a hypothetical best-case trim is unknowable cheaply, so it is applied to the raw window —
         // a window that only passes POST-trim is re-admitted because the trimmed window is itself
         // enumerated as a smaller (a,b) candidate by the ascending scan.
-        int singularContent = ContentTokenCount(singular, settings);
+        int singularContent = similarity.ContentTokenCount(singular);
 
         // The added-text path admits messier merges/splits than the coverage path (see TrimAndGate):
         // its surviving paragraph may ADD text (run smaller than singular → drop the coverage-derived
@@ -1990,16 +1990,6 @@ internal static class IrBlockAligner
         }
 
         return bestAddedText;
-    }
-
-    /// <summary>Content-token count of a paragraph (non-Separator, non-Textbox — the scoring rule).</summary>
-    private static int ContentTokenCount(IrParagraph p, IrDiffSettings settings)
-    {
-        int n = 0;
-        foreach (var t in IrDiffTokenizer.Tokenize(p, settings))
-            if (t.Kind is not (IrDiffTokenKind.Separator or IrDiffTokenKind.Textbox))
-                n++;
-        return n;
     }
 
     /// <summary>

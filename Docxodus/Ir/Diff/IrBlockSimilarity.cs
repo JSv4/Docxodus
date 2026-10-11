@@ -104,6 +104,15 @@ internal sealed class IrBlockSimilarity
     /// call; used by the junction pass's uniqueness discipline.</summary>
     public IReadOnlyDictionary<string, int> WordKeys(IrParagraph paragraph) => Bag(paragraph).WordCounts;
 
+    /// <summary>Content-token total used by split/merge length gates, reusing cached tokenization.</summary>
+    public int ContentTokenCount(IrParagraph paragraph)
+    {
+        int count = 0;
+        foreach (var multiplicity in Bag(paragraph).ContentCounts.Values)
+            count += multiplicity;
+        return count;
+    }
+
     /// <summary>
     /// How many content tokens (every kind but <see cref="IrDiffTokenKind.Separator"/> and
     /// <see cref="IrDiffTokenKind.Textbox"/>, the split scorer's content rule) the two paragraphs share by
