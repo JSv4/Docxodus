@@ -1442,7 +1442,16 @@ export class PaginationEngine {
     for (const rule of sectionChildren.filter((child) => child.tagName === "HR")) {
       this.checkpoint();
       const clonedRule = rule.cloneNode(true) as HTMLElement;
-      if (blocks.length === 0) clonedRule.style.marginTop = sectionStyle.marginTop;
+      // The rule leaves its section when flattened, so preserve the section-scoped
+      // print styling before measuring and painting the detached clone.
+      const ruleStyle = this.view.getComputedStyle(rule);
+      for (const property of ["height", "width", "max-width", "border", "background-color", "color",
+        "margin-top", "margin-right", "margin-bottom", "margin-left"]) {
+        clonedRule.style.setProperty(property, ruleStyle.getPropertyValue(property));
+      }
+      if (blocks.length === 0) {
+        clonedRule.style.marginTop = `calc(${sectionStyle.marginTop} + ${ruleStyle.marginTop})`;
+      }
       blocks.push(this.measureElement(clonedRule, dims, sectionIndex));
     }
 
@@ -1491,12 +1500,14 @@ export class PaginationEngine {
             if (clone.id && clone.id !== itemId) return null;
             clone.id = itemId;
           }
-          const value = parseInt(item.getAttribute("value") || String(itemIndex + 1), 10);
-          const marker = this.formatOrderedListMarker(
-            Number.isFinite(value) ? value : itemIndex + 1,
-            listStyle.listStyleType,
-          );
-          clone.insertBefore(this.document.createTextNode(`${marker}. `), clone.firstChild);
+          if (!clone.querySelector('[data-endnote-number]')) {
+            const value = parseInt(item.getAttribute("value") || String(itemIndex + 1), 10);
+            const marker = this.formatOrderedListMarker(
+              Number.isFinite(value) ? value : itemIndex + 1,
+              listStyle.listStyleType,
+            );
+            clone.insertBefore(this.document.createTextNode(`${marker}. `), clone.firstChild);
+          }
         }
         blocks.push(this.measureElement(clone, dims, sectionIndex));
       }

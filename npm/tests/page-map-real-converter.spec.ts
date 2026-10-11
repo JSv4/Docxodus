@@ -37,6 +37,8 @@ interface RealPaginationResult {
   endnoteReferenceResolves: boolean;
   endnoteLinkTargetsUnique: boolean;
   endnoteMarkerText: string | null;
+  endnoteNumbers: string[];
+  visibleEndnoteText: string;
   visibleFootnoteText: string;
   clippedFootnoteParagraphs: Array<{
     anchorId: string | null;
@@ -148,6 +150,15 @@ async function convertPaginateAndRegister(
       endnoteTargetCount: document.querySelectorAll('#en-1').length,
       endnoteMarkerText: container.querySelector<HTMLElement>('#en-1')?.textContent?.trim()
         ?? null,
+      endnoteNumbers: Array.from(container.querySelectorAll('[data-endnote-number]'))
+        .map((number) => number.textContent?.trim() ?? ''),
+      visibleEndnoteText: Array.from(container.querySelectorAll<HTMLElement>(
+        'p[data-source-anchor-id^="p:en:"]',
+      )).map((paragraph) => {
+        const clone = paragraph.cloneNode(true) as HTMLElement;
+        clone.querySelectorAll('[data-endnote-number]').forEach((number) => number.remove());
+        return clone.textContent ?? '';
+      }).join(' ').replace(/\s+/g, ' ').trim(),
       visibleFootnoteText,
       clippedFootnoteParagraphs,
     };
@@ -334,6 +345,12 @@ test.describe('Real converter PageMap pipeline', () => {
     expect(result.endnoteTargetCount).toBe(1);
     expect(result.endnoteReferenceResolves).toBe(true);
     expect(result.endnoteLinkTargetsUnique).toBe(true);
-    expect(result.endnoteMarkerText).toMatch(/^i\.\s/);
+    // The source endnoteRef supplies "i"; browser list punctuation is not part
+    // of the printed note. Its marker must occur once across all continuations.
+    expect(result.endnoteMarkerText).toMatch(/^i\s/);
+    expect(result.endnoteNumbers).toEqual(['i']);
+    expect(result.visibleEndnoteText).toBe(
+      Array.from({ length: 1200 }, (_, index) => `endnote${index}`).join(' '),
+    );
   });
 });
