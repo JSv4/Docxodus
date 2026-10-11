@@ -462,6 +462,9 @@ function collapsesThroughTo(
     && style.overflowX === "visible" && style.overflowY === "visible"
     && style.float === "none" && style.position !== "absolute" && style.position !== "fixed";
   if (!ordinaryBlock) return null;
+  // Column boxes establish a formatting context: child margins stay inside the multicol
+  // box and are already included in its measured height (CSS Multi-column Layout §2).
+  if (style.columnCount !== "auto" || style.columnWidth !== "auto") return null;
   const border = parseFloat(edge === "top" ? style.borderTopWidth : style.borderBottomWidth) || 0;
   const padding = parseFloat(edge === "top" ? style.paddingTop : style.paddingBottom) || 0;
   if (border !== 0 || padding !== 0) return null;
@@ -898,7 +901,9 @@ export class PaginationEngine {
             sectionDims,
             sectionIndex,
             columnCount,
-            Number.isFinite(gap) ? gap : 36
+            Number.isFinite(gap) ? gap : 36,
+            section.dataset.sectionType === "continuous"
+              && section === sectionsToProcess[sectionsToProcess.length - 1],
           ));
         } else {
           blocks.push(...this.measureBlocks(section, sectionDims, sectionIndex));
@@ -1519,10 +1524,11 @@ export class PaginationEngine {
   /**
    * Flows a multi-column (`w:cols`) section's children into CSS-multicol container
    * blocks. Word lays such a section out as N columns inside the same body extent;
-   * a balanced `column-count` container reproduces that geometry, and the paginator
+   * a `column-count` container reproduces that geometry, and the paginator
    * then places each container as one ordinary measured block. A container grows
-   * greedily until its balanced height would exceed the smallest page body available
-   * to the section, so a long columned section still splits across pages at block
+   * greedily until it would exceed the smallest page body available to the section.
+   * Final continuous sections fill that height sequentially; other sections retain
+   * balancing. A long columned section still splits across pages at block
    * boundaries. Each child lands in exactly one container, so anchors never
    * duplicate. An explicit page break child passes through as its own block, which
    * ends the current container and lets the normal flow logic turn the page.
@@ -1532,7 +1538,8 @@ export class PaginationEngine {
     dims: PageDimensions,
     sectionIndex: number,
     columnCount: number,
-    columnGapPt: number
+    columnGapPt: number,
+    sequential = false,
   ): MeasuredBlock[] {
     const children = Array.from(section.children) as HTMLElement[];
     const blocks: MeasuredBlock[] = [];
@@ -1546,9 +1553,15 @@ export class PaginationEngine {
       const container = this.document.createElement("div");
       container.style.columnCount = String(columnCount);
       container.style.columnGap = `${columnGapPt}pt`;
+      if (sequential) {
+        container.dataset.paginationSequentialColumns = "true";
+        container.style.columnFill = "auto";
+        container.style.maxHeight = `${maxFragmentHeight}pt`;
+      }
       for (const child of slice) {
         container.appendChild(child.cloneNode(true));
       }
+      if (sequential) this.liftColumnSpaceBefore(container, dims);
       return container;
     };
 
@@ -1565,12 +1578,20 @@ export class PaginationEngine {
       // emitted alone, preserving the established oversized-block fallback.
       let end = start + 1;
       let container = makeContainer(children.slice(start, end));
+      if (sequential && this.columnContainerOverflows(container, dims)) {
+        // An indivisible child that exceeds all available columns keeps the established
+        // oversized-block path; a constrained box must not hide it in an extra column.
+        delete container.dataset.paginationSequentialColumns;
+        container.style.columnFill = "balance";
+        container.style.maxHeight = "";
+      }
       let measured = this.measureElement(container, dims, sectionIndex);
       while (end < children.length && !isBreak(children[end])) {
         this.checkpoint();
         const candidate = makeContainer(children.slice(start, end + 1));
         const candidateMeasured = this.measureElement(candidate, dims, sectionIndex);
-        if (candidateMeasured.heightPt > maxFragmentHeight) break;
+        if (candidateMeasured.heightPt > maxFragmentHeight
+          || (sequential && this.columnContainerOverflows(candidate, dims))) break;
         container = candidate;
         measured = candidateMeasured;
         end++;
@@ -1592,6 +1613,84 @@ export class PaginationEngine {
     }
 
     return blocks;
+  }
+
+  /** Keep Word's paragraph space-before in the ordinary inter-block spacing budget. */
+  private liftColumnSpaceBefore(container: HTMLElement, dims: PageDimensions): void {
+    container.style.marginTop = "";
+    const first = container.firstElementChild as HTMLElement | null;
+    if (!first || !this.isWordParagraphElement(first)) return;
+    const host = this.document.createElement("div");
+    host.style.width = `${dims.contentWidth}pt`;
+    host.appendChild(container);
+    this.stagingElement.appendChild(host);
+    try {
+      const spaceBefore = first.dataset.paginationColumnSpaceBefore
+        ?? this.view.getComputedStyle(first).marginTop;
+      first.dataset.paginationColumnSpaceBefore = spaceBefore;
+      first.style.marginTop = "0";
+      container.style.marginTop = spaceBefore;
+    } finally {
+      container.remove();
+      host.remove();
+    }
+  }
+
+  /** A height-constrained multicol box overflows horizontally when it needs another column. */
+  private columnContainerOverflows(element: HTMLElement, dims: PageDimensions): boolean {
+    const host = this.document.createElement("div");
+    host.style.width = `${dims.contentWidth}pt`;
+    const clone = element.cloneNode(true) as HTMLElement;
+    host.appendChild(clone);
+    this.stagingElement.appendChild(host);
+    try {
+      return clone.scrollWidth > clone.clientWidth + 1;
+    } finally {
+      host.remove();
+    }
+  }
+
+  /**
+   * Reflow a final continuous column section against the actual remaining body band.
+   * A preceding title, running story or note reservation can make it shorter than the
+   * fresh-page band used while collecting source blocks. Split at source-child boundaries
+   * when the narrower band would create an extra horizontal column; the tail is reconsidered
+   * normally on the following page. No source child is duplicated or discarded.
+   */
+  private reflowSequentialColumns(
+    block: MeasuredBlock,
+    dims: PageDimensions,
+    availableHeightPt: number,
+  ): MeasuredBlock[] | null {
+    if (block.element.dataset.paginationSequentialColumns !== "true"
+      || availableHeightPt <= 0) return null;
+    const maximumHeight = this.smallestEffectiveContentHeight(dims, block.sectionIndex);
+    const height = Math.min(availableHeightPt, maximumHeight);
+    if (Math.abs(parseFloat(block.element.style.maxHeight) - height) < 0.01) return null;
+    const children = Array.from(block.element.children) as HTMLElement[];
+    const make = (slice: HTMLElement[], limit: number): HTMLElement => {
+      const container = block.element.cloneNode(false) as HTMLElement;
+      container.style.maxHeight = `${limit}pt`;
+      for (const child of slice) container.appendChild(child.cloneNode(true));
+      this.liftColumnSpaceBefore(container, dims);
+      return container;
+    };
+    const whole = make(children, height);
+    if (!this.columnContainerOverflows(whole, dims)) {
+      return [this.measureElement(whole, dims, block.sectionIndex)];
+    }
+    let end = 0;
+    for (let count = 1; count < children.length; count++) {
+      this.checkpoint();
+      const candidate = make(children.slice(0, count), height);
+      if (this.columnContainerOverflows(candidate, dims)) break;
+      if (children[count - 1].dataset.keepWithNext !== "true") end = count;
+    }
+    if (end === 0) return null;
+    return [
+      this.measureElement(make(children.slice(0, end), height), dims, block.sectionIndex),
+      this.measureElement(make(children.slice(end), maximumHeight), dims, block.sectionIndex),
+    ];
   }
 
   /**
@@ -3890,6 +3989,16 @@ export class PaginationEngine {
         isFirstOnPage,
         pageInSection(block.sectionIndex)
       );
+      const columnFragments = this.reflowSequentialColumns(
+        block,
+        blockDimensions,
+        remainingHeight - currentFootnoteHeight - additionalFootnoteHeight - effectiveMarginTop,
+      );
+      if (columnFragments) {
+        blocks.splice(i, 1, ...columnFragments);
+        i--;
+        continue;
+      }
       // Visible height = top margin gap + content + footnote space
       // Note: bottom margin is NOT included in the fit check because the last block's
       // bottom margin extends beyond the content area and is clipped by overflow:hidden.

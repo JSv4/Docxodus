@@ -14,6 +14,26 @@ import { bodyFillDocx } from './docx-body-fill-fixture.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+for (const columns of ['column-count: 2', 'column-width: 50px']) {
+  test(`child margins stay inside a ${columns} box`, async ({ page }) => {
+    await page.setContent(`<div id="columns"
+      style="${columns}; column-fill: auto; max-height: 100px; width: 200px; margin: 3px 0 7px">
+      <p style="margin: 16px 0; height: 20px">inside</p>
+    </div>`);
+    await page.addScriptTag({ path: path.join(__dirname, '../dist/pagination.bundle.js') });
+    const measured = await page.evaluate(() => {
+      const columns = document.getElementById('columns')!;
+      return {
+        margins: (window as any).DocxodusPagination.collapsedBlockMarginsPx(window, columns),
+        inset: columns.firstElementChild!.getBoundingClientRect().top
+          - columns.getBoundingClientRect().top,
+      };
+    });
+    expect(measured.inset).toBe(16);
+    expect(measured.margins).toEqual({ topPx: 3, bottomPx: 7 });
+  });
+}
+
 async function clippedPages(page: Page, bytes: Uint8Array): Promise<string[]> {
   return page.evaluate((input) => {
     const D = (window as any).Docxodus;
