@@ -12,8 +12,8 @@ const TEST_FILES_DIR = path.join(__dirname, '../../TestFiles');
  *
  * A `w:type="continuous"` section keeps filling the page its predecessor started;
  * the paginator used to open a fresh page for EVERY section wrapper, promoting the
- * continuous break to a page break. A `w:cols` section lays out as balanced CSS
- * columns instead of one full-width column.
+ * continuous break to a page break. A `w:cols` section uses multiple columns;
+ * a final continuous section fills their available height before advancing.
  */
 
 const PAGE_GEOMETRY = `
@@ -556,7 +556,7 @@ test.describe('Continuous section breaks', () => {
 });
 
 test.describe('w:cols column geometry', () => {
-  test('a columned continuous section shares the page as one balanced multicol block', async ({ page }) => {
+  test('a final columned continuous section fills the available column before advancing', async ({ page }) => {
     await page.setContent(staging(`
       <div data-section-index="0" ${PAGE_GEOMETRY}>
         <p style="height: 20pt">title</p>
@@ -569,10 +569,119 @@ test.describe('w:cols column geometry', () => {
 
     const { content, columnCounts } = await paginate(page);
 
-    // One page: the 20pt title plus a balanced two-column container (~20pt tall
-    // instead of 40pt stacked). Each source block lands in the container exactly once.
+    // Both paragraphs fit below the title in the left column. A balanced box would move
+    // beta to the right even though most of the page body remains empty.
     expect(content).toEqual([['title', 'alphabeta']]);
     expect(columnCounts).toEqual([['', '2']]);
+    const positions = await page.evaluate(() => {
+      const paragraphs = Array.from(document.querySelectorAll<HTMLElement>('#container p'));
+      return paragraphs.map(p => ({ text: p.textContent, x: p.getBoundingClientRect().x,
+        y: p.getBoundingClientRect().y }));
+    });
+    expect(positions[2].x).toBeCloseTo(positions[1].x, 1);
+    expect(positions[2].y).toBeGreaterThan(positions[1].y);
+  });
+
+  test('a final continuous column section reflows around the preceding title without extra columns', async ({ page }) => {
+    await page.setContent(staging(`
+      <div data-section-index="0" ${PAGE_GEOMETRY}>
+        <p style="height: 60pt">title</p>
+      </div>
+      <div data-section-index="1" data-section-type="continuous"
+           data-cols="2" data-col-gap="10" ${PAGE_GEOMETRY}>
+        <p style="height: 60pt">alpha</p>
+        <p style="height: 60pt">beta</p>
+        <p style="height: 60pt">gamma</p>
+      </div>`));
+    const result = await paginate(page);
+    expect(result.content).toEqual([['title', 'alpha'], ['betagamma']]);
+    const overflow = await page.evaluate(() => Array.from(
+      document.querySelectorAll<HTMLElement>('#container .page-content > div'),
+    ).filter(e => e.style.columnCount === '2').map(e => e.scrollWidth - e.clientWidth));
+    expect(overflow.every(width => width <= 1)).toBe(true);
+  });
+
+  test('a column section followed by a continuous section still balances', async ({ page }) => {
+    await page.setContent(staging(`
+      <div data-section-index="0" data-cols="2" data-col-gap="10" ${PAGE_GEOMETRY}>
+        <p style="height: 20pt; margin: 0">alpha</p>
+        <p style="height: 20pt; margin: 0">beta</p>
+      </div>
+      <div data-section-index="1" data-section-type="continuous" ${PAGE_GEOMETRY}>
+        <p style="height: 20pt; margin: 0">after columns</p>
+      </div>`));
+    const result = await paginate(page);
+    expect(result.content).toEqual([['alphabeta', 'after columns']]);
+    const positions = await page.evaluate(() => Array.from(
+      document.querySelectorAll<HTMLElement>('#container p'),
+    ).map(p => ({ x: p.getBoundingClientRect().x, y: p.getBoundingClientRect().y })));
+    expect(positions[1].x).toBeGreaterThan(positions[0].x);
+    expect(positions[1].y).toBeCloseTo(positions[0].y, 1);
+    expect(positions[2].y).toBeGreaterThan(positions[0].y);
+  });
+
+  test('a column overflow keeps a feasible heading and following paragraph together', async ({ page }) => {
+    await page.setContent(staging(`
+      <div data-section-index="0" ${PAGE_GEOMETRY}>
+        <p style="height: 80pt; margin: 0">title</p>
+      </div>
+      <div data-section-index="1" data-section-type="continuous"
+           data-cols="2" data-col-gap="10" ${PAGE_GEOMETRY}>
+        <p data-keep-with-next="true" style="height: 20pt; margin: 0">heading</p>
+        <p style="height: 30pt; margin: 0">body</p>
+      </div>`));
+    expect((await paginate(page, 1000)).content).toEqual([['title'], ['headingbody']]);
+  });
+
+  test('an explicit page break ends a final continuous column container', async ({ page }) => {
+    await page.setContent(staging(`
+      <div data-section-index="0" ${PAGE_GEOMETRY}>
+        <p style="height: 20pt; margin: 0">title</p>
+      </div>
+      <div data-section-index="1" data-section-type="continuous"
+           data-cols="2" data-col-gap="10" ${PAGE_GEOMETRY}>
+        <p data-source-anchor-id="alpha" style="height: 20pt; margin: 0">alpha</p>
+        <div data-page-break="true"></div>
+        <p data-source-anchor-id="beta" style="height: 20pt; margin: 0">beta</p>
+      </div>`));
+    expect((await paginate(page, 1000)).content).toEqual([['title', 'alpha'], ['beta']]);
+    const anchors = await page.locator('#container [data-source-anchor-id]').evaluateAll(
+      elements => elements.map(element => element.getAttribute('data-source-anchor-id')),
+    );
+    expect(anchors).toEqual(['alpha', 'beta']);
+  });
+
+  test('a final continuous column section reserves its footnote band before flowing', async ({ page }) => {
+    await page.setContent(staging(`
+      <div data-section-index="0" ${PAGE_GEOMETRY}>
+        <p style="height: 20pt; margin: 0">title</p>
+      </div>
+      <div data-section-index="1" data-section-type="continuous"
+           data-cols="2" data-col-gap="10" ${PAGE_GEOMETRY}>
+        <p style="height: 30pt; margin: 0">alpha<sup data-footnote-id="f1">1</sup></p>
+        <p style="height: 30pt; margin: 0">beta</p>
+        <p style="height: 30pt; margin: 0">gamma</p>
+      </div>
+      <div id="pagination-footnote-registry">
+        <div class="footnote-item" data-footnote-id="f1">
+          <span class="footnote-number">1</span>
+          <div class="footnote-content"><p style="height: 20pt; margin: 0">note</p></div>
+        </div>
+      </div>`));
+    const result = await paginate(page, 1000);
+    // The note and its separator shorten both columns, so gamma belongs to the next page.
+    expect(result.content).toEqual([['title', 'alpha1beta'], ['gamma']]);
+    expect(result.footnotes[0]).toContain('note');
+    expect(result.footnotes[1]).toBe('');
+    const geometry = await page.evaluate(() => {
+      const columns = document.querySelector<HTMLElement>('#container .page-content > div')!;
+      const notes = document.querySelector<HTMLElement>('#container .page-footnotes')!;
+      return { overflow: columns.scrollWidth - columns.clientWidth,
+        bodyBottom: columns.getBoundingClientRect().bottom,
+        notesTop: notes.getBoundingClientRect().top };
+    });
+    expect(geometry.overflow).toBeLessThanOrEqual(1);
+    expect(geometry.bodyBottom).toBeLessThanOrEqual(geometry.notesTop);
   });
 
   test('a long columned section splits across pages at block boundaries', async ({ page }) => {
@@ -622,12 +731,19 @@ test.describe('VP003 end-to-end (issue #413)', () => {
       const columnBlocks = Array.from(
         container.querySelectorAll<HTMLElement>('.page-content > div')
       ).filter(block => block.style.columnCount === '2');
-      return { totalPages, columnBlockCount: columnBlocks.length };
+      return { totalPages, columnBlockCount: columnBlocks.length,
+        columnOverflow: columnBlocks.map(block => block.scrollWidth - block.clientWidth),
+        firstParagraphInsets: columnBlocks.map(block =>
+          block.firstElementChild!.getBoundingClientRect().top - block.getBoundingClientRect().top),
+      };
     });
 
     // LibreOffice and Word lay this fixture out on ONE page: the continuous
-    // section starts on the title's page and its body balances into two columns.
+    // section starts on the title's page and its body flows into two columns.
     expect(result.totalPages).toBe(1);
     expect(result.columnBlockCount).toBeGreaterThan(0);
+    expect(result.columnOverflow.every(width => width <= 1)).toBe(true);
+    // Heading space-before collapses with the title's space-after in the outer budget.
+    expect(result.firstParagraphInsets).toEqual([0]);
   });
 });
