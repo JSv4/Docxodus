@@ -48,7 +48,7 @@ public class RenderingFidelityInheritanceTests
         var kind = endnote ? "endnote" : "footnote";
         var html = Render($"<w:p><w:r><w:{kind}Reference w:id=\"1\"/></w:r></w:p>",
             $"<w:p><w:r><w:{kind}Ref/></w:r><w:r><w:t> Note body.</w:t></w:r></w:p>", endnote);
-        var item = html.Descendants().First(e => endnote ? e.Name.LocalName == "li" : (string?)e.Attribute("class") == "footnote-item");
+        var item = html.Descendants().First(e => endnote ? e.Attribute("data-endnote-number") != null : (string?)e.Attribute("class") == "footnote-number");
         Assert.Contains("'Liberation Serif'", (string?)item.Attribute("style"));
         Assert.DoesNotContain("↩", html.Value);
         if (endnote)

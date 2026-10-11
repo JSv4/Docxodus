@@ -4423,11 +4423,6 @@ namespace Docxodus
                         new XAttribute("class", "footnote-content"),
                         content));
 
-                var noteStyle = new Dictionary<string, string>();
-                var noteParagraph = fn.Elements(W.p).FirstOrDefault();
-                if (noteParagraph != null) DefineStrutFont(noteStyle, noteParagraph);
-                footnoteItem.SetAttributeValue("style", string.Join("; ", noteStyle.Select(p => p.Key + ": " + p.Value)));
-
                 registry.Add(footnoteItem);
             }
 
@@ -4454,6 +4449,13 @@ namespace Docxodus
             var number = new XElement(Xhtml.span,
                 new XAttribute("class", endnote ? "endnote-number" : "footnote-number"),
                 endnote ? new XAttribute("data-endnote-number", "true") : null);
+            // The marker is outside the footnote paragraph. Set its family here without
+            // changing the item/content shells' inherited line metrics during pagination.
+            var numberStyle = new Dictionary<string, string>();
+            var paragraph = footnote.Descendants(W.p).FirstOrDefault();
+            if (paragraph != null) DefineStrutFont(numberStyle, paragraph);
+            numberStyle.Remove("font-size");
+            number.SetAttributeValue("style", string.Join("; ", numberStyle.Select(p => p.Key + ": " + p.Value)));
             if (marker == null || run == null || run.Name != W.r)
             {
                 number.Add(new XText(displayNumber));

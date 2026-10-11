@@ -23,6 +23,7 @@ import {
   renderDocxFile,
 } from "../dist/index.js";
 import { canonicalJson } from "../dist/canonical.js";
+import { pdfLineText, joinHyphenatedLines } from "./pdf-line-text.mjs";
 import {
   generateLongFootnoteDocx,
   generateMixedSectionDocx,
@@ -92,6 +93,7 @@ async function inspectPdf(bytes) {
     pages.push({
       pageNumber,
       text: pageText,
+      textWithLineBreaks: pdfLineText(content.items),
       textRuns: content.items
         .filter((item) => "str" in item && item.str.trim().length > 0)
         .map((item) => ({
@@ -715,11 +717,15 @@ describe("@docxodus/export", { concurrency: false }, () => {
 
     // Match on word boundaries, never substrings: `footnote-1-1-1` occurs inside
     // `footnote-1-1-10`, so a bare indexOf reports every low-numbered word twice.
+    // PDF.js reports a hard hyphen at a line end in a separate item from the
+    // remainder of the word. Join only actual hasEOL boundaries; ordinary spaces,
+    // missing glyphs, and duplicates must still fail the complete inventory check.
+    const noteText = joinHyphenatedLines(inspection.pages.map((page) => page.textWithLineBreaks).join("\n"));
     let priorPdfOffset = -1;
-    for (const index of [1, 2, 150, 300, 450, 599, 600]) {
+    for (let index = 1; index <= 600; index++) {
       const token = `footnote-1-1-${index}`;
       assert.equal(result.html.match(new RegExp(`\\b${token}\\b`, "g"))?.length, 1);
-      const pdfMatches = [...inspection.searchableText.matchAll(new RegExp(`\\b${token}\\b`, "g"))];
+      const pdfMatches = [...noteText.matchAll(new RegExp(`\\b${token}\\b`, "g"))];
       assert.equal(pdfMatches.length, 1, `${token} must appear exactly once in the PDF text`);
       assert.ok(pdfMatches[0].index > priorPdfOffset, `${token} out of order in PDF text`);
       priorPdfOffset = pdfMatches[0].index;
