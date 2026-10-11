@@ -35,12 +35,13 @@ internal static partial class IrMarkupRenderer
             lm.GlossaryDocumentPart is not null || rm.GlossaryDocumentPart is not null ||
             !PartsEqual(lm.ThemePart, rm.ThemePart) ||
             !PartsEqual(lm.NumberingDefinitionsPart, rm.NumberingDefinitionsPart) ||
-            !PartsEqual(lm.DocumentSettingsPart, rm.DocumentSettingsPart) ||
             HasThemeReference(ls) || HasThemeReference(rs) ||
             HasUnsafePresentationConsumer(state.Left, allowTables: true) ||
             HasUnsafePresentationConsumer(state.Right, allowTables: true))
             return state.Right;
 
+        // These font and spacing axes resolve through styles and direct properties. Settings
+        // differences do not change that cascade and must not suppress its consumer histories.
         var inherited = AssembleConsumers(right, state.Right, ls.Element(W.docDefaults), replaceDefaults: true);
         var revised = AssembleConsumers(right, state.Right, null, replaceDefaults: false);
         var copies = new Dictionary<XElement, XElement>();
