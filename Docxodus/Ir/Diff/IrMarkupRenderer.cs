@@ -7387,6 +7387,9 @@ internal static partial class IrMarkupRenderer
                      .OrderBy(entry => StyleChainDepth(root, entry.Id)))
             ExpressImportedStyleUnderLeftDefaults(style, rightRoot, leftOriginalRoot, root, "paragraph", id);
 
+        if (state.ImplicitParagraphStyle is { } implicitStyle)
+            root.Add(new XElement(implicitStyle));
+
         leftStyles.PutXDocument();
         return rightImportedStyles;
     }
@@ -8091,9 +8094,9 @@ internal static partial class IrMarkupRenderer
     private static string? ReadChangedDefaultParagraphStyleId(WmlDocument left, WmlDocument right, RenderState state)
     {
         if (state.Settings.PreserveInputRevisions || !state.Settings.TrackParagraphFormatChanges ||
-            state.Right.Styles.DefaultParagraphStyleId is not { } rightId ||
-            state.Left.Styles.DefaultParagraphStyleId == rightId)
+            state.Left.Styles.DefaultParagraphStyleId == state.Right.Styles.DefaultParagraphStyleId)
             return null;
+        var rightId = state.Right.Styles.DefaultParagraphStyleId;
 
         XElement? Styles(WmlDocument document, Uri? partUri)
         {
@@ -8111,12 +8114,43 @@ internal static partial class IrMarkupRenderer
         bool DefaultCountIs(XElement root, int expected) => root.Elements(W.style).Count(style =>
             (string?)style.Attribute(W.type) == "paragraph" && IsOn((string?)style.Attribute(W._default))) == expected;
         if (!DefaultCountIs(leftRoot, state.Left.Styles.DefaultParagraphStyleId is null ? 0 : 1) ||
-            !DefaultCountIs(rightRoot, 1))
+            !DefaultCountIs(rightRoot, rightId is null ? 0 : 1))
             return null;
         var rightStyles = rightRoot.Elements(W.style).Where(style => style.Attribute(W.styleId) is not null)
             .GroupBy(style => (string)style.Attribute(W.styleId)!, StringComparer.Ordinal).ToArray();
         if (rightStyles.Any(group => group.Count() != 1))
             return null;
+        if (rightId is null)
+        {
+            var usedIds = leftRoot.Elements(W.style).Concat(rightRoot.Elements(W.style))
+                .Select(style => (string?)style.Attribute(W.styleId)).ToHashSet(StringComparer.Ordinal);
+            string id = "DocxodusImplicitParagraph";
+            for (int suffix = 1; usedIds.Contains(id); suffix++)
+                id = "DocxodusImplicitParagraph" + suffix;
+            var (pPr, rPr) = ResolveEffectiveStyleFormatting(rightRoot, "paragraph", id,
+                LeftDocDefaultsProps(leftRoot, paragraphAxis: false) ?? new XElement(W.rPr));
+            AddDocDefaultsNeutralizers(pPr, LeftDocDefaultsProps(leftRoot, paragraphAxis: true), pPr,
+                paragraphAxis: true, LeftDocDefaultsProps(rightRoot, paragraphAxis: true));
+            var fonts = rPr.Element(W.rFonts);
+            if (fonts is null)
+            {
+                fonts = new XElement(W.rFonts);
+                rPr.AddFirst(fonts);
+            }
+            foreach (var axis in new[] { W.ascii, W.hAnsi, W.cs })
+                if (fonts.Attribute(axis) is null)
+                    fonts.SetAttributeValue(axis, "Times New Roman");
+            if (rPr.Element(W.sz) is null)
+                rPr.Add(new XElement(W.sz, new XAttribute(W.val, "20")));
+            if (rPr.Element(W.szCs) is null)
+                rPr.Add(new XElement(W.szCs, new XAttribute(W.val, "20")));
+            NormalizeStylePropertyOrder(pPr, StylePPrChildOrder);
+            NormalizeStylePropertyOrder(rPr, StyleRPrChildOrder);
+            state.ImplicitParagraphStyle = new XElement(W.style,
+                new XAttribute(W.type, "paragraph"), new XAttribute(W.styleId, id),
+                new XElement(W.name, new XAttribute(W.val, "Implicit paragraph formatting")), pPr, rPr);
+            return id;
+        }
         var stylesById = rightStyles.ToDictionary(group => group.Key, group => group.Single(), StringComparer.Ordinal);
         var chain = new HashSet<string>(StringComparer.Ordinal);
         if (!TryAddRightParagraphStyleChain(rightId, stylesById, chain) || chain.Any(id =>
@@ -9449,6 +9483,8 @@ internal static partial class IrMarkupRenderer
         public IrDocument RightSource { get; set; }
 
         public HashSet<string>? ProjectedPropertyRevisionIds { get; set; }
+
+        public XElement? ImplicitParagraphStyle { get; set; }
 
         /// <summary>When non-null, overrides Settings.AuthorForRevisions for emitted revision attributes
         /// (composite multi-author rendering). Null for normal two-way render → behavior unchanged.</summary>
