@@ -633,6 +633,34 @@ test.describe('w:cols column geometry', () => {
     expect((await paginate(page, 1000)).content).toEqual([['title'], ['headingbody']]);
   });
 
+  test('a column continuation beginning with a table drops the preceding heading space-before', async ({ page }) => {
+    await page.setContent(staging(`
+      <div data-section-index="0" ${PAGE_GEOMETRY}>
+        <p style="height: 60pt; margin: 0">title</p>
+      </div>
+      <div data-section-index="1" data-section-type="continuous"
+           data-cols="2" data-col-gap="10" ${PAGE_GEOMETRY}>
+        <p style="height: 30pt; margin: 10pt 0 0">heading</p>
+        <table style="height: 60pt; margin: 0; border-collapse: collapse">
+          <tbody><tr><td>table</td></tr></tbody>
+        </table>
+      </div>`));
+    const result = await paginate(page, 1000);
+    expect(result.content).toEqual([['title', 'heading'], ['table']]);
+    const continuation = await page.evaluate(() => {
+      const content = document.querySelectorAll<HTMLElement>('#container .page-content')[1];
+      const columns = content.firstElementChild as HTMLElement;
+      return {
+        marginTop: parseFloat(getComputedStyle(columns).marginTop),
+        overflowX: columns.scrollWidth - columns.clientWidth,
+        overflowY: columns.scrollHeight - columns.clientHeight,
+      };
+    });
+    expect(continuation.marginTop).toBe(0);
+    expect(continuation.overflowX).toBeLessThanOrEqual(1);
+    expect(continuation.overflowY).toBeLessThanOrEqual(1);
+  });
+
   test('an explicit page break ends a final continuous column container', async ({ page }) => {
     await page.setContent(staging(`
       <div data-section-index="0" ${PAGE_GEOMETRY}>

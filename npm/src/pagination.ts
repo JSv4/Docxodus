@@ -1617,6 +1617,7 @@ export class PaginationEngine {
 
   /** Keep Word's paragraph space-before in the ordinary inter-block spacing budget. */
   private liftColumnSpaceBefore(container: HTMLElement, dims: PageDimensions): void {
+    container.style.marginTop = "";
     const first = container.firstElementChild as HTMLElement | null;
     if (!first || !this.isWordParagraphElement(first)) return;
     const host = this.document.createElement("div");
