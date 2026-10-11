@@ -241,7 +241,7 @@ internal static partial class IrMarkupRenderer
 
     private static void CarryUnchangedProjectedStories(WordprocessingDocument document, IrEditScript script, RenderState state)
     {
-        if (state.ProjectedPropertyRevisionIds is null)
+        if (state.ProjectedPropertyRevisionIds is null && state.ChangedDefaultParagraphStyleId is null)
             return;
         // Unchanged header/footer stories normally remain in the left package without emission.
         // Their inherited presentation still changed. Copy only a same-URI story whose original
@@ -262,7 +262,23 @@ internal static partial class IrMarkupRenderer
                 IrHasher.CanonicalHash(originalLeft.Root).Equals(IrHasher.CanonicalHash(originalRight.Root)) &&
                 IrHasher.CanonicalHash(originalLeft.Root).Equals(IrHasher.CanonicalHash(output.Root)))
             {
-                output.Root.ReplaceWith(StripUnids(new XElement(projected.Root)));
+                var clone = StripUnids(new XElement(projected.Root));
+                if (state.ChangedDefaultParagraphStyleId is not null)
+                {
+                    var currentParagraphs = clone.Descendants(W.p).ToArray();
+                    var leftParagraphs = originalLeft.Descendants(W.p).ToArray();
+                    var rightParagraphs = originalRight.Descendants(W.p).ToArray();
+                    if (currentParagraphs.Length != leftParagraphs.Length || currentParagraphs.Length != rightParagraphs.Length)
+                        continue;
+                    for (int i = 0; i < currentParagraphs.Length; i++)
+                    {
+                        if (rightParagraphs[i].Element(W.pPr)?.Element(W.pStyle) is not null)
+                            continue;
+                        BindChangedDefaultParagraphStyle(currentParagraphs[i], state);
+                        ApplyBlockFormatChanges(currentParagraphs[i], leftParagraphs[i], rightParagraphs[i], state);
+                    }
+                }
+                output.Root.ReplaceWith(clone);
                 part.PutXDocument();
             }
         }
