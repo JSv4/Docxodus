@@ -1,0 +1,887 @@
+[
+  {
+    "name": "plain-control",
+    "accepted_text_matches": true,
+    "rejected_text_matches": true,
+    "accepted_presentation_matches": true,
+    "rejected_presentation_matches": true,
+    "expected_accepted": [
+      {
+        "text": "Moss station records the morning temperature.",
+        "spacing_after": "200",
+        "spacing_line": "310",
+        "runs": [
+          {
+            "text": "Moss station records the morning temperature.",
+            "font": "DejaVu Serif",
+            "size": "28"
+          }
+        ]
+      },
+      {
+        "text": "A violet lantern marks the new storage shelf.",
+        "spacing_after": "200",
+        "spacing_line": "310",
+        "runs": [
+          {
+            "text": "A violet lantern marks the new storage shelf.",
+            "font": "DejaVu Serif",
+            "size": "28"
+          }
+        ]
+      },
+      {
+        "text": "Granite station records the evening temperature.",
+        "spacing_after": "200",
+        "spacing_line": "310",
+        "runs": [
+          {
+            "text": "Granite station records the evening temperature.",
+            "font": "DejaVu Serif",
+            "size": "28"
+          }
+        ]
+      }
+    ],
+    "actual_accepted": [
+      {
+        "text": "Moss station records the morning temperature.",
+        "spacing_after": "200",
+        "spacing_line": "310",
+        "runs": [
+          {
+            "text": "Moss station records the morning temperature.",
+            "font": "DejaVu Serif",
+            "size": "28"
+          }
+        ]
+      },
+      {
+        "text": "A violet lantern marks the new storage shelf.",
+        "spacing_after": "200",
+        "spacing_line": "310",
+        "runs": [
+          {
+            "text": "A violet lantern marks the new storage shelf.",
+            "font": "DejaVu Serif",
+            "size": "28"
+          }
+        ]
+      },
+      {
+        "text": "Granite station records the evening temperature.",
+        "spacing_after": "200",
+        "spacing_line": "310",
+        "runs": [
+          {
+            "text": "Granite station records the evening temperature.",
+            "font": "DejaVu Serif",
+            "size": "28"
+          }
+        ]
+      }
+    ],
+    "expected_rejected": [
+      {
+        "text": "Moss station records the morning temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "Moss station records the morning temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      },
+      {
+        "text": "Granite station records the evening temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "Granite station records the evening temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      }
+    ],
+    "actual_rejected": [
+      {
+        "text": "Moss station records the morning temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "Moss station records the morning temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      },
+      {
+        "text": "Granite station records the evening temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "Granite station records the evening temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      }
+    ],
+    "validation": [
+      {
+        "view": "original",
+        "errors": []
+      },
+      {
+        "view": "revised",
+        "errors": []
+      },
+      {
+        "view": "compared",
+        "errors": []
+      },
+      {
+        "view": "accepted",
+        "errors": []
+      },
+      {
+        "view": "rejected",
+        "errors": []
+      }
+    ]
+  },
+  {
+    "name": "unused-numbering",
+    "accepted_text_matches": true,
+    "rejected_text_matches": true,
+    "accepted_presentation_matches": false,
+    "rejected_presentation_matches": true,
+    "expected_accepted": [
+      {
+        "text": "Moss station records the morning temperature.",
+        "spacing_after": "200",
+        "spacing_line": "310",
+        "runs": [
+          {
+            "text": "Moss station records the morning temperature.",
+            "font": "DejaVu Serif",
+            "size": "28"
+          }
+        ]
+      },
+      {
+        "text": "A violet lantern marks the new storage shelf.",
+        "spacing_after": "200",
+        "spacing_line": "310",
+        "runs": [
+          {
+            "text": "A violet lantern marks the new storage shelf.",
+            "font": "DejaVu Serif",
+            "size": "28"
+          }
+        ]
+      },
+      {
+        "text": "Granite station records the evening temperature.",
+        "spacing_after": "200",
+        "spacing_line": "310",
+        "runs": [
+          {
+            "text": "Granite station records the evening temperature.",
+            "font": "DejaVu Serif",
+            "size": "28"
+          }
+        ]
+      }
+    ],
+    "actual_accepted": [
+      {
+        "text": "Moss station records the morning temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "Moss station records the morning temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      },
+      {
+        "text": "A violet lantern marks the new storage shelf.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "A violet lantern marks the new storage shelf.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      },
+      {
+        "text": "Granite station records the evening temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "Granite station records the evening temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      }
+    ],
+    "expected_rejected": [
+      {
+        "text": "Moss station records the morning temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "Moss station records the morning temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      },
+      {
+        "text": "Granite station records the evening temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "Granite station records the evening temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      }
+    ],
+    "actual_rejected": [
+      {
+        "text": "Moss station records the morning temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "Moss station records the morning temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      },
+      {
+        "text": "Granite station records the evening temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "Granite station records the evening temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      }
+    ],
+    "validation": [
+      {
+        "view": "original",
+        "errors": []
+      },
+      {
+        "view": "revised",
+        "errors": []
+      },
+      {
+        "view": "compared",
+        "errors": []
+      },
+      {
+        "view": "accepted",
+        "errors": []
+      },
+      {
+        "view": "rejected",
+        "errors": []
+      }
+    ]
+  },
+  {
+    "name": "numbered-body",
+    "accepted_text_matches": true,
+    "rejected_text_matches": true,
+    "accepted_presentation_matches": false,
+    "rejected_presentation_matches": true,
+    "expected_accepted": [
+      {
+        "text": "4.Moss station records the morning temperature.",
+        "spacing_after": "200",
+        "spacing_line": "310",
+        "runs": [
+          {
+            "text": "4.",
+            "font": "DejaVu Serif",
+            "size": "28"
+          },
+          {
+            "text": "Moss station records the morning temperature.",
+            "font": "DejaVu Serif",
+            "size": "28"
+          }
+        ]
+      },
+      {
+        "text": "5.A violet lantern marks the new storage shelf.",
+        "spacing_after": "200",
+        "spacing_line": "310",
+        "runs": [
+          {
+            "text": "5.",
+            "font": "DejaVu Serif",
+            "size": "28"
+          },
+          {
+            "text": "A violet lantern marks the new storage shelf.",
+            "font": "DejaVu Serif",
+            "size": "28"
+          }
+        ]
+      },
+      {
+        "text": "6.Granite station records the evening temperature.",
+        "spacing_after": "200",
+        "spacing_line": "310",
+        "runs": [
+          {
+            "text": "6.",
+            "font": "DejaVu Serif",
+            "size": "28"
+          },
+          {
+            "text": "Granite station records the evening temperature.",
+            "font": "DejaVu Serif",
+            "size": "28"
+          }
+        ]
+      }
+    ],
+    "actual_accepted": [
+      {
+        "text": "4.Moss station records the morning temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "4.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          },
+          {
+            "text": "Moss station records the morning temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      },
+      {
+        "text": "5.A violet lantern marks the new storage shelf.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "5.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          },
+          {
+            "text": "A violet lantern marks the new storage shelf.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      },
+      {
+        "text": "6.Granite station records the evening temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "6.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          },
+          {
+            "text": "Granite station records the evening temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      }
+    ],
+    "expected_rejected": [
+      {
+        "text": "1.Moss station records the morning temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "1.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          },
+          {
+            "text": "Moss station records the morning temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      },
+      {
+        "text": "2.Granite station records the evening temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "2.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          },
+          {
+            "text": "Granite station records the evening temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      }
+    ],
+    "actual_rejected": [
+      {
+        "text": "1.Moss station records the morning temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "1.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          },
+          {
+            "text": "Moss station records the morning temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      },
+      {
+        "text": "2.Granite station records the evening temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "2.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          },
+          {
+            "text": "Granite station records the evening temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      }
+    ],
+    "validation": [
+      {
+        "view": "original",
+        "errors": []
+      },
+      {
+        "view": "revised",
+        "errors": []
+      },
+      {
+        "view": "compared",
+        "errors": []
+      },
+      {
+        "view": "accepted",
+        "errors": []
+      },
+      {
+        "view": "rejected",
+        "errors": []
+      }
+    ]
+  },
+  {
+    "name": "changed-settings",
+    "accepted_text_matches": true,
+    "rejected_text_matches": true,
+    "accepted_presentation_matches": false,
+    "rejected_presentation_matches": true,
+    "expected_accepted": [
+      {
+        "text": "Moss station records the morning temperature.",
+        "spacing_after": "200",
+        "spacing_line": "310",
+        "runs": [
+          {
+            "text": "Moss station records the morning temperature.",
+            "font": "DejaVu Serif",
+            "size": "28"
+          }
+        ]
+      },
+      {
+        "text": "A violet lantern marks the new storage shelf.",
+        "spacing_after": "200",
+        "spacing_line": "310",
+        "runs": [
+          {
+            "text": "A violet lantern marks the new storage shelf.",
+            "font": "DejaVu Serif",
+            "size": "28"
+          }
+        ]
+      },
+      {
+        "text": "Granite station records the evening temperature.",
+        "spacing_after": "200",
+        "spacing_line": "310",
+        "runs": [
+          {
+            "text": "Granite station records the evening temperature.",
+            "font": "DejaVu Serif",
+            "size": "28"
+          }
+        ]
+      }
+    ],
+    "actual_accepted": [
+      {
+        "text": "Moss station records the morning temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "Moss station records the morning temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      },
+      {
+        "text": "A violet lantern marks the new storage shelf.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "A violet lantern marks the new storage shelf.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      },
+      {
+        "text": "Granite station records the evening temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "Granite station records the evening temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      }
+    ],
+    "expected_rejected": [
+      {
+        "text": "Moss station records the morning temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "Moss station records the morning temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      },
+      {
+        "text": "Granite station records the evening temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "Granite station records the evening temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      }
+    ],
+    "actual_rejected": [
+      {
+        "text": "Moss station records the morning temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "Moss station records the morning temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      },
+      {
+        "text": "Granite station records the evening temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "Granite station records the evening temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      }
+    ],
+    "validation": [
+      {
+        "view": "original",
+        "errors": []
+      },
+      {
+        "view": "revised",
+        "errors": []
+      },
+      {
+        "view": "compared",
+        "errors": []
+      },
+      {
+        "view": "accepted",
+        "errors": []
+      },
+      {
+        "view": "rejected",
+        "errors": []
+      }
+    ]
+  },
+  {
+    "name": "numbered-table",
+    "accepted_text_matches": true,
+    "rejected_text_matches": true,
+    "accepted_presentation_matches": false,
+    "rejected_presentation_matches": true,
+    "expected_accepted": [
+      {
+        "text": "4.Moss station records the morning temperature.",
+        "spacing_after": "200",
+        "spacing_line": "310",
+        "runs": [
+          {
+            "text": "4.",
+            "font": "DejaVu Serif",
+            "size": "28"
+          },
+          {
+            "text": "Moss station records the morning temperature.",
+            "font": "DejaVu Serif",
+            "size": "28"
+          }
+        ]
+      },
+      {
+        "text": "5.A violet lantern marks the new storage shelf.",
+        "spacing_after": "200",
+        "spacing_line": "310",
+        "runs": [
+          {
+            "text": "5.",
+            "font": "DejaVu Serif",
+            "size": "28"
+          },
+          {
+            "text": "A violet lantern marks the new storage shelf.",
+            "font": "DejaVu Serif",
+            "size": "28"
+          }
+        ]
+      },
+      {
+        "text": "6.Granite station records the evening temperature.",
+        "spacing_after": "200",
+        "spacing_line": "310",
+        "runs": [
+          {
+            "text": "6.",
+            "font": "DejaVu Serif",
+            "size": "28"
+          },
+          {
+            "text": "Granite station records the evening temperature.",
+            "font": "DejaVu Serif",
+            "size": "28"
+          }
+        ]
+      }
+    ],
+    "actual_accepted": [
+      {
+        "text": "4.Moss station records the morning temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "4.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          },
+          {
+            "text": "Moss station records the morning temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      },
+      {
+        "text": "5.A violet lantern marks the new storage shelf.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "5.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          },
+          {
+            "text": "A violet lantern marks the new storage shelf.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      },
+      {
+        "text": "6.Granite station records the evening temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "6.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          },
+          {
+            "text": "Granite station records the evening temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      }
+    ],
+    "expected_rejected": [
+      {
+        "text": "1.Moss station records the morning temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "1.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          },
+          {
+            "text": "Moss station records the morning temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      },
+      {
+        "text": "2.Granite station records the evening temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "2.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          },
+          {
+            "text": "Granite station records the evening temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      }
+    ],
+    "actual_rejected": [
+      {
+        "text": "1.Moss station records the morning temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "1.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          },
+          {
+            "text": "Moss station records the morning temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      },
+      {
+        "text": "2.Granite station records the evening temperature.",
+        "spacing_after": "80",
+        "spacing_line": "250",
+        "runs": [
+          {
+            "text": "2.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          },
+          {
+            "text": "Granite station records the evening temperature.",
+            "font": "DejaVu Sans",
+            "size": "22"
+          }
+        ]
+      }
+    ],
+    "validation": [
+      {
+        "view": "original",
+        "errors": []
+      },
+      {
+        "view": "revised",
+        "errors": []
+      },
+      {
+        "view": "compared",
+        "errors": []
+      },
+      {
+        "view": "accepted",
+        "errors": []
+      },
+      {
+        "view": "rejected",
+        "errors": []
+      }
+    ]
+  }
+]

@@ -1,0 +1,3857 @@
+{
+  "assembly_sha256": "ac355cca026af6f36913fe50f209d2cdfb342da088ef866afdb91a8710fef35b",
+  "results": [
+    {
+      "name": "widths_only",
+      "accepted_matches": true,
+      "rejected_matches": true,
+      "validation": {
+        "left": [],
+        "right": [],
+        "redline": [],
+        "accepted": [],
+        "rejected": []
+      },
+      "geometry": {
+        "left": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "right": [
+          {
+            "grid": [
+              "2700",
+              "1600",
+              "2900"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "accepted": [
+          {
+            "grid": [
+              "2700",
+              "1600",
+              "2900"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "rejected": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "histories": {
+        "tblGridChange": 1,
+        "tcPrChange": 6
+      }
+    },
+    {
+      "name": "widths_row_delete",
+      "accepted_matches": true,
+      "rejected_matches": true,
+      "validation": {
+        "left": [],
+        "right": [],
+        "redline": [],
+        "accepted": [],
+        "rejected": []
+      },
+      "geometry": {
+        "left": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "Middle gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "Middle bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "Middle lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "right": [
+          {
+            "grid": [
+              "2700",
+              "1600",
+              "2900"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "accepted": [
+          {
+            "grid": [
+              "2700",
+              "1600",
+              "2900"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "rejected": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "Middle gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "Middle bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "Middle lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "histories": {
+        "tblGridChange": 1,
+        "tcPrChange": 6
+      }
+    },
+    {
+      "name": "widths_row_insert",
+      "accepted_matches": true,
+      "rejected_matches": true,
+      "validation": {
+        "left": [],
+        "right": [],
+        "redline": [],
+        "accepted": [],
+        "rejected": []
+      },
+      "geometry": {
+        "left": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "right": [
+          {
+            "grid": [
+              "2700",
+              "1600",
+              "2900"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "Middle gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "Middle bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "Middle lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "accepted": [
+          {
+            "grid": [
+              "2700",
+              "1600",
+              "2900"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "Middle gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "Middle bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "Middle lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "rejected": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "histories": {
+        "tblGridChange": 1,
+        "tcPrChange": 6
+      }
+    },
+    {
+      "name": "merge_horizontal",
+      "accepted_matches": false,
+      "rejected_matches": true,
+      "validation": {
+        "left": [],
+        "right": [],
+        "redline": [],
+        "accepted": [],
+        "rejected": []
+      },
+      "geometry": {
+        "left": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "right": [
+          {
+            "grid": [
+              "2700",
+              "1600",
+              "2900"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "4300",
+                    "span": "2",
+                    "merge": "none",
+                    "text": "North gauge bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "accepted": [
+          {
+            "grid": [
+              "2700",
+              "1600",
+              "2900"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "4300",
+                    "span": "2",
+                    "merge": "none",
+                    "text": "North gauge bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "2",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "rejected": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "histories": {
+        "tblGridChange": 1,
+        "tcPrChange": 5,
+        "cellDel": 1
+      }
+    },
+    {
+      "name": "split_horizontal",
+      "accepted_matches": true,
+      "rejected_matches": true,
+      "validation": {
+        "left": [],
+        "right": [],
+        "redline": [],
+        "accepted": [],
+        "rejected": []
+      },
+      "geometry": {
+        "left": [
+          {
+            "grid": [
+              "2700",
+              "1600",
+              "2900"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "4300",
+                    "span": "2",
+                    "merge": "none",
+                    "text": "North gauge bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "right": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "accepted": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "rejected": [
+          {
+            "grid": [
+              "2700",
+              "1600",
+              "2900"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "4300",
+                    "span": "2",
+                    "merge": "none",
+                    "text": "North gauge bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "histories": {
+        "tblGridChange": 1,
+        "tcPrChange": 5,
+        "cellIns": 1
+      }
+    },
+    {
+      "name": "offset_shift",
+      "accepted_matches": true,
+      "rejected_matches": true,
+      "validation": {
+        "left": [],
+        "right": [],
+        "redline": [],
+        "accepted": [],
+        "rejected": []
+      },
+      "geometry": {
+        "left": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "1",
+                "after": "0",
+                "beforeWidth": "1800",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "right": [
+          {
+            "grid": [
+              "2700",
+              "1600",
+              "2900"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "1",
+                "beforeWidth": "0",
+                "afterWidth": "2900",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "accepted": [
+          {
+            "grid": [
+              "2700",
+              "1600",
+              "2900"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "1",
+                "beforeWidth": "0",
+                "afterWidth": "2900",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "rejected": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "1",
+                "after": "0",
+                "beforeWidth": "1800",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "histories": {
+        "tblGridChange": 1,
+        "trPrChange": 1,
+        "tcPrChange": 5
+      }
+    },
+    {
+      "name": "offset_add_cell",
+      "accepted_matches": true,
+      "rejected_matches": true,
+      "validation": {
+        "left": [],
+        "right": [],
+        "redline": [],
+        "accepted": [],
+        "rejected": []
+      },
+      "geometry": {
+        "left": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "1",
+                "after": "0",
+                "beforeWidth": "1800",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "right": [
+          {
+            "grid": [
+              "2700",
+              "1600",
+              "2900"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "accepted": [
+          {
+            "grid": [
+              "2700",
+              "1600",
+              "2900"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "rejected": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "1",
+                "after": "0",
+                "beforeWidth": "1800",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "histories": {
+        "tblGridChange": 1,
+        "trPrChange": 1,
+        "tcPrChange": 5,
+        "cellIns": 1
+      }
+    },
+    {
+      "name": "offset_remove_cell",
+      "accepted_matches": false,
+      "rejected_matches": true,
+      "validation": {
+        "left": [],
+        "right": [],
+        "redline": [],
+        "accepted": [],
+        "rejected": []
+      },
+      "geometry": {
+        "left": [
+          {
+            "grid": [
+              "2700",
+              "1600",
+              "2900"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "right": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "1",
+                "after": "0",
+                "beforeWidth": "1800",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "accepted": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "1",
+                "after": "0",
+                "beforeWidth": "1800",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "2",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "rejected": [
+          {
+            "grid": [
+              "2700",
+              "1600",
+              "2900"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "histories": {
+        "tblGridChange": 1,
+        "trPrChange": 1,
+        "tcPrChange": 5,
+        "cellDel": 1
+      }
+    },
+    {
+      "name": "merge_vertical",
+      "accepted_matches": true,
+      "rejected_matches": true,
+      "validation": {
+        "left": [],
+        "right": [],
+        "redline": [],
+        "accepted": [],
+        "rejected": []
+      },
+      "geometry": {
+        "left": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "right": [
+          {
+            "grid": [
+              "2700",
+              "1600",
+              "2900"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "restart",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "continue",
+                    "text": ""
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "accepted": [
+          {
+            "grid": [
+              "2700",
+              "1600",
+              "2900"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "restart",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "continue",
+                    "text": ""
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "rejected": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "histories": {
+        "tblGridChange": 1,
+        "tcPrChange": 6
+      }
+    },
+    {
+      "name": "split_vertical",
+      "accepted_matches": true,
+      "rejected_matches": true,
+      "validation": {
+        "left": [],
+        "right": [],
+        "redline": [],
+        "accepted": [],
+        "rejected": []
+      },
+      "geometry": {
+        "left": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "restart",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "continue",
+                    "text": ""
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "right": [
+          {
+            "grid": [
+              "2700",
+              "1600",
+              "2900"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "accepted": [
+          {
+            "grid": [
+              "2700",
+              "1600",
+              "2900"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "rejected": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "restart",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "continue",
+                    "text": ""
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "histories": {
+        "tblGridChange": 1,
+        "tcPrChange": 6
+      }
+    },
+    {
+      "name": "merged_widths_row_insert",
+      "accepted_matches": true,
+      "rejected_matches": true,
+      "validation": {
+        "left": [],
+        "right": [],
+        "redline": [],
+        "accepted": [],
+        "rejected": []
+      },
+      "geometry": {
+        "left": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "4100",
+                    "span": "2",
+                    "merge": "none",
+                    "text": "North combined"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "right": [
+          {
+            "grid": [
+              "2700",
+              "1600",
+              "2900"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "4300",
+                    "span": "2",
+                    "merge": "none",
+                    "text": "North combined"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "Middle gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "Middle bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "Middle lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "accepted": [
+          {
+            "grid": [
+              "2700",
+              "1600",
+              "2900"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "4300",
+                    "span": "2",
+                    "merge": "none",
+                    "text": "North combined"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "Middle gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "Middle bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "Middle lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "rejected": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "4100",
+                    "span": "2",
+                    "merge": "none",
+                    "text": "North combined"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "histories": {
+        "tblGridChange": 1,
+        "tcPrChange": 5
+      }
+    },
+    {
+      "name": "merged_widths_row_delete",
+      "accepted_matches": true,
+      "rejected_matches": true,
+      "validation": {
+        "left": [],
+        "right": [],
+        "redline": [],
+        "accepted": [],
+        "rejected": []
+      },
+      "geometry": {
+        "left": [
+          {
+            "grid": [
+              "2700",
+              "1600",
+              "2900"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "4300",
+                    "span": "2",
+                    "merge": "none",
+                    "text": "North combined"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "Middle gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "Middle bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "Middle lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "right": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "4100",
+                    "span": "2",
+                    "merge": "none",
+                    "text": "North combined"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "accepted": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "4100",
+                    "span": "2",
+                    "merge": "none",
+                    "text": "North combined"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "rejected": [
+          {
+            "grid": [
+              "2700",
+              "1600",
+              "2900"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "4300",
+                    "span": "2",
+                    "merge": "none",
+                    "text": "North combined"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "Middle gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "Middle bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "Middle lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2700",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "1600",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "2900",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "histories": {
+        "tblGridChange": 1,
+        "tcPrChange": 5
+      }
+    },
+    {
+      "name": "merge_horizontal_stable_widths",
+      "accepted_matches": false,
+      "rejected_matches": true,
+      "validation": {
+        "left": [],
+        "right": [],
+        "redline": [],
+        "accepted": [],
+        "rejected": []
+      },
+      "geometry": {
+        "left": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "right": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "4100",
+                    "span": "2",
+                    "merge": "none",
+                    "text": "North gauge bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "accepted": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "4100",
+                    "span": "2",
+                    "merge": "none",
+                    "text": "North gauge bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "2",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "rejected": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "histories": {
+        "tcPrChange": 2,
+        "cellDel": 1
+      }
+    },
+    {
+      "name": "offset_remove_stable_widths",
+      "accepted_matches": false,
+      "rejected_matches": true,
+      "validation": {
+        "left": [],
+        "right": [],
+        "redline": [],
+        "accepted": [],
+        "rejected": []
+      },
+      "geometry": {
+        "left": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "right": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "1",
+                "after": "0",
+                "beforeWidth": "1800",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "accepted": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "1",
+                "after": "0",
+                "beforeWidth": "1800",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "2",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "rejected": [
+          {
+            "grid": [
+              "1800",
+              "2300",
+              "3100"
+            ],
+            "rows": [
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "North lock"
+                  }
+                ]
+              },
+              {
+                "before": "0",
+                "after": "0",
+                "beforeWidth": "0",
+                "afterWidth": "0",
+                "cells": [
+                  {
+                    "width": "1800",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South gauge"
+                  },
+                  {
+                    "width": "2300",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South bridge"
+                  },
+                  {
+                    "width": "3100",
+                    "span": "1",
+                    "merge": "none",
+                    "text": "South lock"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "histories": {
+        "trPrChange": 1,
+        "tcPrChange": 2,
+        "cellDel": 1
+      }
+    }
+  ]
+}
