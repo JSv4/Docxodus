@@ -52,7 +52,7 @@ for (const [name, content] of [
   ['picture', '<img width="20" height="20">'],
   ['table', '<table><tr><td>Cell</td></tr></table>'],
   ['note', '<a class="footnote-ref">1</a>'],
-  ['columns', '<section data-cols="2"></section>'],
+  ['columns with rich text', '<section data-cols="2"><p><span class="run"><b>Rich column</b></span></p></section>'],
 ]) {
   test(`complex ${name} flow retains its original HTML layout`, async ({ page }) => {
     await page.setContent(`${styles}<main><p><span class="run">AV A plain paragraph</span></p>${content}</main>`);
@@ -129,4 +129,29 @@ test('painting checks cancellation while measuring a long paragraph', async ({ p
   });
   expect(result.cancelled).toBe(true);
   expect(result.after).toBe(result.before);
+});
+
+test('a fragmented column container keeps all of its HTML text and geometry', async ({ page }) => {
+  await page.setContent(`${styles}<main><div style="column-count:2;column-gap:24pt;height:100pt;width:300pt">
+    <p><span class="run">${words}</span></p><p><span class="run">Following paragraph</span></p>
+    </div></main>`);
+  await page.addScriptTag({ content: lineMetrics });
+  await page.addScriptTag({ content: wordText });
+  const result = await page.evaluate(() => {
+    const api = window as any; const root = document.querySelector('main')!;
+    api.applyUnroundedNormalLineHeights(root);
+    const prepared = api.prepareWordText(root);
+    const paragraphs = Array.from(root.querySelectorAll('p'));
+    const before = paragraphs.map(p => ({ text: p.textContent, box: p.getBoundingClientRect().toJSON() }));
+    const fragments = paragraphs[0].getClientRects().length;
+    const painted = api.paintWordText(root);
+    return { prepared, painted, fragments, before,
+      after: paragraphs.map(p => ({ text: p.textContent, box: p.getBoundingClientRect().toJSON() })),
+      pending: root.querySelectorAll('[data-docx-word-text-prepared]').length };
+  });
+  expect(result.prepared).toBe(2);
+  expect(result.fragments).toBeGreaterThan(1);
+  expect(result.painted).toBe(0);
+  expect(result.after).toEqual(result.before);
+  expect(result.pending).toBe(0);
 });

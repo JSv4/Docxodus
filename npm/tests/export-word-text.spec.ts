@@ -7,7 +7,7 @@ import { storedZip, W_NS, xml } from './docx-zip.js';
 
 const texts = Array.from({ length: 42 }, (_, i) =>
   `Record${String(i).padStart(3, '0')} AV A plain paragraph retains its source text.`);
-const source = storedZip([
+function sourceFor(flow: 'single' | 'balanced' | 'continuous' | 'explicit'): Uint8Array { return storedZip([
   { name: '[Content_Types].xml', data: xml(`<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
     <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
     <Default Extension="xml" ContentType="application/xml"/>
@@ -24,15 +24,21 @@ const source = storedZip([
     <w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:sz w:val="22"/>
     </w:rPr></w:rPrDefault></w:docDefaults></w:styles>`) },
   { name: 'word/document.xml', data: xml(`<w:document xmlns:w="${W_NS}"><w:body>
-    ${texts.map(text => `<w:p><w:pPr><w:spacing w:before="0" w:after="120" w:line="276" w:lineRule="auto"/></w:pPr>
+    ${texts.map((text, index) => `<w:p><w:pPr><w:keepLines/><w:spacing w:before="0" w:after="120" w:line="276" w:lineRule="auto"/></w:pPr>
+      ${flow === 'explicit' && index === 18 ? '<w:r><w:br w:type="column"/></w:r>' : ''}
       <w:r><w:t>${text}</w:t></w:r></w:p>`).join('')}
-    <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
+    <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/>
+      ${flow === 'single' ? '' : '<w:cols w:num="2" w:space="480"/>'}
+      ${flow === 'continuous' || flow === 'explicit' ? '<w:type w:val="continuous"/>' : ''}
+    </w:sectPr>
     </w:body></w:document>`) },
-]);
+]); }
 const font = readFileSync(new URL('fixtures/fonts/baseline-test-b.woff2', import.meta.url));
 const digest = (bytes: Uint8Array | string) => createHash('sha256').update(bytes).digest('hex');
 
-test('precision text survives public export, offline reopen and PDF with its font and PageMap identities', async ({ page, context }, testInfo) => {
+for (const flow of ['single', 'balanced', 'continuous', 'explicit'] as const) {
+test(`precision ${flow} text survives public export, offline reopen and PDF with its font and PageMap identities`, async ({ page, context }, testInfo) => {
+  const source = sourceFor(flow);
   await page.goto('/standalone-export-harness.html');
   await page.waitForFunction(() => (window as any).DocxodusStandaloneReady === true);
   const result = await page.evaluate(async ({ bytes, plan }) =>
@@ -69,6 +75,10 @@ test('precision text survives public export, offline reopen and PDF with its fon
   }));
   expect(reopened.map(p => p.text)).toEqual(texts);
   expect(reopened.every(p => p.painted === 1)).toBe(true);
+  if (flow === 'explicit') {
+    expect(reopened[18].geometry.x - reopened[0].geometry.x).toBeCloseTo(246, 0);
+    expect(reopened[36].pageNumber).toBe(2);
+  }
   for (const [index, p] of reopened.entries()) {
     const fragment = result.pageMap.fragments[index];
     expect(fragment.anchorId).toBe(p.anchorId);
@@ -95,3 +105,4 @@ test('precision text survives public export, offline reopen and PDF with its fon
   await loadingTask.destroy();
   await offline.close();
 });
+}

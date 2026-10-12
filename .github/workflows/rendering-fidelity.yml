@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 60
     env:
       BENCH_LIBREOFFICE: /opt/libreoffice25.8/program/soffice
-      BASELINE_COMMIT: 562cf02bbe4448334905fdc9dd44c9d6c0313aa6
+      BASELINE_COMMIT: 28d39919007ddf2946ea03c5eece0729f0892956
       CANDIDATE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1

@@ -1655,7 +1655,12 @@ export class PaginationEngine {
     host.appendChild(clone);
     this.stagingElement.appendChild(host);
     try {
-      return clone.scrollWidth > clone.clientWidth + 1;
+      if (clone.scrollWidth > clone.clientWidth + 1) return true;
+      // Keep-lines paragraphs must fit as a whole. A constrained column container
+      // can report only its first partial box, even when scrollWidth still fits.
+      // Move that source paragraph to the next page before print clips its text.
+      return Array.from(clone.querySelectorAll<HTMLElement>('[data-keep-lines="true"]'))
+        .some(paragraph => paragraph.getClientRects().length > 1);
     } finally {
       host.remove();
     }

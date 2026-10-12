@@ -13,9 +13,8 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 const PARAGRAPHS = 'p, h1, h2, h3, h4, h5, h6';
 
 function plainDocument(root: HTMLElement): boolean {
-  if (root.querySelector('table, img, svg, math, canvas, video, audio, iframe, object, a, ol, ul, aside, template, header, footer, [data-hf-type], section.footnotes, section.endnotes, [data-column-break-before]'))
+  if (root.querySelector('table, img, svg, math, canvas, video, audio, iframe, object, a, ol, ul, aside, template, header, footer, [data-hf-type], section.footnotes, section.endnotes'))
     return false;
-  if (Array.from(root.querySelectorAll('[data-cols]')).some(e => Number(e.getAttribute('data-cols')) > 1)) return false;
   // A document mixing plain text with shifted runs, exact spacing or rich
   // inline structure keeps one consistent legacy layout. Those contexts need
   // their own line model before they can share the precision renderer.
@@ -28,8 +27,26 @@ function plainDocument(root: HTMLElement): boolean {
 
 function plainRun(paragraph: HTMLElement): HTMLElement | null {
   const view = paragraph.ownerDocument.defaultView;
-  if (!view || paragraph.children.length !== 1) return null;
-  const run = paragraph.firstElementChild;
+  if (!view) return null;
+  const children = Array.from(paragraph.children);
+  const content = children.filter(child => child.textContent !== '');
+  if (content.length !== 1) return null;
+  const run = content[0];
+  if (children.length !== 1) {
+    // The converter carries an explicit column break on the paragraph and
+    // leaves an empty run where the break appeared. It has no text identity;
+    // accept only empty spans with the same line metrics as the visible run.
+    if (paragraph.dataset.columnBreakBefore !== 'true') return null;
+    const runStyle = view.getComputedStyle(run);
+    for (const empty of children.filter(child => child !== run)) {
+      if (!(empty instanceof view.HTMLElement) || empty.localName !== 'span' || empty.childNodes.length ||
+        Array.from(empty.attributes).some(a => !['class', 'style', 'lang', 'dir'].includes(a.name))) return null;
+      const emptyStyle = view.getComputedStyle(empty);
+      if (['font-family', 'font-size', 'font-style', 'font-weight', 'font-stretch', 'line-height',
+        'display', 'position', 'top', 'vertical-align'].some(property =>
+        emptyStyle.getPropertyValue(property) !== runStyle.getPropertyValue(property))) return null;
+    }
+  }
   if (!(run instanceof view.HTMLElement) || run.localName !== 'span' || run.children.length ||
       run.childNodes.length !== 1 || run.firstChild?.nodeType !== 3) return null;
   const text = run.textContent ?? '';
@@ -73,6 +90,7 @@ export function prepareWordText(root: HTMLElement, checkpoint?: () => void): num
     if (!(twips > 0)) continue;
     run.style.fontKerning = kerning;
     run.style.lineHeight = `${twips / 15}px`;
+    for (const empty of Array.from(paragraph.children).filter(child => child !== run)) empty.remove();
     paragraph.style.lineHeight = run.style.lineHeight;
     paragraph.setAttribute(PREPARED, 'true');
     prepared++;
@@ -85,6 +103,21 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
   const document = root.ownerDocument;
   const view = document.defaultView;
   if (!view) return 0;
+  const paragraphs = Array.from(root.querySelectorAll<HTMLElement>(`[${PREPARED}]`));
+  const columnOf = (paragraph: HTMLElement): HTMLElement | null => {
+    for (let parent = paragraph.parentElement; parent && parent !== root; parent = parent.parentElement)
+      if (Number(view.getComputedStyle(parent).columnCount) > 1) return parent;
+    return null;
+  };
+  // A column container with fragmented paragraphs keeps its original line flow.
+  // Mixing fixed vector boxes with an HTML paragraph that crosses a column can
+  // reflow that paragraph outside the body band and drop its printed text.
+  const fragmentedColumns = new Set<HTMLElement>();
+  for (const paragraph of paragraphs) {
+    checkpoint?.();
+    const column = columnOf(paragraph);
+    if (column && paragraph.getClientRects().length !== 1) fragmentedColumns.add(column);
+  }
   const metrics = new Map<string, { height: number; descent: number }>();
   function fontMetrics(style: CSSStyleDeclaration): { height: number; descent: number } | null {
     const font = `${style.fontStyle} ${style.fontWeight} 10000px ${style.fontFamily}`;
@@ -108,9 +141,14 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
     return result;
   }
 
-  let painted = 0;
-  for (const paragraph of Array.from(root.querySelectorAll<HTMLElement>(`[${PREPARED}]`))) {
+  const pending: Array<{ paragraph: HTMLElement; svg: SVGSVGElement; height: number }> = [];
+  for (const paragraph of paragraphs) {
     checkpoint?.();
+    const column = columnOf(paragraph);
+    if (column && fragmentedColumns.has(column)) {
+      paragraph.removeAttribute(PREPARED);
+      continue;
+    }
     const run = plainRun(paragraph);
     if (!run) continue;
     const style = view.getComputedStyle(run);
@@ -119,6 +157,8 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
     const pitch = Number.parseFloat(style.lineHeight);
     const box = paragraph.getBoundingClientRect();
     if (!metric || !(fontSize > 0) || !(pitch > 0) || !(box.width > 0) || !(box.height > 0)) continue;
+    const columnBand = column ? paragraph.closest<HTMLElement>('.page-content') : null;
+    const band = columnBand?.getBoundingClientRect() ?? box;
     const text = run.textContent!;
     const rows = new Map<number, Array<{ text: string; x: number }>>();
     let wordCount = 0;
@@ -135,17 +175,19 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
     }
     if (!rows.size) continue;
     const svg = document.createElementNS(SVG_NS, 'svg');
-    svg.setAttribute('width', String(box.width));
-    svg.setAttribute('height', String(box.height));
+    svg.setAttribute('width', String(band.width));
+    svg.setAttribute('height', String(band.height));
     // A larger viewBox retains fractional glyph coordinates without increasing
     // the physical font size or changing the source font file.
-    svg.setAttribute('viewBox', `0 0 ${box.width * 4} ${box.height * 4}`);
+    svg.setAttribute('viewBox', `0 0 ${band.width * 4} ${band.height * 4}`);
     svg.setAttribute('role', 'group');
-    svg.style.cssText = 'display:block;overflow:visible';
+    svg.style.cssText = columnBand
+      ? 'position:absolute;left:0;top:0;display:block;overflow:visible'
+      : 'display:block;overflow:visible';
     const baseline = (metric.height - metric.descent) * fontSize;
     Array.from(rows.values()).forEach((words, index) => {
       const line = document.createElementNS(SVG_NS, 'text');
-      line.setAttribute('y', String((baseline + index * pitch) * 4));
+      line.setAttribute('y', String((box.top - band.top + baseline + index * pitch) * 4));
       line.setAttribute('xml:space', 'preserve');
       for (const property of ['font-family', 'font-weight', 'font-style', 'font-stretch', 'font-kerning'])
         line.style.setProperty(property, style.getPropertyValue(property));
@@ -153,21 +195,26 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
       line.style.fill = style.color;
       for (const word of words) {
         const span = document.createElementNS(SVG_NS, 'tspan');
-        span.setAttribute('x', String(word.x * 4));
+        span.setAttribute('x', String((box.left - band.left + word.x) * 4));
         span.textContent = word.text;
         line.append(span);
       }
       svg.append(line);
     });
+    pending.push({ paragraph, svg, height: box.height });
+  }
+  // Read every line before replacing any paragraph, so one vector box cannot
+  // change the column coordinates used to measure the following paragraph.
+  for (const { paragraph, svg, height } of pending) {
+    checkpoint?.();
     paragraph.replaceChildren(svg);
     // CSSOM rounds a numeric height when serializing an inline declaration.
     // A slightly lower re-parsed value loses one layout unit on every paragraph
     // and shifts PageMap fragments on offline reopen. Custom-property tokens
     // retain the measured value verbatim through the standalone HTML round trip.
-    paragraph.style.setProperty('--docx-word-text-height', `${box.height}px`);
+    paragraph.style.setProperty('--docx-word-text-height', `${height}px`);
     paragraph.style.height = 'var(--docx-word-text-height)';
     paragraph.removeAttribute(PREPARED);
-    painted++;
   }
-  return painted;
+  return pending.length;
 }
