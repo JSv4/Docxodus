@@ -9616,11 +9616,16 @@ namespace Docxodus
             return node;
         }
 
-        /// <summary><paramref name="element"/> and its descendants, leaving out every floating
-        /// (<c>wp:anchor</c>) drawing together with its content, such as a text box's paragraphs.</summary>
+        /// <summary><paramref name="element"/> and its descendants, leaving out hidden runs and
+        /// floating (<c>wp:anchor</c>) drawings together with their content.</summary>
         private static IEnumerable<XElement> InFlowDescendantsAndSelf(XElement element)
         {
             if (element.Name == W.drawing && element.Elements(WP.anchor).Any())
+                yield break;
+            // Match run rendering after formatting assembly has resolved inherited properties.
+            // Hidden text cannot supply the paragraph mark's line; keep its ordinary placeholder.
+            if (element.Name == W.r && element.Element(W.rPr) is XElement runProperties &&
+                GetBoolProp(runProperties, W.vanish) && !GetBoolProp(runProperties, W.specVanish))
                 yield break;
             yield return element;
             foreach (var child in element.Elements())
