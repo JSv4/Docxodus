@@ -11388,6 +11388,18 @@ namespace Docxodus
             }
 
             var wrapper = new XElement(Xhtml.span, imageHtml);
+            var positionV = drawingContainer.Element(WP.positionV);
+            if (relativeFrom == "column" &&
+                ((side == "left" && (alignment == "left" || offset == 0)) || (side == "right" && alignment == "right")) &&
+                (string?)positionV?.Attribute(NoNamespace.relativeFrom) == "paragraph" &&
+                (long?)positionV?.Element(WP.posOffset) == 0)
+                wrapper.SetAttributeValue("data-docx-edge-picture", "true");
+            if (style.ContainsKey("shape-outside"))
+            {
+                wrapper.SetAttributeValue("data-docx-wrap-text", (string?)wrap.Attribute(NoNamespace.wrapText) ?? "bothSides");
+                style["--docx-wrap-distance-left"] = ((leftDistance ?? 0) / 12700m).ToString("0.####", NumberFormatInfo.InvariantInfo) + "pt";
+                style["--docx-wrap-distance-right"] = ((rightDistance ?? 0) / 12700m).ToString("0.####", NumberFormatInfo.InvariantInfo) + "pt";
+            }
             wrapper.AddAnnotation(style);
             return wrapper;
         }

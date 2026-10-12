@@ -50,6 +50,8 @@ test('fractional paragraph paint preserves every character, block box and PageMa
 
 for (const [name, content] of [
   ['picture', '<img width="20" height="20">'],
+  ['inline picture', '<p><span><img width="20" height="20"></span><span class="run">Inline picture text</span></p>'],
+  ['positioned picture', '<p><span><span style="float:left;position:relative"><img width="20" height="20"></span></span><span class="run">Positioned picture text</span></p>'],
   ['table', '<table><tr><td>Cell</td></tr></table>'],
   ['note', '<a class="footnote-ref">1</a>'],
   ['columns with rich text', '<section data-cols="2"><p><span class="run"><b>Rich column</b></span></p></section>'],
@@ -88,6 +90,39 @@ test('rich runs and unsupported scripts retain their source structure', async ({
   });
   expect(result.count).toBe(0);
   expect(result.after).toBe(result.before);
+});
+
+test('a convex both-sides contour places short text before the picture and longer text after it', async ({ page }) => {
+  const text = 'a b An authored caption retains every word.';
+  await page.setContent(`${styles}<main class="page-content" style="position:relative;width:400pt;height:400pt">
+    <p data-source-anchor-id="p:body:picture"><span class="run"><span data-docx-edge-picture="true" data-docx-wrap-text="bothSides"
+      style="float:left;width:72pt;height:72pt;shape-outside:polygon(50% 0%,100% 50%,50% 100%,0% 50%) border-box;
+        shape-margin:5pt;--docx-wrap-distance-left:5pt;--docx-wrap-distance-right:5pt"><img alt="Authored contour" style="width:72pt;height:72pt"></span></span><span class="run">${text}</span></p>
+    <p data-source-anchor-id="p:body:tail"><span class="run">Following text</span></p></main>`);
+  await page.addScriptTag({ content: lineMetrics });
+  await page.addScriptTag({ content: wordText });
+  const result = await page.evaluate(() => {
+    const api = window as any; const root = document.querySelector<HTMLElement>('main')!;
+    api.applyUnroundedNormalLineHeights(root);
+    const prepared = api.prepareWordText(root);
+    const paragraphs = Array.from(root.querySelectorAll('p'));
+    const before = paragraphs.map(p => p.getBoundingClientRect().toJSON());
+    const image = root.querySelector('img')!; const imageBefore = image.getBoundingClientRect().toJSON();
+    const painted = api.paintWordText(root);
+    return { prepared, painted, before, after: paragraphs.map(p => p.getBoundingClientRect().toJSON()),
+      imageSame: image === root.querySelector('img'), imageBefore, imageAfter: image.getBoundingClientRect().toJSON(),
+      text: paragraphs[0].textContent,
+      x: Array.from(paragraphs[0].querySelectorAll('svg tspan')).map(t => Number(t.getAttribute('x')) / 4 * 0.75) };
+  });
+  expect(result.prepared).toBe(2);
+  expect(result.painted).toBe(2);
+  expect(result.text).toBe(text);
+  expect(result.after).toEqual(result.before);
+  expect(result.imageSame).toBe(true);
+  expect(result.imageAfter).toEqual(result.imageBefore);
+  expect(result.x[0]).toBeCloseTo(0, 1);
+  expect(result.x[1]).toBeLessThan(20);
+  expect(result.x[2]).toBeGreaterThan(40);
 });
 
 test('the source kerning choice overrides the Word default', async ({ page }) => {
