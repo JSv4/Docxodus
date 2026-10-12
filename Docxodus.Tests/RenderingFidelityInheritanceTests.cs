@@ -10,7 +10,7 @@ namespace Docxodus.Tests;
 public class RenderingFidelityInheritanceTests
 {
     private static XElement Render(string body, string? notes = null, bool endnote = false,
-        PaginationMode mode = PaginationMode.Paginated)
+        PaginationMode mode = PaginationMode.Paginated, string runDefaults = "")
     {
         using var stream = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
@@ -21,7 +21,7 @@ public class RenderingFidelityInheritanceTests
                 """));
             main.AddNewPart<StyleDefinitionsPart>().PutXDocument(XDocument.Parse($"""
                 <w:styles xmlns:w="{W.w}"><w:docDefaults><w:rPrDefault><w:rPr>
-                  <w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/><w:sz w:val="22"/>
+                  <w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/><w:sz w:val="22"/>{runDefaults}
                 </w:rPr></w:rPrDefault></w:docDefaults></w:styles>
                 """));
             main.AddNewPart<DocumentSettingsPart>().PutXDocument(XDocument.Parse($"<w:settings xmlns:w=\"{W.w}\"/>"));
@@ -146,5 +146,34 @@ public class RenderingFidelityInheritanceTests
         var blanks = html.Descendants().Where(e => e.Name.LocalName == "p" && string.IsNullOrWhiteSpace(e.Value)).ToList();
         Assert.Equal(2, blanks.Count);
         Assert.All(blanks, p => Assert.DoesNotContain("line-height: 0.05pt", (string?)p.Attribute("style")));
+    }
+
+    [Theory]
+    [InlineData("<w:kern w:val=\"28\"/>", "none")]
+    [InlineData("<w:kern w:val=\"22\"/>", "normal")]
+    [InlineData("<w:kern w:val=\"0\"/>", "normal")]
+    public void KerningIntentResolvesTheSourceMinimumSize(string properties, string expected)
+    {
+        var html = Render($"<w:p><w:r><w:rPr>{properties}</w:rPr><w:t>AV A</w:t></w:r></w:p>");
+        var run = html.Descendants().Single(e => e.Name.LocalName == "span" && e.Value == "AV A");
+        Assert.Contains($"--docx-font-kerning: {expected}", (string?)run.Attribute("style"));
+    }
+
+    [Fact]
+    public void KerningIntentInheritsDefaultsAndHonorsARunOverride()
+    {
+        var html = Render("<w:p><w:r><w:t>Inherited</w:t></w:r><w:r><w:rPr><w:kern w:val=\"28\"/></w:rPr><w:t>Overridden</w:t></w:r></w:p>",
+            runDefaults: "<w:kern w:val=\"22\"/>");
+        var runs = html.Descendants().Where(e => e.Name.LocalName == "span").ToList();
+        Assert.Contains("--docx-font-kerning: normal", (string?)runs.Single(e => e.Value == "Inherited").Attribute("style"));
+        Assert.Contains("--docx-font-kerning: none", (string?)runs.Single(e => e.Value == "Overridden").Attribute("style"));
+    }
+
+    [Fact]
+    public void AbsentKerningLeavesLegacyRunStylesUnchanged()
+    {
+        var html = Render("<w:p><w:r><w:t>Default kerning</w:t></w:r></w:p>");
+        var run = html.Descendants().Single(e => e.Name.LocalName == "span" && e.Value == "Default kerning");
+        Assert.DoesNotContain("--docx-font-kerning", (string?)run.Attribute("style"));
     }
 }

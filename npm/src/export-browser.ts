@@ -9,6 +9,7 @@
 import limitsContractJson from "./export-resource-limits-v1.json";
 import { assertWellFormedUnicode, canonicalJson } from "./canonical.js";
 import { alignBaselinesToWord, applyUnroundedNormalLineHeights, isPreservedExactLineInk } from "./line-metrics.js";
+import { prepareWordText, paintWordText } from "./word-text.js";
 import { measureRenderedSource, PaginationEngine, type PageMap } from "./pagination.js";
 import {
   createWorkerDocxodus,
@@ -770,6 +771,15 @@ async function ownedBytes(
 
 function monotonicNow(): number {
   return globalThis.performance?.now() ?? Date.now();
+}
+
+function checkpointWordText(state: ExecutionState): void {
+  if (state.signal?.aborted)
+    fail("operation_cancelled", state.phase, "Export was cancelled during text layout.",
+      "Retry with a non-aborted signal.");
+  if (monotonicNow() >= state.deadline)
+    fail("readiness_timeout", state.phase, "Export timed out during text layout.",
+      "Increase timeoutMs or reduce document complexity.");
 }
 
 async function runPhase<T>(
@@ -3634,6 +3644,7 @@ export async function convertDocxToPaginatedHtml(
         // down the page (issue #850). Fix each line's height before anything is measured; both
         // attempts start from pristine HTML, so both apply it identically.
         applyUnroundedNormalLineHeights(renderDocument.body);
+        prepareWordText(renderDocument.body, () => checkpointWordText(state));
         const engine = new PaginationEngine(staging, container, {
           scale: 1,
           cssPrefix: "page-",
@@ -3756,6 +3767,9 @@ export async function convertDocxToPaginatedHtml(
     // without changing a line box. They run on the final page tree, after the clipping check: a glyph moved
     // down stays inside its line, but its inline box can pass a page band's edge by a pixel.
     alignBaselinesToWord(renderDocument.body);
+    await runPhase(state, "output_verification", ["Word text baselines"], () =>
+      paintWordText(renderDocument.getElementById("pagination-container") as HTMLElement,
+        () => checkpointWordText(state)));
     const renderer = await runPhase(state, "output_verification", ["renderer identity"], () =>
       rendererIdentity(
         renderDocument,

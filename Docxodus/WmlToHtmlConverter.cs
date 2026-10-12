@@ -8008,6 +8008,13 @@ namespace Docxodus
             if (sz != null)
                 style.AddIfMissing("font-size", string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", sz/2.0m));
 
+            // Word kerning is opt-in, with a minimum size in half-points. Preserve
+            // that resolved intent for the precision text renderer; legacy complex
+            // layouts retain their existing shaping until that renderer owns them.
+            var kern = (decimal?)rPr.Element(W.kern)?.Attribute(W.val);
+            if (kern != null)
+                style["--docx-font-kerning"] = sz != null && sz >= kern ? "normal" : "none";
+
             // W.caps
             if (GetBoolProp(rPr, W.caps))
                 style.AddIfMissing("text-transform", "uppercase");
