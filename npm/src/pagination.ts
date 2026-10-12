@@ -511,57 +511,107 @@ export const DRAWING_HOST_ATTRIBUTE = "data-docx-anchor-host";
  */
 export const HOSTS_PROMOTED_DRAWING_ATTRIBUTE = "data-docx-hosts-promoted-drawing";
 
-/**
- * Intersect a box with the page and with every ancestor that establishes an overflow clip before
- * the page root. getBoundingClientRect() reports layout outside those clips, which is not rendered
- * and therefore must not satisfy PageMap completeness or inflate portable geometry.
- */
-function visibleWithinPage(
-  view: Window,
-  element: HTMLElement,
-  page: HTMLElement,
-  pageRect: DOMRect,
-  rect: DOMRect,
-): VisibleBox {
-  let left = Math.max(rect.left, pageRect.left);
-  let top = Math.max(rect.top, pageRect.top);
-  let right = Math.min(rect.right, pageRect.right);
-  let bottom = Math.min(rect.bottom, pageRect.bottom);
-  const clips = (value: string) =>
-    value === "hidden" || value === "clip" || value === "scroll" || value === "auto";
-
-  for (let ancestor = element.parentElement;
-    ancestor && ancestor !== page;
-    ancestor = ancestor.parentElement) {
-    const style = view.getComputedStyle(ancestor);
-    const clipsX = clips(style.overflowX);
-    const clipsY = clips(style.overflowY);
-    if (!clipsX && !clipsY && !style.clipPath.startsWith("inset(")) continue;
-    const ancestorRect = ancestor.getBoundingClientRect();
-    const scale = ancestorRect.width / ancestor.offsetWidth || 1;
-    const inset = insetClipBounds(style.clipPath, ancestorRect, scale);
-    if (inset) {
-      left = Math.max(left, inset.left);
-      top = Math.max(top, inset.top);
-      right = Math.min(right, inset.right);
-      bottom = Math.min(bottom, inset.bottom);
-    }
-    if (clipsX) {
-      left = Math.max(left, ancestorRect.left);
-      right = Math.min(right, ancestorRect.right);
-    }
-    if (clipsY) {
-      top = Math.max(top, ancestorRect.top);
-      bottom = Math.min(bottom, ancestorRect.bottom);
-    }
-  }
-  return { left, top, right, bottom };
-}
-
 /** True when `element` shows no text (beyond white space) and no image, SVG or canvas. */
 function rendersOnlyItsLine(element: HTMLElement): boolean {
   return (element.textContent ?? '').replace(/[\s\u00a0]/g, '') === ''
     && element.querySelector('img, svg, canvas, [data-docx-drawing-anchor]') === null;
+}
+
+/** Self-contained closure for trusted host evaluation in the script-disabled print context. */
+function createRenderedSourceMeasurer(
+  clipInset: typeof insetClipBounds,
+  drawingHostAttribute: string,
+  hostsPromotedDrawingAttribute: string,
+) {
+  /**
+   * Intersect a box with the page and with every ancestor that establishes an overflow clip before
+   * the page root. getBoundingClientRect() reports layout outside those clips, which is not rendered
+   * and therefore must not satisfy PageMap completeness or inflate portable geometry.
+   */
+  function visibleWithinPage(
+    view: Window,
+    element: HTMLElement,
+    page: HTMLElement,
+    pageRect: DOMRect,
+    rect: DOMRect,
+  ): VisibleBox {
+    let left = Math.max(rect.left, pageRect.left);
+    let top = Math.max(rect.top, pageRect.top);
+    let right = Math.min(rect.right, pageRect.right);
+    let bottom = Math.min(rect.bottom, pageRect.bottom);
+    const clips = (value: string) =>
+      value === "hidden" || value === "clip" || value === "scroll" || value === "auto";
+
+    for (let ancestor = element.parentElement;
+      ancestor && ancestor !== page;
+      ancestor = ancestor.parentElement) {
+      const style = view.getComputedStyle(ancestor);
+      const clipsX = clips(style.overflowX);
+      const clipsY = clips(style.overflowY);
+      if (!clipsX && !clipsY && !style.clipPath.startsWith("inset(")) continue;
+      const ancestorRect = ancestor.getBoundingClientRect();
+      const scale = ancestorRect.width / ancestor.offsetWidth || 1;
+      const inset = clipInset(style.clipPath, ancestorRect, scale);
+      if (inset) {
+        left = Math.max(left, inset.left);
+        top = Math.max(top, inset.top);
+        right = Math.min(right, inset.right);
+        bottom = Math.min(bottom, inset.bottom);
+      }
+      if (clipsX) {
+        left = Math.max(left, ancestorRect.left);
+        right = Math.min(right, ancestorRect.right);
+      }
+      if (clipsY) {
+        top = Math.max(top, ancestorRect.top);
+        bottom = Math.min(bottom, ancestorRect.bottom);
+      }
+    }
+    return { left, top, right, bottom };
+  }
+
+  return function measureRenderedSource(
+    view: Window,
+    element: HTMLElement,
+    page: HTMLElement,
+    pageRect: DOMRect = page.getBoundingClientRect(),
+  ): { rect: DOMRect; visible: VisibleBox } {
+    const own = element.getBoundingClientRect();
+    const ownResult = () => ({ rect: own, visible: visibleWithinPage(view, element, page, pageRect, own) });
+    const ownMeasurable = own.width > 0 && own.height > 0;
+    const hostsPromotedDrawing = element.hasAttribute(hostsPromotedDrawingAttribute);
+    if (ownMeasurable && !hostsPromotedDrawing) return ownResult();
+
+    const hostAnchorId = element.dataset.sourceAnchorId;
+    const promoted = hostAnchorId
+      ? Array.from(page.querySelectorAll<HTMLElement>(`[${drawingHostAttribute}]`))
+        .filter((drawing) => drawing.getAttribute(drawingHostAttribute) === hostAnchorId)
+      : [];
+    if (ownMeasurable && promoted.length === 0) return ownResult();
+    const rendered = [
+      ...(ownMeasurable ? [element] : Array.from(element.querySelectorAll<HTMLElement>("*"))),
+      ...promoted.flatMap((drawing) => [drawing, ...Array.from(drawing.querySelectorAll<HTMLElement>("*"))]),
+    ];
+
+    let left = Infinity;
+    let top = Infinity;
+    let right = -Infinity;
+    let bottom = -Infinity;
+    for (const child of rendered) {
+      const style = view.getComputedStyle(child);
+      if (style.display === "none" || style.visibility === "hidden") continue;
+      const childRect = child.getBoundingClientRect();
+      if (childRect.width <= 0 || childRect.height <= 0) continue;
+      const visible = visibleWithinPage(view, child, page, pageRect, childRect);
+      if (visible.right <= visible.left || visible.bottom <= visible.top) continue;
+      left = Math.min(left, visible.left);
+      top = Math.min(top, visible.top);
+      right = Math.max(right, visible.right);
+      bottom = Math.max(bottom, visible.bottom);
+    }
+    if (!(left < right && top < bottom)) return ownResult();
+    return { rect: new DOMRect(left, top, right - left, bottom - top), visible: { left, top, right, bottom } };
+  };
 }
 
 /**
@@ -578,47 +628,14 @@ function rendersOnlyItsLine(element: HTMLElement): boolean {
  * re-verification all measure through this one function, so they agree on which elements are
  * measurable and where.
  */
-export function measureRenderedSource(
-  view: Window,
-  element: HTMLElement,
-  page: HTMLElement,
-  pageRect: DOMRect = page.getBoundingClientRect(),
-): { rect: DOMRect; visible: VisibleBox } {
-  const own = element.getBoundingClientRect();
-  const ownResult = () => ({ rect: own, visible: visibleWithinPage(view, element, page, pageRect, own) });
-  const ownMeasurable = own.width > 0 && own.height > 0;
-  const hostsPromotedDrawing = element.hasAttribute(HOSTS_PROMOTED_DRAWING_ATTRIBUTE);
-  if (ownMeasurable && !hostsPromotedDrawing) return ownResult();
+export const measureRenderedSource = createRenderedSourceMeasurer(
+  insetClipBounds, DRAWING_HOST_ATTRIBUTE, HOSTS_PROMOTED_DRAWING_ATTRIBUTE,
+);
 
-  const hostAnchorId = element.dataset.sourceAnchorId;
-  const promoted = hostAnchorId
-    ? Array.from(page.querySelectorAll<HTMLElement>(`[${DRAWING_HOST_ATTRIBUTE}]`))
-      .filter((drawing) => drawing.getAttribute(DRAWING_HOST_ATTRIBUTE) === hostAnchorId)
-    : [];
-  if (ownMeasurable && promoted.length === 0) return ownResult();
-  const rendered = [
-    ...(ownMeasurable ? [element] : Array.from(element.querySelectorAll<HTMLElement>("*"))),
-    ...promoted.flatMap((drawing) => [drawing, ...Array.from(drawing.querySelectorAll<HTMLElement>("*"))]),
-  ];
-
-  let left = Infinity;
-  let top = Infinity;
-  let right = -Infinity;
-  let bottom = -Infinity;
-  for (const child of rendered) {
-    const style = view.getComputedStyle(child);
-    if (style.display === "none" || style.visibility === "hidden") continue;
-    const childRect = child.getBoundingClientRect();
-    if (childRect.width <= 0 || childRect.height <= 0) continue;
-    const visible = visibleWithinPage(view, child, page, pageRect, childRect);
-    if (visible.right <= visible.left || visible.bottom <= visible.top) continue;
-    left = Math.min(left, visible.left);
-    top = Math.min(top, visible.top);
-    right = Math.max(right, visible.right);
-    bottom = Math.max(bottom, visible.bottom);
-  }
-  if (!(left < right && top < bottom)) return ownResult();
-  return { rect: new DOMRect(left, top, right - left, bottom - top), visible: { left, top, right, bottom } };
+/** @internal Owned runtime code only; never inserts a script or enables document JavaScript. */
+export function renderedSourceMeasurerExpression(): string {
+  return `(${createRenderedSourceMeasurer.toString()})(${insetClipBounds.toString()},
+    ${JSON.stringify(DRAWING_HOST_ATTRIBUTE)}, ${JSON.stringify(HOSTS_PROMOTED_DRAWING_ATTRIBUTE)})`;
 }
 
 export class PaginationEngine {
