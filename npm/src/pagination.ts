@@ -1912,10 +1912,9 @@ export class PaginationEngine {
 
   /**
    * Builds a clone of a simple table wrapper containing a contiguous run of rows.
-   * Complex table features are deliberately rejected by the caller: a split across
-   * vertically merged cells (rowspan), nested tables, or footnotes cannot be made
-   * correct by cloning rows. Horizontal merges (colspan) need no rejection: a colspan
-   * is confined to its own row, and rows are only ever cloned whole.
+   * The caller supplies complete vertical-merge groups: no rowspan crosses a
+   * fragment boundary. Nested tables and footnotes remain unsupported here.
+   * Horizontal merges (colspan) are confined to their own row.
    */
   private createSimpleTableFragment(
     wrapper: HTMLElement,
@@ -1985,13 +1984,26 @@ export class PaginationEngine {
       table.tFoot ||
       body.rows.length < 2 ||
       Array.from(table.children).some(child => child !== body && child.tagName !== "COLGROUP") ||
-      table.querySelector("table, [rowspan], [data-footnote-id]") ||
+      table.querySelector("table, [data-footnote-id]") ||
       wrapper.querySelector("[data-footnote-id]")
     ) {
       return null;
     }
 
     const rows = Array.from(body.rows);
+    // A boundary is safe only after every cell starting above it has ended.
+    // Overlapping merges in different columns extend the same indivisible group.
+    // HTML rowspan=0 extends through the remainder of this row section.
+    const rowGroupEnds: number[] = [];
+    let mergedEnd = 0;
+    for (let index = 0; index < rows.length; index++) {
+      this.checkpoint();
+      for (const cell of Array.from(rows[index].cells)) {
+        mergedEnd = Math.max(mergedEnd, cell.rowSpan === 0
+          ? rows.length : Math.min(rows.length, index + cell.rowSpan));
+      }
+      if (index + 1 >= mergedEnd) rowGroupEnds.push(index + 1);
+    }
     const minimumContentHeight = this.smallestEffectiveContentHeight(dims, sectionIndex);
     // Use the source's full vertical margins while forming groups. Continuation
     // fragments later clear their joining margins, so this conservative bound
@@ -2003,27 +2015,30 @@ export class PaginationEngine {
 
     const groups: HTMLTableRowElement[][] = [];
     let start = 0;
+    let boundaryIndex = 0;
     while (start < rows.length) {
       this.checkpoint();
       let end = start;
-      while (end < rows.length) {
+      while (boundaryIndex < rowGroupEnds.length) {
         this.checkpoint();
+        const candidateEnd = rowGroupEnds[boundaryIndex];
         const candidate = this.createSimpleTableFragment(
           wrapper,
           table,
           body,
-          rows.slice(start, end + 1),
+          rows.slice(start, candidateEnd),
           start === 0
         );
         const measured = this.measureElement(candidate, dims, block.sectionIndex);
         if (measured.heightPt > maximumFragmentHeight) {
           break;
         }
-        end++;
+        end = candidateEnd;
+        boundaryIndex++;
       }
 
-      // Even a one-row fragment cannot fit. Preserve the established overflow
-      // fallback rather than looping or clipping a partially split row.
+      // Even one complete row/merge group cannot fit. Preserve the established
+      // overflow fallback rather than clipping a row or cutting a merged cell.
       if (end === start) {
         return null;
       }
