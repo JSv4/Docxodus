@@ -4337,7 +4337,9 @@ export class PaginationEngine {
         context,
       );
       const widthPercent = this.anchorNumber(anchor, 'width-percent');
-      if (widthPercent !== undefined) {
+      // Word supports strictly positive relative dimensions (MS-ODRAWXML 2.18.3.1/2).
+      // Zero is schema-valid but must not collapse a visible object with a stored extent.
+      if (widthPercent !== undefined && widthPercent > 0) {
         anchor.style.width = `${widthReference.size * widthPercent / 100}pt`;
       }
 
@@ -4348,7 +4350,7 @@ export class PaginationEngine {
         context,
       );
       const heightPercent = this.anchorNumber(anchor, 'height-percent');
-      if (heightPercent !== undefined && anchor.dataset.docxAnchorAutofit !== 'true') {
+      if (heightPercent !== undefined && heightPercent > 0 && anchor.dataset.docxAnchorAutofit !== 'true') {
         anchor.style.height = `${heightReference.size * heightPercent / 100}pt`;
       }
 

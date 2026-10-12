@@ -71,6 +71,35 @@ test.describe('generated DrawingML anchor geometry', () => {
     await page.addScriptTag({ url: '/pagination.bundle.js' });
   });
 
+  for (const relativeSize of [{ width: 0 }, { height: 0 }, { width: 0, height: 0 }]) {
+    test(`zero relative dimensions retain the absolute extent: ${JSON.stringify(relativeSize)}`, async ({ page }) => {
+      const options: DrawingAnchorFixtureOptions = {
+        horizontal: { relativeFrom: 'page', offsetEmu: 914400 },
+        vertical: { relativeFrom: 'page', offsetEmu: 1143000 },
+        extentEmu: { cx: 2743200, cy: 914400 },
+      };
+      const control = await renderAnchor(page, options);
+      const actual = await renderAnchor(page, { ...options, relativeSize });
+      expect(actual).toEqual(control);
+      expect(actual.anchor.width).toBeCloseTo(288, 0);
+      expect(actual.anchor.height).toBeCloseTo(96, 0);
+    });
+  }
+
+  test('positive relative dimensions still override each stored extent independently', async ({ page }) => {
+    const options: DrawingAnchorFixtureOptions = {
+      horizontal: { relativeFrom: 'margin', offsetEmu: 0 },
+      vertical: { relativeFrom: 'margin', offsetEmu: 0 },
+      relativeSize: { width: 50000, height: 25000 },
+    };
+    const both = await renderAnchor(page, options);
+    expect(both.anchor.width).toBeCloseTo(312, 0); // half the 468pt text width
+    expect(both.anchor.height).toBeCloseTo(216, 0); // quarter of the 648pt text height
+    const mixed = await renderAnchor(page, { ...options, relativeSize: { width: 50000, height: 0 } });
+    expect(mixed.anchor.width).toBeCloseTo(312, 0);
+    expect(mixed.anchor.height).toBeCloseTo(96, 0);
+  });
+
   test('page offsets pin the stored extent and textbox text origin', async ({ page }) => {
     const geometry = await renderAnchor(page, {
       horizontal: { relativeFrom: 'page', offsetEmu: 914400 },
