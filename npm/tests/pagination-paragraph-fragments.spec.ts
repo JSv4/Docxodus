@@ -19,7 +19,7 @@ function normalize(text: string): string {
 function viewerHtml(blocks: string): string {
   return `
     <style>
-      #pagination-staging { font: 12pt/12pt Arial; }
+      #pagination-staging, #pagination-container { font: 12pt/12pt Arial; }
       #pagination-staging p { box-sizing: border-box; width: 100%; }
     </style>
     <div id="pagination-staging">
@@ -105,12 +105,64 @@ test.describe('Pagination paragraph fragments', () => {
     expect(result.paragraphParts).toBe(1);
   });
 
+  test('hard breaks work without a grapheme segmenter and retain inline identity and atomic fields', async ({ page }) => {
+    const lines = Array.from({ length: 12 }, (_, index) =>
+      `<span data-field="PAGE">${index + 1}</span><b>日本語</b><i>e\u0301👩‍💻</i>`);
+    await page.setContent(viewerHtml(`<p data-case="unicode" style="margin:0"><a
+      id="inline-link" data-anchor="inline-anchor" href="https://example.org/lines">${lines.join('<br>')}</a></p>`));
+    await addPaginationBundle(page);
+    const result = await page.evaluate(() => {
+      Object.defineProperty(Intl, 'Segmenter', { value: undefined, configurable: true });
+      const { PaginationEngine } = (window as any).DocxodusPagination;
+      const container = document.getElementById('pagination-container')!;
+      const pagination = new PaginationEngine(document.getElementById('pagination-staging'), container,
+        { showPageNumbers: false, fragmentParagraphs: true }).paginate();
+      const parts = Array.from(container.querySelectorAll<HTMLElement>('p[data-case="unicode"]'));
+      return {
+        pages: pagination.totalPages,
+        text: parts.map(p => p.textContent).join(''),
+        fields: parts.flatMap(p => Array.from(p.querySelectorAll('[data-field]'), f => f.textContent)),
+        links: parts.map(p => p.querySelector('a')?.getAttribute('href')),
+        ids: container.querySelectorAll('#inline-link').length,
+        anchors: container.querySelectorAll('[data-anchor="inline-anchor"]').length,
+        heights: parts.map(p => p.getBoundingClientRect().height),
+      };
+    });
+    expect(result.pages).toBeGreaterThanOrEqual(3);
+    expect(result.text).toBe(Array.from({ length: 12 }, (_, i) => `${i + 1}日本語e\u0301👩‍💻`).join(''));
+    expect(result.fields).toEqual(Array.from({ length: 12 }, (_, i) => String(i + 1)));
+    expect(result.links.every(link => link === 'https://example.org/lines')).toBe(true);
+    expect(result.ids).toBe(1);
+    expect(result.anchors).toBe(1);
+    expect(result.heights.filter(height => height > 72)).toEqual([]);
+  });
+
+  test('ordinary prose continuations keep fragmenting after the second page', async ({ page }) => {
+    const text = Array(6).fill(words).join(' ');
+    await page.setContent(viewerHtml(`<p data-case="prose" style="margin:0">${text}</p>`));
+    await addPaginationBundle(page);
+    const result = await page.evaluate(() => {
+      const { PaginationEngine } = (window as any).DocxodusPagination;
+      const container = document.getElementById('pagination-container')!;
+      const pagination = new PaginationEngine(document.getElementById('pagination-staging'), container,
+        { showPageNumbers: false, fragmentParagraphs: true }).paginate();
+      const parts = Array.from(container.querySelectorAll<HTMLElement>('p[data-case="prose"]'));
+      return { pages: pagination.totalPages, text: parts.map(p => p.textContent).join(''),
+        heights: parts.map(p => p.getBoundingClientRect().height) };
+    });
+    expect(result.pages).toBeGreaterThan(2);
+    expect(normalize(result.text)).toBe(text);
+    expect(result.heights.every(height => height <= 72)).toBe(true);
+  });
+
   test('keeps paragraphs with pagination-sensitive or complex descendants intact', async ({ page }) => {
     await page.setContent(viewerHtml(`
       <p data-case="keep-lines" data-keep-lines="true">${words}</p>
       <p data-case="keep-next" data-keep-with-next="true">${words}</p>
       <p data-case="footnote">${words}<sup data-footnote-id="f1">1</sup></p>
-      <p data-case="line-break">alpha<br>bravo<br>charlie<br>delta<br>echo<br>foxtrot</p>`));
+      <p data-case="clearing-break">alpha<br style="clear:left">bravo<br>charlie<br>delta<br>echo<br>foxtrot</p>
+      <p data-case="page-break">alpha<br style="break-before:page">bravo<br>charlie<br>delta<br>echo<br>foxtrot</p>
+      <p data-case="line-break" data-keep-lines="true">alpha<br>bravo<br>charlie<br>delta<br>echo<br>foxtrot</p>`));
     await addPaginationBundle(page);
 
     const result = await page.evaluate(() => {
@@ -129,6 +181,8 @@ test.describe('Pagination paragraph fragments', () => {
         keepNext: count('keep-next'),
         footnote: count('footnote'),
         lineBreak: count('line-break'),
+        clearingBreak: count('clearing-break'),
+        pageBreak: count('page-break'),
       };
     });
 
@@ -137,6 +191,8 @@ test.describe('Pagination paragraph fragments', () => {
       keepNext: 1,
       footnote: 1,
       lineBreak: 1,
+      clearingBreak: 1,
+      pageBreak: 1,
     });
   });
 });

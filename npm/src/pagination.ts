@@ -399,9 +399,11 @@ type ParagraphSplitAttempt =
 interface ParagraphFragmentEndpoint {
   node: Node;
   offset: number;
+  /** A hard line break becomes the page boundary, rather than an empty line on the tail. */
+  consumeBreak?: boolean;
   /** UTF-16 offset in the paragraph's flattened text. */
   textOffset: number;
-  /** Prefer a DOM boundary outside an atomic field over its last text-node boundary. */
+  /** Prefer a hard-break or atomic-field boundary over a text-node boundary. */
   priority: number;
 }
 
@@ -2093,12 +2095,23 @@ export class PaginationEngine {
     const textNodes: Text[] = [];
     const textStarts = new Map<Text, number>();
     const lastTextByField = new Map<HTMLElement, Text>();
-    const walker = this.document.createTreeWalker(paragraph, this.view.NodeFilter.SHOW_TEXT);
+    const breaks: Array<{ element: HTMLElement; textOffset: number }> = [];
+    const walker = this.document.createTreeWalker(paragraph,
+      this.view.NodeFilter.SHOW_TEXT | this.view.NodeFilter.SHOW_ELEMENT);
     const flattenedChunks: string[] = [];
     let flattenedLength = 0;
-    let textNode: Text | null;
-    while ((textNode = walker.nextNode() as Text | null)) {
+    let node: Node | null;
+    while ((node = walker.nextNode())) {
       this.checkpoint();
+      if (node.nodeType === this.view.Node.ELEMENT_NODE) {
+        if ((node as Element).localName === "br") {
+          breaks.push({ element: node as HTMLElement, textOffset: flattenedLength });
+          flattenedChunks.push("\n");
+          flattenedLength++;
+        }
+        continue;
+      }
+      const textNode = node as Text;
       textStarts.set(textNode, flattenedLength);
       textNodes.push(textNode);
       flattenedChunks.push(textNode.data);
@@ -2128,15 +2141,28 @@ export class PaginationEngine {
       const { textOffset } = candidate;
       if (textOffset <= 0 || textOffset >= flattenedText.length) return;
       if (textOffset <= firstVisibleOffset || textOffset > lastVisibleOffset) return;
-      if (this.isNonBreakingTextBoundary(flattenedText, textOffset)) return;
+      if (!candidate.consumeBreak && this.isNonBreakingTextBoundary(flattenedText, textOffset)) return;
       if (!this.isLegalParagraphLineBoundary(paragraph, flattenedText, textOffset)) return;
       if (graphemeBoundaries) {
         if (!graphemeBoundaries.has(textOffset)) return;
-      } else if (!this.isConservativeFallbackTextBoundary(flattenedText, textOffset)) {
+      } else if (!candidate.consumeBreak && !this.isConservativeFallbackTextBoundary(flattenedText, textOffset)) {
         return;
       }
       candidates.push(candidate);
     };
+
+    for (const { element, textOffset } of breaks) {
+      this.checkpoint();
+      // Fields and marker wrappers remain atomic. Do not cut after an empty
+      // line: a trailing BR alone does not create its final blank line in HTML.
+      // Keeping a consecutive break sequence on the tail preserves those lines.
+      if (element.closest("[data-field], [data-list-marker], a[data-comment-id]")
+          || flattenedText[textOffset - 1] === "\n") continue;
+      const parent = element.parentNode;
+      if (!parent) continue;
+      addCandidate({ node: parent, offset: Array.prototype.indexOf.call(parent.childNodes, element),
+        textOffset, priority: 2, consumeBreak: true });
+    }
 
     for (const node of textNodes) {
       this.checkpoint();
@@ -2198,7 +2224,7 @@ export class PaginationEngine {
     }
 
     // Several DOM boundaries can represent the same flattened offset. Prefer
-    // the outer atomic boundary, then keep one stable document-order candidate.
+    // the consumed break, then an outer atomic boundary, in stable document order.
     candidates.sort((left, right) =>
       left.textOffset - right.textOffset || right.priority - left.priority);
     const endpoints: ParagraphFragmentEndpoint[] = [];
@@ -2310,10 +2336,10 @@ export class PaginationEngine {
   }
 
   /**
-   * Phase one only handles text-like paragraph descendants. Objects, explicit
-   * line breaks, list markers, notes, and out-of-flow/inline-block content all
-   * require their own line-layout rules and retain the established whole-block
-   * fallback instead of risking broken content or duplicate anchors.
+   * Phase one handles text-like paragraph descendants and hard line breaks.
+   * Objects, notes, and out-of-flow/inline-block content require their own
+   * line-layout rules and retain the established whole-block fallback instead
+   * of risking broken content or duplicate anchors.
    */
   private canFragmentParagraph(block: MeasuredBlock): boolean {
     if (!this.fragmentParagraphs) {
@@ -2360,7 +2386,6 @@ export class PaginationEngine {
     // Inline ids/editor anchors are reconciled after Range cloning, and list
     // markers are kept atomically with the leading text fragment.
     const unsupportedDescendants = [
-      "br",
       "img",
       "picture",
       "svg",
@@ -2435,6 +2460,8 @@ export class PaginationEngine {
       ) {
         return false;
       }
+      if (descendant.localName === "br" && (style.clear !== "none"
+          || style.breakBefore !== "auto" || style.breakAfter !== "auto")) return false;
     }
     return true;
   }
@@ -2579,7 +2606,7 @@ export class PaginationEngine {
     }
 
     const tailRange = this.document.createRange();
-    tailRange.setStart(best.endpoint.node, best.endpoint.offset);
+    tailRange.setStart(best.endpoint.node, best.endpoint.offset + (best.endpoint.consumeBreak ? 1 : 0));
     tailRange.setEnd(paragraph, paragraph.childNodes.length);
     const tailContents = tailRange.cloneContents();
     if (!this.hasVisibleFragmentText(tailContents)) return { kind: "indivisible" };
@@ -2605,14 +2632,28 @@ export class PaginationEngine {
     availableHeightPt: number,
     effectiveMarginTopPt: number
   ): MeasuredBlock[] | null {
-    if (!this.canFragmentParagraph(block) || availableHeightPt <= effectiveMarginTopPt) {
-      return null;
-    }
+    if (availableHeightPt <= effectiveMarginTopPt) return null;
 
-    const split = this.splitParagraphAtLargestFit(block.element, (head) => {
-      const measured = this.measureElement(head, dims, block.sectionIndex);
-      return effectiveMarginTopPt + measured.heightPt <= availableHeightPt;
-    });
+    // Continuations are detached Range clones. Validate their computed layout
+    // in the same staging context used for measurement before splitting again.
+    const host = !block.element.isConnected ? this.document.createElement("div") : null;
+    const paragraph = host ? block.element.cloneNode(true) as HTMLElement : block.element;
+    if (host) {
+      host.style.cssText = `position:absolute;visibility:hidden;left:-9999px;width:${dims.contentWidth}pt`;
+      host.appendChild(paragraph);
+      this.stagingElement.appendChild(host);
+    }
+    let split: ParagraphSplitAttempt;
+    try {
+      if (!this.canFragmentParagraph({ ...block, element: paragraph })) return null;
+
+      split = this.splitParagraphAtLargestFit(paragraph, (head) => {
+        const measured = this.measureElement(head, dims, block.sectionIndex);
+        return effectiveMarginTopPt + measured.heightPt <= availableHeightPt;
+      });
+    } finally {
+      host?.remove();
+    }
     if (split.kind !== "split") return null;
 
     const headMeasured = this.measureElement(split.head, dims, block.sectionIndex);
