@@ -1058,6 +1058,8 @@ namespace Docxodus
             };
             MarkupSimplifier.SimplifyMarkup(wordDoc, simplifyMarkupSettings);
 
+            MarkStructuralTableEndParagraphs(wordDoc);
+
             FormattingAssemblerSettings formattingAssemblerSettings = new FormattingAssemblerSettings
             {
                 RemoveStyleNamesFromParagraphAndRunProperties = false,
@@ -6992,6 +6994,17 @@ namespace Docxodus
             bool suppressLeadingWhiteSpace = false)
         {
             var style = DefineParagraphStyle(paragraph, elementName, suppressTrailingWhiteSpace, currentMarginLeft, isBidi, suppressLeadingWhiteSpace);
+            if ((string?)paragraph.Attribute(StructuralTableEndParagraphAttribute) == "true")
+            {
+                // A nested table's required, unformatted cell-end paragraph is a structural
+                // boundary, not an additional blank text line. Keep a one-twip box so the
+                // source paragraph retains positive PageMap geometry without adding the
+                // inherited line height and space-after to the containing row.
+                style.Remove(AutomaticLineSpacingMultiplierCssProperty);
+                style["line-height"] = "0.05pt";
+                style["margin-top"] = "0";
+                style["margin-bottom"] = "0";
+            }
             var rtl = isBidi ? new XAttribute("dir", "rtl") : new XAttribute("dir", "ltr");
             var firstMark = isBidi ? new XEntity("#x200f") : null;
             var anchorAttr = settings.StampAnchors && (string?)paragraph.Attribute(PtOpenXml.Unid) != null
@@ -7059,6 +7072,30 @@ namespace Docxodus
 
         private const string AutomaticLineSpacingMultiplierCssProperty = "--docx-auto-line-spacing";
         private const string ExactLineSpacingCssProperty = "--docx-exact-line-height";
+        private static readonly XName StructuralTableEndParagraphAttribute =
+            XName.Get("table-end-paragraph", "urn:docxodus:rendering");
+
+        private static void MarkStructuralTableEndParagraphs(WordprocessingDocument wordDoc)
+        {
+            // Inspect source formatting before assembly expands inherited paragraph/run
+            // defaults. An explicitly formatted blank paragraph remains a real blank line.
+            foreach (var part in wordDoc.ContentParts())
+            {
+                foreach (var paragraph in part.GetXDocument().Descendants(W.p))
+                {
+                    if (paragraph.Parent?.Name != W.tc || paragraph.ElementsAfterSelf().Any() ||
+                        paragraph.ElementsBeforeSelf().LastOrDefault()?.Name != W.tbl ||
+                        paragraph.Element(W.pPr)?.HasElements == true)
+                        continue;
+                    var empty = paragraph.Elements().Where(e => e.Name != W.pPr).All(e =>
+                        e.Name == W.r && e.Elements().All(child =>
+                            (child.Name == W.t && child.Value.Length == 0) ||
+                            (child.Name == W.rPr && !child.HasElements)));
+                    if (empty)
+                        paragraph.SetAttributeValue(StructuralTableEndParagraphAttribute, "true");
+                }
+            }
+        }
 
         /// <summary>
         /// OOXML auto line spacing is a multiple of the font's native single-line height, not a
