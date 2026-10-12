@@ -6,6 +6,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import {
   DEFAULT_EXPORT_RESOURCE_LIMITS,
+  renderedSourceMeasurerExpression,
   type PaginatedHtmlOptions,
 } from "docxodus/export-browser";
 import { loadVerifiedAssetGraph } from "./assets.js";
@@ -572,7 +573,9 @@ async function validatePrintDocument(
   page: Page,
   expectedPageMap: BrowserMaterializationSuccess["pageMap"],
 ): Promise<void> {
-  const audit = await page.evaluate(async () => {
+  const auditDocument = async (measureRenderedSource: (
+    view: Window, element: HTMLElement, page: HTMLElement, pageRect: DOMRect,
+  ) => { rect: DOMRect; visible: { left: number; top: number; right: number; bottom: number } }) => {
     await document.fonts.ready;
     await Promise.all(Array.from(document.images, async (image) => {
       if (!image.complete) {
@@ -614,27 +617,8 @@ async function validatePrintDocument(
       ))) {
         const style = getComputedStyle(element);
         if (style.display === "none" || style.visibility === "hidden") continue;
-        const rect = element.getBoundingClientRect();
-        let left = Math.max(rect.left, pageRect.left);
-        let top = Math.max(rect.top, pageRect.top);
-        let right = Math.min(rect.right, pageRect.right);
-        let bottom = Math.min(rect.bottom, pageRect.bottom);
-        const clips = (value: string) =>
-          value === "hidden" || value === "clip" || value === "scroll" || value === "auto";
-        for (let ancestor = element.parentElement;
-          ancestor && ancestor !== pageElement;
-          ancestor = ancestor.parentElement) {
-          const ancestorStyle = getComputedStyle(ancestor);
-          const ancestorRect = ancestor.getBoundingClientRect();
-          if (clips(ancestorStyle.overflowX)) {
-            left = Math.max(left, ancestorRect.left);
-            right = Math.min(right, ancestorRect.right);
-          }
-          if (clips(ancestorStyle.overflowY)) {
-            top = Math.max(top, ancestorRect.top);
-            bottom = Math.min(bottom, ancestorRect.bottom);
-          }
-        }
+        const { rect, visible } = measureRenderedSource(window, element, pageElement, pageRect);
+        const { left, top, right, bottom } = visible;
         if (rect.width <= 0 || rect.height <= 0 || right <= left || bottom <= top) continue;
         const anchorId = element.dataset.sourceAnchorId!;
         fragments.push({
@@ -671,7 +655,11 @@ async function validatePrintDocument(
       }),
       fragments,
     };
-  });
+  };
+  // Evaluate trusted runtime functions through Playwright, leaving the print snapshot inert.
+  const audit = await page.evaluate<Awaited<ReturnType<typeof auditDocument>>>(
+    `(${auditDocument.toString()})(${renderedSourceMeasurerExpression()})`,
+  );
   if (!audit.fontsLoaded || audit.activeElements !== 0
     || audit.pages.length !== expectedPageMap.pages.length
     || audit.fragments.length !== expectedPageMap.fragments.length) {

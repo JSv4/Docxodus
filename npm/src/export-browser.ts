@@ -11,6 +11,7 @@ import { assertWellFormedUnicode, canonicalJson } from "./canonical.js";
 import { alignBaselinesToWord, applyUnroundedNormalLineHeights, isPreservedExactLineInk } from "./line-metrics.js";
 import { prepareWordText, paintWordText } from "./word-text.js";
 import { measureRenderedSource, PaginationEngine, type PageMap } from "./pagination.js";
+export { renderedSourceMeasurerExpression } from "./pagination.js";
 import {
   createWorkerDocxodus,
   workerErrorCode,
