@@ -2091,6 +2091,78 @@ public class HtmlConversionOpsTests
             e.Name.LocalName == "span" && !e.HasElements && e.Value.Length == 0));
     }
 
+    [Theory]
+    [InlineData("body", true, false, false)]
+    [InlineData("header", true, false, false)]
+    [InlineData("footer", true, false, false)]
+    [InlineData("header", true, false, true)]
+    [InlineData("header", false, false, false)]
+    [InlineData("header", true, true, false)]
+    public void HCO102_HiddenOnlyParagraph_KeepsVisibleMarkWithoutRevealingItsRun(
+        string story, bool hidden, bool mixed, bool inherited)
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms,
+                   DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            var runProperties = inherited
+                ? new Wp.RunProperties(new Wp.RunStyle { Val = "Concealed" })
+                : new Wp.RunProperties(new Wp.Vanish { Val = hidden });
+            var paragraph = new Wp.Paragraph(new Wp.Run(runProperties,
+                new Wp.Text("Concealed archive note.")));
+            if (mixed) paragraph.Append(new Wp.Run(new Wp.Text("Visible label.")));
+            var body = new Wp.Body();
+            if (story == "body") body.Append(paragraph);
+            else
+            {
+                body.Append(new Wp.Paragraph(new Wp.Run(new Wp.Text("Body control."))));
+                if (story == "header")
+                {
+                    var part = main.AddNewPart<HeaderPart>();
+                    part.Header = new Wp.Header(paragraph);
+                    body.Append(new Wp.SectionProperties(new Wp.HeaderReference
+                        { Id = main.GetIdOfPart(part), Type = Wp.HeaderFooterValues.Default }));
+                }
+                else
+                {
+                    var part = main.AddNewPart<FooterPart>();
+                    part.Footer = new Wp.Footer(paragraph);
+                    body.Append(new Wp.SectionProperties(new Wp.FooterReference
+                        { Id = main.GetIdOfPart(part), Type = Wp.HeaderFooterValues.Default }));
+                }
+            }
+            main.Document = new Wp.Document(body);
+            var styles = new Wp.Styles(new Wp.DocDefaults(new Wp.RunPropertiesDefault(
+                new Wp.RunPropertiesBaseStyle(new Wp.FontSize { Val = "24" }))));
+            if (inherited) styles.Append(new Wp.Style(new Wp.StyleName { Val = "Concealed" },
+                new Wp.StyleRunProperties(new Wp.Vanish()))
+                { Type = Wp.StyleValues.Character, StyleId = "Concealed" });
+            main.AddNewPart<StyleDefinitionsPart>().Styles = styles;
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
+            main.Document.Save();
+        }
+        using (var validation = WordprocessingDocument.Open(new MemoryStream(ms.ToArray()), false))
+            Assert.Empty(new DocumentFormat.OpenXml.Validation.OpenXmlValidator(
+                DocumentFormat.OpenXml.FileFormatVersions.Office2019).Validate(validation));
+        var html = XElement.Parse(HtmlConversionOps.ConvertToHtml(ms.ToArray(),
+            new HtmlConversionOptions { FabricateCssClasses = false,
+                RenderHeadersAndFooters = true, PaginationMode = (int)PaginationMode.Paginated }));
+        var paragraphHtml = html.Descendants().Single(e => e.Name.LocalName == "p" &&
+            e.Value.Contains("Concealed archive note."));
+        var concealed = paragraphHtml.Descendants().Single(e => e.Name.LocalName == "span" &&
+            e.Value == "Concealed archive note.");
+        Assert.Equal(hidden, ((string?)concealed.Attribute("style"))?.Contains("display: none") == true);
+        var placeholders = paragraphHtml.Descendants().Where(e => e.Name.LocalName == "span" &&
+            e.Value == "\u00A0").ToArray();
+        if (hidden && !mixed)
+        {
+            Assert.Single(placeholders);
+            Assert.DoesNotContain("display: none", (string?)placeholders[0].Attribute("style"));
+        }
+        else Assert.Empty(placeholders);
+    }
+
     // Error contract: an unresolvable anchor maps to JSON null; good anchors in the
     // same call still render. (The reconciler falls back to a full remount per null.)
     [Fact]
