@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [13.0.0] - 2026-10-12
+
 ### Added
 
 - LibreOffice tracked-drawing diagnostics and a reproducible interoperability matrix (issue #1045).
@@ -262,6 +264,23 @@ All notable changes to this project will be documented in this file.
   major version. (#977)
 
 ### Fixed
+
+- Paginated PDF export preserves an anchored text box's absolute width and height when its
+  Word relative-size percentages are zero (issue #1076). Positive percentages still resize it;
+  a zero value no longer collapses the box or causes an output-verification failure.
+- A paragraph containing only hidden text retains its visible paragraph-mark line in the body,
+  headers and footers (issue #1077), including inherited hidden formatting. Hidden text stays
+  hidden; the following content keeps the same position as after an ordinary empty paragraph.
+- PDF print verification uses the finalized PageMap's fragment measurement (issue #1078).
+  Zero-width paragraph containers with visible text and otherwise empty paragraphs hosting
+  floating drawings now export successfully without weakening fragment identity, geometry or
+  active-content checks.
+- Rendering preserves fractional text baselines in ordinary paragraphs, multi-column pages and
+  text wrapping around anchored pictures (PRs #1092–#1094). Column breaks, inherited note-marker
+  and cell-margin formatting, picture wrap contours, column-edge anchors and structural empty
+  paragraphs after nested tables also retain their intended geometry (PRs #1074, #1075 and #1091).
+- Final continuous-section columns fill the available page band and reset heading spacing on
+  column continuations (PR #1069).
 
 - Comparisons preserve font and spacing changes when the two documents assign their default
   paragraph style to different IDs (issue #1050). Revised paragraphs select the revised definition
