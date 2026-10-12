@@ -11276,9 +11276,9 @@ namespace Docxodus
         /// wrapTight, or wrapThrough; without a flow exclusion the picture behaves as an inline
         /// object and every following line resumes below it. A CSS float is the closest
         /// flow-level equivalent: it excludes the anchored rect from the line layout of the
-        /// current and following blocks in both continuous and paginated rendering. wrapTight's
-        /// polygon degrades to its bounding box (identical for the rectangular polygons Word
-        /// writes for photos); wrapTopAndBottom and wrapNone keep the existing placement.
+        /// current and following blocks in both continuous and paginated rendering. Tight and
+        /// through wrapping retain the source contour as a CSS shape rather than excluding the
+        /// entire picture rectangle. wrapTopAndBottom and wrapNone keep the existing placement.
         /// </summary>
         private static XElement? ApplyAnchorTextWrap(XElement? imageHtml, XElement drawingContainer)
         {
@@ -11298,9 +11298,50 @@ namespace Docxodus
             // exactly what CSS margins are on a float.
             var style = new Dictionary<string, string> { { "float", side } };
             AddEmuPadding(style, "margin-top", (long?)drawingContainer.Attribute(NoNamespace.distT));
-            AddEmuPadding(style, "margin-right", (long?)drawingContainer.Attribute(NoNamespace.distR));
+            var rightDistance = (long?)wrap.Attribute(NoNamespace.distR)
+                ?? (long?)drawingContainer.Attribute(NoNamespace.distR);
+            var leftDistance = (long?)wrap.Attribute(NoNamespace.distL)
+                ?? (long?)drawingContainer.Attribute(NoNamespace.distL);
+            AddEmuPadding(style, "margin-right", rightDistance);
             AddEmuPadding(style, "margin-bottom", (long?)drawingContainer.Attribute(NoNamespace.distB));
-            AddEmuPadding(style, "margin-left", (long?)drawingContainer.Attribute(NoNamespace.distL));
+            AddEmuPadding(style, "margin-left", leftDistance);
+
+            // A column-edge picture starts at its anchor, not at the text-clearance inset.
+            // There is no text outside that edge for the outer margin to exclude. Retain the
+            // established fallback for offset anchors that cannot be placed by an edge float.
+            var positionH = drawingContainer.Element(WP.positionH);
+            var relativeFrom = (string?)positionH?.Attribute(NoNamespace.relativeFrom);
+            var alignment = positionH?.Element(WP.align)?.Value;
+            var offset = (long?)positionH?.Element(WP.posOffset);
+            if (relativeFrom == "column" && side == "left" &&
+                (alignment == "left" || offset == 0))
+                style["margin-left"] = "0pt";
+            if (relativeFrom == "column" && side == "right" && alignment == "right")
+                style["margin-right"] = "0pt";
+
+            var extent = drawingContainer.Element(WP.extent);
+            var width = (long?)extent?.Attribute(NoNamespace.cx);
+            var height = (long?)extent?.Attribute(NoNamespace.cy);
+            var polygon = wrap.Element(WP.wrapPolygon);
+            if (polygon != null && width is > 0 && height is > 0)
+            {
+                var points = polygon.Elements().Where(e => e.Name == WP.start || e.Name == WP.lineTo)
+                    .Select(e => new { X = (long?)e.Attribute(NoNamespace.x), Y = (long?)e.Attribute(NoNamespace.y) })
+                    .ToList();
+                if (points.Count >= 3 && points.All(p => p.X != null && p.Y != null))
+                {
+                    // DrawingML contour coordinates are relative to a 21600 by 21600 box.
+                    // Explicit float dimensions keep CSS from resolving the contour against
+                    // an inline image's extra baseline/descent space.
+                    AddEmuDimensions(style, width, height);
+                    style["shape-outside"] = "polygon(" + string.Join(", ", points.Select(p =>
+                        string.Format(NumberFormatInfo.InvariantInfo, "{0:0.####}% {1:0.####}%",
+                            p.X!.Value / 216m, p.Y!.Value / 216m))) + ") border-box";
+                    var clearance = Math.Max(leftDistance ?? 0, rightDistance ?? 0);
+                    if (clearance > 0)
+                        style["shape-margin"] = (clearance / 12700m).ToString("0.####", NumberFormatInfo.InvariantInfo) + "pt";
+                }
+            }
 
             var wrapper = new XElement(Xhtml.span, imageHtml);
             wrapper.AddAnnotation(style);

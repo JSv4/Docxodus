@@ -1537,8 +1537,8 @@ public class HtmlConversionOpsTests
         Assert.Contains("margin-right: 9pt", html);
     }
 
-    // wrapTight's polygon degrades to its bounding box. This picture sits at column offset 0,
-    // so its center is left of the column midpoint and it floats left.
+    // This picture sits at column offset 0, so its center is left of the column
+    // midpoint and its contour excludes text to the right of the left float.
     [Fact]
     public void HCO093_AnchoredPictureWithTightWrap_FloatsLeft()
     {
