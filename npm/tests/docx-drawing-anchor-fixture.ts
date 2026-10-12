@@ -19,6 +19,8 @@ export interface DrawingAnchorFixtureOptions {
   text?: string;
   /** Stored extent. Auto-fit boxes deliberately carry a wrong one, as Word's own files do. */
   extentEmu?: { cx: number; cy: number };
+  /** Relative dimensions in OOXML thousandths of a percent, independently optional. */
+  relativeSize?: { width?: number; height?: number };
   /**
    * `w:spacing w:line` in 240ths of a line with `w:lineRule="auto"` on the textbox paragraph.
    * Auto line spacing is a multiple of the FONT's line box, so this is what a content-driven
@@ -54,9 +56,14 @@ export function generateDrawingAnchorDocx(options: DrawingAnchorFixtureOptions):
     : '';
   const bodyText = options.text ?? 'ANCHOR';
   const autoFit = options.autoFit ? '<a:spAutoFit/>' : '';
+  const relativeSize = (options.relativeSize?.width !== undefined
+    ? `<wp14:sizeRelH relativeFrom="margin"><wp14:pctWidth>${options.relativeSize.width}</wp14:pctWidth></wp14:sizeRelH>` : '')
+    + (options.relativeSize?.height !== undefined
+      ? `<wp14:sizeRelV relativeFrom="margin"><wp14:pctHeight>${options.relativeSize.height}</wp14:pctHeight></wp14:sizeRelV>` : '');
 
   const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="${w}" xmlns:wp="${wp}" xmlns:a="${a}" xmlns:wps="${wps}">
+<w:document xmlns:w="${w}" xmlns:wp="${wp}" xmlns:a="${a}" xmlns:wps="${wps}"
+  xmlns:wp14="http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing">
   <w:body>
     <w:p>${prefix}<w:r><w:drawing>
       <wp:anchor distT="152400" distR="304800" distB="381000" distL="457200"
@@ -69,10 +76,12 @@ export function generateDrawingAnchorDocx(options: DrawingAnchorFixtureOptions):
         <wp:docPr id="1" name="Generated anchor"/>
         <wp:cNvGraphicFramePr/>
         <a:graphic><a:graphicData uri="${wps}"><wps:wsp>
+          <wps:cNvSpPr txBox="1"/>
           <wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${extent.cx}" cy="${extent.cy}"/></a:xfrm></wps:spPr>
           <wps:txbx><w:txbxContent><w:p>${bodySpacing}<w:r><w:t xml:space="preserve">${bodyText}</w:t></w:r></w:p></w:txbxContent></wps:txbx>
           <wps:bodyPr lIns="114300" tIns="76200" rIns="228600" bIns="12700">${autoFit}</wps:bodyPr>
         </wps:wsp></a:graphicData></a:graphic>
+        ${relativeSize}
       </wp:anchor>
     </w:drawing></w:r></w:p>
     <w:sectPr><w:pgSz w:w="12240" w:h="15840"/>
