@@ -2,7 +2,7 @@
  * Fractional baselines for uniform Word paragraphs in the standalone export.
  *
  * HTML print snaps each inline baseline to a whole CSS pixel, even with an
- * explicit fractional line height. A paragraph-contained SVG retains the
+ * explicit fractional line height. An SVG retains the
  * measured line breaks and word positions while painting the baselines at the
  * font's unrounded ascent. Source paragraph identities and block geometry stay
  * on the original elements. Complex flow still uses the existing HTML renderer.
@@ -13,8 +13,9 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 const PARAGRAPHS = 'p, h1, h2, h3, h4, h5, h6';
 
 function plainDocument(root: HTMLElement): boolean {
-  if (root.querySelector('table, img, svg, math, canvas, video, audio, iframe, object, a, ol, ul, aside, template, header, footer, [data-hf-type], section.footnotes, section.endnotes'))
+  if (root.querySelector('table, svg, math, canvas, video, audio, iframe, object, a, ol, ul, aside, template, header, footer, [data-hf-type], section.footnotes, section.endnotes'))
     return false;
+  if (Array.from(root.querySelectorAll('img')).some(img => !img.closest(PARAGRAPHS))) return false;
   // A document mixing plain text with shifted runs, exact spacing or rich
   // inline structure keeps one consistent legacy layout. Those contexts need
   // their own line model before they can share the precision renderer.
@@ -23,6 +24,21 @@ function plainDocument(root: HTMLElement): boolean {
     return run !== null && Number(root.ownerDocument.defaultView?.getComputedStyle(p)
       .getPropertyValue('--docx-auto-line-spacing')) > 0;
   });
+}
+
+function pictureSibling(element: Element, view: Window & typeof globalThis): boolean {
+  if (!(element instanceof view.HTMLElement) || element.localName !== 'span' || element.children.length !== 1)
+    return false;
+  const wrapper = element.firstElementChild!;
+  if (wrapper.localName !== 'span' || wrapper.children.length !== 1 || wrapper.firstElementChild?.localName !== 'img')
+    return false;
+  if ((wrapper as HTMLElement).dataset.docxEdgePicture !== 'true') return false;
+  const style = view.getComputedStyle(wrapper);
+  const outer = view.getComputedStyle(element);
+  const image = view.getComputedStyle(wrapper.firstElementChild);
+  return ['left', 'right'].includes(style.cssFloat) && style.position === 'static' && style.transform === 'none' &&
+    outer.display === 'inline' && ['static', 'relative'].includes(outer.position) && outer.transform === 'none' &&
+    image.transform === 'none' && image.position === 'static';
 }
 
 function plainRun(paragraph: HTMLElement): HTMLElement | null {
@@ -36,9 +52,15 @@ function plainRun(paragraph: HTMLElement): HTMLElement | null {
     // The converter carries an explicit column break on the paragraph and
     // leaves an empty run where the break appeared. It has no text identity;
     // accept only empty spans with the same line metrics as the visible run.
-    if (paragraph.dataset.columnBreakBefore !== 'true') return null;
     const runStyle = view.getComputedStyle(run);
     for (const empty of children.filter(child => child !== run)) {
+      if (pictureSibling(empty, view)) {
+        const pictureStyle = view.getComputedStyle(empty);
+        if (['font-size', 'font-style', 'font-weight', 'vertical-align'].some(property =>
+          pictureStyle.getPropertyValue(property) !== runStyle.getPropertyValue(property))) return null;
+        continue;
+      }
+      if (paragraph.dataset.columnBreakBefore !== 'true') return null;
       if (!(empty instanceof view.HTMLElement) || empty.localName !== 'span' || empty.childNodes.length ||
         Array.from(empty.attributes).some(a => !['class', 'style', 'lang', 'dir'].includes(a.name))) return null;
       const emptyStyle = view.getComputedStyle(empty);
@@ -68,6 +90,88 @@ function plainRun(paragraph: HTMLElement): HTMLElement | null {
   return run;
 }
 
+/** Word excludes the contour across the native text band, with horizontal clearance. */
+function contourRows(image: HTMLImageElement, paragraph: HTMLElement, run: HTMLElement, lineCount: number, checkpoint?: () => void):
+  Map<number, Array<{ text: string; x: number }>> | null {
+  const view = paragraph.ownerDocument.defaultView!;
+  const wrapper = image.parentElement!;
+  if (wrapper.dataset.docxWrapText !== 'bothSides' ||
+      image.closest('.page-content') !== paragraph.closest('.page-content')) return null;
+  const wrapStyle = view.getComputedStyle(wrapper);
+  if (wrapStyle.marginTop !== '0px' || wrapStyle.marginBottom !== '0px') return null;
+  const polygon = /^polygon\((.*)\) border-box$/.exec(wrapStyle.shapeOutside);
+  if (!polygon) return null;
+  const points = polygon[1].split(',').map(point => {
+    const match = /^\s*([\d.+-]+)%\s+([\d.+-]+)%\s*$/.exec(point);
+    return match ? { x: Number(match[1]) / 100, y: Number(match[2]) / 100 } : null;
+  });
+  if (points.length < 3 || points.some(p => !p || !Number.isFinite(p.x + p.y))) return null;
+  const vertices = points as Array<{ x: number; y: number }>;
+  // One convex contour has a single excluded interval at each height. More
+  // complex contours keep the established CSS flow until they have a line model.
+  let orientation = 0;
+  for (let i = 0; i < vertices.length; i++) {
+    const a = vertices[i], b = vertices[(i + 1) % vertices.length], c = vertices[(i + 2) % vertices.length];
+    const cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+    if (Math.abs(cross) < 1e-8) continue;
+    if (orientation && Math.sign(cross) !== orientation) return null;
+    orientation = Math.sign(cross);
+  }
+  if (!orientation) return null;
+  const left = Number.parseFloat(wrapStyle.getPropertyValue('--docx-wrap-distance-left')) * 4 / 3;
+  const right = Number.parseFloat(wrapStyle.getPropertyValue('--docx-wrap-distance-right')) * 4 / 3;
+  if (!Number.isFinite(left + right) || left < 0 || right < 0) return null;
+  const box = paragraph.getBoundingClientRect(); const picture = image.getBoundingClientRect();
+  if (box.top >= picture.bottom || box.bottom <= picture.top) return null;
+  const style = view.getComputedStyle(run);
+  if (!['start', 'left'].includes(view.getComputedStyle(paragraph).textAlign)) return null;
+  const pitch = Number.parseFloat(style.lineHeight);
+  const nativeHeight = Number.parseFloat(style.getPropertyValue('--docx-word-native-height'));
+  if (!(nativeHeight > 0) || !(pitch > 0) || !(picture.width > 0) || !(picture.height > 0)) return null;
+  const context = paragraph.ownerDocument.createElement('canvas').getContext('2d');
+  if (!context) return null;
+  const measureScale = Number.parseFloat(style.fontSize) / 10000;
+  context.font = `${style.fontStyle} ${style.fontWeight} 10000px ${style.fontFamily}`;
+  context.fontKerning = style.fontKerning as CanvasFontKerning;
+  if (!context.font.includes('10000px')) return null;
+  const words = Array.from(run.textContent!.matchAll(/\S+\s*/gu), (match, index) => {
+    if ((index & 63) === 0) checkpoint?.();
+    return { text: match[0], width: context.measureText(match[0].trimEnd()).width * measureScale,
+      advance: context.measureText(match[0]).width * measureScale };
+  });
+  const rows = new Map<number, Array<{ text: string; x: number }>>();
+  let next = 0;
+  for (let line = 0; line < lineCount && next < words.length; line++) {
+    checkpoint?.();
+    const top = (box.top + line * pitch - picture.top) / picture.height;
+    const bottom = top + nativeHeight / picture.height;
+    const crossings: number[] = [];
+    for (let i = 0; i < vertices.length; i++) {
+      const a = vertices[i], b = vertices[(i + 1) % vertices.length];
+      if (a.y >= top && a.y <= bottom) crossings.push(a.x);
+      for (const y of [top, bottom])
+        if (a.y !== b.y && y >= Math.min(a.y, b.y) && y <= Math.max(a.y, b.y))
+          crossings.push(a.x + (b.x - a.x) * (y - a.y) / (b.y - a.y));
+    }
+    const slots = crossings.length ? [
+      [box.left, Math.min(box.right, picture.left + Math.min(...crossings) * picture.width - left)],
+      [Math.max(box.left, picture.left + Math.max(...crossings) * picture.width + right), box.right],
+    ] : [[box.left, box.right]];
+    const row: Array<{ text: string; x: number }> = [];
+    for (const [start, end] of slots) {
+      let x = start;
+      while (next < words.length && x + words[next].width <= end + 1 / 64) {
+        const word = words[next++]; row.push({ text: word.text, x: x - box.left }); x += word.advance;
+      }
+    }
+    if (!row.length) return null;
+    rows.set(line, row);
+  }
+  // Painting cannot change pagination or paragraph geometry. Use this model
+  // only when its complete source inventory fits the measured number of lines.
+  return next === words.length && rows.size === lineCount ? rows : null;
+}
+
 /** Run after fonts and natural line heights resolve, before pagination measures them. */
 export function prepareWordText(root: HTMLElement, checkpoint?: () => void): number {
   if (!plainDocument(root)) return 0;
@@ -86,11 +190,19 @@ export function prepareWordText(root: HTMLElement, checkpoint?: () => void): num
     if (!(multiple > 0) || !(height > 0) || !['none', 'normal'].includes(kerning)) continue;
     // Word's auto spacing advances on the document's twip grid. Resolve the
     // native single-line height to twips before applying its spacing multiple.
-    const twips = Math.floor(Math.round(height / multiple * 15) * multiple);
+    const nativeTwips = Math.round(height / multiple * 15);
+    const twips = Math.floor(nativeTwips * multiple);
     if (!(twips > 0)) continue;
     run.style.fontKerning = kerning;
     run.style.lineHeight = `${twips / 15}px`;
-    for (const empty of Array.from(paragraph.children).filter(child => child !== run)) empty.remove();
+    run.style.setProperty('--docx-word-native-height', `${nativeTwips / 15}px`);
+    // An empty drawing run participates in the first inline box. Give it the
+    // same resolved height so its inherited auto multiplier is not applied twice.
+    for (const picture of Array.from(paragraph.children).filter(child => pictureSibling(child, view))) {
+      (picture as HTMLElement).style.lineHeight = run.style.lineHeight;
+      (picture as HTMLElement).style.top = '0';
+    }
+    for (const empty of Array.from(paragraph.children).filter(child => child !== run && !child.children.length)) empty.remove();
     paragraph.style.lineHeight = run.style.lineHeight;
     paragraph.setAttribute(PREPARED, 'true');
     prepared++;
@@ -104,6 +216,8 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
   const view = document.defaultView;
   if (!view) return 0;
   const paragraphs = Array.from(root.querySelectorAll<HTMLElement>(`[${PREPARED}]`));
+  const pictures = Array.from(root.querySelectorAll('img'));
+  const hasPictures = pictures.length > 0;
   const columnOf = (paragraph: HTMLElement): HTMLElement | null => {
     for (let parent = paragraph.parentElement; parent && parent !== root; parent = parent.parentElement)
       if (Number(view.getComputedStyle(parent).columnCount) > 1) return parent;
@@ -141,7 +255,7 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
     return result;
   }
 
-  const pending: Array<{ paragraph: HTMLElement; svg: SVGSVGElement; height: number }> = [];
+  const pending: Array<{ paragraph: HTMLElement; run: HTMLElement; svg: SVGSVGElement; height: number }> = [];
   for (const paragraph of paragraphs) {
     checkpoint?.();
     const column = columnOf(paragraph);
@@ -157,10 +271,10 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
     const pitch = Number.parseFloat(style.lineHeight);
     const box = paragraph.getBoundingClientRect();
     if (!metric || !(fontSize > 0) || !(pitch > 0) || !(box.width > 0) || !(box.height > 0)) continue;
-    const columnBand = column ? paragraph.closest<HTMLElement>('.page-content') : null;
+    const columnBand = column || hasPictures ? paragraph.closest<HTMLElement>('.page-content') : null;
     const band = columnBand?.getBoundingClientRect() ?? box;
     const text = run.textContent!;
-    const rows = new Map<number, Array<{ text: string; x: number }>>();
+    let rows = new Map<number, Array<{ text: string; x: number }>>();
     let wordCount = 0;
     for (const match of text.matchAll(/\S+\s*/gu)) {
       if ((wordCount++ & 63) === 0) checkpoint?.();
@@ -174,6 +288,7 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
       rows.set(row, words);
     }
     if (!rows.size) continue;
+    if (pictures.length === 1) rows = contourRows(pictures[0], paragraph, run, rows.size, checkpoint) ?? rows;
     const svg = document.createElementNS(SVG_NS, 'svg');
     svg.setAttribute('width', String(band.width));
     svg.setAttribute('height', String(band.height));
@@ -201,13 +316,14 @@ export function paintWordText(root: HTMLElement, checkpoint?: () => void): numbe
       }
       svg.append(line);
     });
-    pending.push({ paragraph, svg, height: box.height });
+    pending.push({ paragraph, run, svg, height: box.height });
   }
   // Read every line before replacing any paragraph, so one vector box cannot
   // change the column coordinates used to measure the following paragraph.
-  for (const { paragraph, svg, height } of pending) {
+  for (const { paragraph, run, svg, height } of pending) {
     checkpoint?.();
-    paragraph.replaceChildren(svg);
+    if (Array.from(paragraph.children).some(child => pictureSibling(child, view))) run.replaceWith(svg);
+    else paragraph.replaceChildren(svg);
     // CSSOM rounds a numeric height when serializing an inline declaration.
     // A slightly lower re-parsed value loses one layout unit on every paragraph
     // and shifts PageMap fragments on offline reopen. Custom-property tokens

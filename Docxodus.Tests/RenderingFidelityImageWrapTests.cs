@@ -45,12 +45,14 @@ public class RenderingFidelityImageWrapTests
     }
 
     [Theory]
-    [InlineData("wrapTight")]
-    [InlineData("wrapThrough")]
-    public void ContourUsesDrawingCoordinatesAndWrapElementClearance(string kind)
+    [InlineData("wrapTight", "right")]
+    [InlineData("wrapTight", "bothSides")]
+    [InlineData("wrapThrough", "right")]
+    [InlineData("wrapThrough", "bothSides")]
+    public void ContourUsesDrawingCoordinatesAndWrapElementClearance(string kind, string wrapText)
     {
         var html = Render($"""
-            <wp:{kind} wrapText="right" distR="114300"><wp:wrapPolygon edited="1">
+            <wp:{kind} wrapText="{wrapText}" distR="114300"><wp:wrapPolygon edited="1">
               <wp:start x="0" y="0"/><wp:lineTo x="21600" y="0"/><wp:lineTo x="0" y="21600"/><wp:lineTo x="0" y="0"/>
             </wp:wrapPolygon></wp:{kind}>
             """);
@@ -61,6 +63,10 @@ public class RenderingFidelityImageWrapTests
         Assert.Contains("shape-margin: 9pt", style);
         Assert.Contains("margin-left: 0pt", style);
         Assert.Contains("margin-right: 9pt", style);
+        Assert.Contains("--docx-wrap-distance-left: 5.4pt", style);
+        Assert.Contains("--docx-wrap-distance-right: 9pt", style);
+        Assert.Equal(wrapText, (string?)html.Descendants().Single(e => e.Name.LocalName == "img").Parent!.Attribute("data-docx-wrap-text"));
+        Assert.Equal("true", (string?)html.Descendants().Single(e => e.Name.LocalName == "img").Parent!.Attribute("data-docx-edge-picture"));
         Assert.Contains("Authored wrapping test text.", html.Value);
     }
 
@@ -72,6 +78,8 @@ public class RenderingFidelityImageWrapTests
         Assert.Contains("margin-left: 0pt", style);
         Assert.Contains("margin-right: 5.4pt", style);
         Assert.DoesNotContain("shape-outside", style);
+        Assert.DoesNotContain("data-docx-wrap-text", html.ToString());
+        Assert.Equal("true", (string?)html.Descendants().Single(e => e.Name.LocalName == "img").Parent!.Attribute("data-docx-edge-picture"));
     }
 
     [Fact]
@@ -83,6 +91,15 @@ public class RenderingFidelityImageWrapTests
             </wp:wrapPolygon></wp:wrapTight>
             """);
         Assert.DoesNotContain("shape-outside", html.ToString());
+        Assert.DoesNotContain("data-docx-wrap-text", html.ToString());
+        Assert.Contains("Authored wrapping test text.", html.Value);
+    }
+
+    [Fact]
+    public void OffsetPictureKeepsItsExistingFloatFallback()
+    {
+        var html = Render("<wp:wrapSquare wrapText=\"bothSides\"/>", 127000);
+        Assert.DoesNotContain("data-docx-edge-picture", html.ToString());
         Assert.Contains("Authored wrapping test text.", html.Value);
     }
 }
