@@ -1469,22 +1469,16 @@ namespace Docxodus
                         pageHeightPt = h / 20.0;
                 }
 
-                // Parse page margins (w:pgMar) - values are in twips
+                // Page margins accept twips or universal units (ECMA-376 §17.6.11).
                 var pgMar = sectPr.Element(W.pgMar);
                 if (pgMar != null)
                 {
-                    if (int.TryParse((string?)pgMar.Attribute(W.top), out int top))
-                        marginTopPt = top / 20.0;
-                    if (int.TryParse((string?)pgMar.Attribute(W.right), out int right))
-                        marginRightPt = right / 20.0;
-                    if (int.TryParse((string?)pgMar.Attribute(W.bottom), out int bottom))
-                        marginBottomPt = bottom / 20.0;
-                    if (int.TryParse((string?)pgMar.Attribute(W.left), out int left))
-                        marginLeftPt = left / 20.0;
-                    if (int.TryParse((string?)pgMar.Attribute(W.header), out int header))
-                        headerPt = header / 20.0;
-                    if (int.TryParse((string?)pgMar.Attribute(W.footer), out int footer))
-                        footerPt = footer / 20.0;
+                    marginTopPt = MarginPoints(pgMar, W.top, marginTopPt);
+                    marginRightPt = MarginPoints(pgMar, W.right, marginRightPt);
+                    marginBottomPt = MarginPoints(pgMar, W.bottom, marginBottomPt);
+                    marginLeftPt = MarginPoints(pgMar, W.left, marginLeftPt);
+                    headerPt = MarginPoints(pgMar, W.header, headerPt);
+                    footerPt = MarginPoints(pgMar, W.footer, footerPt);
                 }
             }
 
@@ -1493,6 +1487,12 @@ namespace Docxodus
 
             return (pageWidthPt, pageHeightPt, marginTopPt, marginRightPt, marginBottomPt, marginLeftPt,
                 contentWidthPt, contentHeightPt, headerPt, footerPt);
+        }
+
+        private static double MarginPoints(XElement margins, XName name, double fallback)
+        {
+            var twips = WordprocessingMLUtil.AttributeToDecimalTwips(margins.Attribute(name));
+            return twips.HasValue ? (double)(twips.Value / 20m) : fallback;
         }
 
         /// <summary>
@@ -9727,18 +9727,12 @@ namespace Docxodus
                 var pgMar = sectPr.Element(W.pgMar);
                 if (pgMar != null)
                 {
-                    if (int.TryParse((string?)pgMar.Attribute(W.top), out int top))
-                        dims.MarginTopPt = top / 20.0;
-                    if (int.TryParse((string?)pgMar.Attribute(W.right), out int right))
-                        dims.MarginRightPt = right / 20.0;
-                    if (int.TryParse((string?)pgMar.Attribute(W.bottom), out int bottom))
-                        dims.MarginBottomPt = bottom / 20.0;
-                    if (int.TryParse((string?)pgMar.Attribute(W.left), out int left))
-                        dims.MarginLeftPt = left / 20.0;
-                    if (int.TryParse((string?)pgMar.Attribute(W.header), out int header))
-                        dims.HeaderPt = header / 20.0;
-                    if (int.TryParse((string?)pgMar.Attribute(W.footer), out int footer))
-                        dims.FooterPt = footer / 20.0;
+                    dims.MarginTopPt = MarginPoints(pgMar, W.top, dims.MarginTopPt);
+                    dims.MarginRightPt = MarginPoints(pgMar, W.right, dims.MarginRightPt);
+                    dims.MarginBottomPt = MarginPoints(pgMar, W.bottom, dims.MarginBottomPt);
+                    dims.MarginLeftPt = MarginPoints(pgMar, W.left, dims.MarginLeftPt);
+                    dims.HeaderPt = MarginPoints(pgMar, W.header, dims.HeaderPt);
+                    dims.FooterPt = MarginPoints(pgMar, W.footer, dims.FooterPt);
                 }
 
                 return dims;
