@@ -9,12 +9,17 @@ export interface VerifiedPdf {
   volatileMetadata: Record<string, string>;
 }
 
-const GEOMETRY_TOLERANCE_POINTS = 0.5;
+const PAGE_ORIGIN_TOLERANCE_POINTS = 0.5;
+// Chromium rounds the CSS page canvas to whole points, then converts through
+// its 300-DPI PDF print units. Bound half a point plus one device unit (0.24pt)
+// and float serialization, measured at 0.58002pt for a requested 842.5pt page.
+// Origins do not undergo this size rounding and retain their tighter guard.
+const PAGE_SIZE_TOLERANCE_POINTS = 0.75;
 const PDF_WHITESPACE = new Set([0x00, 0x09, 0x0a, 0x0c, 0x0d, 0x20]);
 
-function closeTo(actual: number, expected: number): boolean {
+function closeTo(actual: number, expected: number, tolerance = PAGE_ORIGIN_TOLERANCE_POINTS): boolean {
   return Number.isFinite(actual)
-    && Math.abs(actual - expected) <= GEOMETRY_TOLERANCE_POINTS;
+    && Math.abs(actual - expected) <= tolerance;
 }
 
 interface PdfRectangle {
@@ -216,7 +221,8 @@ export async function verifyPdf(
     }
     for (const [boxName, box] of [["MediaBox", media], ["CropBox", crop]] as const) {
       if (!closeTo(box.x, 0) || !closeTo(box.y, 0)
-        || !closeTo(box.width, expected.width) || !closeTo(box.height, expected.height)) {
+        || !closeTo(box.width, expected.width, PAGE_SIZE_TOLERANCE_POINTS)
+        || !closeTo(box.height, expected.height, PAGE_SIZE_TOLERANCE_POINTS)) {
         exportError(
           "output_verification_failure",
           "output_verification",
