@@ -270,6 +270,7 @@ public static class PackageManifestGenerator
                 ArchiveIndex = index,
                 Uri = uri,
                 IsDirectory = isDirectory,
+                IsTrash = IsStandardTrashItemName(archiveEntry.FullName),
                 Size = length,
                 CompressedSize = compressedLength,
                 IsEncrypted = encrypted,
@@ -297,13 +298,16 @@ public static class PackageManifestGenerator
             works, allEntryUris, totalLimitExceeded, options, readBudget, findings);
         foreach (var work in works)
         {
-            (work.ContentType, work.ContentTypeSource) = contentTypeMap.Resolve(work.Uri);
-            work.IsXml = !work.IsDirectory && IsXml(work.Uri, work.ContentType);
+            // ECMA-376-1 §9.1.5 trash items are ZIP artifacts, not OPC parts. A Default
+            // for .dat does not turn such an item into a part or associate a content type.
+            if (!work.IsTrash)
+                (work.ContentType, work.ContentTypeSource) = contentTypeMap.Resolve(work.Uri);
+            work.IsXml = !work.IsDirectory && !work.IsTrash && IsXml(work.Uri, work.ContentType);
 
             // Only a readable [Content_Types].xml lets us claim a *part* has no declaration.
             // Reporting it per entry when the map itself was never parsed turns one systemic
             // failure into one error per entry and misnames the cause.
-            if (work.ContentType is null && !work.IsDirectory && contentTypeMap.IsAvailable)
+            if (work.ContentType is null && !work.IsDirectory && !work.IsTrash && contentTypeMap.IsAvailable)
             {
                 AddFinding(findings, "missing_content_type", VerificationFindingSeverity.Error,
                     "No content-type Override or Default matches this package entry.",
@@ -1330,17 +1334,30 @@ public static class PackageManifestGenerator
     private static bool IsAsciiLetter(char value) =>
         value is >= 'A' and <= 'Z' or >= 'a' and <= 'z';
 
+    private static bool IsStandardTrashItemName(string name)
+    {
+        // Only this exact trash naming scheme is exempt from OPC part-name grammar.
+        if (name.Length != 16 || !name.StartsWith("[trash]/", StringComparison.Ordinal)
+            || !name.EndsWith(".dat", StringComparison.Ordinal))
+            return false;
+        for (var index = 8; index < 12; index++)
+            if (!Uri.IsHexDigit(name[index])) return false;
+        return true;
+    }
+
     internal static bool TryCanonicalizeEntryName(string name, out string canonical)
     {
         canonical = "/" + name.Replace('\\', '/').TrimStart('/');
 
         // The content-types stream is a package metadata item, not an OPC part name. Its square
-        // brackets are therefore the one deliberate exception to the isegment-nz grammar.
+        // brackets are permitted outside the OPC part-name segment grammar.
         if (PartNameComparer.Equals(name, "[Content_Types].xml"))
         {
             canonical = ContentTypesUri;
             return true;
         }
+        if (IsStandardTrashItemName(name))
+            return true;
 
         // A single trailing forward slash marks a directory-only entry. Those are packaging
         // artifacts, not OPC parts, so the grammar is applied to the path they name and the
@@ -2655,6 +2672,7 @@ public static class PackageManifestGenerator
         required public int ArchiveIndex { get; init; }
         required public string Uri { get; init; }
         required public bool IsDirectory { get; init; }
+        public bool IsTrash { get; init; }
         required public long Size { get; init; }
         required public long CompressedSize { get; init; }
         public bool? IsEncrypted { get; init; }
