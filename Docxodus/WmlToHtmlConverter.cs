@@ -7349,7 +7349,7 @@ namespace Docxodus
         {
             if (ind == null) return;
 
-            var left = (decimal?) WordprocessingMLUtil.IndLeadingAttribute(ind);
+            var left = WordprocessingMLUtil.AttributeToDecimalTwips(WordprocessingMLUtil.IndLeadingAttribute(ind));
             if (left != null && elementName != Xhtml.span)
             {
                 var leftInInches = (decimal) left/1440 - currentMarginLeft;
@@ -7359,7 +7359,7 @@ namespace Docxodus
                         : "0");
             }
 
-            var right = (decimal?) WordprocessingMLUtil.IndTrailingAttribute(ind);
+            var right = WordprocessingMLUtil.AttributeToDecimalTwips(WordprocessingMLUtil.IndTrailingAttribute(ind));
             if (right != null)
             {
                 var rightInInches = (decimal) right/1440;
@@ -9913,8 +9913,8 @@ namespace Docxodus
                     var ind = pPr.Element(W.ind);
                     if (ind != null)
                     {
-                        var leftInInches = (decimal?) WordprocessingMLUtil.IndLeadingAttribute(ind)/1440m ?? 0;
-                        var hangingInInches = -(decimal?) ind.Attribute(W.hanging)/1440m ?? 0;
+                        var leftInInches = WordprocessingMLUtil.AttributeToDecimalTwips(WordprocessingMLUtil.IndLeadingAttribute(ind))/1440m ?? 0;
+                        var hangingInInches = -WordprocessingMLUtil.AttributeToDecimalTwips(ind.Attribute(W.hanging))/1440m ?? 0;
                         currentMarginLeft = leftInInches + hangingInInches;
 
                         style.AddIfMissing("margin-left",
