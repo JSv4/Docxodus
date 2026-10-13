@@ -12,6 +12,7 @@ using System.Xml;
 using System.Linq;
 using System.Xml.Linq;
 using System.Collections.Generic;
+using System.Globalization;
 using DocumentFormat.OpenXml.Packaging;
 using Docxodus.Internal;
 
@@ -939,25 +940,32 @@ namespace Docxodus
 
         public static int? AttributeToTwips(XAttribute? attribute)
         {
-            if (attribute == null)
-            {
-                return null;
-            }
+            return (int?)AttributeToDecimalTwips(attribute);
+        }
 
-            string twipsOrPoints = (string)attribute;
-
-            // if the pos value is in points, not twips
-            if (twipsOrPoints.EndsWith("pt"))
+        // ST_SignedTwipsMeasure permits ST_UniversalMeasure units (ECMA-376-1
+        // §17.18.81 and §22.9.2.15). Keep fractional twips here for CSS callers;
+        // integer consumers retain AttributeToTwips' truncation toward zero.
+        internal static decimal? AttributeToDecimalTwips(XAttribute? attribute)
+        {
+            if (attribute == null) return null;
+            var value = attribute.Value;
+            var unit = value.Length >= 2 ? value.Substring(value.Length - 2) : string.Empty;
+            var hasUnit = unit is "cm" or "mm" or "in" or "pt" or "pc" or "pi";
+            var number = decimal.Parse(hasUnit ? value.Substring(0, value.Length - 2) : value,
+                NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint |
+                NumberStyles.AllowLeadingWhite | NumberStyles.AllowTrailingWhite,
+                CultureInfo.InvariantCulture);
+            // Multiply before dividing to preserve exact values such as 12.7mm.
+            return unit switch
             {
-                decimal decimalValue = decimal.Parse(twipsOrPoints.Substring(0, twipsOrPoints.Length - 2));
-                return (int)(decimalValue * 20);
-            }
-            if (twipsOrPoints.Contains('.'))
-            {
-                decimal decimalValue = decimal.Parse(twipsOrPoints);
-                return (int)decimalValue;
-            }
-            return int.Parse(twipsOrPoints);
+                "cm" => number * 144000m / 254m,
+                "mm" => number * 14400m / 254m,
+                "in" => number * 1440m,
+                "pt" => number * 20m,
+                "pc" or "pi" => number * 240m,
+                _ => number,
+            };
         }
 
         private static readonly List<XName> AdditionalRunContainerNames = new List<XName>
