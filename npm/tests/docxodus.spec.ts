@@ -2,6 +2,7 @@ import { test, expect, Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { generateVerticalMergeDocx } from './docx-vertical-merge-fixture.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1033,8 +1034,8 @@ test.describe('Docxodus WASM Tests', () => {
       expect(paginationResult.fragmentsMissingColgroup).toBe(0);
     });
 
-    test('does not split an oversized table with vertically merged cells', async ({ page }) => {
-      const bytes = readTestFile('HW002-Table17.docx');
+    test('does not split a vertical merge group taller than the page', async ({ page }) => {
+      const bytes = generateVerticalMergeDocx({ mergeSpan: 18, colSpan: 2 });
       const result = await convertToHtmlWithPagination(page, bytes, 1, 1.0);
 
       expect(result.error).toBeUndefined();
@@ -1056,11 +1057,8 @@ test.describe('Docxodus WASM Tests', () => {
           return { error: 'Pagination elements or source table not found' };
         }
 
-        // Make the fixture decisively taller than a body page. The regression is
-        // that merge topology must keep the existing conservative fallback.
-        for (const row of Array.from(sourceTable.rows)) {
-          (row as HTMLElement).style.height = '180pt';
-        }
+        // The original fixture has one 1080pt merge group in a 648pt body.
+        // No complete group fits, so its topology must keep the overflow fallback.
 
         const { PaginationEngine } = (window as any).DocxodusPagination;
         try {
