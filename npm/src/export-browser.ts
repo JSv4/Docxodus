@@ -1623,9 +1623,14 @@ async function preflightManifest(
   }
 
   if (manifest.packageKind !== "opc" || !manifest.isValid || !manifest.facts.mainDocumentUri) {
+    const finding = manifest.findings.find(finding => finding.severity === "error");
     fail("invalid_document", "package_preflight",
       `The input is not a valid DOCX OPC package (${manifest.packageKind}).`,
-      "Repair or decrypt the document before export.");
+      "Repair or decrypt the document before export.", {
+        ...(finding ? { detail: `${finding.code}: ${finding.message}` } : {}),
+        ...(finding?.location?.entryUri ? { partUri: finding.location.entryUri } : {}),
+        ...(finding?.location?.targetUri ? { resource: finding.location.targetUri } : {}),
+      });
   }
   const mainRelationship = manifest.relationships.find((relationship) =>
     relationship.ownerUri === "/"
