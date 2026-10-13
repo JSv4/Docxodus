@@ -10047,8 +10047,10 @@ namespace Docxodus
             }
             else
             {
-                // w:sz is required once the border style isn't nil/none.
-                var sz = (int)side.Attribute(W.sz)!;
+                // CT_Border/@sz is optional with an application-defined default
+                // (ECMA-376-1 §17.3.4). Default to zero, consistent with Word's
+                // documented bar default, before the existing width mapping/minimum.
+                var sz = (int?)side.Attribute(W.sz) ?? 0;
                 var space = (decimal?)side.Attribute(W.space) ?? 0;
                 // `w:color` is a CACHE of the last theme resolution, not the authority: when
                 // `w:themeColor` is present the theme entry (plus any tint/shade) is what the
