@@ -1334,17 +1334,18 @@ export class PaginationEngine {
    * measured with; the header band clips, so the failure mode is a hair of overflow rather than
    * a layout that disagrees with itself.
    *
-   * Scoped to the CLONED header/footer regions on purpose. A page-number field in body text is
+   * Ordinary cached fields are scoped to the CLONED header/footer regions. A page-number field in body text is
    * ordinary run content that the editor may make editable, and committing an edited block writes
    * back whatever text the DOM holds — rewriting it here would mean a body field commits a number
-   * the document never contained. Body content is also not cloned, so it does not have the problem
-   * this method exists to solve.
+   * the document never contained. Legacy w:pgNum blocks are the exception: they have no cached
+   * text and are explicitly non-editable, so their marked projection follows the current page
+   * in every story while ordinary body fields keep their cached results.
    */
   private substitutePageNumberFields(totalPages: number): void {
     const boxes = this.containerElement.querySelectorAll<HTMLElement>(`.${this.cssPrefix}box`);
     for (const box of Array.from(boxes)) {
       const markers = box.querySelectorAll<HTMLElement>(
-        `.${this.cssPrefix}header [data-field], .${this.cssPrefix}footer [data-field]`,
+        `.${this.cssPrefix}header [data-field], .${this.cssPrefix}footer [data-field], [data-legacy-page-number="true"]`,
       );
       if (markers.length === 0) continue;
 
