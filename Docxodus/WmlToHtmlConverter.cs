@@ -3408,6 +3408,23 @@ namespace Docxodus
                 return ConvertTextWithNbsp(element.Value);
             }
 
+            // The legacy page-number block is visible, non-editable decimal
+            // content, rather than an empty run. Give the
+            // paginator a measurable initial value and an explicit decimal
+            // override so a Roman/letter section format cannot change it.
+            if (element.Name == W.pgNum)
+            {
+                return new XElement(Xhtml.span,
+                    new XAttribute("contenteditable", "false"),
+                    settings.RenderPagination == PaginationMode.Paginated || settings.StampPageNumberFields
+                        ? new object[] {
+                            new XAttribute("data-field", "PAGE"),
+                            new XAttribute("data-field-format", "decimal"),
+                            new XAttribute("data-legacy-page-number", "true") }
+                        : null,
+                    "1");
+            }
+
             // Transform symbols to spans
             if (element.Name == W.sym)
             {
