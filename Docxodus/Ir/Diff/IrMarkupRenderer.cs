@@ -3367,13 +3367,13 @@ internal static partial class IrMarkupRenderer
             return empty;
         }
 
-        // A definition is DELETED-ONLY (left-sourced, vanishes on accept) iff every run carrying text is inside a
-        // w:del — i.e. it has w:delText and no live w:t outside a w:del. Its body reference lives in a w:del. A
-        // NON-deleted definition (matched or inserted) is named by an ins/equal reference. This deletedness — NOT
-        // the raw id — is the reliable side discriminator: left and right ids can collide numerically (a deleted
-        // note and a matched note can BOTH land on id 1), but a del reference always names a deleted-only def and
-        // an ins/equal reference always names a non-deleted def. Partitioning the defs this way mirrors the
-        // oracle's disjoint left/right id ranges without needing the preprocess range trick.
+        // A definition is DELETED-ONLY (left-sourced, vanishes on accept) iff it has w:delText and no live w:t
+        // outside a w:del. A del reference names that definition. An ins/equal reference names the live definition
+        // with the same id when one exists. A revised note whose element is empty is rendered with only w:delText,
+        // so it is deleted-only, while the body reference both documents still cite is not inside w:del. That equal
+        // reference names the deleted-only definition; removing it makes accept drop a citation the right document
+        // kept (WC063). Left and right ids can still collide (a deleted note and a matched note can BOTH land on
+        // id 1). The equal reference prefers the live definition.
         bool IsDeletedOnly(XElement note)
         {
             bool hasLiveText = note.Descendants(W.t)
@@ -3420,18 +3420,21 @@ internal static partial class IrMarkupRenderer
             var oldId = (string?)r.Attribute(W.id);
             if (oldId == null) continue;
             bool isDel = r.Ancestors().Any(a => a.Name == W.del || a.Name == W.moveFrom);
-            // ins/equal → the live definition with the reference's (right) id. del → the deleted-only definition
-            // with the reference's (left) id (left-sourced, vanishes on accept); but a del reference whose note was
-            // NOT deleted — its DEFINITION is preserved (a matched note whose only reference was deleted, so the
-            // def lingers unreferenced) — has no deleted-only def, so fall back to the LIVE def carrying the
-            // reference's id. Without the fallback the del reference gets a fresh sequential id while its
-            // preserved def keeps its original id, and reject dangles (the renumbered reference resolves to no
-            // definition) whenever the original id ≠ the reference's ordinal — masked by the {1,2}-in-order
-            // corpus, exposed by gapped ids (e.g. the NVCA contract's 111 footnotes).
+            // ins/equal → the live definition with the reference's id, else the deleted-only definition with
+            // that same id. The second lookup is the empty revised note: it is filed only in delById, and the
+            // citation is not inside w:del. A different id is not a match, so a dangling reference is still removed.
+            // When both partitions hold the id, live wins.
+            // del → the deleted-only definition with the reference's (left) id (left-sourced, vanishes on accept);
+            // but a del reference whose note was NOT deleted — its DEFINITION is preserved (a matched note whose
+            // only reference was deleted, so the def lingers unreferenced) — has no deleted-only def, so fall back
+            // to the LIVE def carrying the reference's id. Without the fallback the del reference gets a fresh
+            // sequential id while its preserved def keeps its original id, and reject dangles (the renumbered
+            // reference resolves to no definition) whenever the original id ≠ the reference's ordinal — masked by
+            // the {1,2}-in-order corpus, exposed by gapped ids (e.g. the NVCA contract's 111 footnotes).
             // A matched note re-id'd to its RIGHT id (ApplyNoteDiffsToPart) is found under that id, so a del
             // reference to it follows the re-id first.
             XElement? def = !isDel
-                ? liveById.GetValueOrDefault(oldId)
+                ? liveById.GetValueOrDefault(oldId) ?? delById.GetValueOrDefault(oldId)
                 : matchedLeftToRightIds is not null && matchedLeftToRightIds.TryGetValue(oldId, out var rightId)
                     ? liveById.GetValueOrDefault(rightId) ?? delById.GetValueOrDefault(rightId)
                     : delById.GetValueOrDefault(oldId) ?? liveById.GetValueOrDefault(oldId);

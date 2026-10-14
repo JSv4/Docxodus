@@ -132,6 +132,41 @@ public class FootnoteReferenceMissingTests
     }
 
     /// <summary>
+    /// WC063. Both documents cite footnote 1. The revised footnote element is empty, so the rendered
+    /// note carries only <c>w:delText</c>. That note is deleted-only, and the citation is not inside
+    /// <c>w:del</c>. Removing the citation makes accept drop a reference the right document still has.
+    /// </summary>
+    [Fact]
+    public void Render_keeps_a_citation_when_the_revised_footnote_has_no_text()
+    {
+        var body =
+            "<w:p>" + Ref("1") +
+            "<w:r><w:t xml:space=\"preserve\">One</w:t></w:r></w:p>";
+        var left = Build(body, Boilerplate + Note("1", " Test"));
+        var right = Build(body, Boilerplate + "<w:footnote w:id=\"1\"/>");
+
+        var rendered = Render(left, right);
+        var accepted = RevisionProcessor.AcceptRevisions(rendered);
+        Inspect(accepted, (acceptedBody, acceptedNotes) =>
+        {
+            AssertEveryReferenceResolves(acceptedBody, acceptedNotes);
+            Assert.Equal(new[] { "" }, Cited(
+                acceptedBody.Elements(W.p).Single(paragraph => paragraph.Value.Contains("One")),
+                acceptedNotes));
+            Assert.DoesNotContain(acceptedNotes, note => note.Value.Contains("Test"));
+        });
+
+        var rejected = RevisionProcessor.RejectRevisions(rendered);
+        Inspect(rejected, (rejectedBody, rejectedNotes) =>
+        {
+            AssertEveryReferenceResolves(rejectedBody, rejectedNotes);
+            Assert.Equal(new[] { " Test" }, Cited(
+                rejectedBody.Elements(W.p).Single(paragraph => paragraph.Value.Contains("One")),
+                rejectedNotes));
+        });
+    }
+
+    /// <summary>
     /// Neither document has a footnotes part. A body <c>w:footnoteReference</c> then names nothing.
     /// <c>RenumberNoteIds</c> used to return before the missing-definition check, so rendering the
     /// document against itself left the reference in place and Word still offered to recover.
