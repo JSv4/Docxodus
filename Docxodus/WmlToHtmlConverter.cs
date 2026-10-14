@@ -3493,6 +3493,21 @@ namespace Docxodus
                 return ProcessContentControl(wordDoc, settings, element, currentMarginLeft);
             }
 
+            // A simple PAGE / NUMPAGES field carries the same page-number marker as its complex
+            // form (see ConvertContentThatCanContainFields); without it the paginator cannot
+            // substitute each page's number and every cloned header keeps the cached result.
+            if (element.Name == W.fldSimple
+                && (settings.RenderPagination == PaginationMode.Paginated || settings.StampPageNumberFields)
+                && Internal.PageNumberFieldInstr.TryParse((string?)element.Attribute(W.instr)) is { } simplePageField)
+            {
+                return new XElement(Xhtml.span,
+                    new XAttribute("data-field", simplePageField.Kind),
+                    simplePageField.FormatSwitch is null
+                        ? null
+                        : new XAttribute("data-field-format", simplePageField.FormatSwitch),
+                    CreateBorderDivs(wordDoc, settings, element.Elements()));
+            }
+
             // Transform smart tags and simple fields.
             if (element.Name == W.smartTag || element.Name == W.fldSimple)
             {
