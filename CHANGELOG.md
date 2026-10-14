@@ -20,6 +20,13 @@ All notable changes to this project will be documented in this file.
   layout (a 36pt row with 0.75pt borders advances 36.75pt); an `exact` height is the whole row and
   clips content that needs more; `auto` adds no constraint. Both rules previously produced the same
   CSS row height.
+- Paragraph borders now sit outside the text, as in Word, instead of pushing the text inward
+  (issue #1126). A bordered paragraph group's wrapper takes the group's indentation less each side's
+  `w:space` plus border width, so left and right borders are drawn `w:space` points beyond the text
+  edge and the text keeps its own margins and indents. The outset uses the width the browser lays the
+  border out at (whole CSS pixels, never below one), so the text edge is exact. Left-to-right groups
+  move their trailing indent onto the wrapper so the right border follows it; table-cell borders are
+  unchanged.
 
 ## [13.0.0] - 2026-10-12
 
