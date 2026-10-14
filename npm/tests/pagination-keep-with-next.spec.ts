@@ -152,15 +152,14 @@ test.describe('Pagination keep-with-next chains', () => {
 
     const result = await paginateWithFootnoteInfo(page);
 
-    // The chain is placed greedily: `heading` stays with `lead`, `body` opens page 2. The
-    // trailing page carries no body text — it is the note-only substrate for the last
-    // paragraph of the continuation (see the band arithmetic above), which the engine
-    // drains rather than clipping off the bottom of page 2.
+    // The chain is placed greedily: `heading` stays with `lead`, `body` opens page 2. `body`
+    // is the last block, so once it is placed page 2's note band uses the space it actually
+    // leaves (issue #1119): its 20pt plus the 70.5pt continuation fit the 100pt band, and the
+    // tail no longer needs a note-only third page.
     expect(result.content).toEqual([
       ['lead1', 'heading'],
       ['body'],
-      [],
     ]);
-    expect(result.footnotePages).toEqual([true, true, true]);
+    expect(result.footnotePages).toEqual([true, true]);
   });
 });

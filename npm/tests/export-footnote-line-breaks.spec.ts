@@ -36,11 +36,12 @@ for (const [name, options] of Object.entries<FootnoteLineBreakOptions>({
     const actual = await renderDocxArtifacts(source, exportOptions);
     const control = await renderDocxArtifacts(generateFootnoteLineBreakDocx({ ...options, paragraphs: true }), exportOptions);
     expect(actual.pageCount).toBe(control.pageCount);
-    expect(actual.pageCount).toBe(name === 'short' ? 1 : 5);
+    // Continuation pages use up to 95% of the body band once the body is placed (issue #1119):
+    // the hundred 16pt lines fill three pages, where the former 60% cap needed five.
+    expect(actual.pageCount).toBe(name === 'short' ? 1 : 3);
     const actualFacts = await facts(actual.pdf!);
     const controlFacts = await facts(control.pdf!);
     expect(actualFacts.map(p => p.view)).toEqual(controlFacts.map(p => p.view));
-    // Later source paragraphs have the converter's existing 12pt note inset.
     // A hard break stays inside one source paragraph, so compare the complete
     // glyph inventory and typography without claiming identical paragraph layout.
     const glyphs = (pages: typeof actualFacts) => pages.flatMap(p => p.items)
