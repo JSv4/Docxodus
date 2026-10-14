@@ -148,6 +148,33 @@ public class TextBoxDeletedTextTests
     }
 
     [Fact]
+    public void Session_tracked_fill_of_a_content_control_inside_a_text_box_keeps_its_text_ordinary()
+    {
+        var original = IrTestDocuments.FromBodyXmlWithDrawingNamespaces(
+            "<w:p><w:r><w:pict><v:shape style=\"width:100pt;height:40pt\"><v:textbox><w:txbxContent>" +
+            "<w:p><w:sdt><w:sdtPr><w:id w:val=\"7\"/></w:sdtPr><w:sdtContent>" +
+            "<w:r><w:t>boxed-control</w:t></w:r>" +
+            "</w:sdtContent></w:sdt></w:p>" +
+            "</w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>");
+        using var session = new DocxSession(original.DocumentByteArray, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Reviewer",
+        });
+        var control = session.ListContentControls().Single();
+        var filled = session.FillContentControlText(control.AnchorId, "replacement");
+        Assert.True(filled.Success, filled.Error?.Message);
+
+        var tracked = new WmlDocument("tracked.docx", session.Save());
+        AssertNoDeletedTextInsideTextBoxes(tracked);
+        using var ms = new MemoryStream(tracked.DocumentByteArray);
+        using var doc = WordprocessingDocument.Open(ms, false);
+        var boxes = doc.MainDocumentPart!.GetXDocument().Descendants(W.txbxContent).ToList();
+        Assert.Contains(boxes, box => box.Descendants(W.t).Any(text => text.Value.Contains("boxed-control")));
+        Assert.Contains(boxes, box => box.Descendants(W.t).Any(text => text.Value.Contains("replacement")));
+    }
+
+    [Fact]
     public void Session_delete_of_a_text_box_paragraph_keeps_its_text_ordinary()
     {
         var original = IrTestDocuments.FromBodyXmlWithDrawingNamespaces(
