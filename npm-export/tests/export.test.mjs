@@ -694,7 +694,10 @@ describe("@docxodus/export", { concurrency: false }, () => {
   test("preserves one converter-produced footnote paragraph across HTML and PDF pages", {
     timeout: 180_000,
   }, async () => {
-    const source = generateLongFootnoteDocx(600);
+    // Long enough to continue across at least three pages even when note-only continuation pages
+    // use 95% of the body band (issue #1119); 600 words fitted two.
+    const words = 1200;
+    const source = generateLongFootnoteDocx(words);
     const result = await renderDocxArtifacts(source, {
       ...baseOptions,
       browser,
@@ -722,7 +725,7 @@ describe("@docxodus/export", { concurrency: false }, () => {
     // missing glyphs, and duplicates must still fail the complete inventory check.
     const noteText = joinHyphenatedLines(inspection.pages.map((page) => page.textWithLineBreaks).join("\n"));
     let priorPdfOffset = -1;
-    for (let index = 1; index <= 600; index++) {
+    for (let index = 1; index <= words; index++) {
       const token = `footnote-1-1-${index}`;
       assert.equal(result.html.match(new RegExp(`\\b${token}\\b`, "g"))?.length, 1);
       const pdfMatches = [...noteText.matchAll(new RegExp(`\\b${token}\\b`, "g"))];

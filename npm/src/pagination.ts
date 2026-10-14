@@ -346,7 +346,13 @@ export interface PaginationOptions {
 // Default letter size in points (612 x 792 = 8.5" x 11")
 // Maximum percentage of content height that footnotes can occupy
 // This allows footnotes to expand upward into body content space when needed
+// The cap only protects body text still waiting for the page: once the body is exhausted, notes
+// are budgeted from the space actually left (issue #1119).
 const MAX_FOOTNOTE_AREA_RATIO = 0.6; // 60% of content height
+// Even with no body text left, the note area (separator included) never takes the whole body band:
+// the body keeps a twentieth of it. Measured from LibreOffice 25.8.7.3 across body heights of
+// 468-1008pt and note lines of 4pt and 18pt (docs/ooxml_corner_cases.md, issue #1119).
+const MAX_EXHAUSTED_BODY_FOOTNOTE_AREA_RATIO = 0.95;
 // Hidden measurement and final absolutely-positioned note bands differ by sub-pixel border/margin
 // rounding in Chromium. Reserve a small physical-unit guard so the last baseline stays visible.
 const FOOTNOTE_MEASUREMENT_GUARD_PT = 2;
@@ -3354,7 +3360,8 @@ export class PaginationEngine {
     bands: PageBands,
     footnoteHeight: number,
     continuation?: FootnoteContinuation | null,
-    partialFootnotes?: PartialFootnote[]
+    partialFootnotes?: PartialFootnote[],
+    noteBandLimitPt = bands.bodyHeight * MAX_FOOTNOTE_AREA_RATIO,
   ): void {
     const hasContinuation = continuation && continuation.remainingElements.length > 0;
     if (footnoteIds.length === 0 && !hasContinuation) {
@@ -3365,10 +3372,7 @@ export class PaginationEngine {
     }
 
     // Calculate max height for footnotes area (content height minus margin for body content)
-    const maxFootnoteHeight = Math.min(
-      footnoteHeight,
-      bands.bodyHeight * MAX_FOOTNOTE_AREA_RATIO
-    );
+    const maxFootnoteHeight = Math.min(footnoteHeight, noteBandLimitPt);
 
     const footnotesDiv = this.document.createElement("div");
     footnotesDiv.className = `${this.cssPrefix}footnotes`;
@@ -3658,6 +3662,16 @@ export class PaginationEngine {
     let deferredFootnoteIds: string[] = [];
     // Track partial footnotes for current page (footnotes that were split)
     let currentPartialFootnotes: PartialFootnote[] = [];
+    // Set once every body block is placed. From then on no body text needs the space the
+    // note cap reserves, so a page's notes may use everything its body does not.
+    let bodyExhausted = false;
+    // The band the carried continuation was partitioned for. A page partitioned while body
+    // blocks were still pending may become the last body page; it is re-partitioned then.
+    let currentContinuationLimit = 0;
+    const noteBandLimit = (bodyHeight: number) => bodyExhausted
+      ? Math.max(0, Math.min(bodyHeight * MAX_EXHAUSTED_BODY_FOOTNOTE_AREA_RATIO,
+        bodyHeight - (effectiveContentHeight - remainingHeight - prevMarginBottomPt)))
+      : bodyHeight * MAX_FOOTNOTE_AREA_RATIO;
 
     const adoptEmptyPageOwner = (owner: number) => {
       pageSectionIndex = owner;
@@ -3691,9 +3705,10 @@ export class PaginationEngine {
         pageInSection(),
         displayedPageNumber(),
       );
+      currentContinuationLimit = noteBandLimit(pageBands.bodyHeight);
       const partition = this.splitContinuationForPage(
         currentContinuation!,
-        pageBands.bodyHeight * MAX_FOOTNOTE_AREA_RATIO,
+        currentContinuationLimit,
         ownedDimensions.contentWidth,
       );
       currentContinuation = partition.current;
@@ -3720,6 +3735,22 @@ export class PaginationEngine {
       }
 
       prepareCurrentContinuation();
+      if (bodyExhausted && currentContinuation && nextPageContinuation
+          && nextPageContinuation.footnoteId === currentContinuation.footnoteId) {
+        const ownedBands = this.getPageBands(dimensionsFor(), pageSectionIndex, pageInSection(), displayedPageNumber());
+        const limit = noteBandLimit(ownedBands.bodyHeight);
+        if (limit > currentContinuationLimit + 0.5) {
+          // This page was partitioned while body text still needed it. With the body now
+          // placed, rejoin the carried tail and give the note the space it actually has.
+          const partition = this.splitContinuationForPage({
+            ...currentContinuation,
+            remainingElements: [...currentContinuation.remainingElements, ...nextPageContinuation.remainingElements],
+          }, limit, dimensionsFor().contentWidth);
+          currentContinuationLimit = limit;
+          currentContinuation = partition.current;
+          nextPageContinuation = partition.overflow ?? null;
+        }
+      }
       // Pages without a carried continuation are charged here. Continuation
       // pages were charged before their page-owned partition above.
       admitCurrentPage();
@@ -3737,7 +3768,7 @@ export class PaginationEngine {
         ownedPageInSection,
         ownedDisplayedPageNumber,
       );
-      const maxFootnoteHeight = pageBands.bodyHeight * MAX_FOOTNOTE_AREA_RATIO;
+      const maxFootnoteHeight = noteBandLimit(pageBands.bodyHeight);
       // `prepareCurrentContinuation` has already packed the exact head for this
       // page. Keeping that partition stable lets body fit decisions share the
       // remaining band without rescanning the entire tail.
@@ -3821,6 +3852,7 @@ export class PaginationEngine {
         currentPartialFootnotes.length > 0 ? currentPartialFootnotes : undefined,
         false,
         currentPageAdmitted,
+        maxFootnoteHeight,
       );
       pages.push(page);
       precedingDisplayedPageNumber = ownedDisplayedPageNumber;
@@ -4100,7 +4132,11 @@ export class PaginationEngine {
 
       // Calculate maximum footnote area for this page (can expand into body content space)
       const bodyContentUsed = effectiveContentHeight - remainingHeight;
-      const maxFootnoteArea = effectiveContentHeight * MAX_FOOTNOTE_AREA_RATIO;
+      // The cap reserves room for body text that follows this block; with none left,
+      // the citing block's notes may use the rest of the page.
+      const maxFootnoteArea = effectiveContentHeight * (i < blocks.length - 1
+        ? MAX_FOOTNOTE_AREA_RATIO
+        : MAX_EXHAUSTED_BODY_FOOTNOTE_AREA_RATIO);
 
       // A paragraph that cannot fit as a whole may still have a simple text-only
       // prefix that fits this page. Fragment before the ordinary next-page or
@@ -4307,6 +4343,7 @@ export class PaginationEngine {
     }
 
     // Finish last page
+    bodyExhausted = true;
     finishPage();
 
     // A split created while finishing the final body page still needs a page substrate.
@@ -4603,6 +4640,7 @@ export class PaginationEngine {
     partialFootnotes?: PartialFootnote[],
     isSectionFiller = false,
     pageAlreadyAdmitted = false,
+    noteBandLimitPt?: number,
   ): PageInfo {
     if (!pageAlreadyAdmitted) this.admitPageAllocation();
     // Create page box at full size, then scale the entire box
@@ -4708,7 +4746,8 @@ export class PaginationEngine {
     // Add footnotes if any references appear on this page (or continuation from previous)
     const hasContinuation = continuation && continuation.remainingElements.length > 0;
     if (!isSectionFiller && (footnoteIds.length > 0 || hasContinuation)) {
-      this.addPageFootnotes(pageBox, footnoteIds, dims, bands, footnoteHeight, continuation, partialFootnotes);
+      this.addPageFootnotes(pageBox, footnoteIds, dims, bands, footnoteHeight, continuation, partialFootnotes,
+        noteBandLimitPt);
 
     }
 
