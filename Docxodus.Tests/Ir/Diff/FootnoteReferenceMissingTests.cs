@@ -62,7 +62,10 @@ public class FootnoteReferenceMissingTests
         Inspect(rejected, (body, notes) =>
         {
             AssertEveryReferenceResolves(body, notes);
+            Assert.Empty(body.Descendants(W.footnoteReference));
             Assert.DoesNotContain(notes, note => note.Value.Contains("Simoes"));
+            Assert.DoesNotContain(notes, note => note.Value.Contains("Planes"));
+            Assert.DoesNotContain(notes, note => note.Value.Contains("Baseado"));
         });
     }
 
@@ -92,6 +95,38 @@ public class FootnoteReferenceMissingTests
             Assert.Empty(second.Descendants(W.footnoteReference));
             var zero = renderedNotes.Single(note => (string?)note.Attribute(W.id) == "0");
             Assert.Contains("Simoes", zero.Value);
+            Assert.Equal(1, renderedNotes.Count(note => note.Value.Contains("Simoes")));
+        });
+    }
+
+    /// <summary>
+    /// 1830's dangling reference is an equal reference: both sides are the same document.
+    /// A deletion is the other side. The left document cites id 3 and the right document does not.
+    /// The deleted reference names no footnote, so the render removes it instead of keeping it
+    /// inside <c>w:del</c> or pointing it at another note.
+    /// </summary>
+    [Fact]
+    public void Render_removes_a_deleted_footnote_reference_that_names_no_footnote()
+    {
+        var notes = Note("0", "Simoes") + Note("1", "Planes") + Note("2", "Baseado");
+        var cited =
+            "<w:p><w:r><w:t xml:space=\"preserve\">Os principios.</w:t></w:r>" +
+            Ref("1") + Ref("2") + "</w:p>";
+        var left = Build(
+            cited + "<w:p><w:r><w:t xml:space=\"preserve\">A definicao.</w:t></w:r>" + Ref("3") + "</w:p>",
+            notes);
+        var right = Build(
+            cited + "<w:p><w:r><w:t xml:space=\"preserve\">A definicao.</w:t></w:r></w:p>",
+            notes);
+
+        var rendered = Render(left, right);
+        Inspect(rendered, (body, renderedNotes) =>
+        {
+            AssertEveryReferenceResolves(body, renderedNotes);
+            var opening = body.Elements(W.p).Single(paragraph => paragraph.Value.Contains("Os principios"));
+            var closing = body.Elements(W.p).Single(paragraph => paragraph.Value.Contains("A definicao"));
+            Assert.Equal(new[] { "Planes", "Baseado" }, Cited(opening, renderedNotes));
+            Assert.Empty(closing.Descendants(W.footnoteReference));
             Assert.Equal(1, renderedNotes.Count(note => note.Value.Contains("Simoes")));
         });
     }
