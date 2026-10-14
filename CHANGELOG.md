@@ -27,6 +27,13 @@ All notable changes to this project will be documented in this file.
   border out at (whole CSS pixels, never below one), so the text edge is exact. Left-to-right groups
   move their trailing indent onto the wrapper so the right border follows it; table-cell borders are
   unchanged.
+- Explicitly sized thin paragraph borders keep their physical width in exported PDFs (issue #1116).
+  CSS lays every border out in whole CSS pixels, so a `w:sz="2"` (0.25pt) single or dashed border was
+  drawn and spaced as 0.75pt (1pt in the converter's former mapping). The converter records each
+  explicit single/dashed side's width as `--docx-border-{side}-width`; the standalone export lays
+  those sides out as padding of that width and paints them as vector shapes on the final page tree,
+  keeping the dash rhythm of the one-pixel CSS border. Omitted and zero sizes keep their
+  application-defined CSS default.
 
 ## [13.0.0] - 2026-10-12
 
