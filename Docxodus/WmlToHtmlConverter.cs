@@ -10024,21 +10024,46 @@ namespace Docxodus
                     GenerateBorderStyle(pBdr, W.left, style, BorderType.Paragraph);
 
                     var currentMarginLeft = 0m;
+                    var trailingIndentInPoints = 0m;
                     var ind = pPr.Element(W.ind);
                     if (ind != null)
                     {
                         var leftInInches = WordprocessingMLUtil.AttributeToDecimalTwips(WordprocessingMLUtil.IndLeadingAttribute(ind))/1440m ?? 0;
                         var hangingInInches = -WordprocessingMLUtil.AttributeToDecimalTwips(ind.Attribute(W.hanging))/1440m ?? 0;
                         currentMarginLeft = leftInInches + hangingInInches;
+                        trailingIndentInPoints = Math.Max(0m,
+                            WordprocessingMLUtil.AttributeToDecimalTwips(WordprocessingMLUtil.IndTrailingAttribute(ind))/20m ?? 0m);
+                    }
+                    // A right-to-left paragraph maps its trailing indent to its left margin
+                    // (CreateStyleFromInd), so only left-to-right groups move it to the wrapper.
+                    if (pPr.Element(W.bidi) is { } bidi && (string?)bidi.Attribute(W.val) is not ("0" or "false" or "off"))
+                        trailingIndentInPoints = 0m;
 
-                        style.AddIfMissing("margin-left",
-                            currentMarginLeft > 0m
-                                ? string.Format(NumberFormatInfo.InvariantInfo, "{0:0.00}in", currentMarginLeft)
-                                : "0");
+                    // The wrapper's content box is the paragraphs' text box: its margins are the
+                    // group's indentation less each side's border outset, and its padding is
+                    // w:space, so the borders sit outside the text and the text keeps its
+                    // indentation (issue #1126). The group shares one w:ind (BorderGroupKey), so
+                    // the trailing indent moves from its paragraphs onto the wrapper.
+                    style["margin-left"] = PointsCss(Math.Max(0m, currentMarginLeft) * 72m - ParagraphBorderOutsetInPoints(pBdr, W.left));
+                    style["margin-right"] = PointsCss(trailingIndentInPoints - ParagraphBorderOutsetInPoints(pBdr, W.right));
+
+                    // Materialize the (lazy) paragraph projections once, so the adjusted elements
+                    // are the ones the wrapper holds.
+                    var content = GroupAndVerticallySpaceNumberedParagraphs(wordDoc, settings, g, currentMarginLeft)
+                        .SelectMany(item => item is IEnumerable<object> nested ? nested : new[] { item }).ToList();
+                    if (trailingIndentInPoints > 0m)
+                    {
+                        foreach (var paragraph in content.OfType<XElement>())
+                        {
+                            if (paragraph.Annotation<Dictionary<string, string>>() is { } paragraphStyle &&
+                                paragraphStyle.TryGetValue("margin-right", out var trailing) && trailing != "0")
+                                paragraphStyle["margin-right"] = "0";
+                        }
                     }
 
-                    var div = new XElement(Xhtml.div,
-                        GroupAndVerticallySpaceNumberedParagraphs(wordDoc, settings, g, currentMarginLeft));
+                    var div = new XElement(Xhtml.div, content);
+                    if (RecordExactParagraphBorderWidths(pBdr, style))
+                        div.Add(new XAttribute(ExactParagraphBorderAttribute, "true"));
                     div.AddAnnotation(style);
                     return div;
                 })
@@ -10116,6 +10141,73 @@ namespace Docxodus
             { "inset", new BorderMappingInfo() { CssName = "inset", CssSize = 4.5m }},
         };
 
+        /// <summary>The CSS width, in points, painted for a border of type <paramref name="type"/>
+        /// and eighth-point size <paramref name="sz"/>.</summary>
+        private static decimal BorderWidthInPoints(string? type, int sz)
+        {
+            decimal borderWidthInPoints = Math.Max(1m, Math.Min(96m, Math.Max(2m, sz)) / 8m);
+            if (type == null || !BorderStyleMap.TryGetValue(type, out var borderInfo))
+                return borderWidthInPoints;
+            if (type == "double")
+                return sz <= 8 ? 2.5m : sz <= 18 ? 6.75m : sz / 3m;
+            if (type == "triple")
+                return sz <= 8 ? 8m : 11.25m;
+            if (type.ToLower().Contains("dash"))
+                return sz <= 4 ? 1m : sz <= 12 ? 1.5m : 2m;
+            return type != "single" ? borderInfo.CssSize : borderWidthInPoints;
+        }
+
+        private const string ExactParagraphBorderAttribute = "data-docx-exact-border";
+
+        /// <summary>
+        /// Record the declared physical width of each explicitly sized single or dashed paragraph
+        /// border as <c>--docx-border-{side}-width</c>. CSS lays borders out in whole CSS pixels, so
+        /// a 0.25pt (<c>w:sz="2"</c>) border is drawn and spaced as 0.75pt; the paginated export
+        /// lays these sides out and paints them at the recorded width instead (issue #1116). An
+        /// omitted or zero size has an application-defined default and keeps the CSS rendering.
+        /// </summary>
+        private static bool RecordExactParagraphBorderWidths(XElement? pBdr, Dictionary<string, string> style)
+        {
+            var recorded = false;
+            foreach (var side in new[] { W.top, W.right, W.bottom, W.left })
+            {
+                var border = pBdr?.Element(side);
+                var type = (string?)border?.Attribute(W.val);
+                var sz = (int?)border?.Attribute(W.sz) ?? 0;
+                if (type is not ("single" or "dashed") || sz <= 0)
+                    continue;
+                style["--docx-border-" + side.LocalName + "-width"] = PointsCss(Math.Min(96, Math.Max(2, sz)) / 8m);
+                recorded = true;
+            }
+            return recorded;
+        }
+
+        private static string PointsCss(decimal points) =>
+            points == 0m ? "0" : string.Format(NumberFormatInfo.InvariantInfo, "{0:0.####}pt", points);
+
+        /// <summary>
+        /// How far a paragraph's visible border on <paramref name="sideXName"/> extends beyond its
+        /// text edge: the border's <c>w:space</c> plus its painted width. Word draws left and right
+        /// paragraph borders outside the text, which keeps its indentation (issue #1126).
+        /// </summary>
+        private static decimal ParagraphBorderOutsetInPoints(XElement? pBdr, XName sideXName)
+        {
+            var side = pBdr?.Element(sideXName);
+            var type = (string?)side?.Attribute(W.val);
+            if (side == null || type == "nil" || type == "none")
+                return 0m;
+            return ((decimal?)side.Attribute(W.space) ?? 0m)
+                + ParagraphBorderLayoutWidthInPoints(type, (int?)side.Attribute(W.sz) ?? 0);
+        }
+
+        /// <summary>
+        /// The width a browser lays out for a paragraph border: CSS floors border widths to whole
+        /// CSS pixels (0.75pt), never below one. The paragraph border is written at that width so
+        /// its outset, and therefore the text edge, is exact (issue #1126).
+        /// </summary>
+        private static decimal ParagraphBorderLayoutWidthInPoints(string? type, int sz) =>
+            Math.Max(1m, Math.Floor(BorderWidthInPoints(type, sz) / 0.75m)) * 0.75m;
+
         private static void GenerateBorderStyle(XElement? pBdr, XName sideXName, Dictionary<string, string> style, BorderType borderType)
         {
             string whichSide;
@@ -10179,46 +10271,16 @@ namespace Docxodus
                 else
                     color = ConvertColor(color);
 
-                decimal borderWidthInPoints = Math.Max(1m, Math.Min(96m, Math.Max(2m, sz)) / 8m);
-
-                var borderStyle = "solid";
-                if (type != null && BorderStyleMap.ContainsKey(type))
-                {
-                    var borderInfo = BorderStyleMap[type];
-                    borderStyle = borderInfo.CssName;
-                    if (type == "double")
-                    {
-                        if (sz <= 8)
-                            borderWidthInPoints = 2.5m;
-                        else if (sz <= 18)
-                            borderWidthInPoints = 6.75m;
-                        else
-                            borderWidthInPoints = sz / 3m;
-                    }
-                    else if (type == "triple")
-                    {
-                        if (sz <= 8)
-                            borderWidthInPoints = 8m;
-                        else if (sz <= 18)
-                            borderWidthInPoints = 11.25m;
-                        else
-                            borderWidthInPoints = 11.25m;
-                    }
-                    else if (type.ToLower().Contains("dash"))
-                    {
-                        if (sz <= 4)
-                            borderWidthInPoints = 1m;
-                        else if (sz <= 12)
-                            borderWidthInPoints = 1.5m;
-                        else
-                            borderWidthInPoints = 2m;
-                    }
-                    else if (type != "single")
-                        borderWidthInPoints = borderInfo.CssSize;
-                }
+                var borderWidthInPoints = borderType == BorderType.Paragraph
+                    ? ParagraphBorderLayoutWidthInPoints(type, sz)
+                    : BorderWidthInPoints(type, sz);
+                var borderStyle = type != null && BorderStyleMap.TryGetValue(type, out var borderInfo)
+                    ? borderInfo.CssName
+                    : "solid";
                 if (type == "outset" || type == "inset")
                     color = "";
-                var borderWidth = string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}pt", borderWidthInPoints);
+                var borderWidth = string.Format(NumberFormatInfo.InvariantInfo,
+                    borderType == BorderType.Paragraph ? "{0:0.##}pt" : "{0:0.0}pt", borderWidthInPoints);
 
                 style.Add("border-" + whichSide, borderStyle + " " + color + " " + borderWidth);
                 if (borderType == BorderType.Cell &&

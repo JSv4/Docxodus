@@ -20,6 +20,20 @@ All notable changes to this project will be documented in this file.
   layout (a 36pt row with 0.75pt borders advances 36.75pt); an `exact` height is the whole row and
   clips content that needs more; `auto` adds no constraint. Both rules previously produced the same
   CSS row height.
+- Paragraph borders now sit outside the text, as in Word, instead of pushing the text inward
+  (issue #1126). A bordered paragraph group's wrapper takes the group's indentation less each side's
+  `w:space` plus border width, so left and right borders are drawn `w:space` points beyond the text
+  edge and the text keeps its own margins and indents. The outset uses the width the browser lays the
+  border out at (whole CSS pixels, never below one), so the text edge is exact. Left-to-right groups
+  move their trailing indent onto the wrapper so the right border follows it; table-cell borders are
+  unchanged.
+- Explicitly sized thin paragraph borders keep their physical width in exported PDFs (issue #1116).
+  CSS lays every border out in whole CSS pixels, so a `w:sz="2"` (0.25pt) single or dashed border was
+  drawn and spaced as 0.75pt (1pt in the converter's former mapping). The converter records each
+  explicit single/dashed side's width as `--docx-border-{side}-width`; the standalone export lays
+  those sides out as padding of that width and paints them as vector shapes on the final page tree,
+  keeping the dash rhythm of the one-pixel CSS border. Omitted and zero sizes keep their
+  application-defined CSS default.
 
 ## [13.0.0] - 2026-10-12
 
