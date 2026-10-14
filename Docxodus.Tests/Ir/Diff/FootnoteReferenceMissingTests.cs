@@ -97,6 +97,28 @@ public class FootnoteReferenceMissingTests
     }
 
     /// <summary>
+    /// Neither document has a footnotes part. A body <c>w:footnoteReference</c> then names nothing.
+    /// <c>RenumberNoteIds</c> used to return before the missing-definition check, so rendering the
+    /// document against itself left the reference in place and Word still offered to recover.
+    /// </summary>
+    [Fact]
+    public void Render_removes_a_footnote_reference_when_neither_document_has_a_footnotes_part()
+    {
+        var body =
+            "<w:p><w:r><w:t xml:space=\"preserve\">Os principios.</w:t></w:r>" +
+            Ref("1") + "</w:p>";
+        var document = Build(body, footnotesInnerXml: null);
+
+        var rendered = Render(document, document);
+        Inspect(rendered, (renderedBody, renderedNotes) =>
+        {
+            Assert.Empty(renderedNotes);
+            Assert.Empty(renderedBody.Descendants(W.footnoteReference));
+            Assert.Contains("Os principios", renderedBody.Value);
+        });
+    }
+
+    /// <summary>
     /// The left document has no footnotes part. The right document's content footnote at id 0 sits
     /// beside continuationSeparator, which also uses id 0. Seeding the new part must copy the separator
     /// notes only, so the content note is inserted once and stays cited.

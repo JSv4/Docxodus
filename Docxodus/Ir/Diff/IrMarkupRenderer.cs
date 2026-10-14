@@ -3312,8 +3312,9 @@ internal static partial class IrMarkupRenderer
     /// is renumbered to <c>n</c> and emitted in that order. Reserved separator/continuation boilerplate notes
     /// (<see cref="WmlToMarkdownConverter.IsBoilerplateNote"/>: a <c>w:type</c> other than <c>normal</c>) keep their
     /// ids and lead the part. A content footnote at id 0 is not boilerplate — <c>continuationSeparator</c> also uses
-    /// id 0 — and is renumbered with the reference that cites it. A reference that names no definition is removed;
-    /// assigning it the next id leaves a <c>w:footnoteReference</c> Word offers to recover. Definitions that no
+    /// id 0 — and is renumbered with the reference that cites it. A reference that names no definition is removed,
+    /// including when the notes part itself is absent; assigning it the next id, or returning before the walk,
+    /// leaves a <c>w:footnoteReference</c> Word offers to recover. Definitions that no
     /// surviving reference names are still carried (after the renumbered ones, original order) so accept/reject —
     /// which drop the opposite side's references — never dangle: each surviving reference still resolves, and the
     /// kept ids stay an ASCENDING subsequence of the renumbered space, so the read-order note sequence matches the
@@ -3340,7 +3341,10 @@ internal static partial class IrMarkupRenderer
     {
         var empty = new Dictionary<string, string>(StringComparer.Ordinal);
         if (notePart == null)
+        {
+            RemoveBodyReferencesWithNoNotePart(main, refName);
             return empty;
+        }
         var noteXDoc = notePart.GetXDocument();
         var noteRoot = noteXDoc.Root;
         if (noteRoot == null)
@@ -3498,6 +3502,20 @@ internal static partial class IrMarkupRenderer
         // RemapNestedNoteReferences sweep, which runs after BOTH kinds' renumber passes so a footnote-nested
         // endnote reference sees the endnote remap and vice versa.
         return idRemap;
+    }
+
+    /// <summary>
+    /// Drop every body reference of <paramref name="refName"/> when the output has no notes part.
+    /// Nothing in the package can define it. The parent run stays, including when the reference was its only child.
+    /// </summary>
+    private static void RemoveBodyReferencesWithNoNotePart(MainDocumentPart main, XName refName)
+    {
+        var bodyRefs = main.GetXDocument().Root?.Element(W.body)?.Descendants(refName).ToList();
+        if (bodyRefs == null || bodyRefs.Count == 0)
+            return;
+        foreach (var reference in bodyRefs)
+            reference.Remove();
+        main.PutXDocument();
     }
 
     /// <summary>
