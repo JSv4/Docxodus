@@ -9962,6 +9962,8 @@ namespace Docxodus
                     }
 
                     var div = new XElement(Xhtml.div, content);
+                    if (RecordExactParagraphBorderWidths(pBdr, style))
+                        div.Add(new XAttribute(ExactParagraphBorderAttribute, "true"));
                     div.AddAnnotation(style);
                     return div;
                 })
@@ -10053,6 +10055,31 @@ namespace Docxodus
             if (type.ToLower().Contains("dash"))
                 return sz <= 4 ? 1m : sz <= 12 ? 1.5m : 2m;
             return type != "single" ? borderInfo.CssSize : borderWidthInPoints;
+        }
+
+        private const string ExactParagraphBorderAttribute = "data-docx-exact-border";
+
+        /// <summary>
+        /// Record the declared physical width of each explicitly sized single or dashed paragraph
+        /// border as <c>--docx-border-{side}-width</c>. CSS lays borders out in whole CSS pixels, so
+        /// a 0.25pt (<c>w:sz="2"</c>) border is drawn and spaced as 0.75pt; the paginated export
+        /// lays these sides out and paints them at the recorded width instead (issue #1116). An
+        /// omitted or zero size has an application-defined default and keeps the CSS rendering.
+        /// </summary>
+        private static bool RecordExactParagraphBorderWidths(XElement? pBdr, Dictionary<string, string> style)
+        {
+            var recorded = false;
+            foreach (var side in new[] { W.top, W.right, W.bottom, W.left })
+            {
+                var border = pBdr?.Element(side);
+                var type = (string?)border?.Attribute(W.val);
+                var sz = (int?)border?.Attribute(W.sz) ?? 0;
+                if (type is not ("single" or "dashed") || sz <= 0)
+                    continue;
+                style["--docx-border-" + side.LocalName + "-width"] = PointsCss(Math.Min(96, Math.Max(2, sz)) / 8m);
+                recorded = true;
+            }
+            return recorded;
         }
 
         private static string PointsCss(decimal points) =>
