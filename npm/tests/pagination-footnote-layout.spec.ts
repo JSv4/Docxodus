@@ -748,6 +748,8 @@ test.describe('Paginated footnote layout', () => {
     expect(lastBodyPage).toBeGreaterThan(0);
     // 60% of a 300pt band holds 17 ten-point lines with the separator; more means re-partitioned.
     expect(result.lines[lastBodyPage]).toBeGreaterThan(17);
+  });
+
   test('exact-spaced note lines and their number sit on Word\'s exact baseline', async ({ page }) => {
     // Issue #1120: the note band's exact-spaced runs take the same 80% baseline as body text, and
     // the number, a run of the first paragraph in Word, moves with that paragraph's text.
