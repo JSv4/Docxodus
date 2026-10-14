@@ -2430,11 +2430,11 @@ namespace Docxodus
             sb.AppendLine("    display: inline;");
             sb.AppendLine("}");
 
-            // Subsequent paragraphs in footnote get normal block display with indent
+            // Later paragraphs are ordinary blocks. Their indentation and spacing are the note
+            // paragraph's own resolved properties: a generic inset or gap here outranks those
+            // classes by specificity and moved every later note line (issue #1120).
             sb.AppendLine(".footnote-content p:not(:first-of-type) {");
             sb.AppendLine("    display: block;");
-            sb.AppendLine("    margin-top: 2pt;");
-            sb.AppendLine("    margin-left: 12pt;");
             sb.AppendLine("}");
 
             return sb.ToString();
@@ -4475,6 +4475,18 @@ namespace Docxodus
             var paragraph = footnote.Descendants(W.p).FirstOrDefault();
             if (paragraph != null) DefineStrutFont(numberStyle, paragraph);
             numberStyle.Remove("font-size");
+            // In Word the number is a run of the first note paragraph, so it sits on that
+            // paragraph's line. An exact-spaced line top-aligns its runs in a box of the declared
+            // height; without that height the number inherited the item's zero line height and
+            // painted half a line above its text (issue #1120).
+            // Only a number rendered from the note's own run on its baseline: a generic number or
+            // a run raised by w:position is shifted by CSS, and a line height would let that raised
+            // box grow the line (the #955 strut the item's zero line height prevents).
+            var spacing = paragraph?.Element(W.pPr)?.Element(W.spacing);
+            if (run?.Name == W.r && run.Element(W.rPr)?.Element(W.position) == null
+                && (string?)spacing?.Attribute(W.lineRule) == "exact"
+                && WordprocessingMLUtil.AttributeToTwips(spacing!.Attribute(W.line)) is { } exactLine)
+                numberStyle["line-height"] = string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0#}pt", exactLine / 20m);
             number.SetAttributeValue("style", string.Join("; ", numberStyle.Select(p => p.Key + ": " + p.Value)));
             if (marker == null || run == null || run.Name != W.r)
             {
