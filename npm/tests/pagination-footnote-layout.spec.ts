@@ -683,6 +683,49 @@ test.describe('Paginated footnote layout', () => {
     ).toEqual([]);
   });
 
+  test('exact-spaced note lines and their number sit on Word\'s exact baseline', async ({ page }) => {
+    // Issue #1120: the note band's exact-spaced runs take the same 80% baseline as body text, and
+    // the number, a run of the first paragraph in Word, moves with that paragraph's text.
+    const exactRun = (text: string) => `<span data-docx-exact-run="true" style="vertical-align: top">${text}</span>`;
+    await page.setContent(`
+      <style>
+        #staging { font: 11pt/normal 'Liberation Serif', serif; }
+        .body { height: 20pt; margin: 0; }
+        .footnote-item { margin: 0; line-height: 0; }
+        .footnote-content { display: contents; }
+        .footnote-content p:first-of-type { display: inline; }
+        .footnote-content p:not(:first-of-type) { display: block; }
+        .note { margin: 0; line-height: 18pt; --docx-exact-line-height: 18pt; }
+      </style>
+      <div id="staging">
+        <div id="pagination-footnote-registry">
+          <div class="footnote-item" data-footnote-id="f1">
+            <span class="footnote-number" data-note-run="true" style="line-height: 18pt">${exactRun('1')}</span>
+            <span class="footnote-content"><p class="note">${exactRun(' Ledger001')}</p><p class="note">${exactRun('Ledger002')}</p></span>
+          </div>
+        </div>
+        <div data-section-index="0" data-page-width="312" data-page-height="312"
+             data-content-width="300" data-content-height="300"
+             data-margin-top="6" data-margin-right="6" data-margin-bottom="6" data-margin-left="6">
+          <p class="body">body <sup data-footnote-id="f1">1</sup></p>
+        </div>
+      </div>
+      <div id="container"></div>`);
+    await page.addScriptTag({ path: path.join(__dirname, '../dist/pagination.bundle.js') });
+    const tops = await page.evaluate(() => {
+      const staging = document.getElementById('staging') as HTMLElement;
+      const container = document.getElementById('container') as HTMLElement;
+      const { PaginationEngine } = (window as any).DocxodusPagination;
+      new PaginationEngine(staging, container, { showPageNumbers: false }).paginate();
+      return Array.from(container.querySelectorAll<HTMLElement>('.page-footnotes [data-docx-exact-run]'))
+        .map((run) => run.style.top);
+    });
+    expect(tops).toHaveLength(3);
+    expect(tops.every((top) => top !== '' && Number.parseFloat(top) !== 0)).toBe(true);
+    // The number and its first line move together; every line shares one offset.
+    expect(new Set(tops).size).toBe(1);
+  });
+
   test('whole notes deferred from the final body block drain onto note-only pages', async ({ page }) => {
     await page.setContent(finalBlockDeferralHtml());
     await page.addScriptTag({ path: path.join(__dirname, '../dist/pagination.bundle.js') });
