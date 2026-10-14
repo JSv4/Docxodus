@@ -191,6 +191,15 @@ public class CustomXmlBlockProjectionTests
 
         Assert.Contains(Body(redline.DocumentByteArray).Descendants(W.ins).Descendants(W.t), t => t.Value.Contains("weekly"));
         AssertRoundTrip(original, accepted, redline);
+
+        // What the issue's reporter looked at: the redline's revision listings.
+        using var review = new DocxSession(redline.DocumentByteArray);
+        var listed = review.ListRevisions();
+        Assert.NotEmpty(listed);
+        Assert.All(listed, entry => Assert.Equal(RevisionResolutionStatus.Supported, entry.ResolutionStatus));
+        var revisions = DocxDiff.GetRevisions(original, accepted);
+        Assert.Contains(revisions, r => r.Type == DocxDiffRevisionType.Deleted && r.Text.Contains("monthly"));
+        Assert.Contains(revisions, r => r.Type == DocxDiffRevisionType.Inserted && r.Text.Contains("weekly"));
     }
 
     [Fact]
@@ -204,6 +213,24 @@ public class CustomXmlBlockProjectionTests
 
         Assert.NotEmpty(Body(redline.DocumentByteArray).Descendants(W.ins));
         AssertRoundTrip(baseline, reviewed, redline);
+    }
+
+    [Fact]
+    public void Consolidate_ReviewerEditInsideAWrappedFootnote_IsTrackedAndReversible()
+    {
+        static WmlDocument WithFootnote(string text) => new("a.docx", WrapNoteAndCommentParagraphs(
+            IrTestDocuments.WithMixedReviewParts("Header", "Footer", text, "Endnote", "Comment").DocumentByteArray));
+        var baseline = WithFootnote("Backups are verified monthly.");
+        var reviewed = WithFootnote("Backups are verified weekly.");
+
+        var redline = DocxCompare.Consolidate(baseline,
+            [new DocxDiffReviewer { Document = reviewed, Author = "Reviewer" }]);
+
+        Assert.NotEmpty(Footnotes(redline.DocumentByteArray).Descendants(W.ins));
+        Assert.Equal(Shape(Footnotes(reviewed.DocumentByteArray)),
+            Shape(Footnotes(DocxDiffOps.AcceptRevisions(redline.DocumentByteArray))));
+        Assert.Equal(Shape(Footnotes(baseline.DocumentByteArray)),
+            Shape(Footnotes(DocxDiffOps.RejectRevisions(redline.DocumentByteArray))));
     }
 
     // ---- semantic diff ------------------------------------------------------------------------
@@ -289,6 +316,13 @@ public class CustomXmlBlockProjectionTests
             }
         }
         return stream.ToArray();
+    }
+
+    private static XElement Footnotes(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var document = WordprocessingDocument.Open(stream, false);
+        return new XElement(document.MainDocumentPart!.FootnotesPart!.GetXDocument().Root!);
     }
 
     private static XElement Header(byte[] bytes)
