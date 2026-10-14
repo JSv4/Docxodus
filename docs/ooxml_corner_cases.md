@@ -2969,6 +2969,9 @@ the whole marked result (`substitutePageNumberFields`), so the cached run's form
 intentionally not reproduced. A `\* MERGEFORMAT` result that should keep prior formatting, and Word's
 own output, still need a Word capture before Docxodus models them. Evidence: docx-fidelity-bench
 `paragraphs-page-number-*` cases (bench issue #26).
+
+---
+
 ## Footnotes: how much of a page a long note may take (issue #1119)
 
 **Status:** Docxodus matches LibreOffice; Word not yet captured (October 2026)
