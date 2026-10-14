@@ -116,7 +116,9 @@ test.describe('Paginated footnote geometry', () => {
       [twoNotes] = await paginateGeneratedDocument(page, generateFootnoteDocx(2));
       continuedNote = await paginateGeneratedDocument(
         page,
-        generateFootnoteDocx(1, 1, 1, 600),
+        // Long enough for more than one continuation page now that note-only pages use 95%
+        // of the body band (issue #1119); 600 words fit two pages.
+        generateFootnoteDocx(1, 1, 1, 1200),
       );
     } finally {
       await page.close();

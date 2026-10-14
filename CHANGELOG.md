@@ -55,6 +55,11 @@ All notable changes to this project will be documented in this file.
   paragraph at a fractional position keeps its exact horizontal and vertical place, and paints each
   paragraph at its ideal twip-grid position rather than the 1/64-pixel layout position, which drifts
   up by a fraction of a pixel per line down the page.
+- Long footnotes no longer leave usable page space empty (issue #1119). The 60% note-band cap now
+  applies only while body text still needs the page: notes cited by the last body block, and the
+  continuation pages that follow it, are budgeted from the space the body actually leaves, up to
+  95% of the body band (the limit LibreOffice applies; see `docs/ooxml_corner_cases.md`), so a
+  ninety-line note uses three pages instead of five.
 
 ## [13.0.0] - 2026-10-12
 

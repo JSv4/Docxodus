@@ -501,7 +501,9 @@ test.describe('standalone paginated HTML', () => {
     page,
     context,
   }) => {
-    const source = generateFootnoteDocx(1, 1, 1, 600, {
+    // Long enough to continue across more than two pages now that note-only pages use 95% of
+    // the body band (issue #1119); 600 words fit two.
+    const source = generateFootnoteDocx(1, 1, 1, 1200, {
       normalText: 'NORMAL-SEPARATOR-STORY',
       continuationText: 'CONTINUATION-SEPARATOR-STORY',
     });
@@ -551,7 +553,7 @@ test.describe('standalone paginated HTML', () => {
     expect(audit.uniqueIds).toBe(true);
     expect(audit.continuationIds.length).toBeGreaterThan(1);
     expect(audit.continuationIds.every((id) => id === '1')).toBe(true);
-    for (const index of [1, 2, 150, 300, 450, 599, 600]) {
+    for (const index of [1, 2, 300, 600, 900, 1199, 1200]) {
       const token = `footnote-1-1-${index}`;
       expect(audit.noteText.match(new RegExp(`\\b${token}\\b`, 'g'))).toHaveLength(1);
     }
