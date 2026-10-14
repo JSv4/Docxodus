@@ -683,6 +683,73 @@ test.describe('Paginated footnote layout', () => {
     ).toEqual([]);
   });
 
+  test('a long note after the last body block uses the space the body no longer needs', async ({ page }) => {
+    // Issue #1119: one citing paragraph and a 60-line (600pt) note on 300pt bands. The 60% cap
+    // reserves 40% of every page for body text that does not exist; budgeting from the space
+    // actually left (up to 95% of the band: LibreOffice keeps a twentieth of it for the
+    // body) fits the note on three pages instead of five.
+    await page.setContent(stagingHtml(1, 1, 60));
+    await page.addScriptTag({ path: path.join(__dirname, '../dist/pagination.bundle.js') });
+    const result = await page.evaluate(
+      ({ measure }: { measure: string }) => {
+        const staging = document.getElementById('staging') as HTMLElement;
+        const container = document.getElementById('container') as HTMLElement;
+        const { PaginationEngine } = (window as any).DocxodusPagination;
+        new PaginationEngine(staging, container, { showPageNumbers: false }).paginate();
+        // eslint-disable-next-line no-eval
+        const notes = (0, eval)(`(${measure})`)();
+        const boxes = Array.from(container.querySelectorAll<HTMLElement>('.page-box'));
+        return {
+          ...notes,
+          pages: boxes.length,
+          lines: boxes.map((box) => Array.from(box.querySelectorAll('.page-footnotes p'))
+            .filter((line) => line.textContent === 'note 0 line').length),
+        };
+      },
+      { measure: MEASURE_NOTES.toString() },
+    );
+    expect(result.lost).toEqual([]);
+    expect(result.clipped).toEqual([]);
+    expect(result.lines.reduce((sum: number, count: number) => sum + count, 0)).toBe(60);
+    expect(result.pages).toBe(3);
+    // A continuation page holds 95% of its band (285pt, separator included), not 60% of it.
+    expect(result.lines[1]).toBeGreaterThanOrEqual(26);
+    expect(result.lines[1]).toBeLessThanOrEqual(28);
+  });
+
+  test('a carried note gains the space on the last body page once the body is placed', async ({ page }) => {
+    // Issue #1119: the note continues onto page 2, which also receives the last (short) body
+    // block. Page 2 was partitioned at 60% while that block was pending; once it is placed the
+    // note takes what the page actually has left.
+    await page.setContent(stagingHtml(15, 1, 60));
+    await page.addScriptTag({ path: path.join(__dirname, '../dist/pagination.bundle.js') });
+    const result = await page.evaluate(
+      ({ measure }: { measure: string }) => {
+        const staging = document.getElementById('staging') as HTMLElement;
+        const container = document.getElementById('container') as HTMLElement;
+        const { PaginationEngine } = (window as any).DocxodusPagination;
+        new PaginationEngine(staging, container, { showPageNumbers: false }).paginate();
+        // eslint-disable-next-line no-eval
+        const notes = (0, eval)(`(${measure})`)();
+        const boxes = Array.from(container.querySelectorAll<HTMLElement>('.page-box'));
+        return {
+          ...notes,
+          body: boxes.map((box) => box.querySelectorAll('.page-content p.body').length),
+          lines: boxes.map((box) => Array.from(box.querySelectorAll('.page-footnotes p'))
+            .filter((line) => line.textContent === 'note 0 line').length),
+        };
+      },
+      { measure: MEASURE_NOTES.toString() },
+    );
+    expect(result.lost).toEqual([]);
+    expect(result.clipped).toEqual([]);
+    expect(result.lines.reduce((sum: number, count: number) => sum + count, 0)).toBe(60);
+    const lastBodyPage = result.body.findLastIndex((count: number) => count > 0);
+    expect(lastBodyPage).toBeGreaterThan(0);
+    // 60% of a 300pt band holds 17 ten-point lines with the separator; more means re-partitioned.
+    expect(result.lines[lastBodyPage]).toBeGreaterThan(17);
+  });
+
   test('whole notes deferred from the final body block drain onto note-only pages', async ({ page }) => {
     await page.setContent(finalBlockDeferralHtml());
     await page.addScriptTag({ path: path.join(__dirname, '../dist/pagination.bundle.js') });
