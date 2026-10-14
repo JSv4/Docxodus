@@ -159,23 +159,34 @@ internal sealed record IrTable : IrBlock
 }
 
 /// <summary>
-/// A block-level <c>w:sdt</c> content-control envelope. The control remains one structural block so
-/// its wrapper, metadata, and child ordering are never lost; <see cref="Blocks"/> is retained for
-/// recursive anchor/flat-text traversal rather than flattening the control into its parent scope.
+/// A block-level wrapper envelope: a <c>w:sdt</c> content control or a <c>w:customXml</c> element. The
+/// wrapper remains one structural block so its metadata and child ordering are never lost;
+/// <see cref="Blocks"/> is retained for recursive anchor/flat-text traversal rather than flattening the
+/// wrapper into its parent scope.
 /// </summary>
 /// <remarks>
-/// <see cref="EnvelopeDigest"/> is the resolver-aware canonical hash of the OUTER <c>w:sdt</c>, not
-/// merely <c>w:sdtPr</c>. Thus the modeled identity includes its properties, end properties, nested
-/// wrappers, and exact content-tree shape. The parsed child blocks remain equality-participating too,
-/// while source provenance remains equality-neutral.
+/// <see cref="EnvelopeDigest"/> is the resolver-aware canonical hash of the OUTER wrapper, not merely
+/// <c>w:sdtPr</c>/<c>w:customXmlPr</c>. Thus the modeled identity includes its properties, end properties,
+/// nested wrappers, and exact content-tree shape. The parsed child blocks remain equality-participating
+/// too, while source provenance remains equality-neutral.
 /// </remarks>
 internal sealed record IrSdtBlock : IrBlock
 {
-    /// <summary>Direct block children of <c>w:sdtContent</c>, in document order.</summary>
+    /// <summary>Direct block children of <c>w:sdtContent</c> (or of <c>w:customXml</c>, after its
+    /// <c>w:customXmlPr</c>), in document order.</summary>
     public required IrNodeList<IrBlock> Blocks { get; init; }
 
-    /// <summary>Resolver-aware canonical digest of the complete outer <c>w:sdt</c> envelope.</summary>
+    /// <summary>Resolver-aware canonical digest of the complete outer wrapper.</summary>
     public required IrHash EnvelopeDigest { get; init; }
+
+    /// <summary>True for a <c>w:customXml</c> wrapper, false for a <c>w:sdt</c> content control. The
+    /// markdown projection renders a custom-XML wrapper's content but not a content control's.</summary>
+    public bool IsCustomXml { get; init; }
+
+    /// <summary>For a <c>w:customXml</c> wrapper, the canonical digest of the wrapper alone — its attributes
+    /// and <c>w:customXmlPr</c>, without the blocks it carries — so a change to the wrapper can be told from a
+    /// change to its content. Default for a content control.</summary>
+    public IrHash ShellDigest { get; init; }
 }
 
 /// <summary>A table row. <paramref name="Source"/> is equality-neutral provenance.</summary>

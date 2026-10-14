@@ -1475,16 +1475,18 @@ internal static partial class IrMarkupRenderer
         }
     }
 
-    /// <summary>Whether either side of an operation resolves to an atomic block-level content control.</summary>
+    /// <summary>Whether either side of an operation resolves to an atomic block wrapper (a block-level content
+    /// control or <c>w:customXml</c> element).</summary>
     private static bool IsBlockSdtOp(IrEditOp op, RenderState state) =>
         (op.LeftAnchor is { } left && ResolveBlock(left, state.Left) is IrSdtBlock) ||
         (op.RightAnchor is { } right && ResolveBlock(right, state.RightSource) is IrSdtBlock);
 
     /// <summary>
-    /// Render a block-level <c>w:sdt</c> as a single ownership unit.  Native content-control range revisions
-    /// toggle the wrapper itself, while normal whole-block run/paragraph/table marking toggles its payload.
-    /// Both layers are required: Word's custom-XML deletion range accepts by COLLAPSING an SDT to its content,
-    /// not by deleting that content, so a range-only representation would leak a deleted control's text.
+    /// Render a block wrapper (<c>w:sdt</c> or <c>w:customXml</c>) as a single ownership unit.  Native
+    /// custom-XML range revisions toggle the wrapper itself, while normal whole-block run/paragraph/table
+    /// marking toggles its payload. Both layers are required: Word's custom-XML deletion range accepts by
+    /// COLLAPSING a wrapper to its content, not by deleting that content, so a range-only representation would
+    /// leak a deleted wrapper's text. Any change inside a wrapper therefore replaces the whole wrapper.
     /// </summary>
     private static void RenderBlockSdtOp(IrEditOp op, RenderState state, List<XElement> sink)
     {
@@ -2072,7 +2074,7 @@ internal static partial class IrMarkupRenderer
             }
 
             var newCell = new XElement(W.tc);
-            foreach (var pre in cellSrc.Elements().Where(e => e.Name != W.p && e.Name != W.tbl && e.Name != W.sdt))
+            foreach (var pre in cellSrc.Elements().Where(e => !IsBlockContent(e)))
                 newCell.Add(RightClone(pre));
 
             if (cellOp.BlockOps != null)
@@ -2083,13 +2085,13 @@ internal static partial class IrMarkupRenderer
                 // A cell must contain at least one block-level child; if the ops produced none, keep the right
                 // cell's content verbatim so the table stays schema-valid.
                 if (cellSink.Count == 0)
-                    foreach (var b in cellSrc.Elements().Where(e => e.Name == W.p || e.Name == W.tbl || e.Name == W.sdt))
+                    foreach (var b in cellSrc.Elements().Where(IsBlockContent))
                         cellSink.Add(RightClone(b));
                 newCell.Add(cellSink);
             }
             else
             {
-                foreach (var b in cellSrc.Elements().Where(e => e.Name == W.p || e.Name == W.tbl || e.Name == W.sdt))
+                foreach (var b in cellSrc.Elements().Where(IsBlockContent))
                     newCell.Add(RightClone(b));
             }
             // Do not compare by output ordinal: a middle cellIns shifts every later right cell.  The
@@ -2533,7 +2535,7 @@ internal static partial class IrMarkupRenderer
             }
 
             var newCell = new XElement(W.tc);
-            foreach (var pre in shellSrc.Elements().Where(e => e.Name != W.p && e.Name != W.tbl && e.Name != W.sdt))
+            foreach (var pre in shellSrc.Elements().Where(e => !IsBlockContent(e)))
                 newCell.Add(StripUnids(new XElement(pre)));
 
             // The winner's shell was swapped in above; stamp a native w:tcPrChange (inner = BASE tcPr)
@@ -2555,14 +2557,14 @@ internal static partial class IrMarkupRenderer
                 foreach (var cellBlock in blockOps)
                     renderOneCompositeBlock(cellBlock, baseIr, reviewerIrs, state, cellSink);
                 if (cellSink.Count == 0)
-                    foreach (var b in baseCellSrc.Elements().Where(e => e.Name == W.p || e.Name == W.tbl || e.Name == W.sdt))
+                    foreach (var b in baseCellSrc.Elements().Where(IsBlockContent))
                         cellSink.Add(StripUnids(new XElement(b)));
                 newCell.Add(cellSink);
             }
             else
             {
                 // Base passthrough: the base cell's content verbatim.
-                foreach (var b in baseCellSrc.Elements().Where(e => e.Name == W.p || e.Name == W.tbl || e.Name == W.sdt))
+                foreach (var b in baseCellSrc.Elements().Where(IsBlockContent))
                     newCell.Add(StripUnids(new XElement(b)));
             }
             newRow.Add(newCell);
@@ -2795,7 +2797,7 @@ internal static partial class IrMarkupRenderer
                 if (rightNote == null)
                     continue;
                 noteEl = new XElement(noteName, rightNote.Attributes());
-                foreach (var pre in rightNote.Elements().Where(e => e.Name != W.p && e.Name != W.tbl && e.Name != W.sdt))
+                foreach (var pre in rightNote.Elements().Where(e => !IsBlockContent(e)))
                     noteEl.Add(StripUnids(new XElement(pre)));
                 root.Add(noteEl);
             }
@@ -2812,7 +2814,7 @@ internal static partial class IrMarkupRenderer
                 StripUnids(b);
 
             // Replace the note's block-level children (w:p / w:tbl / w:sdt), keeping any non-block prelude.
-            noteEl.Elements().Where(e => e.Name == W.p || e.Name == W.tbl || e.Name == W.sdt).Remove();
+            noteEl.Elements().Where(IsBlockContent).Remove();
             noteEl.Add(noteBlocks);
 
             // Re-id a MATCHED note's definition to its RIGHT/scope id so the definition shares an id space with
@@ -3243,7 +3245,7 @@ internal static partial class IrMarkupRenderer
             foreach (var b in blocks)
                 SimplifyMoveMarkup(b);
 
-        root.Elements().Where(e => e.Name == W.p || e.Name == W.tbl || e.Name == W.sdt).Remove();
+        root.Elements().Where(IsBlockContent).Remove();
         root.Add(blocks);
 
         ImportStorySourcedRelationships(diff, state, clonesBefore, part, rightMain,
@@ -4809,7 +4811,7 @@ internal static partial class IrMarkupRenderer
         string? anchor, IrDocument doc, RenderState state, List<XElement> sink, RevKind kind, bool fromRight)
     {
         var src = SourceElement(anchor, doc);
-        if (src == null || src.Name != W.sdt || src.Element(W.sdtContent) is null)
+        if (src == null || BlockWrapperContent(src) is null)
             return;
 
         var sdt = StripUnids(new XElement(src));
@@ -4835,8 +4837,8 @@ internal static partial class IrMarkupRenderer
     /// </summary>
     private static (XElement Before, XElement After) MarkWholeSdtEnvelope(XElement sdt, RevKind kind, RenderState state)
     {
-        var content = sdt.Element(W.sdtContent)!;
-        foreach (var child in content.Elements().ToList())
+        var content = BlockWrapperContent(sdt)!;
+        foreach (var child in content.Elements().Where(e => e.Name != W.customXmlPr).ToList())
             MarkWholeSdtContentChild(child, kind, state);
 
         var startName = IsDeleteGrade(kind) ? W.customXmlDelRangeStart : W.customXmlInsRangeStart;
@@ -4849,11 +4851,26 @@ internal static partial class IrMarkupRenderer
             name => new XElement(name, state.RevisionAttributes()));
     }
 
+    /// <summary>Whether a story, cell or note child is block content the ops render (a paragraph, table, or
+    /// block wrapper), as opposed to the container's own properties.</summary>
+    internal static bool IsBlockContent(XElement e) =>
+        e.Name == W.p || e.Name == W.tbl || e.Name == W.sdt || e.Name == W.customXml;
+
     /// <summary>
-    /// Mark payload carried by a block-level SDT without losing legal intermediate containers.  Paragraphs and
-    /// tables own the established whole-block revision shapes; nested SDTs receive their own envelope ranges.
-    /// Inline SDT payloads can be direct runs, so they are wrapped at run granularity too. Any other transparent
-    /// block container is descended so customXml/smartTag wrappers do not leave visible paragraphs unmarked after
+    /// The element holding a block wrapper's content: <c>w:sdtContent</c> for a content control, the
+    /// <c>w:customXml</c> element itself (its <c>w:customXmlPr</c> first) for a custom-XML wrapper, or null
+    /// when <paramref name="wrapper"/> is neither a well-formed control nor a custom-XML element.
+    /// </summary>
+    private static XElement? BlockWrapperContent(XElement wrapper) =>
+        wrapper.Name == W.sdt ? wrapper.Element(W.sdtContent)
+        : wrapper.Name == W.customXml ? wrapper
+        : null;
+
+    /// <summary>
+    /// Mark payload carried by a block wrapper without losing legal intermediate containers.  Paragraphs and
+    /// tables own the established whole-block revision shapes; nested <c>w:sdt</c>/<c>w:customXml</c> wrappers
+    /// receive their own envelope ranges. Inline SDT payloads can be direct runs, so they are wrapped at run
+    /// granularity too. Any other container is descended so it does not leave visible paragraphs unmarked after
     /// an enclosing delete-range acceptance.
     /// </summary>
     private static void MarkWholeSdtContentChild(XElement child, RevKind kind, RenderState state)
@@ -4868,7 +4885,7 @@ internal static partial class IrMarkupRenderer
             MarkWholeTable(child, kind, state);
             return;
         }
-        if (child.Name == W.sdt && child.Element(W.sdtContent) is not null)
+        if (BlockWrapperContent(child) is not null)
         {
             var boundaries = MarkWholeSdtEnvelope(child, kind, state);
             child.AddBeforeSelf(boundaries.Before);
@@ -4883,8 +4900,8 @@ internal static partial class IrMarkupRenderer
             return;
         }
 
-        // Content controls can legally carry transparent block containers such as w:customXml. Preserve their
-        // shell verbatim but descend into their block-bearing children; raw leaf metadata has no visible payload.
+        // Any other container keeps its shell verbatim; descend into its block-bearing children. Raw leaf
+        // metadata has no visible payload.
         foreach (var nested in child.Elements().ToList())
             MarkWholeSdtContentChild(nested, kind, state);
     }

@@ -172,7 +172,7 @@ internal static class IrDiagnosticJson
                 WriteTableBody(writer, t);
                 break;
             case IrSdtBlock sdt:
-                writer.WriteString("type", "sdt");
+                writer.WriteString("type", sdt.IsCustomXml ? "customXml" : "sdt");
                 WriteHashes(writer, sdt);
                 writer.WriteString("envelopeDigest", sdt.EnvelopeDigest.ToHex());
                 writer.WriteStartArray("blocks");

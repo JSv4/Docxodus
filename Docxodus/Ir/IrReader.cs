@@ -675,10 +675,12 @@ internal static class IrReader
 
     /// <summary>
     /// Append the IR block produced by a single body/cell child element to <paramref name="sink"/>.
-    /// A legal block-level <c>w:sdt</c> becomes one <see cref="IrSdtBlock"/> envelope whose direct
-    /// <c>w:sdtContent</c> children are recursively parsed into its <see cref="IrSdtBlock.Blocks"/>.
-    /// This keeps the control's wrapper and metadata addressable without flattening it into the parent
-    /// block list. SDTs can nest; malformed wrappers and pathological depth fall back to opaque blocks.
+    /// A legal block-level <c>w:sdt</c> or <c>w:customXml</c> becomes one <see cref="IrSdtBlock"/>
+    /// envelope whose content children (<c>w:sdtContent</c>'s, or the <c>w:customXml</c>'s own after its
+    /// <c>w:customXmlPr</c>) are recursively parsed into its <see cref="IrSdtBlock.Blocks"/>. This keeps the
+    /// wrapper and its metadata intact without flattening it into the parent block list, and lets the diff
+    /// see the paragraphs inside. Wrappers can nest; malformed wrappers and pathological depth fall back to
+    /// opaque blocks.
     /// </summary>
     private static void AppendBlocks(XElement el, ReadContext ctx, List<IrBlock> sink, int depth = 0)
     {
@@ -705,22 +707,31 @@ internal static class IrReader
                 return;
             }
             if (el.Element(W + "sdtContent") is { } content)
-                sink.Add(BuildSdtBlock(el, content, ctx, depth));
+                sink.Add(BuildSdtBlock(el, content.Elements(), ctx, depth));
             else
                 // An SDT without its mandatory content container cannot be represented safely as an
                 // envelope. Preserve the original subtree instead of silently dropping it.
                 sink.Add(BuildOpaqueBlock(el, ctx));
             return;
         }
+        if (el.Name == W + "customXml")
+        {
+            // A block-level custom-XML element wraps ordinary paragraphs and tables. Modeled opaquely, an
+            // edit inside it became an unmarked whole-wrapper replacement in the redline (issue #1114).
+            sink.Add(depth >= MaxSdtDepth
+                ? BuildOpaqueBlock(el, ctx)
+                : BuildSdtBlock(el, el.Elements().Where(e => e.Name != W + "customXmlPr"), ctx, depth));
+            return;
+        }
         sink.Add(BuildBlock(el, ctx));
     }
 
     /// <summary>
-    /// Maximum content-control (<c>w:sdt</c>/<c>w:smartTag</c>) nesting the reader unwraps before
+    /// Maximum wrapper (<c>w:sdt</c>/<c>w:customXml</c>/<c>w:smartTag</c>) nesting the reader unwraps before
     /// falling back to an opaque node. Real documents nest only a handful deep; the cap exists
     /// purely to bound recursion against adversarial/corrupt input.
     /// </summary>
-    private const int MaxSdtDepth = 64;
+    internal const int MaxSdtDepth = 64;
 
     /// <summary>
     /// Maximum <c>w:txbxContent</c> nesting the reader walks before falling back to an opaque inline.
@@ -741,16 +752,18 @@ internal static class IrReader
     }
 
     /// <summary>
-    /// Build one block-level content-control envelope. Its content hash is explicitly framed with an
-    /// SDT structure marker plus the resolver-aware canonical hash of the WHOLE outer wrapper, so it
-    /// cannot collide structurally with a paragraph/table and every wrapper-level change participates.
-    /// The parsed children support recursive anchor and flat-text traversal; they do not flatten the
-    /// envelope into its containing body/cell scope.
+    /// Build one block-level wrapper envelope (<c>w:sdt</c> or <c>w:customXml</c>). Its content hash is
+    /// explicitly framed with an SDT structure marker plus the resolver-aware canonical hash of the WHOLE
+    /// outer wrapper, so it cannot collide structurally with a paragraph/table and every wrapper-level change
+    /// participates. The parsed children support recursive anchor and flat-text traversal; they do not
+    /// flatten the envelope into its containing body/cell scope. A custom-XML wrapper keeps the
+    /// <c>unk</c> anchor kind it had as an opaque block: the projection has never indexed it.
     /// </summary>
-    private static IrSdtBlock BuildSdtBlock(XElement sdt, XElement content, ReadContext ctx, int depth)
+    private static IrSdtBlock BuildSdtBlock(XElement sdt, IEnumerable<XElement> content, ReadContext ctx, int depth)
     {
+        var isCustomXml = sdt.Name == W + "customXml";
         var children = new List<IrBlock>();
-        foreach (var child in content.Elements())
+        foreach (var child in content)
             AppendBlocks(child, ctx, children, depth + 1);
 
         var envelopeDigest = IrHasher.CanonicalHash(sdt, ctx.RelResolver);
@@ -760,9 +773,14 @@ internal static class IrReader
 
         return new IrSdtBlock
         {
-            Anchor = AnchorFor(IrAnchorKind.Sdt, sdt, ctx),
+            Anchor = AnchorFor(isCustomXml ? IrAnchorKind.Unk : IrAnchorKind.Sdt, sdt, ctx),
             Blocks = IrNodeList.From(children),
             EnvelopeDigest = envelopeDigest,
+            IsCustomXml = isCustomXml,
+            ShellDigest = isCustomXml
+                ? IrHasher.CanonicalHash(new XElement(sdt.Name, sdt.Attributes(), sdt.Elements(W + "customXmlPr")),
+                    ctx.RelResolver)
+                : default,
             ContentHash = contentBuilder.Build(),
             // Phase 1 deliberately treats every envelope change as structural content, never a
             // format-only update: there is no safe pPr-like native marker for arbitrary sdt metadata.

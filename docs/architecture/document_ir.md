@@ -49,7 +49,7 @@ Full shapes live in spec §7; the namespace is `Docxodus/Ir/`. The essentials:
 |---|---|
 | `IrDocument` | Root snapshot: `Body` scope, per-part `Headers`/`Footers`, `Footnotes`/`Endnotes` note stores, `Comments` store, the three registries, and `Sources` (part URI → `XDocument`, the provenance pin). `FindByAnchor` is O(1). |
 | `IrScope(Name, Blocks)` | A flat block list for one part. `Name` matches the projection's multipart namespacing: `body`, `hdr1…N`, `ftr1…N`, `fn`, `en`, `cmt`. |
-| `IrBlock` (abstract) | Base for `IrParagraph`, `IrTable`, `IrSectionBreak`, `IrOpaqueBlock`. Carries `Anchor`, `ContentHash`, `FormatFingerprint`, and an equality-excluded `Source`. |
+| `IrBlock` (abstract) | Base for `IrParagraph`, `IrTable`, `IrSdtBlock`, `IrSectionBreak`, `IrOpaqueBlock`. Carries `Anchor`, `ContentHash`, `FormatFingerprint`, and an equality-excluded `Source`. `IrSdtBlock` is a block-level wrapper envelope — a `w:sdt` content control or a `w:customXml` element (`IsCustomXml`) — holding its parsed child blocks; the diff treats it as one unit and renders an inserted or deleted wrapper with Word's paired `w:customXml{Ins,Del}Range*` markers. |
 | `IrParagraph` | `Format` (direct) + lazy `EffectiveFormat`, optional `List` facts, `Inlines`, and the rendering-derived `ResolvedListMarker` (see below). |
 | `IrTable` / `IrRow` / `IrCell` | Table tree; cells carry `GridSpan`/`VMerge`; rows/cells/tables each roll up a `ContentHash`. |
 | Inlines | `IrTextRun`, `IrTab`, `IrBreak`, `IrHyperlink`, `IrFieldRun(Instruction, CachedResult)`, `IrNoteRef`, `IrInlineImage`, `IrOpaqueInline`. Runs are **not** anchored — inline positions are addressed as (block anchor, char span). |
