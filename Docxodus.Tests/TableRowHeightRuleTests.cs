@@ -1,0 +1,107 @@
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Xml.Linq;
+using DocumentFormat.OpenXml.Packaging;
+using Xunit;
+
+namespace Docxodus.Tests;
+
+// Issue #1122: w:hRule decides what a row height bounds. A minimum height bounds the content and the
+// collapsed borders are added to it; an exact height is the whole row pitch and clips overflow.
+public class TableRowHeightRuleTests
+{
+    private const string W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+    // Literal original ledger; no external document or template is read.
+    private static byte[] AuthoredDocument(string? rule, string extraCell = "", string vAlign = "", string size = "6")
+    {
+        var height = rule == null ? "<w:trHeight w:val=\"720\"/>" : $"<w:trHeight w:val=\"720\" w:hRule=\"{rule}\"/>";
+        var borders = "<w:tblBorders>" + string.Concat(new[] { "top", "left", "bottom", "right", "insideH", "insideV" }
+            .Select(side => $"<w:{side} w:val=\"single\" w:sz=\"{size}\" w:color=\"444444\"/>")) + "</w:tblBorders>";
+        var cell = $"<w:tc><w:tcPr><w:tcW w:w=\"3600\" w:type=\"dxa\"/>{vAlign}</w:tcPr><w:p><w:r><w:t>Birch exact record.</w:t></w:r></w:p>{extraCell}</w:tc>";
+        var content = $"<w:document xmlns:w=\"{W}\"><w:body><w:tbl><w:tblPr><w:tblW w:w=\"3600\" w:type=\"dxa\"/>{borders}</w:tblPr>"
+            + "<w:tblGrid><w:gridCol w:w=\"3600\"/></w:tblGrid>"
+            + $"<w:tr><w:trPr>{height}</w:trPr>{cell}</w:tr></w:tbl>"
+            + "<w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"720\" w:footer=\"720\"/></w:sectPr></w:body></w:document>";
+        using var stream = new MemoryStream();
+        using (var document = WordprocessingDocument.Create(stream, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = document.AddMainDocumentPart();
+            using var xml = new MemoryStream(Encoding.UTF8.GetBytes(content));
+            main.FeedData(xml);
+        }
+        return stream.ToArray();
+    }
+
+    private static XElement Render(string? rule, string extraCell = "", string vAlign = "", string size = "6") =>
+        WmlToHtmlConverter.ConvertToHtml(new WmlDocument("Birch.docx", AuthoredDocument(rule, extraCell, vAlign, size)),
+            new WmlToHtmlConverterSettings { FabricateCssClasses = false });
+
+    private static Dictionary<string, string> Style(XElement? element) =>
+        ((string?)element?.Attribute("style") ?? "").Split(';', System.StringSplitOptions.RemoveEmptyEntries)
+            .Select(d => d.Split(':', 2)).ToDictionary(d => d[0].Trim(), d => d[1].Trim());
+
+    private static XElement Row(XElement html) => html.Descendants(Xhtml.tr).Single();
+
+    private static XElement? Clip(XElement html) =>
+        html.Descendants(Xhtml.div).SingleOrDefault(d => (string?)d.Attribute("data-docx-exact-row-cell") == "true");
+
+    [Theory]
+    [InlineData("atLeast")]
+    [InlineData(null)]
+    public void MinimumHeightBoundsTheContentAndAddsTheCollapsedBorders(string? rule)
+    {
+        var html = Render(rule);
+
+        // 36pt of content plus half of each 0.75pt horizontal border.
+        Assert.Equal("36.75pt", Style(Row(html))["height"]);
+        Assert.Null(Clip(html));
+    }
+
+    [Fact]
+    public void ExactHeightIsTheWholeRowAndClipsItsCells()
+    {
+        var html = Render("exact", "<w:p><w:r><w:t>Overflow Birch continuation line.</w:t></w:r></w:p>");
+
+        Assert.Equal("36pt", Style(Row(html))["height"]);
+        var clip = Assert.IsType<XElement>(Clip(html));
+        Assert.Equal("35.25pt", Style(clip)["height"]);
+        Assert.Equal("hidden", Style(clip)["overflow"]);
+        // Every paragraph stays in the document; the clip only hides what does not fit.
+        Assert.Contains("Overflow Birch continuation line.", clip.Value);
+    }
+
+    [Fact]
+    public void ExactHeightKeepsCellVerticalAlignmentInsideTheClip()
+    {
+        var clip = Clip(Render("exact", vAlign: "<w:vAlign w:val=\"bottom\"/>"));
+        Assert.Equal("safe flex-end", Style(clip)["justify-content"]);
+    }
+
+    [Fact]
+    public void AutoHeightAddsNoConstraint() =>
+        Assert.False(Style(Row(Render("auto"))).ContainsKey("height"));
+
+    [Fact]
+    public void ThinBordersUseTheirDeclaredWidthForPitchAndTheirLaidOutWidthForTheClip()
+    {
+        // w:sz="4" (0.5pt) is laid out as one CSS pixel (0.75pt) by the browser.
+        var html = Render("exact", size: "4");
+        Assert.Equal("36pt", Style(Row(html))["height"]);
+        Assert.Equal("35.25pt", Style(Clip(html))["height"]);
+        Assert.Equal("36.5pt", Style(Row(Render("atLeast", size: "4")))["height"]);
+    }
+
+    [Fact]
+    public void ClippedCellsKeepTheirRunFormatting()
+    {
+        // The clip wraps the cell's converted content without dropping the styles its runs carry.
+        var exact = Render("exact").Descendants(Xhtml.td).Single();
+        var minimum = Render("atLeast").Descendants(Xhtml.td).Single();
+        static string RunStyle(XElement cell) => (string?)cell.Descendants(Xhtml.span).First().Attribute("style") ?? "";
+        Assert.NotEqual("", RunStyle(minimum));
+        Assert.Equal(RunStyle(minimum), RunStyle(exact));
+    }
+}
