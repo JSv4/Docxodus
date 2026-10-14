@@ -500,7 +500,11 @@ Chromium's inferred heading outline is likewise not enabled until it is proven a
 heading/bookmark semantics. No global Letter/A4 format is supplied. A pinned
 pure-JavaScript PDF parser in the companion package verifies page count and every effective
 MediaBox/CropBox origin and dimension against finalized page metadata, accounting for inherited
-page attributes, rotation, and `UserUnit`, before bytes are returned. It rejects encryption,
+page attributes, rotation, and `UserUnit`, before bytes are returned. Chromium prints in 300-DPI
+device units and rounds the page canvas (a requested 878.5 pt page arrives 877.92 pt tall), so
+`restorePageGeometry` first sets each quantized page's boxes to the finalized size and prepends a
+translation that keeps the top-anchored content, link rectangles and destinations at their distance
+from the top edge; the verifier then requires the finalized size within 0.01 pt (issue #1125). It rejects encryption,
 malformed/incremental cross-reference ambiguity, and decompression beyond the PDF parser limits;
 regular-expression
 page counting is test scaffolding, not the production verifier. Chromium currently writes volatile

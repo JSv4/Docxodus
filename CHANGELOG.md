@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Exported PDFs now have the exact requested paper size (issue #1125). Chromium prints in 300-DPI
+  device units and delivered a 606 × 878.5pt page as 606 × 877.92pt, which the output verifier
+  accepted within 0.75pt. `@docxodus/export` now restores each page's MediaBox and CropBox to the
+  finalized size, translating the page content, link rectangles and destinations so everything keeps
+  its distance from the top edge, and then verifies the size within 0.01pt.
+
 ## [13.0.0] - 2026-10-12
 
 ### Added

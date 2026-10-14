@@ -38,7 +38,7 @@ import {
   publishNoReplace,
   readStableInputFile,
 } from "./files.js";
-import { verifyPdf } from "./pdf.js";
+import { restorePageGeometry, verifyPdf } from "./pdf.js";
 
 export * from "./contracts.js";
 export {
@@ -985,6 +985,15 @@ async function renderOwned(
     }
 
     if (browser.pdf) {
+      if (browser.pdf.byteLength > pdfLimit) {
+        exportError(
+          "resource_limit",
+          "output_verification",
+          `PDF output exceeds pdfOutputBytes (${browser.pdf.byteLength} > ${pdfLimit}).`,
+          "Lower document complexity or select a larger permitted limit.",
+        );
+      }
+      browser.pdf = await restorePageGeometry(browser.pdf, report.pages, parserLimit);
       if (browser.pdf.byteLength > pdfLimit) {
         exportError(
           "resource_limit",
