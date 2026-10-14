@@ -2938,6 +2938,40 @@ interoperability evidence without changing those core paths. Unit tests cover fa
 artifact freshness, process cleanup and source preservation, and run in CI without requiring a
 LibreOffice installation.
 
+
+## Fields: a `PAGE` result is formatted by the field, not by its cached result run (issue #1115)
+
+**Status:** Documented, Docxodus matches the reference (October 2026)
+
+A page-number field's cached result can carry run formatting that the field's instruction does not:
+
+```xml
+<w:fldSimple w:instr=" PAGE \* Arabic "><w:r><w:rPr><w:i/></w:rPr><w:t>1</w:t></w:r></w:fldSimple>
+<!-- complex form: the instruction run is unformatted, only the result run is italic -->
+<w:r><w:fldChar w:fldCharType="begin"/></w:r>
+<w:r><w:instrText xml:space="preserve"> PAGE \* Arabic </w:instrText></w:r>
+<w:r><w:fldChar w:fldCharType="separate"/></w:r>
+<w:r><w:rPr><w:i/></w:rPr><w:t>1</w:t></w:r>
+<w:r><w:fldChar w:fldCharType="end"/></w:r>
+```
+
+| Form | Word | LibreOffice 25.8.7.3 | Docxodus (paginated) |
+|---|---|---|---|
+| Simple `PAGE` with italic cached result | Not yet captured | Upright current page number | Upright current page number (from #1115) |
+| Complex `PAGE`, unformatted instruction, italic result | Not yet captured | Upright current page number | Upright current page number |
+| Legacy `w:pgNum` in an italic run | Not yet captured | Block dropped | Italic decimal number |
+
+Word documents a field result updated without `\* MERGEFORMAT` as taking its formatting from the field
+code rather than from the previous result; LibreOffice behaves that way for both field forms. Before
+#1115, a simple field was flattened to its cached text and kept the stale value on every page. The
+converter now marks it like a complex field (`data-field`/`data-field-format`). The paginator replaces
+the whole marked result (`substitutePageNumberFields`), so the cached run's formatting is
+intentionally not reproduced. A `\* MERGEFORMAT` result that should keep prior formatting, and Word's
+own output, still need a Word capture before Docxodus models them. Evidence: docx-fidelity-bench
+`paragraphs-page-number-*` cases (bench issue #26).
+
+---
+
 ## Contributing
 
 When adding new corner cases to this document:

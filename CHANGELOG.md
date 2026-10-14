@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Simple `PAGE` and `NUMPAGES` fields (`w:fldSimple`) now follow each page in paginated output
+  instead of repeating their cached result (issue #1115). The converter gives them the same
+  `data-field` / `data-field-format` marker as the equivalent complex field, so the paginator
+  substitutes each page's number. As for complex fields, the substituted result takes the field's
+  formatting rather than the cached result run's (see `docs/ooxml_corner_cases.md`).
+
 ## [13.0.0] - 2026-10-12
 
 ### Added
