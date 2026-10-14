@@ -54,6 +54,7 @@ public class TextBoxDeletedTextTests
 
         var rendered = Render(left, right);
         AssertNoDeletedTextInsideTextBoxes(rendered);
+        Assert.Contains(TextBoxInstructions(rendered), text => text.Contains("PAGE"));
 
         using var ms = new MemoryStream(rendered.DocumentByteArray);
         using var doc = WordprocessingDocument.Open(ms, false);
@@ -72,6 +73,7 @@ public class TextBoxDeletedTextTests
         Assert.Contains("fallback-copy", VisibleText(rejected));
         Assert.Contains("body-stays", VisibleText(rejected));
         AssertNoDeletedTextInsideTextBoxes(rejected);
+        Assert.Contains(TextBoxInstructions(rejected), text => text.Contains("PAGE"));
     }
 
     [Fact]
@@ -97,7 +99,7 @@ public class TextBoxDeletedTextTests
             footerParts: new Dictionary<string, string[]>
             {
                 ["rIdF1"] = new[] { VmlParagraph("footer-one") },
-                ["rIdF2"] = new[] { InstructionParagraph(" NUMPAGES ") },
+                ["rIdF2"] = new[] { "<w:p><w:r><w:instrText xml:space=\"preserve\"> NUMPAGES </w:instrText></w:r></w:p>" },
             });
         var right = HeaderFooterFixtures.Build(
             new[]
@@ -144,7 +146,8 @@ public class TextBoxDeletedTextTests
             Assert.Empty(root.Descendants(W.txbxContent).SelectMany(box => box.Descendants(W.delInstrText)));
         });
         Assert.Contains(footers, root => root.Descendants(W.txbxContent).Any(box => box.Value.Contains("footer-one")));
-        Assert.Contains(footers, root => root.Descendants(W.instrText).Any(text => text.Value.Contains("NUMPAGES")));
+        Assert.Contains(footers, root => root.Descendants(W.delInstrText).Any(text =>
+            text.Value.Contains("NUMPAGES") && !text.Ancestors(W.txbxContent).Any()));
     }
 
     [Fact]
@@ -232,6 +235,20 @@ public class TextBoxDeletedTextTests
         }
     }
 
+    private static IEnumerable<string> TextBoxInstructions(WmlDocument document)
+    {
+        using var ms = new MemoryStream(document.DocumentByteArray);
+        using var doc = WordprocessingDocument.Open(ms, false);
+        var main = doc.MainDocumentPart!;
+        var roots = new List<XElement> { main.GetXDocument().Root! };
+        roots.AddRange(main.HeaderParts.Select(part => part.GetXDocument().Root!));
+        roots.AddRange(main.FooterParts.Select(part => part.GetXDocument().Root!));
+        return roots.SelectMany(root => root.Descendants(W.txbxContent))
+            .SelectMany(box => box.Descendants(W.instrText))
+            .Select(text => text.Value)
+            .ToList();
+    }
+
     private static string VisibleText(WmlDocument document)
     {
         using var ms = new MemoryStream(document.DocumentByteArray);
@@ -247,10 +264,4 @@ public class TextBoxDeletedTextTests
         "<w:p><w:r><w:pict><v:shape xmlns:v=\"urn:schemas-microsoft-com:vml\" " +
         "style=\"width:100pt;height:40pt\"><v:textbox><w:txbxContent><w:p><w:r><w:t>" +
         text + "</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>";
-
-    private static string InstructionParagraph(string instruction) =>
-        "<w:p><w:r><w:pict><v:shape xmlns:v=\"urn:schemas-microsoft-com:vml\" " +
-        "style=\"width:100pt;height:40pt\"><v:textbox><w:txbxContent><w:p><w:r>" +
-        "<w:instrText xml:space=\"preserve\">" + instruction + "</w:instrText></w:r></w:p>" +
-        "</w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>";
 }
