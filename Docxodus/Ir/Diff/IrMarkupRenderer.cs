@@ -2730,9 +2730,11 @@ internal static partial class IrMarkupRenderer
         if (rightPart == null)
             return null;
 
-        // Create the part and seed it with the right part's BOILERPLATE notes only (the reserved separator /
-        // continuation notes, ids ≤ 0), under a fresh root — so the real inserted notes start from a clean
-        // LEFT-side (empty) baseline and reject-all yields no real note content.
+        // Create the part and seed it with the right part's BOILERPLATE notes only, under a fresh root —
+        // so the real inserted notes start from a clean LEFT-side (empty) baseline and reject-all yields no
+        // real note content. Boilerplate is a w:type other than normal. A content footnote at id 0 is not
+        // boilerplate, even though continuationSeparator also uses id 0; copying it here would duplicate
+        // the note the insert then adds.
         var newPart = isFootnote
             ? (OpenXmlPart)main.AddDeterministicPart<FootnotesPart>("rIdFootnotes")
             : main.AddDeterministicPart<EndnotesPart>("rIdEndnotes");
@@ -2743,7 +2745,7 @@ internal static partial class IrMarkupRenderer
             rightRoot?.Attributes() ?? Enumerable.Empty<XAttribute>());
         if (rightRoot != null)
             foreach (var note in rightRoot.Elements(noteName)
-                         .Where(n => int.TryParse((string?)n.Attribute(W.id), out var id) && id <= 0))
+                         .Where(WmlToMarkdownConverter.IsBoilerplateNote))
                 newRoot.Add(new XElement(note));
         var xDoc = newPart.GetXDocument();
         if (xDoc.Root == null)
@@ -2775,8 +2777,10 @@ internal static partial class IrMarkupRenderer
         // Resolve every note by its LEFT id before any is re-id'd below: when an inserted reference shifts the
         // numbering, matched notes move along a chain (1→2, 2→3), and looking up left id 2 after note 1 took
         // id 2 found the wrong note, so two definitions ended up with one note's text.
+        // Skip boilerplate. continuationSeparator is also id 0, and a content footnote may use id 0
+        // beside it. First-wins would edit the separator and leave the content footnote untouched.
         var leftNotesById = root.Elements(noteName)
-            .Where(e => e.Attribute(W.id) != null)
+            .Where(e => e.Attribute(W.id) != null && !WmlToMarkdownConverter.IsBoilerplateNote(e))
             .GroupBy(e => (string)e.Attribute(W.id)!)
             .ToDictionary(g => g.Key, g => g.First());
         foreach (var diff in diffs)
@@ -2791,7 +2795,8 @@ internal static partial class IrMarkupRenderer
                 // the RIGHT note element's shell (attributes + non-block prelude) so the inserted blocks land in
                 // a schema-valid w:footnote/w:endnote; the ops (all InsertBlock) supply the content.
                 var rightNote = rightRoot?.Elements(noteName)
-                    .FirstOrDefault(e => (string?)e.Attribute(W.id) == diff.NoteId);
+                    .FirstOrDefault(e => (string?)e.Attribute(W.id) == diff.NoteId
+                        && !WmlToMarkdownConverter.IsBoilerplateNote(e));
                 if (rightNote == null)
                     continue;
                 noteEl = new XElement(noteName, rightNote.Attributes());
@@ -3305,11 +3310,14 @@ internal static partial class IrMarkupRenderer
     /// Each reference's <c>@w:id</c> is rewritten to <c>n</c> and its definition (matched by side: a reference
     /// inside <c>w:del</c> resolves a LEFT-sourced definition, an <c>w:ins</c>/equal reference a RIGHT-sourced one)
     /// is renumbered to <c>n</c> and emitted in that order. Reserved separator/continuation boilerplate notes
-    /// (<c>w:type</c> present, or id ≤ 0) keep their ids and lead the part. Definitions that no surviving reference
-    /// names are still carried (after the renumbered ones, original order) so accept/reject — which drop the
-    /// opposite side's references — never dangle: each surviving reference still resolves, and the kept ids stay an
-    /// ASCENDING subsequence of the renumbered space, so the read-order note sequence matches the right document on
-    /// accept and the left on reject. Idempotent when ids already coincide; runs for every render.
+    /// (<see cref="WmlToMarkdownConverter.IsBoilerplateNote"/>: a <c>w:type</c> other than <c>normal</c>) keep their
+    /// ids and lead the part. A content footnote at id 0 is not boilerplate — <c>continuationSeparator</c> also uses
+    /// id 0 — and is renumbered with the reference that cites it. A reference that names no definition is removed;
+    /// assigning it the next id leaves a <c>w:footnoteReference</c> Word offers to recover. Definitions that no
+    /// surviving reference names are still carried (after the renumbered ones, original order) so accept/reject —
+    /// which drop the opposite side's references — never dangle: each surviving reference still resolves, and the
+    /// kept ids stay an ASCENDING subsequence of the renumbered space, so the read-order note sequence matches the
+    /// right document on accept and the left on reject. Idempotent when ids already coincide; runs for every render.
     /// <para><b>Nested references.</b> The body walk cannot see a reference living INSIDE a note's definition
     /// body (a note that itself cites a note). Each renumbered definition's old→new id is therefore returned
     /// to the caller, which — after BOTH kinds' passes ran — sweeps BOTH note parts remapping nested
@@ -3339,9 +3347,10 @@ internal static partial class IrMarkupRenderer
             return empty;
 
         // Partition: reserved boilerplate (kept verbatim, leads the part) vs real notes (renumber candidates).
-        bool IsReserved(XElement note) =>
-            note.Attribute(W.type) != null ||
-            (int.TryParse((string?)note.Attribute(W.id), out var nid) && nid <= 0);
+        // Id <= 0 is not the test. continuationSeparator occupies id 0, and a content footnote may occupy
+        // id 0 beside it. The reader already keeps that content footnote (IsBoilerplateNote). Reserving it
+        // here drops it from the lookup, and the reference that cites it is handed a fresh id no footnote has.
+        bool IsReserved(XElement note) => WmlToMarkdownConverter.IsBoilerplateNote(note);
         var reserved = noteRoot.Elements(noteName).Where(IsReserved).ToList();
         var realNotes = noteRoot.Elements(noteName).Where(e => !IsReserved(e)).ToList();
 
@@ -3423,9 +3432,18 @@ internal static partial class IrMarkupRenderer
                     ? liveById.GetValueOrDefault(rightId) ?? delById.GetValueOrDefault(rightId)
                     : delById.GetValueOrDefault(oldId) ?? liveById.GetValueOrDefault(oldId);
 
+            // A reference that names no definition is removed. The next sequential id would be a
+            // w:footnoteReference Word offers to recover, because no w:footnote carries it. The parent
+            // run stays, including when the reference was its only child.
+            if (def == null)
+            {
+                r.Remove();
+                continue;
+            }
+
             // A note referenced more than once corresponds once: the FIRST reference fixes its id; later references
             // to the same definition reuse it (mirroring the builder's first-reference-wins correspondence).
-            if (def != null && assignedIdByDef.TryGetValue(def, out var existing))
+            if (assignedIdByDef.TryGetValue(def, out var existing))
             {
                 r.SetAttributeValue(W.id, existing);
                 continue;
@@ -3434,14 +3452,11 @@ internal static partial class IrMarkupRenderer
             var newId = next.ToString();
             r.SetAttributeValue(W.id, newId);
             next++;
-            if (def != null)
-            {
-                var defOldId = (string?)def.Attribute(W.id);
-                def.SetAttributeValue(W.id, newId);
-                if (defOldId != null && defOldId != newId) idRemap[defOldId] = newId;
-                assignedIdByDef[def] = newId;
-                orderedDefs.Add(def);
-            }
+            var defOldId = (string?)def.Attribute(W.id);
+            def.SetAttributeValue(W.id, newId);
+            if (defOldId != null && defOldId != newId) idRemap[defOldId] = newId;
+            assignedIdByDef[def] = newId;
+            orderedDefs.Add(def);
         }
 
         // Carry any real definitions no surviving reference named (orphaned/unreferenced notes), after the
