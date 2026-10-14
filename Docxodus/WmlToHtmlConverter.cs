@@ -6555,6 +6555,73 @@ namespace Docxodus
             return cell;
         }
 
+        /// <summary>A cell's declared horizontal border width on <paramref name="side"/>, which a
+        /// minimum row height does not include.</summary>
+        private static decimal DeclaredBorderInPoints(XElement cell, XName side)
+        {
+            var border = cell.Element(W.tcPr)?.Element(W.tcBorders)?.Element(side);
+            var type = (string?)border?.Attribute(W.val);
+            return border == null || type is null or "nil" or "none" ? 0m : ((int?)border.Attribute(W.sz) ?? 0) / 8m;
+        }
+
+        /// <summary>The width a browser lays out for a converted cell's CSS border on
+        /// <paramref name="side"/>: its declared points floored to whole CSS pixels, never below one.</summary>
+        private static decimal LaidOutCellBorderInPoints(Dictionary<string, string>? cellStyle, string side)
+        {
+            if (cellStyle == null || !cellStyle.TryGetValue("border-" + side, out var border)) return 0m;
+            var width = border.Split(' ', StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
+            if (border.StartsWith("none") || width == null || !width.EndsWith("pt")
+                || !decimal.TryParse(width[..^2], NumberStyles.Number, CultureInfo.InvariantCulture, out var points)
+                || points <= 0m) return 0m;
+            return Math.Max(1m, Math.Floor(points / 0.75m)) * 0.75m;
+        }
+
+        /// <summary>
+        /// Hold each cell of an exact-height row to the row's content height and clip what does
+        /// not fit, as Word does: a table cell grows with its content, so the row height alone
+        /// cannot express an exact rule. Each clip is the row height less the half borders the
+        /// browser lays out in the row (whole CSS pixels) and the cell's own vertical padding.
+        /// </summary>
+        private static void ClipExactRowCells(IEnumerable<object?> cells, decimal rowHeightInPoints)
+        {
+            var styles = cells.OfType<XElement>().Where(c => c.Name == Xhtml.td)
+                .Select(c => c.Annotation<Dictionary<string, string>>()).ToList();
+            var contentHeightInPoints = rowHeightInPoints
+                - styles.Select(st => LaidOutCellBorderInPoints(st, "top")).DefaultIfEmpty(0m).Max() / 2m
+                - styles.Select(st => LaidOutCellBorderInPoints(st, "bottom")).DefaultIfEmpty(0m).Max() / 2m;
+            // A vertically merged cell spans later rows, so one row's height cannot bound it.
+            foreach (var cell in cells.OfType<XElement>().Where(c => c.Name == Xhtml.td && c.Attribute("rowspan") == null))
+            {
+                var cellStyle = cell.Annotation<Dictionary<string, string>>();
+                decimal Padding(string side) =>
+                    cellStyle != null && cellStyle.TryGetValue("padding-" + side, out var value) && value.EndsWith("pt")
+                        && decimal.TryParse(value[..^2], NumberStyles.Number, CultureInfo.InvariantCulture, out var points)
+                        ? points : 0m;
+                var height = Math.Max(0m, contentHeightInPoints - Padding("top") - Padding("bottom"));
+                var clipStyle = new Dictionary<string, string>
+                {
+                    ["height"] = string.Format(NumberFormatInfo.InvariantInfo, "{0:0.####}pt", height),
+                    ["overflow"] = "hidden",
+                };
+                // The clip box fills the cell, so the cell's vertical alignment moves inside it.
+                var alignment = cellStyle != null && cellStyle.TryGetValue("vertical-align", out var va) ? va : "top";
+                if (alignment is "middle" or "bottom")
+                {
+                    clipStyle["display"] = "flex";
+                    clipStyle["flex-direction"] = "column";
+                    // `safe` keeps the first lines when the content overflows the clip.
+                    clipStyle["justify-content"] = alignment == "middle" ? "safe center" : "safe flex-end";
+                }
+                // Detach the content before adding it: XContainer.Add clones a node that still has a
+                // parent, and a clone drops the style annotations every converted run carries.
+                var content = cell.Nodes().ToList();
+                cell.RemoveNodes();
+                var clip = new XElement(Xhtml.div, new XAttribute("data-docx-exact-row-cell", "true"), content);
+                clip.AddAnnotation(clipStyle);
+                cell.Add(clip);
+            }
+        }
+
         private static decimal? TableRowHeightInTwips(XAttribute? attribute)
         {
             if (attribute == null) return null;
@@ -6578,15 +6645,31 @@ namespace Docxodus
             decimal currentMarginLeft)
         {
             var style = new Dictionary<string, string>();
-            var trHeight = TableRowHeightInTwips(element.Elements(W.trPr).Elements(W.trHeight).Attributes(W.val).FirstOrDefault());
-            // Points at twip precision: a 0.01in quantum turned a 55pt row into 54.72pt and
-            // drifted every following row (issue #1121).
-            if (trHeight != null)
+            var heightElement = element.Elements(W.trPr).Elements(W.trHeight).FirstOrDefault();
+            var trHeight = TableRowHeightInTwips(heightElement?.Attribute(W.val));
+            var heightRule = (string?)heightElement?.Attribute(W.hRule) ?? "atLeast";
+            var cells = element.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft)).ToList();
+            // A collapsed-border table row's CSS height includes half of each horizontal border.
+            // w:hRule decides whether w:trHeight does too (issue #1122): an exact height is the
+            // row's whole pitch and clips content that needs more, while a minimum height bounds
+            // the content and the borders are added to it. Twip precision: issue #1121.
+            if (trHeight != null && heightRule != "auto")
+            {
+                var heightInPoints = trHeight.Value / 20m;
+                // A collapsed row takes the widest top half and the widest bottom half of its cells.
+                var cellsInRow = element.Elements(W.tc).ToList();
+                var borderHalves = cellsInRow.Select(c => DeclaredBorderInPoints(c, W.top)).DefaultIfEmpty(0m).Max() / 2m
+                    + cellsInRow.Select(c => DeclaredBorderInPoints(c, W.bottom)).DefaultIfEmpty(0m).Max() / 2m;
+                if (heightRule == "exact")
+                    ClipExactRowCells(cells, heightInPoints);
+                else
+                    heightInPoints += borderHalves;
                 style.AddIfMissing("height",
-                    string.Format(NumberFormatInfo.InvariantInfo, "{0:0.####}pt", trHeight.Value/20m));
+                    string.Format(NumberFormatInfo.InvariantInfo, "{0:0.####}pt", heightInPoints));
+            }
             var htmlRow = new XElement(Xhtml.tr,
                 SourceAnchorIdentityAttribute(settings, element),
-                element.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft)));
+                cells);
             if (style.Any())
                 htmlRow.AddAnnotation(style);
 
