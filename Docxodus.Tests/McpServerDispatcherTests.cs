@@ -27,10 +27,12 @@ public class McpServerDispatcherTests : IDisposable
     {
         // Each test class instance gets its own scope root, so the dispatcher runs against a
         // realistically-confined store rather than an unbounded filesystem.
-        _root = Path.Combine(Path.GetTempPath(), $"mcp-dispatcher-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_root);
-        _store = new SessionStore(new LocalFileDocumentStore(_root));
-
+        var created = Path.Combine(Path.GetTempPath(), $"mcp-dispatcher-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(created);
+        _store = new SessionStore(new LocalFileDocumentStore(created));
+        // Resolve follows symlinks. On macOS the temp directory is under /var, a symlink to
+        // /private/var, so the path GetTempPath returns is not the path Resolve returns.
+        _root = _store.Documents.RootDescription;
         _tempPath = Path.Combine(_root, "document.docx");
         File.WriteAllBytes(_tempPath, DocxSession.CreateBlankDocxBytes());
     }
