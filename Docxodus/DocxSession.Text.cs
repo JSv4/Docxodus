@@ -972,7 +972,10 @@ public sealed partial class DocxSession
             var after = concat[(start + len)..];
 
             // Snapshot the original formatting before changing/reusing the live run.
-            var deletedRun = CloneRunWithRevisionText(run, W.delText, removed);
+            // Inside a text box the deleted clone keeps w:t: one w:delText in
+            // w:txbxContent makes Word offer to recover the file.
+            var deletedRun = CloneRunWithRevisionText(
+                run, InsideTextBox(run) ? W.t : W.delText, removed);
             if (i == 0 && replace.Length > 0)
                 insertedRun = CloneRunWithRevisionText(run, W.t, replace);
 
@@ -1114,7 +1117,8 @@ public sealed partial class DocxSession
 
     /// <summary>Create a text-only run that retains the source run's formatting/rsid
     /// attributes but gets its own internal Unid. <paramref name="textName"/> is
-    /// <c>w:t</c> for ordinary/inserted text and <c>w:delText</c> for deletions.</summary>
+    /// <c>w:t</c> for ordinary/inserted text and <c>w:delText</c> for deletions —
+    /// except deletions inside <c>w:txbxContent</c>, which also take <c>w:t</c>.</summary>
     private static XElement CloneRunWithRevisionText(XElement source, XName textName, string text)
     {
         var clone = new XElement(W.r,

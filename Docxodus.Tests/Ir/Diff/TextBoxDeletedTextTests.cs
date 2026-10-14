@@ -208,6 +208,35 @@ public class TextBoxDeletedTextTests
             box.Descendants(W.delText).Any() || box.Descendants(W.delInstrText).Any());
     }
 
+    [Fact]
+    public void Session_tracked_span_replace_inside_a_text_box_keeps_its_text_ordinary()
+    {
+        var original = IrTestDocuments.FromBodyXmlWithDrawingNamespaces(VmlBox);
+        using var session = new DocxSession(original.DocumentByteArray, new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Reviewer",
+        });
+        var textBoxes = session.Project().AnchorIndex.Values
+            .Where(anchor => anchor.Anchor.Kind == "p" && anchor.TextPreview.Contains("one-boxed"))
+            .ToList();
+        Assert.Equal(2, textBoxes.Count);
+        // A span replace builds its deleted slice directly (CloneRunWithRevisionText),
+        // bypassing ConvertTextToDeletedText — the deleted run must keep w:t inside
+        // the box all the same.
+        var replaced = session.ReplaceTextAtSpan(
+            textBoxes[1].Anchor.Id, 0, "one-boxed".Length, "two-boxed");
+        Assert.True(replaced.Success, replaced.Error?.Message);
+
+        var tracked = new WmlDocument("tracked.docx", session.Save());
+        AssertNoDeletedTextInsideTextBoxes(tracked);
+        using var ms = new MemoryStream(tracked.DocumentByteArray);
+        using var doc = WordprocessingDocument.Open(ms, false);
+        var boxes = doc.MainDocumentPart!.GetXDocument().Descendants(W.txbxContent).ToList();
+        Assert.Contains(boxes, box => box.Descendants(W.t).Any(text => text.Value.Contains("one-boxed")));
+        Assert.Contains(boxes, box => box.Descendants(W.t).Any(text => text.Value.Contains("two-boxed")));
+    }
+
     private static WmlDocument Render(WmlDocument left, WmlDocument right)
     {
         var settings = new IrDiffSettings();
