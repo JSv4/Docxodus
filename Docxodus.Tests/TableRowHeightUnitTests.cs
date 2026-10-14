@@ -54,13 +54,15 @@ public class TableRowHeightUnitTests
             actual.Descendants().Attributes("style").Select(a => a.Value));
     }
 
-    [Fact]
-    public void FractionalUnitHeightRetainsExistingCssRounding()
-    {
-        var style = (string?)Render("25.075pt").Descendants(Xhtml.tr).Single().Attribute("style");
-        Assert.Contains("height: 0.35in", style);
-        Assert.Equal((string?)Render("502").Descendants(Xhtml.tr).Single().Attribute("style"), style);
-    }
+    // Issue #1121: row heights keep twip precision. The former 0.01in quantum made 55pt rows
+    // 54.72pt and mapped both 25.075pt and 25.1pt to 25.2pt.
+    [Theory]
+    [InlineData("25.075pt", "height: 25.075pt")]
+    [InlineData("502", "height: 25.1pt")]
+    [InlineData("1100", "height: 55pt")]
+    [InlineData("720", "height: 36pt")]
+    public void RowHeightsKeepTwipPrecision(string value, string expected) =>
+        Assert.Contains(expected, (string?)Render(value).Descendants(Xhtml.tr).Single().Attribute("style"));
 
     [Theory]
     [InlineData("501.5")]

@@ -6594,9 +6594,11 @@ namespace Docxodus
         {
             var style = new Dictionary<string, string>();
             var trHeight = TableRowHeightInTwips(element.Elements(W.trPr).Elements(W.trHeight).Attributes(W.val).FirstOrDefault());
+            // Points at twip precision: a 0.01in quantum turned a 55pt row into 54.72pt and
+            // drifted every following row (issue #1121).
             if (trHeight != null)
                 style.AddIfMissing("height",
-                    string.Format(NumberFormatInfo.InvariantInfo, "{0:0.00}in", trHeight.Value/1440m));
+                    string.Format(NumberFormatInfo.InvariantInfo, "{0:0.####}pt", trHeight.Value/20m));
             var htmlRow = new XElement(Xhtml.tr,
                 SourceAnchorIdentityAttribute(settings, element),
                 element.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft)));
