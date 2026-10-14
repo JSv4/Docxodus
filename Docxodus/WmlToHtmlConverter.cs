@@ -7276,7 +7276,8 @@ namespace Docxodus
             XElement paragraph,
             Dictionary<string, string> paragraphStyle)
         {
-            if (!paragraphStyle.ContainsKey(AutomaticLineSpacingMultiplierCssProperty))
+            if (!paragraphStyle.TryGetValue(AutomaticLineSpacingMultiplierCssProperty, out var multiplier)
+                || multiplier == "1")
                 return;
 
             foreach (var child in paragraph.Elements())
@@ -7565,6 +7566,13 @@ namespace Docxodus
                     style.Add(AutomaticLineSpacingMultiplierCssProperty,
                         string.Format(NumberFormatInfo.InvariantInfo, "{0:0.###}", multiple));
                     style.Add("line-height", "normal");
+                }
+                else
+                {
+                    // Single spacing still records its multiple, so the paginated text renderer can
+                    // place its lines on Word's twip grid (issue #1123). Nothing else reads a unit
+                    // multiple: the line box and inline content stay exactly as before.
+                    style.Add(AutomaticLineSpacingMultiplierCssProperty, "1");
                 }
             }
             if (lineRule == "exact" && line is { } exactLine)

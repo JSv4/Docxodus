@@ -45,6 +45,16 @@ All notable changes to this project will be documented in this file.
   accepted within 0.75pt. `@docxodus/export` now restores each page's MediaBox and CropBox to the
   finalized size, translating the page content, link rectangles and destinations so everything keeps
   its distance from the top edge, and then verifies the size within 0.01pt.
+- Single-spaced paragraphs now use the paginated export's fractional text placement (issue #1123).
+  The converter records single spacing's unit multiple (without rewriting the line box or its runs),
+  and documents with plain header/footer stories, or with otherwise plain right-to-left paragraphs,
+  no longer lose the path for their left-to-right paragraphs (right-to-left paragraphs keep the HTML
+  line layout). Single-spaced lines advance 12.65pt instead of whole CSS pixels. Running stories
+  holding page-number fields still keep the HTML layout. The painter also keeps the sub-pixel
+  remainder Chromium drops when it snaps a vector's origin to a whole CSS pixel, so text in a
+  paragraph at a fractional position keeps its exact horizontal and vertical place, and paints each
+  paragraph at its ideal twip-grid position rather than the 1/64-pixel layout position, which drifts
+  up by a fraction of a pixel per line down the page.
 
 ## [13.0.0] - 2026-10-12
 
