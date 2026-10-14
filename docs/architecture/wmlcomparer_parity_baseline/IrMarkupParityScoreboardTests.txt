@@ -1,0 +1,50 @@
+===== IR MARKUP PARITY SCOREBOARD (MARKUP_BLOCKED cases) =====
+Total: 39   PASS: 39   DEVIATION: 0   FAIL: 0   (100.0% pass-or-deviation)
+  [BL ] 6 pass + 0 deviation / 6
+  [D  ] 19 pass + 0 deviation / 19
+  [E  ] 8 pass + 0 deviation / 8
+  [G  ] 5 pass + 0 deviation / 5
+  [PR ] 1 pass + 0 deviation / 1
+FAILING (must be empty for the floor):
+PASSING:
+  PASS  MoveMarkup-ContainsMoveFrom
+  PASS  MoveMarkup-ContainsMoveTo
+  PASS  MoveMarkup-ContainsRangeMarkers
+  PASS  MoveMarkup-LinkPairsViaName
+  PASS  MoveMarkup-WhenDisabledNoMoveElements
+  PASS  MoveMarkup-RequiredAttributes
+  PASS  MoveMarkup-RangeIdsProperlyPaired
+  PASS  SimplifyMoveMarkup-ConvertMoveFromToDel
+  PASS  SimplifyMoveMarkup-ConvertMoveToToIns
+  PASS  SimplifyMoveMarkup-RemoveRangeMarkers
+  PASS  SimplifyMoveMarkup-PreserveAttributes
+  PASS  SimplifyMoveMarkup-WhenFalsePreserveMoveElements
+  PASS  MoveMarkup-MixedChangesUniqueIds
+  PASS  MoveMarkup-MoveNamesFollowConvention
+  PASS  MoveMarkup-RecognizedByWmlComparerGetRevisions
+  PASS  MoveMarkup-ValidSchema
+  PASS  MoveMarkup-Stress-50
+  PASS  MoveMarkup-Stress-100
+  PASS  MoveMarkup-Stress-200
+  PASS  FormatChange-AddBold-rPrChange
+  PASS  FormatChange-RemoveBold-rPrChange
+  PASS  FormatChange-BoldToItalic-rPrChange
+  PASS  FormatChange-AddMultiple-rPrChange
+  PASS  FormatChange-RequiredAttributes
+  PASS  FormatChange-ContainsOldProperties
+  PASS  FormatChange-ItalicToBold-rPrChange
+  PASS  FormatChange-RenderedSchemaValid
+  PASS  LegalNum-001-OriginalHasLegal-Preserves
+  PASS  LegalNum-002-RevisedHasLegal-Preserves
+  PASS  LegalNum-003-BothHaveLegal-Preserves
+  PASS  LegalNum-004-MultiLevel-Preserves
+  PASS  LegalNum-005-DifferentNumIds-Merges
+  PASS  BodyBookmark-001-NoThrow
+  PASS  BodyBookmark-002-ReverseDirection
+  PASS  BodyPerm-001-NoThrow
+  PASS  BodyProofErr-001-NoThrow
+  PASS  BodyBookmark-003-BothSides
+  PASS  BodyLevel-RenderedSchemaValid
+  PASS  ParallelRace-NoStatics-ThreadSafe
+
+

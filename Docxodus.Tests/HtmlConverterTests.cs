@@ -1,0 +1,5299 @@
+﻿// Copyright (c) Microsoft. All rights reserved.
+// Licensed under the MIT license. See LICENSE file in the project root for full license information.
+
+#define COPY_FILES_FOR_DEBUGGING
+
+// DO_CONVERSION_VIA_WORD is defined in the project Docxodus.Tests.OA.csproj, but not in the Docxodus.Tests.csproj
+
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Xml.Linq;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
+using Docxodus;
+using SkiaSharp;
+using Xunit;
+
+#if DO_CONVERSION_VIA_WORD
+using Word = Microsoft.Office.Interop.Word;
+#endif
+
+
+namespace Docxodus.Tests
+{
+    public class HcTests
+    {
+        public static bool s_CopySourceFiles = true;
+        public static bool s_CopyFormattingAssembledDocx = true;
+        public static bool s_ConvertUsingWord = true;
+
+        // PowerShell oneliner that generates InlineData for all files in a directory
+        // dir | % { '[InlineData("' + $_.Name + '")]' } | clip
+
+        [Theory]
+        [InlineData("HC001-5DayTourPlanTemplate.docx")]
+        [InlineData("HC002-Hebrew-01.docx")]
+        [InlineData("HC003-Hebrew-02.docx")]
+        [InlineData("HC004-ResumeTemplate.docx")]
+        [InlineData("HC005-TaskPlanTemplate.docx")]
+        [InlineData("HC006-Test-01.docx")]
+        [InlineData("HC007-Test-02.docx")]
+        [InlineData("HC008-Test-03.docx")]
+        [InlineData("HC009-Test-04.docx")]
+        [InlineData("HC010-Test-05.docx")]
+        [InlineData("HC011-Test-06.docx")]
+        [InlineData("HC012-Test-07.docx")]
+        [InlineData("HC013-Test-08.docx")]
+        [InlineData("HC014-RTL-Table-01.docx")]
+        [InlineData("HC015-Vertical-Spacing-atLeast.docx")]
+        [InlineData("HC016-Horizontal-Spacing-firstLine.docx")]
+        [InlineData("HC017-Vertical-Alignment-Cell-01.docx")]
+        [InlineData("HC018-Vertical-Alignment-Para-01.docx")]
+        [InlineData("HC019-Hidden-Run.docx")]
+        [InlineData("HC020-Small-Caps.docx")]
+        [InlineData("HC021-Symbols.docx")]
+        [InlineData("HC022-Table-Of-Contents.docx")]
+        [InlineData("HC023-Hyperlink.docx")]
+        [InlineData("HC024-Tabs-01.docx")]
+        [InlineData("HC025-Tabs-02.docx")]
+        [InlineData("HC026-Tabs-03.docx")]
+        [InlineData("HC027-Tabs-04.docx")]
+        [InlineData("HC028-No-Break-Hyphen.docx")]
+        [InlineData("HC029-Table-Merged-Cells.docx")]
+        [InlineData("HC030-Content-Controls.docx")]
+        [InlineData("HC031-Complicated-Document.docx")]
+        [InlineData("HC032-Named-Color.docx")]
+        [InlineData("HC033-Run-With-Border.docx")]
+        [InlineData("HC034-Run-With-Position.docx")]
+        [InlineData("HC035-Strike-Through.docx")]
+        [InlineData("HC036-Super-Script.docx")]
+        [InlineData("HC037-Sub-Script.docx")]
+        [InlineData("HC038-Conflicting-Border-Weight.docx")]
+        [InlineData("HC039-Bold.docx")]
+        [InlineData("HC040-Hyperlink-Fieldcode-01.docx")]
+        [InlineData("HC041-Hyperlink-Fieldcode-02.docx")]
+        [InlineData("HC042-Image-Png.docx")]
+        [InlineData("HC043-Chart.docx")]
+        [InlineData("HC044-Embedded-Workbook.docx")]
+        [InlineData("HC045-Italic.docx")]
+        [InlineData("HC046-BoldAndItalic.docx")]
+        [InlineData("HC047-No-Section.docx")]
+        [InlineData("HC048-Excerpt.docx")]
+        [InlineData("HC049-Borders.docx")]
+        [InlineData("HC050-Shaded-Text-01.docx")]
+        [InlineData("HC051-Shaded-Text-02.docx")]
+        [InlineData("HC060-Image-with-Hyperlink.docx")]
+        [InlineData("HC061-Hyperlink-in-Field.docx")]
+        
+        public void HC001(string name)
+        {
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/");
+            FileInfo sourceDocx = new FileInfo(Path.Combine(sourceDir.FullName, name));
+
+#if COPY_FILES_FOR_DEBUGGING
+            var sourceCopiedToDestDocx = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, sourceDocx.Name.Replace(".docx", "-1-Source.docx")));
+            if (!sourceCopiedToDestDocx.Exists)
+                File.Copy(sourceDocx.FullName, sourceCopiedToDestDocx.FullName);
+
+            var assembledFormattingDestDocx = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, sourceDocx.Name.Replace(".docx", "-2-FormattingAssembled.docx")));
+            if (!assembledFormattingDestDocx.Exists)
+                CopyFormattingAssembledDocx(sourceDocx, assembledFormattingDestDocx);
+#endif
+
+            var oxPtConvertedDestHtml = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, sourceDocx.Name.Replace(".docx", "-3-OxPt.html")));
+            ConvertToHtml(sourceDocx, oxPtConvertedDestHtml);
+
+#if DO_CONVERSION_VIA_WORD
+            var wordConvertedDocHtml = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, sourceDocx.Name.Replace(".docx", "-4-Word.html")));
+            ConvertToHtmlUsingWord(sourceDocx, wordConvertedDocHtml);
+#endif
+
+        }
+
+        [Theory]
+        [InlineData("HC006-Test-01.docx")]
+        public void HC002_NoCssClasses(string name)
+        {
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/");
+            FileInfo sourceDocx = new FileInfo(Path.Combine(sourceDir.FullName, name));
+
+            var oxPtConvertedDestHtml = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, sourceDocx.Name.Replace(".docx", "-5-OxPt-No-CSS-Classes.html")));
+            ConvertToHtmlNoCssClasses(sourceDocx, oxPtConvertedDestHtml);
+        }
+
+        private static void CopyFormattingAssembledDocx(FileInfo source, FileInfo dest)
+        {
+            var ba = File.ReadAllBytes(source.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(ba, 0, ba.Length);
+                using (WordprocessingDocument wordDoc = WordprocessingDocument.Open(ms, true))
+                {
+
+                    RevisionAccepter.AcceptRevisions(wordDoc);
+                    SimplifyMarkupSettings simplifyMarkupSettings = new SimplifyMarkupSettings
+                    {
+                        RemoveComments = true,
+                        RemoveContentControls = true,
+                        RemoveEndAndFootNotes = true,
+                        RemoveFieldCodes = false,
+                        RemoveLastRenderedPageBreak = true,
+                        RemovePermissions = true,
+                        RemoveProof = true,
+                        RemoveRsidInfo = true,
+                        RemoveSmartTags = true,
+                        RemoveSoftHyphens = true,
+                        RemoveGoBackBookmark = true,
+                        ReplaceTabsWithSpaces = false,
+                    };
+                    MarkupSimplifier.SimplifyMarkup(wordDoc, simplifyMarkupSettings);
+
+                    FormattingAssemblerSettings formattingAssemblerSettings = new FormattingAssemblerSettings
+                    {
+                        RemoveStyleNamesFromParagraphAndRunProperties = false,
+                        ClearStyles = false,
+                        RestrictToSupportedLanguages = false,
+                        RestrictToSupportedNumberingFormats = false,
+                        CreateHtmlConverterAnnotationAttributes = true,
+                        OrderElementsPerStandard = false,
+                        ListItemRetrieverSettings =
+                            new ListItemRetrieverSettings()
+                            {
+                                ListItemTextImplementations = ListItemRetrieverSettings.DefaultListItemTextImplementations,
+                            },
+                    };
+
+                    FormattingAssembler.AssembleFormatting(wordDoc, formattingAssemblerSettings);
+                }
+                var newBa = ms.ToArray();
+                File.WriteAllBytes(dest.FullName, newBa);
+            }
+        }
+
+        private static void ConvertToHtml(FileInfo sourceDocx, FileInfo destFileName)
+        {
+            byte[] byteArray = File.ReadAllBytes(sourceDocx.FullName);
+            using (MemoryStream memoryStream = new MemoryStream())
+            {
+                memoryStream.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(memoryStream, true))
+                {
+                    var outputDirectory = destFileName.Directory;
+                    destFileName = new FileInfo(Path.Combine(outputDirectory.FullName, destFileName.Name));
+                    var imageDirectoryName = destFileName.FullName.Substring(0, destFileName.FullName.Length - 5) + "_files";
+                    int imageCounter = 0;
+                    var pageTitle = (string)wDoc.CoreFilePropertiesPart.GetXDocument().Descendants(DC.title).FirstOrDefault();
+                    if (pageTitle == null)
+                        pageTitle = sourceDocx.FullName;
+
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = pageTitle,
+                        FabricateCssClasses = true,
+                        CssClassPrefix = "pt-",
+                        RestrictToSupportedLanguages = false,
+                        RestrictToSupportedNumberingFormats = false,
+                        ImageHandler = imageInfo =>
+                        {
+                            DirectoryInfo localDirInfo = new DirectoryInfo(imageDirectoryName);
+                            if (!localDirInfo.Exists)
+                                localDirInfo.Create();
+                            ++imageCounter;
+                            string extension = imageInfo.ContentType.Split('/')[1].ToLower();
+                            SKEncodedImageFormat? imageFormat = null;
+                            if (extension == "png")
+                            {
+                                // Convert png to gif.
+                                extension = "gif";
+                                imageFormat = SKEncodedImageFormat.Gif;
+                            }
+                            else if (extension == "gif")
+                                imageFormat = SKEncodedImageFormat.Gif;
+                            else if (extension == "bmp")
+                                imageFormat = SKEncodedImageFormat.Bmp;
+                            else if (extension == "jpeg")
+                                imageFormat = SKEncodedImageFormat.Jpeg;
+                            else if (extension == "tiff")
+                            {
+                                // Convert tiff to png (SkiaSharp doesn't support tiff output).
+                                extension = "png";
+                                imageFormat = SKEncodedImageFormat.Png;
+                            }
+                            else if (extension == "x-wmf")
+                            {
+                                // Convert wmf to png (SkiaSharp doesn't support wmf output).
+                                extension = "png";
+                                imageFormat = SKEncodedImageFormat.Png;
+                            }
+
+                            // If the image format isn't one that we expect, ignore it,
+                            // and don't return markup for the link.
+                            if (imageFormat == null)
+                                return null;
+
+                            string imageFileName = imageDirectoryName + "/image" +
+                                imageCounter.ToString() + "." + extension;
+                            try
+                            {
+                                imageInfo.SaveImage(imageFileName, imageFormat.Value);
+                            }
+                            catch (Exception)
+                            {
+                                return null;
+                            }
+                            XElement img = new XElement(Xhtml.img,
+                                new XAttribute(NoNamespace.src, imageFileName),
+                                imageInfo.ImgStyleAttribute,
+                                imageInfo.AltText != null ?
+                                    new XAttribute(NoNamespace.alt, imageInfo.AltText) : null);
+                            return img;
+                        }
+                    };
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+
+                    // Note: the xhtml returned by ConvertToHtmlTransform contains objects of type
+                    // XEntity.  PtOpenXmlUtil.cs define the XEntity class.  See
+                    // http://blogs.msdn.com/ericwhite/archive/2010/01/21/writing-entity-references-using-linq-to-xml.aspx
+                    // for detailed explanation.
+                    //
+                    // If you further transform the XML tree returned by ConvertToHtmlTransform, you
+                    // must do it correctly, or entities will not be serialized properly.
+
+                    var htmlString = html.ToString(SaveOptions.DisableFormatting);
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+        private static void ConvertToHtmlNoCssClasses(FileInfo sourceDocx, FileInfo destFileName)
+        {
+            byte[] byteArray = File.ReadAllBytes(sourceDocx.FullName);
+            using (MemoryStream memoryStream = new MemoryStream())
+            {
+                memoryStream.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(memoryStream, true))
+                {
+                    var outputDirectory = destFileName.Directory;
+                    destFileName = new FileInfo(Path.Combine(outputDirectory.FullName, destFileName.Name));
+                    var imageDirectoryName = destFileName.FullName.Substring(0, destFileName.FullName.Length - 5) + "_files";
+                    int imageCounter = 0;
+                    var pageTitle = (string)wDoc.CoreFilePropertiesPart.GetXDocument().Descendants(DC.title).FirstOrDefault();
+                    if (pageTitle == null)
+                        pageTitle = sourceDocx.FullName;
+
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = pageTitle,
+                        FabricateCssClasses = false,
+                        RestrictToSupportedLanguages = false,
+                        RestrictToSupportedNumberingFormats = false,
+                        ImageHandler = imageInfo =>
+                        {
+                            DirectoryInfo localDirInfo = new DirectoryInfo(imageDirectoryName);
+                            if (!localDirInfo.Exists)
+                                localDirInfo.Create();
+                            ++imageCounter;
+                            string extension = imageInfo.ContentType.Split('/')[1].ToLower();
+                            SKEncodedImageFormat? imageFormat = null;
+                            if (extension == "png")
+                            {
+                                // Convert png to gif.
+                                extension = "gif";
+                                imageFormat = SKEncodedImageFormat.Gif;
+                            }
+                            else if (extension == "gif")
+                                imageFormat = SKEncodedImageFormat.Gif;
+                            else if (extension == "bmp")
+                                imageFormat = SKEncodedImageFormat.Bmp;
+                            else if (extension == "jpeg")
+                                imageFormat = SKEncodedImageFormat.Jpeg;
+                            else if (extension == "tiff")
+                            {
+                                // Convert tiff to png (SkiaSharp doesn't support tiff output).
+                                extension = "png";
+                                imageFormat = SKEncodedImageFormat.Png;
+                            }
+                            else if (extension == "x-wmf")
+                            {
+                                // Convert wmf to png (SkiaSharp doesn't support wmf output).
+                                extension = "png";
+                                imageFormat = SKEncodedImageFormat.Png;
+                            }
+
+                            // If the image format isn't one that we expect, ignore it,
+                            // and don't return markup for the link.
+                            if (imageFormat == null)
+                                return null;
+
+                            string imageFileName = imageDirectoryName + "/image" +
+                                imageCounter.ToString() + "." + extension;
+                            try
+                            {
+                                imageInfo.SaveImage(imageFileName, imageFormat.Value);
+                            }
+                            catch (Exception)
+                            {
+                                return null;
+                            }
+                            XElement img = new XElement(Xhtml.img,
+                                new XAttribute(NoNamespace.src, imageFileName),
+                                imageInfo.ImgStyleAttribute,
+                                imageInfo.AltText != null ?
+                                    new XAttribute(NoNamespace.alt, imageInfo.AltText) : null);
+                            return img;
+                        }
+                    };
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+
+                    // Note: the xhtml returned by ConvertToHtmlTransform contains objects of type
+                    // XEntity.  PtOpenXmlUtil.cs define the XEntity class.  See
+                    // http://blogs.msdn.com/ericwhite/archive/2010/01/21/writing-entity-references-using-linq-to-xml.aspx
+                    // for detailed explanation.
+                    //
+                    // If you further transform the XML tree returned by ConvertToHtmlTransform, you
+                    // must do it correctly, or entities will not be serialized properly.
+
+                    var htmlString = html.ToString(SaveOptions.DisableFormatting);
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+#if DO_CONVERSION_VIA_WORD
+        public static void ConvertToHtmlUsingWord(FileInfo sourceFileName, FileInfo destFileName)
+        {
+            Word.Application app = new Word.Application();
+            app.Visible = false;
+            try
+            {
+                Word.Document doc = app.Documents.Open(sourceFileName.FullName);
+                doc.SaveAs2(destFileName.FullName, Word.WdSaveFormat.wdFormatFilteredHTML);
+            }
+            catch (System.Runtime.InteropServices.COMException)
+            {
+                Console.WriteLine("Caught unexpected COM exception.");
+                ((Microsoft.Office.Interop.Word._Application)app).Quit();
+                Environment.Exit(0);
+            }
+            ((Microsoft.Office.Interop.Word._Application)app).Quit();
+        }
+#endif
+
+        [Fact]
+        public void HC003_TrackedChanges_InsertionsAndDeletions()
+        {
+            // Use DocxCompare to create a document with tracked changes
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc1 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
+            FileInfo doc2 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-InsertInMiddle.docx"));
+
+            WmlDocument wmlDoc1 = new WmlDocument(doc1.FullName);
+            WmlDocument wmlDoc2 = new WmlDocument(doc2.FullName);
+
+            WmlDocument comparedDoc = DocxCompare.Compare(wmlDoc1, wmlDoc2);
+
+            // Convert to HTML with tracked changes rendering enabled
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(comparedDoc.DocumentByteArray, 0, comparedDoc.DocumentByteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Tracked Changes Test",
+                        FabricateCssClasses = true,
+                        CssClassPrefix = "pt-",
+                        RenderTrackedChanges = true,
+                        IncludeRevisionMetadata = true,
+                        ShowDeletedContent = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify the HTML contains <ins> elements (insertions)
+                    Assert.Contains("<ins", htmlString);
+                    // The revision class leads the attribute; a fabricated style class may follow
+                    // it, because the class pass APPENDS to an existing attribute rather than
+                    // replacing it. Pin the revision class, not the whole attribute value.
+                    Assert.Contains("class=\"rev-ins", htmlString);
+
+                    // Verify metadata attributes are present
+                    Assert.Contains("data-author=", htmlString);
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "TrackedChanges-Insertions.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC004_TrackedChanges_Deletions()
+        {
+            // Use DocxCompare to create a document with deletions
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc1 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
+            FileInfo doc2 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-DeleteInMiddle.docx"));
+
+            WmlDocument wmlDoc1 = new WmlDocument(doc1.FullName);
+            WmlDocument wmlDoc2 = new WmlDocument(doc2.FullName);
+
+            WmlDocument comparedDoc = DocxCompare.Compare(wmlDoc1, wmlDoc2);
+
+            // Convert to HTML with tracked changes rendering enabled
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(comparedDoc.DocumentByteArray, 0, comparedDoc.DocumentByteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Tracked Changes Deletions Test",
+                        FabricateCssClasses = true,
+                        CssClassPrefix = "pt-",
+                        RenderTrackedChanges = true,
+                        IncludeRevisionMetadata = true,
+                        ShowDeletedContent = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify the HTML contains <del> elements (deletions)
+                    Assert.Contains("<del", htmlString);
+                    // As above: a fabricated style class may follow the revision class.
+                    Assert.Contains("class=\"rev-del", htmlString);
+
+                    // Verify metadata attributes are present
+                    Assert.Contains("data-author=", htmlString);
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "TrackedChanges-Deletions.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC005_TrackedChanges_CssGenerated()
+        {
+            // Use DocxCompare to create a document with tracked changes
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc1 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
+            FileInfo doc2 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-InsertInMiddle.docx"));
+
+            WmlDocument wmlDoc1 = new WmlDocument(doc1.FullName);
+            WmlDocument wmlDoc2 = new WmlDocument(doc2.FullName);
+
+            WmlDocument comparedDoc = DocxCompare.Compare(wmlDoc1, wmlDoc2);
+
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(comparedDoc.DocumentByteArray, 0, comparedDoc.DocumentByteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "CSS Test",
+                        FabricateCssClasses = true,
+                        RenderTrackedChanges = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify the CSS for tracked changes is generated
+                    Assert.Contains("ins.rev-ins", htmlString);
+                    Assert.Contains("del.rev-del", htmlString);
+                    Assert.Contains("text-decoration: underline", htmlString);
+                    Assert.Contains("text-decoration: line-through", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC006_TrackedChanges_DisabledByDefault()
+        {
+            // When RenderTrackedChanges is false (default), revisions should be accepted
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc1 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
+            FileInfo doc2 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-InsertInMiddle.docx"));
+
+            WmlDocument wmlDoc1 = new WmlDocument(doc1.FullName);
+            WmlDocument wmlDoc2 = new WmlDocument(doc2.FullName);
+
+            WmlDocument comparedDoc = DocxCompare.Compare(wmlDoc1, wmlDoc2);
+
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(comparedDoc.DocumentByteArray, 0, comparedDoc.DocumentByteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Default Test",
+                        FabricateCssClasses = true,
+                        // RenderTrackedChanges defaults to false
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify the HTML does NOT contain <ins> or <del> elements
+                    Assert.DoesNotContain("<ins", htmlString);
+                    Assert.DoesNotContain("<del", htmlString);
+
+                    // Verify revision CSS is not generated
+                    Assert.DoesNotContain("ins.rev-ins", htmlString);
+                    Assert.DoesNotContain("del.rev-del", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC007_FootnotesAndEndnotes_CssEnabled()
+        {
+            // Test that footnote CSS is generated when RenderFootnotesAndEndnotes is true
+            // Use an existing test document
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Footnote Test",
+                        FabricateCssClasses = true,
+                        RenderFootnotesAndEndnotes = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify footnote CSS is generated when enabled
+                    Assert.Contains("a.footnote-ref", htmlString);
+                    Assert.Contains("section.footnotes", htmlString);
+                    Assert.Contains("Footnotes and Endnotes CSS", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC008_FootnotesAndEndnotes_CssDisabled()
+        {
+            // Test that footnote CSS is NOT generated when RenderFootnotesAndEndnotes is false (default)
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Footnote Test - Disabled",
+                        FabricateCssClasses = true,
+                        // RenderFootnotesAndEndnotes defaults to false
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify footnote CSS is NOT generated when disabled
+                    Assert.DoesNotContain("a.footnote-ref", htmlString);
+                    Assert.DoesNotContain("section.footnotes", htmlString);
+                    Assert.DoesNotContain("Footnotes and Endnotes CSS", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC008b_FootnoteContent_NoEmptySpansFromFootnoteRef()
+        {
+            // Test that runs containing only w:footnoteRef are skipped and don't produce empty spans.
+            // When rendering footnotes, the original Word document has a run with w:footnoteRef that
+            // displays the footnote number inside the footnote text. Since we add our own number
+            // (via footnote-number span or <ol> value), we should not render the footnoteRef run.
+            // This test creates a document with a footnote and verifies no empty spans are generated.
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "WC034-Footnotes-Before.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Footnote Content Test",
+                        FabricateCssClasses = true,
+                        RenderFootnotesAndEndnotes = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify footnotes section is generated
+                    Assert.Contains("section class=\"footnotes\"", htmlString);
+
+                    // Check that the FootnoteText paragraphs don't have empty spans at the beginning
+                    // An empty span would indicate the footnoteRef run was not properly filtered
+                    // Look for the pattern: span with FootnoteText class followed by another span with no text
+                    var htmlDoc = XElement.Parse(htmlString);
+                    var footnotesSection = htmlDoc.Descendants()
+                        .FirstOrDefault(e => e.Name.LocalName == "section" &&
+                            (string)e.Attribute("class") == "footnotes");
+
+                    Assert.NotNull(footnotesSection);
+
+                    // Get all spans inside the footnotes section
+                    var spansInFootnotes = footnotesSection.Descendants()
+                        .Where(e => e.Name.LocalName == "span")
+                        .ToList();
+
+                    // Verify no empty spans exist (spans that have no text content and no meaningful children)
+                    foreach (var span in spansInFootnotes)
+                    {
+                        // Skip spans that intentionally may be empty (like markers)
+                        var className = (string)span.Attribute("class");
+                        if (className != null &&
+                            (className.Contains("marker") || className.Contains("backref")))
+                            continue;
+
+                        // An empty footnoteRef run would produce a span with only whitespace or no content
+                        var textContent = string.Concat(span.DescendantNodes()
+                            .OfType<XText>()
+                            .Select(t => t.Value.Trim()));
+                        var hasChildren = span.Elements().Any();
+
+                        // Either has text content or has child elements (both are valid)
+                        bool hasContent = !string.IsNullOrWhiteSpace(textContent) || hasChildren;
+                        Assert.True(hasContent,
+                            $"Found empty span in footnotes section with class '{className}'");
+                    }
+                }
+            }
+        }
+
+        [Fact]
+        public void HC008c_FootnoteContent_PaginatedMode_NoEmptySpansFromFootnoteRef()
+        {
+            // Test that runs containing only w:footnoteRef are skipped in paginated mode.
+            // In paginated mode, footnotes are rendered with explicit footnote-number spans,
+            // so skipping footnoteRef runs is even more important to avoid duplication.
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "WC034-Footnotes-Before.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Footnote Paginated Test",
+                        FabricateCssClasses = true,
+                        RenderFootnotesAndEndnotes = true,
+                        RenderPagination = PaginationMode.Paginated,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // In paginated mode, there should be a footnote registry
+                    Assert.Contains("pagination-footnote-registry", htmlString);
+
+                    var htmlDoc = XElement.Parse(htmlString);
+                    var footnoteRegistry = htmlDoc.Descendants()
+                        .FirstOrDefault(e => e.Name.LocalName == "div" &&
+                            (string)e.Attribute("id") == "pagination-footnote-registry");
+
+                    Assert.NotNull(footnoteRegistry);
+
+                    // Stock marker-only stories contain formatting properties
+                    // under pPr/rPr, but no authored presentation paragraph.
+                    // They must render exactly the rule, without an empty line.
+                    var separatorStories = footnoteRegistry.Elements()
+                        .Where(e => e.Attribute("data-footnote-separator") != null)
+                        .ToList();
+                    Assert.Equal(2, separatorStories.Count);
+                    Assert.All(separatorStories, story =>
+                    {
+                        Assert.Single(story.Elements().Where(e => e.Name.LocalName == "hr"));
+                        Assert.DoesNotContain(story.Elements(), e => e.Name.LocalName == "p");
+                    });
+
+                    // Check footnote-content spans for empty children
+                    var footnoteContentSpans = footnoteRegistry.Descendants()
+                        .Where(e => e.Name.LocalName == "span" &&
+                            (string)e.Attribute("class") == "footnote-content")
+                        .ToList();
+
+                    foreach (var contentSpan in footnoteContentSpans)
+                    {
+                        // Get all spans inside the footnote content
+                        var innerSpans = contentSpan.Descendants()
+                            .Where(e => e.Name.LocalName == "span")
+                            .ToList();
+
+                        foreach (var span in innerSpans)
+                        {
+                            // An empty footnoteRef run would produce a span with only whitespace
+                            var textContent = string.Concat(span.DescendantNodes()
+                                .OfType<XText>()
+                                .Select(t => t.Value.Trim()));
+                            var hasChildren = span.Elements().Any();
+
+                            bool hasContent = !string.IsNullOrWhiteSpace(textContent) || hasChildren;
+                            Assert.True(hasContent,
+                                $"Found empty span in footnote registry content with class '{(string)span.Attribute("class")}'");
+                        }
+                    }
+                }
+            }
+        }
+
+        [Fact]
+        public void HC008c2_PaginatedFootnoteSeparators_ArePreservedAndTypedBoilerplateIsExcluded()
+        {
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "WC034-Footnotes-Before.docx"));
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+                    var footnotes = wDoc.MainDocumentPart.FootnotesPart.GetXDocument();
+                    var normal = footnotes.Root.Elements(w + "footnote")
+                        .First(note => (string)note.Attribute(w + "type") == "separator");
+                    var continuation = footnotes.Root.Elements(w + "footnote")
+                        .First(note => (string)note.Attribute(w + "type") == "continuationSeparator");
+                    normal.Add(new XElement(w + "p", new XElement(w + "r",
+                        new XElement(w + "t", "NORMAL-SEPARATOR-TOKEN"))));
+                    // A separator story is cloned onto every note band, so any
+                    // identity or local target it carries would be duplicated
+                    // across pages. Author both kinds here and assert they are
+                    // stripped from the rendered template.
+                    continuation.Add(new XElement(w + "p",
+                        new XElement(w + "bookmarkStart",
+                            new XAttribute(w + "id", "77"),
+                            new XAttribute(w + "name", "SEPARATOR-BOOKMARK")),
+                        new XElement(w + "bookmarkEnd", new XAttribute(w + "id", "77")),
+                        new XElement(w + "hyperlink",
+                            new XAttribute(w + "anchor", "SEPARATOR-BOOKMARK"),
+                            new XElement(w + "r",
+                                new XElement(w + "t", "CONTINUATION-SEPARATOR-TOKEN")))));
+                    footnotes.Root.Add(new XElement(w + "footnote",
+                        new XAttribute(w + "type", "continuationNotice"),
+                        new XAttribute(w + "id", "999"),
+                        new XElement(w + "p", new XElement(w + "r",
+                            new XElement(w + "t", "MUST-NOT-BECOME-A-NOTE")))));
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc,
+                        new WmlToHtmlConverterSettings
+                        {
+                            PageTitle = "Footnote separator stories",
+                            FabricateCssClasses = true,
+                            RenderFootnotesAndEndnotes = true,
+                            RenderPagination = PaginationMode.Paginated,
+                        });
+                    var registry = html.Descendants()
+                        .First(element => element.Name.LocalName == "div" &&
+                            (string)element.Attribute("id") == "pagination-footnote-registry");
+                    var separators = registry.Elements()
+                        .Where(element => element.Attribute("data-footnote-separator") != null)
+                        .ToList();
+
+                    Assert.Equal(new[] { "normal", "continuation" }, separators
+                        .Select(element => (string)element.Attribute("data-footnote-separator")));
+                    Assert.Contains("NORMAL-SEPARATOR-TOKEN", separators[0].Value);
+                    Assert.Contains("CONTINUATION-SEPARATOR-TOKEN", separators[1].Value);
+                    Assert.DoesNotContain(registry.Elements(), element =>
+                        (string)element.Attribute("data-footnote-id") == "999");
+                    Assert.DoesNotContain("MUST-NOT-BECOME-A-NOTE", registry.Value);
+
+                    // No identity and no local target survives on a repeated story,
+                    // and nothing in it is editable.
+                    var repeated = separators[1].DescendantsAndSelf().ToList();
+                    Assert.DoesNotContain(repeated, element => element.Attributes()
+                        .Any(attribute => attribute.Name.LocalName is "id" or "name"
+                            or "data-anchor" or "data-source-anchor-id"));
+                    Assert.DoesNotContain(repeated, element => element.Attributes()
+                        .Any(attribute => attribute.Name.LocalName == "href"
+                            && attribute.Value.StartsWith("#", StringComparison.Ordinal)));
+                    Assert.All(repeated, element =>
+                        Assert.Equal("false", (string)element.Attribute("contenteditable")));
+                }
+            }
+        }
+
+        [Fact]
+        public void HC008d_PageBreakMarker_PaginatedMode_NotSelfClosing()
+        {
+            // A hard page break (w:br w:type="page") is emitted in paginated mode as an EMPTY
+            // <div class="page-break" data-page-break="true">. An empty XElement serializes as a
+            // self-closing <div .../>, which a browser's HTML parser treats as an UNCLOSED div
+            // (the slash is ignored for non-void elements), so every following sibling — including
+            // the visible #pagination-container — nests inside the display:none staging and the
+            // whole paginated view renders 0x0 (blank). The marker must serialize with an explicit
+            // </div> so the browser keeps the staging/container as siblings.
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "HC031-Complicated-Document.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Page Break Marker Test",
+                        FabricateCssClasses = true,
+                        RenderPagination = PaginationMode.Paginated,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    // Serialize exactly as the production WASM path does (HtmlConversionOps).
+                    string htmlString = html.ToString(SaveOptions.DisableFormatting);
+
+                    // Sanity: the marker is present at all.
+                    Assert.Contains("data-page-break=\"true\"", htmlString);
+
+                    // The marker MUST NOT be self-closing (that is the browser-nesting bug).
+                    Assert.DoesNotContain("data-page-break=\"true\" />", htmlString);
+                    // It must carry an explicit close tag instead.
+                    Assert.Contains("data-page-break=\"true\"></div>", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC008f_BlankRunningStory_PaginatedMode_NotSelfClosing()
+        {
+            // A section with w:titlePg but no first-page headerReference deliberately gets an
+            // EMPTY header-first registry entry, so page one cannot fall through to the Default
+            // story. Empty is the whole point -- and an empty XElement serializes as a
+            // self-closing <div .../>, which a browser's HTML parser treats as an UNCLOSED div.
+            // Every following sibling, #pagination-container included, then nests inside the
+            // display:none staging; the standalone exporter removes staging during finalization
+            // and takes the entire page tree with it, so PageMap measurement sees 0x0 pages.
+            // Same hazard as the page-break marker in HC008d, reached through a blank story.
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "HC006-Test-01.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+                    var body = wDoc.MainDocumentPart.GetXDocument().Root.Element(w + "body");
+                    var sectPr = body.Element(w + "sectPr");
+                    if (sectPr.Element(w + "titlePg") == null)
+                        sectPr.Add(new XElement(w + "titlePg"));
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc,
+                        new WmlToHtmlConverterSettings
+                        {
+                            PageTitle = "Blank running story",
+                            FabricateCssClasses = true,
+                            RenderPagination = PaginationMode.Paginated,
+                            RenderHeadersAndFooters = true,
+                        });
+                    // Serialize exactly as the production WASM path does (HtmlConversionOps).
+                    string htmlString = html.ToString(SaveOptions.DisableFormatting);
+
+                    // Sanity: titlePg really did select a blank First story.
+                    Assert.Contains("data-hf-type=\"header-first\"", htmlString);
+
+                    // No running-story entry may be self-closing, blank or not.
+                    Assert.DoesNotContain("data-hf-type=\"header-first\" />", htmlString);
+                    Assert.DoesNotContain("data-hf-type=\"header-even\" />", htmlString);
+                    Assert.DoesNotContain("data-hf-type=\"footer-first\" />", htmlString);
+                    Assert.DoesNotContain("data-hf-type=\"footer-even\" />", htmlString);
+
+                    // Staging and container must remain siblings once a browser parses this:
+                    // an unclosed registry div would swallow the container that follows it.
+                    int staging = htmlString.IndexOf("id=\"pagination-staging\"", StringComparison.Ordinal);
+                    int container = htmlString.IndexOf("id=\"pagination-container\"", StringComparison.Ordinal);
+                    Assert.True(staging >= 0 && container > staging);
+                    string between = htmlString.Substring(staging, container - staging);
+                    Assert.DoesNotContain("data-hf-type", between.Substring(between.LastIndexOf("</div>", StringComparison.Ordinal)));
+                }
+            }
+        }
+
+        [Fact]
+        public void HC008e_PaginationPrintCss_IsGeneratedOnlyForPaginatedOutput()
+        {
+            // Screen pagination is deliberately a scaled flex-column viewer. Its print
+            // rules must restore physical page boundaries without imposing an @page size
+            // or margin policy on the caller.
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "HC006-Test-01.docx"));
+            byte[] bytes = File.ReadAllBytes(doc.FullName);
+
+            string Convert(PaginationMode paginationMode)
+            {
+                using var ms = new MemoryStream();
+                ms.Write(bytes, 0, bytes.Length);
+                ms.Position = 0;
+                using var wDoc = WordprocessingDocument.Open(ms, true);
+                var settings = new WmlToHtmlConverterSettings()
+                {
+                    FabricateCssClasses = true,
+                    RenderPagination = paginationMode,
+                    PaginationCssClassPrefix = "print-",
+                };
+                return WmlToHtmlConverter.ConvertToHtml(wDoc, settings)
+                    .ToString(SaveOptions.DisableFormatting);
+            }
+
+            string paginatedHtml = Convert(PaginationMode.Paginated);
+            string expectedPrintCss = string.Join("\n", new[]
+            {
+                "@media print {",
+                "    .print-container {",
+                "        display: block;",
+                "        gap: 0;",
+                "        padding: 0;",
+                "        background: transparent;",
+                "        min-height: 0;",
+                "    }",
+                "    .print-box {",
+                "        zoom: 1 !important;",
+                "        transform: none !important;",
+                "        margin: 0 !important;",
+                "        box-shadow: none;",
+                "    }",
+                "    .print-box + .print-box {",
+                "        break-before: page;",
+                "        page-break-before: always;",
+                "    }",
+                "}",
+            });
+            Assert.Contains(expectedPrintCss, paginatedHtml.Replace("\r\n", "\n"));
+
+            string unpaginatedHtml = Convert(PaginationMode.None);
+            Assert.DoesNotContain(".print-container {", unpaginatedHtml);
+            Assert.DoesNotContain(".print-box + .print-box {", unpaginatedHtml);
+        }
+
+        [Fact]
+        public void HC008f_Endnotes_PaginatedMode_FlowInsideStagingSection()
+        {
+            // Issue #414: the paginator only flows content found inside [data-section-index]
+            // wrappers within #pagination-staging. The endnotes section used to be emitted as a
+            // body-level SIBLING of the staging/container divs, so it never reached any page and
+            // vanished from the print layout. It must be the last child of the last section div.
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "WC036-Endnote-With-Table-Before.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    var settings = new WmlToHtmlConverterSettings()
+                    {
+                        FabricateCssClasses = true,
+                        RenderFootnotesAndEndnotes = true,
+                        RenderPagination = PaginationMode.Paginated,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+
+                    var endnoteSections = html.Descendants()
+                        .Where(e => e.Name.LocalName == "section" &&
+                            (string)e.Attribute("class") == "endnotes")
+                        .ToList();
+
+                    // Exactly one endnotes section — no duplicate outside the staging area
+                    var endnotesSection = Assert.Single(endnoteSections);
+
+                    // It flows as content of a section div inside the staging area
+                    Assert.Contains(endnotesSection.Ancestors(),
+                        a => a.Attribute("data-section-index") != null);
+                    Assert.Contains(endnotesSection.Ancestors(),
+                        a => (string)a.Attribute("id") == "pagination-staging");
+                }
+            }
+        }
+
+        [Fact]
+        public void HC008g_EndnoteMarkers_DefaultLowerRoman()
+        {
+            // Issue #414: Word's default endnote w:numFmt is lowerRoman (footnotes are decimal),
+            // so with no w:endnotePr override the citation marker must render "i", not "1", and
+            // the endnotes list must number in lowercase roman.
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "WC036-Endnote-With-Table-Before.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    var settings = new WmlToHtmlConverterSettings()
+                    {
+                        FabricateCssClasses = true,
+                        RenderFootnotesAndEndnotes = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+
+                    // Citation marker: <a class="endnote-ref ..."><sup>i</sup></a>
+                    // (FabricateCssClasses appends a fabricated pt-* class after endnote-ref)
+                    var endnoteRef = html.Descendants()
+                        .First(e => e.Name.LocalName == "a" &&
+                            ((string)e.Attribute("class") ?? "").Contains("endnote-ref"));
+                    var sup = endnoteRef.Elements().First(e => e.Name.LocalName == "sup");
+                    Assert.Equal("i", sup.Value);
+
+                    // Endnotes section list numbers in lowercase roman
+                    var endnotesSection = html.Descendants()
+                        .First(e => e.Name.LocalName == "section" &&
+                            (string)e.Attribute("class") == "endnotes");
+                    var ol = endnotesSection.Elements().First(e => e.Name.LocalName == "ol");
+                    Assert.Contains("lower-roman", (string)ol.Attribute("style"));
+
+                    // Footnote markers keep their decimal default
+                    var footnoteRef = html.Descendants()
+                        .FirstOrDefault(e => e.Name.LocalName == "a" &&
+                            ((string)e.Attribute("class") ?? "").Contains("footnote-ref"));
+                    if (footnoteRef != null)
+                    {
+                        var fnSup = footnoteRef.Elements().First(e => e.Name.LocalName == "sup");
+                        Assert.Equal("1", fnSup.Value);
+                    }
+                }
+            }
+        }
+
+        [Fact]
+        public void HC009_HeadersAndFooters_CssEnabled()
+        {
+            // Test that header/footer CSS is generated when RenderHeadersAndFooters is true
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Header/Footer Test",
+                        FabricateCssClasses = true,
+                        RenderHeadersAndFooters = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify header/footer CSS is generated when enabled
+                    Assert.Contains("header.document-header", htmlString);
+                    Assert.Contains("footer.document-footer", htmlString);
+                    Assert.Contains("Document Headers and Footers CSS", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC010_HeadersAndFooters_CssDisabled()
+        {
+            // Test that header/footer CSS is NOT generated when RenderHeadersAndFooters is false (default)
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Header/Footer Test - Disabled",
+                        FabricateCssClasses = true,
+                        // RenderHeadersAndFooters defaults to false
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify header/footer CSS is NOT generated when disabled
+                    Assert.DoesNotContain("header.document-header", htmlString);
+                    Assert.DoesNotContain("footer.document-footer", htmlString);
+                    Assert.DoesNotContain("Document Headers and Footers CSS", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC011_TrackedChanges_MoveOperations()
+        {
+            // Use DocxCompare to create a document with move operations
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc1 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
+            FileInfo doc2 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-MovedPara.docx"));
+
+            if (!doc2.Exists)
+            {
+                // Skip if test file doesn't exist
+                return;
+            }
+
+            WmlDocument wmlDoc1 = new WmlDocument(doc1.FullName);
+            WmlDocument wmlDoc2 = new WmlDocument(doc2.FullName);
+
+            WmlDocument comparedDoc = DocxCompare.Compare(wmlDoc1, wmlDoc2);
+
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(comparedDoc.DocumentByteArray, 0, comparedDoc.DocumentByteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Move Operations Test",
+                        FabricateCssClasses = true,
+                        RenderTrackedChanges = true,
+                        RenderMoveOperations = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify move CSS classes are generated
+                    Assert.Contains("rev-move-from", htmlString);
+                    Assert.Contains("rev-move-to", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC012_TrackedChanges_AuthorColors()
+        {
+            // Test that author-specific CSS is generated
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Author Colors Test",
+                        FabricateCssClasses = true,
+                        RenderTrackedChanges = true,
+                        AuthorColors = new Dictionary<string, string>
+                        {
+                            { "Test Author", "#ff0000" },
+                            { "Another Author", "#00ff00" }
+                        }
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify author color CSS is generated (data-author attribute selector)
+                    Assert.Contains("[data-author=\"Test Author\"]", htmlString);
+                    Assert.Contains("#ff0000", htmlString);
+                    Assert.Contains("[data-author=\"Another Author\"]", htmlString);
+                    Assert.Contains("#00ff00", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC013_TrackedChanges_AllFeaturesEnabled()
+        {
+            // Test with all tracked changes features enabled
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc1 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
+            FileInfo doc2 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-InsertInMiddle.docx"));
+
+            WmlDocument wmlDoc1 = new WmlDocument(doc1.FullName);
+            WmlDocument wmlDoc2 = new WmlDocument(doc2.FullName);
+
+            WmlDocument comparedDoc = DocxCompare.Compare(wmlDoc1, wmlDoc2);
+
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(comparedDoc.DocumentByteArray, 0, comparedDoc.DocumentByteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "All Features Test",
+                        FabricateCssClasses = true,
+                        RenderTrackedChanges = true,
+                        IncludeRevisionMetadata = true,
+                        ShowDeletedContent = true,
+                        RenderMoveOperations = true,
+                        RenderFootnotesAndEndnotes = true,
+                        RenderHeadersAndFooters = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify all CSS sections are generated
+                    Assert.Contains("Tracked Changes CSS", htmlString);
+                    Assert.Contains("ins.rev-ins", htmlString);
+                    Assert.Contains("del.rev-del", htmlString);
+
+                    // Verify body structure
+                    Assert.Contains("<body", htmlString);
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "AllFeatures.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC014_Comments_CssGeneratedWhenEnabled()
+        {
+            // Test that comment CSS is generated when RenderComments is true
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Comment CSS Test",
+                        FabricateCssClasses = true,
+                        RenderComments = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify comment CSS is generated when enabled
+                    Assert.Contains("Comments CSS", htmlString);
+                    Assert.Contains("span.comment-highlight", htmlString);
+                    Assert.Contains("a.comment-marker", htmlString);
+                    Assert.Contains("aside.comments-section", htmlString);
+                    Assert.Contains("li.comment", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC015_Comments_CssNotGeneratedWhenDisabled()
+        {
+            // Test that comment CSS is NOT generated when RenderComments is false (default)
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Comment CSS Test - Disabled",
+                        FabricateCssClasses = true,
+                        // RenderComments defaults to false
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify comment CSS is NOT generated when disabled
+                    Assert.DoesNotContain("Comments CSS", htmlString);
+                    Assert.DoesNotContain("span.comment-highlight", htmlString);
+                    Assert.DoesNotContain("a.comment-marker", htmlString);
+                    Assert.DoesNotContain("aside.comments-section", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC016_Comments_WithCommentContent()
+        {
+            // Use HC031 which has a real comment (id=10 by "Eric White")
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/");
+            FileInfo sourceDocx = new FileInfo(Path.Combine(sourceDir.FullName, "HC031-Complicated-Document.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(sourceDocx.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Comment Content Test",
+                        FabricateCssClasses = true,
+                        RenderComments = true,
+                        IncludeCommentMetadata = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify comment highlighting is present
+                    Assert.Contains("comment-highlight", htmlString);
+                    Assert.Contains("data-comment-id=\"10\"", htmlString);
+
+                    // Verify comment marker is present
+                    Assert.Contains("comment-marker", htmlString);
+                    Assert.Contains("href=\"#comment-10\"", htmlString);
+
+                    // Verify comments section is present
+                    Assert.Contains("comments-section", htmlString);
+                    Assert.Contains("id=\"comment-10\"", htmlString);
+
+                    // Verify author metadata
+                    Assert.Contains("data-author=\"Eric White\"", htmlString);
+                    Assert.Contains("Eric White", htmlString);
+
+                    // Verify comment text
+                    Assert.Contains("This is a comment.", htmlString);
+
+                    // Verify back reference link
+                    Assert.Contains("href=\"#comment-ref-10\"", htmlString);
+                    Assert.Contains("comment-backref", htmlString);
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "Comments-Test.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC017_Comments_InlineMode()
+        {
+            // Use HC031 which has a real comment and test inline mode
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/");
+            FileInfo sourceDocx = new FileInfo(Path.Combine(sourceDir.FullName, "HC031-Complicated-Document.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(sourceDocx.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Inline Comment Test",
+                        FabricateCssClasses = true,
+                        RenderComments = true,
+                        CommentRenderMode = CommentRenderMode.Inline,
+                        IncludeCommentMetadata = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify inline mode attributes
+                    Assert.Contains("title=\"Eric White: This is a comment.\"", htmlString);
+                    Assert.Contains("data-comment=\"This is a comment.\"", htmlString);
+
+                    // In inline mode, there should NOT be a comments section element (but CSS is fine)
+                    Assert.DoesNotContain("<aside class=\"comments-section\"", htmlString);
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "Comments-Inline.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC018_Comments_MultipleComments()
+        {
+            // Copy an existing document and add multiple comments programmatically
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/");
+            FileInfo sourceDocx = new FileInfo(Path.Combine(sourceDir.FullName, "HC006-Test-01.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(sourceDocx.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    var mainPart = wDoc.MainDocumentPart;
+                    var body = mainPart.Document.Body;
+                    var firstPara = body.Elements<Paragraph>().FirstOrDefault();
+
+                    if (firstPara != null)
+                    {
+                        // Add comment markers to first paragraph
+                        var firstRun = firstPara.Elements<Run>().FirstOrDefault();
+                        if (firstRun != null)
+                        {
+                            firstRun.InsertBeforeSelf(new CommentRangeStart() { Id = "100" });
+                            firstRun.InsertAfterSelf(new CommentRangeEnd() { Id = "100" });
+                            firstRun.InsertAfterSelf(new Run(new CommentReference() { Id = "100" }));
+                        }
+                    }
+
+                    var secondPara = body.Elements<Paragraph>().Skip(1).FirstOrDefault();
+                    if (secondPara != null)
+                    {
+                        var secondRun = secondPara.Elements<Run>().FirstOrDefault();
+                        if (secondRun != null)
+                        {
+                            secondRun.InsertBeforeSelf(new CommentRangeStart() { Id = "101" });
+                            secondRun.InsertAfterSelf(new CommentRangeEnd() { Id = "101" });
+                            secondRun.InsertAfterSelf(new Run(new CommentReference() { Id = "101" }));
+                        }
+                    }
+
+                    // Add comments part with multiple comments
+                    var commentsPart = mainPart.AddNewPart<WordprocessingCommentsPart>();
+                    commentsPart.Comments = new Comments(
+                        new Comment(
+                            new Paragraph(new Run(new Text("Comment one text.")))
+                        )
+                        { Id = "100", Author = "Author One" },
+                        new Comment(
+                            new Paragraph(new Run(new Text("Comment two text.")))
+                        )
+                        { Id = "101", Author = "Author Two" }
+                    );
+
+                    mainPart.Document.Save();
+                }
+
+                ms.Position = 0;
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Multiple Comments Test",
+                        FabricateCssClasses = true,
+                        RenderComments = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify both comments are rendered
+                    Assert.Contains("id=\"comment-100\"", htmlString);
+                    Assert.Contains("id=\"comment-101\"", htmlString);
+                    Assert.Contains("Comment one text.", htmlString);
+                    Assert.Contains("Comment two text.", htmlString);
+                    Assert.Contains("Author One", htmlString);
+                    Assert.Contains("Author Two", htmlString);
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "Comments-Multiple.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC019_Comments_CustomCssPrefix()
+        {
+            // Use HC031 which has a real comment and test custom CSS prefix
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/");
+            FileInfo sourceDocx = new FileInfo(Path.Combine(sourceDir.FullName, "HC031-Complicated-Document.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(sourceDocx.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Custom Prefix Test",
+                        FabricateCssClasses = true,
+                        RenderComments = true,
+                        CommentCssClassPrefix = "note-",
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify custom prefix is used
+                    Assert.Contains("note-highlight", htmlString);
+                    Assert.Contains("note-marker", htmlString);
+                    Assert.Contains("notes-section", htmlString);
+
+                    // Verify default prefix is NOT used
+                    Assert.DoesNotContain("comment-highlight", htmlString);
+                    Assert.DoesNotContain("comments-section", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC020_Comments_MarginMode()
+        {
+            // Use HC031 which has a real comment and test margin mode rendering
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/");
+            FileInfo sourceDocx = new FileInfo(Path.Combine(sourceDir.FullName, "HC031-Complicated-Document.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(sourceDocx.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Margin Mode Comments Test",
+                        FabricateCssClasses = true,
+                        RenderComments = true,
+                        CommentRenderMode = CommentRenderMode.Margin,
+                        IncludeCommentMetadata = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify margin mode layout structure
+                    Assert.Contains("comment-margin-container", htmlString);
+                    Assert.Contains("comment-margin-content", htmlString);
+                    Assert.Contains("comment-margin-column", htmlString);
+                    Assert.Contains("comment-margin-note", htmlString);
+
+                    // Verify margin note elements
+                    Assert.Contains("comment-margin-note-header", htmlString);
+                    Assert.Contains("comment-margin-author", htmlString);
+                    Assert.Contains("comment-margin-note-body", htmlString);
+                    Assert.Contains("comment-margin-backref", htmlString);
+
+                    // Verify margin mode CSS is generated
+                    Assert.Contains("/* Margin Mode Comments */", htmlString);
+                    Assert.Contains("display: flex", htmlString);
+                    Assert.Contains("flex-direction: row", htmlString);
+                    Assert.Contains("width: 250px", htmlString);
+
+                    // Verify print media query is included
+                    Assert.Contains("@media print", htmlString);
+
+                    // Verify there is NO endnote-style comments section element in HTML (CSS is fine)
+                    // The CSS for comments-section is generated for all modes, but the actual <aside> element should not be present
+                    Assert.DoesNotContain("<aside class=\"comments-section\"", htmlString);
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "Comments-Margin.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC021_Comments_MarginMode_MultipleComments()
+        {
+            // Test margin mode with multiple comments to verify ordering
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/");
+            FileInfo sourceDocx = new FileInfo(Path.Combine(sourceDir.FullName, "HC006-Test-01.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(sourceDocx.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    var mainPart = wDoc.MainDocumentPart;
+                    var body = mainPart.Document.Body;
+                    var firstPara = body.Elements<Paragraph>().FirstOrDefault();
+
+                    if (firstPara != null)
+                    {
+                        var firstRun = firstPara.Elements<Run>().FirstOrDefault();
+                        if (firstRun != null)
+                        {
+                            firstRun.InsertBeforeSelf(new CommentRangeStart() { Id = "200" });
+                            firstRun.InsertAfterSelf(new CommentRangeEnd() { Id = "200" });
+                            firstRun.InsertAfterSelf(new Run(new CommentReference() { Id = "200" }));
+                        }
+                    }
+
+                    var secondPara = body.Elements<Paragraph>().Skip(1).FirstOrDefault();
+                    if (secondPara != null)
+                    {
+                        var secondRun = secondPara.Elements<Run>().FirstOrDefault();
+                        if (secondRun != null)
+                        {
+                            secondRun.InsertBeforeSelf(new CommentRangeStart() { Id = "201" });
+                            secondRun.InsertAfterSelf(new CommentRangeEnd() { Id = "201" });
+                            secondRun.InsertAfterSelf(new Run(new CommentReference() { Id = "201" }));
+                        }
+                    }
+
+                    // Add comments part
+                    var commentsPart = mainPart.AddNewPart<WordprocessingCommentsPart>();
+                    commentsPart.Comments = new Comments(
+                        new Comment(
+                            new Paragraph(new Run(new Text("First margin comment.")))
+                        )
+                        { Id = "200", Author = "Reviewer A", Date = new DateTime(2024, 1, 15, 10, 30, 0) },
+                        new Comment(
+                            new Paragraph(new Run(new Text("Second margin comment.")))
+                        )
+                        { Id = "201", Author = "Reviewer B", Date = new DateTime(2024, 1, 16, 14, 0, 0) }
+                    );
+
+                    mainPart.Document.Save();
+                }
+
+                ms.Position = 0;
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Multiple Margin Comments Test",
+                        FabricateCssClasses = true,
+                        RenderComments = true,
+                        CommentRenderMode = CommentRenderMode.Margin,
+                        IncludeCommentMetadata = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify both comments are in margin column
+                    Assert.Contains("id=\"comment-200\"", htmlString);
+                    Assert.Contains("id=\"comment-201\"", htmlString);
+                    Assert.Contains("First margin comment.", htmlString);
+                    Assert.Contains("Second margin comment.", htmlString);
+                    Assert.Contains("Reviewer A", htmlString);
+                    Assert.Contains("Reviewer B", htmlString);
+
+                    // Verify margin structure
+                    Assert.Contains("comment-margin-column", htmlString);
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "Comments-Margin-Multiple.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC015_TabPrecedingText_UsesMeasuredFlexAdvance()
+        {
+            // Text preceding a tab (like list numbers "2.3") and the tab itself form a
+            // measured flex segment. The label keeps its natural width while the tab absorbs
+            // any font-metric difference before the following text.
+
+            using (MemoryStream ms = new MemoryStream())
+            {
+                // Create a document with a paragraph that has text followed by a tab
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add required parts
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new Style(
+                            new StyleName() { Val = "Normal" },
+                            new PrimaryStyle()
+                        ) { Type = StyleValues.Paragraph, StyleId = "Normal", Default = true }
+                    );
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings(
+                        new DefaultTabStop() { Val = 720 }  // 720 twips = 0.5 inch
+                    );
+                    settingsPart.Settings.Save();
+
+                    // Create document with a paragraph containing "2.3" + tab + "Section Title"
+                    // This simulates numbered headings like "2.3    Deemed Liquidation Events"
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new ParagraphProperties(
+                                    new Tabs(
+                                        new TabStop() { Val = TabStopValues.Left, Position = 720 }
+                                    )
+                                ),
+                                new Run(
+                                    new Text("2.3")
+                                ),
+                                new Run(
+                                    new TabChar()
+                                ),
+                                new Run(
+                                    new Text("Section Title")
+                                )
+                            )
+                        )
+                    );
+
+                    mainPart.Document.Save();
+                }
+
+                ms.Position = 0;
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Tab Width Test",
+                        FabricateCssClasses = true,
+                        CssClassPrefix = "pt-",
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    Assert.Contains("data-docx-tab=\"left\"", htmlString);
+                    Assert.Contains("display: inline-flex;", htmlString);
+                    Assert.Contains("flex-shrink: 0;", htmlString);
+                    Assert.Contains("width: 0.500in;", htmlString);
+
+                    Assert.Contains("2.3", htmlString);
+                    Assert.Contains("Section Title", htmlString);
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "TabWidth-MeasuredFlexAdvance.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC016_RunWithoutRPr_DoesNotCrash()
+        {
+            // Test that runs without w:rPr elements are handled gracefully.
+            // Previously, DefineRunStyle and GetLangAttribute used .First() which
+            // would throw InvalidOperationException if no rPr element existed.
+            // This test verifies the fix using .FirstOrDefault() with null checks.
+
+            using (MemoryStream ms = new MemoryStream())
+            {
+                // Create a document with runs that have NO rPr elements
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add required parts
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new Style(
+                            new StyleName() { Val = "Normal" },
+                            new PrimaryStyle()
+                        ) { Type = StyleValues.Paragraph, StyleId = "Normal", Default = true }
+                    );
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create document with runs that have no rPr at all
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                // Run with no rPr - just text
+                                new Run(
+                                    new Text("Plain text without formatting")
+                                ),
+                                // Another run with no rPr
+                                new Run(
+                                    new Text(" and more plain text")
+                                )
+                            ),
+                            new Paragraph(
+                                // Mixed: run without rPr followed by run with rPr
+                                new Run(
+                                    new Text("No formatting here")
+                                ),
+                                new Run(
+                                    new RunProperties(
+                                        new Bold()
+                                    ),
+                                    new Text(" but this is bold")
+                                )
+                            )
+                        )
+                    );
+
+                    mainPart.Document.Save();
+                }
+
+                ms.Position = 0;
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Null rPr Test",
+                        FabricateCssClasses = true,
+                        CssClassPrefix = "pt-",
+                    };
+
+                    // This should NOT throw - previously it would crash with:
+                    // System.InvalidOperationException: Sequence contains no elements
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify all content is present in the output
+                    Assert.Contains("Plain text without formatting", htmlString);
+                    Assert.Contains("and more plain text", htmlString);
+                    Assert.Contains("No formatting here", htmlString);
+                    Assert.Contains("but this is bold", htmlString);
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "NullRPr-Test.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+        [Fact]
+        public void ConcurrentConversions_ShouldNotCorruptShadeCache()
+        {
+            // This test verifies that the ShadeCache (ConcurrentDictionary) handles
+            // concurrent access correctly during parallel document conversions.
+
+            // Create a proper document with all required parts and shading
+            byte[] docBytes;
+            using (var stream = new MemoryStream())
+            {
+                using (var wDoc = WordprocessingDocument.Create(stream, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    // Add main document part
+                    var mainPart = wDoc.AddMainDocumentPart();
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new Run(
+                                    new RunProperties(
+                                        new Shading { Val = ShadingPatternValues.Percent20, Color = "FF0000", Fill = "FFFFFF" }
+                                    ),
+                                    new Text("Red shading 20%")
+                                )
+                            ),
+                            new Paragraph(
+                                new Run(
+                                    new RunProperties(
+                                        new Shading { Val = ShadingPatternValues.Percent50, Color = "00FF00", Fill = "000000" }
+                                    ),
+                                    new Text("Green shading 50%")
+                                )
+                            ),
+                            new Paragraph(
+                                new Run(
+                                    new RunProperties(
+                                        new Shading { Val = ShadingPatternValues.Percent75, Color = "0000FF", Fill = "FFFFFF" }
+                                    ),
+                                    new Text("Blue shading 75%")
+                                )
+                            )
+                        )
+                    );
+
+                    // Add required StyleDefinitionsPart
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Calibri", HighAnsi = "Calibri" },
+                                    new FontSize { Val = "22" }
+                                )
+                            )
+                        )
+                    );
+
+                    // Add DocumentSettingsPart
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new DocumentFormat.OpenXml.Wordprocessing.Settings();
+                }
+                docBytes = stream.ToArray();
+            }
+
+            var exceptions = new ConcurrentBag<Exception>();
+            var tasks = new Task[20];
+
+            // Run 20 concurrent conversions (each gets its own copy of the doc bytes)
+            for (int i = 0; i < 20; i++)
+            {
+                int iteration = i;
+                tasks[i] = Task.Run(() =>
+                {
+                    try
+                    {
+                        // Each task needs its own copy since the converter may modify the document
+                        byte[] localDocBytes = (byte[])docBytes.Clone();
+                        using (var ms = new MemoryStream())
+                        {
+                            ms.Write(localDocBytes, 0, localDocBytes.Length);
+                            ms.Position = 0;
+                            using (var wDoc = WordprocessingDocument.Open(ms, true))
+                            {
+                                var settings = new WmlToHtmlConverterSettings
+                                {
+                                    PageTitle = $"Concurrent Test {iteration}",
+                                    FabricateCssClasses = true,
+                                    CssClassPrefix = $"pt{iteration}-",
+                                };
+                                XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                                string htmlString = html.ToString();
+
+                                // Verify content was converted
+                                Assert.Contains("Red shading 20%", htmlString);
+                                Assert.Contains("Green shading 50%", htmlString);
+                                Assert.Contains("Blue shading 75%", htmlString);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        exceptions.Add(ex);
+                    }
+                });
+            }
+
+            Task.WaitAll(tasks);
+
+            // No exceptions should have occurred
+            Assert.Empty(exceptions);
+        }
+
+        [Fact]
+        public void ClearShadeCache_ShouldNotThrowDuringConcurrentUse()
+        {
+            // This test verifies that clearing the cache while conversions are running
+            // doesn't cause exceptions (ConcurrentDictionary handles this safely).
+
+            byte[] docBytes;
+            using (var stream = new MemoryStream())
+            {
+                using (var wDoc = WordprocessingDocument.Create(stream, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new Run(
+                                    new RunProperties(
+                                        new Shading { Val = ShadingPatternValues.Percent25, Color = "123456", Fill = "ABCDEF" }
+                                    ),
+                                    new Text("Shaded content")
+                                )
+                            )
+                        )
+                    );
+
+                    // Add required StyleDefinitionsPart
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Calibri", HighAnsi = "Calibri" },
+                                    new FontSize { Val = "22" }
+                                )
+                            )
+                        )
+                    );
+
+                    // Add DocumentSettingsPart
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new DocumentFormat.OpenXml.Wordprocessing.Settings();
+                }
+                docBytes = stream.ToArray();
+            }
+
+            var cts = new CancellationTokenSource();
+            var exceptions = new ConcurrentBag<Exception>();
+
+            // Start a background task doing conversions
+            var conversionTask = Task.Run(() =>
+            {
+                while (!cts.Token.IsCancellationRequested)
+                {
+                    try
+                    {
+                        // Each iteration needs its own copy since converter may modify document
+                        byte[] localDocBytes = (byte[])docBytes.Clone();
+                        using (var ms = new MemoryStream())
+                        {
+                            ms.Write(localDocBytes, 0, localDocBytes.Length);
+                            ms.Position = 0;
+                            using (var wDoc = WordprocessingDocument.Open(ms, true))
+                            {
+                                var settings = new WmlToHtmlConverterSettings();
+                                WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        exceptions.Add(ex);
+                    }
+                }
+            });
+
+            // Clear cache multiple times while conversions are running
+            for (int i = 0; i < 50; i++)
+            {
+                WmlToHtmlConverter.ClearShadeCache();
+                Thread.Sleep(1);
+            }
+
+            cts.Cancel();
+            try { conversionTask.Wait(TimeSpan.FromSeconds(5)); } catch { }
+
+            // No exceptions should have occurred from the concurrent access
+            Assert.Empty(exceptions);
+        }
+
+        [Fact]
+        public void FontFamilyHelper_ConcurrentMarkAsUnknown_ShouldNotCorrupt()
+        {
+            // This test verifies that FontFamilyHelper's ConcurrentDictionary-based
+            // unknown fonts cache handles concurrent access correctly.
+
+            // Clear any existing unknown fonts
+            FontFamilyHelper.ClearUnknownFontsCache();
+
+            var exceptions = new ConcurrentBag<Exception>();
+            var tasks = new Task[20];
+
+            // Run 20 concurrent tasks marking fonts as unknown
+            for (int i = 0; i < 20; i++)
+            {
+                int iteration = i;
+                tasks[i] = Task.Run(() =>
+                {
+                    try
+                    {
+                        for (int j = 0; j < 100; j++)
+                        {
+                            // Each task marks some unique fonts and some shared fonts
+                            FontFamilyHelper.MarkAsUnknown($"UniqueFont-{iteration}-{j}");
+                            FontFamilyHelper.MarkAsUnknown($"SharedFont-{j}");
+
+                            // Also check if fonts are marked
+                            FontFamilyHelper.IsMarkedUnknown($"SharedFont-{j}");
+                            FontFamilyHelper.IsMarkedUnknown($"UniqueFont-{iteration}-{j}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        exceptions.Add(ex);
+                    }
+                });
+            }
+
+            Task.WaitAll(tasks);
+
+            // No exceptions should have occurred
+            Assert.Empty(exceptions);
+
+            // Verify fonts were marked (each task marks 100 unique + 100 shared per iteration)
+            // Unique: 20 tasks * 100 = 2000
+            // Shared: 100 (deduplicated)
+            // Total: 2100
+            Assert.Equal(2100, FontFamilyHelper.UnknownFonts.Count);
+
+            // Verify specific fonts are marked
+            Assert.True(FontFamilyHelper.IsMarkedUnknown("UniqueFont-0-0"));
+            Assert.True(FontFamilyHelper.IsMarkedUnknown("SharedFont-50"));
+
+            // Clean up
+            FontFamilyHelper.ClearUnknownFontsCache();
+            Assert.Empty(FontFamilyHelper.UnknownFonts);
+        }
+
+        [Fact]
+        public void HC022_TabWidthCalculation_TextWidthNonZero()
+        {
+            // Test that text width is now calculated (non-zero) for text elements
+            // before tabs. Previously this was hardcoded to 0, causing incorrect
+            // tab positioning for right/center/decimal tabs.
+
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new Style(
+                            new StyleName() { Val = "Normal" },
+                            new PrimaryStyle()
+                        ) { Type = StyleValues.Paragraph, StyleId = "Normal", Default = true }
+                    );
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings(
+                        new DefaultTabStop() { Val = 720 }
+                    );
+                    settingsPart.Settings.Save();
+
+                    // Create a paragraph with: "Hello World" + tab + "Right aligned"
+                    // The tab is right-aligned at 6 inches (8640 twips)
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new ParagraphProperties(
+                                    new Tabs(
+                                        new TabStop() { Val = TabStopValues.Right, Position = 8640 }
+                                    )
+                                ),
+                                new Run(
+                                    new RunProperties(
+                                        new RunFonts() { Ascii = "Times New Roman" },
+                                        new FontSize() { Val = "24" }  // 12pt
+                                    ),
+                                    new Text("Hello World")
+                                ),
+                                new Run(
+                                    new TabChar()
+                                ),
+                                new Run(
+                                    new Text("Right aligned")
+                                )
+                            )
+                        )
+                    );
+
+                    mainPart.Document.Save();
+                }
+
+                ms.Position = 0;
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Tab Width Calculation Test",
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // The HTML output should contain span elements with margin or width
+                    // values that account for the text before the tab
+                    Assert.Contains("Hello World", htmlString);
+                    Assert.Contains("Right aligned", htmlString);
+
+                    // Verify tab span has styling applied (margin for spacing)
+                    Assert.Contains("margin", htmlString);
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "TabWidth-Calculation.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC023_RightAlignedTab_CorrectSpacing()
+        {
+            // Test that right-aligned tabs calculate correct spacing based on
+            // the width of text that follows the tab.
+
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new Style(
+                            new StyleName() { Val = "Normal" },
+                            new PrimaryStyle()
+                        ) { Type = StyleValues.Paragraph, StyleId = "Normal", Default = true }
+                    );
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings(
+                        new DefaultTabStop() { Val = 720 }
+                    );
+                    settingsPart.Settings.Save();
+
+                    // Table of Contents style: "Chapter 1" + tab with dots + "1"
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new ParagraphProperties(
+                                    new Tabs(
+                                        new TabStop() { Val = TabStopValues.Right, Leader = TabStopLeaderCharValues.Dot, Position = 8640 }
+                                    )
+                                ),
+                                new Run(
+                                    new Text("Chapter 1")
+                                ),
+                                new Run(
+                                    new TabChar()
+                                ),
+                                new Run(
+                                    new Text("1")
+                                )
+                            )
+                        )
+                    );
+
+                    mainPart.Document.Save();
+                }
+
+                ms.Position = 0;
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Right Tab Test",
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify content is present
+                    Assert.Contains("Chapter 1", htmlString);
+                    Assert.Contains("1", htmlString);
+
+                    // Verify tab span has margin or width styling for the right-aligned tab
+                    // (dot leaders may or may not appear depending on font availability)
+                    Assert.True(
+                        htmlString.Contains("margin") || htmlString.Contains("width:"),
+                        "Expected tab to have margin or width styling for positioning"
+                    );
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "TabWidth-RightAligned.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC024_MultipleTabsInParagraph_AllHaveSpacing()
+        {
+            // Test that multiple tabs in a single paragraph all get correct spacing
+
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new Style(
+                            new StyleName() { Val = "Normal" },
+                            new PrimaryStyle()
+                        ) { Type = StyleValues.Paragraph, StyleId = "Normal", Default = true }
+                    );
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings(
+                        new DefaultTabStop() { Val = 720 }
+                    );
+                    settingsPart.Settings.Save();
+
+                    // Create: "Col1" + tab + "Col2" + tab + "Col3"
+                    // With tabs at 2" and 4"
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new ParagraphProperties(
+                                    new Tabs(
+                                        new TabStop() { Val = TabStopValues.Left, Position = 2880 },  // 2 inches
+                                        new TabStop() { Val = TabStopValues.Left, Position = 5760 }   // 4 inches
+                                    )
+                                ),
+                                new Run(new Text("Col1")),
+                                new Run(new TabChar()),
+                                new Run(new Text("Col2")),
+                                new Run(new TabChar()),
+                                new Run(new Text("Col3"))
+                            )
+                        )
+                    );
+
+                    mainPart.Document.Save();
+                }
+
+                ms.Position = 0;
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Multiple Tabs Test",
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify all columns are present
+                    Assert.Contains("Col1", htmlString);
+                    Assert.Contains("Col2", htmlString);
+                    Assert.Contains("Col3", htmlString);
+
+                    // Count explicit tab boxes - each tab advance is represented by its width.
+                    int tabCount = System.Text.RegularExpressions.Regex.Matches(htmlString, @"data-docx-tab=").Count;
+                    Assert.True(tabCount >= 2, $"Expected at least 2 tab boxes, found {tabCount}");
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "TabWidth-Multiple.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC025_TabLeaderCharacters_DotLeaderRendered()
+        {
+            // Test with actual test file that has dot leaders
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/");
+            FileInfo sourceFile = new FileInfo(Path.Combine(sourceDir.FullName, "HC024-Tabs-01.docx"));
+            WmlDocument wmlDoc = new WmlDocument(sourceFile.FullName);
+
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(wmlDoc.DocumentByteArray, 0, wmlDoc.DocumentByteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Tab Leaders Test",
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "TabLeaders-HC024.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+
+                    // Leaders are CSS rules across the measured tab box, independent of fonts.
+                    Assert.Contains("data-docx-tab-leader=\"dot\"", htmlString);
+                    Assert.Contains("border-bottom: 1px dotted currentColor;", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC026_TabLeaderCharacters_ProgrammaticDotLeader()
+        {
+            // Create a document programmatically with dot leader tab
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    MainDocumentPart mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add styles part (required for proper processing)
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts() { Ascii = "Times New Roman", HighAnsi = "Times New Roman" },
+                                    new FontSize() { Val = "24" }
+                                )
+                            )
+                        )
+                    );
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings(
+                        new DefaultTabStop() { Val = 720 }
+                    );
+                    settingsPart.Settings.Save();
+
+                    // Create: "Chapter 1" + dotted tab leader + "1"
+                    // With right-aligned tab with dot leader at 5 inches
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new ParagraphProperties(
+                                    new Tabs(
+                                        new TabStop()
+                                        {
+                                            Val = TabStopValues.Right,
+                                            Position = 7200,  // 5 inches
+                                            Leader = TabStopLeaderCharValues.Dot
+                                        }
+                                    )
+                                ),
+                                new Run(new Text("Chapter 1")),
+                                new Run(new TabChar()),
+                                new Run(new Text("1"))
+                            )
+                        )
+                    );
+
+                    mainPart.Document.Save();
+                }
+
+                ms.Position = 0;
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Programmatic Dot Leader Test",
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "DotLeader-Programmatic.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+
+                    // Output for debugging
+                    System.Diagnostics.Debug.WriteLine("=== HTML OUTPUT ===");
+                    System.Diagnostics.Debug.WriteLine(htmlString);
+
+                    Assert.Contains("data-docx-tab=\"right\"", htmlString);
+                    Assert.Contains("data-docx-tab-leader=\"dot\"", htmlString);
+                    Assert.Contains("border-bottom: 1px dotted currentColor;", htmlString);
+                }
+            }
+        }
+
+        #region Unsupported Content Placeholder Tests
+
+        [Fact]
+        public void HC028_UnsupportedContentPlaceholders_MathEquation()
+        {
+            // Test that math equations render as placeholders when enabled
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add required style definitions part
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
+
+                    // Add document settings part
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create document with math element
+                    var mathNs = XNamespace.Get("http://schemas.openxmlformats.org/officeDocument/2006/math");
+                    var body = new XElement(W.body,
+                        new XElement(W.p,
+                            new XElement(mathNs + "oMath",
+                                new XElement(mathNs + "r",
+                                    new XElement(mathNs + "t", "x + y = z")
+                                )
+                            )
+                        )
+                    );
+
+                    var document = new XElement(W.document,
+                        new XAttribute(XNamespace.Xmlns + "w", W.w.NamespaceName),
+                        new XAttribute(XNamespace.Xmlns + "m", mathNs.NamespaceName),
+                        body);
+
+                    mainPart.PutXDocument(new XDocument(document));
+
+                    // Test with placeholders DISABLED (default - should be empty)
+                    var settingsOff = new WmlToHtmlConverterSettings
+                    {
+                        RenderUnsupportedContentPlaceholders = false,
+                    };
+
+                    XElement htmlOff = WmlToHtmlConverter.ConvertToHtml(wDoc, settingsOff);
+                    string htmlOffString = htmlOff.ToString();
+                    Assert.DoesNotContain("[MATH]", htmlOffString);
+                    Assert.DoesNotContain("unsupported-", htmlOffString);
+
+                    // Test with placeholders ENABLED
+                    var settingsOn = new WmlToHtmlConverterSettings
+                    {
+                        RenderUnsupportedContentPlaceholders = true,
+                        UnsupportedContentCssClassPrefix = "unsupported-",
+                        IncludeUnsupportedContentMetadata = true,
+                    };
+
+                    XElement htmlOn = WmlToHtmlConverter.ConvertToHtml(wDoc, settingsOn);
+                    string htmlOnString = htmlOn.ToString();
+
+                    // Should contain placeholder
+                    Assert.Contains("[MATH]", htmlOnString);
+                    Assert.Contains("unsupported-placeholder", htmlOnString);
+                    Assert.Contains("unsupported-math", htmlOnString);
+                    Assert.Contains("data-content-type=\"MathEquation\"", htmlOnString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC029_UnsupportedContentPlaceholders_FormField()
+        {
+            // Test that form fields render as placeholders when enabled
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add required style definitions part
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
+
+                    // Add document settings part
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create document with form field (checkbox)
+                    var body = new XElement(W.body,
+                        new XElement(W.p,
+                            new XElement(W.r,
+                                new XElement(W.fldChar, new XAttribute(W.fldCharType, "begin")),
+                                new XElement(W.ffData,
+                                    new XElement(W.checkBox,
+                                        new XElement(W._default, new XAttribute(W.val, "0"))
+                                    )
+                                )
+                            ),
+                            new XElement(W.r,
+                                new XElement(W.fldChar, new XAttribute(W.fldCharType, "end"))
+                            )
+                        )
+                    );
+
+                    var document = new XElement(W.document,
+                        new XAttribute(XNamespace.Xmlns + "w", W.w.NamespaceName),
+                        body);
+
+                    mainPart.PutXDocument(new XDocument(document));
+
+                    // Test with placeholders ENABLED
+                    var settings = new WmlToHtmlConverterSettings
+                    {
+                        RenderUnsupportedContentPlaceholders = true,
+                        IncludeUnsupportedContentMetadata = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Should contain form field placeholder
+                    Assert.Contains("[CHECKBOX]", htmlString);
+                    Assert.Contains("unsupported-form", htmlString);
+                    Assert.Contains("data-content-type=\"FormField\"", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC030_UnsupportedContentPlaceholders_RubyAnnotation()
+        {
+            // Test that ruby annotations render as placeholders when enabled
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add required style definitions part
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
+
+                    // Add document settings part
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create document with ruby annotation
+                    var body = new XElement(W.body,
+                        new XElement(W.p,
+                            new XElement(W.r,
+                                new XElement(W.ruby,
+                                    new XElement(W.rubyPr),
+                                    new XElement(W.rt,
+                                        new XElement(W.r,
+                                            new XElement(W.t, "とうきょう")
+                                        )
+                                    ),
+                                    new XElement(W.rubyBase,
+                                        new XElement(W.r,
+                                            new XElement(W.t, "東京")
+                                        )
+                                    )
+                                )
+                            )
+                        )
+                    );
+
+                    var document = new XElement(W.document,
+                        new XAttribute(XNamespace.Xmlns + "w", W.w.NamespaceName),
+                        body);
+
+                    mainPart.PutXDocument(new XDocument(document));
+
+                    // Test with placeholders ENABLED
+                    var settings = new WmlToHtmlConverterSettings
+                    {
+                        RenderUnsupportedContentPlaceholders = true,
+                        IncludeUnsupportedContentMetadata = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Should contain ruby placeholder with base text
+                    Assert.Contains("東京", htmlString);  // Base text should be included
+                    Assert.Contains("unsupported-ruby", htmlString);
+                    Assert.Contains("data-content-type=\"RubyAnnotation\"", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC031_UnsupportedContentPlaceholders_CssGenerated()
+        {
+            // Test that CSS is generated for placeholders when enabled
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add required style definitions part
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
+
+                    // Add document settings part
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create minimal document
+                    var body = new XElement(W.body,
+                        new XElement(W.p,
+                            new XElement(W.r,
+                                new XElement(W.t, "Test")
+                            )
+                        )
+                    );
+
+                    var document = new XElement(W.document,
+                        new XAttribute(XNamespace.Xmlns + "w", W.w.NamespaceName),
+                        body);
+
+                    mainPart.PutXDocument(new XDocument(document));
+
+                    // Test with placeholders ENABLED
+                    var settings = new WmlToHtmlConverterSettings
+                    {
+                        RenderUnsupportedContentPlaceholders = true,
+                        UnsupportedContentCssClassPrefix = "unsupported-",
+                        FabricateCssClasses = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Should contain CSS for placeholders
+                    Assert.Contains("/* Unsupported Content Placeholders CSS */", htmlString);
+                    Assert.Contains(".unsupported-placeholder", htmlString);
+                    Assert.Contains(".unsupported-image", htmlString);
+                    Assert.Contains(".unsupported-math", htmlString);
+                    Assert.Contains(".unsupported-form", htmlString);
+                    Assert.Contains(".unsupported-ruby", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC032_UnsupportedContentPlaceholders_BackwardCompatibility()
+        {
+            // Test that default settings preserve backward compatibility (no placeholders)
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add required style definitions part
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
+
+                    // Add document settings part
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create document with math element
+                    var mathNs = XNamespace.Get("http://schemas.openxmlformats.org/officeDocument/2006/math");
+                    var body = new XElement(W.body,
+                        new XElement(W.p,
+                            new XElement(mathNs + "oMath",
+                                new XElement(mathNs + "r",
+                                    new XElement(mathNs + "t", "x + y")
+                                )
+                            )
+                        )
+                    );
+
+                    var document = new XElement(W.document,
+                        new XAttribute(XNamespace.Xmlns + "w", W.w.NamespaceName),
+                        new XAttribute(XNamespace.Xmlns + "m", mathNs.NamespaceName),
+                        body);
+
+                    mainPart.PutXDocument(new XDocument(document));
+
+                    // Test with DEFAULT settings (placeholders disabled)
+                    var settings = new WmlToHtmlConverterSettings();
+
+                    // Verify default is false
+                    Assert.False(settings.RenderUnsupportedContentPlaceholders);
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Should NOT contain any placeholder indicators
+                    Assert.DoesNotContain("[MATH]", htmlString);
+                    Assert.DoesNotContain("unsupported-placeholder", htmlString);
+                    Assert.DoesNotContain("Unsupported Content Placeholders CSS", htmlString);
+                }
+            }
+        }
+
+        #endregion
+
+        #region Language Attribute Tests
+
+        [Fact]
+        public void HC033_HtmlElementHasLangAttribute_FromThemeFontLang()
+        {
+            // Test that <html> element gets lang attribute from themeFontLang
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add settings with themeFontLang set to French
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings(
+                        new ThemeFontLanguages() { Val = "fr-FR" }
+                    );
+                    settingsPart.Settings.Save();
+
+                    // Add minimal styles
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
+
+                    mainPart.Document = new Document(new Body(new Paragraph(new Run(new Text("Bonjour")))));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings();
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+
+                    var langAttr = html.Attribute("lang");
+                    Assert.NotNull(langAttr);
+                    Assert.Equal("fr-FR", langAttr.Value);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC034_DocumentLanguageSetting_OverridesDocument()
+        {
+            // Test that DocumentLanguage setting overrides document settings
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add settings with French language
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings(
+                        new ThemeFontLanguages() { Val = "fr-FR" }
+                    );
+                    settingsPart.Settings.Save();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
+
+                    mainPart.Document = new Document(new Body(new Paragraph(new Run(new Text("Test")))));
+                    mainPart.Document.Save();
+
+                    // Override with German
+                    var settings = new WmlToHtmlConverterSettings
+                    {
+                        DocumentLanguage = "de-DE"
+                    };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+
+                    var langAttr = html.Attribute("lang");
+                    Assert.NotNull(langAttr);
+                    Assert.Equal("de-DE", langAttr.Value);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC035_FallbackLanguage_WhenNotSpecified()
+        {
+            // Test that language falls back to "en-US" when not specified in document
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // No themeFontLang - empty settings
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
+
+                    mainPart.Document = new Document(new Body(new Paragraph(new Run(new Text("Hello")))));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings();
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+
+                    var langAttr = html.Attribute("lang");
+                    Assert.NotNull(langAttr);
+                    Assert.Equal("en-US", langAttr.Value);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC036_HtmlConverterSettings_DocumentLanguage()
+        {
+            // Test that HtmlConverterSettings also supports DocumentLanguage
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
+
+                    mainPart.Document = new Document(new Body(new Paragraph(new Run(new Text("Test")))));
+                    mainPart.Document.Save();
+
+                    // Use HtmlConverterSettings (the alternate settings class)
+                    var htmlSettings = new HtmlConverterSettings
+                    {
+                        DocumentLanguage = "ja-JP"
+                    };
+                    var html = HtmlConverter.ConvertToHtml(wDoc, htmlSettings);
+
+                    var langAttr = html.Attribute("lang");
+                    Assert.NotNull(langAttr);
+                    Assert.Equal("ja-JP", langAttr.Value);
+                }
+            }
+        }
+
+        #endregion
+
+        #region Table Layout Tests
+
+        [Fact]
+        public void HC037_TableDxaWidth_RendersAsPoints()
+        {
+            // Test that table widths specified in DXA (twips) are converted to points
+            // DXA to points: divide by 20 (1 point = 20 twips)
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Times New Roman" },
+                                    new FontSize { Val = "24" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create a table with DXA width (7200 twips = 360 points = 5 inches)
+                    mainPart.Document = new Document(
+                        new Body(
+                            new DocumentFormat.OpenXml.Wordprocessing.Table(
+                                new TableProperties(
+                                    new TableWidth { Width = "7200", Type = TableWidthUnitValues.Dxa }),
+                                new DocumentFormat.OpenXml.Wordprocessing.TableRow(
+                                    new DocumentFormat.OpenXml.Wordprocessing.TableCell(
+                                        new TableCellProperties(
+                                            new TableCellWidth { Width = "3600", Type = TableWidthUnitValues.Dxa }),
+                                        new Paragraph(
+                                            new Run(new Text("Cell 1"))))),
+                                new DocumentFormat.OpenXml.Wordprocessing.TableRow(
+                                    new DocumentFormat.OpenXml.Wordprocessing.TableCell(
+                                        new TableCellProperties(
+                                            new TableCellWidth { Width = "3600", Type = TableWidthUnitValues.Dxa }),
+                                        new Paragraph(
+                                            new Run(new Text("Cell 2"))))))));
+
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings
+                    {
+                        PageTitle = "Table DXA Width Test"
+                    };
+
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // 7200 twips / 20 = 360 points
+                    Assert.Contains("width: 360pt", htmlString);
+                    Assert.Contains("Cell 1", htmlString);
+                    Assert.Contains("Cell 2", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC038_BorderlessTable_HasDataAttribute()
+        {
+            // Test that tables with nil/none borders get data-borderless="true" attribute
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Times New Roman" },
+                                    new FontSize { Val = "24" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create a table with nil borders (borderless layout table)
+                    mainPart.Document = new Document(
+                        new Body(
+                            new DocumentFormat.OpenXml.Wordprocessing.Table(
+                                new TableProperties(
+                                    new TableBorders(
+                                        new TopBorder { Val = BorderValues.Nil },
+                                        new BottomBorder { Val = BorderValues.Nil },
+                                        new LeftBorder { Val = BorderValues.Nil },
+                                        new RightBorder { Val = BorderValues.Nil },
+                                        new InsideHorizontalBorder { Val = BorderValues.Nil },
+                                        new InsideVerticalBorder { Val = BorderValues.Nil })),
+                                new DocumentFormat.OpenXml.Wordprocessing.TableRow(
+                                    new DocumentFormat.OpenXml.Wordprocessing.TableCell(
+                                        new Paragraph(
+                                            new Run(new Text("Borderless Cell"))))))));
+
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings
+                    {
+                        PageTitle = "Borderless Table Test"
+                    };
+
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    Assert.Contains("data-borderless=\"true\"", htmlString);
+                    Assert.Contains("Borderless Cell", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC039_TableWithBorders_NoDataBorderlessAttribute()
+        {
+            // Test that tables with visible borders do NOT get data-borderless attribute
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Times New Roman" },
+                                    new FontSize { Val = "24" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create a table with single-line borders
+                    mainPart.Document = new Document(
+                        new Body(
+                            new DocumentFormat.OpenXml.Wordprocessing.Table(
+                                new TableProperties(
+                                    new TableBorders(
+                                        new TopBorder { Val = BorderValues.Single, Size = 4, Color = "000000" },
+                                        new BottomBorder { Val = BorderValues.Single, Size = 4, Color = "000000" },
+                                        new LeftBorder { Val = BorderValues.Single, Size = 4, Color = "000000" },
+                                        new RightBorder { Val = BorderValues.Single, Size = 4, Color = "000000" },
+                                        new InsideHorizontalBorder { Val = BorderValues.Single, Size = 4, Color = "000000" },
+                                        new InsideVerticalBorder { Val = BorderValues.Single, Size = 4, Color = "000000" })),
+                                new DocumentFormat.OpenXml.Wordprocessing.TableRow(
+                                    new DocumentFormat.OpenXml.Wordprocessing.TableCell(
+                                        new Paragraph(
+                                            new Run(new Text("Bordered Cell"))))))));
+
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings
+                    {
+                        PageTitle = "Table With Borders Test"
+                    };
+
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    Assert.DoesNotContain("data-borderless", htmlString);
+                    Assert.Contains("Bordered Cell", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC040_TableWithoutTblBorders_IsBorderless()
+        {
+            // Test that tables without any tblBorders element are treated as borderless
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Times New Roman" },
+                                    new FontSize { Val = "24" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create a table without any border properties
+                    mainPart.Document = new Document(
+                        new Body(
+                            new DocumentFormat.OpenXml.Wordprocessing.Table(
+                                new TableProperties(),  // No borders specified
+                                new DocumentFormat.OpenXml.Wordprocessing.TableRow(
+                                    new DocumentFormat.OpenXml.Wordprocessing.TableCell(
+                                        new Paragraph(
+                                            new Run(new Text("No Border Props Cell"))))))));
+
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings
+                    {
+                        PageTitle = "No Border Props Table Test"
+                    };
+
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    Assert.Contains("data-borderless=\"true\"", htmlString);
+                    Assert.Contains("No Border Props Cell", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC041_TablePercentageWidth_RendersCorrectly()
+        {
+            // Test that table widths specified as percentage render correctly
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Times New Roman" },
+                                    new FontSize { Val = "24" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create a table with percentage width (5000 = 100%, so 2500 = 50%)
+                    mainPart.Document = new Document(
+                        new Body(
+                            new DocumentFormat.OpenXml.Wordprocessing.Table(
+                                new TableProperties(
+                                    new TableWidth { Width = "2500", Type = TableWidthUnitValues.Pct }),
+                                new DocumentFormat.OpenXml.Wordprocessing.TableRow(
+                                    new DocumentFormat.OpenXml.Wordprocessing.TableCell(
+                                        new Paragraph(
+                                            new Run(new Text("50% Width Cell"))))))));
+
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings
+                    {
+                        PageTitle = "Table Percentage Width Test"
+                    };
+
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // 2500 / 50 = 50%
+                    Assert.Contains("width: 50%", htmlString);
+                    Assert.Contains("50% Width Cell", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC056_TablePrecededByParagraph_HasTopMargin()
+        {
+            // Test that a table preceded by a paragraph with no after-spacing gets a default margin-top
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Times New Roman" },
+                                    new FontSize { Val = "24" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create a paragraph followed by a table, with no explicit spacing
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new Run(new Text("Text before table"))),
+                            new DocumentFormat.OpenXml.Wordprocessing.Table(
+                                new TableProperties(
+                                    new TableWidth { Width = "5000", Type = TableWidthUnitValues.Pct }),
+                                new DocumentFormat.OpenXml.Wordprocessing.TableRow(
+                                    new DocumentFormat.OpenXml.Wordprocessing.TableCell(
+                                        new TableCellProperties(
+                                            new TableCellWidth { Width = "5000", Type = TableWidthUnitValues.Pct }),
+                                        new Paragraph(
+                                            new Run(new Text("Table cell"))))))));
+
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings
+                    {
+                        PageTitle = "Table Spacing Test"
+                    };
+
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Table should have a margin-top for visual separation
+                    Assert.Contains("margin-top: 7.5pt", htmlString);
+                    Assert.Contains("Text before table", htmlString);
+                    Assert.Contains("Table cell", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC057_TableWithParagraphSpacing_NoExtraMargin()
+        {
+            // Test that when the preceding paragraph has after-spacing, no extra margin-top is added
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new ParagraphPropertiesDefault(
+                                new ParagraphPropertiesBaseStyle(
+                                    new SpacingBetweenLines { After = "200" })),
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Times New Roman" },
+                                    new FontSize { Val = "24" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create a paragraph with after-spacing followed by a table
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new Run(new Text("Spaced paragraph"))),
+                            new DocumentFormat.OpenXml.Wordprocessing.Table(
+                                new TableProperties(
+                                    new TableWidth { Width = "5000", Type = TableWidthUnitValues.Pct }),
+                                new DocumentFormat.OpenXml.Wordprocessing.TableRow(
+                                    new DocumentFormat.OpenXml.Wordprocessing.TableCell(
+                                        new TableCellProperties(
+                                            new TableCellWidth { Width = "5000", Type = TableWidthUnitValues.Pct }),
+                                        new Paragraph(
+                                            new Run(new Text("Table cell"))))))));
+
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings
+                    {
+                        PageTitle = "Table Spacing Test"
+                    };
+
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Table should NOT have the default 7.5pt margin-top since paragraph has spacing
+                    Assert.DoesNotContain("margin-top: 7.5pt", htmlString);
+                    Assert.Contains("Spaced paragraph", htmlString);
+                    Assert.Contains("Table cell", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC042_UnknownSerifFont_GetsSerifFallback()
+        {
+            // Test that unknown fonts without "sans" or "mono" patterns get serif fallback
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "MyCustomFont" },
+                                    new FontSize { Val = "24" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new Run(new Text("Custom font text")))));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings { PageTitle = "Font Fallback Test" };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Unknown font should get serif fallback
+                    Assert.Contains("'MyCustomFont', serif", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC043_UnknownSansFont_GetsSansSerifFallback()
+        {
+            // Test that fonts with "sans" pattern get sans-serif fallback
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "CustomSansFont" },
+                                    new FontSize { Val = "24" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new Run(new Text("Sans font text")))));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings { PageTitle = "Font Fallback Test" };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Font with "sans" should get sans-serif fallback
+                    Assert.Contains("'CustomSansFont', sans-serif", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC044_UnknownMonoFont_GetsMonospaceFallback()
+        {
+            // Test that fonts with "mono" or "code" patterns get monospace fallback
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "MyCodeFont" },
+                                    new FontSize { Val = "24" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new Run(new Text("Mono font text")))));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings { PageTitle = "Font Fallback Test" };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Font with "code" should get monospace fallback
+                    Assert.Contains("'MyCodeFont', monospace", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC045_KnownFont_UsesKnownFallback()
+        {
+            // Test that known fonts (like Arial) use their predefined fallback
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Arial" },
+                                    new FontSize { Val = "24" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new Run(new Text("Arial text")))));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings { PageTitle = "Font Fallback Test" };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Known font Arial should get sans-serif fallback
+                    Assert.Contains("'Arial', sans-serif", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC046_CourierNew_GetsMonospaceFallback()
+        {
+            // Test that Courier New now gets proper monospace fallback (was missing before)
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Courier New" },
+                                    new FontSize { Val = "24" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new Run(new Text("Courier text")))));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings { PageTitle = "Font Fallback Test" };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Courier New should now get monospace fallback
+                    Assert.Contains("'Courier New', monospace", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC047_JapaneseText_GetsCjkFallback()
+        {
+            // Test that East Asian text with Japanese language gets CJK fallback chain
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Times New Roman", EastAsia = "MS Mincho" },
+                                    new FontSize { Val = "24" },
+                                    new Languages { Val = "en-US", EastAsia = "ja-JP" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create a run with Japanese text (hiragana character)
+                    var run = new Run(
+                        new RunProperties(
+                            new RunFonts { EastAsia = "MS Mincho" },
+                            new Languages { EastAsia = "ja-JP" }),
+                        new Text("あ"));  // Hiragana 'a'
+
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(run)));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings { PageTitle = "CJK Font Fallback Test" };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Should contain CJK JP fallback chain fonts
+                    Assert.Contains("Noto Serif CJK JP", htmlString);
+                    Assert.Contains("MS Mincho", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC048_ChineseSimplified_GetsCjkScFallback()
+        {
+            // Test that Simplified Chinese text gets CJK SC fallback chain
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Times New Roman", EastAsia = "SimSun" },
+                                    new FontSize { Val = "24" },
+                                    new Languages { Val = "en-US", EastAsia = "zh-hans" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create a run with Chinese text
+                    var run = new Run(
+                        new RunProperties(
+                            new RunFonts { EastAsia = "SimSun" },
+                            new Languages { EastAsia = "zh-hans" }),
+                        new Text("中"));  // Chinese character
+
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(run)));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings { PageTitle = "CJK Font Fallback Test" };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Should contain CJK SC fallback chain fonts
+                    Assert.Contains("Noto Serif CJK SC", htmlString);
+                    Assert.Contains("Microsoft YaHei", htmlString);
+                }
+            }
+        }
+
+        #endregion
+
+        #region Theme Color Tests
+
+        [Fact]
+        public void HC049_ThemeColor_ResolvesAccentColor()
+        {
+            // Test that theme colors like accent1 are resolved to actual hex values
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add theme part with color scheme
+                    var themePart = mainPart.AddNewPart<ThemePart>();
+                    themePart.Theme = new DocumentFormat.OpenXml.Drawing.Theme(
+                        new DocumentFormat.OpenXml.Drawing.ThemeElements(
+                            new DocumentFormat.OpenXml.Drawing.ColorScheme(
+                                new DocumentFormat.OpenXml.Drawing.Dark1Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Light1Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "FFFFFF" }),
+                                new DocumentFormat.OpenXml.Drawing.Dark2Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "1F4E78" }),
+                                new DocumentFormat.OpenXml.Drawing.Light2Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "EEECE1" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent1Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "4472C4" }),  // Blue
+                                new DocumentFormat.OpenXml.Drawing.Accent2Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "ED7D31" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent3Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "A5A5A5" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent4Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "FFC000" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent5Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "5B9BD5" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent6Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "70AD47" }),
+                                new DocumentFormat.OpenXml.Drawing.Hyperlink(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "0563C1" }),
+                                new DocumentFormat.OpenXml.Drawing.FollowedHyperlinkColor(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "954F72" }))
+                            { Name = "Office" },
+                            new DocumentFormat.OpenXml.Drawing.FontScheme(
+                                new DocumentFormat.OpenXml.Drawing.MajorFont(
+                                    new DocumentFormat.OpenXml.Drawing.LatinFont { Typeface = "Calibri Light" }),
+                                new DocumentFormat.OpenXml.Drawing.MinorFont(
+                                    new DocumentFormat.OpenXml.Drawing.LatinFont { Typeface = "Calibri" }))
+                            { Name = "Office" },
+                            new DocumentFormat.OpenXml.Drawing.FormatScheme(
+                                new DocumentFormat.OpenXml.Drawing.FillStyleList(
+                                    new DocumentFormat.OpenXml.Drawing.SolidFill()),
+                                new DocumentFormat.OpenXml.Drawing.LineStyleList(
+                                    new DocumentFormat.OpenXml.Drawing.Outline()),
+                                new DocumentFormat.OpenXml.Drawing.EffectStyleList(
+                                    new DocumentFormat.OpenXml.Drawing.EffectStyle()),
+                                new DocumentFormat.OpenXml.Drawing.BackgroundFillStyleList(
+                                    new DocumentFormat.OpenXml.Drawing.SolidFill()))
+                            { Name = "Office" }))
+                    { Name = "Office Theme" };
+                    themePart.Theme.Save();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Calibri" },
+                                    new FontSize { Val = "22" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create a run with theme color (accent1 = #4472C4)
+                    var run = new Run(
+                        new RunProperties(
+                            new Color { Val = "4472C4", ThemeColor = ThemeColorValues.Accent1 }),
+                        new Text("Theme colored text"));
+
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(run)));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings { ResolveThemeColors = true };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Should contain the resolved color #4472C4
+                    Assert.Contains("#4472C4", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC050_ThemeColor_AppliesTintModifier()
+        {
+            // Test that tint modifier lightens the theme color
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add theme part with accent1 = pure blue (0000FF)
+                    var themePart = mainPart.AddNewPart<ThemePart>();
+                    themePart.Theme = new DocumentFormat.OpenXml.Drawing.Theme(
+                        new DocumentFormat.OpenXml.Drawing.ThemeElements(
+                            new DocumentFormat.OpenXml.Drawing.ColorScheme(
+                                new DocumentFormat.OpenXml.Drawing.Dark1Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Light1Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "FFFFFF" }),
+                                new DocumentFormat.OpenXml.Drawing.Dark2Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Light2Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "FFFFFF" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent1Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "0000FF" }),  // Pure blue
+                                new DocumentFormat.OpenXml.Drawing.Accent2Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent3Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent4Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent5Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent6Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Hyperlink(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.FollowedHyperlinkColor(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }))
+                            { Name = "Test" },
+                            new DocumentFormat.OpenXml.Drawing.FontScheme(
+                                new DocumentFormat.OpenXml.Drawing.MajorFont(
+                                    new DocumentFormat.OpenXml.Drawing.LatinFont { Typeface = "Calibri" }),
+                                new DocumentFormat.OpenXml.Drawing.MinorFont(
+                                    new DocumentFormat.OpenXml.Drawing.LatinFont { Typeface = "Calibri" }))
+                            { Name = "Test" },
+                            new DocumentFormat.OpenXml.Drawing.FormatScheme(
+                                new DocumentFormat.OpenXml.Drawing.FillStyleList(
+                                    new DocumentFormat.OpenXml.Drawing.SolidFill()),
+                                new DocumentFormat.OpenXml.Drawing.LineStyleList(
+                                    new DocumentFormat.OpenXml.Drawing.Outline()),
+                                new DocumentFormat.OpenXml.Drawing.EffectStyleList(
+                                    new DocumentFormat.OpenXml.Drawing.EffectStyle()),
+                                new DocumentFormat.OpenXml.Drawing.BackgroundFillStyleList(
+                                    new DocumentFormat.OpenXml.Drawing.SolidFill()))
+                            { Name = "Test" }))
+                    { Name = "Test Theme" };
+                    themePart.Theme.Save();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create a run with theme color + 50% tint (7F = 127, so tint factor = 127/255 ≈ 0.5)
+                    // Blue with 50% tint toward white should be around #8080FF
+                    var run = new Run(
+                        new RunProperties(
+                            new Color { Val = "0000FF", ThemeColor = ThemeColorValues.Accent1, ThemeTint = "7F" }),
+                        new Text("Tinted theme color"));
+
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(run)));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings { ResolveThemeColors = true };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // The color should be lightened - blue component stays at FF, others increase
+                    // Should NOT be the original blue #0000FF
+                    Assert.DoesNotContain("#0000FF", htmlString);
+                    // Should contain a lightened color (somewhere between blue and white)
+                    Assert.Contains("color:", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC051_ThemeColor_DisabledWhenSettingFalse()
+        {
+            // Test that theme colors are not resolved when ResolveThemeColors = false
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add theme part
+                    var themePart = mainPart.AddNewPart<ThemePart>();
+                    themePart.Theme = new DocumentFormat.OpenXml.Drawing.Theme(
+                        new DocumentFormat.OpenXml.Drawing.ThemeElements(
+                            new DocumentFormat.OpenXml.Drawing.ColorScheme(
+                                new DocumentFormat.OpenXml.Drawing.Dark1Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Light1Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "FFFFFF" }),
+                                new DocumentFormat.OpenXml.Drawing.Dark2Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Light2Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "FFFFFF" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent1Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "4472C4" }),  // Theme blue
+                                new DocumentFormat.OpenXml.Drawing.Accent2Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent3Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent4Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent5Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent6Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Hyperlink(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.FollowedHyperlinkColor(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }))
+                            { Name = "Test" },
+                            new DocumentFormat.OpenXml.Drawing.FontScheme(
+                                new DocumentFormat.OpenXml.Drawing.MajorFont(
+                                    new DocumentFormat.OpenXml.Drawing.LatinFont { Typeface = "Calibri" }),
+                                new DocumentFormat.OpenXml.Drawing.MinorFont(
+                                    new DocumentFormat.OpenXml.Drawing.LatinFont { Typeface = "Calibri" }))
+                            { Name = "Test" },
+                            new DocumentFormat.OpenXml.Drawing.FormatScheme(
+                                new DocumentFormat.OpenXml.Drawing.FillStyleList(
+                                    new DocumentFormat.OpenXml.Drawing.SolidFill()),
+                                new DocumentFormat.OpenXml.Drawing.LineStyleList(
+                                    new DocumentFormat.OpenXml.Drawing.Outline()),
+                                new DocumentFormat.OpenXml.Drawing.EffectStyleList(
+                                    new DocumentFormat.OpenXml.Drawing.EffectStyle()),
+                                new DocumentFormat.OpenXml.Drawing.BackgroundFillStyleList(
+                                    new DocumentFormat.OpenXml.Drawing.SolidFill()))
+                            { Name = "Test" }))
+                    { Name = "Test Theme" };
+                    themePart.Theme.Save();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create a run with theme color AND explicit fallback val (FF0000 = red)
+                    var run = new Run(
+                        new RunProperties(
+                            new Color { Val = "FF0000", ThemeColor = ThemeColorValues.Accent1 }),
+                        new Text("Explicit color fallback"));
+
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(run)));
+                    mainPart.Document.Save();
+
+                    // Disable theme color resolution
+                    var settings = new WmlToHtmlConverterSettings { ResolveThemeColors = false };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Should use the explicit val (red), not the theme color (blue)
+                    Assert.Contains("#FF0000", htmlString);
+                }
+            }
+        }
+
+        #endregion
+
+        #region Page CSS Tests
+
+        [Fact]
+        public void HC052_PageCss_GeneratesAtPageRule()
+        {
+            // Test that @page CSS rule is generated when GeneratePageCss = true
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create document with US Letter page size (12240 x 15840 twips = 8.5 x 11 inches)
+                    // and 1 inch margins (1440 twips each)
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(new Run(new Text("Test content"))),
+                            new SectionProperties(
+                                new PageSize { Width = 12240, Height = 15840 },
+                                new PageMargin { Top = 1440, Right = 1440, Bottom = 1440, Left = 1440 })));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings { GeneratePageCss = true };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Should contain @page rule
+                    Assert.Contains("@page", htmlString);
+                    // Should contain size declaration (8.5 x 11 inches)
+                    Assert.Contains("size:", htmlString);
+                    Assert.Contains("8.50in", htmlString);
+                    Assert.Contains("11.00in", htmlString);
+                    // Should contain margin declaration (1 inch each)
+                    Assert.Contains("margin:", htmlString);
+                    Assert.Contains("1.00in", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC053_PageCss_A4PageSize()
+        {
+            // Test that A4 page size generates correct dimensions
+            // A4 = 210mm x 297mm = 595.3pt x 841.9pt = 11906 x 16838 twips
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create document with A4 page size (11906 x 16838 twips)
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(new Run(new Text("A4 content"))),
+                            new SectionProperties(
+                                new PageSize { Width = 11906, Height = 16838 },
+                                new PageMargin { Top = 1440, Right = 1440, Bottom = 1440, Left = 1440 })));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings { GeneratePageCss = true };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Should contain @page rule with A4 dimensions
+                    Assert.Contains("@page", htmlString);
+                    // A4 width ≈ 8.27in, height ≈ 11.69in
+                    Assert.Contains("8.27in", htmlString);
+                    Assert.Contains("11.69in", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC054_PageCss_DisabledByDefault()
+        {
+            // Test that @page CSS is NOT generated by default
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(new Run(new Text("Default settings"))),
+                            new SectionProperties(
+                                new PageSize { Width = 12240, Height = 15840 })));
+                    mainPart.Document.Save();
+
+                    // Use default settings (GeneratePageCss = false)
+                    var settings = new WmlToHtmlConverterSettings();
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Should NOT contain @page rule
+                    Assert.DoesNotContain("@page", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC055_PageCss_CustomMargins()
+        {
+            // Test that custom margins are correctly converted
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create document with custom margins:
+                    // Top: 0.5in (720 twips), Right: 0.75in (1080 twips)
+                    // Bottom: 1.5in (2160 twips), Left: 1.25in (1800 twips)
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(new Run(new Text("Custom margins"))),
+                            new SectionProperties(
+                                new PageSize { Width = 12240, Height = 15840 },
+                                new PageMargin { Top = 720, Right = 1080, Bottom = 2160, Left = 1800 })));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings { GeneratePageCss = true };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Should contain @page rule with custom margins
+                    Assert.Contains("@page", htmlString);
+                    Assert.Contains("0.50in", htmlString);  // Top
+                    Assert.Contains("0.75in", htmlString);  // Right
+                    Assert.Contains("1.50in", htmlString);  // Bottom
+                    Assert.Contains("1.25in", htmlString);  // Left
+                }
+            }
+        }
+
+        #endregion
+
+        #region Legal Numbering Continuation Pattern Tests
+
+        /// <summary>
+        /// Tests that a list with items at ilvl=0 (1., 2., 3.) followed by an item at ilvl=1
+        /// with start=4 renders as "4." instead of "3.4" (continuation pattern).
+        /// </summary>
+        [Fact]
+        public void HC050_ContinuationPattern_RendersCorrectNumber()
+        {
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add styles
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Times New Roman" },
+                                    new FontSize { Val = "22" }))),
+                        new Style(
+                            new StyleName() { Val = "Normal" },
+                            new PrimaryStyle()
+                        ) { Type = StyleValues.Paragraph, StyleId = "Normal", Default = true },
+                        new Style(
+                            new StyleName() { Val = "List Number" }
+                        ) { Type = StyleValues.Paragraph, StyleId = "ListNumber" });
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Add numbering
+                    var numberingPart = mainPart.AddNewPart<NumberingDefinitionsPart>();
+                    numberingPart.Numbering = new Numbering(
+                        new AbstractNum(
+                            new Level(
+                                new StartNumberingValue { Val = 1 },
+                                new NumberingFormat { Val = NumberFormatValues.Decimal },
+                                new LevelText { Val = "%1." },
+                                new LevelJustification { Val = LevelJustificationValues.Left },
+                                new PreviousParagraphProperties(new Indentation { Left = "360", Hanging = "360" }),
+                                new NumberingSymbolRunProperties(new Spacing { Val = 0 })
+                            ) { LevelIndex = 0 },
+                            new Level(
+                                new StartNumberingValue { Val = 4 },  // Start at 4 - key for continuation
+                                new IsLegalNumberingStyle(),  // Legal numbering
+                                new NumberingFormat { Val = NumberFormatValues.Decimal },
+                                new LevelText { Val = "%1.%2" },  // Format would normally produce "3.4"
+                                new LevelJustification { Val = LevelJustificationValues.Left },
+                                new PreviousParagraphProperties(new Indentation { Left = "1560", Hanging = "480" }),
+                                new NumberingSymbolRunProperties(new Underline { Val = UnderlineValues.Single })
+                            ) { LevelIndex = 1 }
+                        ) { AbstractNumberId = 1, MultiLevelType = new MultiLevelType { Val = MultiLevelValues.HybridMultilevel } },
+                        new NumberingInstance(
+                            new AbstractNumId { Val = 1 }
+                        ) { NumberID = 1 });
+                    numberingPart.Numbering.Save();
+
+                    // Create paragraphs: 3 at ilvl=0, then 1 at ilvl=1
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new ParagraphProperties(
+                                    new ParagraphStyleId { Val = "ListNumber" },
+                                    new NumberingProperties(
+                                        new NumberingLevelReference { Val = 0 },
+                                        new NumberingId { Val = 1 })),
+                                new Run(new Text("First item"))),
+                            new Paragraph(
+                                new ParagraphProperties(
+                                    new ParagraphStyleId { Val = "ListNumber" },
+                                    new NumberingProperties(
+                                        new NumberingLevelReference { Val = 0 },
+                                        new NumberingId { Val = 1 })),
+                                new Run(new Text("Second item"))),
+                            new Paragraph(
+                                new ParagraphProperties(
+                                    new ParagraphStyleId { Val = "ListNumber" },
+                                    new NumberingProperties(
+                                        new NumberingLevelReference { Val = 0 },
+                                        new NumberingId { Val = 1 })),
+                                new Run(new Text("Third item"))),
+                            new Paragraph(
+                                new ParagraphProperties(
+                                    new ParagraphStyleId { Val = "ListNumber" },
+                                    new NumberingProperties(
+                                        new NumberingLevelReference { Val = 1 },  // ilvl=1, but start=4
+                                        new NumberingId { Val = 1 })),
+                                new Run(new Text("Fourth item (should render as 4. not 3.4)")))));
+                    mainPart.Document.Save();
+                }
+
+                ms.Position = 0;
+                using (var wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    var settings = new WmlToHtmlConverterSettings
+                    {
+                        PageTitle = "Continuation Pattern Test"
+                    };
+
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Should contain list numbers 1., 2., 3., 4.
+                    Assert.Contains(">1.<", htmlString);
+                    Assert.Contains(">2.<", htmlString);
+                    Assert.Contains(">3.<", htmlString);
+                    Assert.Contains(">4.<", htmlString);
+
+                    // Should NOT contain "3.4" which would be the incorrect rendering
+                    Assert.DoesNotContain(">3.4<", htmlString);
+                    Assert.DoesNotContain(">3.4", htmlString);  // Also check without closing bracket
+                }
+            }
+        }
+
+        /// <summary>
+        /// Tests that continuation pattern items use level 0's run properties (no underline)
+        /// even when level 1 has underline in its rPr.
+        /// </summary>
+        [Fact]
+        public void HC051_ContinuationPattern_UsesLevel0Formatting()
+        {
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add styles
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Times New Roman" },
+                                    new FontSize { Val = "22" }))),
+                        new Style(
+                            new StyleName() { Val = "Normal" },
+                            new PrimaryStyle()
+                        ) { Type = StyleValues.Paragraph, StyleId = "Normal", Default = true },
+                        new Style(
+                            new StyleName() { Val = "List Number" }
+                        ) { Type = StyleValues.Paragraph, StyleId = "ListNumber" });
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Add numbering with underline on level 1 but not level 0
+                    var numberingPart = mainPart.AddNewPart<NumberingDefinitionsPart>();
+                    numberingPart.Numbering = new Numbering(
+                        new AbstractNum(
+                            new Level(
+                                new StartNumberingValue { Val = 1 },
+                                new NumberingFormat { Val = NumberFormatValues.Decimal },
+                                new LevelText { Val = "%1." },
+                                new LevelJustification { Val = LevelJustificationValues.Left },
+                                new PreviousParagraphProperties(new Indentation { Left = "360", Hanging = "360" }),
+                                new NumberingSymbolRunProperties(new Spacing { Val = 0 })  // No underline
+                            ) { LevelIndex = 0 },
+                            new Level(
+                                new StartNumberingValue { Val = 4 },
+                                new IsLegalNumberingStyle(),
+                                new NumberingFormat { Val = NumberFormatValues.Decimal },
+                                new LevelText { Val = "%1.%2" },
+                                new LevelJustification { Val = LevelJustificationValues.Left },
+                                new PreviousParagraphProperties(new Indentation { Left = "1560", Hanging = "480" }),
+                                new NumberingSymbolRunProperties(new Underline { Val = UnderlineValues.Single })  // HAS underline
+                            ) { LevelIndex = 1 }
+                        ) { AbstractNumberId = 1, MultiLevelType = new MultiLevelType { Val = MultiLevelValues.HybridMultilevel } },
+                        new NumberingInstance(
+                            new AbstractNumId { Val = 1 }
+                        ) { NumberID = 1 });
+                    numberingPart.Numbering.Save();
+
+                    // Create paragraphs: 3 at ilvl=0, then 1 at ilvl=1 (continuation)
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new ParagraphProperties(
+                                    new ParagraphStyleId { Val = "ListNumber" },
+                                    new NumberingProperties(
+                                        new NumberingLevelReference { Val = 0 },
+                                        new NumberingId { Val = 1 })),
+                                new Run(new Text("First item"))),
+                            new Paragraph(
+                                new ParagraphProperties(
+                                    new ParagraphStyleId { Val = "ListNumber" },
+                                    new NumberingProperties(
+                                        new NumberingLevelReference { Val = 0 },
+                                        new NumberingId { Val = 1 })),
+                                new Run(new Text("Second item"))),
+                            new Paragraph(
+                                new ParagraphProperties(
+                                    new ParagraphStyleId { Val = "ListNumber" },
+                                    new NumberingProperties(
+                                        new NumberingLevelReference { Val = 0 },
+                                        new NumberingId { Val = 1 })),
+                                new Run(new Text("Third item"))),
+                            new Paragraph(
+                                new ParagraphProperties(
+                                    new ParagraphStyleId { Val = "ListNumber" },
+                                    new NumberingProperties(
+                                        new NumberingLevelReference { Val = 1 },
+                                        new NumberingId { Val = 1 })),
+                                new Run(new Text("Fourth item (should NOT have underline)")))));
+                    mainPart.Document.Save();
+                }
+
+                ms.Position = 0;
+                using (var wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    var settings = new WmlToHtmlConverterSettings
+                    {
+                        PageTitle = "Continuation Formatting Test"
+                    };
+
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Find the CSS classes used for list item numbers
+                    // All four list numbers (1., 2., 3., 4.) should use the same CSS class
+                    // because continuation items should use level 0's formatting
+
+                    // The list number spans should NOT have text-decoration: underline
+                    // for any of the items if they're all using level 0's rPr
+
+                    // Count occurrences of the list number pattern - should be 4
+                    int listNumberCount = 0;
+                    int pos = 0;
+                    while ((pos = htmlString.IndexOf(">1.<", pos)) >= 0) { listNumberCount++; pos++; }
+                    pos = 0;
+                    while ((pos = htmlString.IndexOf(">2.<", pos)) >= 0) { listNumberCount++; pos++; }
+                    pos = 0;
+                    while ((pos = htmlString.IndexOf(">3.<", pos)) >= 0) { listNumberCount++; pos++; }
+                    pos = 0;
+                    while ((pos = htmlString.IndexOf(">4.<", pos)) >= 0) { listNumberCount++; pos++; }
+
+                    Assert.Equal(4, listNumberCount);
+
+                    // Verify no "3.4" in output
+                    Assert.DoesNotContain("3.4", htmlString);
+                }
+            }
+        }
+
+        #endregion
+
+        #region Document Layout Tests
+
+        /// <summary>
+        /// Builds a one-paragraph US Letter document, optionally holding a table, so the layout
+        /// tests can assert on the converter's geometry and table-layout output.
+        /// </summary>
+        private static string ConvertLayoutFixture(
+            PaginationMode pagination = PaginationMode.None,
+            DocumentFormat.OpenXml.Wordprocessing.Table table = null)
+        {
+            using var ms = new MemoryStream();
+            using var wDoc = WordprocessingDocument.Create(
+                ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document);
+            var mainPart = wDoc.AddMainDocumentPart();
+
+            var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+            stylesPart.Styles = new Styles();
+            stylesPart.Styles.Save();
+
+            var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+            settingsPart.Settings = new Settings();
+            settingsPart.Settings.Save();
+
+            var body = new Body();
+            if (table != null)
+                body.AppendChild(table);
+            body.AppendChild(new Paragraph(new Run(new Text("Test content"))));
+            body.AppendChild(new SectionProperties(
+                new PageSize { Width = 12240, Height = 15840 },
+                new PageMargin { Top = 1440, Right = 1440, Bottom = 1440, Left = 1440 }));
+
+            mainPart.Document = new Document(body);
+            mainPart.Document.Save();
+
+            var settings = new WmlToHtmlConverterSettings { RenderPagination = pagination };
+            return WmlToHtmlConverter.ConvertToHtml(wDoc, settings).ToString();
+        }
+
+        /// <summary>
+        /// A word wider than its column must break rather than overflow, and a table must never
+        /// exceed the text column. CSS's defaults do the opposite of Word on both counts, so the
+        /// converter emits the rules that restore Word's behavior in EVERY render mode.
+        /// Mobile Chrome's text autosizer must also be opted out on every document element
+        /// (text-size-adjust is non-inherited and Blink consults its own cluster roots), or the
+        /// device re-breaks lines the document authored at a fixed column width.
+        /// </summary>
+        [Fact]
+        public void HC056_DocumentLayoutCss_IsAlwaysEmitted()
+        {
+            var htmlString = ConvertLayoutFixture();
+
+            Assert.Contains("overflow-wrap: break-word;", htmlString);
+            Assert.Contains("max-width: 100%;", htmlString);
+            Assert.Contains("overflow-wrap: anywhere;", htmlString);
+            Assert.Contains("body, body * {", htmlString);
+            Assert.Contains("-webkit-text-size-adjust: 100%;", htmlString);
+            Assert.Contains("text-size-adjust: 100%;", htmlString);
+        }
+
+        /// <summary>
+        /// A section's page setup is a property of the DOCUMENT, so it is stamped on the section
+        /// wrapper whether or not the caller asked for pagination — a continuous renderer needs
+        /// the same text-column width a paginated one does. It used to be Paginated-only, which
+        /// left continuous views sizing their column from the device.
+        /// </summary>
+        [Fact]
+        public void HC057_SectionGeometry_StampedInContinuousMode()
+        {
+            var htmlString = ConvertLayoutFixture();
+
+            Assert.Contains("data-section-index=\"0\"", htmlString);
+            Assert.Contains("data-page-width=\"612.0\"", htmlString);
+            // 8.5in - 2 x 1in of margin = 6.5in = 468pt.
+            Assert.Contains("data-content-width=\"468.0\"", htmlString);
+            Assert.Contains("data-margin-left=\"72.0\"", htmlString);
+        }
+
+        /// <summary>
+        /// A section's start type and column geometry are properties of the document, so the
+        /// wrapper carries them in every render mode: the paginator needs w:type="continuous"
+        /// to keep filling the current page instead of opening a fresh one, and w:cols to lay
+        /// the section out as CSS columns (which the continuous view gets inline). Issue #413.
+        /// </summary>
+        [Fact]
+        public void HC062_ContinuousSectionAndColumns_StampedOnWrapper()
+        {
+            var sourceDocx = new FileInfo("../../../../TestFiles/VP/VP003-Two-Column-Section.docx");
+            var wmlDocument = new WmlDocument(sourceDocx.FullName);
+            using var streamDoc = new OpenXmlMemoryStreamDocument(wmlDocument);
+            using var wDoc = streamDoc.GetWordprocessingDocument();
+
+            var html = WmlToHtmlConverter.ConvertToHtml(wDoc, new WmlToHtmlConverterSettings());
+
+            var sectionDivs = html
+                .Descendants()
+                .Where(e => e.Attribute("data-section-index") != null)
+                .OrderBy(e => (int)e.Attribute("data-section-index"))
+                .ToList();
+            Assert.Equal(2, sectionDivs.Count);
+
+            // The single-column title section is neither typed continuous nor columned.
+            Assert.Null(sectionDivs[0].Attribute("data-section-type"));
+            Assert.Null(sectionDivs[0].Attribute("data-cols"));
+
+            // The trailing section is continuous and two-column with a 720-twip (36pt) gap,
+            // stamped for the paginator and applied inline for the continuous view.
+            Assert.Equal("continuous", (string)sectionDivs[1].Attribute("data-section-type"));
+            Assert.Equal("2", (string)sectionDivs[1].Attribute("data-cols"));
+            Assert.Equal("36.0", (string)sectionDivs[1].Attribute("data-col-gap"));
+            Assert.Equal("column-count: 2; column-gap: 36.0pt;", (string)sectionDivs[1].Attribute("style"));
+        }
+
+        /// <summary>
+        /// Word's fixed table layout makes the authored column widths binding: content wraps
+        /// inside a column instead of widening it. Map it to CSS's fixed layout, with the grid
+        /// (not the first row) supplying the widths, exactly as Word records them.
+        /// </summary>
+        [Fact]
+        public void HC058_FixedLayoutTable_EmitsTableLayoutAndColGroup()
+        {
+            var table = new DocumentFormat.OpenXml.Wordprocessing.Table(
+                new TableProperties(
+                    new TableWidth { Width = "9360", Type = TableWidthUnitValues.Dxa },
+                    new TableLayout { Type = TableLayoutValues.Fixed }),
+                new TableGrid(
+                    new GridColumn { Width = "3120" },
+                    new GridColumn { Width = "6240" }),
+                new DocumentFormat.OpenXml.Wordprocessing.TableRow(
+                    new DocumentFormat.OpenXml.Wordprocessing.TableCell(new Paragraph(new Run(new Text("a")))),
+                    new DocumentFormat.OpenXml.Wordprocessing.TableCell(new Paragraph(new Run(new Text("b"))))));
+
+            var htmlString = ConvertLayoutFixture(table: table);
+
+            Assert.Contains("table-layout: fixed", htmlString);
+            Assert.Contains("<colgroup>", htmlString);
+            Assert.Contains("width: 156pt;", htmlString);
+            Assert.Contains("width: 312pt;", htmlString);
+        }
+
+        /// <summary>
+        /// An AutoFit table keeps CSS's auto layout — the grid still ships as a colgroup, since
+        /// auto layout treats those widths as preferences rather than as binding.
+        /// </summary>
+        [Fact]
+        public void HC059_AutoFitTable_KeepsAutoLayout()
+        {
+            var table = new DocumentFormat.OpenXml.Wordprocessing.Table(
+                new TableProperties(
+                    new TableWidth { Width = "0", Type = TableWidthUnitValues.Auto },
+                    new TableLayout { Type = TableLayoutValues.Autofit }),
+                new TableGrid(
+                    new GridColumn { Width = "3120" },
+                    new GridColumn { Width = "6240" }),
+                new DocumentFormat.OpenXml.Wordprocessing.TableRow(
+                    new DocumentFormat.OpenXml.Wordprocessing.TableCell(new Paragraph(new Run(new Text("a")))),
+                    new DocumentFormat.OpenXml.Wordprocessing.TableCell(new Paragraph(new Run(new Text("b"))))));
+
+            var htmlString = ConvertLayoutFixture(table: table);
+
+            Assert.DoesNotContain("table-layout: fixed", htmlString);
+            Assert.Contains("<colgroup>", htmlString);
+        }
+
+        #endregion
+
+        #region Running Story Revision and Comment Overlap Tests
+
+        private static readonly XNamespace XhtmlNs = "http://www.w3.org/1999/xhtml";
+
+        /// <summary>A story paragraph carrying one native insertion and one native deletion.</summary>
+        private static Paragraph RevisedStoryParagraph(string baseText, string insText, string delText, int revisionIdSeed)
+        {
+            return new Paragraph(
+                new Run(new Text(baseText)),
+                new InsertedRun(new Run(new Text(insText)))
+                {
+                    Author = "Reviewer",
+                    Date = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    Id = revisionIdSeed.ToString(),
+                },
+                new DeletedRun(new Run(new DeletedText(delText)))
+                {
+                    Author = "Reviewer",
+                    Date = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    Id = (revisionIdSeed + 1).ToString(),
+                });
+        }
+
+        /// <summary>
+        /// A document with native tracked changes (w:ins and w:del) in four running stories:
+        /// the default header, the default footer, a footnote body, and an endnote body.
+        /// The body cites both notes so the note stories are reachable from the main part.
+        /// </summary>
+        private static byte[] BuildDocWithRevisionsInRunningStories()
+        {
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(
+                    ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var main = wDoc.AddMainDocumentPart();
+                    main.Document = new Document();
+                    var body = new Body();
+                    main.Document.Body = body;
+
+                    body.Append(new Paragraph(
+                        new Run(new Text("Body text citing the notes.")),
+                        new Run(new FootnoteReference() { Id = 1 }),
+                        new Run(new EndnoteReference() { Id = 1 })));
+
+                    var headerPart = main.AddNewPart<HeaderPart>();
+                    headerPart.Header = new Header(
+                        RevisedStoryParagraph("Header base", "HEADER-INS", "HEADER-DEL", 101));
+
+                    var footerPart = main.AddNewPart<FooterPart>();
+                    footerPart.Footer = new Footer(
+                        RevisedStoryParagraph("Footer base", "FOOTER-INS", "FOOTER-DEL", 103));
+
+                    var footnotesPart = main.AddNewPart<FootnotesPart>();
+                    footnotesPart.Footnotes = new Footnotes(
+                        new Footnote(new Paragraph(new Run(new SeparatorMark())))
+                        { Type = FootnoteEndnoteValues.Separator, Id = -1 },
+                        new Footnote(new Paragraph(new Run(new ContinuationSeparatorMark())))
+                        { Type = FootnoteEndnoteValues.ContinuationSeparator, Id = 0 },
+                        new Footnote(
+                            RevisedStoryParagraph("Footnote base", "FOOTNOTE-INS", "FOOTNOTE-DEL", 105))
+                        { Id = 1 });
+
+                    var endnotesPart = main.AddNewPart<EndnotesPart>();
+                    endnotesPart.Endnotes = new Endnotes(
+                        new Endnote(new Paragraph(new Run(new SeparatorMark())))
+                        { Type = FootnoteEndnoteValues.Separator, Id = -1 },
+                        new Endnote(new Paragraph(new Run(new ContinuationSeparatorMark())))
+                        { Type = FootnoteEndnoteValues.ContinuationSeparator, Id = 0 },
+                        new Endnote(
+                            RevisedStoryParagraph("Endnote base", "ENDNOTE-INS", "ENDNOTE-DEL", 107))
+                        { Id = 1 });
+
+                    body.Append(new SectionProperties(
+                        new HeaderReference() { Type = HeaderFooterValues.Default, Id = main.GetIdOfPart(headerPart) },
+                        new FooterReference() { Type = HeaderFooterValues.Default, Id = main.GetIdOfPart(footerPart) },
+                        new PageSize() { Width = 12240u, Height = 15840u },
+                        new PageMargin()
+                        {
+                            Top = 1440, Bottom = 1440, Left = 1440, Right = 1440,
+                            Header = 720, Footer = 720, Gutter = 0,
+                        }));
+
+                    main.Document.Save();
+                }
+                return ms.ToArray();
+            }
+        }
+
+        /// <summary>Asserts one story's HTML contains its insertion inside a rev-ins &lt;ins&gt;
+        /// and its deletion inside a rev-del &lt;del&gt;.</summary>
+        private static void AssertStoryRendersRevisionMarkup(XElement story, string insText, string delText)
+        {
+            // The revision class leads the attribute; a fabricated style class may follow it.
+            var ins = story.Descendants(XhtmlNs + "ins")
+                .Single(e => (((string)e.Attribute("class")) ?? "").StartsWith("rev-ins"));
+            Assert.Contains(insText, ins.Value);
+
+            var del = story.Descendants(XhtmlNs + "del")
+                .Single(e => (((string)e.Attribute("class")) ?? "").StartsWith("rev-del"));
+            Assert.Contains(delText, del.Value);
+        }
+
+        [Fact]
+        public void HC063_TrackedChanges_RenderInRunningStories()
+        {
+            // Issue #444: revisions in running stories (header, footer, footnote, endnote)
+            // must render under <ins>/<del> markup, not just body revisions.
+            byte[] docBytes = BuildDocWithRevisionsInRunningStories();
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(docBytes, 0, docBytes.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Running Story Revisions Test",
+                        FabricateCssClasses = true,
+                        CssClassPrefix = "pt-",
+                        RenderTrackedChanges = true,
+                        IncludeRevisionMetadata = true,
+                        ShowDeletedContent = true,
+                        // Non-paginated mode renders all four stories: the default header and
+                        // footer as <header>/<footer> wrappers, the notes as <section> lists.
+                        RenderHeadersAndFooters = true,
+                        RenderFootnotesAndEndnotes = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    var header = html.Descendants(XhtmlNs + "header")
+                        .Single(e => (((string)e.Attribute("class")) ?? "").Contains("document-header"));
+                    AssertStoryRendersRevisionMarkup(header, "HEADER-INS", "HEADER-DEL");
+
+                    var footer = html.Descendants(XhtmlNs + "footer")
+                        .Single(e => (((string)e.Attribute("class")) ?? "").Contains("document-footer"));
+                    AssertStoryRendersRevisionMarkup(footer, "FOOTER-INS", "FOOTER-DEL");
+
+                    var footnotes = html.Descendants(XhtmlNs + "section")
+                        .Single(e => (((string)e.Attribute("class")) ?? "").Contains("footnotes"));
+                    AssertStoryRendersRevisionMarkup(footnotes, "FOOTNOTE-INS", "FOOTNOTE-DEL");
+
+                    var endnotes = html.Descendants(XhtmlNs + "section")
+                        .Single(e => (((string)e.Attribute("class")) ?? "").Contains("endnotes"));
+                    AssertStoryRendersRevisionMarkup(endnotes, "ENDNOTE-INS", "ENDNOTE-DEL");
+
+                    // Revision metadata reaches stories rendered from other parts.
+                    Assert.Contains("data-author=\"Reviewer\"", htmlString);
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "TrackedChanges-RunningStories.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+        /// <summary>A document where one comment range spans both a w:ins run and a w:del run.</summary>
+        private static byte[] BuildDocWithCustomXmlRevisionRanges()
+        {
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(
+                    ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var main = wDoc.AddMainDocumentPart();
+                    main.Document = new Document();
+                    var body = new Body();
+                    main.Document.Body = body;
+
+                    var date = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+                    body.Append(new Paragraph(
+                        new Run(new Text("Before the range. ")),
+                        new CustomXmlInsRangeStart { Id = "301", Author = "Reviewer", Date = date },
+                        new Run(new Text("INSIDE-INS-RANGE")),
+                        new CustomXmlInsRangeEnd { Id = "301" },
+                        new Run(new Text(" between ")),
+                        new CustomXmlDelRangeStart { Id = "302", Author = "Reviewer", Date = date },
+                        new Run(new Text("INSIDE-DEL-RANGE")),
+                        new CustomXmlDelRangeEnd { Id = "302" },
+                        new Run(new Text(" after."))));
+
+                    main.Document.Save();
+                }
+                return ms.ToArray();
+            }
+        }
+
+        [Fact]
+        public void HC065_CustomXmlRevisionRanges_DrawVisibleMarkers()
+        {
+            // Issue #538: a custom XML revision range marks a reviewer's tracked add/remove of
+            // a structural wrapper. The wrapper has no text of its own, so under markup each
+            // boundary must draw a perceivable marker carrying the author metadata — a tracked
+            // change that leaves no mark breaks the markup profile's promise silently.
+            byte[] docBytes = BuildDocWithCustomXmlRevisionRanges();
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(docBytes, 0, docBytes.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    var settings = new WmlToHtmlConverterSettings()
+                    {
+                        RenderTrackedChanges = true,
+                        IncludeRevisionMetadata = true,
+                        ShowDeletedContent = true,
+                    };
+
+                    string htmlString = WmlToHtmlConverter.ConvertToHtml(wDoc, settings).ToString();
+
+                    // One start and one end marker per range, kind-addressable for CSS.
+                    Assert.Contains("rev-cxml-ins-start", htmlString);
+                    Assert.Contains("rev-cxml-ins-end", htmlString);
+                    Assert.Contains("rev-cxml-del-start", htmlString);
+                    Assert.Contains("rev-cxml-del-end", htmlString);
+                    // The range's own content still renders, between the markers.
+                    Assert.Contains("INSIDE-INS-RANGE", htmlString);
+                    Assert.Contains("INSIDE-DEL-RANGE", htmlString);
+                    // Author metadata is exposed like every other drawn revision family.
+                    Assert.Contains("data-author=\"Reviewer\"", htmlString);
+                    // The stylesheet ships the marker styling it references.
+                    Assert.Contains("rev-cxml-marker", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC066_CustomXmlRevisionRanges_InvisibleWhenNotRenderingTrackedChanges()
+        {
+            byte[] docBytes = BuildDocWithCustomXmlRevisionRanges();
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(docBytes, 0, docBytes.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    string htmlString = WmlToHtmlConverter.ConvertToHtml(
+                        wDoc, new WmlToHtmlConverterSettings()).ToString();
+
+                    Assert.DoesNotContain("rev-cxml", htmlString);
+                    Assert.Contains("INSIDE-INS-RANGE", htmlString);
+                    Assert.Contains("INSIDE-DEL-RANGE", htmlString);
+                }
+            }
+        }
+
+        private static byte[] BuildDocWithBlockPropertyRevisions()
+        {
+            const string w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+            var body =
+                $"<w:body xmlns:w=\"{w}\">" +
+                // Paragraph whose properties changed with tracking on (was centered, now default).
+                "<w:p><w:pPr>" +
+                "<w:pPrChange w:id=\"501\" w:author=\"Reviewer\" w:date=\"2026-01-01T00:00:00Z\">" +
+                "<w:pPr><w:jc w:val=\"center\"/></w:pPr></w:pPrChange>" +
+                "</w:pPr><w:r><w:t>Re-aligned paragraph.</w:t></w:r></w:p>" +
+                // Paragraph whose numbering changed.
+                "<w:p><w:pPr>" +
+                "<w:numberingChange w:id=\"502\" w:author=\"Reviewer\" w:date=\"2026-01-01T00:00:00Z\"/>" +
+                "</w:pPr><w:r><w:t>Renumbered paragraph.</w:t></w:r></w:p>" +
+                // Table with tracked table-level, grid, row, row-exception, and cell property changes.
+                "<w:tbl>" +
+                "<w:tblPr><w:tblPrChange w:id=\"503\" w:author=\"Reviewer\" w:date=\"2026-01-01T00:00:00Z\">" +
+                "<w:tblPr/></w:tblPrChange></w:tblPr>" +
+                "<w:tblGrid><w:gridCol w:w=\"4000\"/>" +
+                "<w:tblGridChange w:id=\"504\"><w:tblGrid><w:gridCol w:w=\"5000\"/></w:tblGrid></w:tblGridChange>" +
+                "</w:tblGrid>" +
+                "<w:tr><w:trPr>" +
+                "<w:trPrChange w:id=\"505\" w:author=\"Reviewer\" w:date=\"2026-01-01T00:00:00Z\"><w:trPr/></w:trPrChange>" +
+                "</w:trPr>" +
+                "<w:tblPrEx><w:tblPrExChange w:id=\"506\" w:author=\"Reviewer\" w:date=\"2026-01-01T00:00:00Z\">" +
+                "<w:tblPrEx/></w:tblPrExChange></w:tblPrEx>" +
+                "<w:tc><w:tcPr>" +
+                "<w:tcPrChange w:id=\"507\" w:author=\"Reviewer\" w:date=\"2026-01-01T00:00:00Z\"><w:tcPr/></w:tcPrChange>" +
+                "</w:tcPr><w:p><w:r><w:t>Restyled cell.</w:t></w:r></w:p></w:tc></w:tr>" +
+                "</w:tbl>" +
+                "<w:p><w:r><w:t>Tail paragraph.</w:t></w:r></w:p>" +
+                // Trailing section properties changed with tracking on.
+                "<w:sectPr><w:sectPrChange w:id=\"508\" w:author=\"Reviewer\" w:date=\"2026-01-01T00:00:00Z\">" +
+                "<w:sectPr/></w:sectPrChange></w:sectPr>" +
+                "</w:body>";
+
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(
+                    ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var main = wDoc.AddMainDocumentPart();
+                    main.Document = new Document(new Body());
+                    main.Document.Save();
+                    var xd = main.GetXDocument();
+                    xd.Root.Element(XName.Get("body", w))
+                        .ReplaceWith(XElement.Parse(body));
+                    main.PutXDocument();
+                }
+                return ms.ToArray();
+            }
+        }
+
+        [Fact]
+        public void HC067_BlockPropertyRevisions_DrawPerceivableMarks()
+        {
+            // Issue #539: Word records a tracked formatting change by storing the previous
+            // properties beside the current ones. The block renders in its CURRENT state, so
+            // without a mark the reviewer's re-indent, table restyle, or section change is
+            // invisible under markup — each family must leave a perceivable, kind-addressable
+            // trace with the author metadata the other families expose.
+            byte[] docBytes = BuildDocWithBlockPropertyRevisions();
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(docBytes, 0, docBytes.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    var settings = new WmlToHtmlConverterSettings()
+                    {
+                        RenderTrackedChanges = true,
+                        IncludeRevisionMetadata = true,
+                    };
+
+                    string htmlString = WmlToHtmlConverter.ConvertToHtml(wDoc, settings).ToString();
+
+                    Assert.Contains("rev-para-format-change", htmlString);   // pPrChange + numberingChange
+                    Assert.Contains("rev-table-format-change", htmlString);  // tblPrChange / tblGridChange
+                    Assert.Contains("rev-row-format-change", htmlString);    // trPrChange / tblPrExChange
+                    Assert.Contains("rev-cell-format-change", htmlString);   // tcPrChange
+                    Assert.Contains("rev-section-format-change", htmlString); // sectPrChange
+                    Assert.Contains("data-author=\"Reviewer\"", htmlString);
+                    // The stylesheet ships the marks it references.
+                    Assert.Contains("format-change", GetCssText(htmlString));
+                }
+            }
+        }
+
+        private static string GetCssText(string htmlString)
+        {
+            var html = XElement.Parse(htmlString);
+            return string.Concat(html.Descendants()
+                .Where(e => e.Name.LocalName == "style")
+                .Select(e => e.Value));
+        }
+
+        [Fact]
+        public void HC068_BlockPropertyRevisions_InvisibleWhenNotRenderingTrackedChanges()
+        {
+            byte[] docBytes = BuildDocWithBlockPropertyRevisions();
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(docBytes, 0, docBytes.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    string htmlString = WmlToHtmlConverter.ConvertToHtml(
+                        wDoc, new WmlToHtmlConverterSettings()).ToString();
+
+                    Assert.DoesNotContain("format-change", htmlString);
+                    Assert.Contains("Re-aligned paragraph.", htmlString);
+                    Assert.Contains("Restyled cell.", htmlString);
+                }
+            }
+        }
+
+        [Theory]
+        [InlineData("ins", "<w:trPrChange w:id=\"2\" w:author=\"Formatter\" w:date=\"2026-02-02T00:00:00Z\"><w:trPr/></w:trPrChange>", "")]
+        [InlineData("del", "<w:trPrChange w:id=\"2\" w:author=\"Formatter\" w:date=\"2026-02-02T00:00:00Z\"><w:trPr/></w:trPrChange>", "")]
+        [InlineData("ins", "", "<w:tblPrEx><w:tblPrExChange w:id=\"2\" w:author=\"Formatter\" w:date=\"2026-02-02T00:00:00Z\"><w:tblPrEx/></w:tblPrExChange></w:tblPrEx>")]
+        public void HC074_RowWithStructuralAndPropertyRevision_CombinesClassesOnce(
+            string structural, string trPrChange, string tblPrEx)
+        {
+            // Issue #927: a row that is both inserted (or deleted) and carries a tracked property
+            // change threw "Duplicate attribute" — each revision added its own class attribute.
+            const string w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+            var body =
+                $"<w:body xmlns:w=\"{w}\"><w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"4000\"/></w:tblGrid>" +
+                $"<w:tr>{tblPrEx}<w:trPr><w:{structural} w:id=\"1\" w:author=\"Inserter\" w:date=\"2026-01-01T00:00:00Z\"/>" +
+                $"{trPrChange}</w:trPr><w:tc><w:p><w:r><w:t>Both revisions.</w:t></w:r></w:p></w:tc></w:tr>" +
+                "</w:tbl><w:p/></w:body>";
+            var settings = new WmlToHtmlConverterSettings
+            {
+                RenderTrackedChanges = true,
+                IncludeRevisionMetadata = true,
+            };
+
+            XElement xhtml = ConvertBodyToHtml(body, settings);
+
+            var row = xhtml.Descendants().Single(e => e.Name.LocalName == "tr");
+            var classes = ((string?)row.Attribute("class") ?? "").Split(' ');
+            Assert.Contains($"rev-row-{structural}", classes);
+            Assert.Contains("rev-row-format-change", classes);
+            // The row's own insertion or deletion is the revision it is attributed to.
+            Assert.Equal("Inserter", (string?)row.Attribute("data-author"));
+            Assert.Equal("2026-01-01T00:00:00Z", (string?)row.Attribute("data-date"));
+            Assert.Contains("Both revisions.", row.Value);
+        }
+
+        [Theory]
+        [InlineData("RA001-Tracked-Revisions-01.docx")]
+        [InlineData("RA001-Tracked-Revisions-02.docx")]
+        public void HC075_TrackedRevisionFixtures_ConvertWithTrackedChangesRendered(string fileName)
+        {
+            // Issue #927: both fixtures hold a row with a property change and a row revision.
+            var wml = new WmlDocument(Path.Combine(new DirectoryInfo("../../../../TestFiles/").FullName, fileName));
+            using var ms = new MemoryStream();
+            ms.Write(wml.DocumentByteArray, 0, wml.DocumentByteArray.Length);
+            using var wDoc = WordprocessingDocument.Open(ms, true);
+
+            XElement xhtml = WmlToHtmlConverter.ConvertToHtml(wDoc, new WmlToHtmlConverterSettings
+            {
+                RenderTrackedChanges = true,
+                IncludeRevisionMetadata = true,
+            });
+
+            Assert.Contains(xhtml.Descendants(), e => e.Name.LocalName == "tr"
+                && ((string?)e.Attribute("class") ?? "").Contains("rev-row-format-change"));
+        }
+
+        private static XElement ConvertBodyToHtml(string body, WmlToHtmlConverterSettings settings)
+        {
+            using var ms = new MemoryStream();
+            using (var wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+            {
+                var main = wDoc.AddMainDocumentPart();
+                main.Document = new Document(new Body());
+                main.Document.Save();
+                main.GetXDocument().Root!.Element(W.body)!.ReplaceWith(XElement.Parse(body));
+                main.PutXDocument();
+            }
+
+            using var wDocRead = WordprocessingDocument.Open(ms, true);
+            return WmlToHtmlConverter.ConvertToHtml(wDocRead, settings);
+        }
+
+        private static byte[] BuildDocWithCommentSpanningRevisions()
+        {
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(
+                    ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var main = wDoc.AddMainDocumentPart();
+                    main.Document = new Document();
+                    var body = new Body();
+                    main.Document.Body = body;
+
+                    body.Append(new Paragraph(
+                        new Run(new Text("Before the overlap.")),
+                        new CommentRangeStart() { Id = "1" },
+                        new InsertedRun(new Run(new Text("OVERLAP-INS")))
+                        {
+                            Author = "Reviewer",
+                            Date = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                            Id = "201",
+                        },
+                        new DeletedRun(new Run(new DeletedText("OVERLAP-DEL")))
+                        {
+                            Author = "Reviewer",
+                            Date = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                            Id = "202",
+                        },
+                        new CommentRangeEnd() { Id = "1" },
+                        new Run(new CommentReference() { Id = "1" }),
+                        new Run(new Text("After the overlap."))));
+
+                    var commentsPart = main.AddNewPart<WordprocessingCommentsPart>();
+                    commentsPart.Comments = new Comments(
+                        new Comment(
+                            new Paragraph(new Run(new Text("Comment spanning revised text."))))
+                        { Id = "1", Author = "Commenter" });
+
+                    main.Document.Save();
+                }
+                return ms.ToArray();
+            }
+        }
+
+        [Fact]
+        public void HC064_Comments_OverlappingTrackedChanges()
+        {
+            // Issue #444: a comment range overlapping insertions and deletions must render
+            // BOTH the revision markup and the comment markup — neither suppresses the other.
+            byte[] docBytes = BuildDocWithCommentSpanningRevisions();
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(docBytes, 0, docBytes.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Overlapping Comment and Revision Test",
+                        FabricateCssClasses = true,
+                        CssClassPrefix = "pt-",
+                        RenderTrackedChanges = true,
+                        IncludeRevisionMetadata = true,
+                        ShowDeletedContent = true,
+                        RenderComments = true,
+                        // EndnoteStyle renders the comments section in non-paginated mode.
+                        CommentRenderMode = CommentRenderMode.EndnoteStyle,
+                        IncludeCommentMetadata = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // (a) Both revisions render with their revision classes and content.
+                    var ins = html.Descendants(XhtmlNs + "ins")
+                        .Single(e => (((string)e.Attribute("class")) ?? "").StartsWith("rev-ins"));
+                    Assert.Contains("OVERLAP-INS", ins.Value);
+
+                    var del = html.Descendants(XhtmlNs + "del")
+                        .Single(e => (((string)e.Attribute("class")) ?? "").StartsWith("rev-del"));
+                    Assert.Contains("OVERLAP-DEL", del.Value);
+
+                    // (b) The comment highlight spans BOTH revisions: each revision element
+                    // carries a highlight span wired to the comment id.
+                    Assert.Contains(ins.Descendants(XhtmlNs + "span"), s =>
+                        (((string)s.Attribute("class")) ?? "").Contains("comment-highlight")
+                        && (string)s.Attribute("data-comment-id") == "1");
+                    Assert.Contains(del.Descendants(XhtmlNs + "span"), s =>
+                        (((string)s.Attribute("class")) ?? "").Contains("comment-highlight")
+                        && (string)s.Attribute("data-comment-id") == "1");
+
+                    // The comment reference marker is present.
+                    Assert.Contains("comment-marker", htmlString);
+                    Assert.Contains("href=\"#comment-1\"", htmlString);
+
+                    // (c) The comment body renders in the comments section.
+                    Assert.Contains("comments-section", htmlString);
+                    Assert.Contains("id=\"comment-1\"", htmlString);
+                    Assert.Contains("Comment spanning revised text.", htmlString);
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "Comments-OverlappingRevisions.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+        /// <summary>
+        /// A document whose comment set has a shape: comment 1 is a resolved thread root,
+        /// comment 2 replies to it (Word-style: reference-only, linked through
+        /// <c>w15:paraIdParent</c> in commentsExtended), and comment 3 is an independent open
+        /// comment on a second paragraph.
+        /// </summary>
+        private static byte[] BuildDocWithThreadedComments(bool includeExtendedPart = true)
+        {
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(
+                    ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var main = wDoc.AddMainDocumentPart();
+                    main.Document = new Document();
+                    var body = new Body();
+                    main.Document.Body = body;
+
+                    body.Append(
+                        new Paragraph(
+                            new CommentRangeStart { Id = "1" },
+                            new Run(new Text("Thread anchor text.")),
+                            new CommentRangeEnd { Id = "1" },
+                            new Run(new CommentReference { Id = "1" }),
+                            new Run(new CommentReference { Id = "2" })),
+                        new Paragraph(
+                            new CommentRangeStart { Id = "3" },
+                            new Run(new Text("Solo anchor text.")),
+                            new CommentRangeEnd { Id = "3" },
+                            new Run(new CommentReference { Id = "3" })));
+
+                    var commentsPart = main.AddNewPart<WordprocessingCommentsPart>();
+                    commentsPart.Comments = new Comments(
+                        new Comment(
+                            new Paragraph(new Run(new Text("Root comment."))) { ParagraphId = "11AA11AA" })
+                        { Id = "1", Author = "Alice", Date = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc) },
+                        new Comment(
+                            new Paragraph(new Run(new Text("Reply comment."))) { ParagraphId = "22BB22BB" })
+                        { Id = "2", Author = "Bob", Date = new DateTime(2026, 1, 2, 0, 0, 0, DateTimeKind.Utc) },
+                        new Comment(
+                            new Paragraph(new Run(new Text("Solo comment."))) { ParagraphId = "33CC33CC" })
+                        { Id = "3", Author = "Alice", Date = new DateTime(2026, 1, 3, 0, 0, 0, DateTimeKind.Utc) });
+
+                    if (includeExtendedPart)
+                    {
+                        XNamespace w15 = "http://schemas.microsoft.com/office/word/2012/wordml";
+                        var exPart = main.AddNewPart<WordprocessingCommentsExPart>();
+                        exPart.PutXDocument(new XDocument(
+                            new XElement(w15 + "commentsEx",
+                                new XAttribute(XNamespace.Xmlns + "w15", w15),
+                                new XElement(w15 + "commentEx",
+                                    new XAttribute(w15 + "paraId", "11AA11AA"),
+                                    new XAttribute(w15 + "done", "1")),
+                                new XElement(w15 + "commentEx",
+                                    new XAttribute(w15 + "paraId", "22BB22BB"),
+                                    new XAttribute(w15 + "paraIdParent", "11AA11AA"),
+                                    new XAttribute(w15 + "done", "1")),
+                                new XElement(w15 + "commentEx",
+                                    new XAttribute(w15 + "paraId", "33CC33CC"),
+                                    new XAttribute(w15 + "done", "0")))));
+                    }
+
+                    main.Document.Save();
+                }
+                return ms.ToArray();
+            }
+        }
+
+        private static XElement ById(XElement xhtml, string id) =>
+            xhtml.Descendants().First(e => (string)e.Attribute("id") == id);
+
+        [Fact]
+        public void HC069_ThreadedComments_NestRepliesAndMarkResolved()
+        {
+            // Issue #540: comments.xml carries the bodies but commentsExtended.xml carries the
+            // shape — who replied to whom and what was settled. The endnote-style section must
+            // render a reply inside its parent's item and a resolved comment perceivably so,
+            // or the export changes what the review appears to say.
+            byte[] docBytes = BuildDocWithThreadedComments();
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(docBytes, 0, docBytes.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    var settings = new WmlToHtmlConverterSettings() { RenderComments = true };
+                    XElement xhtml = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = xhtml.ToString();
+
+                    // The reply nests inside its parent's list item, in a dedicated replies list,
+                    // and exists nowhere else.
+                    var li1 = ById(xhtml, "comment-1");
+                    var replies = li1.Descendants()
+                        .FirstOrDefault(e => ((string)e.Attribute("class") ?? "").Contains("comment-replies"));
+                    Assert.NotNull(replies);
+                    Assert.Contains(replies.Descendants(), e => (string)e.Attribute("id") == "comment-2");
+                    Assert.Equal(1, xhtml.Descendants().Count(e => (string)e.Attribute("id") == "comment-2"));
+
+                    var li2 = ById(xhtml, "comment-2");
+                    Assert.Contains("comment-reply", (string)li2.Attribute("class"));
+
+                    // The resolved thread is marked: a class for styling and a visible badge.
+                    Assert.Contains("comment-resolved", (string)li1.Attribute("class"));
+                    Assert.Contains(li1.Descendants(),
+                        e => ((string)e.Attribute("class") ?? "").Contains("comment-resolved-badge"));
+
+                    // The independent open comment stays a top-level item with neither mark.
+                    var li3 = ById(xhtml, "comment-3");
+                    Assert.DoesNotContain("comment-reply", (string)li3.Attribute("class") ?? "");
+                    Assert.DoesNotContain("comment-resolved", (string)li3.Attribute("class") ?? "");
+                    Assert.DoesNotContain(li1.Descendants(), e => (string)e.Attribute("id") == "comment-3");
+
+                    // The stylesheet ships what the markup references.
+                    Assert.Contains("comment-replies", htmlString);
+                    Assert.Contains(".comment-resolved", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC070_ThreadedComments_MarginModeNestsAndMarks()
+        {
+            byte[] docBytes = BuildDocWithThreadedComments();
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(docBytes, 0, docBytes.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    var settings = new WmlToHtmlConverterSettings()
+                    {
+                        RenderComments = true,
+                        CommentRenderMode = CommentRenderMode.Margin,
+                    };
+                    XElement xhtml = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+
+                    // The reply's note lives inside the parent's margin note — the thread moves
+                    // as one page-positioned unit — and has no top-level note of its own.
+                    var note1 = ById(xhtml, "comment-1");
+                    Assert.Contains(note1.Descendants(), e => (string)e.Attribute("id") == "comment-2");
+                    Assert.Equal(1, xhtml.Descendants().Count(e => (string)e.Attribute("id") == "comment-2"));
+                    var note2 = ById(xhtml, "comment-2");
+                    Assert.Contains("comment-margin-reply", (string)note2.Attribute("class"));
+
+                    Assert.Contains("comment-resolved", (string)note1.Attribute("class"));
+                    var note3 = ById(xhtml, "comment-3");
+                    Assert.DoesNotContain("comment-resolved", (string)note3.Attribute("class") ?? "");
+                }
+            }
+        }
+
+        [Fact]
+        public void HC071_ThreadedComments_InlineModeMarksHighlightAndReplyMarker()
+        {
+            byte[] docBytes = BuildDocWithThreadedComments();
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(docBytes, 0, docBytes.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    var settings = new WmlToHtmlConverterSettings()
+                    {
+                        RenderComments = true,
+                        CommentRenderMode = CommentRenderMode.Inline,
+                        IncludeCommentMetadata = true,
+                    };
+                    XElement xhtml = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+
+                    // The resolved thread's highlighted range is distinguishable from an open one.
+                    var highlight1 = xhtml.Descendants()
+                        .First(e => (string)e.Attribute("data-comment-id") == "1"
+                            && ((string)e.Attribute("class") ?? "").Contains("comment-highlight"));
+                    Assert.Contains("comment-resolved", (string)highlight1.Attribute("class"));
+                    var highlight3 = xhtml.Descendants()
+                        .First(e => (string)e.Attribute("data-comment-id") == "3"
+                            && ((string)e.Attribute("class") ?? "").Contains("comment-highlight"));
+                    Assert.DoesNotContain("comment-resolved", (string)highlight3.Attribute("class"));
+
+                    // Inline mode has no comments section, so the reply's marker is its whole
+                    // presentation: it must carry the reply relationship and the body text that
+                    // would otherwise be dropped.
+                    var marker2 = ById(xhtml, "comment-ref-2");
+                    Assert.Equal("1", (string)marker2.Attribute("data-parent-id"));
+                    Assert.Equal("Reply comment.", (string)marker2.Attribute("data-comment"));
+                    Assert.Contains("Bob", (string)marker2.Attribute("title"));
+                    Assert.Contains("Reply comment.", (string)marker2.Attribute("title"));
+                }
+            }
+        }
+
+        [Fact]
+        public void HC072_CommentsWithoutExtendedPart_RenderFlatAndUnmarked()
+        {
+            // No commentsExtended part means no topology: every comment is a top-level open
+            // comment, exactly as before issue #540.
+            byte[] docBytes = BuildDocWithThreadedComments(includeExtendedPart: false);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(docBytes, 0, docBytes.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    var settings = new WmlToHtmlConverterSettings() { RenderComments = true };
+                    XElement xhtml = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+
+                    Assert.DoesNotContain(xhtml.Descendants(),
+                        e => ((string)e.Attribute("class") ?? "").Contains("comment-replies"));
+                    Assert.DoesNotContain(xhtml.Descendants(),
+                        e => ((string)e.Attribute("class") ?? "").Contains("comment-resolved"));
+                    Assert.DoesNotContain(xhtml.Descendants(),
+                        e => ((string)e.Attribute("class") ?? "").Contains("comment-reply"));
+                    var li1 = ById(xhtml, "comment-1");
+                    Assert.DoesNotContain(li1.Descendants(), e => (string)e.Attribute("id") == "comment-2");
+                }
+            }
+        }
+
+        [Fact]
+        public void HC073_CommentMarkers_LinkOnlyWhereTheTargetRenders()
+        {
+            // Only EndnoteStyle renders the `#comment-N` targets the marker links point at.
+            // In Inline and Margin modes the marker must not be a link to nowhere, while
+            // keeping its identity (id, class, element name) for downstream selectors
+            // (issue #563).
+            byte[] docBytes = BuildDocWithThreadedComments();
+            foreach (var mode in new[]
+            {
+                CommentRenderMode.EndnoteStyle,
+                CommentRenderMode.Inline,
+                CommentRenderMode.Margin,
+            })
+            {
+                using (MemoryStream ms = new MemoryStream())
+                {
+                    ms.Write(docBytes, 0, docBytes.Length);
+                    using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                    {
+                        var settings = new WmlToHtmlConverterSettings()
+                        {
+                            RenderComments = true,
+                            CommentRenderMode = mode,
+                            IncludeCommentMetadata = true,
+                        };
+                        XElement xhtml = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+
+                        var marker = ById(xhtml, "comment-ref-1");
+                        Assert.Equal("a", marker.Name.LocalName);
+                        Assert.Contains("comment-marker", (string)marker.Attribute("class"));
+
+                        if (mode == CommentRenderMode.EndnoteStyle)
+                        {
+                            Assert.Equal("#comment-1", (string)marker.Attribute("href"));
+                            Assert.NotNull(ById(xhtml, "comment-1"));
+                        }
+                        else
+                        {
+                            Assert.Null(marker.Attribute("href"));
+                        }
+
+                        // The reply's marker keeps its metadata in every mode — dropping the
+                        // href must not cost the thread relationship.
+                        var marker2 = ById(xhtml, "comment-ref-2");
+                        Assert.Equal("1", (string)marker2.Attribute("data-parent-id"));
+                    }
+                }
+            }
+        }
+
+        #endregion
+    }
+}
+

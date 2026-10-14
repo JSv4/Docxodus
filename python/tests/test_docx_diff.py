@@ -1,0 +1,208 @@
+"""Accept/reject round-trip over the ``docx-scalpel`` DocxDiff client surface.
+
+These are deliberately NOT shape/length checks. They drive the full client wire —
+``docx_diff_compare`` (bytes out) → ``docx_diff_accept_revisions`` /
+``docx_diff_reject_revisions`` (bytes in→out, the new surface) → ``convert_docx_to_html``
+(for a text-level oracle) — and assert the engine's round-trip contract: accepting a
+redline's revisions reproduces the *right* document and rejecting them reproduces the
+*left*, at the per-block text level. A wire/type-mapping break anywhere in that diff
+path (a mis-encoded blob, a dropped ``docxB64`` field, a base64 corruption) changes the
+bytes that come back and breaks the text equality below.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+
+from docx_scalpel import (
+    convert_docx_to_html,
+    docx_diff_accept_revisions,
+    docx_diff_compare,
+    docx_diff_compare_batch,
+    docx_diff_compare_products,
+    docx_diff_get_revisions,
+    docx_diff_get_semantic_changes,
+    docx_diff_reject_revisions,
+    open_session,
+)
+from docx_scalpel.types import SemanticChangeFamily, SemanticChangeOperation
+
+# (left, right) WC pairs whose edits land in body text, so the HTML-projection oracle
+# sees a genuine difference between the two sides.
+PAIRS = [
+    ("WC/WC001-Digits.docx", "WC/WC001-Digits-Mod.docx"),
+    ("WC/WC004-Large.docx", "WC/WC004-Large-Mod.docx"),
+]
+
+
+def _text(docx: bytes) -> str:
+    """Visible text of a DOCX via the HTML projection: tags stripped, whitespace folded."""
+    html = convert_docx_to_html(docx)
+    txt = re.sub(r"<[^>]+>", " ", html)
+    txt = txt.replace("&nbsp;", " ").replace("&amp;", "&")
+    return re.sub(r"\s+", " ", txt).strip()
+
+
+@pytest.mark.parametrize("left_rel,right_rel", PAIRS)
+def test_accept_reject_round_trip(test_files_dir: Path, left_rel: str, right_rel: str) -> None:
+    left_path, right_path = test_files_dir / left_rel, test_files_dir / right_rel
+    if not left_path.exists() or not right_path.exists():
+        pytest.skip(f"fixture absent: {left_rel} / {right_rel}")
+    left, right = left_path.read_bytes(), right_path.read_bytes()
+
+    redline = docx_diff_compare(left, right)
+    assert isinstance(redline, bytes) and len(redline) > 1000
+
+    accepted = docx_diff_accept_revisions(redline)
+    rejected = docx_diff_reject_revisions(redline)
+    assert isinstance(accepted, bytes) and len(accepted) > 1000
+    assert isinstance(rejected, bytes) and len(rejected) > 1000
+
+    left_text, right_text = _text(left), _text(right)
+    assert left_text != right_text, "fixtures must genuinely differ for the round-trip to mean anything"
+
+    # The contract: accept materializes the right side, reject the left.
+    assert _text(accepted) == right_text
+    assert _text(rejected) == left_text
+
+
+def test_compare_products_serves_every_product_from_one_pass(test_files_dir: Path) -> None:
+    """``docx_diff_compare_products`` (issue #594): one host call, every requested
+    product — and each equal to what its standalone function returns."""
+    left = (test_files_dir / "WC" / "WC001-Digits.docx").read_bytes()
+    right = (test_files_dir / "WC" / "WC001-Digits-Mod.docx").read_bytes()
+
+    products = docx_diff_compare_products(left, right)
+
+    assert products.redline == docx_diff_compare(left, right)
+    assert products.revisions == docx_diff_get_revisions(left, right)
+    assert products.revisions, "the fixture pair must yield revisions"
+    assert isinstance(products.edit_script, dict) and products.edit_script
+    assert products.semantic_changes is not None
+    assert products.semantic_changes.changes, "semantic changes expected for a differing pair"
+
+    # Selection: unrequested products come back None.
+    only_revisions = docx_diff_compare_products(left, right, products=["revisions"])
+    assert only_revisions.redline is None
+    assert only_revisions.revisions == products.revisions
+    assert only_revisions.edit_script is None
+    assert only_revisions.semantic_changes is None
+
+
+def test_compare_batch_reads_the_baseline_once_for_every_candidate(test_files_dir: Path) -> None:
+    """``docx_diff_compare_batch`` (issue #617): one baseline, many candidates, and each
+    result identical to comparing that pair on its own."""
+    baseline = (test_files_dir / "WC" / "WC001-Digits.docx").read_bytes()
+    candidates = {
+        "modified": (test_files_dir / "WC" / "WC001-Digits-Mod.docx").read_bytes(),
+        "deleted": (test_files_dir / "WC" / "WC002-DeleteAtEnd.docx").read_bytes(),
+    }
+
+    results = docx_diff_compare_batch(baseline, candidates, products=["revisions"])
+
+    assert [r.name for r in results] == ["modified", "deleted"]
+    for result in results:
+        assert result.error is None
+        assert result.products is not None
+        assert result.products.revisions == docx_diff_get_revisions(
+            baseline, candidates[result.name]
+        )
+        assert result.products.redline is None, "unrequested products stay None"
+
+    # A sequence is named by index, matching the .NET and npm surfaces.
+    by_index = docx_diff_compare_batch(baseline, list(candidates.values()), products=["revisions"])
+    assert [r.name for r in by_index] == ["0", "1"]
+
+
+def test_compare_batch_isolates_a_failing_candidate(test_files_dir: Path) -> None:
+    """One malformed counterparty markup must not cost the caller the rest of the batch."""
+    baseline = (test_files_dir / "WC" / "WC001-Digits.docx").read_bytes()
+    good = (test_files_dir / "WC" / "WC001-Digits-Mod.docx").read_bytes()
+
+    results = docx_diff_compare_batch(
+        baseline, {"good": good, "junk": b"not a docx", "also_good": good}, products=["revisions"]
+    )
+
+    assert [r.name for r in results] == ["good", "junk", "also_good"]
+    assert results[0].error is None and results[0].products is not None
+    assert results[1].error and results[1].products is None
+    assert results[2].error is None and results[2].products is not None
+
+
+def test_accept_reject_are_distinct(test_files_dir: Path) -> None:
+    """Accept and reject of the same redline produce DIFFERENT documents — guards against a
+    no-op/passthrough wire bug where both paths echo their input unchanged."""
+    left = (test_files_dir / "WC" / "WC001-Digits.docx").read_bytes()
+    right = (test_files_dir / "WC" / "WC001-Digits-Mod.docx").read_bytes()
+    redline = docx_diff_compare(left, right)
+    assert _text(docx_diff_accept_revisions(redline)) != _text(docx_diff_reject_revisions(redline))
+
+
+def test_docx_diff_settings_track_block_format_changes_to_wire() -> None:
+    """The track_block_format_changes opt-out only emits its wire key when disabled
+    (default True → omitted, matching the host's default-on behavior)."""
+    from docx_scalpel.types import DocxDiffSettings
+
+    assert DocxDiffSettings().track_block_format_changes is True
+    assert "trackBlockFormatChanges" not in DocxDiffSettings().to_wire()
+    assert DocxDiffSettings(track_block_format_changes=False).to_wire()[
+        "trackBlockFormatChanges"
+    ] is False
+
+
+def test_docx_diff_settings_word_parity_opt_outs_to_wire() -> None:
+    """The numbering-change and cell-revision opt-outs (issue #842) only emit their
+    wire keys when disabled (default True → omitted, matching the host's default)."""
+    from docx_scalpel.types import DocxDiffSettings
+
+    defaults = DocxDiffSettings()
+    assert defaults.track_numbering_changes is True
+    assert defaults.track_cell_insertions_and_deletions is True
+    assert "trackNumberingChanges" not in defaults.to_wire()
+    assert "trackCellInsertionsAndDeletions" not in defaults.to_wire()
+    wire = DocxDiffSettings(
+        track_numbering_changes=False, track_cell_insertions_and_deletions=False
+    ).to_wire()
+    assert wire["trackNumberingChanges"] is False
+    assert wire["trackCellInsertionsAndDeletions"] is False
+
+
+def test_docx_diff_settings_input_revision_policies_to_wire() -> None:
+    """Both input-revision policies must reach the shared DocxDiffOps parser.
+
+    Preserve intentionally wins when both are set, but emitting both lets the
+    .NET engine own that precedence consistently across every transport.
+    """
+    from docx_scalpel.types import DocxDiffSettings
+
+    assert "preAcceptInputRevisions" not in DocxDiffSettings().to_wire()
+    assert "preserveInputRevisions" not in DocxDiffSettings().to_wire()
+
+    wire = DocxDiffSettings(
+        pre_accept_input_revisions=True,
+        preserve_input_revisions=True,
+    ).to_wire()
+    assert wire["preAcceptInputRevisions"] is True
+    assert wire["preserveInputRevisions"] is True
+
+
+def test_semantic_change_schema_round_trips_through_stateless_and_session_hosts(
+    test_files_dir: Path,
+) -> None:
+    left = (test_files_dir / "WC" / "WC001-Digits.docx").read_bytes()
+    right = (test_files_dir / "WC" / "WC001-Digits-Mod.docx").read_bytes()
+
+    changes = docx_diff_get_semantic_changes(left, right)
+    assert changes.schema == "docxodus.semantic-changes"
+    assert changes.schema_version == 1
+    assert changes.change_count == len(changes.changes) > 0
+    assert any(change.family is SemanticChangeFamily.TEXT for change in changes.changes)
+    assert all(change.operation in SemanticChangeOperation for change in changes.changes)
+
+    with open_session(left) as session:
+        baseline = session.get_semantic_changes()
+        assert baseline.schema_version == 1
+        assert baseline.changes == ()

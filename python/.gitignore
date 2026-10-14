@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+.venv/
+.eggs/
+
+# Bundled host binaries — populated by scripts/build_host.sh; not committed.
+vendor/*/
+!vendor/.gitkeep
+src/docx_scalpel/_bin/

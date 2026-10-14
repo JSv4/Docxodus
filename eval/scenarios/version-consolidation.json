@@ -1,0 +1,111 @@
+{
+  "id": "version-consolidation",
+  "title": "Compare and consolidate two reviewer versions into one attributed redline",
+  "intent": "Save the current draft as the base, produce two reviewer variants, undo the working copy back to the base, and consolidate both variants into one redline whose tracked changes are attributed to each reviewer.",
+  "fixture": "master-services-agreement",
+  "steps": [
+    {
+      "tool": "docxodus_save",
+      "args": {
+        "path": "version-base.docx"
+      }
+    },
+    {
+      "tool": "docxodus_edit",
+      "target": {
+        "mode": "text",
+        "query": "terminate this Agreement for convenience"
+      },
+      "args": {
+        "action": "replace_text_range",
+        "find": "thirty (30) days",
+        "replace": "forty-five (45) days",
+        "caseSensitive": true
+      }
+    },
+    {
+      "tool": "docxodus_save",
+      "args": {
+        "path": "version-reviewer-a.docx"
+      }
+    },
+    {
+      "tool": "docxodus_edit",
+      "args": {
+        "action": "undo"
+      }
+    },
+    {
+      "tool": "docxodus_edit",
+      "target": {
+        "mode": "text",
+        "query": "each Statement of Work"
+      },
+      "args": {
+        "action": "replace_text_range",
+        "find": "executed under this Agreement.",
+        "replace": "executed under this Agreement or any amendment.",
+        "caseSensitive": true
+      }
+    },
+    {
+      "tool": "docxodus_save",
+      "args": {
+        "path": "version-reviewer-b.docx"
+      }
+    },
+    {
+      "tool": "docxodus_edit",
+      "args": {
+        "action": "undo"
+      }
+    },
+    {
+      "tool": "docxodus_compare",
+      "args": {
+        "baselinePath": "version-base.docx",
+        "revisedPaths": [
+          "version-reviewer-a.docx",
+          "version-reviewer-b.docx"
+        ],
+        "authors": [
+          "Reviewer A",
+          "Reviewer B"
+        ],
+        "outputPath": "version-consolidated.docx"
+      }
+    }
+  ],
+  "invariants": {
+    "taskCompletion": {
+      "textPresent": [
+        "thirty (30) days"
+      ]
+    },
+    "targetPrecision": {
+      "changedAnchorsAtMost": 0
+    },
+    "collateral": {
+      "partsAdded": 0,
+      "partsRemoved": 0,
+      "textPreserved": [
+        "(the \"Service Provider\")",
+        "$132,000"
+      ]
+    },
+    "redline": {
+      "fromPath": "version-consolidated.docx",
+      "countAtLeast": 2,
+      "authorsMustInclude": [
+        "Reviewer A",
+        "Reviewer B"
+      ]
+    },
+    "validity": {
+      "decisionIn": [
+        "passed",
+        "passedWithPreExistingFindings"
+      ]
+    }
+  }
+}

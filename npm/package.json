@@ -1,0 +1,149 @@
+{
+  "name": "docxodus",
+  "version": "0.0.0",
+  "description": "Render, edit, diff and project Word .docx files in the browser \u2014 DOCX to HTML, a block editor, Word-grade redlines with tracked changes, and anchor-addressed markdown for LLM agents. WebAssembly, no server.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "import": "./dist/core.js"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js"
+    },
+    "./embed": {
+      "types": "./dist/embed.d.ts",
+      "import": "./dist/embed.js"
+    },
+    "./worker": {
+      "types": "./dist/worker-proxy.d.ts",
+      "import": "./dist/worker-proxy.js"
+    },
+    "./export-browser": {
+      "types": "./dist/export-browser.d.ts",
+      "import": "./dist/export-browser.bundle.js"
+    },
+    "./export-assets.json": "./dist/export-assets.json",
+    "./render-report.schema.json": "./dist/render-report-v2.schema.json"
+  },
+  "typesVersions": {
+    "*": {
+      "core": [
+        "./dist/core.d.ts"
+      ],
+      "react": [
+        "./dist/react.d.ts"
+      ],
+      "embed": [
+        "./dist/embed.d.ts"
+      ],
+      "worker": [
+        "./dist/worker-proxy.d.ts"
+      ],
+      "export-browser": [
+        "./dist/export-browser.d.ts"
+      ]
+    }
+  },
+  "files": [
+    "dist/*.js",
+    "dist/*.js.map",
+    "dist/*.d.ts",
+    "dist/*.d.ts.map",
+    "dist/*.json",
+    "dist/wasm/_framework"
+  ],
+  "scripts": {
+    "build:wasm": "../scripts/build-wasm.sh",
+    "build:ts": "tsc && node scripts/bundle-editor-deps.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.tests.json",
+    "build:pagination-bundle": "esbuild src/pagination.ts --bundle --format=iife --global-name=DocxodusPagination --outfile=dist/pagination.bundle.js --minify --sourcemap",
+    "build:session-bundle": "esbuild src/session.ts --bundle --format=iife --global-name=DocxodusSession --outfile=dist/session.bundle.js --minify --sourcemap",
+    "build:editor-bundle": "esbuild src/ribbon.ts --bundle --format=iife --global-name=DocxodusEditor --outfile=dist/editor.bundle.js --minify --sourcemap",
+    "build:embed-bundle": "esbuild src/embed.ts --bundle --format=esm --outfile=dist/embed.bundle.js --minify --sourcemap && esbuild src/embed.ts --bundle --format=iife --global-name=Docxodus --outfile=dist/embed.iife.js --minify --sourcemap",
+    "build:worker-bundle": "esbuild src/docxodus.worker.ts --bundle --format=esm --metafile=dist/docxodus.worker.meta.json --outfile=dist/docxodus.worker.js --minify --sourcemap && esbuild src/worker-proxy.ts --bundle --format=esm --outfile=dist/worker-proxy.bundle.js --minify --sourcemap",
+    "build:export-browser": "esbuild src/export-browser.ts --bundle --format=esm --metafile=dist/export-browser.meta.json --outfile=dist/export-browser.bundle.js",
+    "build:export-assets": "node scripts/generate-export-assets.mjs",
+    "build:js": "npm run build:ts && npm run build:pagination-bundle && npm run build:session-bundle && npm run build:editor-bundle && npm run build:embed-bundle && npm run build:worker-bundle && npm run build:export-browser && npm run build:export-assets && npm run build:web",
+    "build": "npm run build:wasm && npm run build:js",
+    "pretest": "npm run test:demo-logic && npm run typecheck && node scripts/stage-web.mjs --tests && node scripts/fetch-doom-iwad.mjs && npm run test:package-boundary && npm run test:bundle-size",
+    "test:demo-logic": "node ../docs/demo/tools/ascii-arcade.test.mjs && node ../docs/demo/tools/doom-ascii.test.mjs && node ../docs/demo/tools/docx-golf.test.mjs && node ../docs/demo/tools/canvas-font.test.mjs && node ../docs/demo/tools/engine-pin.test.mjs",
+    "test:package-boundary": "node scripts/check-package-boundary.mjs",
+    "test:bundle-size": "node scripts/check-bundle-sizes.mjs",
+    "test": "playwright test",
+    "test:visual-parity": "npm run pretest && DOCXODUS_VISUAL_PARITY=1 playwright test visual-parity.spec.ts visual-parity-reductions.spec.ts --project=chromium --reporter=line",
+    "test:generated-pdf-parity": "npm run build && npm --prefix ../npm-export run build && npm run test:generated-pdf-parity:prebuilt",
+    "test:generated-pdf-parity:prebuilt": "npm run pretest && DOCXODUS_VISUAL_PARITY=1 DOCXODUS_GENERATED_PDF_PARITY=1 playwright test generated-pdf-parity.spec.ts --project=chromium --reporter=line",
+    "capture:doom-ascii": "node scripts/capture-doom-ascii.mjs",
+    "benchmark:doom-ascii": "node scripts/benchmark-doom-ascii.mjs",
+    "capture:word-reference": "mkdir -p dist/wasm && playwright test word-reference-capture.spec.ts --project=chromium --reporter=line",
+    "test:ui": "playwright test --ui",
+    "demo": "npm run build && npm run demo:serve",
+    "demo:serve": "python3 -m http.server 8088 --directory dist/wasm",
+    "prepublishOnly": "npm run build && npm run test:package-boundary",
+    "build:web": "node scripts/stage-web.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JSv4/Docxodus.git"
+  },
+  "keywords": [
+    "docx",
+    "docx-editor",
+    "docx-viewer",
+    "docx-to-html",
+    "word",
+    "ooxml",
+    "openxml",
+    "document",
+    "diff",
+    "comparison",
+    "redline",
+    "track-changes",
+    "tracked-changes",
+    "document-comparison",
+    "wasm",
+    "webassembly",
+    "html",
+    "converter",
+    "markdown",
+    "llm",
+    "agent",
+    "react"
+  ],
+  "author": "John Scrudato IV",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/JSv4/Docxodus/issues"
+  },
+  "homepage": "https://github.com/JSv4/Docxodus#readme",
+  "peerDependencies": {
+    "react": ">=16.8.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@atlaskit/pragmatic-drag-and-drop": "^2.0.2",
+    "@atlaskit/pragmatic-drag-and-drop-auto-scroll": "^3.0.0",
+    "@playwright/test": "^1.57.0",
+    "@types/node": "^20.10.0",
+    "@types/react": "^19.2.7",
+    "esbuild": "^0.28.1",
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "6.2.108",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "typescript": "^5.3.0"
+  }
+}

@@ -1,0 +1,584 @@
+[
+  {
+    "id": "open",
+    "name": "docxodus_open",
+    "arguments": {
+      "path": "local.docx",
+      "trackedChanges": "accept"
+    },
+    "capture": { "session_id": "sessionId" }
+  },
+  {
+    "id": "info_before",
+    "name": "docxodus_get_content",
+    "arguments": { "sessionId": "$session_id", "format": "info" }
+  },
+  {
+    "id": "find_certification",
+    "name": "docxodus_search",
+    "arguments": {
+      "sessionId": "$session_id",
+      "mode": "text",
+      "query": "DOES HEREBY CERTIFY:",
+      "maxResults": 1
+    },
+    "capture": { "certification_anchor": "matches.0.enclosingAnchor.id" }
+  },
+  {
+    "id": "find_placeholder",
+    "name": "docxodus_search",
+    "arguments": {
+      "sessionId": "$session_id",
+      "mode": "text",
+      "query": "[____________]",
+      "maxResults": 1
+    },
+    "capture": { "placeholder_anchor": "matches.0.enclosingAnchor.id" }
+  },
+  {
+    "id": "find_preliminary_notes",
+    "name": "docxodus_search",
+    "arguments": {
+      "sessionId": "$session_id",
+      "mode": "text",
+      "query": "Preliminary Notes",
+      "maxResults": 1
+    },
+    "capture": { "preliminary_anchor": "matches.0.enclosingAnchor.id" }
+  },
+  {
+    "id": "find_investment_phrase",
+    "name": "docxodus_search",
+    "arguments": {
+      "sessionId": "$session_id",
+      "mode": "text",
+      "query": "venture capital portfolio investment",
+      "maxResults": 1
+    },
+    "capture": { "investment_anchor": "matches.0.enclosingAnchor.id" }
+  },
+  {
+    "id": "find_document_tail",
+    "name": "docxodus_search",
+    "arguments": {
+      "sessionId": "$session_id",
+      "mode": "text",
+      "query": "The rights provided hereunder shall inure",
+      "maxResults": 1
+    },
+    "capture": { "tail_anchor": "matches.0.enclosingAnchor.id" }
+  },
+  {
+    "id": "preview_batch",
+    "name": "docxodus_mutations",
+    "arguments": {
+      "sessionId": "$session_id",
+      "mode": "preview",
+      "steps": [
+        {
+          "tool": "docxodus_edit",
+          "args": {
+            "action": "replace_text",
+            "anchorId": "$certification_anchor",
+            "markdown": "PREVIEW-ONLY-MARKER"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "preview_absent",
+    "name": "docxodus_search",
+    "arguments": {
+      "sessionId": "$session_id",
+      "mode": "text",
+      "query": "PREVIEW-ONLY-MARKER"
+    },
+    "expect": { "matches.length": 0 }
+  },
+  {
+    "id": "tracked_accept_mode",
+    "name": "docxodus_track_changes",
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "set_mode",
+      "mode": "render_inline",
+      "revisionAuthor": "MCP Round Three"
+    }
+  },
+  {
+    "id": "tracked_accept_apply",
+    "name": "docxodus_edit",
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "replace_text",
+      "anchorId": "$certification_anchor",
+      "markdown": "**DOES HEREBY CERTIFY AND ACKNOWLEDGE:**"
+    }
+  },
+  {
+    "id": "tracked_accept_list",
+    "name": "docxodus_track_changes",
+    "arguments": { "sessionId": "$session_id", "action": "list" },
+    "capture": {
+      "accepted_deletion_id": "revisions.0.id",
+      "accepted_insertion_id": "revisions.1.id"
+    }
+  },
+  {
+    "id": "tracked_accept_deletion",
+    "name": "docxodus_track_changes",
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "accept",
+      "revisionId": "$accepted_deletion_id"
+    }
+  },
+  {
+    "id": "tracked_accept_insertion",
+    "name": "docxodus_track_changes",
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "accept",
+      "revisionId": "$accepted_insertion_id"
+    }
+  },
+  {
+    "id": "direct_mode",
+    "name": "docxodus_track_changes",
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "set_mode",
+      "mode": "accept"
+    }
+  },
+  {
+    "id": "placeholder_replace",
+    "name": "docxodus_edit",
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "replace_text_range",
+      "anchorId": "$placeholder_anchor",
+      "find": "[____________]",
+      "replace": "[MCP ROUND THREE CORPORATION]"
+    }
+  },
+  {
+    "id": "undo_replace",
+    "name": "docxodus_edit",
+    "arguments": { "sessionId": "$session_id", "action": "undo" }
+  },
+  {
+    "id": "redo_replace",
+    "name": "docxodus_edit",
+    "arguments": { "sessionId": "$session_id", "action": "redo" }
+  },
+  {
+    "id": "direct_batch",
+    "name": "docxodus_mutations",
+    "arguments": {
+      "sessionId": "$session_id",
+      "mode": "apply",
+      "steps": [
+        {
+          "tool": "docxodus_edit",
+          "args": {
+            "action": "replace_text_range",
+            "anchorId": "$preliminary_anchor",
+            "find": "Preliminary Notes",
+            "replace": "Preliminary Notes — ROUND THREE REVIEW COPY"
+          }
+        },
+        {
+          "tool": "docxodus_edit",
+          "args": {
+            "action": "replace_text_range",
+            "anchorId": "$investment_anchor",
+            "find": "venture capital portfolio investment",
+            "replace": "venture capital portfolio investment review"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "heading_create",
+    "name": "docxodus_create",
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "insert_heading",
+      "anchorId": "$tail_anchor",
+      "position": "after",
+      "level": 2,
+      "text": "MCP ROUND THREE REVIEW SCHEDULE"
+    },
+    "capture": { "heading_anchor": "created.0.id" }
+  },
+  {
+    "id": "intro_create",
+    "name": "docxodus_create",
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "insert_paragraph",
+      "anchorId": "$heading_anchor",
+      "position": "after",
+      "markdown": "Purpose: exercise structured document operations with stable markers and preserve the surrounding legal form."
+    },
+    "capture": { "intro_anchor": "created.0.id" }
+  },
+  {
+    "id": "rich_create",
+    "name": "docxodus_create",
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "insert_paragraph",
+      "anchorId": "$intro_anchor",
+      "position": "after",
+      "markdown": "Inline matrix: bold-token; italic-token; underline-token; strike-token; superscript-token; subscript-token; blue-token."
+    },
+    "capture": { "rich_anchor": "created.0.id" }
+  },
+  {
+    "id": "rich_inline_batch",
+    "name": "docxodus_mutations",
+    "arguments": {
+      "sessionId": "$session_id",
+      "mode": "apply",
+      "steps": [
+        { "tool": "docxodus_format", "args": { "action": "apply_format_by_substring", "anchorId": "$rich_anchor", "substring": "bold-token", "format": { "bold": true } } },
+        { "tool": "docxodus_format", "args": { "action": "apply_format_by_substring", "anchorId": "$rich_anchor", "substring": "italic-token", "format": { "italic": true } } },
+        { "tool": "docxodus_format", "args": { "action": "apply_format_by_substring", "anchorId": "$rich_anchor", "substring": "underline-token", "format": { "underline": true } } },
+        { "tool": "docxodus_format", "args": { "action": "apply_format_by_substring", "anchorId": "$rich_anchor", "substring": "strike-token", "format": { "strike": true } } },
+        { "tool": "docxodus_format", "args": { "action": "apply_format_by_substring", "anchorId": "$rich_anchor", "substring": "superscript-token", "format": { "vertAlign": "superscript" } } },
+        { "tool": "docxodus_format", "args": { "action": "apply_format_by_substring", "anchorId": "$rich_anchor", "substring": "subscript-token", "format": { "vertAlign": "subscript" } } },
+        { "tool": "docxodus_format", "args": { "action": "apply_format_by_substring", "anchorId": "$rich_anchor", "substring": "blue-token", "format": { "color": "1F4E79" } } }
+      ]
+    }
+  },
+  {
+    "id": "rich_paragraph_format",
+    "name": "docxodus_format",
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "set_paragraph_format",
+      "anchorId": "$rich_anchor",
+      "paragraphFormat": {
+        "alignment": "justify",
+        "indentDelta": 720,
+        "firstLineIndent": 360,
+        "spacingBefore": 120,
+        "spacingAfter": 120,
+        "lineSpacing": 360,
+        "lineSpacingRule": "auto",
+        "pageBreakBefore": false
+      }
+    }
+  },
+  {
+    "id": "comment_anchor_create",
+    "name": "docxodus_create",
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "insert_paragraph",
+      "anchorId": "$rich_anchor",
+      "position": "after",
+      "markdown": "Round-three comment anchor phrase remains visible after review."
+    },
+    "capture": { "comment_host_anchor": "created.0.id" }
+  },
+  {
+    "id": "comment_create",
+    "name": "docxodus_comment",
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "add",
+      "anchorId": "$comment_host_anchor",
+      "span": { "start": 12, "length": 21 },
+      "author": "MCP Server",
+      "initials": "MS",
+      "markdown": "Initial round-three review note."
+    },
+    "capture": { "comment_anchor": "created.0.id" }
+  },
+  {
+    "id": "comment_reply",
+    "name": "docxodus_comment",
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "reply",
+      "commentAnchorId": "$comment_anchor",
+      "author": "MCP Server",
+      "initials": "MS",
+      "markdown": "Reply confirming threaded review."
+    }
+  },
+  {
+    "id": "comment_update",
+    "name": "docxodus_comment",
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "update",
+      "commentAnchorId": "$comment_anchor",
+      "markdown": "Updated round-three review note."
+    }
+  },
+  {
+    "id": "comment_resolve",
+    "name": "docxodus_comment",
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "resolve",
+      "commentAnchorId": "$comment_anchor",
+      "resolved": true
+    }
+  },
+  {
+    "id": "comment_list",
+    "name": "docxodus_comment",
+    "arguments": { "sessionId": "$session_id", "action": "list" },
+    "expect": {
+      "comments.length": 2,
+      "comments.0.resolved": true,
+      "comments.1.resolved": true
+    }
+  },
+  {
+    "id": "list_alpha_create",
+    "name": "docxodus_create",
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "insert_paragraph",
+      "anchorId": "$comment_host_anchor",
+      "position": "after",
+      "markdown": "Round-three item alpha — text and styles"
+    },
+    "capture": { "list_alpha_anchor": "created.0.id" }
+  },
+  {
+    "id": "list_beta_create",
+    "name": "docxodus_create",
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "insert_paragraph",
+      "anchorId": "$list_alpha_anchor",
+      "position": "after",
+      "markdown": "Round-three item beta — numbering and nesting"
+    },
+    "capture": { "list_beta_anchor": "created.0.id" }
+  },
+  {
+    "id": "list_gamma_create",
+    "name": "docxodus_create",
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "insert_paragraph",
+      "anchorId": "$list_beta_anchor",
+      "position": "after",
+      "markdown": "Round-three item gamma — comments and revisions"
+    },
+    "capture": { "list_gamma_anchor": "created.0.id" }
+  },
+  {
+    "id": "list_create",
+    "name": "docxodus_list",
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "apply_format_range",
+      "firstAnchorId": "$list_alpha_anchor",
+      "lastAnchorId": "$list_gamma_anchor",
+      "listFormat": "upperRoman"
+    },
+    "capture": {
+      "list_alpha_item": "modified.0.id",
+      "list_beta_item": "modified.1.id",
+      "list_gamma_item": "modified.2.id"
+    }
+  },
+  {
+    "id": "list_beta_indent",
+    "name": "docxodus_list",
+    "arguments": { "sessionId": "$session_id", "action": "set_level", "anchorId": "$list_beta_item", "levelDelta": 1 }
+  },
+  {
+    "id": "list_gamma_level",
+    "name": "docxodus_list",
+    "arguments": { "sessionId": "$session_id", "action": "set_level", "anchorId": "$list_gamma_item", "levelDelta": 1 }
+  },
+  {
+    "id": "list_alpha_start",
+    "name": "docxodus_list",
+    "arguments": { "sessionId": "$session_id", "action": "set_start", "anchorId": "$list_alpha_item", "startValue": 3 }
+  },
+  {
+    "id": "table_create",
+    "name": "docxodus_create",
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "insert_table",
+      "anchorId": "$list_gamma_item",
+      "position": "after",
+      "rows": 3,
+      "columns": 3,
+      "cellContents": [
+        "RT3 Feature", "RT3 Operation", "RT3 Expected",
+        "Inline formatting", "Seven run properties", "Preserved",
+        "Review metadata", "Thread and decision", "Resolved"
+      ],
+      "columnWidths": [3000, 3800, 2400]
+    },
+    "capture": {
+      "cell_00": "created.0.id",
+      "cell_01": "created.1.id",
+      "cell_02": "created.2.id"
+    }
+  },
+  {
+    "id": "table_borders",
+    "name": "docxodus_table",
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "set_borders",
+      "cellAnchorId": "$cell_00",
+      "borderScope": "all",
+      "borderStyle": "single",
+      "borderSize": 8,
+      "borderColor": "1F4E79"
+    }
+  },
+  {
+    "id": "table_header_shading",
+    "name": "docxodus_table",
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "set_shading",
+      "cellAnchorId": "$cell_00",
+      "shadingScope": "row",
+      "fill": "1F4E79"
+    }
+  },
+  {
+    "id": "table_header_row_options",
+    "name": "docxodus_table",
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "set_row_options",
+      "cellAnchorId": "$cell_00",
+      "repeat": true,
+      "allowBreakAcrossPages": false,
+      "heightTwips": 480,
+      "heightRule": "atLeast"
+    }
+  },
+  {
+    "id": "table_header_format",
+    "name": "docxodus_mutations",
+    "arguments": {
+      "sessionId": "$session_id",
+      "mode": "apply",
+      "steps": [
+        { "tool": "docxodus_format", "args": { "action": "apply_format", "anchorId": "$cell_00", "format": { "bold": true, "color": "FFFFFF" } } },
+        { "tool": "docxodus_format", "args": { "action": "apply_format", "anchorId": "$cell_01", "format": { "bold": true, "color": "FFFFFF" } } },
+        { "tool": "docxodus_format", "args": { "action": "apply_format", "anchorId": "$cell_02", "format": { "bold": true, "color": "FFFFFF" } } },
+        { "tool": "docxodus_format", "args": { "action": "set_paragraph_format", "anchorId": "$cell_00", "paragraphFormat": { "alignment": "center" } } },
+        { "tool": "docxodus_format", "args": { "action": "set_paragraph_format", "anchorId": "$cell_01", "paragraphFormat": { "alignment": "center" } } },
+        { "tool": "docxodus_format", "args": { "action": "set_paragraph_format", "anchorId": "$cell_02", "paragraphFormat": { "alignment": "center" } } }
+      ]
+    }
+  },
+  {
+    "id": "find_created_table",
+    "name": "docxodus_search",
+    "arguments": { "sessionId": "$session_id", "mode": "kind", "query": "tbl" },
+    "expect": { "matches.length": 1 },
+    "capture": { "table_anchor": "matches.0.id" }
+  },
+  {
+    "id": "tracked_reject_anchor",
+    "name": "docxodus_create",
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "insert_paragraph",
+      "anchorId": "$table_anchor",
+      "position": "after",
+      "markdown": "Tracked rejection anchor: BASE."
+    },
+    "capture": { "reject_anchor": "created.0.id" }
+  },
+  {
+    "id": "tracked_reject_mode",
+    "name": "docxodus_track_changes",
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "set_mode",
+      "mode": "render_inline",
+      "revisionAuthor": "MCP Round Three"
+    }
+  },
+  {
+    "id": "tracked_reject_apply",
+    "name": "docxodus_edit",
+    "arguments": {
+      "sessionId": "$session_id",
+      "action": "replace_text",
+      "anchorId": "$reject_anchor",
+      "markdown": "Tracked rejection anchor: BASE TEMPORARY."
+    }
+  },
+  {
+    "id": "tracked_reject_list",
+    "name": "docxodus_track_changes",
+    "arguments": { "sessionId": "$session_id", "action": "list" },
+    "capture": {
+      "rejected_deletion_id": "revisions.0.id",
+      "rejected_insertion_id": "revisions.1.id"
+    }
+  },
+  {
+    "id": "tracked_reject_deletion",
+    "name": "docxodus_track_changes",
+    "arguments": { "sessionId": "$session_id", "action": "reject", "revisionId": "$rejected_deletion_id" }
+  },
+  {
+    "id": "tracked_reject_insertion",
+    "name": "docxodus_track_changes",
+    "arguments": { "sessionId": "$session_id", "action": "reject", "revisionId": "$rejected_insertion_id" }
+  },
+  {
+    "id": "final_direct_mode",
+    "name": "docxodus_track_changes",
+    "arguments": { "sessionId": "$session_id", "action": "set_mode", "mode": "accept" }
+  },
+  {
+    "id": "markers_verify",
+    "name": "docxodus_search",
+    "arguments": { "sessionId": "$session_id", "mode": "text", "query": "Round-three", "maxResults": 20 },
+    "expect": { "matches.length": 4 }
+  },
+  {
+    "id": "rejected_absent",
+    "name": "docxodus_search",
+    "arguments": { "sessionId": "$session_id", "mode": "text", "query": "BASE TEMPORARY" },
+    "expect": { "matches.length": 0 }
+  },
+  {
+    "id": "revisions_final",
+    "name": "docxodus_track_changes",
+    "arguments": { "sessionId": "$session_id", "action": "list" },
+    "expect": { "revisions.length": 0 }
+  },
+  {
+    "id": "info_after",
+    "name": "docxodus_get_content",
+    "arguments": { "sessionId": "$session_id", "format": "info" }
+  },
+  {
+    "id": "save",
+    "name": "docxodus_save",
+    "arguments": { "sessionId": "$session_id", "persistAnchorIds": false }
+  },
+  {
+    "id": "close",
+    "name": "docxodus_close",
+    "arguments": { "sessionId": "$session_id" }
+  }
+]

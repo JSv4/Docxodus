@@ -1,0 +1,85 @@
+{
+  "renderer": "Microsoft Word",
+  "pdfCreator": "Microsoft Word",
+  "capturedAt": "2026-10-10",
+  "topMarginPt": 72,
+  "requestedFont": "Liberation Serif",
+  "notes": "The PDFs embed TimesNewRomanPSMT. Glyphs may extend past exact line boxes and into the page margins; the PDF clips at the paper edge. Baselines are PDF text origins measured from the page top.",
+  "cases": [
+    {
+      "fixture": "font-10-line-12.docx",
+      "sha256": "2387cf207122dcc96f0e73935750b4766757f6df27b7833dd8b2c26f34351405",
+      "fontSizePt": 10,
+      "lineHeightPt": 12,
+      "pageCount": 1,
+      "baselinesPt": [
+        81.53,
+        93.53,
+        105.53
+      ],
+      "renderedFont": "TimesNewRomanPSMT"
+    },
+    {
+      "fixture": "font-16-line-12.docx",
+      "sha256": "c834b7a18cf7cf7be3fec25c5eb7e07aadee19c87fc1d06fc729cdaa5f8f276a",
+      "fontSizePt": 16,
+      "lineHeightPt": 12,
+      "pageCount": 1,
+      "baselinesPt": [
+        81.53,
+        93.53,
+        105.53
+      ],
+      "renderedFont": "TimesNewRomanPSMT"
+    },
+    {
+      "fixture": "font-24-line-12.docx",
+      "sha256": "9164bfecf0a583a5268c594de0f45dc1489b31b4df2ea44c6af00c9dacd5f507",
+      "fontSizePt": 24,
+      "lineHeightPt": 12,
+      "pageCount": 1,
+      "baselinesPt": [
+        81.53,
+        93.53,
+        105.53
+      ],
+      "renderedFont": "TimesNewRomanPSMT"
+    },
+    {
+      "fixture": "font-16-line-18.docx",
+      "sha256": "e248c0be408ffebc7099bce6b3a335ca1605c2cb99c7d6dcb924afae80b3b055",
+      "fontSizePt": 16,
+      "lineHeightPt": 18,
+      "pageCount": 1,
+      "baselinesPt": [
+        86.53,
+        104.53,
+        122.55
+      ],
+      "renderedFont": "TimesNewRomanPSMT"
+    },
+    {
+      "fixture": "font-16-line-24.docx",
+      "sha256": "d217e056f57ead1b0570008ceaaf4c6c45440e6a62a01e1d2b360131c1ebe5e0",
+      "fontSizePt": 16,
+      "lineHeightPt": 24,
+      "pageCount": 1,
+      "baselinesPt": [
+        91.28,
+        115.28,
+        139.3
+      ],
+      "renderedFont": "TimesNewRomanPSMT"
+    }
+  ],
+  "body": {
+    "fixture": "body-54-font-16-line-12.docx",
+    "sha256": "b4ae688b28f91f4824de95c84b435692dc74c87e31b28c50c79dcc12edd24cab",
+    "pageCount": 1,
+    "lineCounts": [
+      54
+    ],
+    "firstBaselinePt": 81.53,
+    "lastBaselinePt": 717.725
+  }
+}

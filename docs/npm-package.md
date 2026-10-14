@@ -1,0 +1,1033 @@
+# Docxodus npm Package
+
+The `docxodus` npm package provides client-side DOCX document comparison and HTML conversion using WebAssembly. All processing runs entirely in the browser with no server required.
+
+## Installation
+
+```bash
+npm install docxodus
+```
+
+## Features
+
+- **Document Comparison**: Compare two DOCX files and generate a redlined document with tracked changes
+- **Move Detection**: Automatically identify when content is relocated (not just deleted/inserted)
+- **HTML Conversion**: Convert DOCX documents to HTML for display in the browser
+- **Comment Rendering**: Render Word document comments in three different styles
+- **Footnotes & Endnotes**: Render footnotes and endnotes with bidirectional links
+- **Headers & Footers**: Render document headers and footers in HTML output
+- **Tracked Changes Rendering**: Render insertions, deletions, and move operations in HTML
+- **Custom Annotations**: Add, remove, and render custom highlights with labels on document content
+- **External Annotations**: Store annotations externally (in JSON/database) without modifying the DOCX
+- **Incremental Annotation Overlay**: Project, add, or remove annotations on pre-converted HTML without re-converting the DOCX
+- **Document Structure API**: Analyze documents and get navigable element trees for precise targeting
+- **Inspect-Before-Edit API**: Enumerate real style ids, direct/effective formatting, list/section
+  facts, and run spans that can be passed unchanged to mutation methods
+- **Revision Extraction**: Get structured data about all revisions in a compared document
+- **100% Client-Side**: All processing happens in the browser using WebAssembly
+- **React Hooks**: Ready-to-use hooks for React applications
+- **TypeScript Support**: Full type definitions included
+
+## Quick Start
+
+### Basic Usage
+
+```javascript
+import { initialize, convertDocxToHtml, compareDocuments } from 'docxodus';
+
+// Initialize the WASM runtime (call once at app startup)
+await initialize();
+
+// Convert DOCX to HTML
+const html = await convertDocxToHtml(docxFile);
+
+// Compare two documents
+const redlinedDocx = await compareDocuments(originalFile, modifiedFile, {
+  authorName: 'Reviewer'
+});
+```
+
+### React Usage
+
+```tsx
+import { useDocxodus } from 'docxodus/react';
+
+function DocumentViewer() {
+  const { isReady, isLoading, error, convertToHtml } = useDocxodus();
+  const [html, setHtml] = useState('');
+
+  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && isReady) {
+      const result = await convertToHtml(file);
+      setHtml(result);
+    }
+  };
+
+  if (isLoading) return <div>Loading...</div>;
+  if (error) return <div>Error: {error.message}</div>;
+
+  return (
+    <div>
+      <input type="file" accept=".docx" onChange={handleFile} />
+      <div dangerouslySetInnerHTML={{ __html: html }} />
+    </div>
+  );
+}
+```
+
+## API Reference
+
+### Stateful inspection and editing
+
+`openDocxSession(bytes)` exposes the live document rather than a one-shot conversion. Inspect the
+source before writing it: `listStyles()` returns the document's actual paragraph/character/table
+styles, `getFormatting(anchorId)` keeps `directParagraph` separate from `effectiveParagraph`, and
+`listInlineSpans(anchorId)` returns `anchorId` + `span` pairs accepted unchanged by `applyFormat`.
+
+```typescript
+const session = openDocxSession(bytes);
+try {
+  const anchorId = Object.keys(session.project().anchorIndex)[0];
+  const style = session.listStyles().find(s => s.name === "Strong Custom");
+  const run = session.listInlineSpans(anchorId).find(s => s.text === "Defined Term");
+  if (style && run) {
+    session.applyFormat(run.anchorId, run.span, { runStyle: style.id });
+  }
+} finally {
+  session.close();
+}
+```
+
+An omitted property in a `direct` record means “not written at this layer”; it must not be treated
+as false or zero. The matching `effective` record resolves document defaults and the full style
+chain. `getListMembership` and `getSectionInfo` likewise return their query `anchorId` so callers
+do not have to translate between inspection and mutation coordinate systems.
+
+`effective` is deliberately a shorter cascade than the renderer's: it excludes the numbering
+level's own paragraph properties and the table style's conditional formatting, so a list item
+indented only by its numbering definition reports `leftIndentTwips: 0` and a run bolded by a
+`firstRow` table style reports `bold: false`. Use `getListMembership` for the real numbering
+indentation. See `docs/architecture/docx_mutation_api.md` for the exact layer list.
+
+### Core Functions
+
+#### `initialize(basePath?: string): Promise<void>`
+
+Initialize the WASM runtime. Must be called before using any other functions.
+
+By default, WASM files are auto-detected from the module's location (works with CDN, npm, or local hosting). Pass a `basePath` to load from a custom location.
+
+#### `convertDocxToHtml(document, options?): Promise<string>`
+
+Convert a DOCX document to HTML.
+
+```typescript
+import { convertDocxToHtml, CommentRenderMode } from 'docxodus';
+
+const html = await convertDocxToHtml(docxFile, {
+  pageTitle: 'My Document',
+  cssPrefix: 'doc-',
+  fabricateClasses: true,
+  additionalCss: '.custom { color: red; }',
+  commentRenderMode: CommentRenderMode.EndnoteStyle,
+  commentCssClassPrefix: 'comment-'
+});
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `pageTitle` | `string` | `"Document"` | HTML document title |
+| `cssPrefix` | `string` | `"docx-"` | CSS class prefix for generated styles |
+| `fabricateClasses` | `boolean` | `true` | Generate CSS classes |
+| `additionalCss` | `string` | `""` | Additional CSS to include |
+| `commentRenderMode` | `CommentRenderMode` | `Disabled` | How to render comments |
+| `commentCssClassPrefix` | `string` | `"comment-"` | CSS prefix for comment elements |
+| `renderFootnotesAndEndnotes` | `boolean` | `false` | Render footnotes/endnotes sections |
+| `renderHeadersAndFooters` | `boolean` | `false` | Render document headers/footers |
+| `renderTrackedChanges` | `boolean` | `false` | Render tracked changes (redlines) |
+| `showDeletedContent` | `boolean` | `true` | Show deleted content with strikethrough |
+| `renderMoveOperations` | `boolean` | `true` | Distinguish moves from insert/delete |
+| `revisionPresentation` | `RevisionPresentation` | `Docxodus` | `Word` draws tracked changes in Word's All Markup style (author colours, no fills or pilcrows, change bars) |
+| `renderAnnotations` | `boolean` | `false` | Render custom annotations |
+| `annotationLabelMode` | `AnnotationLabelMode` | `Above` | How to display annotation labels |
+| `annotationCssClassPrefix` | `string` | `"annot-"` | CSS prefix for annotations |
+| `paginationMode` | `PaginationMode` | `None` | Pagination mode for PDF-style view |
+| `paginationScale` | `number` | `1.0` | Scale factor for paginated view |
+| `paginationCssClassPrefix` | `string` | `"page-"` | CSS prefix for pagination |
+
+**Examples:**
+
+```typescript
+// Render with footnotes and tracked changes
+const html = await convertDocxToHtml(docxFile, {
+  renderFootnotesAndEndnotes: true,
+  renderHeadersAndFooters: true,
+  renderTrackedChanges: true,
+  showDeletedContent: true
+});
+
+// Render with annotations
+const html = await convertDocxToHtml(docxFile, {
+  renderAnnotations: true,
+  annotationLabelMode: AnnotationLabelMode.Above
+});
+```
+
+#### `compareDocuments(original, modified, options?): Promise<Uint8Array>`
+
+Compare two DOCX documents and return a redlined DOCX with tracked changes.
+
+```typescript
+const redlinedDocx = await compareDocuments(originalFile, modifiedFile, {
+  authorName: 'Legal Team',
+  detailThreshold: 0.15,
+  caseInsensitive: false
+});
+
+// Save the result
+const blob = new Blob([redlinedDocx], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+const url = URL.createObjectURL(blob);
+```
+
+**Options:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `authorName` | `string` | `"Docxodus"` | Author name for tracked changes |
+| `detailThreshold` | `number` | `0.15` | 0.0-1.0, lower = more detailed comparison |
+| `caseInsensitive` | `boolean` | `false` | Case-insensitive comparison |
+
+#### `compareDocumentsToHtml(original, modified, options?): Promise<string>`
+
+Compare documents and return the result as HTML with tracked changes rendered visually.
+
+```typescript
+const html = await compareDocumentsToHtml(originalFile, modifiedFile, {
+  authorName: 'Reviewer',
+  renderTrackedChanges: true  // Show <ins>/<del> elements
+});
+```
+
+#### `getRevisions(document): Promise<Revision[]>`
+
+Extract revision information from a compared document. Revisions include insertions, deletions, and **moves** (relocated content).
+
+```typescript
+import { getRevisions, isMove, isMoveSource, findMovePair, RevisionType } from 'docxodus';
+
+const revisions = await getRevisions(comparedDocx);
+
+// Filter by type
+const insertions = revisions.filter(r => r.revisionType === RevisionType.Inserted);
+const deletions = revisions.filter(r => r.revisionType === RevisionType.Deleted);
+const moves = revisions.filter(isMove);
+
+// Work with move pairs
+for (const rev of revisions.filter(isMoveSource)) {
+  const destination = findMovePair(rev, revisions);
+  console.log(`"${rev.text}" moved to "${destination?.text}"`);
+}
+```
+
+**Revision Interface:**
+
+```typescript
+interface Revision {
+  author: string;           // Author who made the change
+  date: string;             // ISO 8601 date string
+  revisionType: RevisionType | string;  // "Inserted", "Deleted", or "Moved"
+  text: string;             // The revised text content
+  moveGroupId?: number;     // For moves: links source and destination
+  isMoveSource?: boolean;   // For moves: true = moved FROM, false = moved TO
+}
+```
+
+**Helper Functions:**
+
+| Function | Description |
+|----------|-------------|
+| `isInsertion(rev)` | Returns true if revision is an insertion |
+| `isDeletion(rev)` | Returns true if revision is a deletion |
+| `isMove(rev)` | Returns true if revision is a move |
+| `isMoveSource(rev)` | Returns true if this is the source of a move (content moved FROM here) |
+| `isMoveDestination(rev)` | Returns true if this is the destination of a move (content moved TO here) |
+| `findMovePair(rev, allRevisions)` | Find the matching source/destination for a move revision |
+
+#### `getComments(document): Promise<CommentListEntry[]>`
+
+Read a document's native Word comments without opening a session — the comment twin of
+`getRevisions()`. Returns the same entries as `session.listComments()` (anchor, id, author,
+text, threading, resolved state) in comments-part order. Also available on the worker proxy as
+`docxodus.getComments(document)`, so a read-only reviewing viewer needs no main-thread runtime.
+
+### Comment Render Modes
+
+The `CommentRenderMode` enum controls how Word document comments are rendered in HTML:
+
+```typescript
+import { CommentRenderMode } from 'docxodus';
+```
+
+| Mode | Value | Description |
+|------|-------|-------------|
+| `Disabled` | -1 | Don't render comments (default) |
+| `EndnoteStyle` | 0 | Comments at end of document with `[1]` style bidirectional links |
+| `Inline` | 1 | Tooltips via `title` and `data-comment` attributes |
+| `Margin` | 2 | Side column using CSS flexbox layout |
+
+**EndnoteStyle Example:**
+```typescript
+const html = await convertDocxToHtml(docxFile, {
+  commentRenderMode: CommentRenderMode.EndnoteStyle
+});
+// Produces: highlighted text with [1] links, comments section at bottom
+```
+
+**Inline Example:**
+```typescript
+const html = await convertDocxToHtml(docxFile, {
+  commentRenderMode: CommentRenderMode.Inline
+});
+// Produces: highlighted text with title="Author: comment text" attributes
+```
+
+**Margin Example:**
+```typescript
+const html = await convertDocxToHtml(docxFile, {
+  commentRenderMode: CommentRenderMode.Margin
+});
+// Produces: flexbox layout with main content on left, comments in right column
+```
+
+### Move Detection
+
+`getRevisions()` reads moves from the document's own `w:moveFrom`/`w:moveTo` markup and reports
+each as one grouped entry (`family: "move"`), so there is nothing to configure at read time.
+Whether a comparison *produces* move markup is decided when comparing, via
+`DocxDiffSettings.detectMoves`.
+
+### Custom Annotations
+
+The annotation system allows you to add, remove, and render custom highlights and labels on DOCX documents. Annotations are stored non-destructively in the document and can be rendered in HTML output.
+
+#### `getAnnotations(document): Promise<Annotation[]>`
+
+Get all annotations from a document.
+
+```typescript
+import { getAnnotations } from 'docxodus';
+
+const annotations = await getAnnotations(docxBytes);
+for (const annot of annotations) {
+  console.log(`${annot.label}: "${annot.annotatedText}"`);
+}
+```
+
+#### `addAnnotation(document, request): Promise<AddAnnotationResult>`
+
+Add an annotation to a document using text search or paragraph indices.
+
+```typescript
+import { addAnnotation } from 'docxodus';
+
+// Add annotation by searching for text
+const result = await addAnnotation(docxBytes, {
+  Id: 'annot-001',
+  LabelId: 'IMPORTANT',
+  Label: 'Important Clause',
+  Color: '#FFEB3B',
+  SearchText: 'shall not be liable',
+  Occurrence: 1,  // First occurrence
+  Author: 'Legal Review',
+  Metadata: {
+    category: 'liability',
+    priority: 'high'
+  }
+});
+
+// result.documentBytes contains the modified document
+// result.annotation contains the created annotation details
+```
+
+**AddAnnotationRequest Properties:**
+
+| Property | Type | Required | Description |
+|----------|------|----------|-------------|
+| `Id` | `string` | Yes | Unique annotation identifier |
+| `LabelId` | `string` | Yes | Category/type identifier for grouping |
+| `Label` | `string` | Yes | Human-readable label text |
+| `Color` | `string` | No | Highlight color in hex (default: `#FFEB3B`) |
+| `SearchText` | `string` | * | Text to find and annotate |
+| `Occurrence` | `number` | No | Which occurrence (1-based, default: 1) |
+| `StartParagraphIndex` | `number` | * | Start paragraph (0-based) |
+| `EndParagraphIndex` | `number` | * | End paragraph (0-based, inclusive) |
+| `Author` | `string` | No | Author name |
+| `Metadata` | `Record<string, string>` | No | Custom key-value pairs |
+
+\* Either `SearchText` OR `StartParagraphIndex`/`EndParagraphIndex` is required.
+
+#### `removeAnnotation(document, annotationId): Promise<RemoveAnnotationResult>`
+
+Remove an annotation by ID.
+
+```typescript
+import { removeAnnotation } from 'docxodus';
+
+const result = await removeAnnotation(docxBytes, 'annot-001');
+// result.documentBytes contains the document without the annotation
+```
+
+#### `hasAnnotations(document): Promise<boolean>`
+
+Check if a document has any annotations.
+
+```typescript
+import { hasAnnotations } from 'docxodus';
+
+if (await hasAnnotations(docxBytes)) {
+  console.log('Document has annotations');
+}
+```
+
+#### Rendering Annotations in HTML
+
+Convert a document with annotations to HTML with highlights rendered:
+
+```typescript
+import { convertDocxToHtml, AnnotationLabelMode } from 'docxodus';
+
+const html = await convertDocxToHtml(annotatedDocxBytes, {
+  renderAnnotations: true,
+  annotationLabelMode: AnnotationLabelMode.Above,
+  annotationCssClassPrefix: 'annot-'
+});
+```
+
+**AnnotationLabelMode Options:**
+
+| Mode | Value | Description |
+|------|-------|-------------|
+| `Above` | 0 | Floating label positioned above the highlight |
+| `Inline` | 1 | Label displayed inline at start of highlight |
+| `Tooltip` | 2 | Label shown only on hover |
+| `None` | 3 | Highlight only, no label displayed |
+
+**Generated HTML Structure:**
+
+```html
+<span class="annot-highlight"
+      data-annotation-id="annot-001"
+      data-label-id="IMPORTANT"
+      data-label-mode="above"
+      style="--annot-color: #FFEB3B;">
+  <span class="annot-label">Important Clause</span>
+  shall not be liable
+</span>
+```
+
+### Document Structure API
+
+The Document Structure API analyzes DOCX documents and returns a navigable tree of elements with stable IDs. This enables precise targeting for annotations.
+
+#### `getDocumentStructure(document): Promise<DocumentStructure>`
+
+Analyze document and get element tree.
+
+```typescript
+import {
+  getDocumentStructure,
+  findElementsByType,
+  getParagraphs,
+  getTables,
+  DocumentElementType
+} from 'docxodus';
+
+const structure = await getDocumentStructure(docxBytes);
+
+// Get all paragraphs
+const paragraphs = getParagraphs(structure);
+console.log(`Document has ${paragraphs.length} paragraphs`);
+
+// Get all tables
+const tables = getTables(structure);
+
+// Find specific element types
+const images = findElementsByType(structure, DocumentElementType.Image);
+
+// Look up element by ID
+const element = structure.elementsById['doc/p-0'];
+console.log(`First paragraph: "${element.TextPreview}"`);
+```
+
+**DocumentStructure Interface:**
+
+```typescript
+interface DocumentStructure {
+  root: DocumentElement;                              // Root document element
+  elementsById: Record<string, DocumentElement>;      // All elements by ID
+  tableColumns: Record<string, TableColumnInfo>;      // Table column metadata
+}
+
+interface DocumentElement {
+  Id: string;              // Path-based ID (e.g., "doc/tbl-0/tr-1/tc-2")
+  Type: string;            // Element type
+  TextPreview?: string;    // First ~100 characters of text
+  Index: number;           // Position in parent
+  Children: DocumentElement[];
+  RowIndex?: number;       // For table rows/cells
+  ColumnIndex?: number;    // For table cells
+  RowSpan?: number;        // Cell row span
+  ColumnSpan?: number;     // Cell column span
+}
+```
+
+**Element ID Format:**
+
+| ID Pattern | Description |
+|------------|-------------|
+| `doc` | Document root |
+| `doc/p-0` | First paragraph |
+| `doc/p-0/r-0` | First run in first paragraph |
+| `doc/tbl-0` | First table |
+| `doc/tbl-0/tr-1` | Second row in first table |
+| `doc/tbl-0/tr-1/tc-2` | Third cell in second row |
+| `doc/tbl-0/tr-1/tc-2/p-0` | First paragraph in that cell |
+
+**DocumentElementType Enum:**
+
+```typescript
+enum DocumentElementType {
+  Document = 'Document',
+  Paragraph = 'Paragraph',
+  Run = 'Run',
+  Table = 'Table',
+  TableRow = 'TableRow',
+  TableCell = 'TableCell',
+  TableColumn = 'TableColumn',  // Virtual - metadata only
+  Hyperlink = 'Hyperlink',
+  Image = 'Image'
+}
+```
+
+#### `addAnnotationWithTarget(document, request): Promise<AddAnnotationResult>`
+
+Add an annotation using flexible element-based targeting.
+
+```typescript
+import {
+  addAnnotationWithTarget,
+  targetParagraph,
+  targetTableCell,
+  targetElement,
+  getDocumentStructure
+} from 'docxodus';
+
+// Target by paragraph index
+const result1 = await addAnnotationWithTarget(docxBytes, {
+  Id: 'para-annot',
+  LabelId: 'SECTION',
+  Label: 'Introduction',
+  Color: '#4CAF50',
+  ...targetParagraph(0)  // First paragraph
+});
+
+// Target a table cell
+const result2 = await addAnnotationWithTarget(result1.documentBytes, {
+  Id: 'cell-annot',
+  LabelId: 'DATA',
+  Label: 'Key Value',
+  Color: '#2196F3',
+  ...targetTableCell(0, 1, 2)  // Table 0, Row 1, Cell 2
+});
+
+// Target by element ID (from structure analysis)
+const structure = await getDocumentStructure(docxBytes);
+const cellId = Object.keys(structure.elementsById)
+  .find(id => id.includes('/tc-'));
+
+const result3 = await addAnnotationWithTarget(docxBytes, {
+  Id: 'element-annot',
+  LabelId: 'HIGHLIGHT',
+  Label: 'Selected Cell',
+  Color: '#FF5722',
+  ...targetElement(cellId)
+});
+
+// Search text within a specific element
+const result4 = await addAnnotationWithTarget(docxBytes, {
+  Id: 'scoped-search',
+  LabelId: 'TERM',
+  Label: 'Legal Term',
+  Color: '#9C27B0',
+  ElementId: 'doc/p-5',
+  SearchText: 'indemnify',
+  Occurrence: 1
+});
+```
+
+**Targeting Helper Functions:**
+
+| Function | Description |
+|----------|-------------|
+| `targetElement(id)` | Target by element ID |
+| `targetParagraph(index)` | Target paragraph by index |
+| `targetParagraphRange(start, end)` | Target paragraph range |
+| `targetRun(paragraphIndex, runIndex)` | Target specific run |
+| `targetTable(index)` | Target entire table |
+| `targetTableRow(tableIndex, rowIndex)` | Target table row |
+| `targetTableCell(tableIndex, rowIndex, cellIndex)` | Target table cell |
+| `targetTableColumn(tableIndex, columnIndex)` | Target column (metadata only) |
+| `targetTextSearch(text, occurrence)` | Global text search |
+
+### External Annotations (Incremental Overlay API)
+
+The incremental overlay API decouples annotation projection from DOCX conversion. Instead of re-converting the entire document every time annotations change, you convert once and then project annotations onto the cached HTML. This produces dramatically better performance for interactive annotation workflows.
+
+> **Performance comparison (benchmark on a typical legal document):**
+>
+> | Operation | Time |
+> |-----------|------|
+> | Full DOCX-to-HTML re-conversion with annotations | ~892 ms |
+> | `projectAnnotationsOntoHtml` (full set projection) | ~56 ms (15.9x faster) |
+> | `addAnnotationToHtml` (single annotation add) | ~0.3 ms |
+
+**Convert-once-then-project pattern:**
+
+```typescript
+import {
+  initialize,
+  convertDocxToHtml,
+  createExternalAnnotationSet,
+  createAnnotationFromSearch,
+  projectAnnotationsOntoHtml,
+  addAnnotationToHtml,
+  removeAnnotationFromHtml,
+  generateAnnotationVisibilityCss,
+  generateAnnotationCss,
+} from 'docxodus';
+
+await initialize();
+
+// Step 1: Convert DOCX to HTML once (expensive, ~892ms)
+const baseHtml = await convertDocxToHtml(docxFile);
+
+// Step 2: Build your annotation set
+const annotationSet = await createExternalAnnotationSet(docxFile, "doc-123");
+annotationSet.textLabels["CLAUSE"] = {
+  id: "CLAUSE", text: "Clause", color: "#FF5722",
+  description: "Contract clause", icon: "", labelType: "text"
+};
+const ann = createAnnotationFromSearch(
+  "ann-001", "CLAUSE", annotationSet.content, "shall not be liable"
+);
+if (ann) annotationSet.labelledText.push(ann);
+
+// Step 3: Project annotations onto cached HTML (fast, ~56ms)
+let html = await projectAnnotationsOntoHtml(baseHtml, annotationSet);
+
+// Step 4: Incrementally add/remove without re-projecting the full set
+const newAnn = createAnnotationFromSearch(
+  "ann-002", "CLAUSE", annotationSet.content, "indemnify"
+);
+if (newAnn) {
+  const label = annotationSet.textLabels["CLAUSE"];
+  html = await addAnnotationToHtml(html, newAnn, label);  // ~0.3ms
+}
+
+html = await removeAnnotationFromHtml(html, "ann-001");  // ~0.3ms
+```
+
+#### `projectAnnotationsOntoHtml(html, annotationSet, options?): Promise<string>`
+
+Project a full annotation set onto pre-converted HTML. Use this when you have a complete set of annotations to render at once.
+
+```typescript
+const annotatedHtml = await projectAnnotationsOntoHtml(baseHtml, annotationSet, {
+  cssClassPrefix: 'ext-annot-',
+  labelMode: AnnotationLabelMode.Above
+});
+```
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `html` | `string` | Yes | HTML string previously produced by `convertDocxToHtml` |
+| `annotationSet` | `ExternalAnnotationSet` | Yes | The external annotation set to project |
+| `options` | `ExternalAnnotationProjectionSettings` | No | Projection settings (see table below) |
+
+**ExternalAnnotationProjectionSettings:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `cssClassPrefix` | `string` | `"ext-annot-"` | CSS class prefix for annotation elements |
+| `labelMode` | `AnnotationLabelMode` | `Above` | How to display annotation labels |
+| `includeMetadata` | `boolean` | `true` | Include annotation metadata as data attributes |
+| `validateBeforeProjection` | `boolean` | `true` | Validate annotations before projection |
+
+#### `addAnnotationToHtml(html, annotation, label?, options?): Promise<string>`
+
+Add a single annotation to existing HTML. This is the fastest way to add one annotation to already-rendered HTML (~0.3ms per operation).
+
+```typescript
+const annotation = createAnnotation("ann-new", "CLAUSE", set.content, 100, 150);
+const label = { id: "CLAUSE", text: "Clause", color: "#FF5722",
+                description: "", icon: "", labelType: "text" as const };
+const updatedHtml = await addAnnotationToHtml(currentHtml, annotation, label);
+```
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `html` | `string` | Yes | HTML string (with or without existing annotations) |
+| `annotation` | `OpenContractsAnnotation` | Yes | The annotation to add |
+| `label` | `AnnotationLabel` | No | Label definition for the annotation (color, display text) |
+| `options` | `ExternalAnnotationProjectionSettings` | No | Projection settings |
+
+#### `removeAnnotationFromHtml(html, annotationId, cssClassPrefix?): Promise<string>`
+
+Remove a single annotation by ID. Unwraps annotation spans back to plain text.
+
+```typescript
+const updatedHtml = await removeAnnotationFromHtml(currentHtml, "ann-001");
+
+// With a custom CSS prefix
+const updatedHtml2 = await removeAnnotationFromHtml(currentHtml, "ann-001", "my-annot-");
+```
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `html` | `string` | Yes | HTML string containing annotations |
+| `annotationId` | `string` | Yes | ID of the annotation to remove |
+| `cssClassPrefix` | `string` | No | CSS class prefix used for annotations (default: `"ext-annot-"`) |
+
+#### `generateAnnotationVisibilityCss(hiddenLabelIds, cssClassPrefix?): Promise<string>`
+
+Generate CSS to hide/show annotations by label. Apply the returned CSS to a `<style>` element for instant toggling without re-rendering HTML.
+
+```typescript
+// Hide annotations with label "DRAFT" and "INTERNAL"
+const css = await generateAnnotationVisibilityCss(["DRAFT", "INTERNAL"]);
+
+// Apply to the DOM
+const styleEl = document.getElementById("visibility-overrides");
+styleEl.textContent = css;
+
+// To show all annotations again, clear the style:
+styleEl.textContent = "";
+```
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `hiddenLabelIds` | `string[]` | Yes | Array of label IDs to hide |
+| `cssClassPrefix` | `string` | No | CSS class prefix (default: `"ext-annot-"`) |
+
+#### `generateAnnotationCss(labels, options?): Promise<string>`
+
+Generate annotation CSS independently from HTML content. Useful when managing CSS separately or pre-generating stylesheets.
+
+```typescript
+const labels = {
+  "CLAUSE": { id: "CLAUSE", text: "Clause", color: "#FF5722",
+              description: "", icon: "", labelType: "text" as const },
+  "TERM":   { id: "TERM", text: "Term", color: "#2196F3",
+              description: "", icon: "", labelType: "text" as const },
+};
+const css = await generateAnnotationCss(labels, {
+  cssClassPrefix: 'ext-annot-',
+  labelMode: AnnotationLabelMode.Above
+});
+```
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `labels` | `Record<string, AnnotationLabel>` | Yes | Label definitions keyed by label ID |
+| `options` | `ExternalAnnotationProjectionSettings` | No | Projection settings |
+
+### React Hooks
+
+#### `useDocxodus(wasmBasePath?: string)`
+
+Main hook providing all Docxodus functionality.
+
+```tsx
+const {
+  isReady,      // boolean - WASM loaded
+  isLoading,    // boolean - WASM loading
+  error,        // Error | null
+  convertToHtml,
+  compare,
+  compareToHtml,
+  getRevisions
+} = useDocxodus();
+```
+
+#### `useConversion(wasmBasePath?: string)`
+
+Simplified hook for DOCX to HTML conversion with state management.
+
+```tsx
+const {
+  html,           // string - converted HTML
+  isConverting,   // boolean
+  error,          // Error | null
+  convert         // (file, options?) => Promise<void>
+} = useConversion();
+```
+
+#### `useComparison(wasmBasePath?: string)`
+
+Simplified hook for document comparison with state management.
+
+```tsx
+const {
+  html,           // string - comparison HTML
+  result,         // Uint8Array - redlined DOCX
+  isComparing,    // boolean
+  error,          // Error | null
+  compare,        // (original, modified, options?) => Promise<void>
+  compareToHtml,  // (original, modified, options?) => Promise<void>
+  downloadResult  // (filename) => void
+} = useComparison();
+```
+
+#### `useDocumentStructure(docxBytes: Uint8Array | null)`
+
+Hook for analyzing document structure with navigation helpers.
+
+```tsx
+import { useDocumentStructure } from 'docxodus/react';
+
+function DocumentExplorer({ docxBytes }: { docxBytes: Uint8Array | null }) {
+  const {
+    structure,        // DocumentStructure | null
+    isLoading,        // boolean
+    error,            // Error | null
+    paragraphs,       // DocumentElement[] - all paragraphs
+    tables,           // DocumentElement[] - all tables
+    findById,         // (id: string) => DocumentElement | undefined
+    getTableColumns   // (tableId: string) => TableColumnInfo[]
+  } = useDocumentStructure(docxBytes);
+
+  if (isLoading) return <div>Analyzing...</div>;
+  if (error) return <div>Error: {error.message}</div>;
+  if (!structure) return <div>No document loaded</div>;
+
+  return (
+    <div>
+      <h3>Paragraphs ({paragraphs.length})</h3>
+      <ul>
+        {paragraphs.map(p => (
+          <li key={p.Id}>
+            <code>{p.Id}</code>: {p.TextPreview?.slice(0, 50)}...
+          </li>
+        ))}
+      </ul>
+
+      <h3>Tables ({tables.length})</h3>
+      {tables.map(t => (
+        <div key={t.Id}>
+          <code>{t.Id}</code>: {t.Children.length} rows
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+#### `useAnnotations` (via `useDocxodus`)
+
+The `useDocxodus` hook includes annotation methods:
+
+```tsx
+import { useDocxodus } from 'docxodus/react';
+
+function AnnotationManager({ docxBytes }: { docxBytes: Uint8Array }) {
+  const {
+    isReady,
+    getAnnotations,
+    addAnnotation,
+    removeAnnotation,
+    hasAnnotations,
+    getDocumentStructure,
+    addAnnotationWithTarget
+  } = useDocxodus();
+
+  const [annotations, setAnnotations] = useState([]);
+  const [doc, setDoc] = useState(docxBytes);
+
+  useEffect(() => {
+    if (isReady && doc) {
+      getAnnotations(doc).then(setAnnotations);
+    }
+  }, [isReady, doc]);
+
+  const handleAddAnnotation = async () => {
+    const result = await addAnnotation(doc, {
+      Id: `annot-${Date.now()}`,
+      LabelId: 'HIGHLIGHT',
+      Label: 'Important',
+      Color: '#FFEB3B',
+      SearchText: 'contract'
+    });
+    setDoc(result.documentBytes);
+  };
+
+  return (
+    <div>
+      <h3>Annotations ({annotations.length})</h3>
+      <button onClick={handleAddAnnotation}>Add Annotation</button>
+      <ul>
+        {annotations.map(a => (
+          <li key={a.Id}>
+            {a.Label}: "{a.AnnotatedText}"
+            <button onClick={() => removeAnnotation(doc, a.Id).then(r => setDoc(r.documentBytes))}>
+              Remove
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+```
+
+## Hosting WASM Files
+
+The WASM files are included in the npm package under `dist/wasm/`. They need to be served from your web server.
+
+### Auto-Detection (Recommended)
+
+By default, the library auto-detects WASM location from the module URL. This works automatically with:
+- CDN usage (jsdelivr, unpkg, etc.)
+- Standard npm imports in bundlers
+- Direct script imports
+
+### Manual Configuration
+
+If auto-detection doesn't work for your setup:
+
+```javascript
+import { initialize } from 'docxodus';
+
+// Specify custom WASM location
+await initialize('/assets/wasm/');
+```
+
+### Directory Structure
+
+After building, copy `node_modules/docxodus/dist/wasm/` to your public directory:
+
+```
+public/
+  wasm/
+    _framework/
+      dotnet.js
+      dotnet.native.wasm
+      ... (other framework files)
+```
+
+## Package and Runtime Size
+
+The WASM runtime payload is IL-trimmed to the API surface the package actually exposes
+(see `docs/architecture/wasm-packaging.md`):
+
+| Metric | Size |
+|--------|------|
+| `dist/wasm/_framework` fetched by the browser (uncompressed) | ~12.9 MB |
+| Over the wire from a Brotli-serving host | **~3.2 MB** |
+| Over the wire from a gzip-on-the-fly host | ~4.1 MB |
+
+Every `_framework` asset ships with a precompressed `.br` sibling (brotli quality 11).
+To get the ~3.2 MB wire size, configure your host to serve them with
+`Content-Encoding: br` and `Vary: Accept-Encoding`, keeping the original
+`Content-Type` — e.g. nginx `brotli_static on;`, Caddy `file_server { precompressed br }`.
+Netlify, Vercel, and Cloudflare Pages do this automatically. Hosts that ignore the
+`.br` files simply serve the uncompressed assets. The files are fetched once and
+cached by the browser.
+
+## Browser Support
+
+- Chrome 89+
+- Firefox 89+
+- Safari 15+
+- Edge 89+
+
+Requires WebAssembly SIMD support.
+
+## CDN Usage
+
+You can use Docxodus directly from a CDN without npm. For an embeddable viewer or
+editor, the `embed` bundle is the one-tag path — it packages the whole stack
+(converter, editor, sessions) with WASM location auto-detection:
+
+```html
+<div id="viewer"></div>
+<div id="editor"></div>
+<script type="module">
+  import { createViewer, createEditor }
+    from 'https://cdn.jsdelivr.net/npm/docxodus@13.0.0/dist/embed.bundle.js';
+
+  // Choose either factory, or render both into separate containers as shown.
+  // Source: URL string, Uint8Array, ArrayBuffer, Blob, or File.
+  await createViewer('#viewer', './document.docx');
+
+  // Editable document; omit the source for a blank document.
+  const editor = await createEditor('#editor', './document.docx');
+  const editedBytes = editor.save();
+</script>
+```
+
+Pages that can't use module scripts load `dist/embed.iife.js` instead, which exposes
+the same surface as a `Docxodus` global and resolves the WASM assets from the script's
+own URL. Pin an exact version in production — the JS wrappers and WASM assemblies must
+come from the same release, and CDN responses are cached as immutable.
+
+Both factories scope converter selectors to a private inner mount, so document rules such as
+`body` and `span` cannot restyle the host page. Document-global `@import` and `@page` rules are
+omitted because they cannot be safely container-scoped; use the full-document conversion/print
+path instead when those rules are required.
+
+Individual ESM entries also work directly, exactly as when self-hosted:
+
+```html
+<script type="module">
+  import { initialize, convertDocxToHtml, CommentRenderMode } from 'https://cdn.jsdelivr.net/npm/docxodus@latest/dist/index.js';
+
+  await initialize();
+
+  const response = await fetch('document.docx');
+  const docxBytes = new Uint8Array(await response.arrayBuffer());
+
+  const html = await convertDocxToHtml(docxBytes, {
+    commentRenderMode: CommentRenderMode.EndnoteStyle
+  });
+
+  document.getElementById('content').innerHTML = html;
+</script>
+```
+
+Limitation: the Web Worker entry (`docxodus/worker`) cannot be loaded cross-origin
+(browsers require same-origin worker scripts), so the embed bundle runs the engine on
+the main thread. Self-host the package if you need off-main-thread execution.
+
+## Related Documentation
+
+- [Custom Annotations Architecture](architecture/custom_annotations.md) - Annotation system design and implementation
+- [Comment Rendering Architecture](architecture/comment_rendering.md) - Detailed documentation on comment rendering implementation
+- [DOCX Converter Architecture](architecture/docx_converter.md) - HTML conversion internals
+- [IR Diff Engine](architecture/ir_diff_engine.md) - Document comparison engine (`DocxDiff`) design
+
+## License
+
+MIT

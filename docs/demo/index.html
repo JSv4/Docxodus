@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Docxodus — Word documents in the browser, no server</title>
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml" />
+  <meta name="description" content="Render, edit, and redline .docx files entirely in the browser via WebAssembly. Try the live editor." />
+
+  <!--
+    Share THIS page's URL on social platforms.
+
+    X no longer documents its historical Player Card format, so this page uses
+    a large-image link card instead of promising an in-post iframe. LinkedIn
+    and X both render/link this landing page; websites can embed player.html
+    directly with the iframe supplied by the on-page Embed dialog.
+
+    Hosting: enable GitHub Pages (Settings → Pages → GitHub Actions) and
+    the repository's static Pages workflow serves this page at
+    https://jsv4.github.io/Docxodus/demo/ — which is what the absolute URLs
+    below assume. Adjust them if hosting elsewhere.
+
+    The editor in this page is NOT hand-written: it is `createRibbonEditor` from
+    the published package — the same surface app.html serves full-bleed and the
+    standalone example serves from a local runtime. That is deliberate. When the
+    three were separate hand-rolled toolbars they drifted, and the demo ended up
+    advertising a smaller editor than the one that shipped.
+
+    On a phone this page mounts THE DOCX ARCADE instead of the plain editor
+    (same surface, a game running on one of its paragraphs). A phone visitor
+    will not draft a contract on a 390px screen, but they will absolutely play
+    the thing — and the arcade demonstrates the same engine harder: a document
+    being rewritten and re-rendered ten times a second, still saving as a real
+    .docx. `?demo=editor` pins the plain editor, `?demo=arcade` the game.
+  -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Docxodus — a Word-document engine in your browser" />
+  <meta property="og:description" content="Render, edit, and redline .docx files entirely client-side via WebAssembly. This page IS the demo — the editor below is live." />
+  <meta property="og:url" content="https://jsv4.github.io/Docxodus/demo/" />
+  <meta property="og:image" content="https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/images/editor/editor-overview.png" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <!-- Set to the maintainer's handle before sharing; some clients want it present. -->
+  <!-- <meta name="twitter:site" content="@yourhandle" /> -->
+  <meta name="twitter:title" content="Docxodus — a Word-document engine in your browser" />
+  <meta name="twitter:description" content="Open a live .docx editor powered by WebAssembly—no server, lossless output." />
+  <meta name="twitter:image" content="https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/images/editor/editor-overview.png" />
+
+  <!-- Inter — the house UI typeface (headlines fall to Georgia, a system serif). -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <style>
+    /* OS-Legal design system (github.com/Open-Source-Legal/OS-Legal-Style):
+       warm light canvas, deep-teal accent, slate foregrounds, Georgia headlines,
+       and light-touch shadows. Structure over decoration. */
+    :root {
+      color-scheme: light;
+      --accent: #0F766E;
+      --accent-hover: #0D9488;
+      --accent-active: #115E59;
+      --ink: #1E293B;
+      --muted: #475569;
+      --faint: #94A3B8;
+      --canvas: #FAFAFA;
+      --surface: #FFFFFF;
+      --line: #E2E8F0;
+      --line-strong: #CBD5E1;
+      --sidebar: #0F172A;
+      --success: #059669;
+      --danger: #DC2626;
+      --serif: Georgia, "Times New Roman", serif;
+      --shadow-md: 0 1px 3px rgba(15, 23, 42, .06), 0 4px 6px rgba(15, 23, 42, .03);
+      --shadow-lg: 0 4px 6px rgba(15, 23, 42, .05), 0 10px 15px rgba(15, 23, 42, .04);
+      --shadow-xl: 0 8px 16px rgba(15, 23, 42, .06), 0 20px 25px rgba(15, 23, 42, .05);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      font-family: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--canvas);
+      color: var(--ink);
+    }
+    a { color: inherit; }
+    button { font: inherit; }
+
+    .hero { position: relative; overflow: hidden; background: var(--surface); border-bottom: 1px solid var(--line); }
+    .hero::after {
+      position: absolute;
+      width: 34rem;
+      height: 34rem;
+      right: -14rem;
+      top: -20rem;
+      border-radius: 50%;
+      content: "";
+      background: rgba(15, 118, 110, .07);
+      filter: blur(80px);
+      pointer-events: none;
+    }
+    .hero-inner { width: min(1180px, calc(100% - 40px)); margin: 0 auto; }
+    .topbar { min-height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .brand { display: inline-flex; align-items: center; gap: 12px; font-weight: 700;
+      letter-spacing: -.02em; text-decoration: none; }
+    .brand-mark { position: relative; width: 31px; height: 36px; border: 1px solid var(--line-strong);
+      border-radius: 7px; background: var(--surface);
+      box-shadow: var(--shadow-md); transform: rotate(-4deg); }
+    .brand-mark::before, .brand-mark::after { position: absolute; left: 7px; content: "";
+      height: 2px; border-radius: 2px; background: var(--line-strong); }
+    .brand-mark::before { top: 11px; width: 15px; box-shadow: 0 7px 0 var(--line); }
+    .brand-mark::after { top: 25px; width: 10px; background: var(--accent); }
+    nav { display: flex; align-items: center; gap: 8px; }
+    nav a { color: var(--muted); padding: 8px 11px; border-radius: 9px; font-size: 13px;
+      text-decoration: none; transition: color .2s, background .2s; }
+    nav a:hover { color: var(--ink); background: #F1F5F9; }
+    nav .nav-cta { color: #fff; background: var(--accent); font-weight: 600; }
+    nav .nav-cta:hover { color: #fff; background: var(--accent-hover); }
+
+    .hero-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(300px, .8fr);
+      align-items: center; gap: clamp(36px, 7vw, 92px); padding: 68px 0 82px; }
+    .eyebrow { display: inline-flex; align-items: center; gap: 9px; margin-bottom: 20px; color: var(--accent);
+      font-size: 12px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+    .eyebrow::before { width: 28px; height: 1px; content: ""; background: currentColor; }
+    h1 { max-width: 760px; margin: 0; font-family: var(--serif); font-size: clamp(40px, 7vw, 74px);
+      line-height: 1.02; letter-spacing: -.02em; font-weight: 500; }
+    h1 span { color: var(--accent); font-style: italic; }
+    .hero-copy { max-width: 650px; margin: 25px 0 0; color: var(--muted); font-size: clamp(16px, 2vw, 19px);
+      line-height: 1.65; }
+    .hero-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
+    .hero-button { display: inline-flex; align-items: center; gap: 10px; min-height: 44px; padding: 12px 17px;
+      border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+      color: inherit; font-size: 13px; font-weight: 600; text-decoration: none; cursor: pointer;
+      box-shadow: var(--shadow-md); transition: transform .2s, border-color .2s, box-shadow .2s; }
+    .hero-button:hover { transform: translateY(-2px); border-color: var(--line-strong); box-shadow: var(--shadow-lg); }
+    .hero-button.primary { color: #fff; border-color: transparent; background: var(--accent);
+      box-shadow: 0 4px 14px rgba(15, 118, 110, .2); }
+    .hero-button.primary:hover { background: var(--accent-hover); box-shadow: 0 8px 24px rgba(15, 118, 110, .25); }
+    .proof-row { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 28px; color: var(--muted); font-size: 12px; }
+    .proof-row span { display: inline-flex; align-items: center; gap: 7px; }
+    .proof-row span::before { width: 6px; height: 6px; border-radius: 50%; content: ""; background: var(--success); }
+
+    .capability-stack { position: relative; min-height: 350px; perspective: 900px; }
+    .capability-card { position: absolute; width: min(100%, 360px); padding: 22px; border: 1px solid var(--line);
+      border-radius: 16px; background: var(--surface); box-shadow: var(--shadow-xl); }
+    .capability-card:nth-child(1) { right: 0; top: 0; transform: rotate(2deg); }
+    .capability-card:nth-child(2) { left: 0; top: 116px; transform: rotate(-3deg); }
+    .capability-card:nth-child(3) { right: 8px; top: 235px; transform: rotate(1deg); }
+    .capability-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; }
+    .capability-icon { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 10px;
+      color: var(--accent); background: #F0FDFA; border: 1px solid #99F6E4; }
+    .capability-tag { color: var(--faint); font-size: 10px; font-weight: 600; letter-spacing: .11em; text-transform: uppercase; }
+    .capability-card strong { display: block; font-size: 15px; }
+    .capability-card p { margin: 7px 0 0; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+
+    /* The page mounts ONE of two demos (the decision is taken in <head>, before
+       first paint, so the framing copy never flashes the wrong one). */
+    [data-demo="editor"] .for-arcade, [data-demo="arcade"] .for-editor { display: none; }
+
+    #stage { width: min(1220px, calc(100% - 32px)); margin: 54px auto 70px; }
+    .section-kicker { margin: 0 0 10px; color: var(--accent); font-size: 11px; font-weight: 700;
+      letter-spacing: .14em; text-transform: uppercase; }
+    .section-title { margin: 0 0 8px; font-family: var(--serif); font-weight: 500;
+      font-size: clamp(26px, 4vw, 42px); letter-spacing: -.02em; }
+    .section-sub { margin: 0 0 23px; max-width: 62ch; color: var(--muted); font-size: 14px; line-height: 1.6; }
+    .section-sub a { color: var(--accent); }
+    /* Positioned: the arcade's thumb controls overlay THIS card rather than the
+       viewport, so they float over the game and not over the page's own prose. */
+    #frame { position: relative; overflow: hidden; border: 1px solid var(--line); border-radius: 16px;
+      background: var(--surface); box-shadow: var(--shadow-xl); }
+    .workspace-head { min-height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 18px;
+      padding: 10px 16px; color: #CBD5E1; background: var(--sidebar); border-bottom: 1px solid rgba(255,255,255,.08); }
+    #statusbar { min-width: 0; display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
+    #statusbar .dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: #FBBF24;
+      box-shadow: 0 0 0 5px rgba(251,191,36,.12); }
+    #statusbar[data-state="ready"] .dot { background: #34D399;
+      box-shadow: 0 0 0 5px rgba(52,211,153,.12); }
+    #statusbar[data-state="error"] .dot { background: #F87171;
+      box-shadow: 0 0 0 5px rgba(248,113,113,.12); }
+    #pageStatus { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .privacy-chip { flex: 0 0 auto; padding: 6px 9px; border: 1px solid rgba(52,211,153,.25); border-radius: 999px;
+      color: #6EE7B7; background: rgba(52,211,153,.08); font-size: 10.5px; font-weight: 600; }
+
+    /* The editor mount. Height is fixed so the surface scrolls the DOCUMENT rather than
+       the page — the ribbon has to stay reachable while you scroll a long contract. */
+    #workspace { height: clamp(560px, 78vh, 820px); }
+    /* Chrome on Android's text autosizer (the system "Text scaling" setting)
+       would inflate the embedded document's text while its authored column
+       width stays fixed, re-breaking every line the document says — so the
+       editor workspace opts out (the page's own prose keeps autosizing). The
+       property is non-inherited and Blink consults the autosizing cluster
+       roots it picks itself, hence the universal selector. Newer engines emit
+       this inside the document render too; page-level also covers engine overrides. */
+    #workspace, #workspace * { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
+    .feature-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; margin-top: 18px; overflow: hidden;
+      border: 1px solid var(--line); border-radius: 16px; background: var(--line); box-shadow: var(--shadow-md); }
+    .feature-strip article { padding: 20px; background: var(--surface); }
+    .feature-strip small { color: var(--accent); font: 600 9px/1 ui-monospace, monospace; letter-spacing: .12em; }
+    .feature-strip strong { display: block; margin-top: 10px; font-size: 14px; }
+    .feature-strip p { margin: 7px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+    footer { padding: 0 20px 44px; text-align: center; color: var(--faint); font-size: 11px; }
+    footer a { color: var(--muted); }
+
+    #embedDialog { width: min(720px, calc(100% - 28px)); max-height: min(720px, calc(100vh - 28px));
+      padding: 0; overflow: auto; border: 1px solid var(--line); border-radius: 16px;
+      color: var(--ink); background: var(--surface); box-shadow: var(--shadow-xl); }
+    #embedDialog::backdrop { background: rgba(15, 23, 42, .45); backdrop-filter: blur(6px); }
+    .embed-inner { padding: clamp(22px, 5vw, 34px); }
+    .embed-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+    .embed-kicker { color: var(--accent); font-size: 10px; font-weight: 700; letter-spacing: .15em; text-transform: uppercase; }
+    .embed-head h2 { margin: 8px 0 0; font-family: var(--serif); font-weight: 500;
+      font-size: clamp(24px, 5vw, 35px); letter-spacing: -.02em; }
+    .dialog-close { width: 34px; height: 34px; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 9px;
+      color: var(--muted); background: var(--surface); font-size: 19px; cursor: pointer; }
+    .dialog-close:hover { background: #F1F5F9; color: var(--ink); }
+    .embed-intro { margin: 14px 0 21px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+    .embed-option { margin-top: 16px; padding: 16px; border: 1px solid var(--line); border-radius: 12px;
+      background: var(--canvas); }
+    .embed-option-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 10px;
+      flex-wrap: wrap; }
+    .embed-option strong { font-size: 13px; }
+    .embed-option p { margin: 0 0 10px; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+    .copy-button { padding: 7px 10px; border: 1px solid #99F6E4; border-radius: 8px;
+      color: var(--accent); background: #F0FDFA; font-size: 10px; font-weight: 700; cursor: pointer; }
+    .copy-button:hover { background: #CCFBF1; }
+    .embed-code { margin: 0; padding: 13px; overflow-x: auto; border-radius: 9px; color: #E2E8F0;
+      background: var(--sidebar); font: 10.5px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre; }
+    .social-note { display: flex; gap: 11px; margin-top: 18px; padding: 14px; border: 1px solid #99F6E4;
+      border-radius: 12px; color: var(--muted); background: #F0FDFA; font-size: 11.5px; line-height: 1.55; }
+    .social-note strong { color: var(--accent-active); }
+
+    @media (max-width: 820px) {
+      .hero-grid { grid-template-columns: 1fr; padding-top: 48px; }
+      /* The fanned, overlapping stack is a wide-screen flourish. Narrow, it is three
+         cards covering each other's copy — so they fall back into ordinary flow. */
+      .capability-stack { display: grid; gap: 12px; min-height: 0; perspective: none; }
+      .capability-card { position: static; width: auto; transform: none; }
+      .feature-strip { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 620px) {
+      .hero-inner { width: min(100% - 26px, 1180px); }
+      /* Every destination stays reachable on a phone. These links point at the
+         other demo pages — the arcade, the observatory, the full-screen editor
+         — which is exactly what a phone visitor wants, and collapsing them to
+         display:none turned the landing page into a dead end. A horizontal
+         scroll strip rather than a hamburger: six chips are one swipe, and
+         nothing hides behind a second tap. */
+      .topbar { min-height: 0; flex-direction: column; align-items: stretch; gap: 4px;
+        padding: 12px 0 2px; }
+      nav { margin: 0 -13px; padding: 2px 13px 8px; overflow-x: auto;
+        scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+      nav::-webkit-scrollbar { display: none; }
+      nav a { flex: 0 0 auto; display: inline-flex; align-items: center; min-height: 34px;
+        border: 1px solid var(--line); background: var(--surface); white-space: nowrap; }
+      nav .nav-cta { border-color: transparent; }
+      .hero-grid { padding: 42px 0 62px; }
+      .workspace-head { align-items: flex-start; flex-direction: column; gap: 8px; }
+      .privacy-chip { display: none; }
+      /* On a phone the surface owns the screen: a short frame would leave the document
+         in a letterbox, and the ribbon collapses to its compact layout anyway. */
+      #workspace { height: min(78vh, 620px); }
+      /* The arcade also spends its bottom ~190px on the thumb controls, so it
+         gets the taller frame — a letterboxed game screen is unplayable.
+         Sized in dvh where that exists: vh on a phone is the tall viewport with
+         the browser chrome hidden, which would push the controls under it.
+         (After boot the script below shrinks this to hug the game screen, so
+         the thumb controls land under the action instead of over blank paper.) */
+      [data-demo="arcade"] #workspace { height: min(86vh, 720px); }
+      [data-demo="arcade"] #workspace { height: min(80dvh, 720px); }
+      /* Crop the letter page's white side margins so the game screen runs
+         edge-to-edge on a phone. The editor's fit-to-width zoom measures the
+         surface element, so widening it by the margins' share of the page
+         (2 × 1in of 8.5in ≈ 15.4% per side, the blank doc the arcade seeds)
+         lands the 6.5in text column — the game bezel — exactly on the card's
+         visible width, with the margins hanging clipped off both edges. The
+         document itself is untouched; this is presentation, like a word
+         processor hiding whitespace. Arcade only: in the editor demo the
+         margins are part of the document being edited. */
+      [data-demo="arcade"] #workspace .dxr-scroll { overflow-x: hidden; }
+      [data-demo="arcade"] #workspace .dxr-surface {
+        margin-left: -15.4%; margin-right: -15.4%;
+        padding-left: 0; padding-right: 0;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+    }
+  </style>
+
+  <script>
+    // Which demo this page mounts — decided once, synchronously, before the
+    // first paint, so the copy framing the surface can never flash the wrong
+    // one and the module script below has nothing left to decide.
+    //
+    // Width, not touch: it is how much room the frame has that decides whether
+    // a document surface is worth serving here, and a width test stays true
+    // when the window is resized (and testable without a device emulator).
+    const forcedDemo = new URLSearchParams(location.search).get("demo");
+    document.documentElement.dataset.demo =
+      forcedDemo === "arcade" || forcedDemo === "editor" ? forcedDemo
+        : window.matchMedia("(max-width: 620px)").matches ? "arcade" : "editor";
+  </script>
+</head>
+<body>
+  <header class="hero">
+    <div class="hero-inner">
+      <div class="topbar">
+        <a class="brand" href="./" aria-label="Docxodus home"><span class="brand-mark" aria-hidden="true"></span>Docxodus</a>
+        <nav aria-label="Primary navigation">
+          <a href="https://github.com/JSv4/Docxodus" target="_blank" rel="noopener">GitHub</a>
+          <a href="https://www.npmjs.com/package/docxodus" target="_blank" rel="noopener">npm</a>
+          <a href="./app.html">Full editor</a>
+          <a href="./player.html">Compact player</a>
+          <a href="./observatory.html">Observatory</a>
+          <a href="./arcade.html">Arcade</a>
+          <a href="./golf.html">Golf</a>
+          <a class="nav-cta" href="#live-editor">Launch demo ↓</a>
+        </nav>
+      </div>
+
+      <div class="hero-grid">
+        <div>
+          <div class="eyebrow">The document engine for the browser</div>
+          <h1>Word files.<br><span>No server required.</span></h1>
+          <p class="hero-copy">Render, edit, redline, and save real DOCX documents with .NET-grade OOXML fidelity—entirely inside the browser via WebAssembly.</p>
+          <div class="hero-actions">
+            <a class="hero-button primary for-editor" href="#live-editor">Try the live editor <span aria-hidden="true">↘</span></a>
+            <a class="hero-button primary for-arcade" href="#live-editor">Play the arcade <span aria-hidden="true">↘</span></a>
+            <a class="hero-button for-editor" href="./app.html">Open full screen <span aria-hidden="true">↗</span></a>
+            <a class="hero-button for-arcade" href="./arcade.html">Open full screen <span aria-hidden="true">↗</span></a>
+            <button class="hero-button" id="openEmbed" type="button">Embed it <span aria-hidden="true">&lt;/&gt;</span></button>
+            <a class="hero-button" href="https://github.com/JSv4/Docxodus" target="_blank" rel="noopener">View source <span aria-hidden="true">↗</span></a>
+          </div>
+          <div class="proof-row" aria-label="Key guarantees">
+            <span>Nothing uploaded</span><span>Real DOCX output</span><span>Open source</span>
+          </div>
+        </div>
+
+        <div class="capability-stack" aria-label="Docxodus capabilities">
+          <article class="capability-card">
+            <div class="capability-top"><span class="capability-icon" aria-hidden="true">⌁</span><span class="capability-tag">Faithful render</span></div>
+            <strong>Word-grade document structure</strong>
+            <p>Tables, numbering, footnotes, headers, styles, and tracked changes stay document-native.</p>
+          </article>
+          <article class="capability-card">
+            <div class="capability-top"><span class="capability-icon" aria-hidden="true">✦</span><span class="capability-tag">Surgical edit</span></div>
+            <strong>Edit without flattening</strong>
+            <p>Formatting and text edits flow back into OOXML—not a canvas, screenshot, or lossy HTML export.</p>
+          </article>
+          <article class="capability-card">
+            <div class="capability-top"><span class="capability-icon" aria-hidden="true">↓</span><span class="capability-tag">Private by design</span></div>
+            <strong>Save locally as .docx</strong>
+            <p>The source document and every edit remain in your browser session.</p>
+          </article>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main id="stage">
+    <div id="live-editor">
+      <p class="section-kicker for-editor">Not a screenshot</p>
+      <h2 class="section-title for-editor">The document below is live.</h2>
+      <p class="section-sub for-editor">This is the shipped editor surface — the same ribbon, tables, footnotes and
+        header/footer tools you get from <code>createRibbonEditor</code> in the npm package. It narrows to a
+        one-handed layout on a phone. <a href="./app.html">Open it full screen ↗</a> ·
+        <a href="?demo=arcade">Play the arcade on it ↗</a></p>
+
+      <p class="section-kicker for-arcade">Not a video</p>
+      <h2 class="section-title for-arcade">The game below is a Word document.</h2>
+      <p class="section-sub for-arcade">Its screen is one paragraph, rewritten and re-rendered ten times a
+        second by the same engine that edits contracts — on the same shipped ribbon. Pause and type terrain
+        straight into the level; resume and it is solid. Save mid-jump and you get a real
+        <code>.docx</code>. <a href="./arcade.html">Open it full screen ↗</a> ·
+        <a href="?demo=editor">Prefer the plain editor? ↗</a></p>
+    </div>
+
+    <section id="frame" aria-label="Live Docxodus editor">
+      <div class="workspace-head">
+        <div id="statusbar" data-state="loading" role="status" aria-live="polite">
+          <span class="dot" aria-hidden="true"></span><span id="pageStatus">Streaming the WebAssembly engine…</span>
+        </div>
+        <span class="privacy-chip">● Local session · zero upload</span>
+      </div>
+
+      <div id="workspace"></div>
+    </section>
+
+    <div class="feature-strip" aria-label="Editor feature summary">
+      <article><small>01 / EDIT</small><strong>Real editing controls</strong><p>Format text, restyle paragraphs, build tables, cite footnotes, and keep working in the original document model.</p></article>
+      <article><small>02 / VIEW</small><strong>Continuous or paginated</strong><p>Switch to page boxes, or open the header and footer bands, without reopening the file or losing session edits.</p></article>
+      <article><small>03 / SAVE</small><strong>Lossless DOCX download</strong><p>Export the edited Office file locally. There is no conversion server in the middle.</p></article>
+    </div>
+  </main>
+
+  <footer>Powered by <a href="https://www.npmjs.com/package/docxodus">Docxodus</a>,
+    built together with this demo. Everything runs client-side.</footer>
+
+  <dialog id="embedDialog" aria-labelledby="embedTitle">
+    <div class="embed-inner">
+      <div class="embed-head">
+        <div><div class="embed-kicker">Two ways to ship it</div><h2 id="embedTitle">Put Docxodus anywhere.</h2></div>
+        <button class="dialog-close" id="closeEmbed" type="button" aria-label="Close embed dialog">×</button>
+      </div>
+      <p class="embed-intro">Use the compact hosted player for a zero-build embed, or import the editor module when you want the full surface inside your own product.</p>
+      <section class="embed-option">
+        <div class="embed-option-head"><strong>Drop-in iframe · compact player</strong><button class="copy-button" id="copyIframe" type="button">Copy iframe</button></div>
+        <p>Boots on tap and fits a small panel. Good for a sidebar or a card in a feed.</p>
+        <pre class="embed-code"><code id="iframeCode"></code></pre>
+      </section>
+      <section class="embed-option">
+        <div class="embed-option-head"><strong>Native JavaScript · the full ribbon surface</strong><button class="copy-button" id="copyModule" type="button">Copy module</button></div>
+        <p>One call mounts the entire editor — ribbon, tables, notes, header/footer bands and the loading
+          overlay — and it picks its own layout from the width of the element you give it.</p>
+        <pre class="embed-code"><code id="moduleCode"></code></pre>
+      </section>
+      <div class="social-note"><span aria-hidden="true">✦</span><span><strong>Sharing on X / LinkedIn:</strong> paste the demo URL, not iframe HTML. Social feeds decide the card presentation and normally open this live page on click; websites you control can render the iframe directly.</span></div>
+    </div>
+  </dialog>
+
+  <script type="module">
+    const params = new URLSearchParams(location.search);
+    import { loadDemoEngine } from "./engine.js";
+    const DOC = params.get("doc")
+      ?? "./docxodus-demo-guide.docx";
+    // The arcade and its controls are demo content living beside this page, so
+    // ?engine= pins the library alone and they version with the site — the same
+    // split arcade.html and observatory.html use.
+    const GAMES_URL = params.get("games") ?? "./ascii-arcade.js";
+    const DOCK_URL = params.get("dock") ?? "./arcade-dock.js";
+    // Decided in <head>, before paint. Read, never re-derived.
+    const DEMO = document.documentElement.dataset.demo;
+
+    const $ = (id) => document.getElementById(id);
+    const statusbar = $("statusbar");
+    const iframeSnippet = `<iframe
+  src="https://jsv4.github.io/Docxodus/demo/player.html"
+  width="480" height="480"
+  title="Docxodus live DOCX editor"
+  loading="lazy"
+  sandbox="allow-scripts allow-same-origin allow-downloads"
+  style="border:0;border-radius:18px;overflow:hidden">
+</iframe>`;
+    const moduleSnippet = `<div id="docx-editor" style="height:80vh"></div>
+<script type="module">
+  import { createRibbonEditor } from
+    "https://cdn.jsdelivr.net/npm/docxodus@13.0.0/dist/embed.bundle.js";
+
+  await createRibbonEditor("#docx-editor", "/documents/example.docx");
+<\/script>`;
+
+    const setStatus = (text, state = "loading") => {
+      $("pageStatus").textContent = text;
+      statusbar.dataset.state = state;
+    };
+    const copyText = async (text, button) => {
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        const area = Object.assign(document.createElement("textarea"), { value: text });
+        area.style.cssText = "position:fixed;opacity:0";
+        document.body.append(area);
+        area.select();
+        document.execCommand("copy");
+        area.remove();
+      }
+      const previous = button.textContent;
+      button.textContent = "Copied!";
+      setTimeout(() => { button.textContent = previous; }, 1500);
+    };
+
+    $("iframeCode").textContent = iframeSnippet;
+    $("moduleCode").textContent = moduleSnippet;
+    $("openEmbed").addEventListener("click", () => $("embedDialog").showModal());
+    $("closeEmbed").addEventListener("click", () => $("embedDialog").close());
+    $("copyIframe").addEventListener("click", (event) => copyText(iframeSnippet, event.currentTarget));
+    $("copyModule").addEventListener("click", (event) => copyText(moduleSnippet, event.currentTarget));
+    $("embedDialog").addEventListener("click", (event) => {
+      if (event.target === $("embedDialog")) $("embedDialog").close();
+    });
+
+    // Both branches mount the SAME shipped surface into the same frame; they
+    // differ only in what is loaded into it and what steers it.
+    const surfaceOptions = {
+      // The landing page frames the surface itself (status head + card), so the
+      // surface stays flush inside it.
+      frame: "flush",
+      // Relay the surface's own status into the chip, without demoting the dot
+      // back to "loading" for routine post-boot messages ("Saved …").
+      onStatus: (text) => setStatus(text, statusbar.dataset.state === "ready" ? "ready" : "loading"),
+      loader: {
+        eyebrow: "Running locally in this tab",
+        meta: DEMO === "arcade" ? "a live DOCX as the framebuffer" : "DOCX → WASM → DOCX",
+      },
+    };
+
+    const started = performance.now();
+    try {
+      if (DEMO === "arcade") {
+        const [{ createRibbonEditor, DocxSession, getWasmExports },
+               { startArcade }, { mountArcadeDock }] =
+          await Promise.all([loadDemoEngine(), import(GAMES_URL), import(DOCK_URL)]);
+
+        const ribbon = await createRibbonEditor("#workspace", null, {
+          history: false,
+          ...surfaceOptions,
+          documentName: "docx-arcade.docx",
+          headerFooter: false,
+          hint: "The game screen below is a Word paragraph. Pause (or tap it) and edit it like any other document.",
+        });
+        const editor = ribbon.editor;
+        const bridge = getWasmExports().DocxSessionBridge;
+        const session = new DocxSession(editor.sessionHandle, bridge);
+        // Anchored to the card, not the viewport: the thumb controls float over
+        // the game, and the page's own prose above and below stays clear of them.
+        // No Embed button here — this page has its own embed dialog.
+        const dock = mountArcadeDock($("frame"), { anchor: "host" });
+        const controller = startArcade({
+          editor,
+          session,
+          intro: params.get("intro") !== "0",
+          ui: dock.ui,
+          // Same overrides the cabinet takes — a same-origin IWAD and a mute
+          // switch, and deliberately no engine override. See
+          // docs/demo/vendor/NOTICE.md.
+          doom: {
+            wadUrl: params.get("wad") ?? undefined,
+            sound: params.get("sound") !== "0",
+          },
+        });
+        dock.show();
+
+        // On a phone the CSS default keeps the card 80dvh tall — mostly blank
+        // paper below the game, with the thumb controls floating over it far
+        // from the action. Once the arcade is live the card hugs the game
+        // instead: the canvas paragraph's bottom edge plus room for the pad
+        // and dock, so the thumbs land directly under the screen they steer.
+        // Re-measured when the title/loading card becomes a DOOM frame, and on resize.
+        const workspace = $("workspace");
+        const hugCard = () => {
+          if (!window.matchMedia("(max-width: 620px)").matches) {
+            workspace.style.removeProperty("height");
+            return;
+          }
+          const canvas = controller.canvasElement();
+          if (!canvas) return;
+          const bottom = canvas.getBoundingClientRect().bottom
+            - workspace.getBoundingClientRect().top
+            + ribbon.element.querySelector('.dxr-scroll').scrollTop;
+          // 240px ≈ the caption's first lines + the pad cluster + the dock.
+          const hugged = Math.ceil(bottom + 240);
+          workspace.style.height = `${Math.max(430, hugged)}px`;
+        };
+        requestAnimationFrame(hugCard);
+        new ResizeObserver(hugCard).observe(ribbon.surface);
+        let hugTimer = 0;
+        addEventListener("resize", () => {
+          clearTimeout(hugTimer);
+          hugTimer = setTimeout(hugCard, 160);
+        });
+
+        window.__arcade = { ...controller, editor, ribbon, session, bridge, dock };
+        window.__ribbon = ribbon;
+        setStatus(`Live — the arcade booted in ${Math.round(performance.now() - started)} ms.`, "ready");
+      } else {
+        const { createRibbonEditor } = await loadDemoEngine();
+        // One call mounts the whole surface. The chrome and its loading overlay paint
+        // immediately; the runtime streams behind them. This page contributes only the
+        // dark frame around it and the status chip above it.
+        window.__ribbon = await createRibbonEditor("#workspace", DOC, {
+          ...surfaceOptions,
+          documentName: "docxodus-demo.docx",
+        });
+        setStatus(`Live — engine and document ready in ${Math.round(performance.now() - started)} ms.`, "ready");
+      }
+    } catch (error) {
+      setStatus(String(error).slice(0, 180), "error");
+      window.__demoError = String(error);
+    }
+  </script>
+</body>
+</html>

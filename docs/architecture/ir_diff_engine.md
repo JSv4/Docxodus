@@ -1,0 +1,559 @@
+# IR Diff Engine
+
+> **Status:** Public surface shipped (M2.5). `DocxDiff` (`Docxodus/DocxDiff.cs`) is **the default comparison engine as of v8.0.0** (2026-07-29) — decision D4 is resolved. `WmlComparer` (`Docxodus/WmlComparer.cs`) is the older engine: still available, but feature-frozen — it will not gain new capabilities going forward. See `CHANGELOG.md` under `[8.0.0]` for the flip itself.
+>
+> **Engine selector (M-B):** a shared `ComparisonEngine` selector (`WmlComparer = 0`, `DocxDiff = 1`) lets a caller pick the engine on the CLI (`redline --engine=`), WASM, and npm surfaces, routed through the single `DocxCompare.Compare` dispatch owner (`Docxodus/DocxCompare.cs`). `WmlComparer` keeps wire value `0` for backward compatibility, but an **omitted** selector now resolves to `DocxDiff` on every surface (CLI, WASM, npm/worker) — `WmlComparer` requires an explicit selector.
+
+The IR diff engine is a structure-aware DOCX comparison engine built on Docxodus' intermediate document representation (IR). It is the write-side analogue of the read-only IR pipeline that backs the markdown projection: it reads two documents into anchor-addressed IR snapshots, computes an **edit script** between them, and renders that script three ways — native tracked-changes markup, a consumer revision list, or the script itself as JSON (diff-as-data).
+
+### What it produces
+
+![A redlined venture financing agreement](../images/redline.png)
+
+The [NVCA model voting agreement](https://nvca.org/model-legal-documents/) against a reproducibly
+edited copy, compared with `DocxDiff.Compare` and rendered by `WmlToHtmlConverter` with
+`RenderTrackedChanges: true`. The [screenshot fixture](../../tools/screenshots/redline/README.md)
+uses `DocxSession` for surgical text edits and Open XML block edits for the move/delete/insert.
+Four families of change appear in one frame, all recovered structurally:
+
+| In the screenshot | Markup emitted |
+|---|---|
+| `(f)` "Qualified Key Holder" struck in red | `w:del` |
+| The "Sanctions Authority" definition underlined in green | `w:ins` |
+| Cascaded labels such as struck `(a)` followed by inserted `(b)` | `w:numPr/w:numberingChange` rendered as a deleted/inserted marker pair |
+| `Series A` for a blank, `means` for `shall mean and include` | `w:ins`/`w:del` at token granularity inside an otherwise Equal block |
+| The interpretation clause struck at the bottom in purple, re-inserted at the top | `w:moveFrom`/`w:moveTo`, paired by `w:name` and surfaced as one `MoveGroupId` |
+
+Note the paired list labels: the old letter is struck and the new letter is inserted wherever a
+structural edit shifts the automatic counter. The paragraph text remains unchanged; only its
+resolved numbering marker is redlined.
+
+It is a sibling to `WmlComparer` in the comparison family. The differences that motivate it:
+
+1. **Anchor-addressed revisions.** Every revision carries the stable block anchor(s) (`kind:scope:unid`) it derives from — the same anchor grammar as the markdown projection and `DocxSession`. A revision can be located in the projection or fed straight to a `DocxSession` mutation. `WmlComparer.WmlComparerRevision` has no anchors.
+2. **Diff-as-data.** The edit script serializes to stable JSON, so the diff is storable, transportable to non-.NET consumers, and auditable. `WmlComparer` only produces an OOXML document or an in-memory revision list.
+3. **A modeled IR.** Comparison runs over the IR's typed blocks/runs/format records rather than raw atom streams, which makes table row/cell-precise diffs, footnote/endnote scope diffs, and modeled-format-change detection first-class.
+
+## Public surface
+
+`public static class DocxDiff` (`Docxodus/DocxDiff.cs`):
+
+| Method | Returns | Purpose |
+|---|---|---|
+| `Compare(left, right, settings?)` | `WmlDocument` | Tracked-changes document with native `w:ins`/`w:del`/`w:moveFrom`/`w:moveTo`/`w:rPrChange` markup. Satisfies the WmlComparer contract: `AcceptRevisions(result) ≡ right`, `RejectRevisions(result) ≡ left` at the per-block text level. |
+| `GetRevisions(left, right, settings?)` | `IReadOnlyList<DocxDiffRevision>` | The consumer revision list, rendered directly off the edit script (no produce-then-reparse round-trip). **Content-only (issue #579):** a comment added/removed/edited between the versions is annotation-layer and is deliberately NOT a revision — matching Word's compare, which merges comments rather than redlining them, and matching `Compare`, which carries/threads comments (a comment "revision" would have no markup to accept or reject). Callers who need comment differences use `GetSemanticChanges` (family `comment`) or `DocxSession.ListComments` parity. Pinned by `GetRevisions_CommentOnlyDifference_IsAnnotationLayerNotARevision`. |
+| `GetEditScriptJson(left, right, settings?)` | `string` | The edit script as indented JSON — the diff-as-data differentiator. |
+| `GetSemanticChanges(left, right, options?)` | `SemanticChangeSet` | Stable, versioned verification schema covering content, formatting, structure, relationships, review data, media, and opaque package changes. |
+| `GetSemanticChangesJson(left, right, options?)` | `string` | Deterministic `docxodus.semantic-changes` JSON; use the returned change set's `ToCanonicalJson()` when compact bytes are required for hashing/signing. |
+| `CreateSnapshot(document, settings?)` | `DocxDiffSnapshot` | One document, read once, reusable across comparisons (issue #617). See "Reusing a read across comparisons" below. |
+| `CreateComparison(leftSnapshot, rightSnapshot, settings?)` | `DocxDiffComparison` | A comparison over two already-read snapshots. Products are identical to the document overload's; neither side is read again. Rejects a snapshot read under a different input-revision policy. |
+| `CreateConsolidation(base, reviewers, settings?)` | `DocxDiffConsolidation` | One memoized N-way pass serving all four consolidate products (issue #617). The four statics delegate to a single-use instance, so inspecting conflicts and then consolidating no longer reads the whole reviewer set twice. |
+| `CreateComparison(left, right, settings?)` | `DocxDiffComparison` | One memoized alignment pass serving every product above (issue #594): each product method is identical to its static, but normalization, the IR reads, and the edit-script build run at most once over one input snapshot. The statics delegate to a single-use instance, so this is also the single owner of their pipelines. Products are lazy and cached; the semantic pass keeps its own reader (it retains sources) but shares the snapshot. |
+
+Supporting public types: `DocxDiffSettings`, `DocxDiffRevision`, `DocxDiffRevisionType`, `DocxDiffFormatChange`, `DocxDiffRevisionGranularity`, `DocxDiffFormatComparison`, `DocxDiffComparison`, `DocxDiffSnapshot`, `DocxDiffConsolidation`. All `#nullable enable`, fully XML-documented, no static or process-global state (multi-author / consolidate-compatible — author flows per call via `DocxDiffSettings.AuthorForRevisions`).
+
+On the bridges the memoized pass surfaces as a one-call multi-product compare —
+`DocxDiffOps.CompareProducts[Json]` → `DocxDiffBridge.CompareProductsJson` (WASM) /
+`docxDiffCompareProducts` (npm) / `docx_diff_compare_products` (python), each returning the
+requested subset of `{redline, revisions, editScript, semanticChanges}` with every product
+identical to its standalone call; the MCP `docxodus_compare` computes its redline + revision
+summary from the same single pass.
+
+`SemanticDiff` is the audit-oriented sibling of these renderer surfaces. It keeps the edit script as
+its alignment authority, projects all modeled families into a durable schema, and supplements them
+with bounded package facts so relationship-only or unknown-part edits cannot disappear. See
+[`semantic_diff.md`](semantic_diff.md) for its schema, suppression, transport, and performance contract.
+
+### Anchor grammar and DocxSession interop
+
+`DocxDiffRevision.LeftAnchor` / `RightAnchor` are block anchors of the form `kind:scope:unid` — e.g. `p:body:a1b2c3d4` (a body paragraph), `li:body:…` (list item), `tbl:body:…` (table), `p:fn3:…` (a paragraph in footnote 3). The `kind`/`scope` match the markdown projection's and `DocxSession`'s anchor grammar, so:
+
+- A revision resolves to a location in the markdown projection (review UIs, blame).
+- A revision can be passed straight to a `DocxSession` call (`ReplaceText`, `GetBlockMetadata`, `AddAnnotation`, …) on the corresponding document.
+
+A left anchor resolves against the `left` document's IR; a right anchor against `right`. Anchor presence by revision type: Inserted → right only; Deleted → left only; FormatChanged → both; Moved source → left, Moved destination → right. A token-level revision inside a modified/moved-and-edited block carries the enclosing block's anchor(s).
+
+## Pipeline
+
+```
+                    settings (DocxDiffSettings.ToIrDiffSettings → IrDiffSettings)
+                         │
+left  ─ IrReader.Read ──▶ IrDocument ─┐
+                                      ├─▶ IrEditScriptBuilder.Build ─▶ IrEditScript ─┬─▶ IrMarkupRenderer.Render   ─▶ WmlDocument
+right ─ IrReader.Read ──▶ IrDocument ─┘                                              ├─▶ IrRevisionRenderer.Render ─▶ revisions
+                                                                                     ├─▶ IrEditScriptJson.Write    ─▶ JSON
+                                                                                     └─▶ SemanticDiff projector   ─▶ versioned semantic JSON
+```
+
+Internal stages (all `internal`, under `Docxodus/Ir/Diff/`):
+
+- **`IrReader`** — reads a `WmlDocument` to an `IrDocument` (anchor-indexed blocks; accepted-revision view). Shared with the markdown projection.
+- **`IrDiffTokenizer`** — splits IR runs into word/separator/atomic tokens with match keys (case folding, NBSP conflation, hyperlink-target-in-key, field transparency). The diff's tokenization, NOT an IR fact.
+- **`IrBlockAligner`** — unique-hash `(ContentHash, FormatFingerprint)` anchoring → LIS spine → in-order gap fill; relocations fall off the spine as moves; similarity-based in-gap pairing + cross-gap fuzzy moves. When a reorder admits several equal-length spines, a **structural-anchor tie-break** keeps heavy blocks (tables / section breaks / opaque) anchored and relocates the lighter paragraph instead (a max-WEIGHT LIS, cardinality-primary so the move count is unchanged; fires only when the plain LIS relocated a structural block, so the paragraph-only path is byte-identical). Beyond cleaner two-way markup, this stops an ambiguous paragraph move across a table boundary from spuriously moving the table — which in `Consolidate` would contest the whole table block and block per-cell composition of a second reviewer's disjoint table edit (issue #229).
+  - **The in-place ORDER invariant (`EnforceInPlaceOrderMonotonicity`, issue #288).** `EmitEntries` walks the RIGHT document and emits each left-owning unit at its right position, so `reject ≡ left` is exact in ORDER — not merely as a word multiset — only when the left → right map is strictly increasing across **every** in-place unit: 1:1 pairs *and* split/merge groups. Each forming pass enforces order-preservation against the pairings that existed when it ran (`InOrderRefine`'s crossing bounds, `SameSlotPair`/`JunctionPair`'s `maxBelow`/`minAbove` sweeps, `ReleaseCrossingModifiedPairs`' post-normalization), but nothing re-checked what a LATER pass added — and the split/merge containment scan runs after the refinement passes. A **verbatim-duplicate** block never anchors (`BuildUniqueIndex` keys on content unique to each side), so which occurrence pairs with which is settled in-gap, and the losing occurrence can end up on the wrong side of a group formed afterwards. A single global pass therefore enforces the invariant once: keep a maximum-**weight** strictly-increasing subsequence of (left → right position) and release the rest to plain Deleted/Inserted (always reversible), weight = blocks kept paired, so an ambiguous cut sacrifices the pairing holding the least content. It runs BEFORE cross-gap move detection, so a released pair that IS a relocation comes straight back as a `Moved` — usually a better reading than the in-place pairing it replaced. Fast path: an already-monotone alignment returns after one linear scan, untouched. Pinned by `IrAlignmentAsserts.AssertLeftOrderReconstructible` (asserted on **every** aligner test) and by `DocxDiffFuzzRoundTripTests`' block-sequence comparison.
+- **`IrTokenDiffer`** — token diff inside a paired block (Equal/Insert/Delete/FormatChanged): a character-weighted LCS over content tokens, capped at 4M cells; longer paragraph pairs are first cut into capped regions by linear-memory anchoring (common prefix/suffix, unique-key patience anchors, rarest shared key).
+- **`IrTableDiffer`** — nested table row/cell diffs (a cell-text edit surfaces as a token diff inside that cell, not a whole-table blob).
+- **`IrEditScriptBuilder`** — assembles the `IrEditScript` from the alignment + token/table diffs, including footnote/endnote scope ops.
+- **`IrCrossParagraphSegmenter`** — the second arrangement mode: a region the aligner could not pair block-wise is factored back into output paragraphs from one flat word+pilcrow stream, so retained words cross paragraph boundaries the way Word's do. Selected per region by `IrEditScriptBuilder.TryBuildCrossParagraphRunOp` / `TryBuildStoryFinalMixedRegionOp`; the class remarks are the algorithm, and `token_stream_arrangement.md` is the architecture decision behind it — including the one part still open, the criterion that decides which regions it owns (issue #694).
+- **`IrMarkupRenderer` / `IrRevisionRenderer` / `IrEditScriptJson`** — the three renderers above.
+
+### One read per document per comparison
+
+The pipeline reads each input **once**, with `RetainSources` ON, and every stage works off that
+snapshot. This is worth stating because the obvious reading of the stage list suggests otherwise:
+`IrMarkupRenderer` clones source `w:p`/`w:tbl` elements, so it needs provenance the script builder
+does not — and it used to obtain that by re-reading both documents itself. It cannot tell the
+difference: `RetainSources` decides only whether `IrProvenance` pins the source `XElement`, and
+`IrProvenance` is equality-neutral by construction (it equals any other instance and hashes to
+zero), so a retention-on snapshot is node-for-node value-equal to a retention-off one. `Render`
+therefore takes an optional pre-read pair and `DocxDiffComparison` supplies it; the same hand-off
+exists on `IrCompositeMarkupRenderer` for the N-way path, where re-reading meant `2*(N+1)` package
+reads to compare `N+1` documents.
+
+`GetRevisions` gained the byte-identical shortcut `Compare` already had: two packages with the
+same bytes have nothing to report, and running the pipeline to establish that costs as much as a
+real comparison. Both shortcuts skip the **work** and not the compatibility pre-flight — that
+pre-flight is a property of the inputs, so a caller who asked to be warned about an under-tested
+construct gets the same answer whether or not the two sides happen to match. This distinction has
+no output-digest signature (a product that stops warning still returns the right answer), so it is
+covered by unit tests and by the pre-flight digests in `benchmarks/docxdiff-stress`' corpus mode
+rather than by output parity. The edit script deliberately keeps no such shortcut: its all-Equal
+operations are the answer the caller asked for.
+
+`IrReader.Read` likewise opens each package once. Deciding the accepted-revision view needs every
+story parsed, and so does the body walk, so the scan runs against the package the walk is about to
+use (`GetXDocument` caches per part). Only a document that genuinely carries revision markup pays
+for the `RevisionProcessor` round-trip and the reopen that follows it.
+
+The left and right sides are independent pure reads, so pre-accept and the IR reads run
+concurrently; `Consolidate` reads the base and all reviewers the same way. Nothing about the output
+depends on this — the reads share no state — and both schedules produce the same values in the same
+order.
+
+**The fan-out is gated, and the gate is not an optimization.** It runs through
+`Docxodus.Internal.ParallelWork`, which is compiled out under `WASM_BUILD` and additionally checks
+`Environment.ProcessorCount > 1`. `wasm/DocxodusWasm/DocxodusWasm.csproj` does not set
+`WasmEnableThreads`, so the browser runtime is single-threaded, and there `Task.Run` does not start a
+second thread — it queues the delegate for
+the ONE thread, which is the thread that would then block on the result. The runtime refuses rather
+than deadlocking: the join throws `PlatformNotSupportedException: Cannot wait on monitors on this
+runtime`, so an unguarded fan-out fails every browser comparison outright. (Measured — with the guard
+forced open, all ten `npm/tests/docx-diff.spec.ts` cases fail with exactly that exception; those specs
+are this guard's regression test.) The browser therefore keeps the sequential
+schedule and still gets the read-sharing win, which is the larger half: on the reference document a
+two-way `Compare` runs roughly 1.4-1.6x faster than before with no parallelism at all, against
+~2.3x with it.
+
+On a 574 KB `document.xml` with 15,360 elements, collapsing four reads to two concurrent ones took
+a two-way `Compare` from ~820 ms to ~350 ms and a four-reviewer `Consolidate` from ~1870 ms to
+~675 ms. `benchmarks/docxdiff-stress` measures this and digests every product — pairwise and N-way, plus
+the compatibility report — across all of `TestFiles/` to prove the output did not move; see its
+`FINDINGS.md` for the full stage attribution and for what still stands between the engine and 10
+comparisons per second.
+
+### Reusing a read across comparisons (issue #617)
+
+Reading each document once *per comparison* leaves the redundancy *across* comparisons. Every bulk
+workload pays it: one baseline against many counterparties re-reads the baseline N times; a version
+chain A→B→C→D reads every interior version twice; `GetConflicts` followed by `Consolidate` reads
+everything twice.
+
+`DocxDiff.CreateSnapshot` is the caller's way to say *"I already read this document."*
+
+```csharp
+var baseline = DocxDiff.CreateSnapshot(original);          // read once…
+foreach (var candidate in candidates)                      // …reused N times
+    yield return DocxDiff
+        .CreateComparison(baseline, DocxDiff.CreateSnapshot(candidate))
+        .GetRevisions();
+```
+
+Three things about it are worth knowing rather than assuming.
+
+**What it is valid for.** Only the input-revision policy reaches the read — `PreAcceptInputRevisions`
+and `PreserveInputRevisions`, which together decide whether the document's own tracked changes are
+flattened away first. Everything else in `DocxDiffSettings` is a diff-time or render-time policy, so
+one snapshot serves comparisons that differ in author, granularity, move detection, format
+comparison and the rest. A snapshot handed to a comparison with a *different* input-revision policy
+is **rejected with an `ArgumentException`**, not silently reused: serving it would compare a
+different view of the document than the caller asked for.
+
+**What it costs.** A materialized snapshot roots the parsed `XDocument` of every story, not merely
+the IR values, because the markup renderer clones source elements out of it. That is what makes the
+reuse possible and it is not small — reckon on several times the package's XML size resident per
+snapshot, and hold only the ones a run is reusing. Creation itself is free; nothing is read until a
+comparison needs it.
+
+**What it does not change.** The compatibility pre-flight is a property of the *comparison*, not of
+the read, so it fires on every comparison a snapshot takes part in. A reused snapshot must not make
+a caller's `OnCompatibilityWarning` subscription go quiet.
+
+`DocxDiffConsolidation` is the N-way counterpart, and closes a second gap on the way: of the four
+consolidate statics only `Consolidate` ran the compatibility pre-flight, so a caller who set
+`ThrowOnCompatibilityWarning` and asked for conflicts, consolidated revisions or the consolidated
+edit script was silently never told. All four now run the same gate — the N-way half of what #622
+fixed on the pairwise side.
+
+**On the bridges the snapshot becomes a batch.** A snapshot is an in-process object holding parsed
+XML; it cannot cross a process or language boundary, and exposing it as a handle would put a
+memory-pinning lifetime on transports with no good way to bound it. So the transports get the
+workload the snapshot exists for instead: `DocxDiffOps.CompareBatchJson` →
+`DocxDiffBridge.CompareBatchJson` (WASM) / `docxDiffCompareBatch` (npm) /
+`docx_diff_compare_batch` (python) / `docxodus_compare` with `mode: "fan_out"` (MCP), each taking one
+baseline and many candidates, reading the baseline once, and returning per-candidate products
+identical to comparing that pair alone. A candidate that fails carries its error instead of products
+rather than failing the batch — one malformed counterparty markup must not cost the caller the other
+ninety-nine.
+
+## Edit script
+
+The `IrEditScript` is an ordered list of block operations (`IrEditOpKind`), plus a parallel `noteOps` list for footnote/endnote scopes:
+
+| Kind | Meaning | Anchors |
+|---|---|---|
+| `EqualBlock` | Both sides identical | both |
+| `FormatOnlyBlock` | Text-equal, modeled format differs (`w:rPrChange`-grade) | both |
+| `ModifyBlock` | Same block, edited (carries a nested token/table diff) | both |
+| `InsertBlock` | Right-only block | right only |
+| `DeleteBlock` | Left-only block | left only |
+| `MoveBlock` | Relocated block (source + destination ops share a `moveGroupId`) | source: left, dest: right |
+| `MoveModifyBlock` | Relocated AND edited (the case `WmlComparer` cannot express as a move) | source: left, dest: right |
+| `SplitBlock` | One left paragraph split across N≥2 right paragraphs (M2.6) | left + `splitMergeAnchors` (the N rights) |
+| `MergeBlock` | N≥2 left paragraphs fused into one right paragraph (M2.6) | right + `splitMergeAnchors` (the N lefts) |
+
+**What is reported as a move (issue #844).** Measured on hand-built reorder pairs through the front
+door:
+- **Reported as a move:**
+  - a relocated paragraph of any length, including a single word;
+  - an adjacent swap;
+  - a moved run of several paragraphs, or half the document swapped with the other half;
+  - a move next to an unrelated insertion;
+  - a moved paragraph whose formatting also changed;
+  - a moved paragraph with one or two words edited (`MoveModifyBlock`, above the 0.8 similarity
+    threshold);
+  - a relocated **table**. The table's rows are marked `w:del` at the source and `w:ins` at the
+    destination (`w:trPr`), the cell content is wrapped in `w:moveFrom`/`w:moveTo`, and a move
+    range sits inside each table. This is Word's own shape; `EmitTableMove` produces it;
+  - a relocated table whose text was also edited, above the same 0.8 similarity threshold
+    (issue #887). The table's word count is the sum of its cells', so it clears the minimum-words gate
+    the fuzzy move pass applies. It is drawn with complete halves, like a moved-and-edited paragraph;
+    the edit script's destination op carries the row/cell `tableDiff`, and `GetRevisions` lists the
+    in-move edits after the destination (a row that moved inside the table is listed as the row deletion
+    and insertion the redline draws). The aligner is shared, so this applies to `Consolidate` too;
+  - a reordered table **row** (issue #887): the row is marked deleted at its old position and inserted
+    at its new one, its cell content wrapped in `w:moveFrom`/`w:moveTo`, each half in a named move range
+    among the table's rows. Consolidate still draws it as a delete + insert;
+  - a paragraph moved **into or out of a table cell**, or between two cells (issue #887), when the
+    cell gains or loses a whole paragraph and its text and run formatting are unchanged. The aligner works one block list at a
+    time (the body, or one cell), so such a paragraph arrives as a `DeleteBlock` in one list and an
+    `InsertBlock` in another. `IrRelocationPairer` (two-way comparison only) pairs the two when their text
+    is identical once whitespace runs are collapsed, word for word in the same run formatting, and carries
+    at least `MoveMinimumWordCount` words, and
+    gives both ops a shared `relocationGroupId`. The ops keep their kinds, so applying the script,
+    accepting and rejecting are unchanged; the renderers draw the pair as a whole-paragraph move, outside
+    the delete/insert gap arrangement, and `GetRevisions` reports a Moved pair.
+    - It looks only into the cells of tables both surfaces draw cell by cell
+      (`IrTableDiffer.NeedsWholeTableFallback` false); a moved table is drawn whole and is not looked into.
+    - A half in a paragraph the redline draws inside a cross-paragraph run (issue #930) has no standalone
+      op in the markup script. `IrRelocationPairer.ApplyToBoth` pairs the comparison's two scripts at once:
+      it pairs on the data script (`GetRevisions`, the edit script), where every paragraph has its own op,
+      and admits such a half only when the run holds it as one contiguous deleted (or inserted) stretch of
+      one output paragraph — a whole paragraph must have an output paragraph of its own whose mark is
+      deleted (or inserted) — choosing among slide positions only those the run can draw. It then tags that
+      stretch of the run's cell with the same id, and carries every other rewrite over to the markup ops the
+      two scripts share value for value. Two halves in one output paragraph pair only when a retained word
+      separates them. A half the run draws any other way (retained across a pilcrow, split over two output
+      paragraphs) pairs on neither surface. `DocxDiffComparison` aligns once and serves both builds from
+      that alignment; the aligner never reads `CrossParagraphTokenDiff`.
+    - Nothing pairs under `PreserveInputRevisions`, where the markup may draw a table whole to keep its
+      input revisions.
+    - Safety net: a move range with no partner of the other direction is lowered to plain `w:del`/`w:ins`
+      in the redline, and a Moved group missing its source or destination is reported as Deleted/Inserted.
+    - `GetSemanticChanges` does not apply this pairing: such a paragraph is a block delete + insert there.
+  - **text moved within a paragraph, between paragraphs, or into or out of a table cell** (issue #888): a
+    deleted span inside a modified paragraph whose text reappears as an inserted span elsewhere, or as a
+    whole inserted paragraph (a sentence split out), and the reverse (a whole paragraph merged into the
+    middle of another). `IrRelocationPairer` pairs the halves under the same rule as whole paragraphs —
+    identical text once whitespace runs collapse, word for word in the same run formatting, at least
+    `MoveMinimumWordCount` words — and tags each
+    span's token op with a `relocationGroupId` (the sixth element of its JSON array). Two spans in the same
+    paragraph pair only when retained words separate them. A token diff may put a span's edge somewhere
+    else than where the moved text starts ("first sentence. The " after a retained "The "), so each span is
+    also tried at every position it can slide to without changing the text it covers, and the chosen
+    position is written back; when both halves can slide, a position ending on sentence punctuation is
+    preferred, then the smallest total slide. The redline wraps a tagged span in `w:moveFrom`/`w:moveTo` inside a move
+    range in its paragraph; the word-shaped regrouping of ins/del never reaches across it. The same
+    exclusions apply as for whole paragraphs (fused cross-paragraph runs, tables drawn whole,
+    `PreserveInputRevisions`), plus paragraphs the renderer always draws whole. With `DetectMoves` off,
+    under the WmlComparer-compatible revision granularity, and in Consolidate nothing is paired, and the
+    script is exactly the builder's.
+- **Still a delete + insert:**
+  - a moved paragraph edited below the similarity threshold;
+  - a paragraph moved across a table boundary and edited, or moved next to paragraphs the redline draws as
+    one cross-paragraph stream;
+  - moved text that was also reworded, or that is shorter than `MoveMinimumWordCount` words. Word's
+    compare marks much shorter moves, down to a single word or a list number carried with a paragraph
+    mark (see `docs/ooxml_corner_cases.md`, "Compare: Word marks moves below the paragraph level").
+
+**Move group ids are unique across scopes (issue #924).** The builder numbers moves per block list, so
+`Build` renumbers every nested scope (cells, rows, textboxes, notes, header/footer stories) above the
+body's ids. A move's `w:name` and its `MoveGroupId` therefore identify one move in the whole document;
+relocation ids continue above them.
+
+**Edited-move markup boundary.** A `MoveModifyBlock` remains rich in the edit-script and revisions
+surfaces: its destination carries the token diff describing the edit within the relocation. Produced
+OOXML deliberately does not nest that token diff inside the move range. It emits the complete left
+paragraph as `w:moveFrom` and the complete right paragraph as `w:moveTo`, paired by `w:name`. Word-class
+consumers process ordinary `w:ins`/`w:del` nested among destination `w:moveTo` fragments as independent
+revisions; Reject All can therefore restore a nested deletion after rejecting the destination move and
+leave an orphaned old word. Complete move halves make accept/reject atomic while preserving the detailed
+change in the non-markup APIs (issue #359).
+
+**Footnote/endnote structural fidelity.** The `noteOps` carry per-note block diffs that the markup renderer applies *inside* the produced footnotes/endnotes part, after which `IrMarkupRenderer.RenumberNoteIds` re-sequences every reference + definition into body-reference document order (mirroring `WmlComparer`'s `ChangeFootnoteEndnoteReferencesToUniqueRange`). The invariants this path guarantees — verified by `DocxDiffScenarioTests.Scenario_PreservesFootnoteStructure` (every edit×feature scenario) and `DocxDiffFootnoteRobustnessTests`, with a headless-LibreOffice load backstop:
+- **Definition ids are unique** and every body reference resolves to exactly one definition. A `continuationNotice` (or any typed) reserved note at a *positive* id keeps its id and leads the part; real notes renumber to a range disjoint from the kept reserved ids (the counter seeds above the highest positive reserved id), so a reserved note never collides with a renumbered real note.
+- **A reference is never dropped.** A footnote/endnote reference is a zero-width inline; the token-diff run rebuilder (`SourceRunModel.Slice`) attributes a boundary zero-width to exactly the op whose token range owns it (`ZeroWidthBoundaries`), so a reference at the tail of an edited paragraph survives and is never double-counted.
+- **A reference-deleted note's definition is emitted once.** When an edit removes a reference but the definition lingers in both stores, the builder reconciles the orphan into a single matched pair (identity = `w:id`) rather than a delete + an insert of the same id; the renumber pass links a `w:del` reference to its preserved definition so it stays resolvable on reject even when its id ≠ its reference ordinal.
+- **A note-in-note reference is renumbered with its target.** A footnote/endnote whose body cites another note keeps a reference inside its definition body; the body-only renumber walk never visits it, so `RenumberNoteIds` records each definition's old→new id and `RemapNestedNoteReferences` sweeps BOTH note parts once — after both kinds' passes — with both maps, so SAME-kind nesting (a footnote citing a footnote) AND CROSS-kind nesting (an endnote ref inside a footnote body, or vice versa) are both remapped and neither dangles on accept/reject. (Note-in-note references are valid OOXML but LibreOffice Writer's DOCX import cannot load *any* document that contains one, cross-kind or same-kind — so the round-trip oracle here is the structural reference-resolvability check and Word, not LibreOffice.)
+
+**Hyperlink structural fidelity (`w:hyperlink`).** An edit that straddles a `w:hyperlink` anchor slices the link across multiple token ops, so `SourceRunModel.Slice` emits one `w:hyperlink` wrapper per contributing op (each stamped with the source link's document-order ordinal, `pt:SourceLinkId`, plus its **resolved** target `pt:SourceLinkTarget`). `CoalesceAdjacentHyperlinks` then rejoins a maximal run of same-ordinal fragments back into ONE `w:hyperlink` — so the output is byte-faithful to the source's single link — merging a run when EITHER it carries a plain (Equal) run (an intra-anchor text edit) OR every fragment resolves to the SAME target (issue #232: a single link whose *entire* anchor is replaced with no shared token is still one link with an unchanged href). The merge keys on the **resolved target** (external URI, or `#anchor` for an internal link — resolved via the part annotation on the retained source tree, exactly as `IrReader` does), **not** the `r:id` string: this is what keeps the WC019 whole-anchor **retarget** (text *and* href change) split into two links — its del/ins fragments share the same `r:id` string at coalesce time but resolve to *different* targets, so the pure `w:del`-link (old target) and `w:ins`-link (new target) must stay separate for the post-assembly `r:id` remap (`ImportHyperlinkAndExternalRelationships`). Genuinely distinct adjacent links that merely share a target carry *different* ordinals and never group. Proof: `IrMarkupRendererTests.Hyperlink_*` (internal edit, fully-replaced same-target → one link, whole-anchor retarget → two links, adjacent-distinct-same-target).
+
+**Comment fidelity (Covered).** Comments (`w:commentRangeStart`/`End`/`w:commentReference`) are dropped from IR paragraphs (reader rule N15 records them as `IrCommentStore` char-offset spans for the markdown projection only), but they are carried through the fine token-diff path as `AlwaysKeep` zero-width markers — exactly like bookmarks — so an edited commented paragraph gets **fine per-word `w:ins`/`w:del`** markup with its comment anchors intact (no whole-block bail). Three passes guarantee integrity, the comment analogue of `NormalizeBookmarks`:
+
+- `MergeRightCommentDefinitions` copies any RIGHT-only `w:comment` the emitted right-sourced content references into the LEFT-based comments part (creating it if the left had none), plus the referenced `commentsExtended` (`w15:commentEx` `paraIdParent` reply links) and `commentsIds` entries — so a right-**added** comment never dangles.
+- `NormalizeComments` reconciles the body so every `commentReference` resolves to exactly one `w:comment`, every `commentRangeStart` is unique + pairs 1:1 with a `commentRangeEnd`, and an unchanged comment survives both accept and reject: **(A)** a common comment with a bare survivor collapses to a single bare range; **(A2)** a right-added / left-deleted comment's bare markers are wrapped in `w:ins`/`w:del` so they toggle with their side; **(B)** a wholly-rewritten comment's del/ins copies renumber the deleted copy to a fresh id + a cloned definition — the comment-dedup analogue of the bookmark renumber-collision — with its OWN fresh `w14:paraId` + a cloned `commentsExtended` entry so a reject-side threaded reply keeps its parent link; **(C)** orphaned markers are paired/dropped so the output is always schema-valid + fully resolvable.
+
+DocxDiff is strictly ahead of the blessed `WmlComparer` oracle, which drops comments entirely on any edit. Verified by `DocxDiffCommentStructureTests` (9-shape synthetic corpus) + `DocxDiffCommentRealDocTests` (vendored `TestFiles/DD/DD002-DenseComments.docx`) under OpenXmlValidator schema validity, a comment-structure round-trip, and a headless-LibreOffice comment oracle (`tools/diffharness/lo/lo_comment_check.py`). See `docs/ooxml_corner_cases.md` (comment threading is keyed on `w14:paraId`; the validator's paraId-uniqueness blind spot).
+
+**Header/footer scopes (2026-07-03 campaign — strictly ahead of the oracle, like comments).** `HeaderFooterOps` carries per-STORY block diffs for the header/footer scopes — mirroring Word Compare's default-on "Headers and footers" granularity, which `WmlComparer` lacks entirely (it ignores header/footer differences). Gated by `DocxDiffSettings.CompareHeadersFooters` (default **true**; `false` restores the carry-left-verbatim behavior exactly). Stories pair per (section ordinal × occurrence kind) over each side's EFFECTIVE story grid (explicit `w:headerReference`/`w:footerReference`, else Word's previous-section inheritance), de-duplicated to distinct part pairs — scope names (`hdr1`…) are positional per-document labels and never the pairing axis. A matched story runs the block aligner exactly like a note (token-level `ModifyBlock` diffs); an all-Equal pair emits nothing (unchanged stories keep the verbatim part carry-over, preserving the revisionsInInput pins); one-sided stories are whole insert/delete. The markup renderer rebuilds a changed story inside its part via the shared block-op dispatch (shared revision-id counter; per-part media/hyperlink rel import — rels are part-scoped), creates inserted stories as fresh parts + references (ensuring `w:titlePg` for First, `w:evenAndOddHeaders` for Even), and marks deleted stories' content `w:del` (part + reference stay; accept leaves an empty story — Word's own behavior, empty ≡ absent at the text level). Fine-granularity revisions include hdr/ftr-anchored entries appended after note revisions; **`WmlComparerCompatible` excludes them** (its contract is the oracle's revision set, which has none — this keeps the 179-count parity scoreboard meaningful by construction; the differential harness likewise filters hdr/ftr revisions with the oracle-cannot-produce rationale). v1 ceilings: sections pair by ordinal; sectPr/settings visibility flags are ensured, not `w:sectPrChange`-tracked; unreferenced parts aren't compared; Consolidate does not merge header/footer scopes (see v1 limitations). Proof: `IrHeaderFooterDiffTests`, the renderer battery's story round-trip (`AssertRoundTrip`), and `DocxDiffHeaderFooterSmokeTests` (synthetic battery + the WC004 real pair + a headless-LibreOffice render oracle, `tools/diffharness/lo/lo_headerfooter_check.py`).
+
+A `ModifyBlock` over a paragraph carries a `tokenDiff`; over a table, a `tableDiff` (row ops with nested cell ops); a textbox-bearing block carries `textboxDiffs`. A `SplitBlock`/`MergeBlock` carries `splitMergeAnchors` (the plural side, document order) plus `segmentDiffs` — one COMPLETE token diff per member, whose singular-side spans are slice-local; the slices tile the singular side's token stream exactly, in order (the partition invariant: slice *i*'s length = Σ of segment *i*'s non-Insert left-span lengths for a split, non-Delete right-span lengths for a merge — boundaries are implicit in the diff ops, never stored). N:M (plural on both sides) is physically representable by the nullable fields but rejected by the test-side `AssertSplitMergePairing` (a `SplitBlock` must carry a null `rightAnchor`, a `MergeBlock` a null `leftAnchor`, no anchor may appear in two ops' `splitMergeAnchors`) and never emitted by the builder — the pairing assert is the load-bearing scope ceiling. The JSON is a faithful serialization of this structure (top-level `operations` + optional `noteOps` + optional `headerFooterOps`; `splitMergeAnchors`/`segmentDiffs` appear only on split/merge ops and each optional array only when populated, so earlier scripts serialize byte-identically), and is deterministic for identical inputs.
+
+## Settings
+
+`DocxDiffSettings` is the public mirror of the internal `IrDiffSettings`; it exposes the consumer-relevant subset and maps onto it in `ToIrDiffSettings()`.
+
+| Public setting | Default | Maps to | Notes |
+|---|---|---|---|
+| `AuthorForRevisions` | `"Docxodus"` (`DocxDiffSettings.DefaultAuthorForRevisions`) | `IrDiffSettings.AuthorForRevisions` | was `"Open-Xml-PowerTools"` (the `WmlComparerSettings` value) through v12; one default on every surface since issue #961 |
+| `Deterministic` | `true` | `IrDiffSettings.Deterministic` | **deviation from `WmlComparerSettings`** (which is wall-clock by default) |
+| `DateTimeForRevisions` | `null` → epoch or `DateTime.Now` | `IrDiffSettings.DateTimeForRevisions` | explicit value always wins |
+| `CaseInsensitive` / `Culture` | `false` / `null` | `CaseInsensitive` / `Culture` | |
+| `ConflateBreakingAndNonbreakingSpaces` | `true` | same | |
+| `WordSeparators` | `null` → default set | `WordSeparators` | |
+| `DetectMoves` | `true` | `RenderMoves` | render-time relabel: the engine always ALIGNS a relocation as a move; this controls whether it is REPORTED as one |
+| `MoveSimilarityThreshold` | `0.8` | same | |
+| `MoveMinimumWordCount` | `3` | `MoveMinimumTokenCount` | |
+| `RevisionGranularity` | `Fine` | `RevisionGranularity` | `Fine` = engine-native one-revision-per-token-span (byte-stable); `WmlComparerCompatible` = coalesce/trim/prune to match the legacy comparer's coarser revision set |
+| `FormatComparison` | `ModeledOnly` | `IrFormatComparison` | `ModeledOnly` reports only modeled-field deltas (false-negative on unmodeled rPr); `Full` sees every rPr difference. Governs paragraph-property comparison too (block-format-change family — see below) |
+| `TrackBlockFormatChanges` | `true` | `IrDiffSettings.TrackBlockFormatChanges` | public opt-out (cascades to all three slices); detect+track paragraph/table/section property changes (below). Sliced into `TrackParagraphFormatChanges`/`TrackTableFormatChanges`/`TrackSectionFormatChanges` (each defaults equal, so two-way is byte-identical); `IrCompositeMerger` forces the umbrella OFF but turns all three slices ON, so `Consolidate` merges every block-format family (B1+B2). Wire: `trackBlockFormatChanges` (Ops JSON + npm/python) |
+| `TrackNumberingChanges` | `true` | same | render-time: write `w:numberingChange` (the label a list item showed before an edit elsewhere renumbered it) on aligned, deleted and moved-away list items. Word's own compare never writes it; `false` omits it and nothing else changes. Honored by `Consolidate` (same emitter). Wire: `trackNumberingChanges` (Ops JSON + npm/python). Issue #842 |
+| `TrackCellInsertionsAndDeletions` | `true` | same | render-time: track a cell added to / removed from a paired row with `w:cellIns`/`w:cellDel`. Word's own compare never writes cell-level revisions; `false` sends such a table down the whole-table delete + insert fallback in both the markup and `GetRevisions`. Two-way only — `Consolidate`'s per-cell composition keeps cell revisions to attribute reviewers. Wire: `trackCellInsertionsAndDeletions`. Issue #842 |
+| `PreAcceptInputRevisions` | `false` | — (a pre-pass, not an `IrDiffSettings` field) | when true, runs `RevisionProcessor.AcceptRevisions` on EACH input before diffing — the first-class "accept-all both sides, then compare" wrapper. See [Inputs that already carry tracked changes](#inputs-that-already-carry-tracked-changes-rule-n13--preacceptinputrevisions). Wire: `preAcceptInputRevisions`. Forced on by the `DocxCompare` front doors — `Compare`, and `Consolidate`, which every transport's consolidate op goes through (issue #1020). |
+| `PreserveInputRevisions` | `false` | `PreserveInputRevisions` | when true, PRESERVE the inputs' own tracked changes as Word's Combine does: no pre-accept runs, and the markup renderer carries the RIGHT input's original revision markup through verbatim for content-equal blocks, whole-block inserts, and modified blocks (lowered to whole-block replacement; foreign wrappers keep their original `w:id`s). Wins over `PreAcceptInputRevisions` when both are set. One-sided round trip: `accept ≡ accept(right)` holds, `reject ≠ left` where foreign markup exists (Word's Combine behaves the same way). The `DocxCompare` selector path leaves it OFF — Word's Compare pre-accepts instead. |
+| `CompareHeadersFooters` | `true` | `CompareHeadersFooters` | diff header/footer stories (Word Compare's own default-on granularity — see the Edit script section). `false` restores the carry-left-verbatim behavior. Wire: `compareHeadersFooters` (Ops JSON + npm/python types). |
+
+### Two honest defaults that deviate from `WmlComparerSettings`
+
+1. **Deterministic dates.** `WmlComparerSettings.DateTimeForRevisions` defaults to `DateTime.Now` — the same compare twice yields different dates. `DocxDiff` pins a fixed epoch by default so output is reproducible. Opt into wall-clock via `Deterministic = false`.
+
+   Reproducibility is a whole-package property, not just a date: two comparisons of the same inputs are byte-identical, media and diagram parts included (#621). It rests on two naming rules. A part imported alongside right-sourced content is named `P` + a SHA-256 of the SOURCE bytes it carries — the copy's own bytes cannot be the address, because an XML part is fixed up *after* it is copied and that fixup embeds the names of the parts below it — and identical bytes that must stay distinct copies (the per-owner diagram-data rule in `RelatedPartImportState`) take the lowest free `-N` suffix. Relationship ids are likewise named, never minted: an imported relationship takes the lowest free `R`*n* on the owning part, and a part the renderer creates is added through `DeterministicPartIds.AddDeterministicPart`, because the SDK's own `AddNewPart` id is `R` + sixteen random hex characters. Anything that adds a part or a relationship to the output belongs on one of those two rules.
+2. **`FormatComparison = ModeledOnly`.** A `w:rPrChange`-grade report can only DESCRIBE modeled fields, so a format change driven by an undescribable unmodeled-only rPr flip (`w:lang`, `w:bCs`, complex-script toggles) is noise. `ModeledOnly` collapses that noise; the trade-off is a false negative on a visible-but-unmodeled change (e.g. `w:shd` run shading). `Full` restores byte-fidelity comparison.
+
+### Paragraph-and-above formatting changes (the block-format-change family)
+
+Word's Compare tracks *paragraph-and-above* property changes, not just run formatting. `DocxDiff` produces the native markup Word renders for each (2026-07-03 campaign — strictly ahead of the `WmlComparer` oracle, which emits none of these):
+
+| Scope | Markup | Detection substrate | Round-trip |
+|---|---|---|---|
+| Paragraph | `w:pPrChange` (+ `w:pPr/w:rPr/w:rPrChange` for a changed paragraph mark) | modeled `IrParaFormat` (incl. direct `w:numPr` numId/ilvl) under `ModeledOnly`; the stored fingerprint under `Full` | inner = OLD (left) pPr, minus `w:rPr`/`w:sectPr`/`w:pPrChange` (CT_PPrBase) |
+| Table cell | `w:tcPrChange` | `IrCell.ShellDigest` (whole `w:tcPr`, folded into cell `ContentHash` → a shell edit makes the table *Modified*) | inner = OLD tcPr, minus cellIns/cellDel/cellMerge/tcPrChange (CT_TcPrInner) |
+| Table row | `w:trPrChange` | `IrRow.TrPrShellDigest` (trPr-only) for attribution; `TrPrDigest` (row shell incl tblPrEx) folds into the *fingerprint* → *FormatOnly* | inner = OLD trPr, minus ins/del/trPrChange (CT_TrPrBase) |
+| Table row (exceptions) | `w:tblPrExChange` | `IrRow.TrPrExDigest` (tblPrEx-only flattened) | inner = OLD tblPrEx (CT_TblPrExBase); a `TableRow` revision with changed-name `"tblPrEx"` |
+| Table | `w:tblPrChange` + `w:tblGridChange` | `IrTable.TblPrDigest` / `TblGridDigest` (fingerprint → *FormatOnly*) | tblPrChange inner = OLD tblPr; tblGridChange is CT_Markup (bare `w:id`, no author/date), inner = OLD gridCol run |
+| Section (trailing) | `w:sectPrChange` on the trailing body `w:sectPr` | modeled `IrSectionFormat` (revision) / canonical props-diff excluding references (markup) | inner = OLD section properties (CT_SectPrBase — no header/footer references) |
+| Section (mid-document) | `w:sectPrChange` inside a paragraph's `w:pPr/w:sectPr` | `IrParagraph.InlineSectionFormat` (folded into the paragraph fingerprint + `BlockSignature`) | inner = OLD inline section properties; a per-paragraph Section revision. One-sided add/remove is structural (untracked); an unmodeled-only inline-sectPr change under `ModeledOnly` is the same blind spot as run/paragraph formats (right-applied, seen under `Full`) |
+
+Key design points:
+
+- **`FormatComparison` governs paragraphs too.** A modeled paragraph delta (jc/indent/spacing/style/numbering) is detected under `ModeledOnly`; an unmodeled-only pPr delta (e.g. `w:shd`) is the documented false-negative (untracked right-apply) under `ModeledOnly`, seen under `Full` — exactly the run-format trade-off. Table shells and section props are compared canonically (byte-grade) under both policies (there is no modeled/unmodeled split that changes emission there — a documented asymmetry).
+- **The emitted change carries the FULL old properties**, so `accept ≡ right` and `reject ≡ left` hold at the property-byte level (canonical, reference/rsid-normalized) for every detected change — the same rule `w:rPrChange` follows. The reader digests flatten shell *children* (not the wrapper element), so an empty shell ≡ an absent shell — no spurious change from a render→reject-cycle empty `<w:trPr/>`.
+- **Ops carry no new payload.** Detection happens at block pairing (an alignment kind flips Unchanged→FormatOnly, or a shell digest flips ContentHash→Modified); the renderers recompute the delta from the source elements by anchor — the established `w:rPrChange` architecture. The edit-script JSON is unchanged; only the **revisions** wire gains an additive `scope`.
+- **Revision surface.** `DocxDiffRevision.FormatChange` gains `Scope` (`DocxDiffFormatChangeScope`: `Run` default + `Paragraph`/`TableCell`/`TableRow`/`Table`/`Section`). Paragraph/section scopes carry modeled property dictionaries; table scopes are digest-grade (`ChangedPropertyNames = ["shell"]` or `["grid"]`). **`WmlComparerCompatible` excludes every non-`Run` scope** by construction (the oracle produces none — keeps the 179-count parity scoreboard meaningful, the hdr/ftr precedent). `Full`/`Fine` reports them.
+- **A consume-side fix rode along:** rejecting a `w:sectPrChange` (or a `w:pPrChange` on a section-final paragraph) used to drop the section's header/footer references / inline `w:sectPr`, because those live OUTSIDE the tracked change (CT_SectPrBase / CT_PPrBase). `RevisionProcessor` now preserves them. See `docs/ooxml_corner_cases.md`.
+
+**Scope coverage (two-way engine — the follow-up A batch, 2026-07-03, closed the gaps below):**
+- **`w:tblPrExChange`** (row-level table property exceptions) is now **tracked** — `IrRow.TrPrExDigest` (a flattened `tblPrEx`-only projection, parallel to `TrPrShellDigest`) drives a `w:tblPrExChange` marker + a `TableRow`-scope revision with the distinct changed-name `"tblPrEx"`; reject restores the left bytes.
+- **Mid-document `w:sectPrChange`** (an inline `w:sectPr` inside a `w:pPr`) is now **tracked** — the reader models it as `IrParagraph.InlineSectionFormat` (folded into the paragraph `FormatFingerprint` AND `IrModeledFormat.BlockSignature` so a sectPr-only change classifies FormatOnly under `ModeledOnly`), and the emit stamps `w:sectPrChange` inside the paragraph's `w:pPr/w:sectPr` (not the `pPrChange` inner — CT_PPrBase excludes sectPr) with a per-paragraph Section revision. A *one-sided* inline sectPr (added/removed) is a structural change, not a property change — untracked.
+- **Note-scope and header/footer-scope `w:pPrChange`** already work (they route through the same `RenderBlockOp` dispatch as the body, with no per-scope gate) — proven by `BlockFormatChangeTests` (footnote + header pPrChange), not a ceiling.
+- **`TrackBlockFormatChanges`** is now a **public opt-out** on `DocxDiffSettings` (default true; wire key `trackBlockFormatChanges`, npm/python surfaced).
+
+**`w:gridSpan` / `w:vMerge` — the chosen scope (Issue #230).** Cell grid-span and vertical-merge both live *inside* `w:tcPr`, so they are covered by the cell-shell substrate above, not a separate model. The scope decision, closing #230's "property-only table change reads as unchanged" soundness gap:
+- **Detect (2-way):** a `gridSpan`/`vMerge`-only change with a **stable cell count** flips `IrCell.ShellDigest` → the cell `ContentHash` → the table classifies *Modified*, and renders as a native `w:tcPrChange` with a `TableCell` `FormatChanged` revision. `accept ≡ right` / `reject ≡ left` hold at the tcPr-byte level (previously invisible — the table read `EqualBlock` and the edit silently vanished). Pinned by `BlockFormatChangeTests.{GridSpanOnly,VMergeOnly}_cell_change_is_tracked_with_native_tcPrChange`.
+- **Compose (Consolidate):** a `gridSpan`/`vMerge`-only cell-shell edit composes exactly like a cell width/shading edit — sourced from the editing reviewer, consensus/conflict per policy (`ComposeCellShell`); shell application is not itself `w:tcPrChange`-tracked in the consolidated output (the documented v1 shell-compose behavior — reject restores text, not shell bytes). Pinned by `IrCompositeTableTests.VMerge_only_cell_edit_composes` (and the width-shell battery it mirrors).
+- **Column-structure change (cell COUNT changes — a `gridSpan` add/remove):** *detected* (the content hash differs, so never silently invisible) and rendered via the table differ's cell alignment. In Consolidate an uncontested column add/remove composes per-cell (`w:cellIns`/`w:cellDel`, `IrCompositeTableTests.GridSpan_merge_edit_composes`); a contested one falls back to a whole-table block conflict. In 2-way the single-toucher path currently lowers a column add/remove to a whole-table del/ins — a pre-existing *renderer-granularity* limitation (content round-trips), independent of #230's *detection* soundness.
+- **Changed-name granularity:** a cell `w:tcPr` change reports `ChangedPropertyNames = ["shell"]` (the whole `w:tcPr` is one opaque digest); naming `gridSpan`/`vMerge`/width individually would require XML-child diffing the revision path deliberately avoids — by design.
+
+**Remaining v1 ceilings (documented + pinned):**
+- **`Consolidate` MERGES block-format changes** (sub-project B, done): reviewers' paragraph (`w:pPr`, B1), table-shell (`w:tcPr`/`trPr`/`tblPr`/`tblGrid`/`tblPrEx`, B2) and section (`w:sectPr`, B2) format edits compose with per-element attribution + native markup; competing edits conflict per policy. A reviewer who changed BOTH a paragraph's text AND its pPr remains conflict-routed (v1 decision; never a silent drop). See the N-way composite section below.
+- **Split/merge members do not emit `w:pPrChange`** — a **deliberate, principled decline**: a split's members are brand-new right paragraphs already tracked by the inserted pilcrow mark (there is no per-member left baseline to diff against), and a merge's non-final members carry deleted marks; a pPr "change" on them is not well-defined and would fight the reject-fuse. Pinned by `Split_members_do_not_emit_pPrChange_declined_v1`.
+
+Proof: `BlockFormatChangeTests`, `BlockFormatChangeRealDocTests` (a real corpus doc mutated across the full table + section family), and the strengthened `IrMarkupRendererTests` round-trip battery.
+
+### Inputs that already carry tracked changes (rule N13 + `PreAcceptInputRevisions`)
+
+DocxDiff is frequently asked to diff a document that is itself a redline — its body, notes, headers, or comments already carry un-accepted `w:ins`/`w:del`/`w:moveFrom`/`w:moveTo`/`w:rPrChange`. The handling is **explicit and pinned**, not incidental. Characterization tests: `Docxodus.Tests/Ir/Diff/RevisionsInInputDefaultTests.cs` (default) and `PreAcceptInputRevisionsTests.cs` (the flag).
+
+**The default — diff the ACCEPTED VIEW, carry non-body markup through verbatim.**
+
+- **Rule N13 (the IR is a revision-free view).** `IrReader` resolves revisions with `RevisionView.Accept` on a working copy *before* building the IR (the original bytes are untouched). So the edit script — and therefore `GetRevisions`/`GetEditScriptJson` and the body of `Compare` — is computed over the **accepted view** of each side: an input's own `w:ins`/`w:del` never surface as their own diff, and the produced body carries only THIS diff's revisions, attributed to `AuthorForRevisions`. At the body level the round-trip already holds against the accepted view (`reject(result) ≡ accept-view(left)`, `accept(result) ≡ accept-view(right)`).
+- **The carry-over leak.** `IrMarkupRenderer` assembles the output on a **clone of the LEFT package** (so styles/numbering/theme/settings/section/media carry over by reuse — what WmlComparer does), and only the **body** (plus *changed* footnotes/endnotes and, since the 2026-07-03 campaign, *changed* header/footer stories) is rebuilt from accept-clean source. Everything else — **UNCHANGED header/footer stories, UNCHANGED footnotes/endnotes, styles, the comments part** — is passed through *verbatim from the original left input*. Any pre-existing revision markup there **survives into the result**, attributed to its ORIGINAL author. This is the documented limitation the inspector's `revisionsInInput` entry flags.
+- **Why the leak matters.** A leaked pre-existing `w:ins` in, say, an unchanged header is then *rejected* by `RejectRevisions` (it strips the insertion) — so under the default the round-trip does **not** hold in the carried-over scopes (`reject(result)` drops header text the accepted view of the left actually contains). Pinned by `Default_leak_breaks_the_header_round_trip` (whose header is identical on both sides — an unchanged story — so it stays a carry-over even with header diffing on).
+
+**The opt-in — `PreAcceptInputRevisions` (default `false`).** When set, every input is run through `RevisionProcessor.AcceptRevisions` *before* it enters the pipeline, so both the IR read and the cloned output package are revision-free on both sides. It is, by construction, **exactly** `Compare(AcceptRevisions(left), AcceptRevisions(right))` — byte-for-byte identical to that wrapper (oracle: `Flag_on_is_byte_identical_to_accept_all_then_compare_wrapper`). The effect:
+
+- every `w:ins`/`w:del`/`w:moveFrom` in the result is attributable to THIS diff (no stale input revision passed through) in the body, header/footer, note, and style scopes;
+- the round-trip holds against the accepted view in those scopes;
+- the consumer revision list (`GetRevisions`) is unchanged — the flag only additionally cleans the rendered package's carried-over parts.
+
+**The flag's coverage is exactly what `RevisionProcessor.AcceptRevisions` processes** — the body, headers, footers, footnotes, endnotes, and styles part. Carried-over parts it does **not** process keep their pre-existing revisions: notably the `WordprocessingCommentsPart` (a tracked change inside a COMMENT *definition* survives — pinned by `PreAcceptInputRevisions_does_not_flatten_a_revision_inside_a_comment_definition`) and the `GlossaryDocumentPart` (building-blocks / AutoText entries; the renderer clones the whole left package, including the glossary part, verbatim). These are the honest boundaries of the accept-all pre-pass — resolve revisions in those parts separately if they matter. (The narrower `NumberingDefinitionsPart` carries only style-grade `pPrChange`/`rPrChange`, never `w:ins`/`w:del`, so it is outside the inspector's tracked-changes scope.)
+
+Applied uniformly to all seven entry points (`Compare`/`GetRevisions`/`GetEditScriptJson` and the four consolidate-family methods, accepting the base and every reviewer). The wire settings object carries it as `preAcceptInputRevisions` (WASM/npm/python). The two front doors turn it on unconditionally: `DocxCompare.Compare` for two-way comparison and `DocxCompare.Consolidate` for N-way consolidation (issue #1020). Every transport's consolidate op (`DocxDiffOps`, so WASM/npm, the stdio host/docx-scalpel and the MCP `docxodus_compare` consolidate form) runs through the consolidate front door, so on those surfaces a wire `preAcceptInputRevisions: false` is ignored for consolidate; `preserveInputRevisions` still wins over it.
+
+**Two honest costs of accept-all (read before enabling).** Accept-all is a lossy, opinionated pre-flatten:
+
+1. **It flattens pre-existing authorship and change boundaries.** Accepting collapses each input's tracked changes into final text, so *who* made a prior edit and *where* the prior change boundaries were are lost — the result's authorship reflects only this diff.
+2. **"Accept all" is itself a policy.** It overrides any change a prior reviewer had left unaccepted — including one they had effectively rejected by leaving in tracked form — materializing every insertion and dropping every deletion. To preserve or re-adjudicate the inputs' in-flight revisions, resolve them by your own policy first, then diff. See `docs/ooxml_corner_cases.md` → "DocxDiff: `PreAcceptInputRevisions` accept-all flattens prior authorship".
+
+**The Combine-parity opt-in — `PreserveInputRevisions` (default `false`).** Word has TWO merge operations with opposite input-revision policies. Its **Compare** treats revisions already present in either input as accepted — the dialog says so outright, and its outputs confirm it (text an input had struck through is absent from the result entirely; the surviving delta is re-detected under the compare author; the output carries a single revision author). Its **Combine** instead carries the inputs' own tracked changes through under their original authors. This flag opts into the Combine-style preservation (an earlier reading attributed it to Compare — the oracle documents it was verified against turned out to be Combine-shaped). With the flag ON:
+
+- **No pre-accept runs** (Preserve wins when both flags are set) — the LEFT package's carried-over parts (headers/footers, unchanged notes, styles, comments) keep their markup, which under this policy is the *desired* behavior, not a leak.
+- **The renderer reaches back to the ORIGINAL right elements.** The renderer's internal IR read accepts the whole working copy first (rule N13), so retained `Source.Element` provenance is accept-clean; `IrMarkupRenderer.BuildPreservedOriginalIndex` re-opens the original right package and aligns its body children with the working body via an in-order two-pointer walk that models the document-level accept's only body restructuring (a mark-deleted paragraph merges into the NEXT one; a fully-deleted paragraph vanishes the same way) — a working block maps to a GROUP of originals, and any unmodeled divergence (adjacent-table merges, removed content controls) conservatively stops the walk with a partial map.
+- **What preservation covers.** Content-EQUAL blocks emit the original element(s) verbatim (`EmitVerbatim`); whole-block INSERTS emit the original with only plain runs wrapped in this diff's `w:ins` (`MarkWholeParagraph` leaves foreign `w:ins`/`w:del`/move wrappers as-is; `MarkParagraphMark`/`MarkWholeTable` keep foreign mark/row markers) — a foreign wrapper that is a direct paragraph child never nests inside a same-kind wrapper. A MODIFIED block whose right side carries its own markup (issue #517) lowers off the fine renderers — which emit the accepted view and would silently drop the markup — to the same whole-block replacement pair, so the insert side keeps the original markup; when that markup sits *inside* an atomic construct (the WC012 shape: `w:ins` nested in `m:r`), the emission nests the foreign wrapper inside this diff's `w:ins` across the math boundary, which is exactly what keeps both round trips and selective resolution working. Preserved wrappers are normalized (`NormalizePreservedClone`): each keeps its ORIGINAL `w:id` on first emission — the input's revision identity, which the reversibility proof keys on, survives into the redline — with duplicated emissions renumbered off the render's counter (seeded above every preserved id so generated ids never collide; range pairs keep one id via a per-render remap) and Word-extension attrs (`w16du:dateUtc`) dropped. Note scopes ride the same map: footnote/endnote definitions pair by `w:id` and their child blocks align with the same walk, so equal/inserted note blocks preserve through the same emission paths. NOT preserved (accepted-view render): format-only/split/merge/moved blocks, changed header/footer stories, and the LEFT side's markup in deleted blocks. `GetRevisions` does not report preserved foreign revisions.
+- **One-sided round trip, exactly like Word.** `accept(output) ≡ accept(right)` at the text level (foreign dels vanish, foreign ins accepted). `reject(output) ≠ left` where foreign markup exists — rejecting a foreign `w:del` restores its text; Word behaves identically, so this is pinned (`Equal_paragraph_preserves_foreign_del_and_accept_removes_it`) rather than "fixed".
+- **Wiring.** The engine-selector path (CLI `--engine=docxdiff` / WASM / npm) models Word's *Compare* and therefore pre-accepts WITHOUT preserving; preservation is an explicit opt-in on the raw `DocxDiff` API. Every transport's consolidate op likewise pre-accepts through `DocxCompare.Consolidate`'s policy (issue #1020). Consolidate does not preserve in v1 (the composite renderer builds no map), though Preserve still suppresses the pre-accept there when both flags are set.
+
+Tests: `Docxodus.Tests/Ir/Diff/DocxDiffPreserveInputRevisionsTests.cs`; corpus proof: page_numbering_examples vs potpourritest (176 foreign revisions in the right input → 103 preserved in the output, zero validator-error delta, accept round trip intact).
+
+## N-way composite / Consolidate
+
+The IR engine merges **N reviewers' edits** — each an independently revised copy of ONE shared base — into a single tracked-changes document, an attributed revision list, a composite edit-script-as-data, and a structured conflict report. This is the IR-native answer to the last `WmlComparer` capability the engine had not addressed: `WmlComparer.Consolidate` (the 84 `CONSOLIDATE` cases in the M2.3 parity inventory, deferred there as "out of v1 scope").
+
+### Public surface
+
+Four entry points on `public static class DocxDiff` (`Docxodus/DocxDiff.cs`), with the supporting types in `Docxodus/DocxDiffConsolidate.cs`:
+
+| Method | Returns | Purpose |
+|---|---|---|
+| `Consolidate(base, reviewers, settings?)` | `WmlDocument` | One multi-author tracked-changes document — each reviewer's edits stamped with that reviewer's own author name (`w:ins`/`w:del`/`w:moveFrom`/`w:moveTo`/`w:rPrChange`). The N-way, shared-base counterpart to `Compare`. |
+| `GetConsolidatedRevisions(base, reviewers, settings?)` | `IReadOnlyList<DocxDiffConsolidatedRevision>` | The attributed revision list — `DocxDiffRevision`'s shape plus the contributing reviewer's `Author` and, on a conflict winner, a `ConflictId`. |
+| `GetConsolidatedEditScriptJson(base, reviewers, settings?)` | `string` | The composite edit script as data: every op additively carries `author`/`sourceReviewer`, a `conflictId` when it won a conflict, and (for a composed paragraph) `authoredTokens` + `sourceRightAnchors`; the document gains a top-level `conflicts` array. |
+| `GetConflicts(base, reviewers, settings?)` | `IReadOnlyList<DocxDiffConflict>` | The inspect-before-merge view — the same merge run, surfacing only the conflict list so a caller can review disagreements (and pick a policy) before committing to an output. |
+
+Supporting public types (all `#nullable enable`, XML-doc'd, no static state — author flows per reviewer): `DocxDiffReviewer { Document, Author }`, `DocxDiffConsolidateSettings { Diff, ConflictResolution }` (composes — does not inherit — the `sealed DocxDiffSettings` via `Diff`), `enum ConflictResolution { BaseWins, FirstReviewerWins, StackAll }`, `DocxDiffConsolidatedRevision` (= `DocxDiffRevision` + `ConflictId`), `DocxDiffConflict { Id, BaseAnchor, TokenStart, TokenEnd, AppliedPolicy, Competitors }`, `DocxDiffConflictCompetitor { Author, ResultText }`. N reviewers, no cap; reviewer LIST ORDER is significant (it determines competitor order and policy tie-breaking). Zero reviewers returns the base unchanged / empty lists. The four surfaces are exposed through every shipping layer — WASM (`DocxDiffBridge.Consolidate`/`GetConflictsJson`/`GetConsolidatedRevisionsJson`/`GetConsolidatedEditScriptJson`), npm (`docxDiffConsolidate`/`docxDiffGetConflicts`/`docxDiffGetConsolidatedRevisions`/`docxDiffGetConsolidatedEditScript`), docx-scalpel (`docx_diff_consolidate`/`docx_diff_get_conflicts`/`docx_diff_get_consolidated_revisions`/`docx_diff_get_consolidated_edit_script`) — all routing through `DocxDiffOps`, so the wire shapes live in one place. `DocxDiffOps` applies the consolidate front door's input-revision policy (`DocxCompare.ApplyFrontDoorConsolidatePolicy`, issue #1020) to every one of them, so the shipping layers consolidate the accepted view of the base and every reviewer; the raw `DocxDiff` consolidate methods keep the opt-in default. `DocxCompare.Consolidate` is the .NET front door with the same policy.
+
+### The merge algorithm
+
+The source of truth is `IrCompositeMerger.Merge` (`Docxodus/Ir/Diff/IrCompositeMerger.cs`). The merge builds **N pairwise edit scripts** — `IrEditScriptBuilder.Build(baseIr, reviewer_i)` — which all share the base's anchor space AND, within a paired block, the same base token coordinate system. That shared coordinate system is what makes the merge exact rather than heuristic. It then walks the base document in block order; per base block:
+
+- **Untouched** (no reviewer op, or all `EqualBlock`) → one base-sourced passthrough.
+- **One reviewer touched it** → that reviewer's op verbatim, authored to that reviewer.
+- **≥2 reviewers, all producing the SAME right result** → consensus: a single op, authored to the first reviewer. A set of consensus deletes collapses to one delete.
+- **≥2 reviewers, all paragraph `ModifyBlock` token edits with UNCHANGED paragraph properties** → **token-span composition** (`ComposeTokenSpans`): the per-reviewer token diffs, all expressed over the same base token stream `[0, baseTokenCount)`, compose into one merged authored token-op list. Non-overlapping span edits each land inline under their own author; overlapping spans become a conflict resolved by the policy. The emitted spans tile the base token stream exactly once (a **runtime** totality invariant via `IrCompositeMerger.Invariant` — enforced in Release too, not a `Debug.Assert` that the shipped/CI Release build would strip).
+- **≥2 reviewers, all table `ModifyBlock` edits (row moves uncontested)** → **per-cell table composition** (`ComposeTableDiffs`): rows align by base row anchor; each reviewer's cell ops pair by **base cell anchor** (not position, so one reviewer's column change never shifts another's edits), and DISJOINT cross-reviewer cell edits compose inline (each cell authored to its reviewer). A cell edited by ≥2 reviewers RECURSES into the SAME body block/token composition over the cell's paragraph mini-body (`MergeBlockStream` over the per-reviewer cell `BlockOps`) — so disjoint words inside one cell paragraph fuse, and same-word edits become a cell-paragraph-anchored conflict resolved by the policy. A reviewer's **column ADD/REMOVE composes** too: a right-only cell op becomes an authored `InsertCell` (rendered with native `w:tcPr/w:cellIns`, removed on reject) and a left-only cell op an authored `DeleteCell` (`w:tcPr/w:cellDel`, restored on reject); a delete-vs-edit on the same cell is a recorded cell conflict resolved by the policy. A cell-SHELL (`w:tcPr` width/gridSpan/vMerge/shading) edit is first-class: the shell digest participates in the cell `ContentHash` (`IrCell.ShellDigest`), a changed cell's shell is sourced from its editing reviewer (`ComposeCellShell`), agreeing shells reach consensus, and competing shells are a recorded conflict. An UNCONTESTED reviewer `MovedRow` composes (lowered to the del+ins row shape the two-way renderer itself uses). The op's `Op.TableDiff` is the merged apply/JSON truth; an additive `AuthoredRows` carries the renderer/revision attribution view. Authored rows/cells tile the base table exactly once (`AssertTilesBaseTable`, enforced at **runtime** via `IrCompositeMerger.Invariant`, not a Release-stripped `Debug.Assert`). A CONTESTED row move (the same base row also edited/deleted/moved by another reviewer) falls back to a whole-table block conflict.
+- **Anything else** (delete-vs-modify; a reviewer who changed both the paragraph's text AND its `w:pPr`; a table with a CONTESTED `MovedRow`; mixed kinds) → a **block-level conflict** resolved by the policy. (The pPr gate is deliberate: the compose path clones the BASE paragraph's pPr, so a reviewer who also changed pPr would have that change silently dropped — routing such an op to the conflict path preserves and surfaces the reviewer's full edit instead.)
+
+**Block-level inserts never conflict.** Every reviewer's right-only inserted block appears, slotted immediately after the shared base anchor it follows, ordered by reviewer index — two reviewers both inserting after the same paragraph both appear, attributed. A NATIVE move DESTINATION (see below) is right-positioned content too (null left anchor) and is routed the same way.
+
+**Native move composition.** Before the by-base grouping, `PlanMoves` decides, per reviewer move group, NATIVE vs LOWER: a move group (reviewer R, source base anchor S) renders as a native `w:moveFrom`/`w:moveTo` iff `RenderMoves` is on AND R is the only reviewer that touches base block S (so the move does not collide with another reviewer's edit/move on S). Native groups are assigned **globally-namespaced** move-group ids (one deterministic counter, reviewers in list order then ascending local gid) so two reviewers' independent moves never share a `w:name`; `ApplyMovePlan` keeps the native move ops (rewriting the gid) and lowers everything else. The native move SOURCE rides its base anchor through the by-base path (sole-toucher → emitted verbatim, authored to the mover); the native move DESTINATION rides the preceding-anchor (right-positioned) path. COLLIDING moves — move-vs-edit on S, or two reviewers moving the same block — are NOT native: both LOWER to del/ins and record a conflict (see the contested-relocation note below). The markup/revision/JSON renderers already handle native moves with a per-op author override, so no renderer change was needed.
+
+### Conflict model + the three policies
+
+A conflict is a base span (a token span, or a whole block) edited DIFFERENTLY by two or more reviewers. The configured `ConflictResolution` decides what lands in the OUTPUT document; the conflict is **always recorded in the data regardless of policy** (`GetConflicts` / the `conflicts` JSON array / a `ConflictId` on the winning revision):
+
+| Policy | Output at the conflicted span |
+|---|---|
+| `BaseWins` (default) | The base text is kept; every competitor is recorded. |
+| `FirstReviewerWins` | The first reviewer (list order) is applied inline; the others are recorded. |
+| `StackAll` | Each competing edit is emitted in reviewer order; all are recorded. |
+
+A `DocxDiffConflict` carries `BaseAnchor` + the base **token span** `[TokenStart, TokenEnd)` (an empty interval = a block-level conflict), the `AppliedPolicy`, and the per-reviewer `Competitors` (each with `Author` and the `ResultText` that reviewer's edit would have produced — `""` for a deletion). Its `Id` matches the `ConflictId` on the winning `DocxDiffConsolidatedRevision`, so conflicts correlate to the revision actually placed in the document.
+
+### Multi-author rendering + round-trip
+
+The same renderer backs `Compare` and `Consolidate`: `IrMarkupRenderer` was extended with a per-op author override + per-reviewer source selection (each reviewer's composed INSERT token spans index THAT reviewer's right-token list, so the renderer carries each contributing reviewer's own right paragraph anchor). Single-document `Compare` output is **byte-unchanged** by this extension. The round-trip invariant generalizes `Compare`'s accept ≡ right / reject ≡ left: `RejectRevisions(Consolidate(...))` content-equals the **base** (through the `DocxCompare.Consolidate` front door and every transport, the base's *accepted view* — see "Inputs that already carry tracked changes") (rejecting every reviewer restores the base), and `AcceptRevisions(...)` content-equals the **policy-resolved composite** (e.g. base text at conflicted spans under `BaseWins`, the first reviewer's text under `FirstReviewerWins`).
+
+### Before / after intuition
+
+- **Two reviewers editing DIFFERENT sentences of one paragraph.** Base: *"The cat sat. The dog ran."* Alice edits the first sentence, Bob the second. Their two token diffs share the base token stream, so token-span composition fuses them into **ONE merged paragraph** carrying Alice's edit on sentence 1 and Bob's on sentence 2, each `w:ins`/`w:del` attributed to its own author — directly consumable in Word's reviewing pane. (Legacy `WmlComparer.Consolidate` would instead append two stacked, labeled, colored single-cell boxes after the original — a side-by-side juxtaposition for a human to eyeball, never an inline merge.)
+- **Two reviewers editing the SAME word.** Base: *"the quick fox"*. Alice changes *quick*→*brown*, Bob *quick*→*slow*. The token spans overlap, so this is a recorded conflict at `[BaseAnchor, TokenStart..TokenEnd)`. Under the default `BaseWins`, the output keeps *quick* and `GetConflicts` returns one `DocxDiffConflict` with both competitors (Alice→*brown*, Bob→*slow*); under `FirstReviewerWins` the output reads *brown* (Alice inline) with Bob still recorded; under `StackAll` both edits emit in order. The conflict data is identical across all three policies — only the document body differs.
+
+### Parity outcome — and why the deviation catalog is empty
+
+`ConsolidateParityScoreboardTests` (`Docxodus.Tests/Ir/Diff/ConsolidateParityScoreboardTests.cs`) scores all **84** legacy `WmlComparer.Consolidate` corpus cases (WC001's 10 multi-reviewer rows + WC002's 74 single-reviewer rows): **84/84 reproduce-PASS, 0 deviations, 0 fails**, with the genuine-pass floor ratcheted at 84.
+
+The headline finding the scoreboard records: **legacy `WmlComparer.Consolidate` is a juxtaposition/triage tool, not a merge.** It keeps the original document intact and, for every changed block, APPENDS that reviewer's labeled revised copy (wrapped in a colored single-cell table under the default `ConsolidateWithTable`) right after the original — even for a single reviewer. Its accepted body is therefore, per changed block, `[revisor label][reviewer's block][original block]`: a side-by-side juxtaposition with the revisor name as literal body text. The IR-native engine instead produces a true inline merge. Because the two engines emit categorically different document SHAPES by design, raw accepted-body-text equality is the wrong relation (it never holds — that mismatch IS the supersession). Parity is therefore measured by a **sound-semantics** metric over normalized body plaintext:
+
+- **Single reviewer** → accept ≡ that reviewer's document, **char-exact** (the same accept ≡ right contract `Compare` obeys; holds for all 74 WC002 rows).
+- **Multi-reviewer, no conflict** → every reviewer's ADDED tokens appear in the accepted body (added-token containment, not whole-body subsequence — composition fuses adjacent edited tokens).
+
+The whole-corpus juxtaposition-vs-inline-merge shape divergence is the deliberate supersession, quantified once in the scoreboard footer rather than catalogued as 84 identical per-row entries. A row is catalogued as a per-row **deviation** only when `GetConflicts` reports a TRUE cross-reviewer token-overlap conflict (two reviewers editing the same span differently) — and **no legacy-corpus row produces one** (every corpus edit is single-reviewer or disjoint-span), so the per-row catalog is empty for this corpus. The conflict-supersession path is instead exercised by the unit suites (`DocxDiffOpsConsolidateTests` / `DocxDiffConsolidateApiTests`) and the K-way composite fuzzer (`CompositeFuzzTests`: round-trip reject ≡ base + the `IrCompositeVerifier` apply-verifier over 3/4/5-way seeds).
+
+### v1 limitations (honest)
+
+- **Header/footer scopes are NOT consolidated (2026-07-03 campaign ceiling).** The two-way engine diffs header/footer stories (`IrEditScript.HeaderFooterOps`), but `IrCompositeMerger.Merge` forces `CompareHeadersFooters` off for its per-reviewer diffs — explicit and deterministic (nothing is generated, so nothing is silently dropped), pinned by `IrHeaderFooterDiffTests.Consolidate_ignores_header_changes_v1_ceiling`. A reviewer's header edit is ignored by `Consolidate`; run a two-way `Compare` against that reviewer to capture it. Follow-on: `MergeHeaderFooterScopes` mirroring `MergeNoteScopes` — simpler than notes (story pairing is by scope/part, no id-map/reference-rewrite machinery).
+- **Note scopes MERGE across reviewers.** The merger builds composite note-scope (footnote/endnote) ops (`IrCompositeMerger.MergeNoteScopes`): a base-matched note's blocks run the SAME `MergeBlockStream` dispatch the body uses (disjoint note edits compose, identical ones reach consensus, contested ones are recorded conflicts resolved by the policy; a whole-note delete vs an edit is a delete-vs-modify conflict), and reviewer-INSERTED notes pass through authored. The composite renderer applies the composed ops inside the footnotes/endnotes parts, creates reviewer-inserted definitions under fresh output ids, rewrites reviewer-sourced body references from each reviewer's id space into the base-anchored output space (`IrCompositeScript.NoteIdMaps` + `RenderState.NoteRefClonesBySource`; deleted/moved-from content is base-sourced and skipped), then runs the SAME body-order renumber + cross-kind nested-reference sweep the two-way renderer runs. A reviewer-inserted note is all-`ins` content in that reviewer's id space, so a note-in-note reference INSIDE its definition body (which the body-reference rewrite never visits) is also rewritten to the output id space before the renumber — closing the sub-case where a reviewer inserts a footnote citing an endnote the same reviewer inserts (whose target id becomes a fresh output id, not a base id): without it, that nested cross-kind reference kept the reviewer id and dangled. Same-kind and cross-kind note-in-note nesting therefore stay resolvable on merge/accept/reject across N reviewers (`IrCompositeCrossKindNoteTests`). Structural ops INSIDE a note (a split/merge/move of note paragraphs) are conservatively lowered to del/ins (content-preserving); native in-note structural composition is a follow-on. Consolidated revisions cover note edits (appended after body ops, footnotes then endnotes), and the parity scoreboard's accept ≡ right metric now includes referenced note texts.
+- **Multi-reviewer table edits compose per-cell, including column changes and cell shells.** DISJOINT cross-reviewer table-cell edits COMPOSE inline (Alice edits cell(0,0), Bob edits cell(1,2) → both land, attributed; disjoint words inside one cell paragraph fuse via the recursion); edits to the SAME cell by ≥2 reviewers become a recorded conflict resolved by the policy. Cell ops pair by BASE cell anchor, so a reviewer's **column add/remove composes**: an added cell renders with native `w:tcPr/w:cellIns` (kept on accept, removed on reject), a removed cell with `w:tcPr/w:cellDel` (removed on accept, restored on reject — Word's own accept semantics absorb the removed cell's grid slot into the preceding cell's `gridSpan`); a cell delete-vs-edit is a recorded conflict. **Cell-shell (`w:tcPr`) edits are first-class**: the shell digest participates in the cell `ContentHash` (`IrCell.ShellDigest`), so a width/gridSpan/vMerge/shading-only edit is visible (was: invisible — classified `EqualBlock` and silently dropped); the composed cell's shell is sourced from its editing reviewer, agreeing shells reach consensus, competing shells are a recorded conflict (BaseWins keeps the base shell). The remaining STOP boundary: a **CONTESTED `MovedRow`** (the same base row also edited/deleted/moved by another reviewer) falls back to a whole-table **block conflict** (no silent loss — the base table is kept under `BaseWins` and the disagreement is recorded under every policy); an UNCONTESTED row move composes (lowered to the two-way renderer's own del+ins row shape). Notes: shell/tblPr application is not `tcPrChange`/`tblPrChange`-tracked (reject restores text, not shell bytes — same class as the two-way renderer's right-shelled table render); a 2-way column ADD in the SINGLE-toucher passthrough still renders via the whole-table fallback (a pre-existing two-way renderer gap, independent of composition).
+- **Non-colliding reviewer moves/splits/merges render natively; colliding ones are lowered to del/ins as a recorded conflict.** A reviewer's `MoveBlock`/`MoveModifyBlock`/`SplitBlock`/`MergeBlock` whose consumed base block(s) are touched by ONLY that reviewer renders NATIVELY (`PlanMoves`/`ApplyMovePlan` for moves with globally-namespaced move-group ids; `ApplySplitMergePlan` for splits/merges — the same sole-toucher predicate via the shared `BuildTouchers` map). A native `MergeBlock` (null left anchor, N consumed base anchors) dispatches through `MergeBlockStream`'s first-consumed-anchor index; the remaining consumed anchors emit no block op but keep insert slotting, and `GroupInsertsByPrecedingAnchor` advances past the merge's consumed region so a following insert lands after the whole merge markup. A COLLIDING structural op (another reviewer touches a consumed base block) is LOWERED: `LowerOneStructuralOp` rewrites the move SOURCE → `DeleteBlock` (retaining `MoveGroupId`/`IsMoveSource` as a relocation marker, stripped before emission), the move DEST → `InsertBlock`, a split → `DeleteBlock` + N ordered `InsertBlock`s, a merge → N ordered `DeleteBlock`s + an `InsertBlock` — preserving op order; **content is fully preserved and round-trips** (accept shows the moved/split/merged text, reject ≡ base), and the collision resolves through the existing conflict machinery. Cell mini-bodies run the same split/merge plan (fixing a silent drop: a `MergeBlock` inside a multi-editor cell reached neither grouping map and vanished). Two reviewers relocating the SAME base block to different places collide on the lowered source-delete → a recorded **placement conflict** whose PLACEMENT is now resolved by the conflict policy (issue #233): `BaseWins` keeps the block at its base position (`MergeOneBaseBlock` emits `EqualBlock`, not the removal, and every relocating destination is suppressed → **accept ≡ base**, neither move applied); `FirstReviewerWins` applies only the first reviewer's (list-order) destination (consensus removal once + the other destinations suppressed); `StackAll` lands every destination (both/all placements — the legacy behavior). `PlanContestedRelocationSuppression` selects the surviving destination(s) — each lowered move DEST `InsertBlock` retains its `(reviewer, MoveGroupId)` marker so it links back to its source-delete — in lockstep with `MergeOneBaseBlock`'s base-keep-vs-consensus-removal choice (both key off the single `IsContestedRelocation` predicate). The consensus removal is emitted **at most once** (never policy-flipped per competitor), so a delete both reviewers made is never duplicated. Under every policy there is **no content loss**, `reject ≡ base` holds, and the conflict is recorded for human resolution.
+- **Reviewers' BLOCK-FORMAT changes MERGE — paragraph (B1) + table-shell + section (B2).** The internal `TrackBlockFormatChanges` is sliced into `TrackParagraphFormatChanges`/`TrackTableFormatChanges`/`TrackSectionFormatChanges` (each defaults equal, so two-way is byte-identical); `IrCompositeMerger` forces the umbrella OFF but turns all three slices ON. Every family composes by a per-element digest mirroring `ComposeCellShell` (0 changers → base, all agree → consensus/first reviewer, ≥2 distinct → a recorded conflict resolved by policy; a shell/pPr/section cannot STACK):
+  - **Paragraph (B1):** a pPr-only edit composed by `ComposeParagraphFormat` over the FULL boundary-normalized `BlockSignature` (run formats + pPr — NOT the pPr digest alone, which silently drops a competitor's run edit) → native `w:pPrChange` authored to the winner.
+  - **Table-shell (B2):** per-cell `tcPr` (existing `ComposeCellShell`, now with the render stamping the `w:tcPrChange` marker it previously omitted), per-row `trPr`+`tblPrEx`, per-table `tblPr`+`tblGrid` — attributed **independently** by `ComposeTableAndRowShells` (carried on `IrAuthoredRowOp.TrPr`/`TblPrEx` + `IrCompositeOp.TableShell`, stamped by `ApplyComposedShell`). Disjoint elements compose; only a contested element conflicts; composes with #250's column-add/remove + row-move. Single-reviewer shells ride the two-way single-source render.
+  - **Section (B2):** the trailing `w:sectPr` (a document-level element, not a body block op) is composed by `ComposeTrailingSection` over each reviewer's trailing `IrSectionBreak.FormatFingerprint` (modeled + unmodeled digest) and stamped as `w:sectPrChange` (inner = base, hdr/ftr refs preserved) by `ApplyComposedTrailingSectPr`; an inline (`w:pPr/w:sectPr`) section change rides B1's paragraph path.
+  - `reject ≡ base` / `accept ≡ policy-winner` hold at the **property-byte** level for every family — enforced by the strengthened byte-level verifier (`Docs.ShellSection` asserted alongside the text projections in `CompositeFuzzTests` + `ConsolidateBlockFormatB2Tests`). **v1 decision:** a reviewer who changed BOTH a paragraph's text AND its pPr is conflict-routed (never a silent format drop); true inline text+format compose is deferred. Pinned by `ConsolidateBlockFormatB2Tests`.
+- **Conflict spans are base TOKEN indices** (`TokenStart`/`TokenEnd`) + `BaseAnchor`, not character offsets — suitable for machine consumers inspecting the edit script.
+
+## Parity status
+
+The engine was developed against `WmlComparer` as the oracle under a binding method rule: WmlComparer presumed correct per gap; the IR is fixed to match unless an oracle fault is established with concrete evidence. As of M2.6 (this surface):
+
+- **`GetRevisions` parity: 179/179 PASS-or-documented-deviation — 177 genuine count-exact passes plus 2 adjudicated deviations.** M2.6 closed the historical catalog entirely (179/179 genuine); the later content-anchored intra-paragraph diff then re-opened exactly two rows, **WC-1450** and **WC-1470**, by making the revision grain deliberately COARSER and Word-aligned (a rewrite is one Del + one Ins region, not per-word). The scoreboard ratchets `Pass + Deviation ≥ 179`, `Pass ≥ 177`, and `Deviation == 2`. The engine optimizes for Microsoft Word's compare output, not `WmlComparer` count parity, and round-trip is unaffected.
+  - **WC-1450 in particular** (`WC023-Table-4-Row-Image`, one table row deleted + a `"Second "` cell edit) is worth knowing because it was mis-filed as an aligner collapse (issue #289). It is not: the body aligns to 5 Unchanged + the table as ONE `Modified` pair, and `IrTableDiffer` resolves the table to exactly the authored edit (`DeleteRow`, `ModifyRow`, 2 × `EqualRow`) — pinned by `IrSplitMergeTests.WC1450_duplicate_content_body_does_not_collapse_to_delete_plus_insert`. The IR reports 2 revisions (the deleted row at its `tr:` anchor + the `"Second "` insert), the oracle 7. A whole deleted row is ONE revision at the engine's row grain — which is also what the oracle does everywhere else in the corpus (WC-1140/1150/1460/1660/1670/1750/1760 all pin per-row counts). The oracle's 7 here are not a finer reading of the same edit: it mis-aligns the fixture, reporting content as INSERTED that is unchanged on both sides, plus two null-text revisions.
+- **Produced-markup parity:** floor 39 fixtures round-trip clean (accept ≡ right, reject ≡ left, schema-valid); the round-trip allowlist is **1 fixture** (WC-BodyBookmarks endnote→footnote whole-note-store conversion, on which the WmlComparer oracle itself throws — there is no oracle behaviour to match). M2.6 Task 2 closed WC022 (the `InOrderRefine` same-unid identity reservation); the split/merge markup (below) round-trips on both corpus split fixtures and the synthetic split/merge shapes.
+- **Round-trip ORDER:** `accept ≡ right` / `reject ≡ left` hold as exact BLOCK SEQUENCES, not just word multisets — see the in-place order invariant under `IrBlockAligner` above. Guarded generatively by `DocxDiffFuzzRoundTripTests` (default 250 seeds, `DOCXODUS_FUZZ_SEEDS` widens; clean at 2000).
+- The only remaining artifact anywhere is that single oracle-crashes allowlist fixture.
+- **Output validity (epic #835):** `DocxCompareOutputValidityGateTests` compares ~375 pairs of `TestFiles/**/*.docx` fixtures — a seeded, hash-selected sample of cross-pairs plus every `X`/`X-Mod` and `X-Before`/`X-After*` revision pair — through `DocxCompare.Compare` and fails when an output carries an Open XML SDK (Office 2019) validator error (id plus the element it reports) that neither input has, or cannot be opened at all. Known residue sits in an explicit allow-list, each entry annotated with the sub-issue that owns it; the test also fails when an entry stops occurring, so the list only shrinks. The epic closes when it is empty. Selection hashes relative paths, so adding a fixture only adds pairs; deleting or renaming one changes the sample.
+
+### 1:N paragraph split / N:1 merge (M2.6) — the implemented algorithm
+
+One before-paragraph whose content migrates across N after-paragraphs (the user pressed Enter mid-paragraph), or the reverse merge, is a first-class engine capability. Design: `docs/superpowers/specs/2026-06-12-subparagraph-split-merge-design.md` (DESIGN-RESOLVED + adversarial review); this section records what the code DOES — the source of truth is `IrBlockAligner.DetectOneToManyInGap`/`FindQualifyingRun`/`TrimAndGate` + `IrSplitSegmenter`.
+
+**Detection (in `FillOneGap`, after the unambiguous-table-residue rule, before the 1×1-residue rule; gated by `IrDiffSettings.DetectSplitMerge`, default ON).** One side-parameterized worker runs twice per gap — split (singular = left) first, then merge (singular = right); a block consumed by a split group is never reconsidered by the merge scan.
+
+1. **Candidates.** A gap paragraph on the singular side qualifies iff it is still FREE, or was Modified-paired by THIS gap's `SimilarityPair` to a plural-side paragraph inside the gap (the pairing is *promoted* if a window qualifies). `Unchanged`/`FormatOnly`/`Moved` blocks are NEVER candidates: a content-equal pair has zero unmatched tail, so promoting one could only manufacture a false split — this is what preserves the WC022 identity-reservation reject-order invariant (review finding F4.2; regression-tested both directions with detection on).
+2. **Window enumeration.** For each candidate, ascending start × ascending end over maximal CONTIGUOUS runs of eligible plural indices (free paragraphs, or the candidate's own partner), capped at `SplitMaxRunLength` (8). The first window that passes all gates wins — shortest-first is deliberate: the smallest window clearing the coverage bar absorbs the least foreign content.
+3. **O(1) length prefilter.** Before any scoring, a window is skipped unless its cached content-token total lies in `[SplitCoverageThreshold × singularContent, singularContent / (1 − SplitForeignSlack)]` — the thresholds' arithmetic implications. Growing a window only adds content, so exceeding the upper bound breaks out of the end-loop. This is what keeps a fully-rewritten G×G gap at G²·O(1) instead of G²·O(LCS) (the adversarial 200×200 fixture's 5-second bound).
+4. **Scoring (`IrSplitSegmenter.Score`).** One in-order LCS (standard DP, deterministic back-walk tie-break) of the singular paragraph's full token stream against the window's concatenated streams. `Coverage` = LCS-matched singular CONTENT tokens / singular content tokens; `ForeignSlack` = unmatched window content tokens / window content tokens (content = non-Separator, non-Textbox; separators participate in the LCS for boundary context but never score).
+5. **Edge trim (the false-positive guard, review R2).** Leading and trailing members with ZERO matched content are dropped, then the trimmed window is re-scored. This excludes an unrelated net-new edge neighbor and edge empty carriers, while keeping INTERIOR net-new members (WC-1830's inserted math paragraph between the two halves) — their foreign content is priced by the slack gate.
+6. **Fire gates (on the trimmed window).** ≥2 members carrying at least one content token; a paired candidate's partner inside the window plus ≥1 other free member; `Coverage ≥ SplitCoverageThreshold` (0.90); `ForeignSlack ≤ SplitForeignSlack` (0.34). The thresholds are corpus-swept (`IrSplitThresholdSweepTests`): the shipped pair sits on a plateau at the grid maximum with ≥1 full grid step of margin on every axis (the F4.1 gate, re-asserted on every run).
+7. **On fire.** Any prior Modified pairing is overwritten; every member's kind/match slots are stamped immediately (no window may reuse a consumed block — the F2.2 overlap ceiling); the group is recorded and its indices leave the leftover lists, so the 1×1 rule and surplus classification see only what remains. `EmitEntries` collapses each group to ONE alignment entry (`IrAlignmentKind.Split` at the FIRST member's right position carrying `MultiBlocks`; `Merge` at the right block's position), with deletion buckets flushed exactly once per anchored left.
+
+**Segmentation (`IrSplitSegmenter.ComputeSegmentDiffs`, at projection time).** The same LCS assigns every singular token to a member: a matched token goes to its partner's member, an unmatched token to the nearest PRECEDING matched token's member (leading unmatched → member 0) — a total, monotone rule. Each slice is re-diffed against its member with the ordinary Myers differ, so every segment diff carries the full token-diff invariant battery over (slice, member) and the partition invariant holds structurally. For a merge the segmenter runs with singular = right, and the builder mirrors each diff (`MirrorDiff`: Insert↔Delete + span swap) so stored diffs always read left → right.
+
+**Surfaces.** *Apply-verifier:* a `SplitBlock` pushes one reconstructed tuple per member (the existing count/order/`ReferenceEquals` loop then proves the N rights sit contiguously at the op's position); a `MergeBlock` pushes one tuple reconstructed from the N members; the cell/note path additionally asserts the produced right-anchor SEQUENCE equals the right block list (the F3.2 strengthening, asserted corpus-wide). *Revisions:* Fine mode reports each segment's token diff plus one `Inserted "\n"` per new pilcrow (`Deleted "\n"` per removed one) — a clean split is visible but claims no content change; compatible mode reproduces the oracle's account — segment 0's inline edits (seam-whitespace-only ins/del suppressed) plus exactly ONE coalesced `Inserted` (`"\n" + Σ(memberText + "\n")`) per split — which is what lands WC-1830 at 2 and WC-1450 at 7. *Markup:* the anchored-split shape — N paragraphs, each member's pPr and segment content, with `MarkParagraphMark` inserted marks on paragraphs 0..N−2 (deleted marks for a merge, whose non-final paragraphs keep their LEFT pPr); REJECT removes the marks and RevisionProcessor re-fuses the paragraphs, reconstructing LEFT; ACCEPT yields the N right paragraphs. *Wire:* additive optional arrays only. *Fuzzer:* `SplitParagraph`/`MergeParagraphs` mutation kinds run the own-oracle battery (apply-verify + JSON round-trip + determinism) on every seed; they are excluded from the cross-engine differential class because the engines frame a clean split differently BY CONSTRUCTION (WmlComparer reports the tail as a Deleted+Inserted pair of identical text; the IR keeps it Equal and reports the structural mark — the `RelocateParagraph` precedent).
+
+**Deltas vs the spec worth knowing.** (a) The spec's §3.2 "anchored-split" example cell (WC-1450's `Second `-prefix cell) turned out NOT to be a split at all — its before-paragraph never contained the tail (`Score` member-match probe: `[11, 0]`); the oracle's `Inserted "Second "` + `Inserted "When you click…"` is the ordinary Modify + InsertBlock account, which the edge trim correctly preserves. (b) The implemented mark placement (inserted marks on 0..N−2, last paragraph keeps the original pilcrow) differs from the spec's §3.2 oracle excerpt but satisfies the same accept ≡ right / reject ≡ left contract the spec adjudicates on (§3.3/§5.5 explicitly allow this). (c) There is no `IrSegmentDiff` wrapper record (review F1.3) — `segmentDiffs` is a plain token-diff list. (d) Scope ceilings: N:M and cross-gap splits never fire (one singular side, one gap, by construction); `DetectSplitMerge = false` restores strict 1:1 op semantics.
+
+## Relationship to WmlComparer
+
+| | `WmlComparer` | `DocxDiff` (IR engine) |
+|---|---|---|
+| Status | Legacy, feature-frozen (kept via explicit selector) | **Default** (since v8.0.0) |
+| Comparison substrate | Atom streams | Modeled IR (blocks/runs/format records) |
+| Revisions | `WmlComparerRevision` (OOXML members, no anchors) | `DocxDiffRevision` (anchor-addressed; no OOXML members) |
+| Move markup | `GetRevisions`-only post-process; **native `w:moveFrom`/`w:moveTo` IS produced** by the IR markup renderer | native `w:moveFrom`/`w:moveTo` |
+| Format change | run-level only (`w:rPrChange`) | run + **paragraph/table/section** (`w:rPrChange`/`w:pPrChange`/`w:tcPrChange`/`w:trPrChange`/`w:tblPrChange`/`w:tblGridChange`/`w:sectPrChange`); modeled-only by default |
+| Diff-as-data | none | edit-script JSON |
+| Determinism | wall-clock dates by default | deterministic by default |
+
+## Cross-layer ripple
+
+The four-layer ripple (WASM bridge → npm/TypeScript → python host/`docx_scalpel`) for these three entry points is tracked as M2.5 Task 5 (see the program plan). This document covers the .NET public surface.

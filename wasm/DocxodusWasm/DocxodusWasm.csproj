@@ -1,0 +1,133 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RuntimeIdentifier>browser-wasm</RuntimeIdentifier>
+    <OutputType>Exe</OutputType>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Disable StyleCop for WASM wrapper -->
+    <NoWarn>$(NoWarn);SA1633;SA1636</NoWarn>
+
+    <!-- WASM specific -->
+    <WasmMainJSPath>main.js</WasmMainJSPath>
+
+    <!-- Size optimization -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- IL Trimming — only code reachable from the [JSExport] bridge surface ships.
+         Docxodus and DocumentFormat.OpenXml are trimmed (see the ItemGroup below);
+         modules never exported to the browser (HtmlToWml, DocumentBuilder,
+         OpenXmlRegex, ...) are removed. Validated by the full Playwright
+         suite plus tests/trim-validation.spec.ts, which pins the two paths where
+         trimming could bite at runtime (reflective GetPackage(), OpenXmlValidator).
+         See docs/architecture/wasm-packaging.md. -->
+    <PublishTrimmed>true</PublishTrimmed>
+    <TrimMode>full</TrimMode>
+    <TrimmerRemoveSymbols>true</TrimmerRemoveSymbols>
+    <!-- The timezone database is dead weight: nothing in the library converts timezones. -->
+    <InvariantTimezone>true</InvariantTimezone>
+    <!-- No dotnet.native.js.symbols in the payload. -->
+    <WasmEmitSymbolMap>false</WasmEmitSymbolMap>
+    <!-- Suppressed deliberately: the only reflection in the WASM-compiled tree is
+         PtOpenXmlUtil.GetPackage() (SDK 3.x Package access), whose targets are pinned
+         by ILLink.Descriptors.xml. Trim safety is enforced by the browser test suite. -->
+    <SuppressTrimAnalysisWarnings>true</SuppressTrimAnalysisWarnings>
+
+    <!-- Webcil format (size-neutral vs .dll; firewall/AV-friendly) -->
+    <WasmEnableWebcil>true</WasmEnableWebcil>
+
+    <!-- Disable unused runtime features -->
+    <HttpActivityPropagationSupport>false</HttpActivityPropagationSupport>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <MetadataUpdaterSupport>false</MetadataUpdaterSupport>
+    <UseNativeHttpHandler>true</UseNativeHttpHandler>
+
+    <!-- Debug settings - disable for release -->
+    <DebuggerSupport Condition="'$(Configuration)' == 'Release'">false</DebuggerSupport>
+    <EventSourceSupport Condition="'$(Configuration)' == 'Release'">false</EventSourceSupport>
+
+    <!-- Profile-guided AOT (issues #652, #783). Compile the methods reached by the
+         representative compare, conversion, annotation, and editor workloads;
+         other reachable methods stay on the interpreter/jiterpreter. The broader
+         browser workload speeds up annotation creation by ~2–3x for +286.5 KiB
+         Brotli, bringing the framework to 5.44 MiB on SDK 10.0.301.
+         Measurements: benchmarks/aot-coverage/README.md.
+
+         WasmAotProfilePath, not the documented AOTProfilePath: the SDK passes both to the
+         AOT task under one case-insensitive parameter and the (empty) item wins, so
+         AOTProfilePath silently yields full AOT. Re-record the profile with
+         scripts/record-aot-profile.sh when the hot paths move; a stale profile costs speed,
+         never correctness. -->
+    <RunAOTCompilation Condition="'$(Configuration)' == 'Release'">true</RunAOTCompilation>
+    <WasmAotProfilePath>$(MSBuildThisFileDirectory)docxodus.aotprofile</WasmAotProfilePath>
+
+    <!-- Define WASM_BUILD to enable SkiaSharp-free code paths in Docxodus -->
+    <DefineConstants>$(DefineConstants);WASM_BUILD</DefineConstants>
+  </PropertyGroup>
+
+  <Import Project="AotProfile.targets" />
+
+  <!-- Turn off the interpreter's precise stack marking (issue #811). With it on (the .NET 10
+       default), every nursery collection walks the chain of interpreter-to-native transition
+       records. Mono's AOT compiler omits the record pop on a `ret` reached only by a backward
+       branch, so the OpenXml SDK's GetAllParts() iterator leaves its record behind on every
+       `yield return` and the next MoveNext links it to itself; WebAssembly does not trap on the
+       resulting walk, so a collection inside that loop spins forever. Conservative marking of the
+       interpreter stack is the .NET 8 behaviour and never walks the chain.
+       npm/tests/wasm-runtime-config.spec.ts pins this; wasm-packaging.md has the evidence. -->
+  <ItemGroup>
+    <WasmEnvironmentVariable Include="MONO_INTERPRETER_OPTIONS" Value="-precise" />
+  </ItemGroup>
+
+  <!-- Apply size optimization in the SDK's post-link Binaryen pass, before it
+       generates asset hashes. Keep the default -O2 AOT compilation and link,
+       the full recorded profile, and every exported API. -->
+  <ItemGroup Condition="'$(Configuration)' == 'Release'">
+    <WasmOptConfigurationFlags Include="-Oz" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Reference Docxodus library with WASM_BUILD property to exclude SkiaSharp dependencies -->
+    <ProjectReference Include="../../Docxodus/Docxodus.csproj" AdditionalProperties="WASM_BUILD=true" />
+
+    <!-- SkiaSharp DISABLED for smaller bundle size -->
+    <!-- The WASM converter doesn't use ImageHandler, so SkiaSharp is not needed -->
+    <!-- Uncomment if image processing is required -->
+    <!-- <PackageReference Include="SkiaSharp" Version="2.88.9" /> -->
+    <!-- <PackageReference Include="SkiaSharp.NativeAssets.WebAssembly" Version="2.88.9" /> -->
+  </ItemGroup>
+
+  <!-- Native SkiaSharp library DISABLED - saves ~15MB -->
+  <!-- <ItemGroup>
+    <NativeFileReference Include="$(NuGetPackageRoot)skiasharp.nativeassets.webassembly/2.88.9/build/netstandard1.0/libSkiaSharp.a/3.1.34/simd,st/libSkiaSharp.a" />
+  </ItemGroup> -->
+
+  <ItemGroup>
+    <WasmExtraFilesToDeploy Include="main.js" />
+    <WasmExtraFilesToDeploy Include="index.html" />
+  </ItemGroup>
+
+  <!-- Trimming roots. DocxodusWasm must stay fully rooted — JS resolves its [JSExport]s
+       by name at runtime, invisibly to the trimmer. Docxodus and the Open XML SDK are
+       opted INTO trimming instead (DocumentFormat.OpenXml is IsTrimmable-annotated, but
+       under a rooted Docxodus most of it stayed reachable; Docxodus itself carries no
+       IsTrimmable metadata, so TrimmableAssembly is required for it in either TrimMode).
+       ILLink.Descriptors.xml pins the members PtOpenXmlUtil.GetPackage() reaches only
+       via reflection. -->
+  <ItemGroup>
+    <TrimmerRootAssembly Include="DocxodusWasm" />
+    <TrimmableAssembly Include="Docxodus" />
+    <TrimmableAssembly Include="DocumentFormat.OpenXml" />
+    <TrimmableAssembly Include="DocumentFormat.OpenXml.Framework" />
+    <TrimmerRootDescriptor Include="ILLink.Descriptors.xml" />
+  </ItemGroup>
+
+  <!-- The AOT-profiler flavour (scripts/record-aot-profile.sh publishes with
+       WasmProfilers=aot) hands its data to JavaScriptExports.DumpAotProfileData, which nothing
+       references statically and full trimming therefore removes. Root it for that flavour
+       only; the shipped build is unaffected. -->
+  <ItemGroup Condition="$(WasmProfilers.Contains('aot'))">
+    <TrimmerRootDescriptor Include="ILLink.Descriptors.AotProfiler.xml" />
+  </ItemGroup>
+</Project>

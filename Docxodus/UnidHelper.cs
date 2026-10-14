@@ -1,0 +1,550 @@
+#nullable enable
+
+// Copyright (c) John Scrudato IV. All rights reserved.
+// Licensed under the MIT license. See LICENSE file in the project root for full license information.
+
+using System;
+using System.Buffers;
+using System.Collections.Generic;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
+using System.Xml.Linq;
+using Docxodus.Internal;
+
+namespace Docxodus;
+
+/// <summary>Which elements a deterministic Unid pass assigns to.</summary>
+internal enum UnidAssignment
+{
+    /// <summary>Every element, which is what <see cref="DocxSession"/>, the markdown projection and
+    /// the package change detector expect — a Unid assigned here persists into a saved package, so
+    /// "which elements carry an identity" is a cross-cutting contract those paths keep unchanged.</summary>
+    All,
+
+    /// <summary>
+    /// Only elements an identity can be read back from, plus their ancestors. The diff engine reads
+    /// a Unid from block elements, table structure, content controls, notes, comments and
+    /// <c>w:drawing</c>; the markup renderer strips the attribute on the way out. Assigning to the
+    /// rest costs two SHA-256 hashes each for an identity nothing queries. The assigned VALUES are
+    /// unchanged — see <c>CarriesNoIdentity</c> for why.
+    /// </summary>
+    IdentityBearing,
+}
+
+/// <summary>
+/// Shared helpers for the <c>PtOpenXml.Unid</c> stable-id attribute. The Unid is a 32-char
+/// hex string. <see cref="AssignToAllElementsDeterministic"/> derives it from element content +
+/// structural position, so the same document content produces the same Unids across sessions —
+/// an anchor id captured in one <see cref="DocxSession"/> still resolves in a fresh session opened
+/// over the same bytes. <see cref="GenerateUnid"/> mints a random Unid for freshly-inserted elements.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The deterministic scheme hashes <c>parent_unid : tag_name : content_sig : dup_index</c>
+/// — where <c>dup_index</c> is the count of preceding siblings with the same
+/// (tag, content_sig). Properties:
+/// </para>
+/// <list type="bullet">
+/// <item>Two opens of the same bytes produce identical Unids on every element.</item>
+/// <item>Editing a paragraph's text changes that paragraph's Unid; siblings stay stable.</item>
+/// <item>Inserting a unique-content paragraph anywhere does not shift any other Unid.</item>
+/// <item>Inserting/editing a duplicate-content paragraph between duplicates shifts the
+/// <c>dup_index</c> of later duplicates of the same content (the only rough edge in the scheme).</item>
+/// </list>
+/// </remarks>
+internal static class UnidHelper
+{
+    /// <summary>Random 32-char hex Unid. Used by <see cref="AssignToSelfAndDescendants"/> on
+    /// freshly-inserted elements that don't yet have a parent.</summary>
+    internal static string GenerateUnid() => Guid.NewGuid().ToString().Replace("-", "");
+
+    /// <summary>
+    /// Content-addressable assignment. Assigns <c>PtOpenXml.Unid</c> on the root if it's a
+    /// footnote/endnote and on every descendant that does not already have one; the values are
+    /// derived deterministically from element content + structural position so the
+    /// same bytes produce the same Unids across sessions.
+    /// </summary>
+    /// <returns><c>true</c> when at least one Unid was assigned — callers use this to
+    /// skip persistence work (part flushes) on the no-op passes that dominate per-op
+    /// index rebuilds.</returns>
+    internal static bool AssignToAllElementsDeterministic(
+        XElement contentParent, UnidAssignment assignment = UnidAssignment.All)
+    {
+        bool prune = assignment == UnidAssignment.IdentityBearing;
+        // Run the legacy deterministic walk first. Descendant block/run identities below an
+        // SDT must keep using the same structural seed they used before SDTs became public
+        // anchors; otherwise merely exposing the wrapper would rename every child anchor.
+        // The wrapper's own Unid is replaced from native w:id only after that walk completes.
+        bool assignedRoot = false;
+        if (contentParent.Name == W.footnote || contentParent.Name == W.endnote)
+        {
+            if (contentParent.Attribute(PtOpenXml.Unid) == null)
+            {
+                var noteId = (string?)contentParent.Attribute(W.id) ?? string.Empty;
+                contentParent.Add(new XAttribute(PtOpenXml.Unid,
+                    DeriveUnid(rootSeed: contentParent.Name.LocalName, tag: "id", sig: noteId, dupIndex: 0)));
+                assignedRoot = true;
+            }
+        }
+
+        // Prune the recursion to subtrees that actually contain an element missing a
+        // Unid. After the first assignment over a document, the common case (an edit
+        // touched one block) leaves 99%+ of the tree fully assigned — recursing into
+        // it only to recompute content signatures for dup-index bookkeeping nobody
+        // needs is the dominant cost of every per-op index rebuild (36 ms of a 74 ms
+        // rebuild on a 15k-element document). `live` = every element whose subtree
+        // (self or descendants) holds a missing Unid; parents outside it are skipped
+        // wholesale. Assigned values are IDENTICAL to the unpruned walk: dup-index
+        // bookkeeping only ever influences an assignment within a parent that has a
+        // missing child, and such parents are always in `live`.
+        var live = new HashSet<XElement>();
+        CollectLiveAncestors(contentParent, prune, live);
+        if (live.Count == 0)
+        {
+            ContentControlIdentity.AssignStableUnids(contentParent, out bool changedControls);
+            return assignedRoot || changedControls;
+        }
+
+        var parentUnid = (string?)contentParent.Attribute(PtOpenXml.Unid) ?? contentParent.Name.LocalName;
+        // ContentSignature hashes a string built from an element's subtree, and in real OOXML those
+        // strings repeat heavily — on a 15k-element legal document roughly seven in eight are a
+        // duplicate of one already seen (identical rPr blobs, repeated empty runs, boilerplate
+        // properties). SHA-256 dominates this walk, so the repeats are worth remembering. The cache
+        // lives for one call only: it is keyed on the exact string that is hashed, so a hit returns
+        // precisely what a fresh hash would have, and nothing survives to leak between documents.
+        var sigCache = new Dictionary<string, string>(StringComparer.Ordinal);
+        AssignDescendantsDeterministic(contentParent, parentUnid, live, sigCache, prune);
+        ContentControlIdentity.AssignStableUnids(contentParent);
+        return true;
+    }
+
+    /// <summary>
+    /// <see cref="AssignToAllElementsDeterministic"/> restricted to one top-level block that already
+    /// carries its own Unid: assigns every missing Unid below <paramref name="block"/> and nothing
+    /// else. The values are identical to what the whole-scope walk would assign, because that walk
+    /// reaches the block with the block's own Unid as the parent seed and derives a descendant's
+    /// Unid only from its ancestors and its preceding siblings, all of which lie inside the block.
+    /// Content-control identities are not touched: the caller must fall back to the whole-scope
+    /// walk for any block holding a <c>w:sdt</c>, whose identity is decided story-wide.
+    /// </summary>
+    /// <returns><c>true</c> when at least one Unid was assigned.</returns>
+    internal static bool AssignWithinBlock(XElement block)
+    {
+        var blockUnid = (string?)block.Attribute(PtOpenXml.Unid)
+            ?? throw new InvalidOperationException("block-scoped Unid assignment needs a block that has its own Unid");
+        var live = new HashSet<XElement>();
+        CollectLiveAncestors(block, prune: false, live);
+        if (live.Count == 0) return false;
+        AssignDescendantsDeterministic(block, blockUnid, live, new Dictionary<string, string>(StringComparer.Ordinal),
+            prune: false);
+        return true;
+    }
+
+    /// <summary>
+    /// Return an element's existing Unid, or derive the exact deterministic value that
+    /// <see cref="AssignToAllElementsDeterministic"/> would assign without changing the XML tree.
+    /// Read-only inspection fallbacks use this when an element lies outside the normal projected
+    /// walk. The derivation follows the ancestor chain and counts same-signature preceding siblings,
+    /// matching <see cref="AssignDescendantsDeterministic"/>.
+    /// </summary>
+    internal static string ReadOrDeriveUnid(XElement element)
+    {
+        ArgumentNullException.ThrowIfNull(element);
+        if ((string?)element.Attribute(PtOpenXml.Unid) is { Length: > 0 } existing)
+            return existing;
+
+        var chain = element.AncestorsAndSelf().Reverse().ToArray();
+        var root = chain[0];
+        string parentUnid;
+        if ((string?)root.Attribute(PtOpenXml.Unid) is { Length: > 0 } rootUnid)
+        {
+            parentUnid = rootUnid;
+        }
+        else if (root.Name == W.footnote || root.Name == W.endnote)
+        {
+            var noteId = (string?)root.Attribute(W.id) ?? string.Empty;
+            parentUnid = DeriveUnid(root.Name.LocalName, "id", noteId, 0);
+        }
+        else
+        {
+            // Scope roots such as w:document/w:hdr/w:ftr are seeds, not assigned descendants.
+            parentUnid = root.Name.LocalName;
+        }
+
+        for (int i = 1; i < chain.Length; i++)
+        {
+            var current = chain[i];
+            if ((string?)current.Attribute(PtOpenXml.Unid) is { Length: > 0 } currentUnid)
+            {
+                parentUnid = currentUnid;
+                continue;
+            }
+
+            var signature = ContentSignature(current);
+            int duplicateIndex = 0;
+            foreach (var preceding in current.ElementsBeforeSelf())
+            {
+                if (preceding.Name == current.Name
+                    && string.Equals(ContentSignature(preceding), signature, StringComparison.Ordinal))
+                    duplicateIndex++;
+            }
+            parentUnid = DeriveUnid(parentUnid, current.Name.LocalName, signature, duplicateIndex);
+        }
+
+        return parentUnid;
+    }
+
+    /// <summary>
+    /// Assigns a random Unid to the root element itself (regardless of element name) and to
+    /// every descendant that does not already have one. Used for freshly-built block elements
+    /// inserted into a document by <c>DocxSession</c>. Uses the random Unid path
+    /// because the inserted root often isn't yet attached to a parent at call time;
+    /// once saved and reopened, the deterministic projector path will re-derive a
+    /// stable Unid for the same slot.
+    /// </summary>
+    internal static void AssignToSelfAndDescendants(XElement root)
+    {
+        // A dense text paragraph has thousands of property elements. On WASM,
+        // Guid.NewGuid crosses into the browser's crypto provider each time.
+        // Fill a batch once, retaining independent random v4 GUIDs and every
+        // pre-existing identity, instead of making one host call per element.
+        const int batchSize = 1024;
+        var pending = root.DescendantsAndSelf()
+            .Where(e => e.Attribute(PtOpenXml.Unid) == null).ToArray();
+        if (pending.Length == 0) return;
+        byte[] random = ArrayPool<byte>.Shared.Rent(Math.Min(pending.Length, batchSize) * 16);
+        try
+        {
+            for (int start = 0; start < pending.Length; start += batchSize)
+            {
+                int count = Math.Min(pending.Length - start, batchSize);
+                RandomNumberGenerator.Fill(random.AsSpan(0, count * 16));
+                for (int i = 0; i < count; i++)
+                {
+                    var bytes = random.AsSpan(i * 16, 16);
+                    bytes[7] = (byte)((bytes[7] & 0x0f) | 0x40);
+                    bytes[8] = (byte)((bytes[8] & 0x3f) | 0x80);
+                    pending[start + i].Add(new XAttribute(PtOpenXml.Unid, new Guid(bytes).ToString("N")));
+                }
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(random);
+        }
+    }
+
+    /// <summary>
+    /// Content hash of an element's full subtree — names, attributes (minus the
+    /// <c>PtOpenXml.Unid</c> bookkeeping) and text — for change DETECTION, not identity.
+    /// In-session a block element keeps its Unid attribute across edits (ops rebuild
+    /// its children, not the element), so a renderer diffing by Unid alone would keep
+    /// stale DOM for any in-place edit; this hash moves whenever anything inside the
+    /// unit changes. One tree walk, no serialization allocation beyond the builder.
+    /// </summary>
+    internal static string ContentHash(XElement element)
+    {
+        var sb = new StringBuilder(1024);
+        void Walk(XElement e)
+        {
+            sb.Append('<').Append(e.Name.LocalName);
+            // A note's w:id is EXCLUDED — on the reference AND on the definition:
+            // inserting a footnote shifts the id of every later citation and its
+            // definition (ids ascend in reference order), yet their rendered content is
+            // unchanged — marker/list numbering and hrefs are POSITION-derived chrome a
+            // renumber pass owns, not content. Hashing the id would make one note insert
+            // look like a change to every later citing block and every note definition.
+            bool isNoteRef = e.Name == W.footnoteReference || e.Name == W.endnoteReference
+                || e.Name == W.footnote || e.Name == W.endnote;
+            foreach (var a in e.Attributes())
+            {
+                if (a.Name == PtOpenXml.Unid || a.IsNamespaceDeclaration) continue;
+                if (isNoteRef && a.Name == W.id) continue;
+                sb.Append(' ').Append(a.Name.LocalName).Append('=').Append(a.Value);
+            }
+            sb.Append('>');
+            foreach (var n in e.Nodes())
+            {
+                if (n is XElement ce) Walk(ce);
+                else if (n is XText t) sb.Append(t.Value);
+            }
+            sb.Append("</").Append('>');
+        }
+        Walk(element);
+        return ShortHash(sb.ToString(), hexChars: 16);
+    }
+
+    // ─── Deterministic derivation internals ──────────────────────────────
+
+    private static void AssignDescendantsDeterministic(
+        XElement parent, string parentUnid, HashSet<XElement> live, Dictionary<string, string> sigCache,
+        bool prune)
+    {
+        // Signature/dup-index bookkeeping is only needed when THIS parent has a child
+        // to assign — for fully-assigned parents (the overwhelming majority after the
+        // first pass) it would be pure waste, so it is gated on a cheap presence scan.
+        bool anyMissing = false;
+        foreach (var c in parent.Elements())
+        {
+            if (prune && CarriesNoIdentity(c)) continue;
+            if (c.Attribute(PtOpenXml.Unid) == null) { anyMissing = true; break; }
+        }
+
+        var dup = anyMissing ? new Dictionary<(string Tag, string Sig), int>() : null;
+        foreach (var child in parent.Elements())
+        {
+            if (prune && CarriesNoIdentity(child)) continue;
+            if (child.Attribute(PtOpenXml.Unid) == null)
+            {
+                var sig = ContentSignature(child, sigCache);
+                var key = (child.Name.LocalName, sig);
+                dup!.TryGetValue(key, out var dupIndex);
+                dup[key] = dupIndex + 1;
+                child.Add(new XAttribute(PtOpenXml.Unid,
+                    DeriveUnid(rootSeed: parentUnid, tag: child.Name.LocalName, sig: sig, dupIndex: dupIndex)));
+            }
+            else if (anyMissing)
+            {
+                // Pre-existing Unid (persisted across save, or freshly-inserted via
+                // AssignToSelfAndDescendants). Still count it for dup-index of its
+                // same-content siblings so unassigned later siblings get a
+                // consistent index regardless of which subset already had Unids.
+                var sig = ContentSignature(child, sigCache);
+                var key = (child.Name.LocalName, sig);
+                dup!.TryGetValue(key, out var dupIndex);
+                dup[key] = dupIndex + 1;
+            }
+
+            // Recurse only where something below still needs assignment: `live` holds
+            // every ancestor of a missing element, so a child with any unassigned
+            // descendant — including one just assigned above whose own children are
+            // still missing — is a member; anything else has a fully-assigned subtree.
+            if (live.Contains(child))
+            {
+                var childUnid = (string)child.Attribute(PtOpenXml.Unid)!;
+                AssignDescendantsDeterministic(child, childUnid, live, sigCache, prune);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Mark every element whose subtree still holds an element needing a Unid, so the assignment
+    /// walk can skip fully-assigned subtrees wholesale. Under <paramref name="prune"/> the walk
+    /// does not descend into identityless subtrees either, so they never mark their ancestors live.
+    /// </summary>
+    /// <returns>Whether <paramref name="parent"/>'s subtree holds anything to assign.</returns>
+    private static bool CollectLiveAncestors(XElement parent, bool prune, HashSet<XElement> live)
+    {
+        bool anythingBelow = false;
+        foreach (var child in parent.Elements())
+        {
+            if (prune && CarriesNoIdentity(child)) continue;
+            var below = CollectLiveAncestors(child, prune, live);
+            if (below || child.Attribute(PtOpenXml.Unid) is null) anythingBelow = true;
+        }
+
+        if (anythingBelow) live.Add(parent);
+        return anythingBelow;
+    }
+
+    /// <summary>
+    /// Elements — with their whole subtree — that no consumer can address: run/table/row/cell
+    /// property containers, the page-setup children of a section break, everything under a
+    /// <c>w:pPr</c> other than an inline <c>w:sectPr</c>, and the text leaves. Under
+    /// <see cref="UnidAssignment.IdentityBearing"/> these are neither assigned a Unid nor descended
+    /// into, which is most of a document: an identity is read back from block elements, table
+    /// structure, content controls, notes, comments and <c>w:drawing</c>, and from nothing else.
+    /// <para>
+    /// The predicate is a pure function of the element's name and its parent's name, and that is
+    /// what makes the pruned Unids <b>identical</b> to the unpruned ones rather than merely similar.
+    /// A Unid derives from <c>parentUnid : tag : signature : dupIndex</c> — ancestors only, never
+    /// descendants — and <c>dupIndex</c> counts same-<c>(tag, signature)</c> preceding siblings. A
+    /// name-keyed skip therefore removes whole tag-groups at once, so no surviving element ever
+    /// shares a dup key with a skipped one and no surviving element's index can shift. A predicate
+    /// that looked at content instead could split a tag-group and move an index.
+    /// </para>
+    /// </summary>
+    private static bool CarriesNoIdentity(XElement el)
+    {
+        var name = el.Name;
+        if (name == W.rPr || name == W.tblPr || name == W.tblPrEx || name == W.trPr || name == W.tcPr)
+            return true;
+        if (name == W.t || name == W.delText || name == W.instrText || name == W.delInstrText)
+            return true;
+
+        var parent = el.Parent?.Name;
+        // The one addressable thing under paragraph properties is an inline section break.
+        if (parent == W.pPr) return name != W.sectPr;
+        // The section break itself is addressable; its page setup is not.
+        if (parent == W.sectPr) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// Compact content signature for the element's identity within its parent.
+    /// <para>
+    /// Container elements (those that have block-level descendants like nested
+    /// <c>w:p</c> or <c>w:tbl</c>) get a purely-structural signature — the tag
+    /// names of their direct children. Including their descendants' text here
+    /// would couple every child's Unid to every other child's content, so
+    /// editing one paragraph would shift every other paragraph's Unid via the
+    /// shared parent.
+    /// </para>
+    /// <para>
+    /// Leaf-ish elements (paragraphs, runs, table cells) include their flat
+    /// <c>w:t</c> text plus style id + numbering id + tag names of non-text
+    /// descendants (so text-empty paragraphs holding distinct images / math /
+    /// fields get distinct sigs).
+    /// </para>
+    /// </summary>
+    private static string ContentSignature(XElement element) => ContentSignature(element, sigCache: null);
+
+    /// <summary>
+    /// The content signature of <paramref name="element"/>: a 16-hex-char digest of its own text,
+    /// paragraph style/numbering, and descendant element names. With <paramref name="sigCache"/>
+    /// supplied, digests are reused across elements whose signature input is identical — the digest
+    /// is a pure function of that string, so a cache hit is indistinguishable from a fresh hash.
+    /// </summary>
+    private static string ContentSignature(XElement element, Dictionary<string, string>? sigCache)
+    {
+        // Container elements (those that contain block-level descendants like
+        // nested w:p or w:tbl) collapse to a tag-name-only signature. Their
+        // Unid is used as parent_unid for the blocks inside; we don't want
+        // editing/inserting one paragraph to invalidate every other paragraph
+        // by shifting their parent's signature.
+        //
+        // The block-descendant test, the text concatenation and the descendant-name list all used to
+        // walk the subtree separately, with a string materialized per walk. One walk now feeds all
+        // three: the same characters land in the builder in the same order, so the hashed string —
+        // and therefore the signature — is unchanged.
+        var sb = AcquireSignatureBuilder();
+        try
+        {
+            if (AppendSignatureInput(element, sb))
+                return Digest(element.Name.LocalName, sigCache);
+
+            return Digest(sb.ToString(), sigCache);
+        }
+        finally
+        {
+            ReleaseSignatureBuilder(sb);
+        }
+
+        static string Digest(string input, Dictionary<string, string>? cache)
+        {
+            if (cache is null)
+                return ShortHash(input, hexChars: 16);
+            if (cache.TryGetValue(input, out var hit))
+                return hit;
+            var computed = ShortHash(input, hexChars: 16);
+            cache[input] = computed;
+            return computed;
+        }
+    }
+
+    /// <summary>
+    /// Append <paramref name="element"/>'s signature input to <paramref name="sb"/> in the exact order
+    /// the original three-walk form produced — all descendant <c>w:t</c> text, <c>'|'</c>, the pStyle id,
+    /// <c>'|'</c>, the numId, <c>'|'</c>, then every non-<c>w:t</c> descendant's local name followed by a
+    /// comma. Returns <c>true</c> as soon as a block-level descendant (<c>w:p</c>/<c>w:tbl</c>) is seen,
+    /// in which case the caller discards the builder and uses the tag-name-only signature instead.
+    /// </summary>
+    private static bool AppendSignatureInput(XElement element, StringBuilder sb)
+    {
+        // Text first, bailing out the moment the element proves to be a block container.
+        if (AppendDescendantText(element, sb))
+            return true;
+
+        var pPr = element.Element(W.pPr);
+        sb.Append('|')
+          .Append(pPr?.Element(W.pStyle)?.Attribute(W.val)?.Value ?? string.Empty)
+          .Append('|')
+          .Append(pPr?.Element(W.numPr)?.Element(W.numId)?.Attribute(W.val)?.Value ?? string.Empty)
+          .Append('|');
+
+        AppendDescendantNames(element, sb);
+        return false;
+    }
+
+    /// <summary>Depth-first <c>w:t</c> text append; <c>true</c> if a <c>w:p</c>/<c>w:tbl</c> descendant exists.</summary>
+    private static bool AppendDescendantText(XElement element, StringBuilder sb)
+    {
+        foreach (var child in element.Elements())
+        {
+            if (child.Name == W.p || child.Name == W.tbl)
+                return true;
+            if (child.Name == W.t)
+                sb.Append(child.Value);
+            if (AppendDescendantText(child, sb))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>Depth-first append of every non-<c>w:t</c> descendant's local name, comma-separated.</summary>
+    private static void AppendDescendantNames(XElement element, StringBuilder sb)
+    {
+        foreach (var child in element.Elements())
+        {
+            if (child.Name != W.t)
+                sb.Append(child.Name.LocalName).Append(',');
+            AppendDescendantNames(child, sb);
+        }
+    }
+
+    // One builder per thread, reused across the thousands of signatures a single walk computes.
+    // Oversized builders are dropped rather than parked so a pathological element cannot pin memory.
+    [ThreadStatic]
+    private static StringBuilder? t_signatureBuilder;
+
+    private static StringBuilder AcquireSignatureBuilder()
+    {
+        var sb = t_signatureBuilder;
+        if (sb is null)
+            return new StringBuilder(256);
+        t_signatureBuilder = null;
+        sb.Clear();
+        return sb;
+    }
+
+    private static void ReleaseSignatureBuilder(StringBuilder sb)
+    {
+        if (sb.Capacity <= 8192)
+            t_signatureBuilder = sb;
+    }
+
+    private static string DeriveUnid(string rootSeed, string tag, string sig, int dupIndex)
+    {
+        var input = rootSeed + ":" + tag + ":" + sig + ":" + dupIndex.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return ShortHash(input, hexChars: 32);
+    }
+
+    /// <remarks>
+    /// Allocation-free apart from the returned string. Same bytes in, same lowercase-hex digest
+    /// prefix out as the <c>SHA256.Create()</c> + <c>GetBytes</c> + <c>StringBuilder</c> version
+    /// it replaces. This runs once per block for every render plan and once per element for every
+    /// Unid derivation — hundreds of calls per interactive operation — so the per-call garbage was
+    /// worth removing even though it does not dominate on a JIT-ed desktop runtime.
+    /// </remarks>
+    internal static string ShortHash(string input, int hexChars)
+    {
+        Span<byte> digest = stackalloc byte[32];
+        Span<byte> inline = stackalloc byte[1024];
+        int maxBytes = Encoding.UTF8.GetMaxByteCount(input.Length);
+        byte[]? rented = maxBytes <= inline.Length ? null : ArrayPool<byte>.Shared.Rent(maxBytes);
+        Span<byte> buffer = rented is null ? inline : rented;
+
+        try
+        {
+            int written = Encoding.UTF8.GetBytes(input, buffer);
+            SHA256.HashData(buffer[..written], digest);
+            return Convert.ToHexStringLower(digest[..(hexChars / 2)]);
+        }
+        finally
+        {
+            if (rented is not null) ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
+}

@@ -1,0 +1,1251 @@
+#nullable enable
+
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using Docxodus.Internal;
+using Docxodus.Ir;
+using Docxodus.Ir.Diff;
+using Docxodus.Verification;
+
+namespace Docxodus;
+
+/// <summary>
+/// The IR diff engine's public facade — a structure-aware DOCX comparison engine that produces native
+/// tracked-changes markup, a consumer revision list, AND the edit script as data (JSON). This is the
+/// public surface over the internal <c>Docxodus.Ir.Diff</c> pipeline
+/// (<c>IrReader → IrEditScriptBuilder → IrMarkupRenderer / IrRevisionRenderer / IrEditScriptJson</c>).
+/// </summary>
+/// <remarks>
+/// <para><b>Relationship to <c>WmlComparer</c>.</b> <see cref="DocxDiff"/> is the only comparison
+/// engine; it replaced the inherited <c>WmlComparer</c>, which was removed in v11.0.0. It is built on an
+/// intermediate document representation (IR) with anchor-addressed blocks, so its revisions carry
+/// stable anchors (<see cref="DocxDiffRevision.LeftAnchor"/>/<see cref="DocxDiffRevision.RightAnchor"/>)
+/// and it can emit its edit script as data (<see cref="GetEditScriptJson"/>). Most callers should enter
+/// through <see cref="DocxCompare.Compare"/>, which also normalizes the inputs' own tracked changes. See
+/// <c>docs/architecture/ir_diff_engine.md</c>.</para>
+///
+/// <para><b>Multi-author / consolidate-forward stance.</b> Nothing here is static or process-global:
+/// the author stamped on revisions flows per call via <see cref="DocxDiffSettings.AuthorForRevisions"/>,
+/// so a multi-author pipeline simply passes a different author per comparison. The facade compares two
+/// documents per call; an N-way consolidate is a forward composition of pairwise diffs (each carrying
+/// its own author) rather than a baked-in "exactly two documents" assumption — the types here make no
+/// such assumption and are consolidate-compatible.</para>
+///
+/// <para><b>Determinism.</b> By default (<see cref="DocxDiffSettings.Deterministic"/> true) revision
+/// dates are pinned to a fixed epoch, so two diffs of the same inputs are byte-identical. Set
+/// <see cref="DocxDiffSettings.Deterministic"/> false (optionally with an explicit
+/// <see cref="DocxDiffSettings.DateTimeForRevisions"/>) for wall-clock dates.</para>
+///
+/// <para><b>Thread-safety.</b> All methods are pure functions of their arguments with no shared mutable
+/// state; concurrent calls on distinct inputs are safe.</para>
+/// </remarks>
+public static class DocxDiff
+{
+    // The diff engine reads with provenance OFF (it never needs element-level provenance and the lower
+    // footprint matters for bulk pipelines) and revisions ACCEPTED (the IR the script is built over is
+    // the accepted view of each side). The markup renderer re-reads internally with its own options.
+    // …and with the Unid pass pruned to the elements an identity is read back FROM (issue #618).
+    // The engine addresses block elements, table structure, content controls, notes, comments and
+    // w:drawing; the renderer strips the attribute on the way out. The assigned values are identical
+    // either way — see UnidAssignment — so this is purely the work of not hashing 13k elements twice.
+    internal static readonly IrReaderOptions ReadOpts =
+        new()
+        {
+            RetainSources = false,
+            RevisionView = RevisionView.Accept,
+            UnidAssignment = UnidAssignment.IdentityBearing,
+        };
+
+    // The same read WITH provenance. DocxDiffComparison uses this one so a single pass per side feeds both
+    // the edit-script build and the markup renderer's clone-from-provenance pass; provenance is
+    // equality-neutral (see IrProvenance), so the script built over it is identical to one built over
+    // ReadOpts. ReadOpts stays for the paths that genuinely never clone source XML and want the lower
+    // footprint (the consolidate scoreboard, compatibility probes).
+    internal static readonly IrReaderOptions RenderReadOpts =
+        new()
+        {
+            RetainSources = true,
+            RevisionView = RevisionView.Accept,
+            UnidAssignment = UnidAssignment.IdentityBearing,
+        };
+
+    /// <summary>
+    /// Compare <paramref name="left"/> and <paramref name="right"/> and produce a tracked-changes
+    /// <see cref="WmlDocument"/> carrying native Word revision markup
+    /// (<c>w:ins</c>/<c>w:del</c>/<c>w:moveFrom</c>/<c>w:moveTo</c>/<c>w:rPrChange</c>). The result
+    /// satisfies the WmlComparer contract: <c>RevisionAccepter.AcceptRevisions(result)</c> content-equals
+    /// <paramref name="right"/> and <c>RevisionProcessor.RejectRevisions(result)</c> content-equals
+    /// <paramref name="left"/> at the per-block text level.
+    /// </summary>
+    /// <param name="left">The earlier/original document.</param>
+    /// <param name="right">The later/revised document.</param>
+    /// <param name="settings">Diff settings; <c>null</c> uses the defaults.</param>
+    /// <returns>A new <see cref="WmlDocument"/> with tracked-changes markup; the inputs are unchanged.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="left"/> or <paramref name="right"/> is null.</exception>
+    public static WmlDocument Compare(WmlDocument left, WmlDocument right, DocxDiffSettings? settings = null) =>
+        CreateComparison(left, right, settings).ToRedline();
+
+    /// <summary>
+    /// Create a memoized comparison of <paramref name="left"/> and <paramref name="right"/> that
+    /// runs the alignment once and serves every data product from that single pass (issue #594) —
+    /// the multi-product counterpart of calling <see cref="Compare"/>, <see cref="GetRevisions"/>,
+    /// and <see cref="GetEditScriptJson"/> separately, each of which recomputes the diff. Each
+    /// product is identical to what the corresponding static returns for the same inputs and
+    /// settings; the statics themselves delegate to a single-use instance of this. Nothing is
+    /// computed until the first product is requested. See <see cref="DocxDiffComparison"/> for
+    /// snapshot, memoization, and memory semantics.
+    /// </summary>
+    /// <param name="left">The earlier/original document.</param>
+    /// <param name="right">The later/revised document.</param>
+    /// <param name="settings">Diff settings; <c>null</c> uses the defaults.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="left"/> or <paramref name="right"/> is null.</exception>
+    public static DocxDiffComparison CreateComparison(
+        WmlDocument left, WmlDocument right, DocxDiffSettings? settings = null)
+    {
+        ArgumentNullException.ThrowIfNull(left);
+        ArgumentNullException.ThrowIfNull(right);
+        return new DocxDiffComparison(left, right, settings);
+    }
+
+    /// <summary>
+    /// Read <paramref name="document"/> once into a <see cref="DocxDiffSnapshot"/> that can be
+    /// handed to any number of comparisons (issue #617). The read is the single largest stage of a
+    /// comparison, and a bulk workload — one baseline against many counterparties, or a version
+    /// chain — otherwise pays for it once per comparison the document appears in.
+    /// </summary>
+    /// <param name="document">The document to snapshot. Not modified.</param>
+    /// <param name="settings">
+    /// Only the input-revision policy is read from here (<c>PreAcceptInputRevisions</c> /
+    /// <c>PreserveInputRevisions</c>); everything else in <see cref="DocxDiffSettings"/> is applied
+    /// at diff or render time and does not reach the read. A comparison given a snapshot read under
+    /// a different policy is rejected, not silently served.
+    /// </param>
+    /// <remarks>Nothing is read until a comparison needs it, so preparing a batch of snapshots is
+    /// free. See <see cref="DocxDiffSnapshot"/> for what a materialized snapshot retains — it is
+    /// not small, and holding a hundred of them holds a hundred parsed documents.</remarks>
+    public static DocxDiffSnapshot CreateSnapshot(WmlDocument document, DocxDiffSettings? settings = null)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        return new DocxDiffSnapshot(
+            document, DocxDiffSnapshot.AcceptsInputRevisions(settings ?? new DocxDiffSettings()));
+    }
+
+    /// <summary>
+    /// A comparison over two already-read <see cref="DocxDiffSnapshot"/>s. Every product is exactly
+    /// what the corresponding static returns for the same documents and settings; the difference is
+    /// only that neither side is read again.
+    /// </summary>
+    /// <exception cref="ArgumentException">
+    /// A snapshot was read under a different input-revision policy than <paramref name="settings"/>
+    /// asks for. Reusing it would silently compare a different view of the document than the caller
+    /// requested, so the mismatch is refused — create the snapshot with the same policy instead.
+    /// </exception>
+    public static DocxDiffComparison CreateComparison(
+        DocxDiffSnapshot left, DocxDiffSnapshot right, DocxDiffSettings? settings = null)
+    {
+        ArgumentNullException.ThrowIfNull(left);
+        ArgumentNullException.ThrowIfNull(right);
+        var wanted = DocxDiffSnapshot.AcceptsInputRevisions(settings ?? new DocxDiffSettings());
+        RequirePolicy(left, wanted, nameof(left));
+        RequirePolicy(right, wanted, nameof(right));
+        return new DocxDiffComparison(left, right, settings);
+
+        static void RequirePolicy(DocxDiffSnapshot snapshot, bool wanted, string parameter)
+        {
+            if (snapshot.InputRevisionsAccepted == wanted) return;
+            throw new ArgumentException(
+                $"the {parameter} snapshot was read with InputRevisionsAccepted="
+                + $"{snapshot.InputRevisionsAccepted}, but these settings ask for {wanted}. "
+                + "Create the snapshot with the same input-revision policy as the comparison.",
+                parameter);
+        }
+    }
+
+    /// <summary>
+    /// Compare <paramref name="left"/> and <paramref name="right"/> and return the consumer revision list
+    /// (insertions, deletions, moves, format changes) rendered from the edit script — the diff-as-revisions
+    /// view, analogous to <c>WmlComparer</c>'s <c>GetRevisions</c> but anchor-addressed and produced
+    /// directly off the IR script (no produce-then-reparse round-trip).
+    /// </summary>
+    /// <remarks>
+    /// <b>The revision list is CONTENT-only; comments are annotation-layer (issue #579).</b> A
+    /// comment added, removed, or edited between the two versions is NOT reported here — matching
+    /// Word's own compare, which merges comments from both sides rather than redlining them, and
+    /// matching this engine's markup behavior (<see cref="Compare"/> carries and threads comments;
+    /// a comment "revision" would have no markup to accept or reject). A caller asking "what
+    /// changed between these documents, comments included" wants
+    /// <see cref="GetSemanticChanges(WmlDocument,WmlDocument,SemanticDiffOptions?)"/>, whose
+    /// <c>comment</c> family reports comment-part differences precisely (insert/delete/modify),
+    /// on every transport; <see cref="DocxSession.ListComments"/> parity checks are the
+    /// session-level alternative.
+    /// </remarks>
+    /// <param name="left">The earlier/original document.</param>
+    /// <param name="right">The later/revised document.</param>
+    /// <param name="settings">Diff settings; <c>null</c> uses the defaults.</param>
+    /// <returns>The revisions in document order.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="left"/> or <paramref name="right"/> is null.</exception>
+    public static IReadOnlyList<DocxDiffRevision> GetRevisions(
+        WmlDocument left, WmlDocument right, DocxDiffSettings? settings = null) =>
+        CreateComparison(left, right, settings).GetRevisions();
+
+    /// <summary>
+    /// Compare <paramref name="left"/> and <paramref name="right"/> and return the engine's edit script as
+    /// a JSON string — the <b>diff-as-data</b> differentiator. The script is the anchor-addressed list of
+    /// block operations (equal/insert/delete/modify/move/format-only, with nested token diffs and
+    /// row/cell-precise table diffs) that the markup and revision renderers both consume. Stable and
+    /// machine-readable: suitable for storage, transport to non-.NET consumers, review tooling, and audit.
+    /// </summary>
+    /// <param name="left">The earlier/original document.</param>
+    /// <param name="right">The later/revised document.</param>
+    /// <param name="settings">Diff settings; <c>null</c> uses the defaults.</param>
+    /// <returns>The edit script serialized as indented JSON.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="left"/> or <paramref name="right"/> is null.</exception>
+    public static string GetEditScriptJson(
+        WmlDocument left, WmlDocument right, DocxDiffSettings? settings = null) =>
+        CreateComparison(left, right, settings).GetEditScriptJson();
+
+    /// <summary>
+    /// Compare two documents and return the stable, versioned semantic change schema. Unlike
+    /// <see cref="GetEditScriptJson"/>, which exposes the renderer's internal block script, this
+    /// projection classifies document meaning (text, formatting, lists, tables, sections, notes,
+    /// relationships, media, annotations, and opaque package parts) for audit and verification.
+    /// </summary>
+    public static SemanticChangeSet GetSemanticChanges(
+        WmlDocument left, WmlDocument right, SemanticDiffOptions? options = null) =>
+        SemanticDiff.Compare(left, right, options);
+
+    /// <summary>
+    /// Raw-byte counterpart of <see cref="GetSemanticChanges(WmlDocument,WmlDocument,SemanticDiffOptions?)"/>.
+    /// The bounded package preflight runs before either byte array is opened by the Open XML SDK.
+    /// </summary>
+    public static SemanticChangeSet GetSemanticChanges(
+        byte[] leftBytes, byte[] rightBytes, SemanticDiffOptions? options = null) =>
+        SemanticDiff.Compare(leftBytes, rightBytes, options);
+
+    /// <summary>
+    /// JSON counterpart of <see cref="GetSemanticChanges(WmlDocument,WmlDocument,SemanticDiffOptions?)"/>.
+    /// Field order, change order, and generated
+    /// change ids are deterministic for semantically identical inputs.
+    /// </summary>
+    public static string GetSemanticChangesJson(
+        WmlDocument left,
+        WmlDocument right,
+        SemanticDiffOptions? options = null,
+        bool indented = true) =>
+        SemanticDiff.CompareJson(left, right, options, indented);
+
+    /// <summary>JSON counterpart of the raw-byte <see cref="GetSemanticChanges(byte[],byte[],SemanticDiffOptions?)"/>.</summary>
+    public static string GetSemanticChangesJson(
+        byte[] leftBytes,
+        byte[] rightBytes,
+        SemanticDiffOptions? options = null,
+        bool indented = true) =>
+        SemanticDiff.CompareJson(leftBytes, rightBytes, options, indented);
+
+    /// <summary>
+    /// Consolidate the edits of N reviewers — each an independently revised copy of the SAME
+    /// <paramref name="baseDocument"/> — into a single tracked-changes <see cref="WmlDocument"/> carrying
+    /// native Word revision markup (<c>w:ins</c>/<c>w:del</c>/<c>w:moveFrom</c>/<c>w:moveTo</c>/<c>w:rPrChange</c>),
+    /// with each reviewer's contribution attributed to that reviewer's own author name. This is the N-way,
+    /// shared-base composition counterpart to the pairwise <see cref="Compare"/>: every reviewer is diffed
+    /// against the common base and the resulting per-reviewer edit scripts are merged at the block- and
+    /// token-span level into one document.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Shared-base contract.</b> All reviewers MUST be derived from the same
+    /// <paramref name="baseDocument"/>; the merge is anchored on the base's deterministic block anchors, and a
+    /// reviewer document with no common ancestry will simply read as a wholesale rewrite. Reviewers are
+    /// processed in list order, which is significant for tie-breaking under
+    /// <see cref="ConflictResolution.FirstReviewerWins"/> and for the emission order under
+    /// <see cref="ConflictResolution.StackAll"/>.</para>
+    ///
+    /// <para><b>Multi-author attribution.</b> Each reviewer's revisions are stamped with that reviewer's
+    /// <see cref="DocxDiffReviewer.Author"/> (not the single
+    /// <see cref="DocxDiffSettings.AuthorForRevisions"/>), so the consolidated document distinguishes who made
+    /// each edit — directly consumable by Word's reviewing pane and by consolidate-forward pipelines.</para>
+    ///
+    /// <para><b>Round-trip contract.</b> The result satisfies the WmlComparer round-trip relative to the
+    /// policy-resolved outcome: <c>RevisionProcessor.RejectRevisions(result)</c> content-equals
+    /// <paramref name="baseDocument"/> (rejecting every reviewer's edits restores the base) and
+    /// <c>RevisionAccepter.AcceptRevisions(result)</c> content-equals the document the chosen
+    /// <see cref="DocxDiffConsolidateSettings.ConflictResolution"/> policy resolves to (e.g. base text retained
+    /// at conflicted spans under <see cref="ConflictResolution.BaseWins"/>, the first reviewer's text under
+    /// <see cref="ConflictResolution.FirstReviewerWins"/>).</para>
+    ///
+    /// <para><b>Conflicts.</b> A base span edited DIFFERENTLY by two or more reviewers is a conflict: it is
+    /// resolved per the configured policy in the OUTPUT, and every competing edit is recorded — call
+    /// <see cref="GetConflicts"/> on the same inputs/settings to retrieve the conflict list (id, base anchor,
+    /// token span, applied policy, and the competing edits per reviewer).</para>
+    ///
+    /// <para><b>Determinism &amp; thread-safety.</b> With
+    /// <see cref="DocxDiffConsolidateSettings.Diff"/>'s <see cref="DocxDiffSettings.Deterministic"/> true (the
+    /// default), the consolidated output is byte-identical across runs of the same inputs. The method is a pure
+    /// function of its arguments with no shared mutable state; concurrent calls on distinct inputs are safe.</para>
+    ///
+    /// <para><b>Zero reviewers.</b> An empty <paramref name="reviewers"/> list returns
+    /// <paramref name="baseDocument"/> unchanged (no edits to consolidate).</para>
+    /// </remarks>
+    /// <param name="baseDocument">The shared base document every reviewer revised.</param>
+    /// <param name="reviewers">The reviewers' revised copies and their author names, in priority order.</param>
+    /// <param name="settings">Consolidate settings (diff settings + conflict policy); <c>null</c> uses the defaults.</param>
+    /// <returns>
+    /// A new <see cref="WmlDocument"/> with multi-author tracked-changes markup; the inputs are unchanged.
+    /// When <paramref name="reviewers"/> is empty, <paramref name="baseDocument"/> is returned as-is.
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="baseDocument"/> or <paramref name="reviewers"/> is null.</exception>
+    public static WmlDocument Consolidate(
+        WmlDocument baseDocument, IReadOnlyList<DocxDiffReviewer> reviewers,
+        DocxDiffConsolidateSettings? settings = null)
+    {
+        return CreateConsolidation(baseDocument, reviewers, settings).Consolidate();
+    }
+
+    /// <summary>
+    /// Return the conflicts that an N-way <see cref="Consolidate"/> of the same inputs would record — each a
+    /// base span edited DIFFERENTLY by two or more reviewers — WITHOUT producing the consolidated document.
+    /// This is the inspect-before-merge view: it runs the same shared-base merge as <see cref="Consolidate"/>
+    /// and surfaces only the conflict list, so callers can review disagreements (and choose a
+    /// <see cref="DocxDiffConsolidateSettings.ConflictResolution"/> policy) before committing to an output.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Shared-base contract.</b> As with <see cref="Consolidate"/>, all reviewers MUST derive from the
+    /// same <paramref name="baseDocument"/>, and reviewer LIST ORDER is significant (it determines competitor
+    /// order within each conflict and policy tie-breaking).</para>
+    ///
+    /// <para><b>What a conflict carries.</b> Each <see cref="DocxDiffConflict"/> records the base anchor and
+    /// token span where reviewers disagree, the <see cref="ConflictResolution"/> that WOULD be applied, and the
+    /// per-reviewer competing edits (<see cref="DocxDiffConflict.Competitors"/>, each with the reviewer's
+    /// <see cref="DocxDiffConflictCompetitor.Author"/> and the text that reviewer's edit would produce). A span
+    /// edited by only one reviewer, or identically by several, is NOT a conflict and does not appear here.</para>
+    ///
+    /// <para><b>Consistency with <see cref="Consolidate"/>.</b> Given identical
+    /// <paramref name="baseDocument"/>, <paramref name="reviewers"/>, and <paramref name="settings"/>, the
+    /// conflicts returned here are exactly those recorded by <see cref="Consolidate"/>, with matching
+    /// <see cref="DocxDiffConflict.Id"/> values — so the two calls can be correlated.</para>
+    ///
+    /// <para><b>Determinism &amp; thread-safety.</b> Deterministic for the same inputs and a pure function of
+    /// its arguments with no shared mutable state; concurrent calls on distinct inputs are safe.</para>
+    ///
+    /// <para><b>Zero reviewers.</b> An empty <paramref name="reviewers"/> list yields an empty conflict list.</para>
+    /// </remarks>
+    /// <param name="baseDocument">The shared base document every reviewer revised.</param>
+    /// <param name="reviewers">The reviewers' revised copies and their author names, in priority order.</param>
+    /// <param name="settings">Consolidate settings (diff settings + conflict policy); <c>null</c> uses the defaults.</param>
+    /// <returns>
+    /// The conflicts in document order; empty when there are no conflicting spans (or no reviewers).
+    /// </returns>
+    /// <exception cref="ArgumentNullException"><paramref name="baseDocument"/> or <paramref name="reviewers"/> is null.</exception>
+    public static IReadOnlyList<DocxDiffConflict> GetConflicts(
+        WmlDocument baseDocument, IReadOnlyList<DocxDiffReviewer> reviewers,
+        DocxDiffConsolidateSettings? settings = null)
+    {
+        return CreateConsolidation(baseDocument, reviewers, settings).GetConflicts();
+    }
+
+    /// <summary>
+    /// Consolidate N reviewers' edits of the same <paramref name="baseDocument"/> and return the ATTRIBUTED
+    /// consumer revision list — the consolidate counterpart to <see cref="GetRevisions"/>. Each revision carries
+    /// the contributing reviewer's <see cref="DocxDiffConsolidatedRevision.Author"/> (not a single document
+    /// author) and, when it participates in a conflicted span, the
+    /// <see cref="DocxDiffConsolidatedRevision.ConflictId"/> linking it to the matching
+    /// <see cref="DocxDiffConflict"/> from <see cref="GetConflicts"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Attribution.</b> An insertion is attributed to the reviewer who inserted it; a deletion to the
+    /// reviewer who deleted that base content; a format change to the reviewer who changed the formatting. When a
+    /// single base paragraph was edited by several reviewers, each reviewer's word-level edits are surfaced as
+    /// separate revisions under that reviewer's name (the multi-author generalization of
+    /// <see cref="GetRevisions"/>).</para>
+    ///
+    /// <para><b>Consistency.</b> Given identical <paramref name="baseDocument"/>, <paramref name="reviewers"/>,
+    /// and <paramref name="settings"/>, the revisions returned here describe exactly the edits that
+    /// <see cref="Consolidate"/> places in the consolidated document, and conflict ids match those from
+    /// <see cref="GetConflicts"/>. Deterministic for the same inputs; a pure function of its arguments.</para>
+    ///
+    /// <para><b>Zero reviewers.</b> An empty <paramref name="reviewers"/> list yields an empty revision list.</para>
+    /// </remarks>
+    /// <param name="baseDocument">The shared base document every reviewer revised.</param>
+    /// <param name="reviewers">The reviewers' revised copies and their author names, in priority order.</param>
+    /// <param name="settings">Consolidate settings (diff settings + conflict policy); <c>null</c> uses the defaults.</param>
+    /// <returns>The attributed revisions in document order; empty when there are no reviewers.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="baseDocument"/> or <paramref name="reviewers"/> is null.</exception>
+    public static IReadOnlyList<DocxDiffConsolidatedRevision> GetConsolidatedRevisions(
+        WmlDocument baseDocument, IReadOnlyList<DocxDiffReviewer> reviewers,
+        DocxDiffConsolidateSettings? settings = null)
+    {
+        return CreateConsolidation(baseDocument, reviewers, settings).GetConsolidatedRevisions();
+    }
+
+    /// <summary>
+    /// Consolidate N reviewers' edits of the same <paramref name="baseDocument"/> and return the COMPOSITE edit
+    /// script as a JSON string — the consolidate counterpart to <see cref="GetEditScriptJson"/>. It additively
+    /// extends the two-way edit-script JSON: every operation carries an <c>author</c> and <c>sourceReviewer</c>,
+    /// a <c>conflictId</c> when the op is a conflict winner, and (for a composed multi-reviewer paragraph)
+    /// <c>authoredTokens</c> + <c>sourceRightAnchors</c>; the document additionally carries a top-level
+    /// <c>conflicts</c> array (id, base anchor, token span, applied policy, and the per-reviewer competing edits).
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Diff-as-data.</b> This is the machine-readable, transport-friendly form of a consolidate:
+    /// suitable for storage, audit, review tooling, and non-.NET consumers. It is stable and deterministic for
+    /// the same inputs.</para>
+    ///
+    /// <para><b>Zero reviewers.</b> An empty <paramref name="reviewers"/> list yields a JSON document with empty
+    /// <c>operations</c> and <c>conflicts</c> arrays.</para>
+    /// </remarks>
+    /// <param name="baseDocument">The shared base document every reviewer revised.</param>
+    /// <param name="reviewers">The reviewers' revised copies and their author names, in priority order.</param>
+    /// <param name="settings">Consolidate settings (diff settings + conflict policy); <c>null</c> uses the defaults.</param>
+    /// <returns>The composite edit script serialized as indented JSON.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="baseDocument"/> or <paramref name="reviewers"/> is null.</exception>
+    public static string GetConsolidatedEditScriptJson(
+        WmlDocument baseDocument, IReadOnlyList<DocxDiffReviewer> reviewers,
+        DocxDiffConsolidateSettings? settings = null)
+    {
+        return CreateConsolidation(baseDocument, reviewers, settings).GetConsolidatedEditScriptJson();
+    }
+
+    /// <summary>
+    /// Pre-flight a document against the DocxDiff feature catalog, returning a warning for each construct
+    /// DocxDiff has not had a fidelity campaign for. Does NOT diff anything and does not change
+    /// <see cref="Compare(WmlDocument, WmlDocument, DocxDiffSettings?)"/>; the caller decides whether to log,
+    /// gate, or throw on <see cref="DocxDiffCompatibilityReport.HasWarnings"/>. See
+    /// <see cref="DocxDiffCompatibility"/> for the catalog (the campaign roadmap).
+    /// </summary>
+    public static DocxDiffCompatibilityReport InspectCompatibility(WmlDocument doc) =>
+        DocxDiffCompatibility.Inspect(doc);
+
+    /// <inheritdoc cref="InspectCompatibility(WmlDocument)"/>
+    public static DocxDiffCompatibilityReport InspectCompatibility(byte[] docxBytes) =>
+        DocxDiffCompatibility.Inspect(docxBytes);
+
+    // ----------------------------------------------------------------- compatibility pre-flight
+
+    /// <summary>
+    /// Opt-in pre-flight a diff's inputs against the compatibility catalog. A no-op (NO scan, zero cost) unless
+    /// <see cref="DocxDiffSettings.OnCompatibilityWarning"/> or <see cref="DocxDiffSettings.ThrowOnCompatibilityWarning"/>
+    /// is set. When engaged and a warning is found, invokes the callback then optionally throws
+    /// <see cref="DocxDiffCompatibilityException"/>.
+    /// </summary>
+    // Internal: SemanticDiffEngine shares this gate so the audit surface honors the same
+    // OnCompatibilityWarning/ThrowOnCompatibilityWarning contract as every sibling entry point.
+    internal static void PreflightCompatibility(DocxDiffSettings settings, params WmlDocument[] inputs)
+    {
+        if (settings.OnCompatibilityWarning == null && !settings.ThrowOnCompatibilityWarning)
+            return;
+        var report = CombineCompatibility(inputs);
+        if (!report.HasWarnings)
+            return;
+        settings.OnCompatibilityWarning?.Invoke(report);
+        if (settings.ThrowOnCompatibilityWarning)
+            throw new DocxDiffCompatibilityException(report);
+    }
+
+    /// <summary>Union the compatibility reports of several inputs: warnings keyed by feature id with occurrences
+    /// summed across inputs, CoveredPresent unioned.</summary>
+    private static DocxDiffCompatibilityReport CombineCompatibility(IReadOnlyList<WmlDocument> inputs)
+    {
+        var warnings = new Dictionary<string, DocxDiffCompatibilityFinding>();
+        var covered = new Dictionary<string, DocxDiffFeature>();
+        foreach (var input in inputs)
+        {
+            var r = DocxDiffCompatibility.Inspect(input);
+            foreach (var w in r.Warnings)
+                warnings[w.Feature.Id] = warnings.TryGetValue(w.Feature.Id, out var existing)
+                    ? existing with { Occurrences = existing.Occurrences + w.Occurrences }
+                    : w;
+            foreach (var c in r.CoveredPresent)
+                covered[c.Id] = c;
+        }
+        return new DocxDiffCompatibilityReport(warnings.Values.ToList(), covered.Values.ToList());
+    }
+
+    /// <summary>
+    /// Validate the shared consolidate arguments once for all four N-way entry points and resolve the
+    /// settings: rejects a null base/reviewers, a null <see cref="DocxDiffConsolidateSettings.Diff"/>, and any
+    /// null reviewer element or reviewer <see cref="DocxDiffReviewer.Document"/> — surfacing a clear,
+    /// attributed <see cref="ArgumentException"/> at the public boundary instead of a downstream
+    /// <see cref="NullReferenceException"/>.
+    /// </summary>
+    private static DocxDiffConsolidateSettings ValidateConsolidateArgs(
+        WmlDocument baseDocument, IReadOnlyList<DocxDiffReviewer> reviewers,
+        DocxDiffConsolidateSettings? settings)
+    {
+        ArgumentNullException.ThrowIfNull(baseDocument);
+        ArgumentNullException.ThrowIfNull(reviewers);
+        var s = settings ?? new DocxDiffConsolidateSettings();
+        if (s.Diff is null)
+            throw new ArgumentException(
+                $"{nameof(DocxDiffConsolidateSettings)}.{nameof(DocxDiffConsolidateSettings.Diff)} must not be null.",
+                nameof(settings));
+        for (int i = 0; i < reviewers.Count; i++)
+        {
+            if (reviewers[i] is null)
+                throw new ArgumentException($"reviewers[{i}] is null.", nameof(reviewers));
+            if (reviewers[i].Document is null)
+                throw new ArgumentException(
+                    $"reviewers[{i}].Document is null (author '{reviewers[i].Author}').", nameof(reviewers));
+        }
+        return s;
+    }
+
+    /// <summary>
+    /// Read the base document and every reviewer's document into IR. The reads are independent pure
+    /// functions of their inputs, so they run concurrently; reviewer order in the result matches
+    /// <paramref name="reviewers"/>, which is significant for conflict competitor order.
+    /// </summary>
+    internal static (IrDocument BaseIr, List<(string Author, IrDocument Ir)> ReviewerIrs) ReadReviewerSet(
+        WmlDocument baseDocument, IReadOnlyList<DocxDiffReviewer> reviewers, IrReaderOptions opts)
+    {
+        var reads = new Func<IrDocument>[reviewers.Count];
+        for (var i = 0; i < reviewers.Count; i++)
+        {
+            var doc = reviewers[i].Document;
+            reads[i] = () => IrReader.Read(doc, opts);
+        }
+
+        var (baseIr, reviewerIrs) = ParallelWork.Fan(() => IrReader.Read(baseDocument, opts), reads);
+
+        var revIr = new List<(string Author, IrDocument Ir)>(reviewers.Count);
+        for (var i = 0; i < reviewers.Count; i++)
+            revIr.Add((reviewers[i].Author, reviewerIrs[i]));
+        return (baseIr, revIr);
+    }
+
+    /// <summary>
+    /// Apply <see cref="DocxDiffSettings.PreAcceptInputRevisions"/>: when set, return the fully accepted view of
+    /// <paramref name="doc"/> (a new <see cref="WmlDocument"/>; the input is untouched) so both the IR read AND
+    /// the output-package clone are revision-free; when not set, return <paramref name="doc"/> unchanged so the
+    /// default path is byte-for-byte what it was before the flag existed.
+    /// <see cref="DocxDiffSettings.PreserveInputRevisions"/> WINS over the pre-accept: preserving input markup
+    /// and pre-flattening it are opposite policies, and the Word-parity choice is to keep it.
+    /// </summary>
+    // Internal: SemanticDiffEngine shares this normalization so strict-conformance and
+    // mc:AlternateContent inputs reach the IR exactly as they do on every sibling entry point.
+    internal static WmlDocument PreAccept(DocxDiffSettings settings, WmlDocument doc)
+    {
+        // Strict-conformance packages (ISO 29500 purl.oclc.org namespaces) are normalized to
+        // transitional before ANY read — Word does the same on open. No-op for transitional docs.
+        doc = StrictOoxmlNormalizer.NormalizeToTransitional(doc);
+        // mc:AlternateContent resolution (VML-choice unwrap, dead-draft fallback) — Word resolves
+        // on open and its compare output carries the resolved content. No-op when nothing matches.
+        doc = MarkupCompatibilityNormalizer.Normalize(doc);
+        // The byte-level accept-flatten is skipped under Preserve; the normalizers above always apply.
+        return settings.PreAcceptInputRevisions && !settings.PreserveInputRevisions
+            ? RevisionProcessor.AcceptRevisions(doc)
+            : doc;
+    }
+
+    /// <summary>Per-reviewer <see cref="PreAccept(DocxDiffSettings, WmlDocument)"/> for the N-way entry points
+    /// (strict normalization always applies; the accept-flatten only when the flag is set and not
+    /// overridden by Preserve).</summary>
+    /// <summary>
+    /// A memoized N-way consolidation the four static entry points delegate to, and which a caller
+    /// can hold directly to inspect conflicts and then consolidate without reading the reviewer set
+    /// twice (issue #617). An <c>N</c>-reviewer set is <c>N+1</c> documents; two independent statics
+    /// over the same inputs read <c>2(N+1)</c> packages to answer a question that needs <c>N+1</c>.
+    /// </summary>
+    /// <param name="baseDocument">The shared base document every reviewer revised.</param>
+    /// <param name="reviewers">The reviewers' revised copies and author names, in priority order.</param>
+    /// <param name="settings">Consolidate settings; <c>null</c> uses the defaults.</param>
+    /// <remarks>Nothing is computed at creation; each product materializes on first request. See
+    /// <see cref="DocxDiffConsolidation"/> for what the instance retains.</remarks>
+    public static DocxDiffConsolidation CreateConsolidation(
+        WmlDocument baseDocument, IReadOnlyList<DocxDiffReviewer> reviewers,
+        DocxDiffConsolidateSettings? settings = null)
+    {
+        var resolved = ValidateConsolidateArgs(baseDocument, reviewers, settings);
+        return new DocxDiffConsolidation(baseDocument, reviewers, resolved);
+    }
+
+    /// <summary>Project the composite revision renderer's output to the public consolidated-revision
+    /// shape. Shared so the memoized consolidation and this file cannot drift.</summary>
+    internal static IReadOnlyList<DocxDiffConsolidatedRevision> ProjectConsolidatedRevisions(
+        IReadOnlyList<(Ir.Diff.IrRevision Rev, string Author, int? ConflictId)> rendered)
+    {
+        return rendered.Select(x => new DocxDiffConsolidatedRevision(
+            type: x.Rev.Type switch
+            {
+                IrRevisionType.Inserted => DocxDiffRevisionType.Inserted,
+                IrRevisionType.Deleted => DocxDiffRevisionType.Deleted,
+                IrRevisionType.Moved => DocxDiffRevisionType.Moved,
+                IrRevisionType.FormatChanged => DocxDiffRevisionType.FormatChanged,
+                _ => throw new ArgumentOutOfRangeException(nameof(rendered), x.Rev.Type, "Unknown IrRevisionType."),
+            },
+            text: x.Rev.Text,
+            author: x.Author,
+            date: x.Rev.Date,
+            moveGroupId: x.Rev.MoveGroupId,
+            isMoveSource: x.Rev.IsMoveSource,
+            formatChange: x.Rev.FormatChange is { } fc ? new DocxDiffFormatChange(fc) : null,
+            leftAnchor: x.Rev.LeftAnchor,
+            rightAnchor: x.Rev.RightAnchor,
+            conflictId: x.ConflictId)).ToList();
+    }
+
+    private static IReadOnlyList<DocxDiffReviewer> PreAccept(
+        DocxDiffSettings settings, IReadOnlyList<DocxDiffReviewer> reviewers)
+    {
+        return reviewers
+            .Select(r => new DocxDiffReviewer { Author = r.Author, Document = PreAccept(settings, r.Document) })
+            .ToList();
+    }
+}
+
+/// <summary>
+/// How <see cref="DocxDiff"/> projects the edit script to consumer revisions. The edit script's grain is
+/// the engine's truth and is untouched by this setting — it only governs coalescing/trimming on the way
+/// out of <see cref="DocxDiff.GetRevisions"/>.
+/// </summary>
+public enum DocxDiffRevisionGranularity
+{
+    /// <summary>
+    /// The engine's native, finest-grain projection (the default): one revision per token-op span. A
+    /// paragraph whose every word changed yields one inserted + one deleted revision per word. This is the
+    /// faithful, byte-stable mirror of the edit script — the right grain for review UIs that map a revision
+    /// to a token span, blame, and structured indexers.
+    /// </summary>
+    Fine,
+
+    /// <summary>
+    /// A render-time projection that reproduces <c>WmlComparer</c>'s coarser <c>GetRevisions</c>
+    /// atomization, so a <see cref="DocxDiff"/> revision set is count/text-comparable to the shipped
+    /// comparer's. Per modified block it coalesces adjacent same-kind revisions into one maximal contiguous
+    /// changed region (bridging purely-separator gaps), trims the common character prefix/suffix shared by a
+    /// region's deleted and inserted text, and prunes zero-width (content-less) revisions. Move and
+    /// format-change revisions pass through untouched. Choose this only when matching the legacy comparer's
+    /// revision counts/texts matters; otherwise <see cref="Fine"/> is the more faithful surface.
+    /// </summary>
+    WmlComparerCompatible,
+}
+
+/// <summary>
+/// How <see cref="DocxDiff"/> compares run formatting. A purely diff-time policy: it changes which format
+/// facts a comparison treats as significant, never the documents themselves.
+/// </summary>
+public enum DocxDiffFormatComparison
+{
+    /// <summary>
+    /// Compare only the MODELED run-format fields (bold, italic, underline, size, color, shading,
+    /// sub/superscript, strike, caps, highlight, …) — the default. A format change is reported only when a
+    /// modeled field differs. <b>Trade-off:</b> a visible but residual rPr difference (e.g. <c>w:bdr</c>,
+    /// complex-script toggles, secondary font faces) or a metadata flip such as <c>w:lang</c> reads as
+    /// Unchanged — a false negative. This default filters known residual-format churn while native revision
+    /// markup preserves the complete source <c>w:rPr</c> for every change it does detect.
+    /// </summary>
+    ModeledOnly,
+
+    /// <summary>
+    /// Compare the FULL run format including the residual rPr digest — every remaining rPr difference (lang,
+    /// complex-script toggles, secondary font faces, borders) is significant. Choose this for byte-fidelity
+    /// consumers that must DETECT every formatting difference. The
+    /// trade-off is the inverse of <see cref="ModeledOnly"/>: format-change noise from cosmetic rPr churn
+    /// (e.g. editing tools rewriting <c>w:lang</c>/<c>w:bCs</c>) is reported.
+    /// </summary>
+    Full,
+}
+
+/// <summary>
+/// Settings for <see cref="DocxDiff"/>. Defaults mirror the former <c>WmlComparerSettings</c> (removed in
+/// v11.0.0) so the engine reproduces that comparer's word granularity and normalization out of the box, with
+/// two deliberate deviations called out below (<see cref="Deterministic"/> revision dates and
+/// <see cref="FormatComparison"/> defaulting to modeled-only). Its properties are settable; construct a
+/// fresh instance per call rather than mutating one shared across concurrent diffs.
+/// </summary>
+/// <remarks>
+/// This is the public mirror of the internal <c>IrDiffSettings</c>; it exposes the consumer-relevant
+/// subset and maps onto it. Settings carry no per-document or process-global state — pass a different
+/// <see cref="AuthorForRevisions"/> per call for multi-author pipelines.
+/// </remarks>
+public sealed class DocxDiffSettings
+{
+    /// <summary>
+    /// The author a comparison stamps when the caller names none: <c>"Docxodus"</c> on every surface
+    /// (.NET, browser, Python, MCP). Through v12 the .NET default was <c>"Open-Xml-PowerTools"</c>,
+    /// inherited from <c>WmlComparerSettings</c>, while the browser stamped <c>"Docxodus"</c>; issue #961
+    /// made this the one default. Pass <c>"Open-Xml-PowerTools"</c> explicitly to keep the old author.
+    /// </summary>
+    public const string DefaultAuthorForRevisions = "Docxodus";
+
+    /// <summary>
+    /// Author name stamped on every revision's <see cref="DocxDiffRevision.Author"/> and on the produced
+    /// markup's <c>w:author</c> attributes. Default <see cref="DefaultAuthorForRevisions"/>. Flows per
+    /// call — set a different author per comparison in a multi-author/consolidate pipeline.
+    /// </summary>
+    public string AuthorForRevisions { get; set; } = DefaultAuthorForRevisions;
+
+    /// <summary>
+    /// When true (the DEFAULT), revision dates are pinned to a fixed epoch
+    /// (<c>2000-01-01T00:00:00Z</c>) so two diffs of the same inputs are byte-identical. Set false for
+    /// wall-clock dates. This deliberately deviates from the former <c>WmlComparerSettings</c>, whose
+    /// <c>DateTime.Now</c> default was nondeterministic.
+    /// </summary>
+    public bool Deterministic { get; set; } = true;
+
+    /// <summary>
+    /// The ISO-8601 date string stamped on every revision and on the produced markup's <c>w:date</c>
+    /// attributes. When null (the default), the date is derived from <see cref="Deterministic"/>: the fixed
+    /// epoch when deterministic, else <c>DateTime.Now</c> in round-trip ("o") format captured once per diff.
+    /// An explicit non-null value always wins over both, and must be a parseable ISO-8601 date/time (it is
+    /// stamped verbatim into the markup's <c>w:date</c> attributes) — a non-parseable value throws
+    /// <see cref="ArgumentException"/>.
+    /// </summary>
+    public string? DateTimeForRevisions { get; set; }
+
+    /// <summary>
+    /// Optional pre-flight: a callback invoked once (BEFORE diffing) with a combined
+    /// <see cref="DocxDiffCompatibilityReport"/> when an input document contains a feature DocxDiff has not had a
+    /// fidelity campaign for (see <see cref="DocxDiffCompatibility"/>). Both inputs are inspected and their
+    /// warnings unioned (occurrences summed); only <see cref="DocxDiffCoverage.Untested"/>/
+    /// <see cref="DocxDiffCoverage.Partial"/> features trigger it. <b>Null (the default) skips the scan
+    /// entirely</b> — zero behavior and zero performance change. The diff then proceeds normally (non-fatal);
+    /// pair with <see cref="ThrowOnCompatibilityWarning"/> for a hard gate.
+    /// </summary>
+    public Action<DocxDiffCompatibilityReport>? OnCompatibilityWarning { get; set; }
+
+    /// <summary>
+    /// When true, a diff method THROWS <see cref="DocxDiffCompatibilityException"/> (after invoking
+    /// <see cref="OnCompatibilityWarning"/>, if set) when an input contains an under-tested feature — a hard
+    /// gate that produces no output. Default false. Orthogonal to <see cref="OnCompatibilityWarning"/>: the
+    /// pre-flight scan runs only when at least one of the two is engaged, so the default is still zero-cost.
+    /// </summary>
+    public bool ThrowOnCompatibilityWarning { get; set; }
+
+    /// <summary>
+    /// When true, word match keys are case-folded (per <see cref="Culture"/>, or ordinal/invariant when
+    /// <see cref="Culture"/> is null) so "Foo" matches "foo". Default false, matching
+    /// <c>WmlComparerSettings.CaseInsensitive</c>.
+    /// </summary>
+    public bool CaseInsensitive { get; set; }
+
+    /// <summary>
+    /// Culture used for case folding when <see cref="CaseInsensitive"/> is true. Null (the default) means
+    /// ordinal/invariant folding — no culture-specific casing. Mirrors
+    /// <c>WmlComparerSettings.CultureInfo</c>.
+    /// </summary>
+    public CultureInfo? Culture { get; set; }
+
+    /// <summary>
+    /// When true (the DEFAULT), a non-breaking space (U+00A0) folds to an ordinary space (U+0020) in match
+    /// keys, so NBSP-separated text matches space-separated text. The non-breaking hyphen (U+2011) is not
+    /// folded. Mirrors <c>WmlComparerSettings.ConflateBreakingAndNonbreakingSpaces</c>.
+    /// </summary>
+    public bool ConflateBreakingAndNonbreakingSpaces { get; set; } = true;
+
+    /// <summary>
+    /// Characters that split a run's text into word vs. separator tokens; each separator character becomes
+    /// its own token. <b>Null (the default)</b> uses the same default set as
+    /// <c>WmlComparerSettings.WordSeparators</c>
+    /// (<c>{ ' ', '-', ')', '(', ';', ',', and CJK punctuation }</c>). An explicit set replaces that
+    /// default, including an empty array. Independently of this set, Han, kana, and Hangul text elements
+    /// form individual word tokens, ASCII <c>:</c> and non-numeric <c>.</c>/<c>,</c> split, and NBSP splits
+    /// when <see cref="ConflateBreakingAndNonbreakingSpaces"/> is true.
+    /// </summary>
+    public char[]? WordSeparators { get; set; }
+
+    /// <summary>
+    /// When true (the DEFAULT), relocated content is reported as a move pair (a source revision sharing a
+    /// <see cref="DocxDiffRevision.MoveGroupId"/> with its destination) and the produced markup uses native
+    /// <c>w:moveFrom</c>/<c>w:moveTo</c>. When false, an aligned move is projected as an ordinary
+    /// inserted+deleted pair and the markup uses plain <c>w:del</c>/<c>w:ins</c>. Mirrors
+    /// <c>WmlComparerSettings.DetectMoves</c>. The engine always ALIGNS a relocation as a move; this
+    /// only controls how it is REPORTED, so it works regardless of how the move was detected.
+    /// </summary>
+    public bool DetectMoves { get; set; } = true;
+
+    /// <summary>
+    /// Minimum block similarity (Jaccard over token match-key multisets, 0.0–1.0) for two leftover blocks to
+    /// be re-paired as a cross-gap fuzzy move. Default 0.8, matching
+    /// <c>WmlComparerSettings.MoveSimilarityThreshold</c>.
+    /// </summary>
+    public double MoveSimilarityThreshold { get; set; } = 0.8;
+
+    /// <summary>
+    /// Minimum number of word tokens both sides of a candidate fuzzy move must carry for it to be considered
+    /// a move (short fragments are excluded to avoid false positives). Default 3, matching
+    /// <c>WmlComparerSettings.MoveMinimumWordCount</c>.
+    /// </summary>
+    public int MoveMinimumWordCount { get; set; } = 3;
+
+    /// <summary>
+    /// How <see cref="DocxDiff.GetRevisions"/> projects the edit script to revisions. Default
+    /// <see cref="DocxDiffRevisionGranularity.Fine"/> (the engine's native one-revision-per-token-span
+    /// grain). Set <see cref="DocxDiffRevisionGranularity.WmlComparerCompatible"/> for revision counts/texts
+    /// comparable to the shipped comparer's. Does not affect <see cref="DocxDiff.Compare"/> or
+    /// <see cref="DocxDiff.GetEditScriptJson"/>.
+    /// </summary>
+    public DocxDiffRevisionGranularity RevisionGranularity { get; set; } = DocxDiffRevisionGranularity.Fine;
+
+    /// <summary>
+    /// How run formatting is compared. Default <see cref="DocxDiffFormatComparison.ModeledOnly"/> — see that
+    /// member for the false-negative trade-off and the rationale, and <see cref="DocxDiffFormatComparison.Full"/>
+    /// for byte-fidelity comparison.
+    /// </summary>
+    public DocxDiffFormatComparison FormatComparison { get; set; } = DocxDiffFormatComparison.ModeledOnly;
+
+    /// <summary>
+    /// When true, every input document is run through <see cref="RevisionProcessor.AcceptRevisions(WmlDocument)"/>
+    /// BEFORE it is diffed — so the comparison, AND the output package the markup renderer clones from those
+    /// inputs, are built over the fully <b>accepted view</b> of each side. This is the first-class, opt-in form
+    /// of the "accept-all-both-sides, then compare" wrapper. <b>Default false</b>, which is a zero behavior change:
+    /// the engine already diffs the accepted view at the edit-script/body level, but carries pre-existing
+    /// revision markup in carried-over parts (headers/footers, unchanged footnotes/endnotes, styles, comments)
+    /// straight through into the result. Setting this true runs the accept-all, which flattens the body,
+    /// headers/footers, footnotes/endnotes, and styles, so every revision the markup renderer emits in those
+    /// scopes is attributable to THIS diff (none is a stale input revision passed through) and the round-trip
+    /// holds against the accepted view of each side there. <b>Coverage is exactly the parts
+    /// <see cref="RevisionProcessor.AcceptRevisions(WmlDocument)"/> processes</b> — the main body,
+    /// headers/footers, footnotes/endnotes, and styles. Carried-over parts it does NOT process — notably the
+    /// comments part and the glossary (building-blocks / AutoText) document part — are left intact, so a
+    /// pre-existing revision inside a comment definition or a glossary entry survives regardless of this flag.
+    ///
+    /// <para><b>Two honest costs of accept-all (read before enabling).</b></para>
+    /// <para>1. <b>It flattens pre-existing authorship and change boundaries.</b> Accepting collapses each input's
+    /// own tracked changes into final text, so WHO made a prior edit and WHERE the prior change boundaries were
+    /// are lost — the result's authorship reflects only this diff, not the inputs' edit history.</para>
+    /// <para>2. <b>"Accept all" is itself a policy.</b> It overrides any change a prior reviewer had left
+    /// unaccepted — including one they had effectively rejected by leaving in tracked form — by materializing
+    /// every insertion and dropping every deletion. If you need to preserve or re-adjudicate the inputs'
+    /// in-flight revisions, do not enable this; resolve them first by your own policy, then diff.</para>
+    ///
+    /// <para>The shared WASM/npm/python wire surface exposes this as
+    /// <c>preAcceptInputRevisions</c>.</para>
+    /// </summary>
+    public bool PreAcceptInputRevisions { get; set; }
+
+    /// <summary>
+    /// When true, tracked revisions ALREADY PRESENT in the input documents are PRESERVED in the compare
+    /// output — the inputs' original author/date markup rides through verbatim alongside this diff's fresh
+    /// revisions — while the text diff itself is still computed over the <b>accepted view</b> of each side.
+    /// This is how Word's <b>Combine</b> treats an input's pre-existing <c>w:ins</c>/<c>w:del</c> markup; Word's
+    /// <b>Compare</b> instead treats it as accepted, which is what <see cref="PreAcceptInputRevisions"/> models
+    /// and what the <see cref="DocxCompare"/> front door applies. Default false.
+    ///
+    /// <para><b>V1 scope (what is preserved).</b> The RIGHT input's foreign markup is preserved in blocks
+    /// the diff finds content-EQUAL (emitted verbatim from the original right element) and in whole-block
+    /// INSERTED content (the diff's <c>w:ins</c> wraps only the plain runs; a foreign <c>w:ins</c>/<c>w:del</c>
+    /// child is left as-is, so no same-kind wrapper ever nests) — in the BODY and in footnote/endnote
+    /// bodies (note definitions pair by id and their blocks preserve through the same emission paths).
+    /// A right table that accepting removes (every row tracked-deleted, or its content moved away) is
+    /// carried in front of the block that follows it, rows still deleted, when that block is equal, inserted
+    /// or modified (not when it moves, splits or merges, where the table is dropped as before).
+    /// The LEFT package's carried-over parts (headers/footers, unchanged notes, styles, comments) keep
+    /// their markup because no pre-accept runs.
+    /// When the LEFT input carries tracked revisions of its own, the right input's markup is NOT preserved
+    /// on its own, which would keep one side's history and flatten the other's. The exception is a
+    /// content-equal block whose two originals carry the same markup (revision ids aside): that is a pending
+    /// change both documents share, and it is preserved.
+    /// NOT preserved (flattened to the accepted view, attributable to this diff only): foreign markup inside
+    /// MODIFIED/format-only/split/merge/moved blocks and inside changed header/footer stories — the
+    /// char-precise renderers there require accept-view sources; the LEFT side's foreign markup in deleted
+    /// blocks is likewise flattened. <see cref="DocxDiff.GetRevisions"/> does not report preserved foreign
+    /// revisions (they are input facts, not edits of this diff).</para>
+    ///
+    /// <para><b>Round-trip contract under the flag (one-sided, like Word's Combine).</b>
+    /// <c>accept(Compare(left, right))</c> still content-equals <c>accept(right)</c> — a preserved foreign
+    /// deletion vanishes on accept and a preserved foreign insertion is kept, matching the right side's own
+    /// accepted view. But <c>reject(Compare(left, right))</c> does NOT equal <c>left</c> wherever foreign
+    /// markup was preserved: rejecting a foreign <c>w:del</c> RESTORES its deleted text (and rejecting a
+    /// foreign <c>w:ins</c> removes text the left side never had). Word's Combine output behaves identically
+    /// under Reject All — this is inherent to preserving input revisions, not a defect; do not rely on
+    /// reject ≡ left when enabling this flag.</para>
+    ///
+    /// <para><b>Precedence.</b> When both this and <see cref="PreAcceptInputRevisions"/> are set, Preserve
+    /// wins: the byte-level pre-accept is skipped entirely (the two flags are opposite policies for the same
+    /// input markup; preserving is the Word-Combine choice, pre-accepting the Word-Compare one).</para>
+    ///
+    /// <para>The shared WASM/npm/python wire surface exposes this as
+    /// <c>preserveInputRevisions</c>.</para>
+    /// </summary>
+    public bool PreserveInputRevisions { get; set; }
+
+    /// <summary>
+    /// When true, every tracked-revision element in the output has its <c>w:author</c> stamped to
+    /// <see cref="AuthorForRevisions"/>, collapsing the output to a SINGLE revision author (default false).
+    /// This matches how author-coloring renderers (LibreOffice) display Word's single-author compare output:
+    /// with <see cref="PreserveInputRevisions"/> on, the inputs' own revisions ride through under their
+    /// ORIGINAL authors, so a document whose source carried foreign-authored suggestions renders in TWO
+    /// colors while Word's oracle is one. This normalizes the render, not the markup semantics — comment
+    /// authors are untouched, and it does not affect Consolidate/N-way outputs (per-reviewer authors are
+    /// intended there). See <c>docs/ooxml_corner_cases.md</c>.
+    /// </summary>
+    public bool NormalizeRevisionAuthors { get; set; }
+
+    /// <summary>
+    /// When true (the DEFAULT — matching Word Compare's "Headers and footers" comparison setting, which
+    /// is also on by default), header/footer stories are compared: each section's effective
+    /// default/first/even header and footer stories pair across the two documents (Word's
+    /// previous-section inheritance rule applies), a changed story is rebuilt in the output with native
+    /// <c>w:ins</c>/<c>w:del</c> markup inside its header/footer part, a right-only story is added (its
+    /// content inserted), a left-only story's content is marked deleted — so the round-trip contract
+    /// (<c>accept ≡ right</c>, <c>reject ≡ left</c> at the per-block text level) extends to header/footer
+    /// scopes. <see cref="DocxDiff.GetRevisions"/> reports hdr/ftr-anchored revisions in
+    /// <see cref="DocxDiffRevisionGranularity.Fine"/> mode (the compatible mode excludes them — the
+    /// legacy comparer's revision set has none), and <see cref="DocxDiff.GetEditScriptJson"/> carries a
+    /// <c>headerFooterOps</c> array. When false, header/footer scopes are ignored — the pre-campaign
+    /// behavior: the output carries the left document's headers/footers verbatim and a header/footer
+    /// change is silently invisible.
+    /// </summary>
+    public bool CompareHeadersFooters { get; set; } = true;
+
+    /// <summary>
+    /// Track paragraph-and-above property changes (block-format-change family) as native Word markup —
+    /// <c>w:pPrChange</c>/<c>w:tcPrChange</c>/<c>w:trPrChange</c>/<c>w:tblPrChange</c>/<c>w:tblGridChange</c>/
+    /// <c>w:tblPrExChange</c>/<c>w:sectPrChange</c>. Default <c>true</c>. Set <c>false</c> to restore the
+    /// pre-2026-07-03 behavior: a paragraph/table/section property change is applied untracked (the right
+    /// properties win with no revision). Run-level <c>w:rPrChange</c> is unaffected (always tracked).
+    /// <c>Consolidate</c> forces this off internally (the N-way merge does not track block-format changes in
+    /// v1), regardless of this value.
+    /// </summary>
+    public bool TrackBlockFormatChanges { get; set; } = true;
+
+    /// <summary>
+    /// Render a run of ≥2 ADJACENT word-matched modified paragraph pairs via a single cross-paragraph
+    /// word+pilcrow token-stream diff — the within-run flat-stream shape decoded from Word's compare
+    /// output: retained words from base paragraph k may land in output paragraph k±1 (crossing the
+    /// pilcrow), paragraph marks are stream tokens marked ¶INS/¶DEL by side, and the output paragraph
+    /// count follows the token-level LCS interleave (a 2×2 word-matched region can emit 3 paragraphs).
+    /// Default <c>true</c> (validated against Word's compare output; set false to keep each
+    /// word-matched pair's independent per-paragraph token diff). Purely a
+    /// <see cref="DocxDiff.Compare"/> (markup) refinement:
+    /// <see cref="DocxDiff.GetRevisions"/> and <see cref="DocxDiff.GetEditScriptJson"/> force it off
+    /// internally, so the revision list and edit-script-as-data are unaffected regardless of this value,
+    /// and <c>Consolidate</c> forces it off too. When false, each word-matched pair keeps its independent
+    /// per-paragraph token diff (byte-identical to before). The <c>accept ≡ right</c> / <c>reject ≡ left</c>
+    /// round-trip contract holds in both modes.
+    /// </summary>
+    public bool CrossParagraphTokenDiff { get; set; } = true;
+
+    /// <summary>
+    /// When true (the DEFAULT), an aligned list item whose displayed label changed only because an insertion,
+    /// deletion or move elsewhere in its list renumbered it carries a <c>w:numberingChange</c> recording the
+    /// label it showed before (and so does a deleted or moved-away list item), so a reviewer sees the
+    /// numbering cascade. Microsoft Word's own compare never writes <c>w:numberingChange</c>, and it is a
+    /// transitional-only construct that renderers treat inconsistently; set false for output limited to the
+    /// constructs Word writes. Only this metadata is affected: the list items themselves, their numbering and
+    /// every text revision are unchanged, and <c>DocxDiff.Consolidate</c> honors it too (issue #842).
+    /// </summary>
+    public bool TrackNumberingChanges { get; set; } = true;
+
+    /// <summary>
+    /// When true (the DEFAULT), a cell added to or removed from a paired table row is tracked on its own:
+    /// <c>w:tcPr/w:cellIns</c> for an added cell, <c>w:cellDel</c> for a removed one, the rest of the row
+    /// diffed in place. Microsoft Word's own compare never writes cell-level revisions; set false and a table
+    /// whose rows gain or lose cells is instead tracked as a whole, the original table deleted and the
+    /// revised one inserted, which is the construct Word writes. Both shapes keep accept ≡ revised and
+    /// reject ≡ original. Affects <see cref="DocxDiff.Compare"/> and <see cref="DocxDiff.GetRevisions"/>;
+    /// <c>DocxDiff.Consolidate</c> keeps cell-level revisions, which its N-way table merge needs to
+    /// attribute each reviewer's cells (issue #842).
+    /// </summary>
+    public bool TrackCellInsertionsAndDeletions { get; set; } = true;
+
+    /// <summary>Map this public settings object onto the internal <c>IrDiffSettings</c>.</summary>
+    /// <summary>
+    /// Shallow copy, so a facade can layer its own policy on top of caller-supplied settings without
+    /// mutating the caller's object (<see cref="DocxCompare.ApplyFrontDoorRevisionPolicy"/>). Shallow is
+    /// correct here: every member is a value type or an immutable/never-mutated reference.
+    /// </summary>
+    internal DocxDiffSettings Clone() => (DocxDiffSettings)MemberwiseClone();
+
+    internal IrDiffSettings ToIrDiffSettings()
+    {
+        // Resolve the revision date: an explicit value always wins; otherwise derive from Deterministic.
+        // When non-deterministic with no explicit date, capture DateTime.Now once here (not per revision)
+        // so a single diff is internally consistent, mirroring a single WmlComparerSettings instance.
+        var (deterministic, date) = (Deterministic, DateTimeForRevisions) switch
+        {
+            (_, { } explicitDate) => (Deterministic, explicitDate),
+            (true, null) => (true, IrDiffSettings.DeterministicEpoch),
+            (false, null) => (false, DateTime.Now.ToString("o", CultureInfo.InvariantCulture)),
+        };
+
+        // An explicit date is stamped verbatim into every w:date attribute (xsd:dateTime); validate it parses
+        // so garbage fails at the boundary instead of producing schema-questionable markup. The deterministic
+        // epoch and the captured DateTime.Now are always valid, so only the caller-supplied value is checked.
+        if (DateTimeForRevisions is { } supplied &&
+            !DateTimeOffset.TryParse(supplied, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out _))
+        {
+            throw new ArgumentException(
+                $"DateTimeForRevisions '{supplied}' is not a valid ISO-8601 date/time.",
+                nameof(DateTimeForRevisions));
+        }
+
+        return new IrDiffSettings
+        {
+            AuthorForRevisions = AuthorForRevisions,
+            Deterministic = deterministic,
+            DateTimeForRevisions = date,
+            CaseInsensitive = CaseInsensitive,
+            Culture = Culture,
+            ConflateBreakingAndNonbreakingSpaces = ConflateBreakingAndNonbreakingSpaces,
+            // Only NULL falls back to the default set; an explicit set — even empty — is honored verbatim.
+            WordSeparators = WordSeparators is { } seps
+                ? System.Collections.Immutable.ImmutableHashSet.CreateRange(seps)
+                : IrDiffSettings.DefaultWordSeparators,
+            RenderMoves = DetectMoves,
+            MoveSimilarityThreshold = MoveSimilarityThreshold,
+            MoveMinimumTokenCount = MoveMinimumWordCount,
+            RevisionGranularity = RevisionGranularity == DocxDiffRevisionGranularity.WmlComparerCompatible
+                ? Docxodus.Ir.Diff.RevisionGranularity.WmlComparerCompatible
+                : Docxodus.Ir.Diff.RevisionGranularity.Fine,
+            FormatComparison = FormatComparison == DocxDiffFormatComparison.Full
+                ? IrFormatComparison.Full
+                : IrFormatComparison.ModeledOnly,
+            CompareHeadersFooters = CompareHeadersFooters,
+            PreserveInputRevisions = PreserveInputRevisions,
+            NormalizeRevisionAuthors = NormalizeRevisionAuthors,
+            TrackBlockFormatChanges = TrackBlockFormatChanges,
+            // The three slices default equal to the block flag (two-way behaves identically) — so the public
+            // opt-out cascades to all of them. Only the composite diverges them (all slices on, umbrella off)
+            // — see IrCompositeMerger.
+            TrackParagraphFormatChanges = TrackBlockFormatChanges,
+            TrackTableFormatChanges = TrackBlockFormatChanges,
+            TrackSectionFormatChanges = TrackBlockFormatChanges,
+            CrossParagraphTokenDiff = CrossParagraphTokenDiff,
+            TrackNumberingChanges = TrackNumberingChanges,
+            TrackCellInsertionsAndDeletions = TrackCellInsertionsAndDeletions,
+        };
+    }
+}
+
+/// <summary>
+/// The kind of a <see cref="DocxDiffRevision"/>. One-for-one with
+/// <c>WmlComparer.WmlComparerRevisionType</c> plus the <see cref="Moved"/> and
+/// <see cref="FormatChanged"/> kinds the IR engine surfaces natively.
+/// </summary>
+public enum DocxDiffRevisionType
+{
+    /// <summary>Right-only content (a <c>w:ins</c>-grade insertion).</summary>
+    Inserted,
+
+    /// <summary>Left-only content (a <c>w:del</c>-grade deletion).</summary>
+    Deleted,
+
+    /// <summary>
+    /// Relocated content. Source and destination revisions share a <see cref="DocxDiffRevision.MoveGroupId"/>;
+    /// <see cref="DocxDiffRevision.IsMoveSource"/> distinguishes the two. Only produced when
+    /// <see cref="DocxDiffSettings.DetectMoves"/> is true.
+    /// </summary>
+    Moved,
+
+    /// <summary>
+    /// Content unchanged in text but changed in modeled run formatting (a <c>w:rPrChange</c>-grade change).
+    /// <see cref="DocxDiffRevision.FormatChange"/> carries the old/new properties and the changed names.
+    /// </summary>
+    FormatChanged,
+}
+
+/// <summary>
+/// Details of a <see cref="DocxDiffRevisionType.FormatChanged"/> revision: the modeled run-format fields
+/// before and after, plus the names of the fields that differ. Mirrors
+/// <c>WmlComparer.FormatChangeDetails</c>.
+/// </summary>
+/// <remarks>
+/// The dictionaries enumerate only MODELED format fields (bold, italic, underline, fontSize, color, …),
+/// keyed by friendly property names. A field present on one side and absent on the other (e.g. bold added)
+/// appears in only that side's dictionary and in <see cref="ChangedPropertyNames"/>.
+/// </remarks>
+public sealed class DocxDiffFormatChange
+{
+    /// <summary>The modeled format properties on the LEFT (old) side, keyed by friendly name.</summary>
+    public IReadOnlyDictionary<string, string> OldProperties { get; }
+
+    /// <summary>The modeled format properties on the RIGHT (new) side, keyed by friendly name.</summary>
+    public IReadOnlyDictionary<string, string> NewProperties { get; }
+
+    /// <summary>The friendly names of the properties that differ between the two sides.</summary>
+    public IReadOnlyList<string> ChangedPropertyNames { get; }
+
+    /// <summary>
+    /// Which property container this format change describes (block-format-change family, 2026-07-03).
+    /// <see cref="DocxDiffFormatChangeScope.Run"/> (the default and the pre-existing behavior) is an
+    /// rPr-grade report whose dictionaries carry run fields (bold, italic, fontSize, …);
+    /// <see cref="DocxDiffFormatChangeScope.Paragraph"/> is a <c>w:pPrChange</c>-grade report whose
+    /// dictionaries carry paragraph fields (style, justification, indentLeft, …, numId, numLevel).
+    /// Non-Run scopes appear only under <see cref="DocxDiffRevisionGranularity.Fine"/> —
+    /// <see cref="DocxDiffRevisionGranularity.WmlComparerCompatible"/> excludes them by construction
+    /// (the legacy comparer cannot produce them).
+    /// </summary>
+    public DocxDiffFormatChangeScope Scope { get; }
+
+    internal DocxDiffFormatChange(IrFormatChangeDetails details)
+    {
+        OldProperties = details.OldProperties;
+        NewProperties = details.NewProperties;
+        ChangedPropertyNames = details.ChangedPropertyNames;
+        Scope = (DocxDiffFormatChangeScope)details.Scope;
+    }
+}
+
+/// <summary>
+/// The property container a <see cref="DocxDiffFormatChange"/> describes. Members mirror the internal
+/// <c>IrFormatChangeScope</c> one-for-one (the cast in <see cref="DocxDiffFormatChange"/> relies on it).
+/// <see cref="TableCell"/>/<see cref="TableRow"/>/<see cref="Table"/> and <see cref="Section"/> are
+/// produced by the table-family and section phases of the block-format-change campaign.
+/// </summary>
+public enum DocxDiffFormatChangeScope
+{
+    /// <summary>Run properties (<c>w:rPr</c> / <c>w:rPrChange</c>-grade) — the pre-existing report.</summary>
+    Run,
+
+    /// <summary>Paragraph properties (<c>w:pPr</c> / <c>w:pPrChange</c>-grade).</summary>
+    Paragraph,
+
+    /// <summary>Table-cell shell properties (<c>w:tcPr</c> / <c>w:tcPrChange</c>-grade).</summary>
+    TableCell,
+
+    /// <summary>Table-row properties (<c>w:trPr</c> / <c>w:trPrChange</c>-grade).</summary>
+    TableRow,
+
+    /// <summary>Table-level properties (<c>w:tblPr</c>+<c>w:tblGrid</c> / <c>w:tblPrChange</c>-grade).</summary>
+    Table,
+
+    /// <summary>Section properties (<c>w:sectPr</c> / <c>w:sectPrChange</c>-grade).</summary>
+    Section,
+}
+
+/// <summary>
+/// One consumer-facing revision from <see cref="DocxDiff.GetRevisions"/>. Mirrors the consumer-relevant
+/// shape of <c>WmlComparer.WmlComparerRevision</c>
+/// (<see cref="Type"/>/<see cref="Text"/>/<see cref="Author"/>/<see cref="Date"/>/<see cref="MoveGroupId"/>/
+/// <see cref="IsMoveSource"/>/<see cref="FormatChange"/>) and ADDS the block anchors the revision derives
+/// from — the IR engine's differentiator over <c>WmlComparer.WmlComparerRevision</c>.
+/// </summary>
+/// <remarks>
+/// <para><b>Anchor grammar.</b> <see cref="LeftAnchor"/> and <see cref="RightAnchor"/> are stable block
+/// anchors of the form <c>kind:scope:unid</c> — e.g. <c>p:body:a1b2c3d4</c> (a body paragraph),
+/// <c>li:body:…</c> (a list item), <c>tbl:body:…</c> (a table), <c>p:fn3:…</c> (a paragraph in footnote 3).
+/// The <c>kind</c> and <c>scope</c> match the anchor grammar of <see cref="WmlToMarkdownConverter"/>'s
+/// markdown projection and of <see cref="DocxSession"/>'s anchor-addressed editing API, so a revision can be
+/// located in the markdown projection or fed straight to a <see cref="DocxSession"/> mutation
+/// (<c>ReplaceText</c>, <c>GetBlockMetadata</c>, <c>AddAnnotation</c>, …) on the corresponding document.
+/// The <c>unid</c> is the IR's deterministic per-element id.</para>
+///
+/// <para><b>Anchor presence by <see cref="Type"/>.</b> Each type's PRIMARY anchor is ALWAYS present; the
+/// opposite anchor MAY also be present for a TOKEN-LEVEL revision (see below). The full rule:
+/// <list type="bullet">
+/// <item><see cref="DocxDiffRevisionType.Inserted"/> — <see cref="RightAnchor"/> always; <see cref="LeftAnchor"/>
+/// null for a whole-block insertion, but PRESENT for a token-level insert inside a modified block.</item>
+/// <item><see cref="DocxDiffRevisionType.Deleted"/> — <see cref="LeftAnchor"/> always; <see cref="RightAnchor"/>
+/// null for a whole-block deletion, but PRESENT for a token-level delete inside a modified block.</item>
+/// <item><see cref="DocxDiffRevisionType.FormatChanged"/> — BOTH (it is always a content-equal block pair).</item>
+/// <item><see cref="DocxDiffRevisionType.Moved"/> — EXCLUSIVE: source carries <see cref="LeftAnchor"/> only
+/// (<see cref="RightAnchor"/> null), destination carries <see cref="RightAnchor"/> only.</item>
+/// </list>
+/// A TOKEN-LEVEL revision is one describing an insert/delete WITHIN a modified (or moved-and-edited) paragraph
+/// — that paragraph exists on both sides, so the revision carries BOTH the left and right anchors of its
+/// enclosing block (useful for locating the edit in either document). A BLOCK-LEVEL insert/delete (a whole
+/// new/removed paragraph) carries only its primary anchor. Each anchor resolves against the IR of the document
+/// it came FROM: left anchors against <see cref="DocxDiff.GetRevisions"/>'s <c>left</c> argument, right anchors
+/// against <c>right</c>.</para>
+/// </remarks>
+public sealed class DocxDiffRevision
+{
+    /// <summary>The kind of change.</summary>
+    public DocxDiffRevisionType Type { get; }
+
+    /// <summary>The affected text.</summary>
+    public string Text { get; }
+
+    /// <summary>The author stamped on the revision (from <see cref="DocxDiffSettings.AuthorForRevisions"/>).</summary>
+    public string Author { get; }
+
+    /// <summary>The ISO-8601 revision date (deterministic epoch by default).</summary>
+    public string Date { get; }
+
+    /// <summary>
+    /// For <see cref="DocxDiffRevisionType.Moved"/> revisions, the id linking a move's source and
+    /// destination; null otherwise.
+    /// </summary>
+    public int? MoveGroupId { get; }
+
+    /// <summary>
+    /// For <see cref="DocxDiffRevisionType.Moved"/> revisions: true at the source (moved FROM here), false at
+    /// the destination (moved TO here); null for non-move revisions.
+    /// </summary>
+    public bool? IsMoveSource { get; }
+
+    /// <summary>
+    /// For <see cref="DocxDiffRevisionType.FormatChanged"/> revisions, the old/new modeled properties and the
+    /// changed names; null otherwise.
+    /// </summary>
+    public DocxDiffFormatChange? FormatChange { get; }
+
+    /// <summary>
+    /// The LEFT-document block anchor (<c>kind:scope:unid</c>) the revision derives from, or null when it has
+    /// no left side (a pure insertion). See the type remarks for the anchor grammar and presence rules.
+    /// </summary>
+    public string? LeftAnchor { get; }
+
+    /// <summary>
+    /// The RIGHT-document block anchor (<c>kind:scope:unid</c>) the revision derives from, or null when it has
+    /// no right side (a pure deletion). See the type remarks for the anchor grammar and presence rules.
+    /// </summary>
+    public string? RightAnchor { get; }
+
+    private DocxDiffRevision(
+        DocxDiffRevisionType type, string text, string author, string date,
+        int? moveGroupId, bool? isMoveSource, DocxDiffFormatChange? formatChange,
+        string? leftAnchor, string? rightAnchor)
+    {
+        Type = type;
+        Text = text;
+        Author = author;
+        Date = date;
+        MoveGroupId = moveGroupId;
+        IsMoveSource = isMoveSource;
+        FormatChange = formatChange;
+        LeftAnchor = leftAnchor;
+        RightAnchor = rightAnchor;
+    }
+
+    internal static DocxDiffRevision FromIr(IrRevision r) => new(
+        type: r.Type switch
+        {
+            IrRevisionType.Inserted => DocxDiffRevisionType.Inserted,
+            IrRevisionType.Deleted => DocxDiffRevisionType.Deleted,
+            IrRevisionType.Moved => DocxDiffRevisionType.Moved,
+            IrRevisionType.FormatChanged => DocxDiffRevisionType.FormatChanged,
+            _ => throw new ArgumentOutOfRangeException(nameof(r), r.Type, "Unknown IrRevisionType."),
+        },
+        text: r.Text,
+        author: r.Author,
+        date: r.Date,
+        moveGroupId: r.MoveGroupId,
+        isMoveSource: r.IsMoveSource,
+        formatChange: r.FormatChange is { } fc ? new DocxDiffFormatChange(fc) : null,
+        leftAnchor: r.LeftAnchor,
+        rightAnchor: r.RightAnchor);
+
+    /// <summary>
+    /// Self-describing one-line rendering — type, move role, changed format property names,
+    /// quoted (truncated) text, anchors, and author — so a revision prints usefully in logs
+    /// and string interpolation instead of as the bare type name (issue #596). For example:
+    /// <c>Deleted "[8]%" @ p:body:abca8bfa ↔ p:body:dad1d7ec (Docxodus)</c>.
+    /// </summary>
+    public override string ToString()
+    {
+        var sb = new System.Text.StringBuilder(Type.ToString());
+        if (Type == DocxDiffRevisionType.Moved)
+        {
+            sb.Append(IsMoveSource == true ? " (source" : " (destination");
+            if (MoveGroupId is { } group) sb.Append(" #").Append(group);
+            sb.Append(')');
+        }
+        if (FormatChange is { } change && change.ChangedPropertyNames.Count > 0)
+            sb.Append(" [").Append(string.Join(", ", change.ChangedPropertyNames)).Append(']');
+        var text = Text.ReplaceLineEndings(" ");
+        if (text.Length > 60) text = text[..59] + "…";
+        sb.Append(" \"").Append(text).Append('"');
+        if (LeftAnchor is not null || RightAnchor is not null)
+        {
+            sb.Append(" @ ");
+            if (LeftAnchor is not null && RightAnchor is not null)
+                sb.Append(LeftAnchor).Append(" ↔ ").Append(RightAnchor);
+            else
+                sb.Append(LeftAnchor ?? RightAnchor);
+        }
+        return sb.Append(" (").Append(Author).Append(')').ToString();
+    }
+}

@@ -1,0 +1,1101 @@
+/**
+ * Worker Proxy - Main thread interface for the Docxodus Web Worker
+ *
+ * This module provides a Promise-based API that mirrors the main API but
+ * executes all WASM operations in a Web Worker, keeping the main thread free.
+ *
+ * @example
+ * ```typescript
+ * import { createWorkerDocxodus } from 'docxodus/worker';
+ *
+ * // Create worker instance
+ * const docxodus = await createWorkerDocxodus();
+ *
+ * // Use the same API as the main module, but non-blocking!
+ * const html = await docxodus.convertDocxToHtml(docxFile);
+ *
+ * // Clean up when done
+ * docxodus.terminate();
+ * ```
+ */
+
+import type {
+  WorkerRequest,
+  WorkerResponse,
+  WorkerConvertResponse,
+  WorkerGeneratePackageManifestResponse,
+  WorkerVerifyDeliverableResponse,
+  DeliverableVerificationRequest,
+  WorkerProveRedlineReversibilityResponse,
+  WorkerProjectReviewProfileResponse,
+  WorkerCompareResponse,
+  WorkerCompareToHtmlResponse,
+  WorkerGetSemanticChangesResponse,
+  WorkerCreateExternalAnnotationSetResponse,
+  WorkerValidateExternalAnnotationsResponse,
+  WorkerProjectAnnotationsOntoHtmlResponse,
+  WorkerConvertWithExternalAnnotationsResponse,
+  WorkerExportToOpenContractResponse,
+  ExternalAnnotationSet,
+  ExternalAnnotationValidationResult,
+  ExternalAnnotationProjectionSettings,
+  OpenContractDocExport,
+  WorkerGetRevisionsResponse,
+  WorkerGetCommentsResponse,
+  WorkerGetDocumentMetadataResponse,
+  WorkerGetVersionResponse,
+  WorkerPrepareResponse,
+  WorkerSessionOpenResponse,
+  WorkerSessionGetPackageManifestResponse,
+  WorkerSessionGetSemanticChangesResponse,
+  WorkerSessionVerifyDeliverableResponse,
+  WorkerSessionEditResponse,
+  WorkerDocxodusOptions,
+  ConversionOptions,
+  CompareOptions,
+  DocxDiffSettings,
+  RevisionListEntry,
+  CommentListEntry,
+  VersionInfo,
+  DocumentMetadata,
+  DocxSessionSettings,
+  DocumentAnnotation,
+  AnnotationUpdate,
+  CharSpan,
+  EditResult,
+  PackageManifest,
+  DeliverableVerificationResult,
+  RedlineReversibilityProof,
+  SemanticChangeSet,
+  PackageManifestInspectionLimits,
+  WorkerErrorCode,
+  WorkerRequestOptions,
+} from "./types.js";
+import { serializeVerificationRequest } from "./verification-request.js";
+
+export type { WorkerDocxodusOptions, WorkerErrorCode, WorkerRequestOptions } from "./types.js";
+
+/**
+ * Rejection carrying the worker's machine-readable cause. Callers classify failures with
+ * {@link workerErrorCode}; `message` is diagnostic text whose wording is not a contract.
+ */
+export class WorkerOperationError extends Error {
+  readonly code?: WorkerErrorCode;
+
+  constructor(message: string, code?: WorkerErrorCode) {
+    super(message);
+    this.name = "WorkerOperationError";
+    this.code = code;
+  }
+}
+
+function workerError(message?: string, code?: WorkerErrorCode): WorkerOperationError {
+  return new WorkerOperationError(message || "Unknown error", code);
+}
+
+/**
+ * Read a success response's payload, rejecting with `missing_result` when the worker reported
+ * success without it rather than handing the caller `undefined` typed as a value.
+ */
+function requireField<R extends WorkerResponse, K extends keyof R>(response: R, field: K): NonNullable<R[K]> {
+  const value = response[field];
+  if (value === undefined || value === null) {
+    throw workerError(
+      `The worker's "${(response as { type?: string }).type ?? "unknown"}" response reported success without its ${String(field)}`,
+      "missing_result",
+    );
+  }
+  return value as NonNullable<R[K]>;
+}
+
+/** A positive, finite timeout in milliseconds, or undefined; anything else is a caller error. */
+function checkTimeout(timeoutMs: number | undefined, name: string): number | undefined {
+  if (timeoutMs !== undefined && !(Number.isFinite(timeoutMs) && timeoutMs > 0)) {
+    throw new RangeError(`${name} must be a positive, finite number of milliseconds; got ${timeoutMs}`);
+  }
+  return timeoutMs;
+}
+
+/** Reads a worker failure's machine-readable cause, or undefined for any other error. */
+export function workerErrorCode(error: unknown): WorkerErrorCode | undefined {
+  return error instanceof WorkerOperationError ? error.code : undefined;
+}
+
+/**
+ * Generate a unique request ID.
+ */
+function generateId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+}
+
+/**
+ * Convert a File or Uint8Array to Uint8Array.
+ */
+async function toBytes(document: File | Uint8Array): Promise<Uint8Array> {
+  if (document instanceof Uint8Array) {
+    // Transfer only an exact-view clone. Transferring the caller's buffer would detach it,
+    // and transferring a subarray's backing buffer would also send unrelated prefix/suffix bytes.
+    return new Uint8Array(document);
+  }
+  const buffer = await document.arrayBuffer();
+  return new Uint8Array(buffer);
+}
+
+/**
+ * Derive the WASM base path from the current module URL.
+ */
+function deriveWasmBasePath(): string {
+  // Try to get the base path from the current script URL
+  if (typeof document !== "undefined") {
+    // Browser: look for docxodus script tag or use current location
+    const scripts = document.querySelectorAll('script[src*="docxodus"]');
+    if (scripts.length > 0) {
+      const src = (scripts[0] as HTMLScriptElement).src;
+      const base = src.substring(0, src.lastIndexOf("/") + 1);
+      return base + "wasm/";
+    }
+  }
+
+  // Default fallback
+  return "/wasm/";
+}
+
+/**
+ * A worker-proxied DocxSession. Mirrors the main-thread {@link DocxSession}
+ * annotation write surface but each call returns a Promise, since the actual
+ * work happens inside the Web Worker.
+ *
+ * Acquire via {@link WorkerDocxodus.openDocxSession}; always call
+ * {@link close} when finished to free the in-worker handle.
+ */
+export interface WorkerDocxSession {
+  /** Generate a deterministic manifest of the session's current logical checkpoint. */
+  getPackageManifest(): Promise<PackageManifest>;
+
+  /** Run the default deliverable gate over the session's clean-save checkpoint. */
+  verifyDeliverable(request?: DeliverableVerificationRequest): Promise<DeliverableVerificationResult>;
+
+  /** Compare the current logical checkpoint with the exact opening package. */
+  getSemanticChanges(): Promise<SemanticChangeSet>;
+
+  /**
+   * Add an annotation to the document at the given anchor.
+   * @param anchorId - Markdown-projection anchor id of the target block
+   * @param span - Character span within the block, or null for the whole block
+   * @param annotation - Annotation data (id auto-generated if omitted)
+   * @returns EditResult indicating success and any created/modified anchors
+   */
+  addAnnotation(
+    anchorId: string,
+    span: CharSpan | null,
+    annotation: DocumentAnnotation
+  ): Promise<EditResult>;
+
+  /**
+   * Remove an existing annotation by its id.
+   * @param annotationId - The annotation id to remove
+   * @returns EditResult indicating success
+   */
+  removeAnnotation(annotationId: string): Promise<EditResult>;
+
+  /**
+   * Partially update an annotation's metadata without moving it.
+   * @param annotationId - The annotation id to update
+   * @param update - Fields to change (omitted fields are left unchanged)
+   * @returns EditResult indicating success
+   */
+  updateAnnotation(
+    annotationId: string,
+    update: AnnotationUpdate
+  ): Promise<EditResult>;
+
+  /**
+   * Move an annotation to a new anchor/span position.
+   * @param annotationId - The annotation id to move
+   * @param newAnchorId - Target anchor id
+   * @param newSpan - New character span, or null for the whole block
+   * @returns EditResult indicating success
+   */
+  moveAnnotation(
+    annotationId: string,
+    newAnchorId: string,
+    newSpan: CharSpan | null
+  ): Promise<EditResult>;
+
+  /**
+   * Close the session and release its in-worker handle.
+   * After calling this, the instance cannot be used anymore.
+   */
+  close(): Promise<void>;
+}
+
+/**
+ * A worker-based Docxodus instance.
+ *
+ * Provides the same API as the main module but executes all operations
+ * in a Web Worker for non-blocking UI.
+ */
+export interface WorkerDocxodus {
+  /** Generate a deterministic, non-mutating verification manifest. */
+  generatePackageManifest(
+    document: File | Uint8Array,
+    limits?: PackageManifestInspectionLimits,
+  ): Promise<PackageManifest>;
+
+  /** Generate the exact canonical manifest JSON for strict boundary validation. */
+  generatePackageManifestJson(
+    document: File | Uint8Array,
+    limits?: PackageManifestInspectionLimits,
+  ): Promise<string>;
+
+  /** Derive an isolated final/original package; the source bytes remain caller-owned. */
+  projectReviewProfile(
+    document: File | Uint8Array,
+    profile: "final" | "original",
+    maximumOutputBytes?: number,
+  ): Promise<Uint8Array>;
+
+  /** Run the default bounded deliverable gate, optionally against an exact baseline. */
+  verifyDeliverable(
+    document: File | Uint8Array,
+    baseline?: File | Uint8Array,
+    request?: DeliverableVerificationRequest,
+  ): Promise<DeliverableVerificationResult>;
+
+  /**
+   * Prove that a redline's generated revisions accept to the intended final and reject to the
+   * baseline. Three packages are inspected and two rebuilt, so this always runs off the main
+   * thread; the returned proof carries digests and divergences rather than the rebuilt bytes.
+   */
+  proveRedlineReversibility(
+    baseline: File | Uint8Array,
+    intendedFinal: File | Uint8Array,
+    redline: File | Uint8Array
+  ): Promise<RedlineReversibilityProof>;
+
+  /** Compare two DOCX packages into the stable, versioned semantic-change schema. */
+  getSemanticChanges(
+    left: File | Uint8Array,
+    right: File | Uint8Array,
+    settings?: DocxDiffSettings
+  ): Promise<SemanticChangeSet>;
+
+  /**
+   * Create an empty external annotation set bound to the document's content hash — the input
+   * to every other call in the annotation family. Runs in the worker, so a read-only viewer
+   * that renders through this proxy needs no main-thread runtime to annotate (issue #775).
+   */
+  createExternalAnnotationSet(
+    document: File | Uint8Array,
+    documentId: string,
+  ): Promise<ExternalAnnotationSet>;
+
+  /** Validate an annotation set against a document: hash match and per-annotation text. */
+  validateExternalAnnotations(
+    document: File | Uint8Array,
+    annotationSet: ExternalAnnotationSet,
+  ): Promise<ExternalAnnotationValidationResult>;
+
+  /**
+   * Project an annotation set onto HTML the engine rendered. The input is parsed as XML, so
+   * hand it the converter's output (or another well-formed serialization), not a live DOM's
+   * `innerHTML`.
+   */
+  projectAnnotationsOntoHtml(
+    html: string,
+    annotationSet: ExternalAnnotationSet,
+    projectionOptions?: ExternalAnnotationProjectionSettings,
+  ): Promise<string>;
+
+  /** Convert a document and project an annotation set onto it in one round trip. */
+  convertDocxToHtmlWithExternalAnnotations(
+    document: File | Uint8Array,
+    annotationSet: ExternalAnnotationSet,
+    conversionOptions?: ConversionOptions,
+    projectionOptions?: ExternalAnnotationProjectionSettings,
+  ): Promise<string>;
+
+  /** Export a document to the OpenContracts format (text, layout tokens, labels). */
+  exportToOpenContract(document: File | Uint8Array): Promise<OpenContractDocExport>;
+
+  /**
+   * Convert a DOCX document to HTML.
+   * @param document - DOCX file as File object or Uint8Array
+   * @param options - Conversion options
+   * @returns HTML string
+   */
+  convertDocxToHtml(
+    document: File | Uint8Array,
+    options?: ConversionOptions,
+    maximumOutputBytes?: number,
+  ): Promise<string>;
+
+  /**
+   * Compare two DOCX documents and return the redlined result.
+   * @param original - Original DOCX document
+   * @param modified - Modified DOCX document
+   * @param options - Comparison options
+   * @returns Redlined DOCX as Uint8Array
+   */
+  compareDocuments(
+    original: File | Uint8Array,
+    modified: File | Uint8Array,
+    options?: CompareOptions
+  ): Promise<Uint8Array>;
+
+  /**
+   * Compare two DOCX documents and return the result as HTML.
+   * @param original - Original DOCX document
+   * @param modified - Modified DOCX document
+   * @param options - Comparison options
+   * @returns HTML string with redlined content
+   */
+  compareDocumentsToHtml(
+    original: File | Uint8Array,
+    modified: File | Uint8Array,
+    options?: CompareOptions
+  ): Promise<string>;
+
+  /**
+   * Get revisions from a compared document.
+   * @param document - A document that has tracked changes
+   * @param options - Revision extraction options
+   * @returns Array of revisions
+   */
+  getRevisions(document: File | Uint8Array): Promise<RevisionListEntry[]>;
+
+  /**
+   * Read a document's native Word comments — the comment twin of {@link getRevisions}.
+   * Same entries as `session.listComments()` without a session, so a read-only viewer
+   * needs no main-thread runtime to show comment threads.
+   * @param document - DOCX file as File object or Uint8Array
+   * @returns Array of comments in comments-part order (empty when there are none)
+   */
+  getComments(document: File | Uint8Array): Promise<CommentListEntry[]>;
+
+  /**
+   * Get document metadata for lazy loading pagination.
+   * This is a fast operation that extracts structure without full HTML rendering.
+   * @param document - DOCX file as File object or Uint8Array
+   * @returns Document metadata including sections, dimensions, and content counts
+   */
+  getDocumentMetadata(document: File | Uint8Array): Promise<DocumentMetadata>;
+
+  /**
+   * Get version information about the library.
+   * @returns Version information
+   */
+  getVersion(): Promise<VersionInfo>;
+
+  /**
+   * Pre-warm the comparison code path.
+   *
+   * The 10s runtime warmup paid by {@link createWorkerDocxodus} does not load
+   * the comparison assemblies — the .NET WASM runtime defers
+   * `Docxodus.*.wasm` and its `System.*.wasm` dependents until the first
+   * {@link compareDocuments} call, which then costs ~3s of pure assembly-load
+   * latency. Call `prepare()` after creating the worker to pay that cost ahead
+   * of any user action; once it resolves, the next {@link compareDocuments}
+   * (or {@link compareDocumentsToHtml}) triggers no further `.wasm` fetches.
+   *
+   * Semantics:
+   * - **Idempotent.** Repeated calls share one in-flight warmup and resolve
+   *   immediately once it has completed.
+   * - **No caller IO.** No seed files to fetch, no inputs to construct — the
+   *   seed documents are built inside the worker.
+   * - **Concurrent-safe.** `prepare()` and `compareDocuments()` may be called
+   *   in any order; a `compareDocuments()` issued while a `prepare()` is in
+   *   flight does not double-load assemblies.
+   *
+   * @returns A Promise that resolves when the comparison path is fully hot.
+   */
+  prepare(): Promise<void>;
+
+  /**
+   * Open a {@link WorkerDocxSession} for surgical annotation editing inside
+   * the worker. Uint8Array inputs are copied once so the caller's buffer remains attached and
+   * subarray boundaries are preserved; the private copy is then transferred.
+   *
+   * Always call {@link WorkerDocxSession.close} when you are done to release
+   * the in-worker session handle.
+   *
+   * @param document - DOCX file as File or Uint8Array
+   * @param settings - Optional session settings
+   * @returns A proxied session whose methods are off-main-thread
+   */
+  openDocxSession(
+    document: File | Uint8Array,
+    settings?: DocxSessionSettings
+  ): Promise<WorkerDocxSession>;
+
+  /**
+   * A view of this instance whose requests carry `options`: an `AbortSignal` that rejects each
+   * request it is passed to, and a `timeoutMs` deadline that overrides the instance's
+   * `requestTimeoutMs`. The view shares this instance's worker, so terminating either terminates
+   * both. Sessions opened through the view inherit its options, except that
+   * {@link WorkerDocxSession.close} ignores the signal so a session handle is always released.
+   *
+   * Rejecting a request does not stop work the worker has already started: the WASM engine runs
+   * on the worker's single thread, so a request that was aborted or timed out is most likely still
+   * running, and later requests queue behind it. Call {@link terminate} to stop it.
+   */
+  withRequestOptions(options: WorkerRequestOptions): WorkerDocxodus;
+
+  /**
+   * Terminate the worker.
+   * After calling this, the instance cannot be used anymore.
+   */
+  terminate(): void;
+
+  /**
+   * Check if the worker is still active.
+   */
+  isActive(): boolean;
+}
+
+/**
+ * Create a worker-based Docxodus instance.
+ *
+ * This function spawns a Web Worker that loads the WASM runtime independently.
+ * All operations are executed in the worker, keeping the main thread responsive.
+ *
+ * @param options - Configuration options
+ * @returns A Promise that resolves to a WorkerDocxodus instance
+ *
+ * @example
+ * ```typescript
+ * // Basic usage
+ * const docxodus = await createWorkerDocxodus();
+ * const html = await docxodus.convertDocxToHtml(docxFile);
+ *
+ * // With custom WASM path
+ * const docxodus = await createWorkerDocxodus({
+ *   wasmBasePath: '/assets/wasm/'
+ * });
+ * ```
+ */
+export async function createWorkerDocxodus(
+  options?: WorkerDocxodusOptions
+): Promise<WorkerDocxodus> {
+  if (options?.signal?.aborted) {
+    throw new Error("Worker creation aborted");
+  }
+  const requestTimeoutMs = checkTimeout(options?.requestTimeoutMs, "requestTimeoutMs");
+  // Determine WASM base path
+  const wasmBasePath = options?.wasmBasePath ?? deriveWasmBasePath();
+
+  // The worker bundle is packaged beside this module.
+  const workerScriptPath = new URL("./docxodus.worker.js", import.meta.url)
+    .href;
+
+  // Create the worker
+  const worker = new Worker(workerScriptPath, { type: "module" });
+
+  // Track pending requests
+  const pendingRequests = new Map<
+    string,
+    {
+      resolve: (value: any) => void;
+      reject: (error: Error) => void;
+    }
+  >();
+
+  // Track if worker is active
+  let isWorkerActive = true;
+  let abortListener: (() => void) | undefined;
+
+  const stopWorker = (message: string): void => {
+    if (!isWorkerActive) return;
+    isWorkerActive = false;
+    worker.terminate();
+    for (const pending of pendingRequests.values()) {
+      pending.reject(new Error(message));
+    }
+    pendingRequests.clear();
+    if (abortListener && options?.signal) {
+      options.signal.removeEventListener("abort", abortListener);
+      abortListener = undefined;
+    }
+  };
+  if (options?.signal) {
+    abortListener = () => stopWorker("Worker creation or operation aborted");
+    options.signal.addEventListener("abort", abortListener, { once: true });
+  }
+
+  // Cached warmup promise. Set on the first prepare() and reused thereafter so
+  // repeated/concurrent calls share a single in-flight (or completed) warmup.
+  // Reset to null on failure so a later prepare() can retry.
+  let preparePromise: Promise<void> | null = null;
+
+  // Handle worker messages
+  worker.onmessage = (event: MessageEvent<WorkerResponse | { type: "ready" }>) => {
+    const response = event.data;
+
+    // Handle ready signal
+    if (response.type === "ready") {
+      return;
+    }
+
+    // Handle normal responses
+    const pending = pendingRequests.get(response.id);
+    if (pending) {
+      pendingRequests.delete(response.id);
+
+      if (response.success) {
+        pending.resolve(response);
+      } else {
+        pending.reject(workerError(response.error, response.errorCode));
+      }
+    }
+  };
+
+  // Handle worker errors
+  worker.onerror = (error) => {
+    stopWorker(`Worker error: ${error.message}`);
+  };
+
+  // A response that cannot be deserialized arrives without its request id, so the request it
+  // answered cannot be identified. Rather than leave that request pending forever, reject every
+  // request in flight; the worker itself is unaffected and stays usable.
+  worker.onmessageerror = () => {
+    for (const pending of [...pendingRequests.values()]) {
+      pending.reject(workerError(
+        "A worker response could not be deserialized, so every request in flight was rejected",
+        "message_error",
+      ));
+    }
+  };
+
+  /**
+   * Send a request to the worker and wait for its response. Every way a request ends (a
+   * response, a timeout, an abort, the worker stopping, or a failed post) goes through the
+   * pending entry's resolve/reject, which clear its timer and abort listener exactly once.
+   */
+  function sendRequest<T extends WorkerResponse>(
+    request: WorkerRequest,
+    transfer?: Transferable[],
+    requestOptions?: WorkerRequestOptions,
+  ): Promise<T> {
+    return new Promise((resolve, reject) => {
+      if (!isWorkerActive) {
+        reject(new Error("Worker has been terminated"));
+        return;
+      }
+      const signal = requestOptions?.signal;
+      if (signal?.aborted) {
+        reject(workerError(`The worker request "${request.type}" was aborted before it was sent`, "aborted"));
+        return;
+      }
+      const timeoutMs = requestOptions?.timeoutMs ?? requestTimeoutMs;
+
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let onAbort: (() => void) | undefined;
+      const finish = (): void => {
+        pendingRequests.delete(request.id);
+        if (timer !== undefined) clearTimeout(timer);
+        if (onAbort) signal?.removeEventListener("abort", onAbort);
+      };
+      pendingRequests.set(request.id, {
+        resolve: (value) => {
+          finish();
+          resolve(value);
+        },
+        reject: (error) => {
+          finish();
+          reject(error);
+        },
+      });
+      const fail = (error: Error): void => pendingRequests.get(request.id)?.reject(error);
+
+      if (timeoutMs !== undefined) {
+        timer = setTimeout(() => fail(workerError(
+          `The worker request "${request.type}" timed out after ${timeoutMs} ms`, "timeout")), timeoutMs);
+      }
+      if (signal) {
+        onAbort = () => fail(workerError(`The worker request "${request.type}" was aborted`, "aborted"));
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+
+      try {
+        if (transfer && transfer.length > 0) {
+          worker.postMessage(request, transfer);
+        } else {
+          worker.postMessage(request);
+        }
+      } catch (error) {
+        fail(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  }
+
+  // Initialize the worker
+  try {
+    await sendRequest({
+      id: generateId(),
+      type: "init",
+      wasmBasePath,
+    });
+  } catch (error) {
+    stopWorker("Worker initialization failed");
+    throw error;
+  }
+
+  // The instance, and any withRequestOptions views of it, share this worker; each view's
+  // requests carry its options.
+  const createApi = (requestOptions?: WorkerRequestOptions): WorkerDocxodus => {
+    const send = <T extends WorkerResponse>(request: WorkerRequest, transfer?: Transferable[]): Promise<T> =>
+      sendRequest<T>(request, transfer, requestOptions);
+
+    return {
+      async generatePackageManifest(
+        document: File | Uint8Array,
+        limits?: PackageManifestInspectionLimits,
+      ): Promise<PackageManifest> {
+        const bytes = await toBytes(document);
+        const response = await send<WorkerGeneratePackageManifestResponse>(
+          {
+            id: generateId(),
+            type: "generatePackageManifest",
+            documentBytes: bytes,
+            limits,
+            representation: "object",
+          },
+          [bytes.buffer]
+        );
+        return requireField(response, "manifest");
+      },
+
+      async verifyDeliverable(
+        document: File | Uint8Array,
+        baseline?: File | Uint8Array,
+        request?: DeliverableVerificationRequest,
+      ): Promise<DeliverableVerificationResult> {
+        const bytes = await toBytes(document);
+        const baselineBytes = baseline === undefined ? undefined : await toBytes(baseline);
+        const transfer: Transferable[] = [bytes.buffer];
+        if (baselineBytes !== undefined) transfer.push(baselineBytes.buffer);
+        const response = await send<WorkerVerifyDeliverableResponse>(
+          {
+            id: generateId(),
+            type: "verifyDeliverable",
+            documentBytes: bytes,
+            baselineBytes,
+            requestJson: request === undefined ? undefined : serializeVerificationRequest(request),
+          },
+          transfer
+        );
+        return requireField(response, "verification");
+      },
+
+      async proveRedlineReversibility(
+        baseline: File | Uint8Array,
+        intendedFinal: File | Uint8Array,
+        redline: File | Uint8Array
+      ): Promise<RedlineReversibilityProof> {
+        const baselineBytes = await toBytes(baseline);
+        const intendedFinalBytes = await toBytes(intendedFinal);
+        const redlineBytes = await toBytes(redline);
+        const response = await send<WorkerProveRedlineReversibilityResponse>(
+          {
+            id: generateId(),
+            type: "proveRedlineReversibility",
+            baselineBytes,
+            intendedFinalBytes,
+            redlineBytes,
+          },
+          [baselineBytes.buffer, intendedFinalBytes.buffer, redlineBytes.buffer]
+        );
+        return requireField(response, "proof");
+      },
+
+      async getSemanticChanges(
+        left: File | Uint8Array,
+        right: File | Uint8Array,
+        settings?: DocxDiffSettings
+      ): Promise<SemanticChangeSet> {
+        const leftBytes = await toBytes(left);
+        const rightBytes = await toBytes(right);
+        const response = await send<WorkerGetSemanticChangesResponse>(
+          {
+            id: generateId(),
+            type: "getSemanticChanges",
+            leftBytes,
+            rightBytes,
+            settings,
+          },
+          [leftBytes.buffer, rightBytes.buffer]
+        );
+        return requireField(response, "semanticChanges");
+      },
+
+      async createExternalAnnotationSet(
+        document: File | Uint8Array,
+        documentId: string,
+      ): Promise<ExternalAnnotationSet> {
+        const bytes = await toBytes(document);
+        const response = await send<WorkerCreateExternalAnnotationSetResponse>(
+          { id: generateId(), type: "createExternalAnnotationSet", documentBytes: bytes, documentId },
+          [bytes.buffer]
+        );
+        return requireField(response, "annotationSet");
+      },
+
+      async validateExternalAnnotations(
+        document: File | Uint8Array,
+        annotationSet: ExternalAnnotationSet,
+      ): Promise<ExternalAnnotationValidationResult> {
+        const bytes = await toBytes(document);
+        const response = await send<WorkerValidateExternalAnnotationsResponse>(
+          { id: generateId(), type: "validateExternalAnnotations", documentBytes: bytes, annotationSet },
+          [bytes.buffer]
+        );
+        return requireField(response, "validation");
+      },
+
+      async projectAnnotationsOntoHtml(
+        html: string,
+        annotationSet: ExternalAnnotationSet,
+        projectionOptions?: ExternalAnnotationProjectionSettings,
+      ): Promise<string> {
+        const response = await send<WorkerProjectAnnotationsOntoHtmlResponse>({
+          id: generateId(),
+          type: "projectAnnotationsOntoHtml",
+          html,
+          annotationSet,
+          projectionOptions,
+        });
+        return requireField(response, "html");
+      },
+
+      async convertDocxToHtmlWithExternalAnnotations(
+        document: File | Uint8Array,
+        annotationSet: ExternalAnnotationSet,
+        conversionOptions?: ConversionOptions,
+        projectionOptions?: ExternalAnnotationProjectionSettings,
+      ): Promise<string> {
+        const bytes = await toBytes(document);
+        const response = await send<WorkerConvertWithExternalAnnotationsResponse>(
+          {
+            id: generateId(),
+            type: "convertDocxToHtmlWithExternalAnnotations",
+            documentBytes: bytes,
+            annotationSet,
+            conversionOptions,
+            projectionOptions,
+          },
+          [bytes.buffer]
+        );
+        return requireField(response, "html");
+      },
+
+      async exportToOpenContract(document: File | Uint8Array): Promise<OpenContractDocExport> {
+        const bytes = await toBytes(document);
+        const response = await send<WorkerExportToOpenContractResponse>(
+          { id: generateId(), type: "exportToOpenContract", documentBytes: bytes },
+          [bytes.buffer]
+        );
+        return requireField(response, "export");
+      },
+
+      async generatePackageManifestJson(
+        document: File | Uint8Array,
+        limits?: PackageManifestInspectionLimits,
+      ): Promise<string> {
+        const bytes = await toBytes(document);
+        const response = await send<WorkerGeneratePackageManifestResponse>(
+          {
+            id: generateId(),
+            type: "generatePackageManifest",
+            documentBytes: bytes,
+            limits,
+            representation: "json",
+          },
+          [bytes.buffer],
+        );
+        return requireField(response, "manifestJson");
+      },
+
+      async projectReviewProfile(
+        document: File | Uint8Array,
+        profile: "final" | "original",
+        maximumOutputBytes?: number,
+      ): Promise<Uint8Array> {
+        const bytes = await toBytes(document);
+        const response = await send<WorkerProjectReviewProfileResponse>(
+          {
+            id: generateId(),
+            type: "projectReviewProfile",
+            documentBytes: bytes,
+            profile,
+            maximumOutputBytes,
+          },
+          [bytes.buffer],
+        );
+        if (!response.documentBytes || response.documentBytes.byteLength === 0) {
+          throw new Error(`Failed to derive the ${profile} review profile`);
+        }
+        return response.documentBytes;
+      },
+
+      async convertDocxToHtml(
+        document: File | Uint8Array,
+        options?: ConversionOptions,
+        maximumOutputBytes?: number,
+      ): Promise<string> {
+        const bytes = await toBytes(document);
+        const response = await send<WorkerConvertResponse>(
+          {
+            id: generateId(),
+            type: "convertDocxToHtml",
+            documentBytes: bytes,
+            options,
+            maximumOutputBytes,
+          },
+          [bytes.buffer]
+        );
+        return requireField(response, "html");
+      },
+
+      async compareDocuments(
+        original: File | Uint8Array,
+        modified: File | Uint8Array,
+        options?: CompareOptions
+      ): Promise<Uint8Array> {
+        const originalBytes = await toBytes(original);
+        const modifiedBytes = await toBytes(modified);
+        const response = await send<WorkerCompareResponse>(
+          {
+            id: generateId(),
+            type: "compareDocuments",
+            originalBytes,
+            modifiedBytes,
+            options,
+          },
+          [originalBytes.buffer, modifiedBytes.buffer]
+        );
+        return requireField(response, "documentBytes");
+      },
+
+      async compareDocumentsToHtml(
+        original: File | Uint8Array,
+        modified: File | Uint8Array,
+        options?: CompareOptions
+      ): Promise<string> {
+        const originalBytes = await toBytes(original);
+        const modifiedBytes = await toBytes(modified);
+        const response = await send<WorkerCompareToHtmlResponse>(
+          {
+            id: generateId(),
+            type: "compareDocumentsToHtml",
+            originalBytes,
+            modifiedBytes,
+            options,
+          },
+          [originalBytes.buffer, modifiedBytes.buffer]
+        );
+        return requireField(response, "html");
+      },
+
+      async getRevisions(
+        document: File | Uint8Array
+      ): Promise<RevisionListEntry[]> {
+        const bytes = await toBytes(document);
+        const response = await send<WorkerGetRevisionsResponse>(
+          {
+            id: generateId(),
+            type: "getRevisions",
+            documentBytes: bytes,
+          },
+          [bytes.buffer]
+        );
+        return requireField(response, "revisions");
+      },
+
+      async getComments(document: File | Uint8Array): Promise<CommentListEntry[]> {
+        const bytes = await toBytes(document);
+        const response = await send<WorkerGetCommentsResponse>(
+          { id: generateId(), type: "getComments", documentBytes: bytes },
+          [bytes.buffer]
+        );
+        return requireField(response, "comments");
+      },
+
+      async getDocumentMetadata(
+        document: File | Uint8Array
+      ): Promise<DocumentMetadata> {
+        const bytes = await toBytes(document);
+        const response = await send<WorkerGetDocumentMetadataResponse>(
+          {
+            id: generateId(),
+            type: "getDocumentMetadata",
+            documentBytes: bytes,
+          },
+          [bytes.buffer]
+        );
+        return requireField(response, "metadata");
+      },
+
+      async getVersion(): Promise<VersionInfo> {
+        const response = await send<WorkerGetVersionResponse>({
+          id: generateId(),
+          type: "getVersion",
+        });
+        return requireField(response, "version");
+      },
+
+      prepare(): Promise<void> {
+        // Idempotent: hand back the existing warmup if one is in flight or done.
+        if (preparePromise) {
+          return preparePromise;
+        }
+        preparePromise = send<WorkerPrepareResponse>({
+          id: generateId(),
+          type: "prepare",
+        }).then(() => undefined);
+        // On failure, clear the cache so a subsequent prepare() can retry.
+        preparePromise.catch(() => {
+          preparePromise = null;
+        });
+        return preparePromise;
+      },
+
+      async openDocxSession(
+        document: File | Uint8Array,
+        settings?: DocxSessionSettings
+      ): Promise<WorkerDocxSession> {
+        const bytes = await toBytes(document);
+        const settingsJson = settings ? JSON.stringify(settings) : "";
+        const openResponse = await send<WorkerSessionOpenResponse>(
+          {
+            id: generateId(),
+            type: "sessionOpen",
+            documentBytes: bytes,
+            settingsJson,
+          },
+          [bytes.buffer]
+        );
+
+        const handle = requireField(openResponse, "handle");
+
+        return {
+          async getPackageManifest(): Promise<PackageManifest> {
+            const res = await send<WorkerSessionGetPackageManifestResponse>({
+              id: generateId(),
+              type: "sessionGetPackageManifest",
+              handle,
+            });
+            return requireField(res, "manifest");
+          },
+
+          async getSemanticChanges(): Promise<SemanticChangeSet> {
+            const res = await send<WorkerSessionGetSemanticChangesResponse>({
+              id: generateId(),
+              type: "sessionGetSemanticChanges",
+              handle,
+            });
+            return requireField(res, "semanticChanges");
+          },
+
+          async verifyDeliverable(
+            request?: DeliverableVerificationRequest,
+          ): Promise<DeliverableVerificationResult> {
+            const res = await send<WorkerSessionVerifyDeliverableResponse>({
+              id: generateId(),
+              type: "sessionVerifyDeliverable",
+              handle,
+              requestJson: request === undefined ? undefined : serializeVerificationRequest(request),
+            });
+            return requireField(res, "verification");
+          },
+
+          async addAnnotation(
+            anchorId: string,
+            span: CharSpan | null,
+            annotation: DocumentAnnotation
+          ): Promise<EditResult> {
+            const res = await send<WorkerSessionEditResponse>({
+              id: generateId(),
+              type: "sessionAddAnnotation",
+              handle,
+              anchorId,
+              spanJson: span ? JSON.stringify(span) : "",
+              annotationJson: JSON.stringify(annotation),
+            });
+            return requireField(res, "result");
+          },
+
+          async removeAnnotation(annotationId: string): Promise<EditResult> {
+            const res = await send<WorkerSessionEditResponse>({
+              id: generateId(),
+              type: "sessionRemoveAnnotation",
+              handle,
+              annotationId,
+            });
+            return requireField(res, "result");
+          },
+
+          async updateAnnotation(
+            annotationId: string,
+            update: AnnotationUpdate
+          ): Promise<EditResult> {
+            const res = await send<WorkerSessionEditResponse>({
+              id: generateId(),
+              type: "sessionUpdateAnnotation",
+              handle,
+              annotationId,
+              updateJson: JSON.stringify(update),
+            });
+            return requireField(res, "result");
+          },
+
+          async moveAnnotation(
+            annotationId: string,
+            newAnchorId: string,
+            newSpan: CharSpan | null
+          ): Promise<EditResult> {
+            const res = await send<WorkerSessionEditResponse>({
+              id: generateId(),
+              type: "sessionMoveAnnotation",
+              handle,
+              annotationId,
+              newAnchorId,
+              newSpanJson: newSpan ? JSON.stringify(newSpan) : "",
+            });
+            return requireField(res, "result");
+          },
+
+          async close(): Promise<void> {
+            // Not abortable: an aborted view must still release the in-worker session handle.
+            await sendRequest(
+              { id: generateId(), type: "sessionClose", handle },
+              undefined,
+              { timeoutMs: requestOptions?.timeoutMs },
+            );
+          },
+        };
+      },
+
+      terminate(): void {
+        stopWorker("Worker terminated");
+      },
+
+      withRequestOptions(more: WorkerRequestOptions): WorkerDocxodus {
+        checkTimeout(more.timeoutMs, "timeoutMs");
+        return createApi({ ...requestOptions, ...more });
+      },
+
+      isActive(): boolean {
+        return isWorkerActive;
+      },
+    };
+  };
+
+  return createApi();
+}
+
+/**
+ * Check if Web Workers are supported in the current environment.
+ */
+export function isWorkerSupported(): boolean {
+  return typeof Worker !== "undefined";
+}

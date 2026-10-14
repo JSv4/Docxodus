@@ -1,0 +1,364 @@
+#nullable enable
+
+using System.Linq;
+using System.Xml.Linq;
+using DocumentFormat.OpenXml.Packaging;
+
+namespace Docxodus.Internal;
+
+/// <summary>
+/// Synthesizes character styles that <see cref="DocxSession"/> formatting ops reference by id.
+/// <see cref="DocxSession.ApplyFormat"/> stamps inline code as <c>w:rStyle w:val="Code"</c>;
+/// on a document that never defined a "Code" style that reference is a phantom and Word silently
+/// renders the run as plain text. This ensures the style actually exists (find-or-create), so the
+/// run renders monospace. Mirrors <see cref="NumberingFactory"/>: find-or-create + reuse, and the
+/// styles part is flushed via <c>PutXDocument</c> because the session's <see cref="DocxSession.Save"/>
+/// only persists the projected parts, not the styles part.
+/// </summary>
+internal static class StyleFactory
+{
+    private static readonly XNamespace W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+    /// <summary>The run-style id that inline code references.</summary>
+    public const string CodeStyleId = "Code";
+
+    /// <summary>
+    /// Find-or-create the document's <see cref="StyleDefinitionsPart"/>. word/styles.xml is
+    /// optional in OOXML (Word opens a document-only package without repair), so callers that
+    /// read or write style definitions unconditionally must ensure the part exists first. A
+    /// missing part is synthesized with an empty <c>w:styles</c> root — every lookup then falls
+    /// through to built-in defaults. Note the part is added to <paramref name="main"/>: a
+    /// caller-visible mutation that persists in saved output.
+    /// </summary>
+    public static StyleDefinitionsPart EnsureStylesPart(MainDocumentPart main)
+    {
+        var part = main.StyleDefinitionsPart;
+        if (part is null)
+        {
+            part = main.AddNewPart<StyleDefinitionsPart>();
+            part.PutXDocument(new XDocument(
+                new XElement(W + "styles", new XAttribute(XNamespace.Xmlns + "w", W.NamespaceName))));
+        }
+        return part;
+    }
+
+    /// <summary>
+    /// Ensure a character style with id <see cref="CodeStyleId"/> exists. If <em>any</em> style with
+    /// that id is already defined it is left untouched (respect the document's own definition); only a
+    /// missing style is synthesized, as a monospace character style.
+    /// </summary>
+    public static void EnsureCodeCharacterStyle(WordprocessingDocument doc)
+    {
+        var main = doc.MainDocumentPart;
+        if (main is null) return;
+
+        var part = EnsureStylesPart(main);
+
+        var root = part.GetXDocument().Root!;
+        bool exists = root.Elements(W + "style")
+            .Any(st => (string?)st.Attribute(W + "styleId") == CodeStyleId);
+        if (exists) return;
+
+        root.Add(new XElement(W + "style",
+            new XAttribute(W + "type", "character"),
+            new XAttribute(W + "styleId", CodeStyleId),
+            new XAttribute(W + "customStyle", "1"),
+            new XElement(W + "name", new XAttribute(W + "val", CodeStyleId)),
+            new XElement(W + "rPr",
+                new XElement(W + "rFonts",
+                    new XAttribute(W + "ascii", "Consolas"),
+                    new XAttribute(W + "hAnsi", "Consolas"),
+                    new XAttribute(W + "cs", "Consolas")))));
+
+        // Flush to the part stream — Save only persists the projected parts, not styles.
+        part.PutXDocument();
+    }
+
+    /// <summary>
+    /// Ensure the two styles a footnote (<paramref name="isFootnote"/>) or endnote definition
+    /// references exist: the <c>FootnoteText</c>/<c>EndnoteText</c> paragraph style the note body
+    /// uses, and the <c>FootnoteReference</c>/<c>EndnoteReference</c> superscript character style
+    /// worn by both the body-side reference run and the note's auto-number mark. Same find-or-create
+    /// contract as <see cref="EnsureCodeCharacterStyle"/>: a style the document already defines is
+    /// left untouched, so a house footnote style survives. Without this the style references are
+    /// phantoms and Word renders the citation as ordinary full-size text.
+    /// </summary>
+    public static void EnsureNoteStyles(WordprocessingDocument doc, bool isFootnote)
+    {
+        var main = doc.MainDocumentPart;
+        if (main is null) return;
+
+        var part = EnsureStylesPart(main);
+        var root = part.GetXDocument().Root!;
+        var prefix = isFootnote ? "Footnote" : "Endnote";
+        var word = isFootnote ? "footnote" : "endnote";
+        bool added = false;
+
+        added |= AddStyleIfMissing(root, $"{prefix}Text", NoteTextStyle($"{prefix}Text", $"{word} text"));
+        added |= AddStyleIfMissing(root, $"{prefix}Reference", NoteReferenceStyle($"{prefix}Reference", $"{word} reference"));
+
+        // Flush to the part stream — Save only persists the projected parts, not styles.
+        if (added) part.PutXDocument();
+    }
+
+    /// <summary>
+    /// Ensure the two styles a native Word comment references exist (issue #300): the
+    /// <c>CommentText</c> paragraph style worn by the comment's body paragraphs and the
+    /// <c>CommentReference</c> character style worn by the body-side reference run and the
+    /// definition's <c>w:annotationRef</c> mark run. Same find-or-create contract as
+    /// <see cref="EnsureNoteStyles"/>: a style the document already defines is left untouched.
+    /// Shapes follow Word's canonical "annotation text"/"annotation reference" definitions,
+    /// minus the <c>w:link</c> to <c>CommentTextChar</c> (that style isn't created, so a link
+    /// would be a phantom reference).
+    /// </summary>
+    public static void EnsureCommentStyles(WordprocessingDocument doc)
+    {
+        var main = doc.MainDocumentPart;
+        if (main is null) return;
+
+        var part = EnsureStylesPart(main);
+        var root = part.GetXDocument().Root!;
+        bool added = false;
+
+        added |= AddStyleIfMissing(root, "CommentText", CommentTextStyle());
+        added |= AddStyleIfMissing(root, "CommentReference", CommentReferenceStyle());
+
+        // Flush to the part stream — Save only persists the projected parts, not styles.
+        if (added) part.PutXDocument();
+    }
+
+    /// <summary>
+    /// Ensure the paragraph styles a reference field's table wears exist (issue #607), with the
+    /// same find-or-create contract as <see cref="EnsureNoteStyles"/>: a style the document already
+    /// defines is left exactly as it is, so a firm's house TOC formatting survives.
+    /// </summary>
+    /// <remarks>
+    /// The shapes are Word's own, minus the theme-font references — a document with no theme part
+    /// would carry a dangling reference, and the entry styles are based on Normal anyway, so the
+    /// document's own defaults flow through.
+    /// </remarks>
+    public static void EnsureReferenceFieldStyles(
+        WordprocessingDocument doc, string entryStyleId, string entryStyleName, bool withHeading)
+    {
+        var main = doc.MainDocumentPart;
+        if (main is null) return;
+
+        var part = EnsureStylesPart(main);
+        var root = part.GetXDocument().Root!;
+        bool added = AddStyleIfMissing(root, entryStyleId, ReferenceEntryStyle(entryStyleId, entryStyleName));
+        if (withHeading)
+            added |= AddStyleIfMissing(root, "TOCHeading", TocHeadingStyle());
+
+        // Flush to the part stream — Save only persists the projected parts, not styles.
+        if (added) part.PutXDocument();
+    }
+
+    /// <summary>A reference table's entry style: Normal with the automatic-style marks Word sets on
+    /// generated content, so a user editing the table is told it will be regenerated.</summary>
+    private static XElement ReferenceEntryStyle(string styleId, string name) =>
+        new XElement(W + "style",
+            new XAttribute(W + "type", "paragraph"),
+            new XAttribute(W + "styleId", styleId),
+            new XElement(W + "name", new XAttribute(W + "val", name)),
+            new XElement(W + "basedOn", new XAttribute(W + "val", "Normal")),
+            new XElement(W + "next", new XAttribute(W + "val", "Normal")),
+            new XElement(W + "autoRedefine"),
+            new XElement(W + "uiPriority", new XAttribute(W + "val", "39")),
+            new XElement(W + "unhideWhenUsed"),
+            new XElement(W + "pPr",
+                new XElement(W + "spacing", new XAttribute(W + "after", "100"))));
+
+    /// <summary>The heading above a table of contents. Based on Heading1 but deliberately NOT an
+    /// outline level itself, or the table would list its own title.</summary>
+    private static XElement TocHeadingStyle() =>
+        new XElement(W + "style",
+            new XAttribute(W + "type", "paragraph"),
+            new XAttribute(W + "styleId", "TOCHeading"),
+            new XElement(W + "name", new XAttribute(W + "val", "TOC Heading")),
+            new XElement(W + "basedOn", new XAttribute(W + "val", "Heading1")),
+            new XElement(W + "next", new XAttribute(W + "val", "Normal")),
+            new XElement(W + "uiPriority", new XAttribute(W + "val", "39")),
+            new XElement(W + "semiHidden"),
+            new XElement(W + "unhideWhenUsed"),
+            new XElement(W + "qFormat"),
+            new XElement(W + "pPr",
+                new XElement(W + "outlineLvl", new XAttribute(W + "val", "9"))));
+
+    /// <summary>Word's comment-body paragraph style ("annotation text"): Normal at 10pt.</summary>
+    private static XElement CommentTextStyle() =>
+        new XElement(W + "style",
+            new XAttribute(W + "type", "paragraph"),
+            new XAttribute(W + "styleId", "CommentText"),
+            new XElement(W + "name", new XAttribute(W + "val", "annotation text")),
+            new XElement(W + "basedOn", new XAttribute(W + "val", "Normal")),
+            new XElement(W + "semiHidden"),
+            new XElement(W + "unhideWhenUsed"),
+            new XElement(W + "rPr",
+                new XElement(W + "sz", new XAttribute(W + "val", "20")),
+                new XElement(W + "szCs", new XAttribute(W + "val", "20"))));
+
+    /// <summary>Word's comment-marker character style ("annotation reference"): 8pt.</summary>
+    private static XElement CommentReferenceStyle() =>
+        new XElement(W + "style",
+            new XAttribute(W + "type", "character"),
+            new XAttribute(W + "styleId", "CommentReference"),
+            new XElement(W + "name", new XAttribute(W + "val", "annotation reference")),
+            new XElement(W + "basedOn", new XAttribute(W + "val", "DefaultParagraphFont")),
+            new XElement(W + "uiPriority", new XAttribute(W + "val", "99")),
+            new XElement(W + "semiHidden"),
+            new XElement(W + "unhideWhenUsed"),
+            new XElement(W + "rPr",
+                new XElement(W + "sz", new XAttribute(W + "val", "16")),
+                new XElement(W + "szCs", new XAttribute(W + "val", "16"))));
+
+    private static bool AddStyleIfMissing(XElement stylesRoot, string styleId, XElement definition)
+    {
+        bool exists = stylesRoot.Elements(W + "style")
+            .Any(st => (string?)st.Attribute(W + "styleId") == styleId);
+        if (exists) return false;
+        stylesRoot.Add(definition);
+        return true;
+    }
+
+    /// <summary>Word's note-body paragraph style: Normal at 10pt with single, un-spaced lines.</summary>
+    private static XElement NoteTextStyle(string styleId, string name) =>
+        new XElement(W + "style",
+            new XAttribute(W + "type", "paragraph"),
+            new XAttribute(W + "styleId", styleId),
+            new XElement(W + "name", new XAttribute(W + "val", name)),
+            new XElement(W + "basedOn", new XAttribute(W + "val", "Normal")),
+            new XElement(W + "pPr",
+                new XElement(W + "spacing",
+                    new XAttribute(W + "after", "0"),
+                    new XAttribute(W + "line", "240"),
+                    new XAttribute(W + "lineRule", "auto"))),
+            new XElement(W + "rPr",
+                new XElement(W + "sz", new XAttribute(W + "val", "20")),
+                new XElement(W + "szCs", new XAttribute(W + "val", "20"))));
+
+    /// <summary>Word's note-citation character style: superscript, nothing else.</summary>
+    private static XElement NoteReferenceStyle(string styleId, string name) =>
+        new XElement(W + "style",
+            new XAttribute(W + "type", "character"),
+            new XAttribute(W + "styleId", styleId),
+            new XElement(W + "name", new XAttribute(W + "val", name)),
+            new XElement(W + "rPr",
+                new XElement(W + "vertAlign", new XAttribute(W + "val", "superscript"))));
+
+    /// <summary>
+    /// Ensure a <em>paragraph</em> style with id <paramref name="styleId"/> exists, synthesizing a
+    /// canonical definition for the well-known Word built-ins (<c>Title</c>, <c>Subtitle</c>,
+    /// <c>Heading1</c>–<c>Heading9</c>) when missing. Returns <c>true</c> if the style now exists
+    /// (was already defined, or was just created); <c>false</c> for an unrecognized custom id, which
+    /// the caller surfaces as <c>UnknownStyle</c> (a document can't define an arbitrary style from a
+    /// bare id). Headings carry an <c>outlineLvl</c> so the converter renders them as h1–h9. An
+    /// already-defined style is left untouched. Like <see cref="EnsureCodeCharacterStyle"/>, the part
+    /// is flushed via <c>PutXDocument</c> because <see cref="DocxSession.Save"/> only persists the
+    /// projected parts.
+    /// </summary>
+    public static bool EnsureParagraphStyle(WordprocessingDocument doc, string styleId)
+    {
+        var main = doc.MainDocumentPart;
+        if (main is null) return false;
+
+        if (HasParagraphStyle(doc, styleId)) return true;
+
+        var def = BuiltInParagraphStyle(styleId);
+        if (def is null) return false; // unknown custom id — leave it; caller reports UnknownStyle
+
+        var part = EnsureStylesPart(main);
+        var root = part.GetXDocument().Root!;
+        root.Add(def);
+        part.PutXDocument();
+        return true;
+    }
+
+    /// <summary>Read-only existence check used before a tracked paragraph-style edit.
+    /// A <c>w:pPrChange</c> can restore the paragraph's style reference, but it cannot
+    /// remove a style definition or styles part synthesized by the edit.</summary>
+    internal static bool HasParagraphStyle(WordprocessingDocument doc, string styleId)
+    {
+        var root = doc.MainDocumentPart?.StyleDefinitionsPart?.GetXDocument().Root;
+        return root is not null && root.Elements(W + "style")
+            .Any(style => (string?)style.Attribute(W + "styleId") == styleId);
+    }
+
+    /// <summary>
+    /// True when the paragraph style — or any style on its basedOn chain — attaches
+    /// list numbering (`w:pPr/w:numPr/w:numId` with a non-zero id). Drives the
+    /// markdown-heading numbering suppressor (#572): only a style that would prefix
+    /// the text needs `numId=0` written on the paragraph to keep it unnumbered.
+    /// </summary>
+    internal static bool StyleAttachesNumbering(WordprocessingDocument doc, string styleId)
+    {
+        var root = doc.MainDocumentPart?.StyleDefinitionsPart?.GetXDocument().Root;
+        if (root is null) return false;
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var current = styleId;
+        while (current is not null && seen.Add(current))
+        {
+            var style = root.Elements(W + "style")
+                .FirstOrDefault(s => (string?)s.Attribute(W + "styleId") == current);
+            if (style is null) return false;
+            var numId = (string?)style.Element(W + "pPr")?.Element(W + "numPr")
+                ?.Element(W + "numId")?.Attribute(W + "val");
+            if (numId is not null) return numId != "0";
+            current = (string?)style.Element(W + "basedOn")?.Attribute(W + "val");
+        }
+        return false;
+    }
+
+    /// <summary>Canonical definition for a well-known built-in paragraph style, or null if unknown.</summary>
+    private static XElement? BuiltInParagraphStyle(string styleId)
+    {
+        if (styleId == "Title")
+            return ParagraphStyle(styleId, "Title", outlineLvl: null, bold: false, halfPoints: 56, color: "2E74B5");
+        if (styleId == "Subtitle")
+            return ParagraphStyle(styleId, "Subtitle", outlineLvl: null, bold: false, halfPoints: 28, color: "5A5A5A");
+        if (styleId.StartsWith("Heading") &&
+            int.TryParse(styleId.Substring("Heading".Length), out int n) && n is >= 1 and <= 9)
+        {
+            // Sizes taper from 16pt down to 11pt; accent colour for the top two levels.
+            int[] half = { 32, 26, 24, 24, 22, 22, 22, 22, 22 };
+            return ParagraphStyle(styleId, $"heading {n}", outlineLvl: n - 1,
+                bold: true, halfPoints: half[n - 1], color: n <= 2 ? "2E74B5" : "1F4D78");
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Build a CT_Style paragraph style. Child order follows the schema (name, basedOn, next,
+    /// qFormat, pPr, rPr) so Word doesn't flag the file for repair. A non-null
+    /// <paramref name="outlineLvl"/> makes it a heading (and adds keepNext/keepLines).
+    /// </summary>
+    private static XElement ParagraphStyle(
+        string styleId, string name, int? outlineLvl, bool bold, int halfPoints, string color)
+    {
+        var pPr = new XElement(W + "pPr");
+        if (outlineLvl.HasValue)
+        {
+            pPr.Add(new XElement(W + "keepNext"));
+            pPr.Add(new XElement(W + "keepLines"));
+        }
+        pPr.Add(new XElement(W + "spacing",
+            new XAttribute(W + "before", "240"), new XAttribute(W + "after", "0")));
+        if (outlineLvl.HasValue)
+            pPr.Add(new XElement(W + "outlineLvl", new XAttribute(W + "val", outlineLvl.Value.ToString())));
+
+        var rPr = new XElement(W + "rPr");
+        if (bold) rPr.Add(new XElement(W + "b"));
+        rPr.Add(new XElement(W + "color", new XAttribute(W + "val", color)));
+        rPr.Add(new XElement(W + "sz", new XAttribute(W + "val", halfPoints.ToString())));
+        rPr.Add(new XElement(W + "szCs", new XAttribute(W + "val", halfPoints.ToString())));
+
+        return new XElement(W + "style",
+            new XAttribute(W + "type", "paragraph"),
+            new XAttribute(W + "styleId", styleId),
+            new XElement(W + "name", new XAttribute(W + "val", name)),
+            new XElement(W + "basedOn", new XAttribute(W + "val", "Normal")),
+            new XElement(W + "next", new XAttribute(W + "val", "Normal")),
+            new XElement(W + "qFormat"),
+            pPr,
+            rPr);
+    }
+}

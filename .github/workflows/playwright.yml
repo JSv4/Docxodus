@@ -1,0 +1,105 @@
+name: Playwright Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    # The full single-worker WASM matrix plus the pinned-Chromium export suite now exceeds the
+    # former 25-minute ceiling on hosted runners. Keep a bounded cushion so assertion failures
+    # still surface instead of the job being canceled before export artifacts are produced.
+    # The delivery export-host integration test adds one .NET test build on top.
+    timeout-minutes: 55
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install wasm-tools workload
+        run: dotnet workload install wasm-tools
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install npm dependencies
+        run: cd npm && npm ci
+
+      - name: Build npm package (WASM + TypeScript)
+        run: cd npm && npm run build
+
+      - name: Install Node export companion dependencies
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+        run: cd npm-export && npm ci --ignore-scripts
+
+      # The export runtime deliberately keeps Chromium's process sandbox on, so the runner has to
+      # permit unprivileged user namespaces. Ubuntu 24.04 restricts them through AppArmor by
+      # default, which fails every launched-browser export with browser_launch_failure.
+      - name: Permit Chromium's unprivileged user-namespace sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Install Playwright browsers
+        run: cd npm && npx playwright install --with-deps chromium firefox
+
+      # The export runtime deliberately keeps Chromium's process sandbox on, so the runner has to
+      # permit unprivileged user namespaces. Ubuntu 24.04 restricts them through AppArmor by
+      # default, which fails every launched-browser export with browser_launch_failure.
+      - name: Permit Chromium's unprivileged user-namespace sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Run Node/CLI PDF export tests
+        run: cd npm-export && npm test
+
+      # The delivery bundle's production renderer spawns the framed export host, so this is the
+      # one job holding every prerequisite: the built host, permitted user namespaces, and a real
+      # Chromium. The gate keeps the test inert everywhere else.
+      - name: Run delivery export-host integration test
+        env:
+          DOCXODUS_RUN_DELIVERY_EXPORT_HOST: 1
+          DOCXODUS_EXPORT_HOST_PATH: ${{ github.workspace }}/npm-export/dist/host.js
+          DOCXODUS_DELIVERY_REAL_ARTIFACT_DIR: ${{ github.workspace }}/delivery-artifacts
+        run: |
+          export DOCXODUS_NODE_PATH="$(command -v node)"
+          dotnet test Docxodus.Tests/Docxodus.Tests.csproj \
+            --filter "FullyQualifiedName~DeliveryExportHostIntegrationTests"
+
+      # Run the long editor matrix after the export evidence exists. The final upload is `always()`,
+      # so an unrelated late regression cannot suppress the HTML/PDF artifacts under review.
+      - name: Run Playwright tests
+        run: cd npm && npm test
+
+      - name: Verify browser history files in fresh Python/native hosts
+        env:
+          DOCXODUS_HISTORY_BROWSER_ARTIFACT_DIR: ${{ github.workspace }}/npm/test-results
+        run: |
+          dotnet build tools/python-host/pyhost.csproj -c Release
+          python3 -m pip install -e './python[test]'
+          mkdir -p history-artifacts
+          python3 -m pytest python/tests/test_history_browser_artifacts.py -q -s --basetemp=history-artifacts/python
+
+      - name: Upload Playwright report and test artifacts
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: playwright-report
+          path: |
+            npm/playwright-report/
+            npm/test-results/
+            npm-export/test-artifacts/
+            delivery-artifacts/
+            history-artifacts/
+          if-no-files-found: ignore
+          retention-days: 7

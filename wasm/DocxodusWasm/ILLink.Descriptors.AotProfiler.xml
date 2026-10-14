@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Roots for the AOT-profiler flavour only (DocxodusWasm.csproj includes this descriptor
+     when WasmProfilers contains "aot"; scripts/record-aot-profile.sh builds it). The Mono AOT
+     profiler delivers its data by invoking JavaScriptExports.DumpAotProfileData (the send-to
+     method test-harness.html names), which nothing references statically; keep it so the dump
+     does not fail with "Cannot find method in loaded assemblies". -->
+<linker>
+  <assembly fullname="System.Runtime.InteropServices.JavaScript">
+    <type fullname="System.Runtime.InteropServices.JavaScript.JavaScriptExports">
+      <method name="DumpAotProfileData" />
+    </type>
+  </assembly>
+</linker>

@@ -1,0 +1,19 @@
+{
+  "author": "Series A Counsel",
+  "replacements": [
+    { "find": "[specify percentage]", "replace": "a majority" },
+    { "find": "[__ times] the applicable Original Issue Price", "replace": "one times (1x) the applicable Original Issue Price" },
+    { "find": "[8]% of the Original Issue Price", "replace": "6% of the Original Issue Price" },
+    { "find": "at least 10 days prior to the effective date", "replace": "at least 20 days prior to the effective date" }
+  ],
+  "deleteBlockContaining": "bona fide equity financing of the Corporation, in and of itself",
+  "insertAfterBlockContaining": {
+    "needle": "pro rata based on the number of shares of Common Stock held by each such holder",
+    "markdown": "Notwithstanding the foregoing, the aggregate amount payable to the holders of Preferred Stock pursuant to this Section 2 shall be reduced by the amount of any indebtedness of the Corporation held by such holders that is repaid at or prior to the closing of such Deemed Liquidation Event."
+  },
+  "italicize": "the “Available Proceeds”",
+  "comment": {
+    "needle": "one times (1x) the applicable Original Issue Price",
+    "text": "Confirm the fund's model assumes a 1x non-participating preference here."
+  }
+}

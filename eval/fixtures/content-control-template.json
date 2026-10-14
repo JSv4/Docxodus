@@ -1,0 +1,10 @@
+{
+  "id": "content-control-template",
+  "title": "Engagement letter template",
+  "description": "An engagement-letter template whose blanks are native content controls: a plain-text client name (tag client-name), a governing-law drop-down (tag governing-law), and an include-arbitration checkbox (tag include-arbitration), each showing placeholder content a fill must replace. The tool surface can fill content controls but cannot create them, so this fixture is authored by the named programmatic builder in Docxodus.Tests/Eval/EvalFixtureBuilders.cs rather than as a step script — still deterministic, still no committed document bytes.",
+  "builder": "content-control-template",
+  "expectedContent": [
+    "ENGAGEMENT LETTER TEMPLATE",
+    "the client named below"
+  ]
+}

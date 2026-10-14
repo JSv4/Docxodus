@@ -1,0 +1,167 @@
+{
+  "$comment": "One description of the rendering session ops and how each transport names them (issue #982). SessionOpDescriptionDriftTests checks every transport against it; see docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names (the JSON keys a stdio or MCP caller sends; the WASM bridge, npm and Python take them positionally). Numeric flag enums (scopes, kinds, regex options, depth, diff format) are typed int; string-token enums are typed enum. An argument's own default is the one DocxSessionOps (or the request record it parses into) applies on every transport; a transport that supplies its own default for an argument the facade requires lists it under defaults, a different spelling under argNames. Both are recorded divergences, not the target. An absent transport says why; an MCP route the description cannot express (a tool selected by format or mode rather than action, or an action that reshapes or drops arguments) is recorded absent and names the real route.",
+  "family": "rendering",
+  "ops": [
+    {
+      "op": "renderHtml",
+      "facade": "RenderHtml",
+      "result": "string",
+      "args": [
+        { "name": "cssPrefix", "type": "string", "required": true },
+        { "name": "fabricateClasses", "type": "boolean", "required": true },
+        { "name": "paginated", "type": "boolean", "required": true },
+        { "name": "scale", "type": "number", "required": true },
+        { "name": "renderTrackedChanges", "type": "boolean", "required": false, "default": false }
+      ],
+      "transports": {
+        "wasm": { "method": "RenderHtml" },
+        "npm": { "absent": "kept off: the editor's authoring render, called through the bridge export by npm/src/editor.ts; npm callers render through convertDocxToHtml" },
+        "python": { "absent": "kept off: the editor's authoring render profile; Python renders through Session.to_html (stdio session_to_html) with caller-chosen options" },
+        "stdio": { "absent": "kept off: the editor's authoring render profile (comments and annotations off, headers and footers tied to pagination); the stdio host renders through session_to_html, the HtmlConversionOps path with caller-chosen options" },
+        "mcp": { "absent": "reached by format with a pinned profile: docxodus_get_content format=html (tracked changes rendered) and docxodus_preview call it with fixed options; not one to one, so no route is recorded" }
+      }
+    },
+    {
+      "op": "renderBlockHtml",
+      "facade": "RenderBlockHtml",
+      "result": "string",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "cssPrefix", "type": "string", "required": false, "default": "docx-" },
+        { "name": "fabricateClasses", "type": "boolean", "required": false, "default": false },
+        { "name": "renderTrackedChanges", "type": "boolean", "required": false, "default": false }
+      ],
+      "transports": {
+        "wasm": { "method": "RenderBlockHtml" },
+        "npm": { "method": "renderBlock" },
+        "python": { "absent": "kept off: the editor's authoring render profile; Python renders through Session.to_html (stdio session_to_html) with caller-chosen options" },
+        "stdio": { "absent": "kept off: the editor's authoring render profile (comments and annotations off, headers and footers tied to pagination); the stdio host renders through session_to_html, the HtmlConversionOps path with caller-chosen options" },
+        "mcp": { "absent": "reached by format with a pinned profile: docxodus_get_content format=html with anchorId and docxodus_preview with anchorId call it with fixed options; not one to one, so no route is recorded" }
+      }
+    },
+    {
+      "op": "renderBlocksHtml",
+      "facade": "RenderBlocksHtml",
+      "result": "json",
+      "args": [
+        { "name": "anchorIds", "type": "array", "required": true },
+        { "name": "cssPrefix", "type": "string", "required": true },
+        { "name": "fabricateClasses", "type": "boolean", "required": true },
+        { "name": "renderTrackedChanges", "type": "boolean", "required": false, "default": false }
+      ],
+      "transports": {
+        "wasm": { "method": "RenderBlocksHtml" },
+        "npm": { "absent": "kept off: an internal of the browser block editor, which calls the bridge export directly (npm/src/editor.ts); a DocxSession method would be a public API for the editor's own DOM bookkeeping" },
+        "python": { "absent": "kept off: the editor's authoring render profile; Python renders through Session.to_html (stdio session_to_html) with caller-chosen options" },
+        "stdio": { "absent": "kept off: the editor's authoring render profile (comments and annotations off, headers and footers tied to pagination); the stdio host renders through session_to_html, the HtmlConversionOps path with caller-chosen options" },
+        "mcp": { "absent": "kept off: browser-editor render internal; an agent reads HTML through docxodus_get_content format=html or docxodus_preview" }
+      }
+    },
+    {
+      "op": "renderEditorHtml",
+      "facade": "RenderEditorHtml",
+      "result": "string",
+      "args": [
+        { "name": "options", "type": "object", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "RenderEditorHtml" },
+        "npm": { "absent": "kept off: an internal of the browser block editor, which calls the bridge export directly (npm/src/editor.ts); a DocxSession method would be a public API for the editor's own DOM bookkeeping" },
+        "python": { "absent": "kept off: browser-editor internal with no stdio op to call; a Python caller renders through Session.to_html" },
+        "stdio": { "absent": "kept off: an internal of the browser block editor (its DOM reconcile and remount path); the stdio host serves no editor" },
+        "mcp": { "absent": "kept off: browser-editor render internal; an agent reads HTML through docxodus_get_content format=html or docxodus_preview" }
+      }
+    },
+    {
+      "op": "renderEditorBlockHtml",
+      "facade": "RenderEditorBlockHtml",
+      "result": "string",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "options", "type": "object", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "RenderEditorBlockHtml" },
+        "npm": { "absent": "kept off: an internal of the browser block editor, which calls the bridge export directly (npm/src/editor.ts); a DocxSession method would be a public API for the editor's own DOM bookkeeping" },
+        "python": { "absent": "kept off: browser-editor internal with no stdio op to call; a Python caller renders through Session.to_html" },
+        "stdio": { "absent": "kept off: an internal of the browser block editor (its DOM reconcile and remount path); the stdio host serves no editor" },
+        "mcp": { "absent": "kept off: browser-editor render internal; an agent reads HTML through docxodus_get_content format=html or docxodus_preview" }
+      }
+    },
+    {
+      "op": "renderEditorBlocksHtml",
+      "facade": "RenderEditorBlocksHtml",
+      "result": "json",
+      "args": [
+        { "name": "anchorIds", "type": "array", "required": true },
+        { "name": "options", "type": "object", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "RenderEditorBlocksHtml" },
+        "npm": { "absent": "kept off: an internal of the browser block editor, which calls the bridge export directly (npm/src/editor.ts); a DocxSession method would be a public API for the editor's own DOM bookkeeping" },
+        "python": { "absent": "kept off: browser-editor internal with no stdio op to call; a Python caller renders through Session.to_html" },
+        "stdio": { "absent": "kept off: an internal of the browser block editor (its DOM reconcile and remount path); the stdio host serves no editor" },
+        "mcp": { "absent": "kept off: browser-editor render internal; an agent reads HTML through docxodus_get_content format=html or docxodus_preview" }
+      }
+    },
+    {
+      "op": "renderEditorChromeHtml",
+      "facade": "RenderEditorChromeHtml",
+      "result": "string",
+      "args": [
+        { "name": "options", "type": "object", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "RenderEditorChromeHtml" },
+        "npm": { "absent": "kept off: an internal of the browser block editor, which calls the bridge export directly (npm/src/editor.ts); a DocxSession method would be a public API for the editor's own DOM bookkeeping" },
+        "python": { "absent": "kept off: browser-editor internal with no stdio op to call; a Python caller renders through Session.to_html" },
+        "stdio": { "absent": "kept off: an internal of the browser block editor (its DOM reconcile and remount path); the stdio host serves no editor" },
+        "mcp": { "absent": "kept off: browser-editor render internal; an agent reads HTML through docxodus_get_content format=html or docxodus_preview" }
+      }
+    },
+    {
+      "op": "renderEditorRangeHtml",
+      "facade": "RenderEditorRangeHtml",
+      "result": "string[]",
+      "args": [
+        { "name": "anchorIds", "type": "array", "required": true },
+        { "name": "options", "type": "object", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "RenderEditorRangeHtml" },
+        "npm": { "absent": "kept off: an internal of the browser block editor, which calls the bridge export directly (npm/src/editor.ts); a DocxSession method would be a public API for the editor's own DOM bookkeeping" },
+        "python": { "absent": "kept off: browser-editor internal with no stdio op to call; a Python caller renders through Session.to_html" },
+        "stdio": { "absent": "kept off: an internal of the browser block editor (its DOM reconcile and remount path); the stdio host serves no editor" },
+        "mcp": { "absent": "kept off: browser-editor render internal; an agent reads HTML through docxodus_get_content format=html or docxodus_preview" }
+      }
+    },
+    {
+      "op": "renderPreviewHtml",
+      "facade": "RenderPreviewHtml",
+      "result": "string",
+      "args": [],
+      "transports": {
+        "wasm": { "method": "RenderPreviewHtml" },
+        "npm": { "absent": "kept off: the preview render profile, which previewBatch applies itself through the bridge export when previewHtml is requested" },
+        "python": { "absent": "kept off: the preview render profile, which preview_batch applies when previewHtml is requested; Python renders standalone through Session.to_html" },
+        "stdio": { "absent": "kept off: the preview render profile, which preview_batch applies itself when previewHtml is requested" },
+        "mcp": { "absent": "kept off: the preview render profile, which docxodus_mutations applies itself for previewHtml scoped|full" }
+      }
+    },
+    {
+      "op": "renderPreviewBlockHtml",
+      "facade": "RenderPreviewBlockHtml",
+      "result": "string",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "RenderPreviewBlockHtml" },
+        "npm": { "absent": "kept off: the preview render profile, which previewBatch applies itself through the bridge export when previewHtml is requested" },
+        "python": { "absent": "kept off: the preview render profile, which preview_batch applies when previewHtml is requested; Python renders standalone through Session.to_html" },
+        "stdio": { "absent": "kept off: the preview render profile, which preview_batch applies itself when previewHtml is requested" },
+        "mcp": { "absent": "kept off: the preview render profile, which docxodus_mutations applies itself for previewHtml scoped|full" }
+      }
+    }
+  ]
+}

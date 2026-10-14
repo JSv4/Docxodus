@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Docxodus standalone paginated HTML export</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, sans-serif; color: #17202a; }
+    body { margin: 0; background: #eef1f5; }
+    header { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 14px 18px;
+      background: white; border-bottom: 1px solid #d6dce4; }
+    h1 { margin: 0 auto 0 0; font-size: 16px; }
+    button, label { padding: 7px 11px; border: 1px solid #b9c3d0; border-radius: 5px;
+      background: #fff; font: inherit; font-size: 13px; cursor: pointer; }
+    button:disabled { cursor: default; opacity: .5; }
+    #status { flex-basis: 100%; color: #52606d; font-size: 12px; }
+    iframe { display: block; width: min(1100px, calc(100% - 32px)); height: calc(100vh - 115px);
+      margin: 16px auto; border: 1px solid #c7cfda; background: white; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Standalone paginated HTML export</h1>
+    <label>Open DOCX<input id="source" type="file" accept=".docx" hidden></label>
+    <button id="html" disabled>Download HTML</button>
+    <button id="map" disabled>Download PageMap</button>
+    <button id="report" disabled>Download report</button>
+    <span id="status">Choose a DOCX. Export runs locally in this browser.</span>
+  </header>
+  <iframe id="preview" title="Standalone export preview" sandbox="allow-same-origin"></iframe>
+
+  <script type="module">
+    import { convertDocxToPaginatedHtml } from '../dist/export-browser.bundle.js';
+
+    const source = document.querySelector('#source');
+    const preview = document.querySelector('#preview');
+    const status = document.querySelector('#status');
+    const downloads = {
+      html: document.querySelector('#html'),
+      map: document.querySelector('#map'),
+      report: document.querySelector('#report'),
+    };
+    let result;
+
+    function download(value, type, name) {
+      const url = URL.createObjectURL(new Blob([value], { type }));
+      const link = Object.assign(document.createElement('a'), { href: url, download: name });
+      link.click();
+      URL.revokeObjectURL(url);
+    }
+
+    source.addEventListener('change', async () => {
+      const file = source.files?.[0];
+      if (!file) return;
+      Object.values(downloads).forEach((button) => { button.disabled = true; });
+      status.textContent = 'Converting, paginating, and verifying offline reopen…';
+      try {
+        result = await convertDocxToPaginatedHtml(file, {
+          reviewProfile: 'final',
+          commentProfile: 'endnotes',
+        });
+        preview.srcdoc = result.html;
+        Object.values(downloads).forEach((button) => { button.disabled = false; });
+        status.textContent = `${result.pageCount} page(s); ${result.warnings.length} warning(s); `
+          + `renderer ${result.rendererFingerprint.slice(0, 12)}…`;
+      } catch (error) {
+        result = undefined;
+        preview.srcdoc = '';
+        status.textContent = error?.report
+          ? `${error.code}: ${error.message} (structured failed report is available in the console)`
+          : String(error);
+        console.error(error?.report ?? error);
+      }
+    });
+
+    downloads.html.addEventListener('click', () =>
+      download(result.html, 'text/html', 'document.standalone.html'));
+    downloads.map.addEventListener('click', () =>
+      download(JSON.stringify(result.pageMap, null, 2), 'application/json', 'page-map.json'));
+    downloads.report.addEventListener('click', () =>
+      download(JSON.stringify(result.renderReport, null, 2), 'application/json', 'render-report.json'));
+  </script>
+</body>
+</html>

@@ -1,0 +1,218 @@
+﻿using System.Runtime.InteropServices.JavaScript;
+using System.Runtime.Versioning;
+using System.Text.Json;
+using Docxodus;
+using Docxodus.Internal;
+
+namespace DocxodusWasm;
+
+/// <summary>
+/// JSExport methods for DOCX document comparison (redlining).
+/// These methods are callable from JavaScript.
+///
+/// <para>Also hosts the two single-document review-markup readers, <see cref="GetRevisionsJson"/>
+/// and <see cref="GetCommentsJson"/>, which read what a comparison produces and share
+/// <see cref="OpenForRead"/>.</para>
+/// </summary>
+[SupportedOSPlatform("browser")]
+public partial class DocumentComparer
+{
+    /// <summary>
+    /// Force the comparison code path fully hot.
+    ///
+    /// Creating the WASM runtime does not exercise the comparison engine, so the first real
+    /// comparison executes the engine's whole cold path on top of the actual diff work. This
+    /// export lets a caller pay that up front — the npm worker's <c>prepare()</c> — and keep the
+    /// first interactive comparison at steady-state latency (see <see cref="ComparisonEngine"/>).
+    ///
+    /// <para>Idempotent and self-contained: no caller IO, no seed fixtures to ship. Safe to call
+    /// repeatedly — the warm-up work is only paid once. Returns <c>"ok"</c> on success or a JSON
+    /// error object; warm-up is best-effort, so even the error path has already warmed the
+    /// engine.</para>
+    /// </summary>
+    /// <returns><c>"ok"</c> on success, or a JSON error object.</returns>
+    [JSExport]
+    public static string Warmup() => ComparisonEngine.EnsureWarm();
+
+    /// <summary>
+    /// Compare two DOCX documents and return the result as a redlined DOCX (byte array).
+    /// </summary>
+    /// <param name="originalBytes">The original DOCX file as a byte array</param>
+    /// <param name="modifiedBytes">The modified DOCX file as a byte array</param>
+    /// <param name="authorName">Author name for tracked changes; null takes the core default</param>
+    /// <returns>Redlined DOCX as byte array, or empty array on error</returns>
+    [JSExport]
+    public static byte[] CompareDocuments(
+        byte[] originalBytes,
+        byte[] modifiedBytes,
+        string? authorName) =>
+        CompareDocumentsWithOptions(originalBytes, modifiedBytes, authorName, caseInsensitive: false);
+
+    /// <summary>
+    /// Compare two DOCX documents and return the result as HTML.
+    /// Uses default settings with tracked changes visible.
+    /// </summary>
+    /// <param name="originalBytes">The original DOCX file as a byte array</param>
+    /// <param name="modifiedBytes">The modified DOCX file as a byte array</param>
+    /// <param name="authorName">Author name for tracked changes; null takes the core default</param>
+    /// <returns>HTML string with redlined content, or JSON error object</returns>
+    [JSExport]
+    public static string CompareDocumentsToHtml(
+        byte[] originalBytes,
+        byte[] modifiedBytes,
+        string? authorName) =>
+        CompareDocumentsToHtmlFull(originalBytes, modifiedBytes, authorName, caseInsensitive: false, renderTrackedChanges: true);
+
+    /// <summary>
+    /// Compare two DOCX documents and return the result as HTML with options.
+    /// </summary>
+    /// <param name="originalBytes">The original DOCX file as a byte array</param>
+    /// <param name="modifiedBytes">The modified DOCX file as a byte array</param>
+    /// <param name="authorName">Author name for tracked changes; null takes the core default</param>
+    /// <param name="renderTrackedChanges">If true, show insertions/deletions visually. If false, accept all changes (clean output).</param>
+    /// <returns>HTML string, or JSON error object</returns>
+    [JSExport]
+    public static string CompareDocumentsToHtmlWithOptions(
+        byte[] originalBytes,
+        byte[] modifiedBytes,
+        string? authorName,
+        bool renderTrackedChanges) =>
+        CompareDocumentsToHtmlFull(originalBytes, modifiedBytes, authorName, caseInsensitive: false, renderTrackedChanges);
+
+    /// <summary>
+    /// A throwaway session for a one-shot read. The default settings serve an editing session
+    /// and would price a document-level read at a whole-document markdown projection that the
+    /// read never consults; the read-only preset skips it.
+    /// </summary>
+    private static DocxSession OpenForRead(byte[] docxBytes) =>
+        new(docxBytes, new DocxSessionSettings
+        {
+            CaptureInitialProjection = false,
+            EmitMarkdownPatch = false,
+        });
+
+    /// <summary>
+    /// Read the tracked revisions already present in a document, as JSON.
+    ///
+    /// <para>Through v10 this re-derived moves by running the legacy comparer's move detection over the
+    /// document, which is why it took similarity/min-word/case knobs. It now reads the document's own
+    /// <c>w:moveFrom</c>/<c>w:moveTo</c> markup through <see cref="DocxSession.ListRevisions"/>: the moves
+    /// in the document ARE the moves, not a re-guess from a Jaccard threshold, so those knobs are gone.
+    /// The reader also surfaces revision families the legacy one never did (rows, cells, content controls,
+    /// numbering, property changes) and reports each move as ONE grouped entry rather than two halves.</para>
+    ///
+    /// <para>The payload is <see cref="DocxSessionJson.SerializeRevisionList"/> verbatim — the SAME wire
+    /// shape the session's own <c>listRevisions</c> returns — so the two paths cannot drift. That is why
+    /// there is no DTO here: adding one would fork the shape.</para>
+    /// </summary>
+    /// <param name="comparedDocBytes">A document carrying tracked changes</param>
+    /// <returns>JSON array of revisions, or JSON error object</returns>
+    [JSExport]
+    public static string GetRevisionsJson(byte[] comparedDocBytes)
+    {
+        if (comparedDocBytes == null || comparedDocBytes.Length == 0)
+        {
+            return DocumentConverter.SerializeError("No document data provided");
+        }
+
+        try
+        {
+            using var session = OpenForRead(comparedDocBytes);
+            return DocxSessionJson.SerializeRevisionList(session.ListRevisions());
+        }
+        catch (Exception ex)
+        {
+            return DocumentConverter.SerializeError(ex.Message, ex.GetType().Name);
+        }
+    }
+
+    /// <summary>
+    /// Read the native Word comments already present in a document, as JSON — the comment
+    /// twin of <see cref="GetRevisionsJson"/>. The payload is
+    /// <see cref="DocxSessionJson.SerializeCommentList"/> verbatim, the same wire shape the
+    /// session's own <c>listComments</c> returns, so a read-only viewer gets comment threads
+    /// without opening a session (issue #790).
+    /// </summary>
+    /// <param name="docBytes">A document that may carry comments</param>
+    /// <returns>JSON array of comments (empty when there is no comments part), or JSON error object</returns>
+    [JSExport]
+    public static string GetCommentsJson(byte[] docBytes)
+    {
+        if (docBytes == null || docBytes.Length == 0)
+        {
+            return DocumentConverter.SerializeError("No document data provided");
+        }
+
+        try
+        {
+            using var session = OpenForRead(docBytes);
+            return DocxSessionJson.SerializeCommentList(session.ListComments());
+        }
+        catch (Exception ex)
+        {
+            return DocumentConverter.SerializeError(ex.Message, ex.GetType().Name);
+        }
+    }
+
+    /// <summary>
+    /// Compare two DOCX documents and return the result as HTML with full options.
+    /// Supports the comparison settings that survive (caseInsensitive) plus HTML rendering options.
+    /// The comparison and the render both run through the shared facades
+    /// (<see cref="DocxDiffOps.CompareToHtml"/>), so the browser takes the same author and date
+    /// defaults as every other surface (issue #961).
+    /// </summary>
+    /// <param name="originalBytes">The original DOCX file as a byte array</param>
+    /// <param name="modifiedBytes">The modified DOCX file as a byte array</param>
+    /// <param name="authorName">Author name for tracked changes; null takes the core default</param>
+    /// <param name="caseInsensitive">Whether comparison is case-insensitive</param>
+    /// <param name="renderTrackedChanges">If true, show insertions/deletions visually. If false, accept all changes (clean output).</param>
+    /// <returns>HTML string, or JSON error object</returns>
+    [JSExport]
+    public static string CompareDocumentsToHtmlFull(
+        byte[] originalBytes,
+        byte[] modifiedBytes,
+        string? authorName,
+        bool caseInsensitive,
+        bool renderTrackedChanges)
+    {
+        try
+        {
+            return DocxDiffOps.CompareToHtml(
+                originalBytes, modifiedBytes,
+                DocxDiffOps.FrontDoorSettings(authorName, caseInsensitive),
+                renderTrackedChanges);
+        }
+        catch (Exception ex)
+        {
+            return DocumentConverter.SerializeError(ex.Message, ex.GetType().Name);
+        }
+    }
+
+    /// <summary>
+    /// Compare documents with detailed options, through the shared comparison front door
+    /// (<see cref="DocxDiffOps.CompareFrontDoor"/>).
+    /// </summary>
+    /// <param name="originalBytes">The original DOCX file</param>
+    /// <param name="modifiedBytes">The modified DOCX file</param>
+    /// <param name="authorName">Author name for tracked changes; null takes the core default</param>
+    /// <param name="caseInsensitive">Whether comparison is case-insensitive</param>
+    /// <returns>Redlined DOCX as byte array, or empty array on error</returns>
+    [JSExport]
+    public static byte[] CompareDocumentsWithOptions(
+        byte[] originalBytes,
+        byte[] modifiedBytes,
+        string? authorName,
+        bool caseInsensitive)
+    {
+        try
+        {
+            return DocxDiffOps.CompareFrontDoor(
+                originalBytes, modifiedBytes, DocxDiffOps.FrontDoorSettings(authorName, caseInsensitive));
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Comparison error: {ex.GetType().Name}: {ex.Message}");
+            return Array.Empty<byte>();
+        }
+    }
+}

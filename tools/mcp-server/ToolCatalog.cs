@@ -1,0 +1,828 @@
+#nullable enable
+
+using System.Collections.Generic;
+using System.Text.Json;
+using Docxodus.Internal;
+
+namespace Docxodus.McpServer;
+
+/// <summary>One MCP tool advertised by <c>tools/list</c>. <see cref="InputSchemaJson"/> is a raw
+/// JSON Schema object (draft 2020-12 subset: type/properties/required/enum/description) embedded
+/// verbatim into the response — see <see cref="Dispatcher"/> for what each action actually does.</summary>
+internal sealed record ToolDefinition(string Name, string Description, string InputSchemaJson);
+
+/// <summary>
+/// The tool surface this server advertises: three session-lifecycle tools (open/save/close), four
+/// read/preview tools, thirteen grouped-intent tools, and three sessionless operations.
+/// Grouped tools accept an <c>action</c> discriminator and action-specific arguments. See
+/// <c>docs/architecture/docx_agent_server.md</c> for the full contract, the mapping of every action
+/// onto the underlying Docxodus API, and the documented capability gaps.
+///
+/// <para>This list is the inventory of record. <c>tools/mcp-server/README.md</c> restates it for
+/// MCP hosts, and <c>McpToolInventoryDocumentationTests</c> holds the two in step, so adding or
+/// removing a definition here fails the build's tests until the README moves with it.</para>
+/// </summary>
+internal static class ToolCatalog
+{
+    public static readonly IReadOnlyList<ToolDefinition> Tools = new[]
+    {
+        new ToolDefinition(
+            "docxodus_open",
+            "Open a .docx file into an in-memory editing session and return a session_id. All other tools (except docxodus_open itself) take that session_id.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "path": { "type": "string", "description": "Location of the .docx within this server's configured document scope. Relative locations resolve under the scope root; an absolute path is accepted only if it falls inside that root. A location outside it is rejected — the scope is set by whoever launched the server and cannot be widened from here." },
+                "trackedChanges": { "type": "string", "enum": ["accept", "render_inline", "strip_deletions"], "description": "How mutating ops record their own edits. 'accept' (default) applies them directly; 'render_inline' wraps them as w:ins/w:del tracked changes; 'strip_deletions' drops deleted content outright." },
+                "revisionAuthor": { "type": "string", "description": "Author name stamped on tracked-change markup when trackedChanges is render_inline." },
+                "undoDepth": { "type": "integer", "description": "Maximum undo steps retained. Default 20. Each step is a full document snapshot, so this is a step count, not a memory bound — see undoMemoryBudgetBytes." },
+                "undoMemoryBudgetBytes": { "type": "integer", "description": "Approximate ceiling on memory held by undo/redo snapshots. Default 134217728 (128 MiB). Oldest history is discarded when exceeded, so on a large document undo may not reach the full undoDepth. Set 0 to bound by depth alone." },
+                "persistAnchorIds": { "type": "boolean", "description": "Default false. When true, docxodus_save keeps the anchor-id bookkeeping in the written file, so a session opened over it later resolves the anchor ids this session hands out. Costs file size (hundreds of KB on a large document) — turn it on only when a workflow needs a close+reopen without losing its anchors (no longer needed just to switch trackedChanges mode — docxodus_track_changes set_mode does that in place). docxodus_save can also override this per call." },
+                "captureInitialProjection": { "type": "boolean", "description": "Default true. Retains the opening package and projection as the session's comparison baseline, which is what docxodus_get_content format 'semantic_changes' and the markdown diff compare against — at the memory cost of one package copy per open session. Set false on a long-lived server that never asks for those, and they refuse with an error instead." },
+                "captureDeliveryEvidence": { "type": "boolean", "description": "Default false. Record the evidence a delivery change receipt needs as edits execute: the exact package before and after every mutation, each tool call's request, transaction ids, and undo/redo lineage. docxodus_deliver can then mint an available changeReceipt artifact. Costs one clean package serialization per mutation plus retention of every intermediate package (bounded: 256 states / 512 MiB; beyond that the receipt is reported unavailable). Requires captureInitialProjection." }
+              },
+              "required": ["path"]
+            }
+            """),
+        new ToolDefinition(
+            "docxodus_save",
+            "Write a session's current in-memory state back to the document store.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "sessionId": { "type": "string" },
+                "path": { "type": "string", "description": "Destination within the server's document scope, resolved the same way docxodus_open resolves its path. Defaults to the location the session was opened from (overwrite in place)." },
+                "persistAnchorIds": { "type": "boolean", "description": "Override the session's open-time persistAnchorIds for this save only. true: keep the anchor-id bookkeeping in the written file so reopening it resolves the same anchor ids (an anchor-stable checkpoint, at a file-size cost). false: strip it (a clean deliverable from a session opened with persistAnchorIds true). Absent: use the session's setting." }
+              },
+              "required": ["sessionId"]
+            }
+            """),
+        new ToolDefinition(
+            "docxodus_close",
+            "Discard a session and free its in-memory document. Unsaved changes are lost.",
+            """
+            { "type": "object", "properties": { "sessionId": { "type": "string" } }, "required": ["sessionId"] }
+            """),
+        new ToolDefinition(
+            "docxodus_get_content",
+            "Read a session's document content in one of several formats.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "sessionId": { "type": "string" },
+                "format": { "type": "string", "enum": ["markdown", "html", "text", "blocks", "info", "version", "semantic_changes", "verification", "check_preconditions", "styles", "formatting", "spans", "manifest"], "description": "markdown/text: anchor-addressed projection; html: rendered HTML; blocks: structural metadata; info: version plus edit and per-anchor section facts; version: monotonic document version; semantic_changes: stable versioned changes from the session's opening package to its current state; verification: bounded default deliverable gate over the session's clean-save checkpoint, using opening bytes as baseline; check_preconditions: read-only guard evaluation; styles: explicit style catalog and resolved properties; formatting: direct/effective paragraph and run formatting for anchorId; spans: mutation-compatible inline spans for anchorId; manifest: deterministic package entries, hashes, relationships, facts, and validation findings for the full logical package." },
+                "anchorId": { "type": "string", "description": "Optional for markdown/html/text/info and guard evaluation; required for formatting/spans; not accepted for manifest, semantic_changes, or verification. Those formats always describe the complete package/document. Returned formatting/list/section anchors and span ranges can be passed unchanged to mutation tools." },
+                "citation": {
+                  "type": "object", "additionalProperties": false,
+                  "properties": {
+                    "documentVersion": { "type": "integer", "minimum": 0 },
+                    "rendererFingerprint": { "type": "string", "minLength": 1 }
+                  },
+                  "required": ["documentVersion", "rendererFingerprint"]
+                },
+                "verification": { "type": "object", "description": "verification only: the full bounded request. options (mode standard|strict|reportOnly, failOnUnexpectedChanges, requireNoPlaceholders, detectBracketedAlternativeClauses, editorialMarkers, placeholderTokens, and the inspection limits maxFindings/maxDetector*/maxCompanionArtifact*/maxRenderDiagnostics/maxExpectedChanges/maxReportedDeltaChanges/packageManifest.*), expectedSemanticChanges (the canonical semantic-changes object, as returned by format semantic_changes), expectedPackageChanges (kind, location, before/afterDigest, before/afterValue), companionArtifacts (artifactId, role html|pdf|pageMap|pageImage|renderReport|other, mediaType, availability, path inside the document scope OR bytesB64, pageCount, rendererFingerprint, sourcePackageDigest, pageMapDigest, renderDiagnostics). Omitted: the default policy. Unknown properties are rejected; limits apply before any artifact is decoded." },
+                "preconditions": { "type": "object", "description": "check_preconditions: expectedVersion and/or anchorId plus expectedContentHash, expectedText/expectedTextRange, expectedKind, expectedScope, or expectedMatchCount." }
+              },
+              "required": ["sessionId", "format"]
+            }
+            """),
+        new ToolDefinition(
+            "docxodus_history",
+            "Read, publish, reconstruct, or render immutable timestamped history for the session's scoped document. Requires host configuration DOCXODUS_HISTORY_ROOT. No subscription or transport is created. create captures clean current session bytes; restore appends history only, never overwriting the open session or source file. Use exact expectedHead for publication; stale heads fail explicitly.",
+            """
+            {
+              "type": "object", "additionalProperties": false,
+              "properties": {
+                "sessionId": { "type": "string" },
+                "action": { "type": "string", "enum": ["read", "updates", "operations", "getOperation", "exportOperationProposal", "compare", "create", "list", "get", "export", "exportDocx", "exportArchive", "importArchive", "materialize", "replay", "resolveTime", "restore", "render"] },
+                "beforeVersionId": { "$ref": "#/$defs/blob", "description": "compare: original retained version in this session's history." },
+                "afterVersionId": { "$ref": "#/$defs/blob", "description": "compare: revised retained version; returns redlined DOCX bytes using the existing DocxCompare revision policy. No document-store writes." },
+                "operationId": { "$ref": "#/$defs/blob", "description": "Required for getOperation/exportOperationProposal. operations returns recorded backend decisions, including conflicts and explicit resolutions; no new reconciliation is performed." },
+                "archiveB64": { "type": "string", "description": "importArchive only: base64 .docxhistory, maximum 64 MiB before encoding. Embedded document ID must equal the session's canonical location; never remapped. Initializes absent history only, leaves the session/source unchanged." },
+                "expectedHead": { "anyOf": [{ "$ref": "#/$defs/head" }, { "type": "null" }], "description": "create: null/absent only for initial publication, otherwise exact last head. restore: required exact head. updates: last accepted head, or null for initial latest checkpoint." },
+                "requestId": { "type": "string", "minLength": 1, "maxLength": 1024, "pattern": "\\S", "description": "Optional durable restore retry ID. Reuse exact original head/target/metadata to recover its original result. Rejected for create, which recaptures live bytes; use a captured-byte history client for idempotent create." },
+                "versionId": { "$ref": "#/$defs/blob", "description": "Required for get/export/restore; optional exclusive pagination cursor for list." },
+                "metadata": {
+                  "type": "object", "additionalProperties": false,
+                  "properties": {
+                    "author": { "type": "string" },
+                    "createdAt": { "type": "string", "format": "date-time" },
+                    "label": { "type": ["string", "null"] },
+                    "message": { "type": ["string", "null"] },
+                    "applicationMetadata": { "type": "object", "additionalProperties": { "type": "string" } }
+                  },
+                  "required": ["author", "createdAt"],
+                  "description": "Required for create/restore. Timestamps select history; accepted sequence determines order. The host owns author authentication."
+                },
+                "sequence": { "type": "string", "pattern": "^(0|[1-9][0-9]*)$", "description": "Nonnegative Int64 decimal string; required for materialize/replay. render takes exactly one sequence or cutoff." },
+                "cutoff": { "type": "string", "format": "date-time", "description": "Required for resolveTime; optional alternative to sequence for render." },
+                "limit": { "type": "integer", "minimum": 1, "description": "list page size; default 25." },
+                "maxEntriesToScan": { "type": "integer", "minimum": 1, "description": "Bounded ancestry/replay/time traversal; default 10000." }
+              },
+              "required": ["sessionId", "action"],
+              "$defs": {
+                "blob": {
+                  "type": "object", "additionalProperties": false,
+                  "properties": {
+                    "digest": {
+                      "type": "object", "additionalProperties": false,
+                      "properties": {
+                        "algorithm": { "type": "string", "const": "SHA-256" },
+                        "value": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+                      },
+                      "required": ["algorithm", "value"]
+                    },
+                    "length": { "type": "integer", "minimum": 0 }
+                  },
+                  "required": ["digest", "length"]
+                },
+                "head": {
+                  "type": "object", "additionalProperties": false,
+                  "properties": {
+                    "revision": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+                    "state": { "$ref": "#/$defs/blob" }
+                  },
+                  "required": ["revision", "state"]
+                }
+              }
+            }
+            """),
+        new ToolDefinition(
+            "docxodus_preview",
+            "Render a session's document (or a single block) to HTML for the host's inline preview widget. With an exact registered citation, the widget materializes the cited physical page and navigates to its highlighted fragment. The markup travels in the result's _meta for the widget only; call again after edits to refresh it.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "sessionId": { "type": "string" },
+                "anchorId": { "type": "string", "description": "Optional. Render just this block (any addressable anchor, including hdr*/ftr* scopes) instead of the whole document. Whole-document renders include the converter's stylesheet; single-block renders are bare markup." }
+                ,"citation": {
+                  "type": "object", "additionalProperties": false,
+                  "properties": {
+                    "documentVersion": { "type": "integer", "minimum": 0 },
+                    "rendererFingerprint": { "type": "string", "minLength": 1 }
+                  },
+                  "required": ["documentVersion", "rendererFingerprint"]
+                }
+              },
+              "required": ["sessionId"]
+            }
+            """),
+        new ToolDefinition(
+            "docxodus_pagination",
+            "Register or consume a browser-materialized PageMap. Core never estimates page numbers; unavailable, continuous, stale, and renderer-mismatched layouts are explicit.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "sessionId": { "type": "string" },
+                "action": { "type": "string", "enum": ["register", "status", "cite"] },
+                "pageMap": {
+                  "type": "object", "additionalProperties": false,
+                  "properties": {
+                    "schemaVersion": { "type": "integer", "const": 1 },
+                    "mode": { "type": "string", "enum": ["paginated", "continuous"] },
+                    "availability": { "type": "string", "enum": ["available", "unavailable"] },
+                    "documentVersion": { "type": "integer", "minimum": 0 },
+                    "rendererFingerprint": { "type": "string", "minLength": 1 },
+                    "pages": {
+                      "type": "array",
+                      "items": {
+                        "type": "object", "additionalProperties": false,
+                        "properties": {
+                          "pageNumber": { "type": "integer", "minimum": 1 },
+                          "pageInSection": { "type": "integer", "minimum": 1 },
+                          "width": { "type": "number", "exclusiveMinimum": 0 },
+                          "height": { "type": "number", "exclusiveMinimum": 0 },
+                          "sectionIndex": { "type": "integer", "minimum": 0 },
+                          "pageName": { "type": "string", "minLength": 1 }
+                        },
+                        "required": ["pageNumber", "pageInSection", "width", "height", "pageName"]
+                      }
+                    },
+                    "fragments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object", "additionalProperties": false,
+                        "properties": {
+                          "fragmentId": { "type": "string", "minLength": 1 },
+                          "anchorId": { "type": "string", "minLength": 1 },
+                          "fragmentIndex": { "type": "integer", "minimum": 0 },
+                          "pageNumber": { "type": "integer", "minimum": 1 },
+                          "geometry": {
+                            "type": "object", "additionalProperties": false,
+                            "properties": {
+                              "x": { "type": "number", "minimum": 0 },
+                              "y": { "type": "number", "minimum": 0 },
+                              "width": { "type": "number", "exclusiveMinimum": 0 },
+                              "height": { "type": "number", "exclusiveMinimum": 0 }
+                            },
+                            "required": ["x", "y", "width", "height"]
+                          },
+                          "story": { "type": "string", "enum": ["body", "header", "footer", "footnote", "endnote", "comment"] },
+                          "inTableCell": { "type": "boolean" }
+                        },
+                        "required": ["fragmentId", "anchorId", "fragmentIndex", "pageNumber", "geometry", "story", "inTableCell"]
+                      }
+                    }
+                  },
+                  "required": ["schemaVersion", "mode", "availability", "documentVersion", "rendererFingerprint", "pages", "fragments"]
+                },
+                "expectedRendererFingerprint": { "type": "string", "description": "register: optional independently expected fingerprint; mismatch rejects the map." },
+                "anchorId": { "type": "string", "description": "cite: canonical kind:scope:unid anchor." },
+                "citation": {
+                  "type": "object", "additionalProperties": false,
+                  "properties": {
+                    "documentVersion": { "type": "integer", "minimum": 0 },
+                    "rendererFingerprint": { "type": "string", "minLength": 1 }
+                  },
+                  "required": ["documentVersion", "rendererFingerprint"]
+                }
+              },
+              "required": ["sessionId", "action"],
+              "oneOf": [
+                { "properties": { "action": { "const": "register" } }, "required": ["pageMap"] },
+                { "properties": { "action": { "const": "status" } } },
+                { "properties": { "action": { "const": "cite" } }, "required": ["anchorId", "citation"] }
+              ]
+            }
+            """),
+        new ToolDefinition(
+            "docxodus_search",
+            "Find text or structural nodes in a session's document. Returns anchor ids usable directly as the anchorId/cellAnchorId argument of every other tool.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "sessionId": { "type": "string" },
+                "mode": { "type": "string", "enum": ["text", "regex", "kind", "annotation", "bookmark"], "description": "text: literal substring search (Grep). regex: .NET regex search. kind: all blocks of a structural kind (p, h, li, tbl, tc, ...). annotation: blocks touched by a given annotation id. bookmark: blocks anchored by a given Word bookmark name." },
+                "query": { "type": "string", "description": "The needle: literal text, regex pattern, block kind, annotation id, or bookmark name depending on mode." },
+                "caseSensitive": { "type": "boolean", "description": "Default false (case-insensitive)." },
+                "contextChars": { "type": "integer", "description": "Characters of context captured on each side of a text/regex match. Default 80." },
+                "scope": { "type": "string", "enum": ["body", "headers", "footers", "header_footer", "all"], "description": "text/regex only: package stories to search. Default body preserves existing behavior; headers/footers cover every hdr*/ftr* part, header_footer combines them, and all includes body, running stories, notes, and comments." },
+                "maxResults": { "type": "integer", "description": "Cap the number of matches returned. Default unlimited." }
+                ,"citation": {
+                  "type": "object", "additionalProperties": false,
+                  "properties": {
+                    "documentVersion": { "type": "integer", "minimum": 0 },
+                    "rendererFingerprint": { "type": "string", "minLength": 1 }
+                  },
+                  "required": ["documentVersion", "rendererFingerprint"]
+                }
+              },
+              "required": ["sessionId", "mode", "query"]
+            }
+            """),
+        new ToolDefinition(
+            "docxodus_edit",
+            "Insert, replace, move, delete, or undo/redo text and blocks, addressed by anchor id.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "sessionId": { "type": "string" },
+                "preconditions": { "type": "object", "description": "Optional optimistic guards evaluated immediately before the mutation: expectedVersion, anchorId, expectedContentHash, expectedText/expectedTextRange, expectedKind, expectedScope, expectedMatchCount." },
+                "action": { "type": "string", "enum": ["insert_paragraph", "replace_text", "replace_text_range", "replace_text_at_span_with_format", "delete_block", "move_block", "delete_range", "delete_section", "split_paragraph", "merge_paragraphs", "undo", "redo"] },
+                "anchorId": { "type": "string", "description": "Target block. Required for every action except delete_range, delete_section, undo, redo." },
+                "position": { "type": "string", "enum": ["before", "after"], "description": "insert_paragraph/move_block only." },
+                "markdown": { "type": "string", "description": "insert_paragraph/replace_text payload, in the supported markdown subset (headings, bullet/ordered lists, bold/italic/code/strike, links, hard breaks)." },
+                "find": { "type": "string", "description": "replace_text_range: literal text to find within the block. A find that matches nothing fails with text_not_found (both directly and as a batch step); pass preconditions.expectedMatchCount 0 to assert absence as a successful no-op instead." },
+                "replace": { "type": "string", "description": "replace_text_range / replace_text_at_span_with_format: replacement text." },
+                "spanStart": { "type": "integer", "description": "replace_text_at_span_with_format: start offset in paragraph text." },
+                "spanLength": { "type": "integer", "description": "replace_text_at_span_with_format: length to replace; zero inserts at a run boundary." },
+                "format": { "type": "object", "description": "replace_text_at_span_with_format: FormatOp (same fields as docxodus_format, e.g. bold/italic). Applied only to the replacement as one atomic undo/version unit; empty replacement only deletes." },
+                "options": {
+                  "type": "object",
+                  "description": "replace_text_range options.",
+                  "properties": {
+                    "ignoreCase": { "type": "boolean", "description": "Match case-insensitively. Default true over MCP." },
+                    "maxReplacements": { "type": "integer", "minimum": 1, "description": "Replace at most this many matches, in document order." },
+                    "expectedMatchCount": { "type": "integer", "minimum": 0, "description": "Refuse the replacement unless exactly this many matches exist." }
+                  }
+                },
+                "caseSensitive": { "type": "boolean", "description": "replace_text_range. Deprecated: use options.ignoreCase (its negation). Default false." },
+                "toAnchorIdExclusive": { "type": "string", "description": "delete_range: end boundary, exclusive." },
+                "fromAnchorId": { "type": "string", "description": "delete_range: start boundary (use anchorId as the field name for the start would be ambiguous with toAnchorIdExclusive; both are required together)." },
+                "headingAnchorId": { "type": "string", "description": "delete_section: heading whose section (heading + everything until the next same-or-higher heading) should be removed." },
+                "characterOffset": { "type": "integer", "description": "split_paragraph: character offset to split at." },
+                "secondAnchorId": { "type": "string", "description": "merge_paragraphs: the paragraph absorbed into anchorId." },
+                "sourceAnchorId": { "type": "string", "description": "move_block: block to relocate." },
+                "targetAnchorId": { "type": "string", "description": "move_block: reference block used with position." }
+              },
+              "required": ["sessionId", "action"]
+            }
+            """),
+        new ToolDefinition(
+            "docxodus_format",
+            "Apply character or paragraph formatting, addressed by anchor id.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "sessionId": { "type": "string" },
+                "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
+                "action": { "type": "string", "enum": ["apply_format", "apply_format_by_substring", "set_paragraph_style", "set_paragraph_format", "set_list_level", "remove_list_membership", "apply_list_format"] },
+                "anchorId": { "type": "string" },
+                "span": { "type": "object", "properties": { "start": { "type": "integer" }, "length": { "type": "integer" } }, "description": "apply_format only. Omit to format the whole block." },
+                "substring": { "type": "string", "description": "apply_format_by_substring: literal text within the block to format." },
+                "format": {
+                  "type": "object",
+                  "description": "apply_format / apply_format_by_substring payload. Omitted fields are left unchanged.",
+                  "properties": {
+                    "bold": { "type": "boolean" }, "italic": { "type": "boolean" }, "underline": { "type": "boolean" },
+                    "strike": { "type": "boolean" }, "code": { "type": "boolean" },
+                    "color": { "type": "string", "description": "Hex RGB, no '#'." },
+                    "vertAlign": { "type": "string", "enum": ["superscript", "subscript", "none"] },
+                    "fontSizePts": { "type": "number" }, "fontFamily": { "type": "string" },
+                    "highlight": { "type": "string", "description": "Word highlight swatch name (w:highlight): yellow, green, cyan, magenta, blue, red, darkBlue, darkCyan, darkGreen, darkMagenta, darkRed, darkYellow, darkGray, lightGray, black, white. \"\" or \"none\" clears; any other value is rejected." },
+                    "caps": { "type": "boolean", "description": "All capitals (w:caps). true also removes smallCaps — Word treats them as one either/or slot." },
+                    "smallCaps": { "type": "boolean", "description": "Small capitals (w:smallCaps). true also removes caps." }
+                  }
+                },
+                "styleId": { "type": "string", "description": "set_paragraph_style: a style id from the document's style definitions (e.g. Heading1)." },
+                "paragraphFormat": {
+                  "type": "object",
+                  "description": "set_paragraph_format payload. Omitted fields are left unchanged.",
+                  "properties": {
+                    "alignment": { "type": "string", "enum": ["left", "center", "right", "justify"] },
+                    "indentDelta": { "type": "integer", "description": "Twips to add to the current left indent (negative to outdent). 1440 twips = 1 inch." },
+                    "firstLineIndent": { "type": "integer", "minimum": 0, "description": "Absolute first-line indent in twips (w:ind/@w:firstLine; 1440 = 1 inch, 720 = 0.5 inch). 0 = explicitly none. Mutually exclusive with hangingIndent (Word stores one or the other); setting it removes any hanging indent." },
+                    "hangingIndent": { "type": "integer", "minimum": 0, "description": "Absolute hanging indent in twips (w:ind/@w:hanging; 1440 = 1 inch) — every line EXCEPT the first starts this far right of the left edge. Mutually exclusive with firstLineIndent; setting it removes any first-line indent." },
+                    "spacingBefore": { "type": "integer", "minimum": 0, "description": "Absolute space above the paragraph in twips (w:spacing/@w:before). 20 twips = 1pt, so 240 = 12pt." },
+                    "spacingAfter": { "type": "integer", "minimum": 0, "description": "Absolute space below the paragraph in twips (w:spacing/@w:after). 20 twips = 1pt, so 240 = 12pt." },
+                    "lineSpacing": { "type": "integer", "minimum": 0, "description": "Line spacing (w:spacing/@w:line). Units depend on lineSpacingRule: under \"auto\" (the default) it is 240ths of a line (240 = single, 360 = 1.5x, 480 = double); under \"exact\"/\"atLeast\" it is twips (20 = 1pt, so 480 = 24pt)." },
+                    "lineSpacingRule": { "type": "string", "enum": ["auto", "exact", "atLeast"], "description": "How lineSpacing is measured (w:spacing/@w:lineRule). Requires lineSpacing in the same call." },
+                    "pageBreakBefore": { "type": "boolean" },
+                    "topBorder": {
+                      "type": "object",
+                      "description": "Adds/replaces the paragraph's top border (w:pBdr/w:top).",
+                      "properties": {
+                        "style": { "type": "string", "description": "Border line style, e.g. single/double/thick/dotted/dashed. Default \"single\"." },
+                        "size": { "type": "integer", "description": "Border weight in eighths of a point. Default 6 (≈0.75pt); a heavy rule ≈ 18-24." },
+                        "color": { "type": "string", "description": "Hex RGB without '#', or \"auto\". Default \"auto\"." },
+                        "space": { "type": "integer", "description": "Padding between border and text, in points. Default 1." }
+                      }
+                    },
+                    "bottomBorder": {
+                      "type": "object",
+                      "description": "Adds/replaces the paragraph's bottom border (w:pBdr/w:bottom). This is what an S-1-style horizontal rule is: an (often empty) paragraph with a bottom border.",
+                      "properties": {
+                        "style": { "type": "string", "description": "Border line style, e.g. single/double/thick/dotted/dashed. Default \"single\"." },
+                        "size": { "type": "integer", "description": "Border weight in eighths of a point. Default 6 (≈0.75pt); a heavy rule ≈ 18-24." },
+                        "color": { "type": "string", "description": "Hex RGB without '#', or \"auto\". Default \"auto\"." },
+                        "space": { "type": "integer", "description": "Padding between border and text, in points. Default 1." }
+                      }
+                    },
+                    "clearBorders": { "type": "boolean", "description": "Remove the entire w:pBdr (all paragraph borders) before applying topBorder/bottomBorder in this same call." }
+                  }
+                },
+                "levelDelta": { "type": "integer", "description": "set_list_level: +1 indents one level, -1 outdents one level." },
+                "listFormat": { "type": "string", "enum": ["bullet", "decimal", "lowerLetter", "upperLetter", "lowerRoman", "upperRoman", "decimalParenthesis", "lowerLetterParenthesis", "upperLetterParenthesis", "lowerRomanParenthesis", "upperRomanParenthesis", "none"], "description": "apply_list_format: converts the paragraph into (or out of) a real, auto-numbered Word list. *Parenthesis variants render '(1)'/'(a)'/'(i)'." }
+              },
+              "required": ["sessionId", "action", "anchorId"]
+            }
+            """),
+        new ToolDefinition(
+            "docxodus_create",
+            "Insert new structural content: paragraphs, headings, tables, horizontal rules, footnotes/endnotes, running headers/footers, page-number fields, and the generated reference tables (contents, figures, authorities). Also sets a section's page layout (page setup, page numbering, Word's different-first-page and different-odd-and-even switches) and lists the document's footnotes or endnotes (list_notes, read-only).",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "sessionId": { "type": "string" },
+                "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
+                "action": { "type": "string", "enum": ["insert_paragraph", "insert_heading", "insert_table", "insert_horizontal_rule", "insert_footnote", "insert_endnote", "insert_page_number_field", "insert_table_of_contents", "insert_table_of_figures", "insert_table_of_authorities", "set_header_text", "set_footer_text", "ensure_header_footer_visible", "set_page_setup", "set_page_numbering", "clear_page_numbering", "set_header_footer_kind_enabled", "list_notes"] },
+                "anchorId": { "type": "string", "description": "Reference block for insert_paragraph/insert_heading/insert_table/insert_horizontal_rule (paired with position), or the citing paragraph for insert_footnote/insert_endnote, or the target paragraph for insert_page_number_field, or any body block of the section for set_page_setup/set_page_numbering/clear_page_numbering/set_header_footer_kind_enabled." },
+                "bodyAnchorId": { "type": "string", "description": "set_header_text/set_footer_text/ensure_header_footer_visible: a body block identifying the section whose running story or visibility flags should change." },
+                "position": { "type": "string", "enum": ["before", "after"], "description": "Relative to anchorId. Default after, except insert_table_of_contents/insert_table_of_figures/insert_table_of_authorities, which default to before." },
+                "text": { "type": "string", "description": "insert_heading: heading text (plain, not markdown)." },
+                "level": { "type": "integer", "minimum": 1, "maximum": 6, "description": "insert_heading: 1-6." },
+                "markdown": { "type": "string", "description": "insert_paragraph / insert_footnote / insert_endnote / set_header_text / set_footer_text payload." },
+                "rows": { "type": "integer" }, "columns": { "type": "integer" },
+                "options": {
+                  "type": "object",
+                  "description": "insert_table, insert_table_of_contents, insert_table_of_figures and insert_table_of_authorities options. Each field names the action that reads it.",
+                  "properties": {
+                    "cellContents": { "type": "array", "items": { "type": "string" }, "description": "insert_table: row-major markdown per cell." },
+                    "cellAlignment": { "type": "string", "enum": ["left", "center", "right", "justify"], "description": "insert_table." },
+                    "columnWidths": { "type": "array", "items": { "type": "integer" }, "description": "insert_table: twips per column, left to right." },
+                    "borderless": { "type": "boolean", "description": "insert_table: no table borders (default false)." },
+                    "levels": { "type": "string", "description": "insert_table_of_contents: heading levels to list, a level or range within 1-9 (default \"1-3\")." },
+                    "title": { "type": ["string", "null"], "description": "insert_table_of_contents: heading above the table (default \"Contents\"); empty or null inserts none." },
+                    "hideTabAndPageNumbersInWeb": { "type": "boolean", "description": "insert_table_of_contents: hide tab leaders and page numbers in Web Layout view (default true)." },
+                    "useOutlineLevels": { "type": "boolean", "description": "insert_table_of_contents: also list paragraphs by their outline level (default true)." },
+                    "captionLabel": { "type": "string", "description": "insert_table_of_figures: the caption label to list, e.g. \"Figure\" or \"Exhibit\" (default \"Figure\")." },
+                    "category": { "type": "string", "enum": ["cases", "statutes", "other_authorities", "rules", "treatises", "regulations", "constitutional_provisions"], "description": "insert_table_of_authorities: which category of marked authority to list (default cases)." },
+                    "entryPageSeparator": { "type": "string", "description": "insert_table_of_authorities: separator between an entry and its page numbers." },
+                    "hyperlinks": { "type": "boolean", "description": "Reference tables: make each entry a hyperlink to its target (default true)." },
+                    "rightTabPos": { "type": "integer", "description": "Reference tables: right-aligned dot-leader tab stop in twips (default 9350)." }
+                  }
+                },
+                "rule": {
+                  "type": "object",
+                  "description": "insert_horizontal_rule: the rule's border edge. Omitted is a single 1.5pt (12 eighths) auto-coloured rule; in a rule object, each field left out takes the border-edge default.",
+                  "properties": {
+                    "style": { "type": "string", "description": "OOXML border style: single (default), double, thick, dotted, dashed, …" },
+                    "size": { "type": "integer", "description": "Weight in eighths of a point (default 6 = 0.75pt)." },
+                    "color": { "type": "string", "description": "Hex RRGGBB (no '#') or auto (default)." },
+                    "space": { "type": "integer", "description": "Padding between the rule and the text, in points (default 1)." }
+                  }
+                },
+                "cellContents": { "type": "array", "items": { "type": "string" }, "description": "insert_table. Deprecated: use options.cellContents." },
+                "cellAlignment": { "type": "string", "enum": ["left", "center", "right", "justify"], "description": "insert_table. Deprecated: use options.cellAlignment." },
+                "columnWidths": { "type": "array", "items": { "type": "integer" }, "description": "insert_table. Deprecated: use options.columnWidths." },
+                "borderless": { "type": "boolean", "description": "insert_table. Deprecated: use options.borderless." },
+                "ruleStyle": { "type": "string", "enum": ["single", "double", "thick"], "description": "insert_horizontal_rule. Deprecated: use rule.style." },
+                "characterOffset": { "type": "integer", "description": "insert_footnote/insert_endnote: character offset within the citing paragraph." },
+                "kind": { "type": "string", "enum": ["default", "first", "even"], "description": "set_header_text/set_footer_text/ensure_header_footer_visible/set_header_footer_kind_enabled: running-story kind. first/even authoring also enables the corresponding Word visibility setting; ensure_header_footer_visible enables it for an already-referenced story; set_header_footer_kind_enabled turns Word's 'Different first page' (first) or 'Different odd & even pages' (even) switch on or off (default cannot be disabled)." },
+                "enabled": { "type": "boolean", "description": "set_header_footer_kind_enabled (required): true turns the switch for kind on, false off." },
+                "op": { "type": "object", "description": "set_page_setup: { pageWidthTwips?, pageHeightTwips?, landscape?, marginTopTwips?, marginBottomTwips?, marginLeftTwips?, marginRightTwips?, headerDistanceTwips?, footerDistanceTwips? } for the section owning anchorId, in twips (1440 = 1 inch); omitted fields stay unchanged, landscape without a size swaps the page's width and height, and invalid geometry fails with invalid_page_setup without changing anything. set_page_numbering: { start?, format? } where start is the section's first page number and format a number format such as decimal, lowerRoman, upperRoman, lowerLetter or upperLetter; omitted fields stay unchanged. Omitting op changes nothing (an empty op)." },
+                "endnotes": { "type": "boolean", "description": "list_notes (required): false lists footnotes, true endnotes, each as { id, defAnchorId, ordinal } in citation order (ordinal is the displayed number)." },
+                "field": { "type": "string", "enum": ["current_page", "total_pages", "page_of_total"], "description": "insert_page_number_field: current_page appends a PAGE field, total_pages a NUMPAGES field, page_of_total Word's \"Page X of Y\" gallery entry (the text 'Page ', PAGE, ' of ', NUMPAGES)." },
+                "numberFormat": { "type": "string", "enum": ["decimal", "upperLetter", "lowerLetter", "upperRoman", "lowerRoman"], "description": "insert_page_number_field: optional explicit \\* switch format." },
+                "levels": { "type": "string", "description": "insert_table_of_contents: heading levels to list, a level or range within 1-9 (default \"1-3\"). Deprecated: use options.levels." },
+                "title": { "type": "string", "description": "insert_table_of_contents: heading above the table (default \"Contents\"); empty inserts none. Deprecated: use options.title." },
+                "captionLabel": { "type": "string", "description": "insert_table_of_figures: the caption label to list, e.g. \"Figure\" or \"Exhibit\" (default \"Figure\"). Deprecated: use options.captionLabel." },
+                "category": { "type": "string", "enum": ["cases", "statutes", "other_authorities", "rules", "treatises", "regulations", "constitutional_provisions"], "description": "insert_table_of_authorities: which category of marked authority to list (default cases). Deprecated: use options.category." },
+                "hyperlinks": { "type": "boolean", "description": "Reference tables: make each entry a hyperlink to its target (default true). Deprecated: use options.hyperlinks." },
+                "entryPageSeparator": { "type": "string", "description": "insert_table_of_authorities: separator between an entry and its page numbers. Deprecated: use options.entryPageSeparator." },
+                "rightTabPos": { "type": "integer", "description": "Reference tables: right-aligned dot-leader tab stop in twips (default 9350). Deprecated: use options.rightTabPos." }
+              },
+              "required": ["sessionId", "action"]
+            }
+            """),
+        new ToolDefinition(
+            "docxodus_list",
+            "Manage list membership: promote a paragraph (or a whole contiguous run of paragraphs) to a real auto-numbered Word list, renumber/indent, restart numbering, or drop membership. apply_format_range keeps every member in ONE shared w:num instance so the sequence numbers stay intact — use it instead of per-item apply_format when converting an existing list. set_start is Word's 'Set Numbering Value…': restart (or seed) the item's numbering at startValue — a mid-list restart splits the sequence like Word does; clear_start removes the restart from the item's whole sequence.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "sessionId": { "type": "string" },
+                "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
+                "action": { "type": "string", "enum": ["apply_format", "apply_format_range", "set_level", "set_start", "clear_start", "remove", "get_membership"] },
+                "anchorId": { "type": "string", "description": "Target paragraph for every action except apply_format_range. remove accepts paragraph, heading, or list-item anchors and overrides style-inherited numbering when necessary." },
+                "startValue": { "type": "integer", "description": "set_start: the number the item restarts at (>= 0), e.g. 5 to make this item render as '5.'" },
+                "firstAnchorId": { "type": "string", "description": "apply_format_range: first paragraph of the contiguous sibling run (inclusive)." },
+                "lastAnchorId": { "type": "string", "description": "apply_format_range: last paragraph of the run (inclusive; either document order)." },
+                "listFormat": { "type": "string", "enum": ["bullet", "decimal", "lowerLetter", "upperLetter", "lowerRoman", "upperRoman", "decimalParenthesis", "lowerLetterParenthesis", "upperLetterParenthesis", "lowerRomanParenthesis", "upperRomanParenthesis", "none"], "description": "apply_format / apply_format_range: creates real w:numPr numbering. Plain numbered formats render '1.'/'a.'/'i.'; *Parenthesis variants render '(1)'/'(a)'/'(i)' (legal-drafting presets). 'none' strips membership." },
+                "levelDelta": { "type": "integer", "description": "set_level: +1 indents, -1 outdents." }
+              },
+              "required": ["sessionId", "action"]
+            }
+            """),
+        new ToolDefinition(
+            "docxodus_comment",
+            "Create and manage native Word review comments (real w:comment markup — visible in Word/Google Docs/LibreOffice's Reviewing pane): comment on a character span or tracked revision, reply in the same native thread, resolve/reopen, update, remove, or list. Comments are addressed by their cmt anchor (from add/reply's created list or the projection's # Comments section). list reports each comment's numeric id (the w:id rendered HTML carries as data-comment-id) plus parentAnchorId/resolved when Word extension metadata exists. For the semantic highlight/label overlay see docxodus_annotate.",
+            $$"""
+            {
+              "type": "object",
+              "properties": {
+                "sessionId": { "type": "string" },
+                "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
+                "action": { "type": "string", "enum": [{{GeneratedMcpSchema.DocxodusCommentActions}}] },
+                {{GeneratedMcpSchema.DocxodusCommentProperties}}
+              },
+              "required": ["sessionId", "action"]
+            }
+            """),
+        new ToolDefinition(
+            "docxodus_annotate",
+            "Create and manage anchor-addressed annotations: a highlight + label overlay stored in a bookmark and a custom-XML part, for semantically tagging regions for external tools (e.g. OpenContracts). Not a Word review comment — those live in docxodus_comment.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "sessionId": { "type": "string" },
+                "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
+                "action": { "type": "string", "enum": ["add", "update", "remove", "move", "list", "find"] },
+                "anchorId": { "type": "string", "description": "add/move: block to attach the annotation to." },
+                "span": { "type": "object", "properties": { "start": { "type": "integer" }, "length": { "type": "integer" } }, "description": "add/move: character range within the block. Omit to annotate the whole block." },
+                "annotationId": { "type": "string", "description": "update/remove/move: id of an existing annotation. add: optional; a 16-char hex id is generated if omitted." },
+                "labelId": { "type": "string", "description": "add: category id, e.g. 'REVIEW_NOTE'." },
+                "label": { "type": "string", "description": "add: human-readable text." },
+                "color": { "type": "string", "description": "add: hex highlight color, e.g. '#FFEB3B'." },
+                "author": { "type": "string" },
+                "update": {
+                  "type": "object",
+                  "description": "update action payload. Omitted fields are left unchanged.",
+                  "properties": {
+                    "labelId": { "type": "string" }, "label": { "type": "string" },
+                    "color": { "type": "string" }, "author": { "type": "string" }
+                  }
+                },
+                "newAnchorId": { "type": "string", "description": "move: new target block." },
+                "newSpan": { "type": "object", "properties": { "start": { "type": "integer" }, "length": { "type": "integer" } }, "description": "move: new character range." },
+                "query": { "type": "string", "description": "find: annotation id to look up." }
+              },
+              "required": ["sessionId", "action"]
+            }
+            """),
+        new ToolDefinition(
+            "docxodus_links",
+            "Enumerate and safely mutate native Word hyperlinks and bookmarks across body, headers, footers, footnotes, and endnotes, and insert REF-field cross-references that target a bookmark. Internal hyperlinks target an existing bookmark with relationship-free w:anchor markup; external links use the containing story part's relationship. Bookmark ranges may cross paragraphs in one story part but not package parts. insert_cross_reference writes a real Word REF field with a cached result (the bookmarked text, or the target's auto-number under referenceNumber), so it updates with the target when Word refreshes fields — unlike an internal hyperlink. Tracked render-inline mode rejects the metadata mutations explicitly.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "sessionId": { "type": "string" },
+                "action": { "type": "string", "enum": ["list_hyperlinks", "add_hyperlink", "update_hyperlink", "remove_hyperlink", "list_bookmarks", "add_bookmark", "rename_bookmark", "move_bookmark", "remove_bookmark", "insert_cross_reference"] },
+                "scope": { "type": "string", "enum": ["body", "headers", "footers", "footnotes", "endnotes", "comments", "all"], "description": "Listing only; default all." },
+                "anchorId": { "type": "string", "description": "add_hyperlink: containing paragraph anchor." },
+                "startOffset": { "type": "integer", "description": "add_hyperlink/add_bookmark/move_bookmark: zero-based character boundary." },
+                "length": { "type": "integer", "minimum": 1, "description": "add_hyperlink: selected text length." },
+                "kind": { "type": "string", "enum": ["external", "internal"], "description": "add/update_hyperlink target representation." },
+                "target": { "type": "string", "description": "External URI or existing bookmark name (without '#')." },
+                "hyperlinkId": { "type": "string", "description": "update/remove_hyperlink: id returned by list/add." },
+                "name": { "type": "string", "description": "Bookmark name for add/rename/move/remove." },
+                "newName": { "type": "string", "description": "rename_bookmark destination name; inbound internal links are retargeted atomically." },
+                "startAnchorId": { "type": "string", "description": "add/move_bookmark range start paragraph." },
+                "endAnchorId": { "type": "string", "description": "add/move_bookmark range end paragraph in the same story part." },
+                "endOffset": { "type": "integer", "description": "add/move_bookmark exclusive end boundary." },
+                "characterOffset": { "type": "integer", "description": "insert_cross_reference: zero-based character boundary in anchorId's paragraph where the field is inserted." },
+                "bookmarkName": { "type": "string", "description": "insert_cross_reference: existing bookmark the REF field targets; a missing or incoherent bookmark fails with missing_bookmark_target." },
+                "options": {
+                  "type": "object",
+                  "description": "insert_cross_reference switches. Each defaults to false.",
+                  "properties": {
+                    "referenceNumber": { "type": "boolean", "description": "Emit the \\r switch — show the target's auto-number instead of its text (cached 0 when the target is unnumbered)." },
+                    "hyperlink": { "type": "boolean", "description": "Emit the \\h switch — the field jumps to the bookmark like a link." },
+                    "includePosition": { "type": "boolean", "description": "Emit the \\p switch — show above/below relative position (appended to the number under referenceNumber)." }
+                  }
+                },
+                "referenceNumber": { "type": "boolean", "description": "insert_cross_reference. Deprecated: use options.referenceNumber." },
+                "hyperlink": { "type": "boolean", "description": "insert_cross_reference. Deprecated: use options.hyperlink." },
+                "includePosition": { "type": "boolean", "description": "insert_cross_reference. Deprecated: use options.includePosition." }
+              },
+              "required": ["sessionId", "action"]
+            }
+            """),
+        new ToolDefinition(
+            "docxodus_images",
+            "Inspect and mutate native Word images. Binary payloads cross this JSON boundary only as base64; the server never fetches URLs or reads image paths. PNG, JPEG, GIF, BMP, TIFF, and WebP are writable. Every listed occurrence carries an operations matrix saying which of replace/embed_linked/set_dimensions/set_metadata/set_floating_layout/remove it accepts and why not otherwise: embedded pictures take everything, linked pictures take embed_linked (caller-supplied bytes) instead of replace, SVG/artistic-effect pictures refuse replace, legacy VML refuses set_floating_layout, and multi-picture drawings are inspection-only. Under render_inline every mutation is recorded as a tracked deletion plus a tracked insertion of the changed picture. Rendered dimensions are points; floating offsets/distances are exact EMUs at a documented 96-DPI default.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "sessionId": { "type": "string", "description": "Required except for capabilities." },
+                "action": { "type": "string", "enum": ["capabilities", "list", "insert", "replace", "embed_linked", "set_dimensions", "set_metadata", "set_floating_layout", "remove"] },
+                "scope": { "type": "string", "enum": ["body", "headers", "footers", "footnotes", "endnotes", "comments", "all"] },
+                "anchorId": { "type": "string", "description": "insert: paragraph anchor." },
+                "characterOffset": { "type": "integer", "minimum": 0 },
+                "imageId": { "type": "string", "description": "replace/set/remove: id from list or insert." },
+                "imageBase64": { "type": "string", "description": "insert/replace/embed_linked only; raw image bytes encoded as base64. embed_linked converts an external linked picture into an embedded one using these bytes." },
+                "options": { "type": "object", "description": "insert options: placement inline|floating, widthPoints, heightPoints, preserveAspect, altText, title, and optional floatingLayout." },
+                "dimensions": { "type": "object", "description": "set_dimensions: widthPoints and/or heightPoints plus preserveAspect (default true)." },
+                "altText": { "type": ["string", "null"], "description": "set_metadata full value; null removes it." },
+                "title": { "type": ["string", "null"], "description": "set_metadata full value; null removes it." },
+                "layout": { "type": "object", "description": "set_floating_layout: none/square/tight/through/top_and_bottom wrap (tight/through take an optional wrapPolygon {points:[{x,y}],edited} in 21600-unit picture space, defaulting to the picture rectangle); typed references/alignments; exact EMU positions/distances and flags." }
+              },
+              "required": ["action"]
+            }
+            """),
+        new ToolDefinition(
+            "docxodus_content_controls",
+            "Inspect and fill native Word content controls (structured-document tags) while preserving their wrappers and metadata. Bound controls fail closed unless bindingPolicy is detach_target, which removes only the selected control's own binding. Text, checkbox, date, and list whole-content replacements are refused for row/cell placements. A target containing nested controls needs nestedControls=preserve (keep them, optionally childFills them) or replace (drop them; locked or bound children refuse). Under render_inline, text/rich-text/picture fills and repeating-item add/remove record native tracked changes; checkbox, date and list state has no tracked representation. list reports per-operation canMutate/reason under operations.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "sessionId": { "type": "string" },
+                "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
+                "action": { "type": "string", "enum": ["list", "fill_text", "fill_rich_text", "set_checked", "set_date", "select_item", "fill_picture", "add_repeating_item", "remove_repeating_item"] },
+                "scope": { "type": "string", "enum": ["body", "headers", "footers", "footnotes", "endnotes", "comments", "all"] },
+                "anchorId": { "type": "string", "description": "Target sdt anchor returned by list." },
+                "text": { "type": "string", "description": "fill_text payload." },
+                "markdown": { "type": "string", "description": "fill_rich_text payload." },
+                "checked": { "type": "boolean", "description": "set_checked value." },
+                "value": { "type": "string", "description": "set_date ISO-8601 value or select_item value/display text." },
+                "displayText": { "type": "string", "description": "Optional set_date displayed text." },
+                "imageBase64": { "type": "string", "description": "fill_picture raw image bytes as base64." },
+                "sectionAnchorId": { "type": "string", "description": "add_repeating_item section control." },
+                "afterItemAnchorId": { "type": "string", "description": "Optional direct item after which the clone is inserted." },
+                "itemAnchorId": { "type": "string", "description": "remove_repeating_item direct item." },
+                "options": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "description": "Fill options for every mutating action except remove_repeating_item.",
+                  "properties": {
+                    "bindingPolicy": { "type": "string", "enum": ["preserve", "detach_target"], "description": "Default preserve. detach_target removes only the selected target's own native w:dataBinding or w15:dataBinding element; a bound ancestor still fails closed." },
+                    "nestedControls": { "type": "string", "enum": ["refuse", "preserve", "replace"], "description": "fill_text/fill_rich_text on a target containing nested controls. Default refuse. preserve keeps every nested control in place and replaces only the content outside them; replace discards the whole payload, nested controls included (each is reported removed; a locked or data-bound nested control refuses)." },
+                    "childFills": { "type": "object", "additionalProperties": { "type": "string" }, "description": "With nestedControls=preserve: plain-text fills for nested text/rich-text controls of the target, keyed by their sdt anchor, applied in the same operation. A key that is not a nested textual control, or a child that fails its own gates, fails the whole call without mutating." }
+                  }
+                },
+                "bindingPolicy": { "type": "string", "enum": ["preserve", "detach_target"], "description": "Deprecated: use options.bindingPolicy." },
+                "nestedControls": { "type": "string", "enum": ["refuse", "preserve", "replace"], "description": "Deprecated: use options.nestedControls." },
+                "childFills": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Deprecated: use options.childFills." }
+              },
+              "required": ["sessionId", "action"]
+            }
+            """),
+        new ToolDefinition(
+            "docxodus_track_changes",
+            "List, selectively accept/reject (by revisionId), or atomically bulk-resolve live tracked changes including structural cell, content-control, and numbering families — switch how the session records its OWN subsequent edits (set_mode) — or prove this redline accepts to an intended final and rejects to a baseline (prove_reversibility).",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "sessionId": { "type": "string" },
+                "preconditions": { "type": "object", "description": "Optional optimistic guards for accept/reject/accept_all/reject_all." },
+                "action": { "type": "string", "enum": ["list", "accept", "reject", "accept_all", "reject_all", "repairs", "repair", "set_mode", "prove_reversibility"], "description": "'list' returns the live part-aware registry, including all affected anchors and fail-closed diagnostics. 'repairs' (read-only) lists the explicit repairs the registry offers for entries it refuses — assign_identity for a missing, non-numeric or duplicated w:id; reattach_numbering_change and reattach_cell_marker for a marker outside its owner when the owner is unique; restore_orphan_text or wrap_orphan_text_as_deletion (author and date required) for w:delText with no deletion wrapper — each with the carriers it touches, whether it is repairable, and why. 'repair' applies chosen repairs atomically as one undo step and returns the old-to-new carrier identity mapping; re-list afterwards, repaired entries get new ids. Individual and bulk resolution use the same resolver and are undoable. Bulk resolution is atomic and REFUSES the whole document (revision_unsupported/revision_malformed/revision_ambiguous, nothing mutated) on the first entry it cannot resolve safely — a missing or non-numeric w:id, one w:id shared by two live revisions in a part, a structured-wrapper range marker with no or several counterparts, a math control-character mark whose object still shows unrevised text, a revision mark where the schema forbids one (a run's w:rPr, a w:del under w:numPr), a w:sdt/w:customXml envelope whose ranges do not cross the wrapper's tags, an unattached w:numberingChange, or a malformed cell marker. There is no force mode; run 'list' and read each entry's diagnostic to see what blocks it." },
+                "repairs": { "type": "array", "items": { "type": "object", "properties": { "revisionId": { "type": "string" }, "kind": { "type": "string", "enum": ["assign_identity", "reattach_numbering_change", "reattach_cell_marker", "restore_orphan_text", "wrap_orphan_text_as_deletion"] }, "author": { "type": "string" }, "date": { "type": "string" } }, "required": ["revisionId", "kind"] }, "description": "repair: the entries and kinds to repair, exactly as 'repairs' offered them; a kind not offered, a non-repairable proposal, or a wrap without author/date refuses the whole call (revision_repair_rejected) with nothing mutated." },
+                "revisionId": { "type": "string", "description": "accept/reject: the opaque stable id from 'list' (e.g. 'rev2-a1b2c3d4e5f60718293a'). Legacy revNNN ids remain accepted only when uniquely resolvable. Unknown or already-resolved ids fail with revision_not_found — re-list for the current set." },
+                "author": { "type": "string", "description": "list: only return revisions by this author." },
+                "changeType": { "type": "string", "enum": ["insert", "delete", "move", "format", "structure"], "description": "list: only return revisions of this coarse type." },
+                "family": { "type": "string", "description": "list: exact family filter, such as cell_delete, content_control_insert, or numbering_change." },
+                "resolutionStatus": { "type": "string", "enum": ["supported", "unsupported", "malformed", "ambiguous"], "description": "list: fail-closed resolution status filter." },
+                "partUri": { "type": "string", "description": "list: exact owning package-part URI." },
+                "mode": { "type": "string", "enum": ["accept", "render_inline", "strip_deletions"], "description": "set_mode: how SUBSEQUENT mutations are recorded (same values as docxodus_open's trackedChanges). Never touches already-applied edits — accept does not resolve existing revisions (use accept/accept_all), render_inline does not retroactively track prior direct edits. Not undoable." },
+                "revisionAuthor": { "type": "string", "description": "set_mode: author stamped on subsequent tracked-change markup. Absent = leave the current author unchanged; empty string = reset to the 'docxodus' default." },
+                "baselinePath": { "type": "string", "description": "prove_reversibility: the document this session's redline was generated against, resolved inside the server's document scope like docxodus_open's path. Rejecting only the generated revisions must reproduce it." },
+                "intendedFinalPath": { "type": "string", "description": "prove_reversibility: the document accepting only the generated revisions must reproduce, resolved the same way. Together with baselinePath this is what makes the result a proof rather than a diff." }
+              },
+              "required": ["sessionId", "action"]
+            }
+            """),
+        new ToolDefinition(
+            "docxodus_compare",
+            "Compare stored document versions into native tracked-changes redlines, without an open session: two-way (baselinePath vs revisedPath), N-way consolidate (baselinePath vs revisedPaths merged into one redline, each reviewer's changes attributed), or fan-out (mode=fan_out: one redline per revisedPaths entry, written to the matching outputPaths entry, with the baseline read once for the whole set). Every form compares the accepted view of each input, as Word's Compare does: an input's own pending tracked changes (in the body, headers, footers and notes) are accepted first, so the redline holds only this comparison's revisions. Every path resolves inside the server's document scope exactly like docxodus_open's. The result summarizes the generated revisions by author; open an output with docxodus_open to inspect, comment on, or resolve them.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "baselinePath": { "type": "string", "description": "The earlier version both forms diff against." },
+                "revisedPath": { "type": "string", "description": "Two-way: the later version. Exactly one of revisedPath / revisedPaths." },
+                "revisedPaths": { "type": "array", "items": { "type": "string" }, "minItems": 2, "description": "Two or more revised versions. Merged into ONE redline by default (consolidate); with mode=fan_out, compared separately into one redline each." },
+                "mode": { "type": "string", "enum": ["consolidate", "fan_out"], "default": "consolidate", "description": "How revisedPaths is interpreted. fan_out compares the baseline against each entry separately and needs outputPaths; the baseline is read once for the whole set rather than once per entry." },
+                "outputPaths": { "type": "array", "items": { "type": "string" }, "description": "fan_out: where each entry's redline is written, one per revisedPaths entry in the same order." },
+                "author": { "type": "string", "description": "Two-way: the author stamped on generated revisions; absent uses the engine default." },
+                "authors": { "type": "array", "items": { "type": "string" }, "description": "Consolidate: reviewer name per revisedPaths entry, same order and length. Absent uses each file's name without extension." },
+                "outputPath": { "type": "string", "description": "Where the redline is written, resolved in the document scope like docxodus_save's path. Required except under mode=fan_out, which uses outputPaths." }
+              },
+              "required": ["baselinePath"]
+            }
+            """),
+        new ToolDefinition(
+            "docxodus_verify_receipt",
+            "Verify a portable JSON delivery change receipt without an open session: check the receipt's canonical payload digest, contract, and citation bindings, and independently re-hash any supplied artifact files against the lengths and digests the receipt records. A receipt travels with a delivery bundle (docxodus_deliver); this is the recipient-side check that the received files are exactly what the receipt attests. Malformed input returns a structured invalid verdict with findings, never a crash.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "receiptPath": { "type": "string", "description": "Location of the receipt JSON within the server's document scope. Exactly one of receiptPath / receiptJson." },
+                "receiptJson": { "type": "string", "description": "The receipt envelope JSON inline. Exactly one of receiptPath / receiptJson." },
+                "artifactPaths": { "type": "object", "description": "Optional object mapping each artifact id recorded in the receipt to the file to verify it against, each path resolved in the document scope. An artifact with no supplied file reports status missing." }
+              }
+            }
+            """),
+        new ToolDefinition(
+            "docxodus_mutations",
+            "Apply or safely preview a batch of mutating edit/format/create/table/list/comment/link/image/content-control/track-changes actions. Atomic mode commits as one unit. An optional transactionId makes applying retries idempotent within this open session; preview is isolated and cannot carry a transactionId. A preview run with retainPreview can later be applied exactly as previewed (same generated ids, timestamps and packageHash) with commitPreviewId, which refuses if the session moved on.",
+            $$"""
+            {
+              "type": "object",
+              "properties": {
+                "sessionId": { "type": "string" },
+                "transactionId": { "type": "string", "minLength": 1, "maxLength": {{MutationTransactions.MaxTransactionIdLength}}, "pattern": {{JsonSerializer.Serialize(MutationTransactions.TransactionIdNonBlankPattern)}}, "description": {{JsonSerializer.Serialize(MutationTransactions.TransactionIdSchemaDescription)}} },
+                "preconditions": { "type": "object", "description": "Optional batch-start guards. Each step args object may also carry its own preconditions." },
+                "mode": { "type": "string", "enum": ["atomic", "best_effort", "apply", "preview"], "default": "atomic", "description": "atomic (default): all steps commit as one undo/version unit or fully roll back. best_effort: explicitly retain successful steps after failures. apply: deprecated alias for best_effort. preview: isolated dry-run shorthand using atomic policy unless previewPolicy says best_effort." },
+                "preview": { "type": "boolean", "default": false, "description": "Dry-run mode for mode=atomic or mode=best_effort. The complete package is cloned and the live document, version, caches, configuration, and undo/redo history are never touched." },
+                "previewPolicy": { "type": "string", "enum": ["atomic", "best_effort"], "default": "atomic", "description": "Policy used by legacy mode=preview. Ignored when mode itself is atomic/best_effort." },
+                "previewHtml": { "type": "string", "enum": ["none", "scoped", "full"], "default": "none", "description": "Optionally render shadow-only HTML from the predicted package." },
+                "previewAnchorId": { "type": "string", "description": "Required when previewHtml=scoped; the live anchor is resolved only inside the cloned package." },
+                "retainPreview": { "type": "boolean", "default": false, "description": "Preview only: keep the successful preview's exact result package for commitPreviewId. The receipt then carries retention { previewId, baseVersion, basePackageHash, expiresAt }. Retention is bounded (8 previews, 64 MiB, 15 minutes) and cleared when the session closes." },
+                "commitPreviewId": { "type": "string", "description": "Instead of steps: make the retained preview with this id the live document exactly as previewed, as one undo step. Refuses with preview_stale (no edit) if the version, package content, tracked-changes mode or revision author changed since the preview, and with preview_not_found once it expired, was evicted, or was already committed. May carry a transactionId." },
+                "steps": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "tool": { "type": "string", "enum": ["docxodus_edit", "docxodus_format", "docxodus_create", "docxodus_table", "docxodus_list", "docxodus_comment", "docxodus_links", "docxodus_images", "docxodus_content_controls", "docxodus_track_changes"] },
+                      "args": { "type": "object", "description": "The same arguments that tool's action takes, minus sessionId (inherited from the batch). transactionId is forbidden here; it belongs only at the batch root. May be omitted by writing the action and its arguments directly beside \"tool\" (the same flat shape as the standalone tool call); the server lifts them into args." }
+                    },
+                    "required": ["tool"]
+                  }
+                }
+              },
+              "required": ["sessionId"]
+            }
+            """),
+        new ToolDefinition(
+            "docxodus_deliver",
+            "Build one verified delivery bundle from a named baseline and the current session. Returns canonical manifest bytes and every available artifact as base64, bounded to 64 MiB before base64 expansion. Production rendering uses the process-owned DOCXODUS_NODE_PATH and DOCXODUS_EXPORT_HOST_PATH configuration. A changeReceipt artifact is minted from the evidence a session opened with captureDeliveryEvidence recorded as its edits executed; the response's evidence block says why when it is unavailable.",
+            """
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "sessionId": { "type": "string" },
+                "baselinePath": { "type": "string", "description": "Store-scoped baseline DOCX location." },
+                "baselineDocumentVersion": { "type": "integer", "minimum": 0 },
+                "finalDocumentName": { "type": "string", "minLength": 1 },
+                "finalDocumentVersion": { "type": "integer", "minimum": 0 },
+                "revisionPolicy": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "preExistingRevisions": { "type": "string", "enum": ["preserve", "accept", "reject"] },
+                    "generatedRevisions": { "type": "string", "enum": ["preserve", "accept", "reject"] }
+                  },
+                  "required": ["preExistingRevisions", "generatedRevisions"]
+                },
+                "artifacts": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "artifactId": { "type": "string", "minLength": 1 },
+                      "kind": { "type": "string", "enum": ["baselineDocx", "policyBaselineDocx", "workingDocx", "reviewDocx", "finalDocx", "standaloneHtml", "finalPdf", "reviewPdf", "pageMap", "renderReport", "baselinePackageManifest", "finalPackageManifest", "semanticDelta", "packageDelta", "validationReport", "reversibilityProof", "changeReceipt"] },
+                      "requiredness": { "type": "string", "enum": ["required", "optional"] },
+                      "reviewProfile": { "type": "string", "enum": ["final", "original", "markup"] },
+                      "commentProfile": { "type": "string", "enum": ["hidden", "inline", "endnotes", "margin"] }
+                    },
+                    "required": ["artifactId", "kind", "requiredness"]
+                  }
+                },
+                "failOnDeliverableValidationFailure": { "type": "boolean", "default": true },
+                "returnIncompleteBundle": { "type": "boolean", "default": false },
+                "changeReceipt": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "description": "Receipt policy when a changeReceipt artifact is requested. The receipt attests the session's own edits from the package it opened (the baseline must be that package) with revisions preserved as they are.",
+                  "properties": {
+                    "privacyProfile": { "type": "string", "enum": ["hashOnly", "hashAndSummary", "fullEvidence"], "default": "hashAndSummary" },
+                    "failOnUnexpectedChanges": { "type": "boolean", "default": false }
+                  }
+                }
+              },
+              "required": ["sessionId", "baselinePath", "baselineDocumentVersion", "finalDocumentName", "finalDocumentVersion", "revisionPolicy", "artifacts"]
+            }
+            """),
+        new ToolDefinition(
+            "docxodus_table",
+            "Inspect canonical table identities and coordinates; create tables; edit rows, columns, and cell content; merge/unmerge cells; and style them after insert.",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "sessionId": { "type": "string" },
+                "preconditions": { "type": "object", "description": "Optional optimistic mutation guards; omitted preserves legacy behavior." },
+                "action": { "type": "string", "enum": ["get_metadata", "resolve_cell_anchor", "resolve_cell_coordinate", "insert", "insert_row", "insert_column", "delete_row", "delete_column", "replace_cell_content", "merge_cells", "unmerge_cells", "set_column_widths", "set_borders", "set_shading", "set_repeat_header_row", "set_row_options"] },
+                "anchorId": { "type": "string", "description": "insert: reference block (paired with position)." },
+                "tableAnchorId": { "type": "string", "description": "get_metadata/resolve_cell_coordinate: the table's canonical tbl anchor." },
+                "position": { "type": "string", "enum": ["before", "after"], "description": "insert: relative to anchorId. insert_row/insert_column: relative to cellAnchorId." },
+                "rows": { "type": "integer" }, "columns": { "type": "integer" },
+                "options": {
+                  "type": "object",
+                  "description": "insert options.",
+                  "properties": {
+                    "cellContents": { "type": "array", "items": { "type": "string" }, "description": "Row-major markdown per cell." },
+                    "cellAlignment": { "type": "string", "enum": ["left", "center", "right", "justify"] },
+                    "columnWidths": { "type": "array", "items": { "type": "integer" }, "description": "Twips per column, left to right." },
+                    "borderless": { "type": "boolean", "description": "No table borders (default false)." }
+                  }
+                },
+                "cellContents": { "type": "array", "items": { "type": "string" }, "description": "insert. Deprecated: use options.cellContents." },
+                "cellAlignment": { "type": "string", "enum": ["left", "center", "right", "justify"], "description": "insert. Deprecated: use options.cellAlignment." },
+                "columnWidths": { "type": "array", "items": { "type": "integer" }, "description": "insert. Deprecated: use options.columnWidths." },
+                "borderless": { "type": "boolean", "description": "insert. Deprecated: use options.borderless." },
+                "cellAnchorId": { "type": "string", "description": "resolve_cell_anchor and every cell mutation: the cell's canonical tc anchor, returned by insert/insert_row/insert_column, get_metadata, resolve_cell_coordinate, or docxodus_search mode=kind query=tc. Legacy p/h/li anchors physically inside a cell are translated temporarily for migration; new callers must use tc." },
+                "rowIndex": { "type": "integer", "minimum": 0, "description": "resolve_cell_coordinate: zero-based physical row index." },
+                "columnIndex": { "type": "integer", "minimum": 0, "description": "resolve_cell_coordinate: zero-based table-grid column (honors gridBefore/gridAfter and gridSpan)." },
+                "markdown": { "type": "string", "description": "replace_cell_content payload." },
+                "rowSpan": { "type": "integer", "minimum": 1, "description": "merge_cells: how many rows down the merged rectangle runs from the anchor's cell (default 1). Becomes w:vMerge restart/continue." },
+                "colSpan": { "type": "integer", "minimum": 1, "description": "merge_cells: how many cells right the rectangle runs from the anchor's cell (default 1). Becomes w:gridSpan. rowSpan x colSpan must be > 1. unmerge_cells addressed at a vertical continuation unmerges the whole run." },
+                "mergeContent": { "type": "string", "enum": ["append", "discard", "reject"], "description": "merge_cells: what to do with the absorbed cells' content — append it to the surviving cell (default, lossless), discard it, or refuse the merge when any absorbed cell is non-empty." },
+                "widths": { "type": "array", "items": { "type": "integer" }, "description": "set_column_widths: one positive twip width per column, left→right (1440 = 1 inch). Rewrites w:tblGrid + every cell width and pins the table to fixed layout." },
+                "spec": {
+                  "type": "object",
+                  "description": "set_borders: which edges to write and how.",
+                  "properties": {
+                    "scope": { "type": "string", "enum": ["all", "outside", "inside"], "description": "Which edges to write (default all). Untargeted edges are left unchanged." },
+                    "style": { "type": "string", "description": "OOXML border style — single (default), double, thick, dotted, dashed, …, or none to remove the targeted edges." },
+                    "size": { "type": "integer", "description": "Weight in eighths of a point (default 4 = 0.5pt)." },
+                    "color": { "type": "string", "description": "Hex RRGGBB (no '#') or auto (default)." }
+                  }
+                },
+                "borderScope": { "type": "string", "enum": ["all", "outside", "inside"], "description": "set_borders. Deprecated: use spec.scope." },
+                "borderStyle": { "type": "string", "description": "set_borders. Deprecated: use spec.style." },
+                "borderSize": { "type": "integer", "description": "set_borders. Deprecated: use spec.size." },
+                "borderColor": { "type": "string", "description": "set_borders. Deprecated: use spec.color." },
+                "fill": { "type": "string", "description": "set_shading: hex RRGGBB (leading '#' tolerated) or auto; omit/empty to remove the shading." },
+                "shadingScope": { "type": "string", "enum": ["cell", "row"], "description": "set_shading: just the anchor's cell (default) or every cell of its row — header-row banding." },
+                "repeat": { "type": "boolean", "description": "set_repeat_header_row: true (default) marks the anchor's row as a repeating header row (w:tblHeader; Word honors it on a run of rows starting at row 1), false unmarks. set_row_options: deprecated alias of repeatHeader." },
+                "repeatHeader": { "type": "boolean", "description": "set_row_options: true marks the anchor's row as a repeating header row, false unmarks, omitted leaves it unchanged." },
+                "allowBreakAcrossPages": { "type": "boolean", "description": "set_row_options: true permits a row to split across pages; false writes w:cantSplit." },
+                "heightTwips": { "type": "integer", "minimum": 0, "description": "set_row_options: explicit row height in twips (20 twips = 1pt); zero removes an existing height." },
+                "heightRule": { "type": "string", "enum": ["auto", "atLeast", "exact"], "description": "set_row_options: how Word interprets a positive heightTwips value (default atLeast)." }
+              },
+              "required": ["sessionId", "action"]
+            }
+            """),
+    };
+}

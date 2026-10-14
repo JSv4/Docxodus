@@ -1,0 +1,1487 @@
+#nullable enable
+
+using System.Collections.Generic;
+using System.Text.RegularExpressions;
+
+namespace Docxodus.Internal;
+
+/// <summary>
+/// Per-operation facade that combines <see cref="SessionRegistry"/> lookup,
+/// the corresponding <see cref="DocxSession"/> call, and JSON serialization
+/// via <see cref="DocxSessionJson"/>. Every transport — the WASM JSExport
+/// bridge and the stdio NDJSON host — funnels into these methods, so the
+/// wire format and per-op semantics live in exactly one place.
+/// </summary>
+internal static class DocxSessionOps
+{
+    /// <summary>Where a table of contents, figures or authorities goes when the caller names no
+    /// position: ahead of the anchor, the usual intent when the anchor is the first heading. Owned
+    /// here so every transport agrees (issue #960: MCP used to default to after, the stdio host to
+    /// before).</summary>
+    public const Position ReferenceFieldDefaultPosition = Position.Before;
+
+    /// <summary>The text a new comment or reply gets when the caller sends none: an empty comment.
+    /// Owned here so every transport agrees (issue #1014: MCP defaulted it, the stdio host required
+    /// it).</summary>
+    public const string DefaultCommentMarkdown = "";
+
+    /// <summary>What resolving a comment does when the caller names no state: resolve it. Owned
+    /// here so every transport agrees (issue #1014: MCP defaulted it, the stdio host required
+    /// it).</summary>
+    public const bool DefaultCommentResolved = true;
+
+    // The defaults below were each supplied by one or more transports until issue #1024 moved them
+    // here. Every transport now passes through what the caller sent, so an omitted argument means
+    // the same thing on the WASM bridge, npm, the stdio host, Python and MCP.
+
+    /// <summary>Where a paragraph, table, rule, row or column goes, and where a moved block lands,
+    /// when the caller names no position: after the anchor. (The reference-field inserts have their
+    /// own default, <see cref="ReferenceFieldDefaultPosition"/>.)</summary>
+    public const Position DefaultInsertPosition = Position.After;
+
+    /// <summary>The list format applied when the caller names none: <see cref="ListFormat.None"/>,
+    /// which removes the paragraphs' list membership. Both the stdio host and MCP had read an omitted
+    /// format this way before issue #1024; it is kept so no caller's edit changes.</summary>
+    public const ListFormat DefaultListFormat = ListFormat.None;
+
+    /// <summary>The page-number field inserted when the caller names none: the current page.</summary>
+    public const PageNumberField DefaultPageNumberField = PageNumberField.CurrentPage;
+
+    /// <summary>How many rows, and how many columns, a merge covers along an axis the caller leaves
+    /// out: one, so naming only <c>colSpan</c> merges across a row and only <c>rowSpan</c> down a
+    /// column.</summary>
+    public const int DefaultMergeSpan = 1;
+
+    /// <summary>The shading fill when the caller sends none: empty, which removes the shading (as
+    /// an empty or null fill always has).</summary>
+    public const string DefaultCellFill = "";
+
+    /// <summary>What marking a row as a repeating header row does when the caller names no state:
+    /// mark it.</summary>
+    public const bool DefaultRepeatHeaderRow = true;
+
+    /// <summary>The diff format when the caller names none: anchor-keyed JSON.</summary>
+    public const DiffFormat DefaultDiffFormat = DiffFormat.Json;
+
+    /// <summary>How much an anchored projection covers when the caller names no depth: the anchor's
+    /// subtree and its following siblings (the <see cref="DocxSession.ProjectAnchor"/> default).</summary>
+    public const ProjectionDepth DefaultProjectionDepth = ProjectionDepth.SubtreeAndFollowingSiblings;
+
+    /// <summary>The regex options when the caller sends none: none (case-sensitive).</summary>
+    public const RegexOptions DefaultRegexOptions = RegexOptions.None;
+
+    /// <summary>The placeholder kinds a placeholder search looks for when the caller names none:
+    /// all of them (the <see cref="DocxSession.FindPlaceholders"/> default).</summary>
+    public const PlaceholderKinds DefaultPlaceholderKinds = PlaceholderKinds.All;
+
+    /// <summary>Where a placeholder search looks when the caller names no scope: the body.</summary>
+    public const ProjectionScopes DefaultPlaceholderScope = ProjectionScopes.Body;
+
+    /// <summary>Where a placeholder's context snippet is cut when the caller names no boundary: at
+    /// a character count.</summary>
+    public const ContextBoundary DefaultContextBoundary = ContextBoundary.Char;
+
+    /// <summary>The CSS class prefix a single-block render uses when the caller sends none: the
+    /// editor's <c>docx-</c>. (An empty prefix is a real value, not the default.)</summary>
+    public const string DefaultBlockCssPrefix = "docx-";
+
+    /// <summary>Whether a single-block render fabricates CSS classes when the caller does not say:
+    /// it does not.</summary>
+    public const bool DefaultFabricateClasses = false;
+
+    /// <summary>What an omitted annotation update stands for: the empty update, which changes
+    /// nothing.</summary>
+    private const string EmptyObjectJson = "{}";
+
+    /// <summary>Keep the first <paramref name="maxResults"/> items; null keeps them all. The one
+    /// truncation every listing op shares, so a transport never re-parses a result to cut it.</summary>
+    private static IReadOnlyList<T> Limit<T>(IReadOnlyList<T> items, int? maxResults)
+    {
+        if (maxResults is null) return items;
+        if (maxResults < 0)
+            throw new System.ArgumentException($"maxResults must be zero or more, got {maxResults}");
+        if (items.Count <= maxResults) return items;
+        var kept = new List<T>(maxResults.Value);
+        for (int i = 0; i < maxResults; i++) kept.Add(items[i]);
+        return kept;
+    }
+
+    private static MutationPreconditions? ForTarget(MutationPreconditions? preconditions, string? anchorId) =>
+        preconditions is not null && preconditions.AnchorId is null && anchorId is not null
+            ? preconditions with { AnchorId = anchorId }
+            : preconditions;
+
+    private static string Mutate(
+        int handle,
+        MutationPreconditions? preconditions,
+        string? targetAnchorId,
+        System.Func<DocxSession, EditResult> mutation)
+    {
+        var session = SessionRegistry.Get(handle);
+        return DocxSessionJson.Serialize(
+            session.ExecuteMutation(ForTarget(preconditions, targetAnchorId), mutation));
+    }
+
+    // ─── Lifecycle ──────────────────────────────────────────────────────
+
+    public static int OpenSession(byte[] bytes, DocxSessionSettings? settings) =>
+        SessionRegistry.OpenSession(bytes, settings);
+
+    /// <summary>Mint a complete blank DOCX (a "New document" seed) as bytes.</summary>
+    public static byte[] CreateBlankDocx() => DocxSession.CreateBlankDocxBytes();
+
+    public static void CloseSession(int handle) => SessionRegistry.CloseSession(handle);
+
+    public static byte[] Save(int handle) => SessionRegistry.Get(handle).Save();
+
+    /// <summary>Save with an explicit per-call override of the session's open-time
+    /// <see cref="DocxSessionSettings.PersistAnchorIds"/> — see <see cref="DocxSession.Save(bool)"/>.
+    /// <c>true</c> keeps the projector's Unid bookkeeping in the written bytes (a later open over
+    /// them resolves the same anchor ids); <c>false</c> strips it even from a session opened with
+    /// <c>PersistAnchorIds = true</c> (a clean deliverable save from an anchor-stable session).</summary>
+    public static byte[] Save(int handle, bool persistAnchorIds) =>
+        SessionRegistry.Get(handle).Save(persistAnchorIds);
+
+    /// <summary>
+    /// Save KEEPING the projector's Unid bookkeeping — see <see cref="DocxSession.Save(bool)"/>.
+    /// Exists for the in-browser editor's remount, which re-renders these bytes and needs the
+    /// anchors to survive the hop. The output is ~6x larger than the document and is not meant to
+    /// be handed to a user; a save-to-disk wants <see cref="Save(int)"/>.
+    /// </summary>
+    public static byte[] SaveWithAnchorIds(int handle) =>
+        SessionRegistry.Get(handle).Save(persistAnchorIds: true);
+
+    public static long GetVersion(int handle) => SessionRegistry.Get(handle).Version;
+
+    public static string GetVersionJson(int handle) =>
+        DocxSessionJson.SerializeVersion(GetVersion(handle));
+
+    public static string RegisterPageMap(
+        int handle, PageMap pageMap, string? expectedRendererFingerprint = null) =>
+        DocxSessionJson.SerializePageMapRegistration(
+            SessionRegistry.Get(handle).RegisterPageMap(pageMap, expectedRendererFingerprint));
+
+    public static string GetPageMapStatus(int handle, PageCitationRequest? request = null) =>
+        DocxSessionJson.SerializePageMapStatus(SessionRegistry.Get(handle).GetPageMapStatus(request));
+
+    public static string GetPageCitation(int handle, string anchorId, PageCitationRequest request) =>
+        DocxSessionJson.SerializePageCitation(
+            SessionRegistry.Get(handle).GetPageCitation(anchorId, request));
+
+    /// <summary>Read-only optimistic guard evaluation for dry runs and transport diagnostics.</summary>
+    public static string CheckPreconditions(int handle, MutationPreconditions? preconditions)
+    {
+        var error = SessionRegistry.Get(handle).EvaluatePreconditions(preconditions);
+        return DocxSessionJson.Serialize(error is null
+            ? new EditResult { Success = true }
+            : new EditResult { Success = false, Error = error });
+    }
+
+    public static string ExecuteBatch(
+        int handle,
+        MutationBatchMode mode,
+        System.Collections.Generic.IEnumerable<MutationBatchStep> steps,
+        Verification.DeliveryTransactionIdentity? identity = null) =>
+        DocxSessionJson.SerializeMutationBatchResult(
+            SessionRegistry.Get(handle).ExecuteBatch(steps, mode, identity));
+
+    /// <summary>
+    /// <see cref="ExecuteBatch"/> under a caller-chosen transaction id (issue #761): the session's
+    /// journal replays the retained terminal response for an identical retry, refuses a reused id
+    /// with a different request, and otherwise executes once and retains the result.
+    /// <paramref name="request"/> is the transport's whole request object; its root session
+    /// identity and transaction id are excluded from the fingerprint. Transports that execute
+    /// steps server-side (the stdio host) call this; the MCP server drives the same journal
+    /// through its own dispatch, and the browser client through
+    /// <see cref="BeginMutationTransaction"/>.
+    /// </summary>
+    public static string ExecuteBatchTransactional(
+        int handle,
+        string transactionId,
+        System.Text.Json.JsonElement request,
+        MutationBatchMode mode,
+        System.Func<System.Collections.Generic.IEnumerable<MutationBatchStep>> steps) =>
+        RunTransactional(handle, transactionId, request, mode,
+            identity => ExecuteBatch(handle, mode, steps(), identity));
+
+    /// <summary>
+    /// <see cref="CommitPreview"/> under a caller-chosen transaction id: the same journal
+    /// semantics as <see cref="ExecuteBatchTransactional"/>, so a commit whose response was lost
+    /// can be retried without committing twice.
+    /// </summary>
+    public static string CommitPreviewTransactional(
+        int handle,
+        string transactionId,
+        System.Text.Json.JsonElement request,
+        string previewId) =>
+        RunTransactional(
+            handle, transactionId, request, MutationBatchMode.Atomic, _ => CommitPreview(handle, previewId));
+
+    private static string RunTransactional(
+        int handle,
+        string transactionId,
+        System.Text.Json.JsonElement request,
+        MutationBatchMode mode,
+        System.Func<Verification.DeliveryTransactionIdentity, string> execute)
+    {
+        if (MutationTransactions.ValidateTransactionId(transactionId) is { } invalid)
+            throw new System.ArgumentException(invalid);
+        var fingerprint = MutationTransactions.Fingerprint(request);
+        // The identity the journal binds the request to is also what delivery evidence records
+        // the batch under, so a receipt and a retry replay name the same transaction.
+        var identity = new Verification.DeliveryTransactionIdentity
+        {
+            TransactionId = transactionId,
+            RequestFingerprint = fingerprint,
+        };
+        return SessionRegistry.Transactions(handle).Run(
+            transactionId,
+            fingerprint,
+            mode,
+            () => SessionRegistry.Get(handle).Version,
+            () => execute(identity),
+            ex => ex is System.ArgumentException or System.FormatException
+                    or System.Text.Json.JsonException or System.OverflowException
+                ? (EditErrorCode.InvalidBatchStep, "validation")
+                : (EditErrorCode.InternalError, "dispatch"));
+    }
+
+    /// <summary>
+    /// The browser client's entry to the same journal. <paramref name="requestJson"/> is the
+    /// caller's description of the batch (an object; a root <c>mode</c> of <c>best_effort</c>
+    /// selects that policy for any refusal envelope). Returns
+    /// <c>{"kind","transaction","response"}</c>: a non-null response is terminal and needs no
+    /// execution; a <c>reserved</c> kind means the client runs its batch and then calls
+    /// <see cref="CompleteMutationTransaction"/> with its serialized result (identity attached)
+    /// or <see cref="AbandonMutationTransaction"/>.
+    /// </summary>
+    public static string BeginMutationTransaction(int handle, string transactionId, string requestJson)
+    {
+        if (MutationTransactions.ValidateTransactionId(transactionId) is { } invalid)
+            throw new System.ArgumentException(invalid);
+        using var document = System.Text.Json.JsonDocument.Parse(requestJson);
+        var request = document.RootElement;
+        var mode = request.ValueKind == System.Text.Json.JsonValueKind.Object
+            && request.TryGetProperty("mode", out var modeValue)
+            && modeValue.ValueKind == System.Text.Json.JsonValueKind.String
+            && modeValue.GetString() == "best_effort"
+            ? MutationBatchMode.BestEffort
+            : MutationBatchMode.Atomic;
+        return SessionRegistry.Transactions(handle).BeginForClient(
+            transactionId,
+            MutationTransactions.Fingerprint(request),
+            mode,
+            () => SessionRegistry.Get(handle).Version);
+    }
+
+    public static void CompleteMutationTransaction(int handle, string transactionId, string serializedResponse) =>
+        SessionRegistry.Transactions(handle).CompleteReservation(transactionId, serializedResponse);
+
+    public static void AbandonMutationTransaction(int handle, string transactionId) =>
+        SessionRegistry.Transactions(handle).AbandonReservation(transactionId);
+
+    /// <summary>
+    /// Execute a serialized/handle-addressed batch against a complete isolated clone. The step
+    /// factory receives only the temporary shadow handle, which makes accidentally targeting the
+    /// live handle impossible at this central transport seam. The shadow is disposed on every
+    /// return/throw path; process abandonment is also safe because the live package was never a
+    /// mutation target.
+    /// </summary>
+    public static string PreviewBatch(
+        int liveHandle,
+        MutationBatchMode mode,
+        System.Func<int, System.Collections.Generic.IEnumerable<MutationBatchStep>> shadowSteps,
+        MutationBatchPreviewOptions? options = null)
+    {
+        DocxSession.ValidatePreviewOptions(options);
+        var shadowHandle = SessionRegistry.CloneSessionForPreview(liveHandle);
+        try
+        {
+            var shadow = SessionRegistry.Get(shadowHandle);
+            return DocxSessionJson.SerializeMutationBatchResult(
+                shadow.FinalizePreviewResult(
+                    shadow.ExecuteBatch(shadowSteps(shadowHandle), mode),
+                    options));
+        }
+        finally
+        {
+            SessionRegistry.CloseSession(shadowHandle);
+        }
+    }
+
+    public static string GetPackageContentHash(int handle) =>
+        SessionRegistry.Get(handle).GetPackageContentHash();
+
+    /// <summary>
+    /// Retain a preview shadow's final package for a guarded commit on its live session (issue
+    /// #760). The browser client, which composes its own receipt, calls this on the shadow handle
+    /// after a successful batch. Returns <c>{"retention":{…}|null,"warnings":[…]}</c>.
+    /// </summary>
+    public static string RetainPreview(int shadowHandle)
+    {
+        var warnings = new System.Collections.Generic.List<string>();
+        var retention = SessionRegistry.Get(shadowHandle).RetainPreview(null, warnings);
+        var sb = new System.Text.StringBuilder("{\"retention\":")
+            .Append(retention is null ? "null" : DocxSessionJson.SerializePreviewRetention(retention))
+            .Append(",\"warnings\":[");
+        for (int i = 0; i < warnings.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            sb.Append(DocxSessionJson.JsonString(warnings[i]));
+        }
+        return sb.Append("]}").ToString();
+    }
+
+    /// <summary>Guarded commit of a retained preview; see <see cref="DocxSession.CommitPreview"/>.</summary>
+    public static string CommitPreview(int handle, string previewId) =>
+        DocxSessionJson.SerializeMutationBatchResult(SessionRegistry.Get(handle).CommitPreview(previewId));
+
+    // ─── Delivery evidence (issue #748) ─────────────────────────────────
+
+    /// <summary>The typed export for in-process delivery hosts; see <see cref="DocxSession.ExportDeliveryEvidence"/>.</summary>
+    public static Delivery.DeliveryEvidenceExport ExportDeliveryEvidence(
+        int handle, Delivery.DeliveryReceiptBuildOptions? options) =>
+        SessionRegistry.Get(handle).ExportDeliveryEvidence(options);
+
+    /// <summary>What the session's host-owned evidence recorder holds; see <see cref="DocxSession.GetDeliveryEvidenceStatus"/>.</summary>
+    public static string GetDeliveryEvidenceStatus(int handle) =>
+        DeliveryOps.SerializeEvidenceStatus(SessionRegistry.Get(handle).GetDeliveryEvidenceStatus());
+
+    /// <summary>
+    /// The receipt-bearing delivery of a session (<see cref="DocxSession.BuildDeliveryReceipt"/>)
+    /// as the bundle wire shape every transport publishes. <paramref name="optionsJson"/> is
+    /// <c>{"privacyProfile","failOnUnexpectedChanges"}</c> or empty for the defaults.
+    /// </summary>
+    public static string BuildDeliveryReceipt(int handle, string? optionsJson)
+    {
+        var session = SessionRegistry.Get(handle);
+        var bundle = session.BuildDeliveryReceipt(DeliveryOps.ParseReceiptBuildOptions(optionsJson));
+        return DeliveryOps.SerializeBundle(bundle, DeliveryOps.DefaultMaxReturnedBytes, session.GetDeliveryEvidenceStatus());
+    }
+
+    /// <summary>
+    /// Describe a batch a transport is about to run against the live handle so the version
+    /// steps it produces are recorded under that description. <paramref name="operationsJson"/>
+    /// is <c>[{"tool","action","args"?}]</c>; <paramref name="identityJson"/> is the optional
+    /// <c>{"transactionId","requestFingerprint"}</c> the journal bound the request to. Returns
+    /// whether anything will be recorded; a false return needs no completion.
+    /// </summary>
+    public static bool BeginDeliveryEvidence(int handle, string operationsJson, MutationBatchMode mode, string? identityJson) =>
+        SessionRegistry.Get(handle).BeginClientDeliveryEvidence(
+            DeliveryOps.ParseEvidenceOperations(operationsJson), mode, DeliveryOps.ParseTransactionIdentity(identityJson));
+
+    /// <summary>Complete a described batch with its step results (<c>[{"index","tool","action","rolledBack","results"}]</c>).</summary>
+    public static void CompleteDeliveryEvidence(int handle, string stepsJson) =>
+        SessionRegistry.Get(handle).CompleteClientDeliveryEvidence(DeliveryOps.ParseBatchSteps(stepsJson));
+
+    /// <summary>Complete a described single operation with its edit result(s) JSON.</summary>
+    public static void CompleteDeliveryEvidenceDirect(int handle, string editResultsJson) =>
+        SessionRegistry.Get(handle).CompleteClientDeliveryEvidence(DocxSessionJson.DeserializeEditResults(editResultsJson));
+
+    /// <summary>Retire a described batch that produced no result; its version steps stay recorded, unlabeled.</summary>
+    public static void AbandonDeliveryEvidence(int handle) =>
+        SessionRegistry.Get(handle).AbandonClientDeliveryEvidence();
+
+    /// <summary>
+    /// Return the stable semantic changes between the package opened for this session and its current
+    /// logical state. Requires baseline capture at open time (enabled by default).
+    /// </summary>
+    public static string GetSemanticChanges(int handle) =>
+        SessionRegistry.Get(handle).GetSemanticChangesJson();
+
+    /// <summary>Run the canonical deliverable-verification policy on the current logical package.</summary>
+    public static string VerifyDeliverable(int handle) =>
+        SessionRegistry.Get(handle).VerifyDeliverableJson();
+
+    /// <summary>
+    /// <see cref="VerifyDeliverable(int)"/> under the full wire request (issue #747): the
+    /// session's clean-save bytes and opening-package baseline, plus the policy, expected
+    /// deltas and companion artifacts the request carries.
+    /// </summary>
+    public static string VerifyDeliverable(int handle, string? requestJson)
+    {
+        var parsed = DeliverableVerificationRequestJson.Parse(requestJson);
+        return SessionRegistry.Get(handle).VerifyDeliverable(
+            parsed.Options,
+            parsed.ExpectedSemanticChanges,
+            parsed.ExpectedPackageChanges,
+            parsed.CompanionArtifacts).ToCanonicalJson();
+    }
+
+    /// <summary>
+    /// Render a preview shadow to the SAME complete-document profile
+    /// <see cref="DocxSession.PreviewBatch"/> uses (<see cref="HtmlConversionOps.PreviewDocumentOptions"/>).
+    /// Exists so the callback-shaped npm preview — which drives its shadow from JS and therefore
+    /// cannot reuse the typed core's render call — does not have to restate the profile and drift
+    /// from it. Use this, never <see cref="RenderHtml"/>, for preview HTML: RenderHtml is the
+    /// EDITOR's authoring view (comments and annotations off, headers/footers tied to pagination),
+    /// which answers a different question.
+    /// </summary>
+    public static string RenderPreviewHtml(int handle) =>
+        HtmlConversionOps.ConvertToHtml(
+            SessionRegistry.Get(handle), HtmlConversionOps.PreviewDocumentOptions());
+
+    /// <summary>Scoped counterpart of <see cref="RenderPreviewHtml"/>; see
+    /// <see cref="HtmlConversionOps.PreviewBlockOptions"/>.</summary>
+    public static string RenderPreviewBlockHtml(int handle, string anchorId) =>
+        HtmlConversionOps.RenderBlockHtml(
+            SessionRegistry.Get(handle), anchorId, HtmlConversionOps.PreviewBlockOptions());
+
+    public static DocxSessionTransaction BeginTransaction(int handle) =>
+        SessionRegistry.Get(handle).BeginTransaction();
+
+    internal static MutationBatchStep SerializedBatchStep(
+        string tool,
+        string action,
+        System.Func<string> mutation,
+        System.Func<EditError?>? preflight = null,
+        string? argumentsJson = null) => new(
+            tool,
+            action,
+            _ => DocxSessionJson.DeserializeEditResults(mutation()),
+            preflight is null ? null : _ => preflight())
+        {
+            ArgumentsJson = argumentsJson,
+        };
+
+    // ─── Projection + discovery ─────────────────────────────────────────
+
+    public static string Project(int handle) =>
+        DocxSessionJson.SerializeProjection(SessionRegistry.Get(handle).Project());
+
+    /// <summary>
+    /// Ordered top-level render units per scope container — what an incremental
+    /// renderer diffs its DOM against after a structural op. See <see cref="RenderPlan"/>.
+    /// </summary>
+    public static string ListBlocks(int handle) =>
+        DocxSessionJson.SerializeRenderPlan(SessionRegistry.Get(handle).ListBlocks());
+
+    public static string ListRenderedBlocks(int handle, bool renderTrackedChanges) =>
+        DocxSessionJson.SerializeRenderPlan(
+            SessionRegistry.Get(handle).ListBlocks(renderTrackedChanges));
+
+    /// <summary>Citation-ordered footnotes/endnotes — the id↔ordinal authority a client
+    /// renumbering rendered note chrome walks. See <see cref="NoteListEntry"/>.</summary>
+    public static string ListNotes(int handle, bool endnotes) =>
+        DocxSessionJson.SerializeNoteList(SessionRegistry.Get(handle).ListNotes(endnotes));
+
+    /// <summary>
+    /// The anchor index alone (no markdown emission or marshaling) — the editor's
+    /// per-op anchor-map refresh. Same <c>{"anchorIndex":{…}}</c> shape as
+    /// <see cref="Project"/>, an order of magnitude cheaper on a large document.
+    /// </summary>
+    public static string ListAnchors(int handle) =>
+        DocxSessionJson.SerializeAnchorIndex(SessionRegistry.Get(handle).AnchorIndex());
+
+    public static string ProjectAnchor(int handle, string anchorId, ProjectionDepth? depth,
+        PageCitationRequest? citationRequest = null) =>
+        DocxSessionJson.SerializeProjection(
+            SessionRegistry.Get(handle).ProjectAnchor(anchorId, depth ?? DefaultProjectionDepth, citationRequest));
+
+    /// <summary>
+    /// Render a single block from the live session to faithful HTML — the editor's
+    /// incremental per-block re-render. Resolves against the live document (no Save /
+    /// byte round-trip). Returns the block's HTML element (no html/head wrapper).
+    /// </summary>
+    public static string RenderBlockHtml(int handle, string anchorId, string? cssPrefix,
+        bool? fabricateClasses, bool renderTrackedChanges = false) =>
+        HtmlConversionOps.RenderBlockHtml(SessionRegistry.Get(handle), anchorId,
+            EditorBlockRenderOptions(cssPrefix, fabricateClasses ?? DefaultFabricateClasses, renderTrackedChanges));
+
+    /// <summary>
+    /// Batch single-block render: N anchors, one throwaway document, one converter run.
+    /// Returns a JSON object mapping each anchor id to its HTML (null for an anchor that
+    /// failed to resolve). See <see cref="HtmlConversionOps.RenderBlocksHtml(DocxSession, System.Collections.Generic.IReadOnlyList{string}, HtmlConversionOptions)"/>.
+    /// </summary>
+    public static string RenderBlocksHtml(int handle, string anchorIdsJson, string cssPrefix,
+        bool fabricateClasses, bool renderTrackedChanges = false) =>
+        HtmlConversionOps.RenderBlocksHtml(handle, anchorIdsJson,
+            EditorBlockRenderOptions(cssPrefix, fabricateClasses, renderTrackedChanges));
+
+    /// <summary>
+    /// The block-render option profile for the editor's incremental swaps. Must agree
+    /// with <see cref="RenderHtml"/>'s full-render profile wherever a setting affects
+    /// WITHIN-BLOCK output — footnote/endnote citation markers in particular: with
+    /// RenderFootnotesAndEndnotes off, a re-rendered citing paragraph silently loses
+    /// its citation marker from the DOM.
+    /// </summary>
+    private static HtmlConversionOptions EditorBlockRenderOptions(
+        string? cssPrefix, bool fabricateClasses, bool renderTrackedChanges) =>
+        new HtmlConversionOptions
+        {
+            CssClassPrefix = cssPrefix ?? DefaultBlockCssPrefix,
+            FabricateCssClasses = fabricateClasses,
+            RenderFootnotesAndEndnotes = true,
+            RenderTrackedChanges = renderTrackedChanges,
+        };
+
+    // ─── Editor render profile (comments-aware) ─────────────────────────
+    //
+    // The browser editor's renders take their profile as ONE JSON object (see
+    // EditorRenderOptions) rather than a positional argument per setting, and add native comment
+    // markup — the converter's Inline mode: `comment-highlight` spans around every run inside a
+    // comment range and `comment-marker` anchors at the reference — so the editor can show and
+    // address comments in place. RenderHtml / RenderBlockHtml / RenderBlocksHtml above are left
+    // exactly as they are: their outputs are pinned by the block-fidelity tests, and with
+    // `comments: false` these render byte-identically to them.
+
+    /// <summary>
+    /// Full-document render with the editor profile in <paramref name="optionsJson"/>
+    /// (<see cref="DocxSessionJson.ParseEditorRenderOptions"/>). Same as <see cref="RenderHtml"/>
+    /// plus, when <c>comments</c> is true, Inline comment rendering with the <c>comment-</c> class
+    /// prefix the editor's first paint uses.
+    /// </summary>
+    public static string RenderEditorHtml(int handle, string optionsJson) =>
+        HtmlConversionOps.ConvertToHtml(SessionRegistry.Get(handle),
+            EditorDocumentRenderOptions(DocxSessionJson.ParseEditorRenderOptions(optionsJson)));
+
+    /// <summary>The whole-document profile behind <see cref="RenderEditorHtml"/>; the chrome render
+    /// of a windowed mount uses the same one so its stylesheet, section wrappers and note sections
+    /// are the full render's.</summary>
+    private static HtmlConversionOptions EditorDocumentRenderOptions(EditorRenderOptions o) =>
+        new HtmlConversionOptions
+        {
+            CssClassPrefix = o.CssPrefix,
+            FabricateCssClasses = o.FabricateClasses,
+            PaginationMode = o.Paginated ? 1 : 0,
+            PaginationScale = o.Scale,
+            RenderHeadersAndFooters = o.Paginated,
+            RenderFootnotesAndEndnotes = true,
+            RenderTrackedChanges = o.RenderTrackedChanges,
+            StampAnchors = true,
+            CommentRenderMode = o.Comments ? (int)CommentRenderMode.Inline : -1,
+            CommentCssClassPrefix = EditorCommentCssPrefix,
+        };
+
+    /// <summary>Batch block render with the editor profile — <see cref="RenderBlocksHtml"/> plus
+    /// comment markup when <c>comments</c> is true. Same JSON-object result shape.</summary>
+    /// <summary>
+    /// The document's rendered chrome with the editor profile — stylesheet, every section
+    /// wrapper with its page geometry, the header/footer registry, the footnote and endnote
+    /// sections — and none of its body units. A windowed mount (issue #776) starts from this and
+    /// fills the sections from <see cref="RenderEditorBlocksHtml"/> a window at a time, so the
+    /// first paint never pays the whole-document render. See
+    /// <see cref="HtmlConversionOps.RenderChromeHtml"/>.
+    /// </summary>
+    public static string RenderEditorChromeHtml(int handle, string optionsJson) =>
+        HtmlConversionOps.RenderChromeHtml(SessionRegistry.Get(handle),
+            EditorDocumentRenderOptions(DocxSessionJson.ParseEditorRenderOptions(optionsJson)));
+
+    /// <summary>A contiguous window of body units as the full render lays them out (issue #776) —
+    /// see <see cref="HtmlConversionOps.RenderBlocksRangeHtml(DocxSession, IReadOnlyList{string}, HtmlConversionOptions)"/>.</summary>
+    public static string RenderEditorRangeHtml(int handle, string anchorIdsJson, string optionsJson) =>
+        HtmlConversionOps.RenderBlocksRangeHtml(handle, anchorIdsJson,
+            EditorBlockRenderOptions(DocxSessionJson.ParseEditorRenderOptions(optionsJson)));
+
+    public static string RenderEditorBlocksHtml(int handle, string anchorIdsJson, string optionsJson) =>
+        HtmlConversionOps.RenderBlocksHtml(handle, anchorIdsJson,
+            EditorBlockRenderOptions(DocxSessionJson.ParseEditorRenderOptions(optionsJson)));
+
+    /// <summary>Single-block render with the editor profile — <see cref="RenderBlockHtml"/> plus
+    /// comment markup when <c>comments</c> is true.</summary>
+    public static string RenderEditorBlockHtml(int handle, string anchorId, string optionsJson) =>
+        HtmlConversionOps.RenderBlockHtml(SessionRegistry.Get(handle), anchorId,
+            EditorBlockRenderOptions(DocxSessionJson.ParseEditorRenderOptions(optionsJson)));
+
+    /// <summary>The comment CSS class prefix the editor's first paint passes to
+    /// <c>ConvertDocxToHtmlComplete</c>; the session-attached renders must agree with it so a
+    /// re-rendered block carries the same class names the stylesheet targets.</summary>
+    private const string EditorCommentCssPrefix = "comment-";
+
+    private static HtmlConversionOptions EditorBlockRenderOptions(EditorRenderOptions o) =>
+        new HtmlConversionOptions
+        {
+            CssClassPrefix = o.CssPrefix,
+            FabricateCssClasses = o.FabricateClasses,
+            RenderFootnotesAndEndnotes = true,
+            RenderTrackedChanges = o.RenderTrackedChanges,
+            StampAnchors = o.StampAnchors,
+            CommentRenderMode = o.Comments ? (int)CommentRenderMode.Inline : -1,
+            CommentCssClassPrefix = EditorCommentCssPrefix,
+            // The paginated full render marks PAGE/NUMPAGES results with data-field so the page
+            // boxes can show each page's own number; a block re-render in page view must carry the
+            // same marker or the editor's substitution has nothing to find. A header/footer block
+            // gets it even when the profile says continuous — running stories only ever render
+            // inside page boxes.
+            StampPageNumberFields = o.Paginated,
+            StampPageNumberFieldsInRunningStories = true,
+            // Page view also changes how a block itself renders — an anchored picture or text
+            // box is positioned absolutely inside its page box — so a block re-rendered into
+            // page view follows the same profile the full render used.
+            PaginationMode = o.Paginated ? 1 : 0,
+            PaginationScale = o.Scale,
+        };
+
+    /// <summary>
+    /// Render the live session's current state to a complete anchor-stamped HTML document —
+    /// the editor's full re-render (remount) without round-tripping the saved bytes through
+    /// the transport. The option profile matches the editor's ConvertDocxToHtmlComplete call
+    /// (comments/footnotes/annotations off, headers-and-footers tied to pagination), so a
+    /// remount through this path renders byte-identically to the bytes path.
+    /// </summary>
+    public static string RenderHtml(int handle, string cssPrefix, bool fabricateClasses,
+        bool paginated, double scale, bool renderTrackedChanges = false) =>
+        HtmlConversionOps.ConvertToHtml(SessionRegistry.Get(handle), new HtmlConversionOptions
+        {
+            CssClassPrefix = cssPrefix ?? "docx-",
+            FabricateCssClasses = fabricateClasses,
+            PaginationMode = paginated ? 1 : 0,
+            PaginationScale = scale,
+            RenderHeadersAndFooters = paginated,
+            // Footnotes/endnotes are document CONTENT, not an editing affordance: a document that
+            // has them must show them, and each note renders exactly once so its paragraphs are
+            // uniquely addressable (AssignAnchorUnids stamps the note parts). Must stay in step
+            // with the editor's first-paint profile in npm/src/editor.ts `completeArgs`, which the
+            // remount output is required to match byte-for-byte.
+            RenderFootnotesAndEndnotes = true,
+            RenderTrackedChanges = renderTrackedChanges,
+            StampAnchors = true,
+        });
+
+    /// <summary>Grep with every option the wire can carry; see <see cref="GrepRequest"/> for the
+    /// defaults an omitted field takes.</summary>
+    public static string Grep(int handle, string pattern, GrepRequest request) =>
+        DocxSessionJson.SerializeMatches(Limit(
+            SessionRegistry.Get(handle).Grep(
+                pattern, request.RegexOptions, request.Scope, request.ContextChars ?? DocxSession.DefaultContextChars,
+                request.Whitespace, request.Boundary, request.CitationRequest),
+            request.MaxResults));
+
+    public static string GrepCrossBlock(int handle, string pattern, GrepRequest request) =>
+        DocxSessionJson.SerializeCrossBlockMatches(Limit(
+            SessionRegistry.Get(handle).GrepCrossBlock(
+                pattern, request.RegexOptions, request.Scope, request.ContextChars ?? DocxSession.DefaultContextChars,
+                request.Whitespace, request.Boundary, request.CitationRequest),
+            request.MaxResults));
+
+    /// <summary><paramref name="contextChars"/> null takes
+    /// <see cref="DocxSession.DefaultContextChars"/>.</summary>
+    public static string FindPlaceholders(int handle, PlaceholderKinds? kinds, ProjectionScopes? scope,
+        int? contextChars, ContextBoundary? boundary, PageCitationRequest? citationRequest = null) =>
+        DocxSessionJson.SerializePlaceholders(
+            SessionRegistry.Get(handle).FindPlaceholders(
+                kinds ?? DefaultPlaceholderKinds, scope ?? DefaultPlaceholderScope,
+                contextChars ?? DocxSession.DefaultContextChars, boundary ?? DefaultContextBoundary,
+                citationRequest));
+
+    public static string FindByAnnotation(
+        int handle, string annotationId, PageCitationRequest? citationRequest = null, int? maxResults = null) =>
+        DocxSessionJson.SerializeAnchorTargets(Limit(
+            SessionRegistry.Get(handle).FindByAnnotation(annotationId, citationRequest), maxResults));
+
+    public static string FindByLabel(
+        int handle, string labelId, PageCitationRequest? citationRequest = null) =>
+        DocxSessionJson.SerializeAnchorTargetMap(
+            SessionRegistry.Get(handle).FindByLabel(labelId, citationRequest));
+
+    public static string FindByBookmark(
+        int handle, string bookmarkName, PageCitationRequest? citationRequest = null, int? maxResults = null) =>
+        DocxSessionJson.SerializeAnchorTargets(Limit(
+            SessionRegistry.Get(handle).FindByBookmark(bookmarkName, citationRequest), maxResults));
+
+    public static string ListAnnotations(int handle) =>
+        DocxSessionJson.SerializeAnnotations(SessionRegistry.Get(handle).ListAnnotations());
+
+    public static bool Exists(int handle, string anchorId) =>
+        SessionRegistry.Get(handle).Exists(anchorId);
+
+    public static string GetAnchorInfo(int handle, string anchorId) =>
+        DocxSessionJson.SerializeAnchorInfoOrNull(SessionRegistry.Get(handle).GetAnchorInfo(anchorId));
+
+    public static string GetAnchorInfos(int handle, System.Collections.Generic.IEnumerable<string> anchorIds) =>
+        DocxSessionJson.SerializeAnchorInfoMap(SessionRegistry.Get(handle).GetAnchorInfos(anchorIds));
+
+    public static string GetBlockMetadata(int handle, string anchorId) =>
+        DocxSessionJson.SerializeBlockMetadataOrNull(SessionRegistry.Get(handle).GetBlockMetadata(anchorId));
+
+    public static string GetBlockMetadatas(int handle, System.Collections.Generic.IEnumerable<string> anchorIds) =>
+        DocxSessionJson.SerializeBlockMetadataMap(SessionRegistry.Get(handle).GetBlockMetadatas(anchorIds));
+
+    public static string GetListMembership(int handle, string anchorId) =>
+        DocxSessionJson.SerializeListMembershipOrNull(SessionRegistry.Get(handle).GetListMembership(anchorId));
+
+    public static string GetSectionInfo(int handle, string anchorId) =>
+        DocxSessionJson.SerializeSectionInfoOrNull(SessionRegistry.Get(handle).GetSectionInfo(anchorId));
+
+    public static string ListStyles(int handle) =>
+        DocxSessionJson.SerializeStyles(SessionRegistry.Get(handle).ListStyles());
+
+    public static string GetFormatting(int handle, string anchorId) =>
+        DocxSessionJson.SerializeFormattingInspectionOrNull(SessionRegistry.Get(handle).GetFormatting(anchorId));
+
+    public static string ListInlineSpans(int handle, string anchorId) =>
+        DocxSessionJson.SerializeInlineSpans(SessionRegistry.Get(handle).ListInlineSpans(anchorId));
+
+    public static string FindByText(int handle, string needle, FindOptions? options) =>
+        DocxSessionJson.SerializeAnchorTargetOrNull(SessionRegistry.Get(handle).FindByText(needle, options));
+
+    public static string FindAllByText(int handle, string needle, FindOptions? options) =>
+        DocxSessionJson.SerializeAnchorTargets(SessionRegistry.Get(handle).FindAllByText(needle, options));
+
+    public static string FindByRegex(int handle, string pattern, RegexOptions? regexOptions, FindOptions? options) =>
+        DocxSessionJson.SerializeAnchorTargets(SessionRegistry.Get(handle).FindByRegex(
+            pattern, regexOptions ?? DefaultRegexOptions, options));
+
+    public static string FindByKind(
+        int handle, string kind, string? scope, PageCitationRequest? citationRequest = null,
+        int? maxResults = null) =>
+        DocxSessionJson.SerializeAnchorTargets(Limit(
+            SessionRegistry.Get(handle).FindByKind(kind, scope, citationRequest), maxResults));
+
+    public static string GetEditSummary(int handle) =>
+        DocxSessionJson.SerializeEditSummary(SessionRegistry.Get(handle).GetEditSummary());
+
+    public static string RemainingPlaceholders(int handle, PlaceholderKinds? kinds) =>
+        DocxSessionJson.SerializePlaceholders(SessionRegistry.Get(handle).RemainingPlaceholders(
+            kinds ?? DefaultPlaceholderKinds));
+
+    public static string GetDiff(int handle, DiffFormat? format) =>
+        SessionRegistry.Get(handle).GetDiff(format ?? DefaultDiffFormat);
+
+    // ─── Tier A: text mutations ─────────────────────────────────────────
+
+    public static string ReplaceText(int handle, string anchorId, string markdown,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.ReplaceText(anchorId, markdown));
+
+    public static string DeleteBlock(int handle, string anchorId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.DeleteBlock(anchorId));
+
+    public static string DeleteRange(int handle, string fromAnchorId, string toAnchorIdExclusive,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, fromAnchorId,
+            s => s.DeleteRange(fromAnchorId, toAnchorIdExclusive));
+
+    public static string DeleteSection(int handle, string headingAnchorId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, headingAnchorId, s => s.DeleteSection(headingAnchorId));
+
+    public static string ReplaceTextRange(int handle, string anchorId, string find, string replace,
+        ReplaceOptions? options, MutationPreconditions? preconditions = null)
+    {
+        if (preconditions is not null)
+            options = (options ?? new ReplaceOptions()) with
+            {
+                Preconditions = ForTarget(preconditions, anchorId),
+            };
+        return DocxSessionJson.SerializeEditResults(
+            SessionRegistry.Get(handle).ReplaceTextRange(anchorId, find, replace, options));
+    }
+
+    public static string ReplaceTextAtSpan(int handle, string anchorId, int spanStart, int spanLength,
+        string replace, MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId,
+            s => s.ReplaceTextAtSpan(anchorId, spanStart, spanLength, replace));
+
+    public static string ReplaceTextAtSpanWithFormat(int handle, string anchorId, int spanStart, int spanLength,
+        string replace, FormatOp? format, MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId,
+            s => s.ReplaceTextAtSpanWithFormat(anchorId, spanStart, spanLength, replace, format ?? new FormatOp()));
+
+    /// <summary>
+    /// Bracket-aware variant of <see cref="ReplaceTextAtSpan"/>. Parses the brackets out
+    /// of <paramref name="matchText"/> and substitutes <paramref name="newInner"/> for the
+    /// bracketed portion, preserving any prefix/suffix outside the brackets (so a match
+    /// like <c>$[___]</c> + <c>"0.20"</c> produces <c>$0.20</c>, not <c>0.20</c>).
+    /// Returns a <c>MalformedMarkdown</c> EditResult if the match has no balanced
+    /// brackets. Mirrors <see cref="DocxSession.ReplaceInner(TextMatch, string)"/>;
+    /// transport-side because reconstructing a <see cref="TextMatch"/> from wire fields
+    /// (Fragments, ContextBefore, …) would be wasteful.
+    /// </summary>
+    public static string ReplaceInner(int handle, string matchText, string anchorId,
+        int spanStart, int spanLength, string newInner, MutationPreconditions? preconditions = null)
+    {
+        return Mutate(handle, preconditions, anchorId, s =>
+        {
+            int lb = matchText.IndexOf('[');
+            int rb = matchText.LastIndexOf(']');
+            if (lb < 0 || rb <= lb)
+                return new EditResult
+                {
+                    Success = false,
+                    Error = new EditError(EditErrorCode.MalformedMarkdown,
+                        $"match text has no balanced brackets: '{matchText}'", anchorId),
+                };
+            var prefix = matchText[..lb];
+            var suffix = matchText[(rb + 1)..];
+            return s.ReplaceTextAtSpan(anchorId, spanStart, spanLength, prefix + newInner + suffix);
+        });
+    }
+
+    // ─── Tier B: structural ─────────────────────────────────────────────
+
+    public static string MoveBlock(int handle, string sourceAnchorId, string targetAnchorId,
+        Position? position, MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, sourceAnchorId,
+            s => s.MoveBlock(sourceAnchorId, targetAnchorId, position ?? DefaultInsertPosition));
+
+    /// <summary>The blocks <paramref name="sourceAnchorId"/> may legally move next to, and on which
+    /// side — what a drag UI gates its drop targets on, so it never offers a drop the engine
+    /// will refuse.</summary>
+    public static string ValidMoveTargets(int handle, string sourceAnchorId) =>
+        DocxSessionJson.SerializeMoveTargets(
+            SessionRegistry.Get(handle).ValidMoveTargets(sourceAnchorId));
+
+    public static string InsertParagraph(int handle, string anchorId, Position? position, string markdown,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId,
+            s => s.InsertParagraph(anchorId, position ?? DefaultInsertPosition, markdown));
+
+    public static string SplitParagraph(int handle, string anchorId, int characterOffset,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId,
+            s => s.SplitParagraph(anchorId, characterOffset));
+
+    public static string MergeParagraphs(int handle, string firstAnchorId, string secondAnchorId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, firstAnchorId,
+            s => s.MergeParagraphs(firstAnchorId, secondAnchorId));
+
+    public static string InsertHorizontalRule(int handle, string anchorId, Position? position, string ruleJson,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.InsertHorizontalRule(
+            anchorId, position ?? DefaultInsertPosition, string.IsNullOrEmpty(ruleJson) ? null : ParseRuleEdge(ruleJson)));
+
+    private static ParagraphBorderEdge? ParseRuleEdge(string json)
+    {
+        // The rule JSON is itself a border-edge object; reuse the named-property parser by
+        // wrapping it under a known key.
+        using var d = System.Text.Json.JsonDocument.Parse($"{{\"e\":{json}}}");
+        return DocxSessionJson.ParseBorderEdge(d.RootElement, "e");
+    }
+
+    // ─── Headers / footers / page numbers ───────────────────────────────
+
+    public static string SetHeaderText(int handle, string anchorId, HeaderFooterKind kind, string markdown,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.SetHeaderText(anchorId, kind, markdown));
+
+    public static string SetFooterText(int handle, string anchorId, HeaderFooterKind kind, string markdown,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.SetFooterText(anchorId, kind, markdown));
+
+    public static string InsertPageNumberField(
+        int handle, string anchorId, PageNumberField? field, NumberFormat? format = null,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId,
+            s => s.InsertPageNumberField(anchorId, field ?? DefaultPageNumberField, format));
+
+    public static string EnsureHeaderFooterVisible(int handle, string anchorId, HeaderFooterKind kind,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId,
+            s => s.EnsureHeaderFooterVisible(anchorId, kind));
+
+    /// <summary>An omitted <paramref name="op"/> is the empty op, which changes nothing.</summary>
+    public static string SetPageNumbering(int handle, string anchorId, PageNumberingOp? op,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.SetPageNumbering(anchorId, op ?? new PageNumberingOp()));
+
+    public static string ClearPageNumbering(int handle, string anchorId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.ClearPageNumbering(anchorId));
+
+    /// <summary>Word's "Different first page" / "Different odd &amp; even pages" checkboxes —
+    /// <paramref name="kind"/> is the wire token ("first" | "even"; "default" is refused when
+    /// disabling). See <see cref="DocxSession.SetHeaderFooterKindEnabled"/>.</summary>
+    public static string SetHeaderFooterKindEnabled(int handle, string anchorId, string kind, bool enabled,
+        MutationPreconditions? preconditions = null)
+    {
+        var parsed = DocxSessionJson.ParseHeaderFooterKind(kind);
+        return Mutate(handle, preconditions, anchorId,
+            s => s.SetHeaderFooterKindEnabled(anchorId, parsed, enabled));
+    }
+
+    /// <summary>Page size / orientation / margins / header-footer distance of the section owning
+    /// <paramref name="anchorId"/>. <paramref name="opJson"/> is the <see cref="PageSetupOp"/> wire
+    /// object (see <see cref="DocxSessionJson.ParsePageSetupOp(string)"/>); "" is a no-op.</summary>
+    public static string SetPageSetup(int handle, string anchorId, string opJson,
+        MutationPreconditions? preconditions = null) =>
+        SetPageSetup(handle, anchorId, DocxSessionJson.ParsePageSetupOp(opJson), preconditions);
+
+    /// <summary>An omitted <paramref name="op"/> is the empty op, which changes nothing.</summary>
+    public static string SetPageSetup(int handle, string anchorId, PageSetupOp? op,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.SetPageSetup(anchorId, op ?? new PageSetupOp()));
+
+    // ─── Reference fields (issue #607) ──────────────────────────────────
+
+    public static string InsertTableOfContents(
+        int handle, string anchorId, Position? pos, TableOfContentsOptions? options = null,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId,
+            s => s.InsertTableOfContents(anchorId, pos ?? ReferenceFieldDefaultPosition, options));
+
+    public static string InsertTableOfFigures(
+        int handle, string anchorId, Position? pos, TableOfFiguresOptions? options = null,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId,
+            s => s.InsertTableOfFigures(anchorId, pos ?? ReferenceFieldDefaultPosition, options));
+
+    public static string InsertTableOfAuthorities(
+        int handle, string anchorId, Position? pos, TableOfAuthoritiesOptions? options = null,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId,
+            s => s.InsertTableOfAuthorities(anchorId, pos ?? ReferenceFieldDefaultPosition, options));
+
+    // ─── Footnotes / endnotes ───────────────────────────────────────────
+
+    public static string InsertFootnote(int handle, string anchorId, int characterOffset, string markdown,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId,
+            s => s.InsertFootnote(anchorId, characterOffset, markdown));
+
+    public static string InsertEndnote(int handle, string anchorId, int characterOffset, string markdown,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId,
+            s => s.InsertEndnote(anchorId, characterOffset, markdown));
+
+    // ─── Comments (issue #300) ──────────────────────────────────────────
+
+    public static string AddComment(int handle, string anchorId, CharSpan? span, string author,
+        string? initials, string? dateIso, string? markdown,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.AddComment(
+            anchorId, span, author, markdown ?? DefaultCommentMarkdown, initials,
+            DocxSessionJson.ParseCommentDate(dateIso)));
+
+    public static string AddCommentToRevision(int handle, string revisionId, string author,
+        string? initials, string? dateIso, string? markdown,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, null, s => s.AddCommentToRevision(
+            revisionId, author, markdown ?? DefaultCommentMarkdown, initials,
+            DocxSessionJson.ParseCommentDate(dateIso)));
+
+    public static string AddCommentReply(int handle, string parentCommentAnchorId, string author,
+        string? initials, string? dateIso, string? markdown,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, parentCommentAnchorId, s => s.AddCommentReply(
+            parentCommentAnchorId, author, markdown ?? DefaultCommentMarkdown, initials,
+            DocxSessionJson.ParseCommentDate(dateIso)));
+
+    public static string UpdateComment(int handle, string commentAnchorId, string markdown,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, commentAnchorId, s => s.UpdateComment(commentAnchorId, markdown));
+
+    public static string SetCommentResolved(int handle, string commentAnchorId, bool? resolved,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, commentAnchorId,
+            s => s.SetCommentResolved(commentAnchorId, resolved ?? DefaultCommentResolved));
+
+    public static string RemoveComment(int handle, string commentAnchorId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, commentAnchorId, s => s.RemoveComment(commentAnchorId));
+
+    public static string ListComments(int handle) =>
+        DocxSessionJson.SerializeCommentList(SessionRegistry.Get(handle).ListComments());
+
+    // ─── Hyperlinks / bookmarks (issue #451) ───────────────────────────
+
+    public static string ListHyperlinks(int handle, ProjectionScopes scopes = ProjectionScopes.All) =>
+        DocxSessionJson.SerializeHyperlinks(SessionRegistry.Get(handle).ListHyperlinks(scopes));
+
+    /// <summary>Insert a REF-field internal cross-reference (issue #545); see
+    /// <see cref="DocxSession.InsertCrossReference"/>. Options arrive typed — each transport
+    /// parses its own <c>{referenceNumber, hyperlink, includePosition}</c> wire object.</summary>
+    public static string InsertCrossReference(int handle, string anchorId, int characterOffset,
+        string bookmarkName, CrossReferenceOptions? options = null,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId,
+            s => s.InsertCrossReference(anchorId, characterOffset, bookmarkName, options));
+
+    public static string AddHyperlink(int handle, string anchorId, int start, int length,
+        string kind, string target)
+    {
+        var session = SessionRegistry.Get(handle);
+        if (!TryParseHyperlinkTarget(kind, target, out var parsed))
+            return InvalidHyperlinkKind(kind, anchorId);
+        return DocxSessionJson.Serialize(session.AddHyperlink(anchorId,
+            new CharSpan(start, length), parsed));
+    }
+
+    public static string UpdateHyperlink(int handle, string hyperlinkId, string kind, string target)
+    {
+        var session = SessionRegistry.Get(handle);
+        if (!TryParseHyperlinkTarget(kind, target, out var parsed))
+            return InvalidHyperlinkKind(kind);
+        return DocxSessionJson.Serialize(session.UpdateHyperlink(hyperlinkId, parsed));
+    }
+
+    public static string RemoveHyperlink(int handle, string hyperlinkId) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).RemoveHyperlink(hyperlinkId));
+
+    public static string ListBookmarks(int handle, ProjectionScopes scopes = ProjectionScopes.All) =>
+        DocxSessionJson.SerializeBookmarks(SessionRegistry.Get(handle).ListBookmarks(scopes));
+
+    public static string AddBookmark(int handle, string name, string startAnchorId, int startOffset,
+        string endAnchorId, int endOffset) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).AddBookmark(name,
+            new DocumentRange(startAnchorId, startOffset, endAnchorId, endOffset)));
+
+    public static string RenameBookmark(int handle, string name, string newName) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).RenameBookmark(name, newName));
+
+    public static string MoveBookmark(int handle, string name, string startAnchorId, int startOffset,
+        string endAnchorId, int endOffset) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).MoveBookmark(name,
+            new DocumentRange(startAnchorId, startOffset, endAnchorId, endOffset)));
+
+    public static string RemoveBookmark(int handle, string name) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).RemoveBookmark(name));
+
+    private static bool TryParseHyperlinkTarget(string kind, string target,
+        out HyperlinkTarget parsed)
+    {
+        if (string.Equals(kind, "internal", StringComparison.OrdinalIgnoreCase))
+        {
+            parsed = HyperlinkTarget.Internal(target);
+            return true;
+        }
+        if (string.Equals(kind, "external", StringComparison.OrdinalIgnoreCase))
+        {
+            parsed = HyperlinkTarget.External(target);
+            return true;
+        }
+        parsed = null!;
+        return false;
+    }
+
+    private static string InvalidHyperlinkKind(string kind, string? anchorId = null) =>
+        DocxSessionJson.Serialize(EditResult.Fail(EditErrorCode.InvalidHyperlinkTarget,
+            $"unknown hyperlink target kind '{kind}'; expected 'internal' or 'external'", anchorId));
+
+    // ─── Native images (issue #453) ────────────────────────────────────
+
+    public static string GetImageCapabilities() =>
+        DocxSessionJson.SerializeImageCapabilities(DocxSession.GetImageCapabilities());
+
+    public static string ListImages(int handle, ProjectionScopes scopes = ProjectionScopes.All) =>
+        DocxSessionJson.SerializeImages(SessionRegistry.Get(handle).ListImages(scopes));
+
+    public static string InsertImage(int handle, string anchorId, int characterOffset,
+        string imageBase64, string optionsJson)
+    {
+        if (!TryDecodeImageBase64(imageBase64, anchorId, out var bytes, out var error)) return error!;
+        try
+        {
+            return DocxSessionJson.Serialize(SessionRegistry.Get(handle).InsertImage(
+                anchorId, characterOffset, bytes!, DocxSessionJson.ParseImageInsertOptions(optionsJson)));
+        }
+        catch (System.Exception ex) when (ex is System.Text.Json.JsonException or System.ArgumentException
+            or System.OverflowException)
+        {
+            return DocxSessionJson.Serialize(EditResult.Fail(EditErrorCode.InvalidImageLayout,
+                $"invalid image options JSON: {ex.Message}", anchorId));
+        }
+    }
+
+    public static string ReplaceImage(int handle, string imageId, string imageBase64)
+    {
+        if (!TryDecodeImageBase64(imageBase64, null, out var bytes, out var error)) return error!;
+        return DocxSessionJson.Serialize(SessionRegistry.Get(handle).ReplaceImage(imageId, bytes!));
+    }
+
+    public static string EmbedLinkedImage(int handle, string imageId, string imageBase64)
+    {
+        if (!TryDecodeImageBase64(imageBase64, null, out var bytes, out var error)) return error!;
+        return DocxSessionJson.Serialize(SessionRegistry.Get(handle).EmbedLinkedImage(imageId, bytes!));
+    }
+
+    public static string SetImageDimensions(int handle, string imageId, string dimensionsJson)
+    {
+        try
+        {
+            var dimensions = DocxSessionJson.ParseImageDimensions(dimensionsJson);
+            return DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetImageDimensions(imageId,
+                dimensions.Width, dimensions.Height, dimensions.PreserveAspect));
+        }
+        catch (System.Exception ex) when (ex is System.Text.Json.JsonException or System.ArgumentException
+            or System.OverflowException)
+        {
+            return DocxSessionJson.Serialize(EditResult.Fail(EditErrorCode.InvalidImageDimensions,
+                $"invalid image dimensions JSON: {ex.Message}"));
+        }
+    }
+
+    public static string SetImageMetadata(int handle, string imageId, string? altText, string? title) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetImageMetadata(imageId, altText, title));
+
+    public static string SetImageFloatingLayout(int handle, string imageId, string layoutJson)
+    {
+        try
+        {
+            return DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetImageFloatingLayout(
+                imageId, DocxSessionJson.ParseFloatingImageLayout(layoutJson)));
+        }
+        catch (System.Exception ex) when (ex is System.Text.Json.JsonException or System.ArgumentException
+            or System.OverflowException)
+        {
+            return DocxSessionJson.Serialize(EditResult.Fail(EditErrorCode.InvalidImageLayout,
+                $"invalid floating layout JSON: {ex.Message}"));
+        }
+    }
+
+    public static string RemoveImage(int handle, string imageId) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).RemoveImage(imageId));
+
+    // ─── Native content controls (issue #452) ─────────────────────────
+
+    public static string ListContentControls(int handle,
+        ProjectionScopes scopes = ProjectionScopes.All) =>
+        DocxSessionJson.SerializeContentControls(
+            SessionRegistry.Get(handle).ListContentControls(scopes));
+
+    public static string FillContentControlText(int handle, string anchorId, string text,
+        string optionsJson) => ContentControlOptions(anchorId, optionsJson, options =>
+            SessionRegistry.Get(handle).FillContentControlText(anchorId, text, options));
+
+    public static string FillContentControlRichText(int handle, string anchorId, string markdown,
+        string optionsJson) => ContentControlOptions(anchorId, optionsJson, options =>
+            SessionRegistry.Get(handle).FillContentControlRichText(anchorId, markdown, options));
+
+    public static string SetContentControlChecked(int handle, string anchorId, bool isChecked,
+        string optionsJson) => ContentControlOptions(anchorId, optionsJson, options =>
+            SessionRegistry.Get(handle).SetContentControlChecked(anchorId, isChecked, options));
+
+    public static string SetContentControlDate(int handle, string anchorId, string value,
+        string? displayText, string optionsJson)
+    {
+        if (!System.DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.RoundtripKind, out var parsed))
+            return DocxSessionJson.Serialize(EditResult.Fail(EditErrorCode.InvalidContentControlValue,
+                "date value must be an ISO-8601 timestamp", anchorId));
+        return ContentControlOptions(anchorId, optionsJson, options =>
+            SessionRegistry.Get(handle).SetContentControlDate(anchorId, parsed, displayText, options));
+    }
+
+    public static string SelectContentControlItem(int handle, string anchorId, string value,
+        string optionsJson) => ContentControlOptions(anchorId, optionsJson, options =>
+            SessionRegistry.Get(handle).SelectContentControlItem(anchorId, value, options));
+
+    public static string FillContentControlPicture(int handle, string anchorId,
+        string imageBase64, string optionsJson)
+    {
+        if (!TryDecodeImageBase64(imageBase64, anchorId, out var bytes, out var error)) return error!;
+        return ContentControlOptions(anchorId, optionsJson, options =>
+            SessionRegistry.Get(handle).FillContentControlPicture(anchorId, bytes!, options));
+    }
+
+    public static string AddRepeatingSectionItem(int handle, string sectionAnchorId,
+        string? afterItemAnchorId, string optionsJson) =>
+        ContentControlOptions(sectionAnchorId, optionsJson, options =>
+            SessionRegistry.Get(handle).AddRepeatingSectionItem(
+                sectionAnchorId, afterItemAnchorId, options));
+
+    public static string RemoveRepeatingSectionItem(int handle, string itemAnchorId) =>
+        DocxSessionJson.Serialize(
+            SessionRegistry.Get(handle).RemoveRepeatingSectionItem(itemAnchorId));
+
+    private static string ContentControlOptions(string anchorId, string optionsJson,
+        System.Func<ContentControlFillOptions, EditResult> action)
+    {
+        try
+        {
+            return DocxSessionJson.Serialize(action(
+                DocxSessionJson.ParseContentControlFillOptions(optionsJson)));
+        }
+        catch (System.Exception ex) when (ex is System.Text.Json.JsonException
+            or System.ArgumentException)
+        {
+            return DocxSessionJson.Serialize(EditResult.Fail(
+                EditErrorCode.InvalidContentControlValue,
+                $"invalid content-control options JSON: {ex.Message}", anchorId));
+        }
+    }
+
+    private static bool TryDecodeImageBase64(string? base64, string? anchorId,
+        out byte[]? bytes, out string? error)
+    {
+        bytes = null;
+        error = null;
+        if (string.IsNullOrEmpty(base64))
+        {
+            error = DocxSessionJson.Serialize(EditResult.Fail(EditErrorCode.InvalidImageData,
+                "image base64 is empty", anchorId));
+            return false;
+        }
+        long maxEncodedLength = ((DocxSession.MaxImageInputBytes + 2) / 3) * 4;
+        if (base64.Length > maxEncodedLength)
+        {
+            error = DocxSessionJson.Serialize(EditResult.Fail(EditErrorCode.ImageTooLarge,
+                $"encoded image exceeds the {DocxSession.MaxImageInputBytes}-byte runtime limit", anchorId));
+            return false;
+        }
+        try { bytes = System.Convert.FromBase64String(base64); return true; }
+        catch (System.FormatException)
+        {
+            error = DocxSessionJson.Serialize(EditResult.Fail(EditErrorCode.InvalidImageData,
+                "imageBase64 is not valid base64", anchorId));
+            return false;
+        }
+    }
+
+    // ─── Tier C: formatting ─────────────────────────────────────────────
+
+    // An omitted FormatOp or ParagraphFormatOp is the empty op, which changes nothing.
+
+    public static string ApplyFormat(int handle, string anchorId, CharSpan? span, FormatOp? op,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.ApplyFormat(anchorId, span, op ?? new FormatOp()));
+
+    public static string ApplyFormatBySubstring(int handle, string anchorId, string substring, FormatOp? op,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId,
+            s => s.ApplyFormatToSubstring(anchorId, substring, op ?? new FormatOp()));
+
+    public static string SetParagraphStyle(int handle, string anchorId, string styleId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.SetParagraphStyle(anchorId, styleId));
+
+    public static string SetParagraphFormat(int handle, string anchorId, ParagraphFormatOp? op,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.SetParagraphFormat(anchorId, op ?? new ParagraphFormatOp()));
+
+    public static string SetListLevel(int handle, string anchorId, int levelDelta,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.SetListLevel(anchorId, levelDelta));
+
+    public static string RemoveListMembership(int handle, string anchorId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.RemoveListMembership(anchorId));
+
+    public static string ApplyListFormat(int handle, string anchorId, ListFormat? kind,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.ApplyListFormat(anchorId, kind ?? DefaultListFormat));
+
+    public static string ApplyListFormatRange(int handle, string firstAnchorId, string lastAnchorId, ListFormat? kind,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, firstAnchorId,
+            s => s.ApplyListFormatRange(firstAnchorId, lastAnchorId, kind ?? DefaultListFormat));
+
+    public static string SetListStartOverride(int handle, string anchorId, int value,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.SetListStartOverride(anchorId, value));
+
+    public static string ClearListStartOverride(int handle, string anchorId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.ClearListStartOverride(anchorId));
+
+    // ─── Tier D: tables ─────────────────────────────────────────────────
+
+    public static string GetTableMetadata(int handle, string tableAnchorId) =>
+        DocxSessionJson.SerializeTableMetadataResult(
+            SessionRegistry.Get(handle).GetTableMetadata(tableAnchorId));
+
+    public static string ResolveTableCellAnchor(int handle, string cellAnchorId) =>
+        DocxSessionJson.SerializeTableCellResolutionResult(
+            SessionRegistry.Get(handle).ResolveTableCellAnchor(cellAnchorId));
+
+    public static string ResolveTableCellCoordinate(
+        int handle, string tableAnchorId, int rowIndex, int columnIndex) =>
+        DocxSessionJson.SerializeTableCellResolutionResult(
+            SessionRegistry.Get(handle).ResolveTableCellCoordinate(tableAnchorId, rowIndex, columnIndex));
+
+    public static string ReplaceCellContent(int handle, string cellAnchorId, string markdown,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, cellAnchorId,
+            s => s.ReplaceCellContent(cellAnchorId, markdown));
+
+    public static string InsertTable(int handle, string anchorId, Position? position, int rows, int cols,
+        string optionsJson, MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.InsertTable(
+            anchorId, position ?? DefaultInsertPosition, rows, cols, DocxSessionJson.ParseTableInsertOptions(optionsJson)));
+
+    public static string InsertTableRow(int handle, string cellAnchorId, Position? position,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, cellAnchorId, s => s.InsertTableRow(cellAnchorId, position ?? DefaultInsertPosition));
+
+    public static string InsertTableColumn(int handle, string cellAnchorId, Position? position,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, cellAnchorId, s => s.InsertTableColumn(cellAnchorId, position ?? DefaultInsertPosition));
+
+    public static string DeleteTableRow(int handle, string cellAnchorId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, cellAnchorId, s => s.DeleteTableRow(cellAnchorId));
+
+    public static string DeleteTableColumn(int handle, string cellAnchorId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, cellAnchorId, s => s.DeleteTableColumn(cellAnchorId));
+
+    // ─── Cell merge / unmerge (issue #340 Stage B) ──────────────────────
+
+    /// <summary><paramref name="content"/> is "append" (default) | "discard" | "reject" —
+    /// what happens to the content of the cells the merge absorbs.</summary>
+    public static string MergeCells(int handle, string cellAnchorId, int? rowSpan, int? colSpan,
+        string? content, MutationPreconditions? preconditions = null)
+    {
+        var options = new TableMergeOptions { Content = DocxSessionJson.ParseTableMergeContent(content) };
+        return Mutate(handle, preconditions, cellAnchorId, s => s.MergeCells(
+            cellAnchorId, rowSpan ?? DefaultMergeSpan, colSpan ?? DefaultMergeSpan, options));
+    }
+
+    public static string UnmergeCells(int handle, string cellAnchorId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, cellAnchorId, s => s.UnmergeCells(cellAnchorId));
+
+    // ─── Table styling (issue #315 Stage A) ─────────────────────────────
+
+    /// <summary><paramref name="widthsJson"/> is a JSON array of per-column twip widths
+    /// (one positive value per column, left→right).</summary>
+    public static string SetColumnWidths(int handle, string cellAnchorId, string widthsJson,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, cellAnchorId,
+            s => s.SetColumnWidths(cellAnchorId, DocxSessionJson.ParseIntArray(widthsJson)));
+
+    /// <summary><paramref name="specJson"/> is a TableBorderSpec object
+    /// ({ scope?: "all"|"outside"|"inside", style?, size?, color? }); "" uses the defaults.</summary>
+    public static string SetTableBorders(int handle, string cellAnchorId, string specJson,
+        MutationPreconditions? preconditions = null)
+    {
+        var spec = DocxSessionJson.ParseTableBorderSpec(specJson);
+        return Mutate(handle, preconditions, cellAnchorId, s => s.SetTableBorders(cellAnchorId, spec));
+    }
+
+    /// <summary><paramref name="fill"/> is a hex RRGGBB triplet or "auto"; "" clears the shading.
+    /// <paramref name="scope"/> is "cell" | "row"; null or "" takes "cell".</summary>
+    public static string SetCellShading(int handle, string cellAnchorId, string? fill, string? scope,
+        MutationPreconditions? preconditions = null)
+    {
+        var parsedScope = DocxSessionJson.ParseTableShadingScope(scope);
+        fill ??= DefaultCellFill;
+        return Mutate(handle, preconditions, cellAnchorId, s => s.SetCellShading(
+            cellAnchorId, fill.Length == 0 ? null : fill, parsedScope));
+    }
+
+    /// <summary><paramref name="repeat"/> null marks the row (the op's purpose); false unmarks it.</summary>
+    public static string SetRepeatHeaderRow(int handle, string cellAnchorId, bool? repeat,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, cellAnchorId,
+            s => s.SetRepeatHeaderRow(cellAnchorId, repeat ?? DefaultRepeatHeaderRow));
+
+    public static string SetTableRowOptions(int handle, string cellAnchorId, bool? repeatHeader,
+        bool? allowBreakAcrossPages, int? heightTwips, string? heightRule,
+        MutationPreconditions? preconditions = null)
+    {
+        var options = new TableRowOptions
+        {
+            RepeatHeader = repeatHeader,
+            AllowBreakAcrossPages = allowBreakAcrossPages,
+            HeightTwips = heightTwips,
+            HeightRule = DocxSessionJson.ParseTableRowHeightRule(heightRule),
+        };
+        return Mutate(handle, preconditions, cellAnchorId, s => s.SetTableRowOptions(cellAnchorId, options));
+    }
+
+    // ─── Raw escape hatch ───────────────────────────────────────────────
+
+    public static string RawGetXml(int handle, string anchorId) =>
+        SessionRegistry.Get(handle).Raw.GetXml(anchorId);
+
+    public static string RawInsertXml(int handle, string anchorId, Position position, string xml,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.Raw.InsertXml(anchorId, position, xml));
+
+    public static string RawReplaceXml(int handle, string anchorId, string xml,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.Raw.ReplaceXml(anchorId, xml));
+
+    // ─── Tier E: annotations ────────────────────────────────────────────
+
+    public static string AddAnnotation(int handle, string anchorId, CharSpan? span,
+        string annotationJson, MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, anchorId, s => s.AddAnnotation(
+            anchorId, span, DocxSessionJson.DeserializeAnnotation(annotationJson)));
+
+    public static string RemoveAnnotation(int handle, string annotationId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, null, s => s.RemoveAnnotation(annotationId));
+
+    /// <summary>An omitted <paramref name="updateJson"/> is the empty update, which changes
+    /// nothing.</summary>
+    public static string UpdateAnnotation(int handle, string annotationId, string? updateJson,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, null, s => s.UpdateAnnotation(
+            annotationId, DocxSessionJson.DeserializeAnnotationUpdate(updateJson ?? EmptyObjectJson)));
+
+    public static string MoveAnnotation(int handle, string annotationId, string newAnchorId,
+        CharSpan? newSpan, MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, newAnchorId,
+            s => s.MoveAnnotation(annotationId, newAnchorId, newSpan));
+
+    // ─── Tracked revisions (issue #318) ─────────────────────────────────
+
+    /// <summary>Markup-native revision listing — stable ids, true authors/dates, no
+    /// accept/reject re-diff. See <see cref="DocxSession.ListRevisions"/>.</summary>
+    /// <summary>The explicit repairs the registry offers for entries it refuses to resolve.</summary>
+    public static string ListRevisionRepairs(int handle) =>
+        DocxSessionJson.SerializeRevisionRepairProposals(SessionRegistry.Get(handle).ListRevisionRepairs());
+
+    /// <summary>Perform the repairs in <paramref name="repairsJson"/> atomically as one undo step.</summary>
+    public static string RepairRevisions(int handle, string repairsJson) =>
+        DocxSessionJson.SerializeRevisionRepairResult(SessionRegistry.Get(handle).RepairRevisions(
+            DocxSessionJson.ParseRevisionRepairRequests(repairsJson)));
+
+    /// <summary>The session's tracked revisions, narrowed by <paramref name="filter"/> when given
+    /// (see <see cref="RevisionListFilter"/>).</summary>
+    public static string ListRevisions(int handle, RevisionListFilter? filter = null) =>
+        DocxSessionJson.SerializeRevisionList(
+            DocxSessionJson.FilterRevisions(SessionRegistry.Get(handle).ListRevisions(), filter));
+
+    public static string AcceptRevision(int handle, string revisionId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, null, s => s.AcceptRevision(revisionId));
+
+    public static string RejectRevision(int handle, string revisionId,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, null, s => s.RejectRevision(revisionId));
+
+    public static string AcceptAllRevisions(int handle,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, null, s => s.AcceptAllRevisions());
+
+    public static string RejectAllRevisions(int handle,
+        MutationPreconditions? preconditions = null) =>
+        Mutate(handle, preconditions, null, s => s.RejectAllRevisions());
+
+    // ─── Undo / Redo ────────────────────────────────────────────────────
+
+    /// <summary><c>false</c> means nothing to undo. A corrupted session (issue #963) throws instead,
+    /// so a transport reports an error rather than an empty history.</summary>
+    public static bool Undo(int handle) => RefuseIfCorrupted(SessionRegistry.Get(handle)).Undo();
+
+    /// <summary>See <see cref="Undo"/>.</summary>
+    public static bool Redo(int handle) => RefuseIfCorrupted(SessionRegistry.Get(handle)).Redo();
+
+    private static DocxSession RefuseIfCorrupted(DocxSession session) =>
+        session.IsCorrupted
+            ? throw new System.InvalidOperationException(
+                "session_corrupted: a failed edit could not be rolled back, so the document may be "
+                + "half-changed; reopen the session from known-good bytes")
+            : session;
+
+    public static string UndoChecked(int handle, MutationPreconditions? preconditions) =>
+        Mutate(handle, preconditions, null, s => s.Undo()
+            ? new EditResult { Success = true }
+            : EditResult.Fail(EditErrorCode.NothingToUndo, "nothing to undo"));
+
+    public static string RedoChecked(int handle, MutationPreconditions? preconditions) =>
+        Mutate(handle, preconditions, null, s => s.Redo()
+            ? new EditResult { Success = true }
+            : EditResult.Fail(EditErrorCode.NothingToRedo, "nothing to redo"));
+
+    // ─── Session configuration (issue #304) ─────────────────────────────
+
+    public static void SetTrackedChanges(int handle, TrackedChangeMode mode) =>
+        SessionRegistry.Get(handle).SetTrackedChanges(mode);
+
+    public static void SetRevisionAuthor(int handle, string? author) =>
+        SessionRegistry.Get(handle).SetRevisionAuthor(author);
+
+    public static string GetTrackedChanges(int handle)
+    {
+        var s = SessionRegistry.Get(handle);
+        return "{\"trackedChanges\":" + DocxSessionJson.JsonString(DocxSessionJson.TrackedChangeModeName(s.TrackedChanges))
+            + ",\"revisionAuthor\":" + (s.RevisionAuthor is null ? "null" : DocxSessionJson.JsonString(s.RevisionAuthor))
+            + "}";
+    }
+}

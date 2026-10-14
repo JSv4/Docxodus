@@ -1,0 +1,85 @@
+{
+  "id": "template-fill",
+  "title": "Fill content controls in a template",
+  "intent": "Complete the engagement-letter template: client name Acme Holdings LLC, governing law Delaware, arbitration included — leaving the template prose and every control wrapper intact.",
+  "fixture": "content-control-template",
+  "steps": [
+    {
+      "tool": "docxodus_content_controls",
+      "target": {
+        "mode": "kind",
+        "query": "sdt",
+        "index": 0
+      },
+      "args": {
+        "action": "fill_text",
+        "text": "Acme Holdings LLC"
+      }
+    },
+    {
+      "tool": "docxodus_content_controls",
+      "target": {
+        "mode": "kind",
+        "query": "sdt",
+        "index": 1
+      },
+      "args": {
+        "action": "select_item",
+        "value": "Delaware"
+      }
+    },
+    {
+      "tool": "docxodus_content_controls",
+      "target": {
+        "mode": "kind",
+        "query": "sdt",
+        "index": 2
+      },
+      "args": {
+        "action": "set_checked",
+        "checked": true
+      }
+    }
+  ],
+  "invariants": {
+    "taskCompletion": {
+      "textPresent": [
+        "Acme Holdings LLC",
+        "Delaware",
+        "☒"
+      ],
+      "textAbsent": [
+        "CLIENT NAME",
+        "GOVERNING LAW"
+      ]
+    },
+    "targetPrecision": {
+      "changedAnchorsAtLeast": 3,
+      "changedAnchorsAtMost": 9
+    },
+    "collateral": {
+      "partsAdded": 0,
+      "partsRemoved": 0,
+      "textPreserved": [
+        "entered into by the client named below",
+        "Signature follows on the final page."
+      ],
+      "changedPartsMustBeWithin": [
+        "/word/document.xml"
+      ]
+    },
+    "validity": {
+      "decisionIn": [
+        "passed",
+        "passedWithPreExistingFindings"
+      ]
+    },
+    "rendering": {
+      "htmlMustContain": [
+        "Acme Holdings LLC",
+        "Delaware",
+        "☒"
+      ]
+    }
+  }
+}

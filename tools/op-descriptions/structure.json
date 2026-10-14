@@ -1,0 +1,101 @@
+{
+  "$comment": "One description of the structural session ops (issue #982). See docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names (the MCP name where the stdio host and MCP differ); argNames, defaults and requires on a transport are recorded divergences, not the target. flatAliases (on mcp) records the deprecated flat top-level MCP properties that still alias fields of the object argument MCP now takes nested (issue #1025): argument -> (field -> MCP property). tools/mcp-server/ObjectArguments.cs is the code they are checked against; no new flat alias should be added.",
+  "family": "structure",
+  "ops": [
+    {
+      "op": "deleteBlock",
+      "facade": "DeleteBlock",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "DeleteBlock" },
+        "npm": { "method": "deleteBlock" },
+        "python": { "method": "delete_block" },
+        "stdio": { "op": "delete_block" },
+        "mcp": { "tool": "docxodus_edit", "action": "delete_block" }
+      }
+    },
+    {
+      "op": "moveBlock",
+      "facade": "MoveBlock",
+      "result": "EditResult",
+      "args": [
+        { "name": "sourceAnchorId", "type": "anchor", "required": true },
+        { "name": "targetAnchorId", "type": "anchor", "required": true },
+        { "name": "position", "type": "position", "required": false, "default": "after" }
+      ],
+      "transports": {
+        "wasm": { "method": "MoveBlock" },
+        "npm": { "method": "moveBlock" },
+        "python": { "method": "move_block" },
+        "stdio": { "op": "move_block" },
+        "mcp": { "tool": "docxodus_edit", "action": "move_block" }
+      }
+    },
+    {
+      "op": "deleteRange",
+      "facade": "DeleteRange",
+      "result": "EditResult",
+      "args": [
+        { "name": "fromAnchorId", "type": "anchor", "required": true },
+        { "name": "toAnchorIdExclusive", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "DeleteRange" },
+        "npm": { "method": "deleteRange" },
+        "python": { "method": "delete_range" },
+        "stdio": { "op": "delete_range" },
+        "mcp": { "tool": "docxodus_edit", "action": "delete_range" }
+      }
+    },
+    {
+      "op": "deleteSection",
+      "facade": "DeleteSection",
+      "result": "EditResult",
+      "args": [
+        { "name": "headingAnchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "DeleteSection" },
+        "npm": { "method": "deleteSection" },
+        "python": { "method": "delete_section" },
+        "stdio": { "op": "delete_section" },
+        "mcp": { "tool": "docxodus_edit", "action": "delete_section" }
+      }
+    },
+    {
+      "op": "insertHorizontalRule",
+      "facade": "InsertHorizontalRule",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "position", "type": "position", "required": false, "default": "after" },
+        { "name": "rule", "type": "object", "required": false }
+      ],
+      "transports": {
+        "wasm": { "method": "InsertHorizontalRule" },
+        "npm": { "method": "insertHorizontalRule" },
+        "python": { "method": "insert_horizontal_rule" },
+        "stdio": { "op": "insert_horizontal_rule" },
+        "mcp": { "tool": "docxodus_create", "action": "insert_horizontal_rule", "flatAliases": { "rule": { "style": "ruleStyle" } }, "$comment": "The deprecated flat ruleStyle keeps its narrower enum (single | double | thick); rule.style takes any OOXML border style." }
+      }
+    },
+    {
+      "op": "validMoveTargets",
+      "facade": "ValidMoveTargets",
+      "result": "MoveTarget[]",
+      "args": [
+        { "name": "sourceAnchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "ValidMoveTargets" },
+        "npm": { "absent": "kept off: the block editor's drag-and-drop gate, called through the bridge export by npm/src/editor.ts" },
+        "python": { "absent": "kept off: a drag-and-drop UI gate with no stdio op to call; move_block refuses an illegal move itself" },
+        "stdio": { "absent": "kept off: a drag-and-drop UI gate; move_block refuses an illegal move itself" },
+        "mcp": { "absent": "kept off: a drag-and-drop UI gate; docxodus_edit move_block refuses an illegal move itself" }
+      }
+    }
+  ]
+}

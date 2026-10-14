@@ -1,0 +1,1339 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docxodus.dev/schemas/verification/delivery-change-receipt/v1",
+  "title": "Docxodus delivery change receipt v1",
+  "description": "The exact deterministic JSON envelope emitted by DeliveryChangeReceiptSerializer. Nullable properties and arrays are always present on the wire.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "payload",
+    "receiptDigest"
+  ],
+  "properties": {
+    "payload": {
+      "$ref": "#/$defs/payload"
+    },
+    "receiptDigest": {
+      "$ref": "#/$defs/digest"
+    }
+  },
+  "$defs": {
+    "nullableString": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "nullableEditErrorCode": {
+      "enum": [
+        null,
+        "anchor_not_found",
+        "anchor_wrong_kind",
+        "anchors_not_adjacent",
+        "session_disposed",
+        "malformed_markdown",
+        "unsupported_markdown_syntax",
+        "table_insert_not_supported",
+        "footnote_ref_not_supported",
+        "comment_marker_not_supported",
+        "image_insert_not_supported",
+        "anchor_token_in_payload",
+        "offset_out_of_range",
+        "invalid_position",
+        "unknown_style",
+        "invalid_list_level",
+        "invalid_list_start_value",
+        "invalid_page_numbering",
+        "invalid_paragraph_format",
+        "invalid_table_styling",
+        "invalid_table_merge",
+        "table_anchor_migration_required",
+        "malformed_xml",
+        "disallowed_namespace",
+        "incompatible_element_type",
+        "validation_failed",
+        "nothing_to_undo",
+        "nothing_to_redo",
+        "duplicate_annotation_id",
+        "annotation_not_found",
+        "empty_annotation_span",
+        "hyperlink_not_found",
+        "bookmark_not_found",
+        "duplicate_bookmark_name",
+        "invalid_bookmark_name",
+        "invalid_hyperlink_target",
+        "missing_bookmark_target",
+        "bookmark_in_use",
+        "managed_bookmark",
+        "empty_hyperlink_span",
+        "unsupported_inline_boundary",
+        "image_not_found",
+        "invalid_image_data",
+        "unsupported_image_format",
+        "image_too_large",
+        "invalid_image_dimensions",
+        "unsupported_image_markup",
+        "linked_image_read_only",
+        "invalid_image_layout",
+        "content_control_not_found",
+        "content_control_malformed",
+        "content_control_unsupported",
+        "content_control_locked",
+        "content_control_bound",
+        "content_control_wrong_type",
+        "invalid_content_control_value",
+        "content_control_placement_unsupported",
+        "content_control_nested_fill_unsupported",
+        "repeating_section_constraint",
+        "empty_comment_span",
+        "revision_not_found",
+        "precondition_failed",
+        "invalid_batch_step",
+        "invalid_transaction",
+        "transaction_conflict",
+        "transaction_result_evicted",
+        "transaction_incomplete",
+        "revision_unsupported",
+        "revision_malformed",
+        "revision_ambiguous",
+        "tracked_operation_unsupported",
+        "unresolved_structural_revision",
+        "internal_error"
+      ]
+    },
+    "portableInteger": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "nullablePortableInteger": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "nonNegativeInt32": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2147483647
+    },
+    "nullableNonNegativeInt32": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 2147483647
+    },
+    "digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "value"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "SHA-256"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "nullableDigest": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/digest"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "nullableJsonObject": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "documentIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "documentVersion",
+        "packageKind",
+        "packageManifestSchema",
+        "mainDocumentUri",
+        "rawPackageBytesDigest",
+        "orderedOpcContentDigest",
+        "normalizedSemanticDigest"
+      ],
+      "properties": {
+        "documentVersion": {
+          "$ref": "#/$defs/portableInteger"
+        },
+        "packageKind": {
+          "const": "opc"
+        },
+        "packageManifestSchema": {
+          "const": "https://docxodus.dev/schemas/verification/package-manifest/v1"
+        },
+        "mainDocumentUri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^/[^\\\\]*$"
+        },
+        "rawPackageBytesDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "orderedOpcContentDigest": {
+          "$ref": "#/$defs/nullableDigest"
+        },
+        "normalizedSemanticDigest": {
+          "$ref": "#/$defs/nullableDigest"
+        }
+      }
+    },
+    "textEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "digest",
+        "characterCount",
+        "summary",
+        "value"
+      ],
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "characterCount": {
+          "$ref": "#/$defs/nonNegativeInt32"
+        },
+        "summary": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "value": {
+          "$ref": "#/$defs/nullableString"
+        }
+      }
+    },
+    "nullableTextEvidence": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/textEvidence"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "authoredDiagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "$ref": "#/$defs/textEvidence"
+        }
+      }
+    },
+    "nullableAuthoredDiagnostic": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/authoredDiagnostic"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "objectChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "changeKind",
+        "anchorId",
+        "kind",
+        "scope",
+        "unid"
+      ],
+      "properties": {
+        "changeKind": {
+          "enum": [
+            "added",
+            "removed",
+            "modified"
+          ]
+        },
+        "anchorId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1
+        },
+        "unid": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "operationResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resultDigest",
+        "success",
+        "errorCode",
+        "errorMessage",
+        "objectChanges",
+        "fullResult"
+      ],
+      "properties": {
+        "resultDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "errorCode": {
+          "$ref": "#/$defs/nullableEditErrorCode"
+        },
+        "errorMessage": {
+          "$ref": "#/$defs/nullableTextEvidence"
+        },
+        "objectChanges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/objectChange"
+          }
+        },
+        "fullResult": {
+          "$ref": "#/$defs/nullableJsonObject"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "success": {
+                "const": true
+              }
+            },
+            "required": [
+              "success"
+            ]
+          },
+          "then": {
+            "properties": {
+              "errorCode": {
+                "type": "null"
+              },
+              "errorMessage": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "errorCode": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "errorMessage": {
+                "$ref": "#/$defs/textEvidence"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "index",
+        "tool",
+        "action",
+        "argumentsDigest",
+        "argumentsSummary",
+        "arguments",
+        "executionStatus",
+        "success",
+        "rolledBack",
+        "results"
+      ],
+      "properties": {
+        "index": {
+          "$ref": "#/$defs/nonNegativeInt32"
+        },
+        "tool": {
+          "type": "string",
+          "minLength": 1
+        },
+        "action": {
+          "type": "string",
+          "minLength": 1
+        },
+        "argumentsDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "argumentsSummary": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "arguments": {
+          "$ref": "#/$defs/nullableJsonObject"
+        },
+        "executionStatus": {
+          "enum": [
+            "notExecuted",
+            "succeeded",
+            "failed",
+            "succeededRolledBack",
+            "failedRolledBack"
+          ]
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "rolledBack": {
+          "type": "boolean"
+        },
+        "results": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/operationResult"
+          }
+        }
+      }
+    },
+    "authoredChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entityKind",
+        "changeKind",
+        "entityId",
+        "sourceDigest",
+        "author",
+        "date",
+        "dateUtc",
+        "type",
+        "family",
+        "partUri",
+        "scope",
+        "anchorId",
+        "resolutionStatus",
+        "diagnostic",
+        "constituentIds",
+        "constituentKeys",
+        "affectedAnchorIds",
+        "text",
+        "fullEvidence"
+      ],
+      "properties": {
+        "entityKind": {
+          "enum": [
+            "revision",
+            "comment",
+            "annotation"
+          ]
+        },
+        "changeKind": {
+          "enum": [
+            "added",
+            "removed",
+            "modified"
+          ]
+        },
+        "entityId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "author": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "date": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "dateUtc": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "type": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "family": {
+          "enum": [
+            "contentInsert",
+            "contentDelete",
+            "move",
+            "paragraphMark",
+            "rowInsert",
+            "rowDelete",
+            "cellInsert",
+            "cellDelete",
+            "cellMerge",
+            "contentControlInsert",
+            "contentControlDelete",
+            "numberingPropertiesInsert",
+            "numberingChange",
+            "propertiesChange",
+            "unsupported",
+            null
+          ]
+        },
+        "partUri": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "scope": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "anchorId": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "resolutionStatus": {
+          "enum": [
+            "supported",
+            "unsupported",
+            "malformed",
+            "ambiguous",
+            null
+          ]
+        },
+        "diagnostic": {
+          "$ref": "#/$defs/nullableAuthoredDiagnostic"
+        },
+        "constituentIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "constituentKeys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "affectedAnchorIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "text": {
+          "$ref": "#/$defs/nullableTextEvidence"
+        },
+        "fullEvidence": {
+          "$ref": "#/$defs/nullableJsonObject"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "entityKind": {
+                "const": "revision"
+              }
+            },
+            "required": [
+              "entityKind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "family": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "partUri": {
+                "type": "string",
+                "minLength": 1
+              },
+              "scope": {
+                "type": "string",
+                "minLength": 1
+              },
+              "resolutionStatus": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "constituentIds": {
+                "minItems": 1
+              },
+              "constituentKeys": {
+                "minItems": 1
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "dateUtc": {
+                "type": "null"
+              },
+              "family": {
+                "type": "null"
+              },
+              "anchorId": {
+                "type": "null"
+              },
+              "resolutionStatus": {
+                "type": "null"
+              },
+              "diagnostic": {
+                "type": "null"
+              },
+              "constituentIds": {
+                "maxItems": 0
+              },
+              "constituentKeys": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    "transaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sequence",
+        "entryId",
+        "transactionId",
+        "requestFingerprint",
+        "mode",
+        "status",
+        "baseVersion",
+        "resultVersion",
+        "beforeDocument",
+        "afterDocument",
+        "reportedPackageContentDigest",
+        "operations",
+        "authoredChanges",
+        "warnings"
+      ],
+      "properties": {
+        "sequence": {
+          "$ref": "#/$defs/portableInteger"
+        },
+        "entryId": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "transactionId": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "requestFingerprint": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "mode": {
+          "enum": [
+            "atomic",
+            "bestEffort"
+          ]
+        },
+        "status": {
+          "enum": [
+            "committed",
+            "partiallyCommitted",
+            "failed",
+            "prediction"
+          ]
+        },
+        "baseVersion": {
+          "$ref": "#/$defs/portableInteger"
+        },
+        "resultVersion": {
+          "$ref": "#/$defs/portableInteger"
+        },
+        "beforeDocument": {
+          "$ref": "#/$defs/documentIdentity"
+        },
+        "afterDocument": {
+          "$ref": "#/$defs/documentIdentity"
+        },
+        "reportedPackageContentDigest": {
+          "$ref": "#/$defs/nullableDigest"
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/operation"
+          }
+        },
+        "authoredChanges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/authoredChange"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/textEvidence"
+          }
+        }
+      }
+    },
+    "lineageEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sequence",
+        "action",
+        "affectedEntryId",
+        "beforeDocument",
+        "afterDocument"
+      ],
+      "properties": {
+        "sequence": {
+          "$ref": "#/$defs/portableInteger"
+        },
+        "action": {
+          "enum": [
+            "undo",
+            "redo"
+          ]
+        },
+        "affectedEntryId": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "beforeDocument": {
+          "$ref": "#/$defs/documentIdentity"
+        },
+        "afterDocument": {
+          "$ref": "#/$defs/documentIdentity"
+        }
+      }
+    },
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entryUri",
+        "ownerUri",
+        "relationshipId",
+        "targetUri",
+        "propertyPath"
+      ],
+      "properties": {
+        "entryUri": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "ownerUri": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "relationshipId": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "targetUri": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "propertyPath": {
+          "$ref": "#/$defs/nullableString"
+        }
+      }
+    },
+    "packageChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "changeId",
+        "kind",
+        "location",
+        "before",
+        "after",
+        "disposition",
+        "transactionEntryId",
+        "requestedOperationIndex",
+        "derivation"
+      ],
+      "properties": {
+        "changeId": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "kind": {
+          "enum": [
+            "partAdded",
+            "partRemoved",
+            "partModified",
+            "relationshipAdded",
+            "relationshipRemoved",
+            "relationshipModified"
+          ]
+        },
+        "location": {
+          "$ref": "#/$defs/location"
+        },
+        "before": {
+          "$ref": "#/$defs/nullableTextEvidence"
+        },
+        "after": {
+          "$ref": "#/$defs/nullableTextEvidence"
+        },
+        "disposition": {
+          "enum": [
+            "userRequested",
+            "derived",
+            "unexpected"
+          ]
+        },
+        "transactionEntryId": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "requestedOperationIndex": {
+          "$ref": "#/$defs/nullableNonNegativeInt32"
+        },
+        "derivation": {
+          "$ref": "#/$defs/nullableString"
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactId",
+        "role",
+        "mediaType",
+        "availability",
+        "byteLength",
+        "digest",
+        "relativePath",
+        "unavailableReason",
+        "documentVersion",
+        "packageDigest",
+        "rendererFingerprint",
+        "pageMapDigest"
+      ],
+      "properties": {
+        "artifactId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "enum": [
+            "cleanDocx",
+            "reviewDocx",
+            "html",
+            "pdf",
+            "pageImage",
+            "pageMap",
+            "packageManifest",
+            "semanticDiff",
+            "validationReport",
+            "reversibilityProof",
+            "renderReport",
+            "otherReport"
+          ]
+        },
+        "mediaType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "availability": {
+          "enum": [
+            "available",
+            "unavailable"
+          ]
+        },
+        "byteLength": {
+          "$ref": "#/$defs/nullablePortableInteger"
+        },
+        "digest": {
+          "$ref": "#/$defs/nullableDigest"
+        },
+        "relativePath": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "unavailableReason": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "documentVersion": {
+          "$ref": "#/$defs/nullablePortableInteger"
+        },
+        "packageDigest": {
+          "$ref": "#/$defs/nullableDigest"
+        },
+        "rendererFingerprint": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "pageMapDigest": {
+          "$ref": "#/$defs/nullableDigest"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "availability": {
+                "const": "available"
+              }
+            },
+            "required": [
+              "availability"
+            ]
+          },
+          "then": {
+            "properties": {
+              "byteLength": {
+                "$ref": "#/$defs/portableInteger"
+              },
+              "digest": {
+                "$ref": "#/$defs/digest"
+              },
+              "unavailableReason": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "byteLength": {
+                "type": "null"
+              },
+              "digest": {
+                "type": "null"
+              },
+              "unavailableReason": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "documentVersion": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "documentVersion"
+            ]
+          },
+          "then": {
+            "properties": {
+              "packageDigest": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "packageDigest": {
+                "$ref": "#/$defs/digest"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "evidenceReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "schema",
+        "digest",
+        "artifactId",
+        "summary"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "validationResult",
+            "redlineReversibility"
+          ]
+        },
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "artifactId": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "summary": {
+          "$ref": "#/$defs/nullableString"
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "validationResult"
+            },
+            "schema": {
+              "const": "https://docxodus.dev/schemas/verification/deliverable-verification/v1"
+            }
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "redlineReversibility"
+            },
+            "schema": {
+              "const": "https://docxodus.dev/schemas/verification/redline-reversibility-proof/v1"
+            }
+          }
+        }
+      ]
+    },
+    "semanticChangeSetBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "transactionEntryId",
+        "beforeDocument",
+        "afterDocument",
+        "schema",
+        "schemaVersion",
+        "changeCount",
+        "digest",
+        "artifactId"
+      ],
+      "properties": {
+        "scope": {
+          "enum": [
+            "sourceToDelivered",
+            "transaction"
+          ]
+        },
+        "transactionEntryId": {
+          "$ref": "#/$defs/nullableString"
+        },
+        "beforeDocument": {
+          "$ref": "#/$defs/documentIdentity"
+        },
+        "afterDocument": {
+          "$ref": "#/$defs/documentIdentity"
+        },
+        "schema": {
+          "const": "docxodus.semantic-changes"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "changeCount": {
+          "$ref": "#/$defs/nonNegativeInt32"
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "artifactId": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "pageMapRect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "properties": {
+        "x": {
+          "type": "number",
+          "minimum": 0
+        },
+        "y": {
+          "type": "number",
+          "minimum": 0
+        },
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "pageMapPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pageNumber",
+        "pageInSection",
+        "width",
+        "height",
+        "sectionIndex",
+        "pageName"
+      ],
+      "properties": {
+        "pageNumber": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "pageInSection": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "sectionIndex": {
+          "$ref": "#/$defs/nullableNonNegativeInt32"
+        },
+        "pageName": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "pageMapFragment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fragmentId",
+        "anchorId",
+        "fragmentIndex",
+        "pageNumber",
+        "geometry",
+        "story",
+        "inTableCell"
+      ],
+      "properties": {
+        "fragmentId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "anchorId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fragmentIndex": {
+          "$ref": "#/$defs/nonNegativeInt32"
+        },
+        "pageNumber": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "geometry": {
+          "$ref": "#/$defs/pageMapRect"
+        },
+        "story": {
+          "enum": [
+            "body",
+            "header",
+            "footer",
+            "footnote",
+            "endnote",
+            "comment"
+          ]
+        },
+        "inTableCell": {
+          "type": "boolean"
+        }
+      }
+    },
+    "pageCitation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "anchorId",
+        "scope",
+        "documentVersion",
+        "packageDigest",
+        "rendererFingerprint",
+        "pageMapDigest",
+        "pageMapArtifactId",
+        "renderArtifactId",
+        "renderArtifactDigest",
+        "pages",
+        "fragments"
+      ],
+      "properties": {
+        "anchorId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1
+        },
+        "documentVersion": {
+          "$ref": "#/$defs/portableInteger"
+        },
+        "packageDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "rendererFingerprint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pageMapDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "pageMapArtifactId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "renderArtifactId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "renderArtifactDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "pages": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/pageMapPage"
+          }
+        },
+        "fragments": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/pageMapFragment"
+          }
+        }
+      }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "schemaVersion",
+        "canonicalization",
+        "privacyProfile",
+        "sourceDocument",
+        "deliveredDocument",
+        "transactions",
+        "lineage",
+        "packageChanges",
+        "hasUnexpectedChanges",
+        "evidence",
+        "semanticChangeSets",
+        "artifacts",
+        "pageCitations",
+        "warnings"
+      ],
+      "properties": {
+        "schema": {
+          "const": "https://docxodus.dev/schemas/verification/delivery-change-receipt/v1"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "canonicalization": {
+          "const": "docxodus-canonical-json-v1"
+        },
+        "privacyProfile": {
+          "enum": [
+            "hashOnly",
+            "hashAndSummary",
+            "fullEvidence"
+          ]
+        },
+        "sourceDocument": {
+          "$ref": "#/$defs/documentIdentity"
+        },
+        "deliveredDocument": {
+          "$ref": "#/$defs/documentIdentity"
+        },
+        "transactions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/transaction"
+          }
+        },
+        "lineage": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/lineageEvent"
+          }
+        },
+        "packageChanges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/packageChange"
+          }
+        },
+        "hasUnexpectedChanges": {
+          "type": "boolean"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidenceReference"
+          }
+        },
+        "semanticChangeSets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/semanticChangeSetBinding"
+          }
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/artifact"
+          }
+        },
+        "pageCitations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pageCitation"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/textEvidence"
+          }
+        }
+      }
+    }
+  }
+}

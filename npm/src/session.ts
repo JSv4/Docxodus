@@ -1,0 +1,2367 @@
+// Copyright (c) John Scrudato IV. All rights reserved.
+// Licensed under the MIT license. See LICENSE file in the project root for full license information.
+
+import type {
+  AnchorInfo,
+  AnchorRef,
+  AnchorTargetRef,
+  AnnotationUpdate,
+  BlockMetadata,
+  BookmarkInfo,
+  BulkEditResult,
+  CharSpan,
+  CommentListEntry,
+  ContentControlFillOptions,
+  ContentControlInfo,
+  CrossBlockMatch,
+  DiffEntry,
+  DocumentAnnotation,
+  DocumentRange,
+  DeliverableVerificationResult,
+  DeliverableVerificationRequest,
+  DocxodusWasmExports,
+  DocxSessionProjection,
+  DocxSessionSettings,
+  EditError,
+  EditResult,
+  EditSummary,
+  FillOptions,
+  FindOptions,
+  FormatOp,
+  FormattingInspection,
+  HeaderFooterKind,
+  HyperlinkInfo,
+  HyperlinkKind,
+  ImageCapabilities,
+  ImageDimensions,
+  ImageInsertOptions,
+  ImageOccurrence,
+  FloatingImageLayout,
+  InlineSpan,
+  NoteListEntry,
+  NumberFormat,
+  PageNumberField,
+  PageNumberingOp,
+  PageSetupOp,
+  TableOfAuthoritiesOptions,
+  TableOfContentsOptions,
+  TableOfFiguresOptions,
+  PageCitation,
+  PageCitationRequest,
+  PageMapRegistrationResult,
+  PageMapStatus,
+  PackageManifest,
+  ParagraphBorderEdge,
+  ParagraphFormatOp,
+  TableBorderSpec,
+  TableInsertOptions,
+  TableMetadataResult,
+  TableCellResolutionResult,
+  TableMergeContent,
+  TableRowOptions,
+  TableShadingScope,
+  ListFormat,
+  GrepOptions,
+  ListMembership,
+  MutationBatchFailure,
+  MutationBatchChangeSet,
+  MutationBatchMode,
+  MutationBatchPreviewOptions,
+  MutationBatchPreviewStep,
+  MutationBatchResult,
+  MutationBatchStep,
+  MutationTransaction,
+  MutationTransactionIdentity,
+  MutationPreviewRetention,
+  DeliveryBundleResult,
+  DeliveryEvidenceStatus,
+  DeliveryReceiptBuildOptions,
+  MutationBatchStepResult,
+  MutationPreconditions,
+  CrossReferenceOptions,
+  ReplaceOptions,
+  RevisionListEntry,
+  RevisionListFilter,
+  RevisionRepairProposal,
+  RevisionRepairRequest,
+  RevisionRepairResult,
+  SectionInfo,
+  SemanticChangeSet,
+  StyleInfo,
+  TemplatePlaceholder,
+  TextMatch,
+} from "./types.js";
+import { serializeVerificationRequest } from "./verification-request.js";
+import type { PageMap } from "./pagination.js";
+import { ContextBoundary, DiffFormat, PlaceholderKinds, ProjectionDepth, ProjectionScopes, TrackedChangeMode } from "./types.js";
+
+function mutationBatchChangeSet<T>(
+  before: readonly T[],
+  after: readonly T[],
+  key: (value: T) => string,
+): MutationBatchChangeSet<T> {
+  const beforeGroups = new Map<string, number[]>();
+  const afterGroups = new Map<string, number[]>();
+  const group = (items: readonly T[], target: Map<string, number[]>): void => {
+    items.forEach((item, index) => {
+      const identity = key(item);
+      const indices = target.get(identity) ?? [];
+      indices.push(index);
+      target.set(identity, indices);
+    });
+  };
+  group(before, beforeGroups);
+  group(after, afterGroups);
+
+  const beforeMatched = before.map(() => false);
+  const afterMatched = after.map(() => false);
+  const modified = after.map(() => false);
+  for (const [identity, afterIndices] of afterGroups) {
+    const beforeIndices = beforeGroups.get(identity) ?? [];
+    for (const afterIndex of afterIndices) {
+      const beforeIndex = beforeIndices.find(index =>
+        !beforeMatched[index] && JSON.stringify(before[index]) === JSON.stringify(after[afterIndex]));
+      if (beforeIndex === undefined) continue;
+      beforeMatched[beforeIndex] = true;
+      afterMatched[afterIndex] = true;
+    }
+    const remainingBefore = beforeIndices.filter(index => !beforeMatched[index]);
+    const remainingAfter = afterIndices.filter(index => !afterMatched[index]);
+    const modifiedCount = Math.min(remainingBefore.length, remainingAfter.length);
+    for (let index = 0; index < modifiedCount; index++) {
+      beforeMatched[remainingBefore[index]!] = true;
+      afterMatched[remainingAfter[index]!] = true;
+      modified[remainingAfter[index]!] = true;
+    }
+  }
+  return {
+    added: after.filter((_, index) => !afterMatched[index]),
+    removed: before.filter((_, index) => !beforeMatched[index]),
+    modified: after.filter((_, index) => modified[index]),
+  };
+}
+
+/**
+ * Stateful in-memory DOCX editing session keyed by markdown-projection anchor ids.
+ * Mirror of the .NET `DocxSession` surface. See
+ * `docs/architecture/docx_mutation_api.md` for the surface contract,
+ * anchor lifecycle, error catalog, and supported markdown subset.
+ *
+ * Sessions are not eligible for JS-side garbage collection — call {@link close}
+ * (or use a `using` block under TypeScript 5.2+) when done.
+ */
+/**
+ * Receipt warnings that say a fresh execution may regenerate ids or timestamps — the same
+ * text the .NET receipt attaches. {@link DocxSession.commitPreview} removes them, because a
+ * commit restores the previewed bytes rather than executing afresh.
+ */
+const BATCH_REPLAY_CAVEATS = {
+  revisionDates: "Tracked-revision date attributes may use the execution clock; compare revision ids, authors, types, text, and anchors across separate executions.",
+  commentDates: "Comment date attributes may be generated from the execution clock; supply dates explicitly when byte-identical replay is required.",
+  annotationMetadata: "Auto-generated annotation ids or creation timestamps are execution metadata; supply id and created explicitly when byte-identical replay is required.",
+  createdAnchors: "Created anchors and related OOXML ids may be generated independently on replay; preview/apply equivalence is semantic and packageHash or anchor ids may differ.",
+} as const;
+const BATCH_REPLAY_CAVEAT_TEXTS: ReadonlySet<string> = new Set(Object.values(BATCH_REPLAY_CAVEATS));
+
+type DeliveryBundleArtifactWire = Omit<DeliveryBundleResult["artifacts"][number], "bytes"> & { bytes?: string };
+
+/** Mirrors the .NET retained-preview count bound, so this client-side receipt map cannot outgrow it. */
+const RETAINED_PREVIEW_RECEIPTS = 8;
+
+export class DocxSession {
+  private readonly handle: number;
+  private readonly wasm: DocxodusWasmExports["DocxSessionBridge"];
+  /**
+   * The receipts this client composed for previews it retained, keyed by previewId. The host
+   * keeps the package and the binding; the step receipts live only here, so a commit can return
+   * the previewed steps and change sets without the host re-parsing a client-composed result.
+   */
+  private readonly retainedPreviewReceipts = new Map<string, MutationBatchResult>();
+
+  /** @internal */
+  constructor(handle: number, wasm: DocxodusWasmExports["DocxSessionBridge"]) {
+    this.handle = handle;
+    this.wasm = wasm;
+  }
+
+  // ─── View ────────────────────────────────────────────────────────────
+
+  project(): DocxSessionProjection {
+    return JSON.parse(this.wasm.Project(this.handle)) as DocxSessionProjection;
+  }
+
+  /** Monotonic document version (0 at open; +1 per committed mutation/undo/redo). */
+  getVersion(): number {
+    return (JSON.parse(this.wasm.GetVersion(this.handle)) as { version: number }).version;
+  }
+
+  /**
+   * Verification manifest for the current logical checkpoint. Unsaved edits are included and
+   * the read does not mutate package bytes, caches, history, or the document version.
+   */
+  getPackageManifest(): PackageManifest {
+    return JSON.parse(this.wasm.GetPackageManifest(this.handle)) as PackageManifest;
+  }
+
+  /** Register a browser-materialized PageMap without changing the document version. */
+  registerPageMap(pageMap: PageMap, expectedRendererFingerprint?: string): PageMapRegistrationResult {
+    return JSON.parse(this.wasm.RegisterPageMap(
+      this.handle,
+      JSON.stringify(pageMap),
+      expectedRendererFingerprint ?? "",
+    )) as PageMapRegistrationResult;
+  }
+
+  getPageMapStatus(request?: PageCitationRequest): PageMapStatus {
+    return JSON.parse(this.wasm.GetPageMapStatus(
+      this.handle,
+      request ? JSON.stringify(request) : "",
+    )) as PageMapStatus;
+  }
+
+  getPageCitation(anchorId: string, request: PageCitationRequest): PageCitation {
+    return JSON.parse(this.wasm.GetPageCitation(
+      this.handle,
+      anchorId,
+      JSON.stringify(request),
+    )) as PageCitation;
+  }
+
+  /** Evaluate optimistic guards without mutating or advancing the version. */
+  checkPreconditions(preconditions: MutationPreconditions): EditResult {
+    return JSON.parse(
+      this.wasm.CheckPreconditions(this.handle, JSON.stringify(preconditions)),
+    ) as EditResult;
+  }
+
+  /**
+   * Guard any synchronous mutation. WASM calls are synchronous and single-threaded, so the
+   * check and callback form one uninterrupted client-side operation. Prefer a method's native
+   * `preconditions` option where it has one (notably replaceTextRange's match-count guard).
+   */
+  runWithPreconditions(
+    preconditions: MutationPreconditions,
+    mutation: () => EditResult,
+  ): EditResult {
+    const checked = this.checkPreconditions(preconditions);
+    return checked.success ? mutation() : checked;
+  }
+
+  /**
+   * Execute synchronous mutations atomically by default. Atomic success is one undo/version
+   * unit; any failed or thrown step restores the exact package and history checkpoint.
+   */
+  executeBatch(
+    steps: readonly MutationBatchStep[],
+    mode: MutationBatchMode = "atomic",
+    transaction?: MutationTransaction,
+  ): MutationBatchResult {
+    if (mode !== "atomic" && mode !== "best_effort") {
+      throw new RangeError(`unknown mutation batch mode: ${String(mode)}`);
+    }
+    if (transaction === undefined) return this.recorded(steps, mode, undefined, () => this.runBatch(steps, mode));
+    return this.runTransactional(transaction, mode,
+      identity => this.recorded(steps, mode, identity, () => this.runBatch(steps, mode)));
+  }
+
+  /**
+   * What the session's host-owned delivery evidence recorder holds (issue #748). `enabled` is
+   * false, with the reason, unless the session was opened with `captureDeliveryEvidence`.
+   */
+  getDeliveryEvidenceStatus(): DeliveryEvidenceStatus {
+    if (!this.wasm.GetDeliveryEvidenceStatus) {
+      throw new Error("This WASM bundle predates delivery evidence; rebuild docxodus.");
+    }
+    return JSON.parse(this.wasm.GetDeliveryEvidenceStatus(this.handle)) as DeliveryEvidenceStatus;
+  }
+
+  /**
+   * Build the receipt-bearing delivery of this session through the shared bundle service: the
+   * clean current package (`final-docx`), the source-to-delivered semantic delta, and the change
+   * receipt (`change-receipt`) minted from the captured evidence — verifiable with
+   * `verifyDeliveryReceipt` against the returned artifact bytes. A history that cannot be
+   * attested yields an `incomplete` bundle whose receipt artifact carries the reason, and
+   * `evidence.unavailableReason` says why.
+   */
+  buildDeliveryReceipt(options?: DeliveryReceiptBuildOptions): DeliveryBundleResult {
+    if (!this.wasm.BuildDeliveryReceipt) {
+      throw new Error("This WASM bundle predates delivery evidence; rebuild docxodus.");
+    }
+    const wire = JSON.parse(this.wasm.BuildDeliveryReceipt(this.handle, JSON.stringify(options ?? {}))) as {
+      status: DeliveryBundleResult["status"];
+      verified: boolean;
+      manifest: Record<string, unknown>;
+      manifestBytes: string;
+      artifacts: readonly (Omit<DeliveryBundleArtifactWire, "bytes"> & { bytes?: string })[];
+      evidence?: DeliveryEvidenceStatus;
+    };
+    const decode = (base64: string): Uint8Array => Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+    return {
+      status: wire.status,
+      verified: wire.verified,
+      manifest: wire.manifest,
+      manifestBytes: decode(wire.manifestBytes),
+      artifacts: wire.artifacts.map(artifact => {
+        const { bytes, ...rest } = artifact;
+        return bytes === undefined ? rest : { ...rest, bytes: decode(bytes) };
+      }),
+      ...(wire.evidence ? { evidence: wire.evidence } : {}),
+    };
+  }
+
+  /**
+   * Describe a batch to the session's delivery evidence recorder before running it, and hand
+   * it the step results afterwards, so the version steps the batch produced are recorded under
+   * this description rather than as unlabeled mutations. A bundle without the recorder, or a
+   * session not capturing evidence, simply runs the batch.
+   */
+  private recorded(
+    steps: readonly MutationBatchStep[],
+    mode: MutationBatchMode,
+    identity: MutationTransactionIdentity | undefined,
+    run: () => MutationBatchResult,
+  ): MutationBatchResult {
+    if (!this.wasm.BeginDeliveryEvidence || !this.wasm.CompleteDeliveryEvidence
+      || !this.wasm.AbandonDeliveryEvidence) {
+      return run();
+    }
+    const described = this.wasm.BeginDeliveryEvidence(
+      this.handle,
+      JSON.stringify(steps.map(step => step.args === undefined
+        ? { tool: step.tool, action: step.action }
+        : { tool: step.tool, action: step.action, args: step.args })),
+      mode,
+      identity ? JSON.stringify({ transactionId: identity.transactionId, requestFingerprint: identity.requestFingerprint }) : "",
+    );
+    if (!described) return run();
+    let result: MutationBatchResult | undefined;
+    try {
+      result = run();
+      return result;
+    } finally {
+      if (result) this.wasm.CompleteDeliveryEvidence(this.handle, JSON.stringify(result.steps));
+      else this.wasm.AbandonDeliveryEvidence(this.handle);
+    }
+  }
+
+  /**
+   * Make a preview retained by {@link previewBatch} (`retain: true`) the live document exactly
+   * as previewed: the previewed package is restored byte-for-byte as one undo step, so the
+   * generated anchor ids, timestamps and `packageHash` are exactly those the preview reported.
+   * The commit is guarded — it refuses with `preview_stale`, editing nothing, when the session's
+   * version, package content, tracked-changes mode or revision author moved since the preview,
+   * and with `preview_not_found` once the preview expired, was evicted, or was already
+   * committed. A `transaction` makes a retry after a lost response safe, as for
+   * {@link executeBatch}.
+   */
+  commitPreview(previewId: string, transaction?: MutationTransaction): MutationBatchResult {
+    if (!this.wasm.CommitPreview) {
+      throw new Error("This WASM bundle predates retained previews; rebuild docxodus.");
+    }
+    const commit = (): MutationBatchResult => {
+      const envelope = JSON.parse(this.wasm.CommitPreview!(this.handle, previewId)) as MutationBatchResult;
+      if (!envelope.success) {
+        if (envelope.failure?.error.code === "preview_not_found") this.retainedPreviewReceipts.delete(previewId);
+        return envelope;
+      }
+      const receipt = this.retainedPreviewReceipts.get(previewId);
+      this.retainedPreviewReceipts.delete(previewId);
+      // No receipt means another client of this handle retained the preview; the host's
+      // envelope (versions, hash, retention) is still exact, only the step receipts are unknown.
+      if (!receipt) return envelope;
+      return {
+        ...receipt,
+        preview: false,
+        html: null,
+        baseVersion: envelope.baseVersion,
+        resultVersion: envelope.resultVersion,
+        packageHash: envelope.packageHash,
+        warnings: receipt.warnings.filter(warning => !BATCH_REPLAY_CAVEAT_TEXTS.has(warning)),
+        retention: envelope.retention,
+      };
+    };
+    if (transaction === undefined) return commit();
+    return this.runTransactional(transaction, "atomic", () => commit());
+  }
+
+  private runTransactional(
+    transaction: MutationTransaction,
+    mode: MutationBatchMode,
+    body: (identity: MutationTransactionIdentity) => MutationBatchResult,
+  ): MutationBatchResult {
+    // The batch is composed here from callbacks, so the session's journal (shared with every
+    // other transport) is driven in three steps: resolve the id, run, retain the result.
+    if (!this.wasm.BeginMutationTransaction
+      || !this.wasm.CompleteMutationTransaction
+      || !this.wasm.AbandonMutationTransaction) {
+      throw new Error("This WASM bundle predates mutation transactions; rebuild docxodus.");
+    }
+    if (typeof transaction.transactionId !== "string") {
+      throw new RangeError("transactionId must be a string");
+    }
+    if (transaction.request === null || typeof transaction.request !== "object"
+      || Array.isArray(transaction.request)) {
+      throw new RangeError("a mutation transaction needs a request object describing the batch");
+    }
+    const decision = JSON.parse(this.wasm.BeginMutationTransaction(
+      this.handle,
+      transaction.transactionId,
+      JSON.stringify({ ...transaction.request, mode }),
+    )) as { kind: string; transaction: MutationTransactionIdentity; response: string | null };
+    if (decision.response !== null) {
+      return JSON.parse(decision.response) as MutationBatchResult;
+    }
+    let completed = false;
+    try {
+      const result: MutationBatchResult = {
+        ...body(decision.transaction),
+        transaction: decision.transaction,
+      };
+      this.wasm.CompleteMutationTransaction(
+        this.handle, transaction.transactionId, JSON.stringify(result));
+      completed = true;
+      return result;
+    } finally {
+      if (!completed) this.wasm.AbandonMutationTransaction(this.handle, transaction.transactionId);
+    }
+  }
+
+  private runBatch(
+    steps: readonly MutationBatchStep[],
+    mode: MutationBatchMode,
+  ): MutationBatchResult {
+    const baseVersion = this.getVersion();
+    const observationWarnings: string[] = [];
+    const inspect = <T>(label: string, read: () => T, fallback: T): T => {
+      try { return read(); } catch (error) {
+        observationWarnings.push(`${label} unavailable: ${error instanceof Error ? error.message : String(error)}`);
+        return fallback;
+      }
+    };
+    const beforeRevisions = inspect("Revision delta inspection", () => this.listRevisions(), []);
+    const beforeComments = inspect("Comment delta inspection", () => this.listComments(), []);
+    const beforeAnnotations = inspect("Annotation delta inspection", () => this.listAnnotations(), []);
+    const complete = (result: {
+      mode: MutationBatchMode;
+      status: "ok" | "failed" | "partial";
+      success: boolean;
+      rolledBack: boolean;
+      steps: readonly MutationBatchStepResult[];
+      failure?: MutationBatchFailure;
+    }): MutationBatchResult => {
+      try {
+        const revisionChanges = mutationBatchChangeSet(
+          beforeRevisions,
+          inspect("Revision delta inspection", () => this.listRevisions(), beforeRevisions),
+          revision => revision.id,
+        );
+        const commentChanges = mutationBatchChangeSet(
+          beforeComments,
+          inspect("Comment delta inspection", () => this.listComments(), beforeComments),
+          comment => comment.anchorId,
+        );
+        const annotationChanges = mutationBatchChangeSet(
+          beforeAnnotations,
+          inspect("Annotation delta inspection", () => this.listAnnotations(), beforeAnnotations),
+          annotation => annotation.id ?? "",
+        );
+        const resultVersion = inspect(
+          "Result version inspection", () => this.getVersion(), baseVersion,
+        );
+        const warnings: string[] = [...observationWarnings];
+        if ([...revisionChanges.added, ...revisionChanges.modified]
+          .some(revision => revision.date !== undefined && revision.date !== null)) {
+          warnings.push(BATCH_REPLAY_CAVEATS.revisionDates);
+        }
+        if ([...commentChanges.added, ...commentChanges.modified]
+          .some(comment => comment.date !== undefined && comment.date !== null)) {
+          warnings.push(BATCH_REPLAY_CAVEATS.commentDates);
+        }
+        // Same predicate as the .NET receipt (`annotation.Created.HasValue`): the warning is
+        // about an execution CLOCK, so an annotation added with no created timestamp is
+        // deterministic and must not raise it on one surface and not the other.
+        if (annotationChanges.added
+          .some(annotation => annotation.created !== undefined && annotation.created !== null)) {
+          warnings.push(BATCH_REPLAY_CAVEATS.annotationMetadata);
+        }
+        if (result.steps.some(step => step.results.some(edit => edit.created.length > 0))) {
+          warnings.push(BATCH_REPLAY_CAVEATS.createdAnchors);
+        }
+        if (mode === "best_effort" && !result.success) {
+          warnings.push("Best-effort execution retains every successful step despite later failures.");
+        }
+        // null, never "": an absent hash must not compare equal to another absent hash, or a
+        // naive `preview.packageHash === applied.packageHash` replay assertion passes vacuously.
+        let packageHash: string | null = null;
+        if (!this.wasm.GetPackageContentHash) {
+          warnings.push("This WASM bundle predates package equivalence hashes; packageHash is unavailable.");
+        } else {
+          try { packageHash = this.wasm.GetPackageContentHash(this.handle); } catch (error) {
+            warnings.push(`Package equivalence hash unavailable: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+        return {
+          ...result,
+          preview: false,
+          baseVersion,
+          resultVersion,
+          packageHash,
+          revisionChanges,
+          commentChanges,
+          annotationChanges,
+          warnings,
+          html: null,
+        };
+      } catch (error) {
+        return {
+          ...result,
+          preview: false,
+          baseVersion,
+          resultVersion: inspect("Result version inspection", () => this.getVersion(), baseVersion),
+          packageHash: null,
+          revisionChanges: { added: [], removed: [], modified: [] },
+          commentChanges: { added: [], removed: [], modified: [] },
+          annotationChanges: { added: [], removed: [], modified: [] },
+          warnings: [
+            ...observationWarnings,
+            `Batch receipt enrichment unavailable: ${error instanceof Error ? error.message : String(error)}`,
+          ],
+          html: null,
+        };
+      }
+    };
+    const internalFailure = (value: unknown): EditResult => ({
+      success: false,
+      error: { code: "internal_error", message: value instanceof Error ? value.message : String(value) },
+      created: [], removed: [], modified: [],
+    });
+    const run = (step: MutationBatchStep): readonly EditResult[] => {
+      try {
+        const value = step.mutation();
+        const results = Array.isArray(value) ? value : [value];
+        if (results.some(result =>
+          result === null || typeof result !== "object" || typeof result.success !== "boolean")) {
+          return [internalFailure("batch mutation returned invalid edit results")];
+        }
+        // An empty list is a successful no-op step, matching the core contract.
+        return results;
+      } catch (error) {
+        return [internalFailure(error)];
+      }
+    };
+    const failureOf = (
+      step: MutationBatchStepResult,
+      rolledBack: boolean,
+    ): MutationBatchFailure => ({
+      index: step.index,
+      tool: step.tool,
+      action: step.action,
+      error: step.results.find(result => !result.success)?.error
+        ?? { code: "internal_error", message: "batch step failed without an error" },
+      rolledBack,
+    });
+
+    const preflightOne = (step: MutationBatchStep): EditError | undefined => {
+      try { return step.preflight?.(); } catch (error) { return internalFailure(error).error; }
+    };
+    if (mode === "atomic") {
+      const preflight = steps.map(preflightOne);
+      const failedPreflight = preflight.findIndex(error => error !== undefined);
+      if (failedPreflight >= 0) {
+        const source = steps[failedPreflight]!;
+        const failed: MutationBatchStepResult = {
+          index: failedPreflight, tool: source.tool, action: source.action,
+          success: false, rolledBack: true,
+          results: [{ success: false, error: preflight[failedPreflight]!, created: [], removed: [], modified: [] }],
+        };
+        return complete({ mode, status: "failed", success: false, rolledBack: true,
+          steps: [failed], failure: failureOf(failed, true) });
+      }
+
+      const transaction = this.wasm.BeginTransaction(this.handle);
+      const completed: MutationBatchStepResult[] = [];
+      try {
+        for (let index = 0; index < steps.length; index++) {
+          const source = steps[index]!;
+          const results = run(source);
+          const step: MutationBatchStepResult = {
+            index, tool: source.tool, action: source.action,
+            success: results.every(result => result.success), rolledBack: false, results,
+          };
+          completed.push(step);
+          if (!step.success) {
+            this.wasm.RollbackTransaction(transaction);
+            const rolledBack = completed.map(value => ({ ...value, rolledBack: true }));
+            const failed = rolledBack[rolledBack.length - 1]!;
+            return complete({ mode, status: "failed", success: false, rolledBack: true,
+              steps: rolledBack, failure: failureOf(failed, true) });
+          }
+        }
+        this.wasm.CommitTransaction(transaction);
+        return complete({ mode, status: "ok", success: true, rolledBack: false, steps: completed });
+      } catch (error) {
+        try { this.wasm.RollbackTransaction(transaction); } catch { /* preserve the original */ }
+        throw error;
+      }
+    }
+
+    // Preserve sequential best-effort semantics: a later preflight can observe state created by
+    // an earlier successful step, so run it immediately before that step rather than up front.
+    const completed: MutationBatchStepResult[] = steps.map((source, index) => {
+      const preflight = preflightOne(source);
+      const results = preflight
+        ? [{ success: false, error: preflight, created: [], removed: [], modified: [] }]
+        : run(source);
+      return {
+        index, tool: source.tool, action: source.action,
+        success: results.every(result => result.success), rolledBack: false, results,
+      };
+    });
+    const failed = completed.find(step => !step.success);
+    return complete({
+      mode,
+      status: failed ? (completed.some(step => step.success) ? "partial" : "failed") : "ok",
+      success: failed === undefined,
+      rolledBack: false,
+      steps: completed,
+      failure: failed ? failureOf(failed, false) : undefined,
+    });
+  }
+
+  /**
+   * Execute the same callback batch algorithm against a complete isolated package clone.
+   * Callbacks receive the shadow session explicitly; mutate that argument. The live session's
+   * package, caches, version, configuration, and undo/redo history are never execution targets.
+   */
+  previewBatch(
+    steps: readonly MutationBatchPreviewStep[],
+    mode: MutationBatchMode = "atomic",
+    options?: MutationBatchPreviewOptions,
+  ): MutationBatchResult {
+    if (mode !== "atomic" && mode !== "best_effort") {
+      throw new RangeError(`unknown mutation batch mode: ${String(mode)}`);
+    }
+    const htmlMode = options?.html ?? "none";
+    if (htmlMode !== "none" && htmlMode !== "scoped" && htmlMode !== "full") {
+      throw new RangeError(`unknown preview HTML mode: ${String(htmlMode)}`);
+    }
+    if (!this.wasm.OpenPreviewSession) {
+      throw new Error("This WASM bundle does not support isolated mutation previews.");
+    }
+
+    const shadow = new DocxSession(this.wasm.OpenPreviewSession(this.handle), this.wasm);
+    try {
+      const result = shadow.executeBatch(
+        steps.map(step => ({
+          tool: step.tool,
+          action: step.action,
+          mutation: () => step.mutation(shadow),
+          preflight: step.preflight ? () => step.preflight!(shadow) : undefined,
+        })),
+        mode,
+      );
+      const warnings = [...result.warnings];
+      let html: string | null = null;
+      // A rendered document always starts with '<'; a leading '{' is the bridge's error object.
+      const unwrapRendered = (rendered: string): string | null => {
+        if (rendered.trimStart().startsWith("{")) {
+          const envelope = JSON.parse(rendered) as { error?: string };
+          if (envelope.error) {
+            warnings.push(`Preview HTML could not be generated: ${envelope.error}`);
+            return null;
+          }
+        }
+        return rendered;
+      };
+      // Preview HTML MUST come from the façade's preview profile (DocxSessionOps.RenderPreview*),
+      // not the editor's authoring profile: the editor render hides comments, annotations and
+      // headers/footers, so routing a preview through it would show this surface a materially
+      // different document than the stdio/Python/MCP surfaces show for the identical batch.
+      const legacyProfileWarning =
+        "This WASM bundle predates the shared preview HTML profile; preview HTML omits comments, " +
+        "annotations and headers/footers and may differ from other surfaces.";
+      try {
+        if (htmlMode === "scoped") {
+          if (!options?.htmlAnchorId) {
+            warnings.push("Scoped HTML was requested without htmlAnchorId; no HTML was generated.");
+          } else if (this.wasm.RenderPreviewBlockHtml) {
+            html = unwrapRendered(
+              this.wasm.RenderPreviewBlockHtml(shadow.handle, options.htmlAnchorId));
+          } else {
+            warnings.push(legacyProfileWarning);
+            html = shadow.renderBlock(options.htmlAnchorId);
+          }
+        } else if (htmlMode === "full") {
+          if (this.wasm.RenderPreviewHtml) {
+            html = unwrapRendered(this.wasm.RenderPreviewHtml(shadow.handle));
+          } else {
+            warnings.push(legacyProfileWarning);
+            html = unwrapRendered(this.wasm.RenderHtmlForReview
+              ? this.wasm.RenderHtmlForReview(shadow.handle, "docx-", false, false, 1, true)
+              : this.wasm.RenderHtml(shadow.handle, "docx-", false, false, 1));
+          }
+        }
+      } catch (error) {
+        warnings.push(`Preview HTML could not be generated: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      let retention: MutationPreviewRetention | undefined;
+      if (options?.retain) {
+        if (!this.wasm.RetainPreview) {
+          throw new Error("This WASM bundle predates retained previews; rebuild docxodus.");
+        }
+        if (!result.success) {
+          warnings.push("The preview did not succeed, so it was not retained for commit.");
+        } else {
+          const retained = JSON.parse(this.wasm.RetainPreview(shadow.handle)) as {
+            retention: MutationPreviewRetention | null;
+            warnings: readonly string[];
+          };
+          warnings.push(...retained.warnings);
+          retention = retained.retention ?? undefined;
+        }
+      }
+      const preview: MutationBatchResult = retention
+        ? { ...result, preview: true, warnings, html, retention }
+        : { ...result, preview: true, warnings, html };
+      if (retention) {
+        if (this.retainedPreviewReceipts.size >= RETAINED_PREVIEW_RECEIPTS) {
+          this.retainedPreviewReceipts.delete(this.retainedPreviewReceipts.keys().next().value!);
+        }
+        this.retainedPreviewReceipts.set(retention.previewId, { ...preview, html: null });
+      }
+      return preview;
+    } finally {
+      shadow.close();
+    }
+  }
+
+  /**
+   * Project a slice of the document keyed off an anchor — useful for showing
+   * one section to an LLM at a time without paying the cost of projecting the
+   * whole document.
+   *
+   * - `ProjectionDepth.SelfOnly` — just the addressed block (one paragraph,
+   *   row, etc.).
+   * - `ProjectionDepth.Subtree` — the block + descendants (e.g. a table with
+   *   all its rows/cells, but no following content).
+   * - `ProjectionDepth.SubtreeAndFollowingSiblings` (default) — for headings
+   *   this returns the whole section (heading + content up to the next same-
+   *   or-higher heading); for non-headings it behaves like `Subtree`.
+   *
+   * @see docs/architecture/docx_mutation_api.md
+   */
+  projectAnchor(
+    anchorId: string,
+    depth?: ProjectionDepth,
+    citation?: PageCitationRequest,
+  ): DocxSessionProjection {
+    // An omitted depth takes the engine's default (SubtreeAndFollowingSiblings), declared once in
+    // DocxSessionOps.
+    return JSON.parse(
+      citation
+        ? this.wasm.ProjectAnchorWithCitations(this.handle, anchorId, depth ?? null, JSON.stringify(citation))
+        : this.wasm.ProjectAnchor(this.handle, anchorId, depth ?? null),
+    ) as DocxSessionProjection;
+  }
+
+  /**
+   * Render a single block to faithful HTML from the live session — the editor's
+   * incremental per-block re-render after an edit. Resolves against the in-memory
+   * document (no Save round-trip). `anchorId` is a block anchor (`kind:scope:unid`)
+   * or the bare unid carried by a `data-anchor` attribute. Returns the block's HTML
+   * element (no `<html>`/`<head>` wrapper).
+   */
+  renderBlock(
+    anchorId: string,
+    options?: { cssPrefix?: string; fabricateClasses?: boolean },
+  ): string {
+    // Omitted options take the engine's defaults ("docx-", no fabricated classes), declared once
+    // in DocxSessionOps.
+    const html = this.wasm.RenderBlockHtml(
+      this.handle,
+      anchorId,
+      options?.cssPrefix ?? null,
+      options?.fabricateClasses ?? null,
+    );
+    // Rendered HTML always begins with '<'; a leading '{' signals an error object.
+    if (html.charCodeAt(0) === 0x7b /* '{' */) {
+      const err = JSON.parse(html) as { error?: string };
+      throw new Error(`renderBlock failed: ${err.error ?? "unknown error"}`);
+    }
+    return html;
+  }
+
+  // ─── Tier A: text CRUD ───────────────────────────────────────────────
+
+  replaceText(
+    anchorId: string,
+    markdown: string,
+    preconditions?: MutationPreconditions,
+  ): EditResult {
+    const apply = () => JSON.parse(
+      this.wasm.ReplaceText(this.handle, anchorId, markdown),
+    ) as EditResult;
+    return preconditions
+      ? this.runWithPreconditions(
+          { ...preconditions, anchorId: preconditions.anchorId ?? anchorId }, apply)
+      : apply();
+  }
+
+  deleteBlock(anchorId: string, preconditions?: MutationPreconditions): EditResult {
+    const apply = () => JSON.parse(this.wasm.DeleteBlock(this.handle, anchorId)) as EditResult;
+    return preconditions
+      ? this.runWithPreconditions(
+          { ...preconditions, anchorId: preconditions.anchorId ?? anchorId }, apply)
+      : apply();
+  }
+
+  /** Reorder one top-level paragraph/heading/list/table block relative to another. */
+  moveBlock(sourceAnchorId: string, targetAnchorId: string, position: "before" | "after"): EditResult {
+    return JSON.parse(
+      this.wasm.MoveBlock(this.handle, sourceAnchorId, targetAnchorId, position),
+    ) as EditResult;
+  }
+
+  /**
+   * Delete every top-level block-level sibling between `fromAnchorId` (inclusive)
+   * and `toAnchorIdExclusive` (exclusive). Both anchors must share a direct
+   * parent and live in the same package part. Returns a single `EditResult`
+   * whose `removed` lists every anchor that was deleted.
+   *
+   * Records ONE undo snapshot — `undo()` restores the entire range.
+   *
+   * @see docs/architecture/docx_mutation_api.md#deleterange
+   */
+  deleteRange(fromAnchorId: string, toAnchorIdExclusive: string): EditResult {
+    return JSON.parse(this.wasm.DeleteRange(this.handle, fromAnchorId, toAnchorIdExclusive)) as EditResult;
+  }
+
+  /**
+   * Delete a heading and everything below it up to (but not including) the next
+   * heading at the same or higher level. The heading anchor must have `kind === "h"`.
+   *
+   * If the target is the last heading in its parent, the section extends to the
+   * end of the parent (heading + everything after).
+   *
+   * @see docs/architecture/docx_mutation_api.md#deletesection
+   */
+  deleteSection(headingAnchorId: string): EditResult {
+    return JSON.parse(this.wasm.DeleteSection(this.handle, headingAnchorId)) as EditResult;
+  }
+
+  // ─── Tier B: structural ──────────────────────────────────────────────
+
+  insertParagraph(anchorId: string, position: "before" | "after", markdown: string): EditResult {
+    return JSON.parse(this.wasm.InsertParagraph(this.handle, anchorId, position, markdown)) as EditResult;
+  }
+
+  splitParagraph(anchorId: string, characterOffset: number): EditResult {
+    return JSON.parse(this.wasm.SplitParagraph(this.handle, anchorId, characterOffset)) as EditResult;
+  }
+
+  mergeParagraphs(firstAnchorId: string, secondAnchorId: string): EditResult {
+    return JSON.parse(this.wasm.MergeParagraphs(this.handle, firstAnchorId, secondAnchorId)) as EditResult;
+  }
+
+  /**
+   * Insert an empty paragraph carrying a bottom border — an S-1-style horizontal rule —
+   * before/after the block. `rule` styles the line (default: a single ≈1.5pt black rule).
+   */
+  insertHorizontalRule(
+    anchorId: string,
+    position: "before" | "after",
+    rule?: ParagraphBorderEdge,
+  ): EditResult {
+    const ruleJson = rule ? JSON.stringify(rule) : "";
+    return JSON.parse(
+      this.wasm.InsertHorizontalRule(this.handle, anchorId, position, ruleJson),
+    ) as EditResult;
+  }
+
+  /**
+   * Insert a `rows`×`cols` table before/after the block. `options` controls borders, row-major
+   * cell markdown, and cell alignment. The returned `EditResult.created` lists canonical `tc`
+   * anchors (row-major), so each cell can then be addressed to fill/format.
+   */
+  insertTable(
+    anchorId: string,
+    position: "before" | "after",
+    rows: number,
+    cols: number,
+    options?: TableInsertOptions,
+  ): EditResult {
+    const optionsJson = options ? JSON.stringify(options) : "";
+    return JSON.parse(
+      this.wasm.InsertTable(this.handle, anchorId, position, rows, cols, optionsJson),
+    ) as EditResult;
+  }
+
+  /** Resolve a canonical `tbl` anchor to explicit table/row/column/cell identities. */
+  getTableMetadata(tableAnchorId: string): TableMetadataResult {
+    return JSON.parse(this.wasm.GetTableMetadata(this.handle, tableAnchorId)) as TableMetadataResult;
+  }
+
+  /** Resolve a canonical `tc` anchor to its zero-based table-grid coordinate and spans. */
+  resolveTableCellAnchor(cellAnchorId: string): TableCellResolutionResult {
+    return JSON.parse(
+      this.wasm.ResolveTableCellAnchor(this.handle, cellAnchorId),
+    ) as TableCellResolutionResult;
+  }
+
+  /** Resolve a zero-based table-grid coordinate to the physical `tc` covering it. */
+  resolveTableCellCoordinate(
+    tableAnchorId: string,
+    rowIndex: number,
+    columnIndex: number,
+  ): TableCellResolutionResult {
+    return JSON.parse(
+      this.wasm.ResolveTableCellCoordinate(this.handle, tableAnchorId, rowIndex, columnIndex),
+    ) as TableCellResolutionResult;
+  }
+
+  /**
+   * Table row/column editing, addressed by the canonical `tc` anchor returned from
+   * {@link insertTable}'s `created` or table metadata. Insert clones the reference row/column's
+   * widths and starts empty (`created` lists new `tc` anchors); delete of the last row/column removes
+   * the whole table. All four are grid-aware: inserting across a merge extends it, deleting
+   * through one narrows it, and deleting a vertical merge's lead row promotes the next row to
+   * carry it — the grid is never left ragged.
+   */
+  insertTableRow(cellAnchorId: string, position: "before" | "after"): EditResult {
+    return JSON.parse(this.wasm.InsertTableRow(this.handle, cellAnchorId, position)) as EditResult;
+  }
+
+  insertTableColumn(cellAnchorId: string, position: "before" | "after"): EditResult {
+    return JSON.parse(this.wasm.InsertTableColumn(this.handle, cellAnchorId, position)) as EditResult;
+  }
+
+  deleteTableRow(cellAnchorId: string): EditResult {
+    return JSON.parse(this.wasm.DeleteTableRow(this.handle, cellAnchorId)) as EditResult;
+  }
+
+  deleteTableColumn(cellAnchorId: string): EditResult {
+    return JSON.parse(this.wasm.DeleteTableColumn(this.handle, cellAnchorId)) as EditResult;
+  }
+
+  /**
+   * Merge the rectangle of cells anchored at `cellAnchorId` running `rowSpan` rows down ×
+   * `colSpan` cells right (Word's *Merge Cells*): `w:gridSpan` for the horizontal extent,
+   * `w:vMerge` restart/continue for the vertical one. The rectangle must tile the same whole grid
+   * columns in every row it covers and must not clip a vertical merge entering from above or
+   * continuing below — a partial overlap fails with `invalid_table_merge` instead of tearing the
+   * grid. `content` decides what happens to the absorbed cells' content (default `"append"`).
+   */
+  mergeCells(
+    cellAnchorId: string,
+    rowSpan: number,
+    colSpan: number,
+    content: TableMergeContent = "append",
+  ): EditResult {
+    return JSON.parse(
+      this.wasm.MergeCells(this.handle, cellAnchorId, rowSpan, colSpan, content),
+    ) as EditResult;
+  }
+
+  /**
+   * Split the merged cell at `cellAnchorId` back into unit cells, dropping its `w:gridSpan` and
+   * `w:vMerge` markup and restoring one cell per grid column (each taking its `w:tblGrid` width).
+   * Addressing a vertical-merge continuation unmerges the whole run. A cell with no merge markup
+   * fails with `invalid_table_merge`.
+   */
+  unmergeCells(cellAnchorId: string): EditResult {
+    return JSON.parse(this.wasm.UnmergeCells(this.handle, cellAnchorId)) as EditResult;
+  }
+
+  /**
+   * Table styling, addressed by a canonical `tc` anchor — the post-insert counterpart of
+   * {@link insertTable}'s options (issue #315 Stage A). `setColumnWidths` retunes `w:tblGrid` +
+   * every row's cell width (one positive twip value per column) and pins the table to fixed
+   * layout, exactly as inserting with explicit `columnWidths` would.
+   */
+  setColumnWidths(cellAnchorId: string, widthsTwips: number[]): EditResult {
+    return JSON.parse(
+      this.wasm.SetColumnWidths(this.handle, cellAnchorId, JSON.stringify(widthsTwips)),
+    ) as EditResult;
+  }
+
+  /**
+   * Set the table-level borders (`w:tblPr/w:tblBorders`) of the table containing the anchor.
+   * Only the edges named by `spec.scope` are written; the rest are left untouched. Style
+   * `"none"` removes the targeted edges. Omitting `spec` writes a thin single border all round.
+   */
+  setTableBorders(cellAnchorId: string, spec?: TableBorderSpec): EditResult {
+    return JSON.parse(
+      this.wasm.SetTableBorders(this.handle, cellAnchorId, spec ? JSON.stringify(spec) : ""),
+    ) as EditResult;
+  }
+
+  /**
+   * Shade the cell containing the anchor — or, with scope `"row"`, every cell of its row
+   * (header-row banding). `fill` is a hex RRGGBB triplet (leading '#' tolerated) or `"auto"`;
+   * `null` removes the shading.
+   */
+  setCellShading(
+    cellAnchorId: string,
+    fill: string | null,
+    scope?: TableShadingScope,
+  ): EditResult {
+    // An omitted scope takes the engine's default ("cell"), declared once in the facade.
+    return JSON.parse(
+      this.wasm.SetCellShading(this.handle, cellAnchorId, fill ?? "", scope ?? ""),
+    ) as EditResult;
+  }
+
+  /**
+   * Mark (or unmark) the row containing the anchor as a repeating header row
+   * (`w:trPr/w:tblHeader`), so a multi-page table re-shows it on every page. Word only honors
+   * the flag on a run of rows starting at the table's first row. An omitted `repeat` marks the
+   * row (the engine's default, `true`).
+   */
+  setRepeatHeaderRow(cellAnchorId: string, repeat?: boolean): EditResult {
+    return JSON.parse(
+      this.wasm.SetRepeatHeaderRow(this.handle, cellAnchorId, repeat ?? null),
+    ) as EditResult;
+  }
+
+  /** Apply row layout options to the row containing the canonical cell anchor. */
+  setTableRowOptions(cellAnchorId: string, options: TableRowOptions): EditResult {
+    return JSON.parse(
+      this.wasm.SetTableRowOptions(
+        this.handle,
+        cellAnchorId,
+        options.repeatHeader ?? null,
+        options.allowBreakAcrossPages ?? null,
+        options.heightTwips ?? null,
+        options.heightRule ?? "atLeast",
+      ),
+    ) as EditResult;
+  }
+
+  // ─── Headers / footers / page numbers ────────────────────────────────
+
+  /**
+   * Set the running header story for the section that owns `anchorId` (any body block in that
+   * section) to `markdown`. Creates the header part + `w:headerReference` if the story of `kind`
+   * doesn't exist yet, else replaces its content. The created header-paragraph anchors (scope
+   * `hdr{N}`) come back in `EditResult.created` — insert a page number into one with
+   * {@link insertPageNumberField}. `"first"` sets the section's title-page flag; `"even"` sets the
+   * document's even/odd-headers flag.
+   */
+  setHeaderText(anchorId: string, kind: HeaderFooterKind, markdown: string): EditResult {
+    return JSON.parse(this.wasm.SetHeaderText(this.handle, anchorId, kind, markdown)) as EditResult;
+  }
+
+  /** Set the running footer story for the section that owns `anchorId` — see {@link setHeaderText};
+   * the created footer-paragraph anchors (scope `ftr{N}`) come back in `EditResult.created`. */
+  setFooterText(anchorId: string, kind: HeaderFooterKind, markdown: string): EditResult {
+    return JSON.parse(this.wasm.SetFooterText(this.handle, anchorId, kind, markdown)) as EditResult;
+  }
+
+  /**
+   * Append a page-number field to the paragraph `anchorId` — typically a header/footer paragraph
+   * returned by {@link setFooterText}/{@link setHeaderText}. `"currentPage"` emits a PAGE field,
+   * `"totalPages"` a NUMPAGES field (native complex field with a cached result), and
+   * `"pageOfTotal"` Word's "Page X of Y" gallery entry — the text `Page `, a PAGE field, the text
+   * ` of ` and a NUMPAGES field, every run inheriting the paragraph's last run formatting (the
+   * pieces cannot be composed from the single-field form: text after a field cannot be appended
+   * without rewriting the field's result). Center it by setting the paragraph alignment
+   * ({@link setParagraphFormat}). Returns the paragraph anchor in `modified`.
+   *
+   * `format` writes the field's own `\*` general-formatting switch (`PAGE \* roman` → `i, ii, iii`).
+   * Omitting it — the default — emits a plain field, which is what Word inserts and what follows the
+   * SECTION's format ({@link setPageNumbering}). Prefer the section setting for ordinary page
+   * numbering: a switch here overrides it for this one field and keeps overriding it if the section
+   * later changes.
+   */
+  insertPageNumberField(
+    anchorId: string,
+    field?: PageNumberField,
+    format?: NumberFormat
+  ): EditResult {
+    // An omitted field takes the engine's default ("currentPage"), declared once in DocxSessionOps.
+    return JSON.parse(
+      this.wasm.InsertPageNumberField(this.handle, anchorId, field ?? "", format ?? "")
+    ) as EditResult;
+  }
+
+  /**
+   * Set the page-numbering properties (`w:pgNumType`) of the section that owns `anchorId` (any body
+   * block in that section) — Word's *Format Page Numbers…* dialog: which number the section starts
+   * at and which format its pages use. Omitted fields on `op` are left unchanged, so the start can
+   * be set without disturbing the format and vice versa. Creates the element, and a trailing
+   * `w:sectPr`, if absent.
+   *
+   * Applying values the section already has is a successful no-op that does NOT consume undo
+   * history — safe to call from a dropdown's change handler.
+   */
+  setPageNumbering(anchorId: string, op: PageNumberingOp): EditResult {
+    return JSON.parse(
+      this.wasm.SetPageNumbering(this.handle, anchorId, JSON.stringify(op))
+    ) as EditResult;
+  }
+
+  /**
+   * Insert a **table of contents** before or after `anchorId` (issue #607). The field is written
+   * dirty and the document asks for a field update on open, so Word paginates and fills the table
+   * itself — nothing here ships a cached result that is stale the moment anything above it moves.
+   *
+   * The table is wrapped in the `w:sdt` content control Word puts around one, which is what gives
+   * it the *Update Table* control in Word's UI. Word's `TOCHeading` and `TOC1` styles are
+   * find-or-created; a document that already defines them keeps its own.
+   *
+   * Body anchors only, and refused under tracked-change recording: a generated table is regenerated
+   * wholesale on every field update, so there is no reversible way to redline it.
+   */
+  insertTableOfContents(
+    anchorId: string,
+    pos?: "before" | "after",
+    options?: TableOfContentsOptions
+  ): EditResult {
+    // An omitted position takes the engine's default for reference fields ("before").
+    return JSON.parse(
+      this.wasm.InsertTableOfContents(
+        this.handle, anchorId, pos ?? "", options ? JSON.stringify(options) : "")
+    ) as EditResult;
+  }
+
+  /**
+   * Insert a **table of figures** — the captions carrying `options.captionLabel` and their page
+   * numbers. Same field mechanics as {@link insertTableOfContents}; Word writes this one as a bare
+   * paragraph rather than inside a content control, so this does too.
+   */
+  insertTableOfFigures(
+    anchorId: string,
+    pos?: "before" | "after",
+    options?: TableOfFiguresOptions
+  ): EditResult {
+    // An omitted position takes the engine's default for reference fields ("before").
+    return JSON.parse(
+      this.wasm.InsertTableOfFigures(
+        this.handle, anchorId, pos ?? "", options ? JSON.stringify(options) : "")
+    ) as EditResult;
+  }
+
+  /**
+   * Insert a **table of authorities** — the cases, statutes or other authorities marked in the
+   * document, grouped by `options.category`. The table lists entries the document has MARKED with
+   * `TA` fields; a document with no marked citations produces a table that is correct and empty.
+   */
+  insertTableOfAuthorities(
+    anchorId: string,
+    pos?: "before" | "after",
+    options?: TableOfAuthoritiesOptions
+  ): EditResult {
+    // An omitted position takes the engine's default for reference fields ("before").
+    return JSON.parse(
+      this.wasm.InsertTableOfAuthorities(
+        this.handle, anchorId, pos ?? "", options ? JSON.stringify(options) : "")
+    ) as EditResult;
+  }
+
+  /**
+   * Remove the section's page-numbering start/format: it reverts to continuing the previous
+   * section's numbering in Word's default `1, 2, 3`. Chapter-numbering attributes
+   * (`w:chapStyle`/`w:chapSep`) are preserved. A section with nothing to clear is a no-op.
+   */
+  clearPageNumbering(anchorId: string): EditResult {
+    return JSON.parse(this.wasm.ClearPageNumbering(this.handle, anchorId)) as EditResult;
+  }
+
+  /**
+   * Make the `kind` header/footer stories of the section that owns `anchorId` actually RENDER:
+   * `"first"` sets `w:titlePg`, `"even"` sets the document-global `w:evenAndOddHeaders`;
+   * `"default"` needs no flag and succeeds as a no-op. Idempotent.
+   *
+   * {@link setHeaderText}/{@link setFooterText} set these flags while writing content, which covers
+   * authoring a story from scratch — but NOT a document that already carries a first/even reference
+   * with the flag absent (Word leaves exactly that behind when "Different first page" is switched
+   * off). Editing such a story through the text ops otherwise yields header content that is present
+   * but invisible. Note the `"even"` caveat from {@link setHeaderText}: the flag is document-global
+   * and governs footers too.
+   */
+  ensureHeaderFooterVisible(anchorId: string, kind: HeaderFooterKind): EditResult {
+    return JSON.parse(this.wasm.EnsureHeaderFooterVisible(this.handle, anchorId, kind)) as EditResult;
+  }
+
+  /**
+   * Word's "Different first page" / "Different odd & even pages" checkboxes as one verb: switch
+   * the `kind` story of the section that owns `anchorId` (any body block in it) on or off.
+   * `enabled: true` is exactly {@link ensureHeaderFooterVisible}; `enabled: false` removes the
+   * flag that selects the story — `w:titlePg` from the governing `w:sectPr` for `"first"`, the
+   * document-global `w:evenAndOddHeaders` for `"even"` — and leaves the story parts in place,
+   * which is what Word does when the checkbox is cleared (re-enabling brings the content straight
+   * back). Disabling `"default"` fails with `invalid_page_setup`: that story has no flag.
+   *
+   * A flag already in the requested state is a successful no-op that records NO undo step, so a
+   * checkbox handler can call this unconditionally. Read the current state from
+   * {@link SectionInfo.titlePage} / {@link SectionInfo.evenAndOddHeaders}.
+   */
+  setHeaderFooterKindEnabled(anchorId: string, kind: HeaderFooterKind, enabled: boolean): EditResult {
+    if (!this.wasm.SetHeaderFooterKindEnabled) {
+      throw new Error("SetHeaderFooterKindEnabled is not available in this WASM build");
+    }
+    return JSON.parse(
+      this.wasm.SetHeaderFooterKindEnabled(this.handle, anchorId, kind, enabled)
+    ) as EditResult;
+  }
+
+  /**
+   * Set the page geometry (`w:pgSz` / `w:pgMar`) of the section that owns `anchorId` — Word's
+   * *Page Setup* dialog: page size, orientation, margins and header/footer distance. Omitted
+   * fields on `op` are left unchanged; the elements are created in schema order when absent, as
+   * is a trailing `w:sectPr` for a body that has none. Read the result back with
+   * {@link getSectionInfo}.
+   *
+   * `landscape: true` without an explicit size swaps a portrait-shaped page's width and height
+   * (and `false` swaps back), matching Word's orientation toggle. Invalid geometry — a
+   * non-positive size, a negative margin, or opposing margins that leave no room — fails with
+   * `invalid_page_setup` and touches nothing. Values the section already has are a successful
+   * no-op that consumes no undo history.
+   */
+  setPageSetup(anchorId: string, op: PageSetupOp): EditResult {
+    if (!this.wasm.SetPageSetup) {
+      throw new Error("SetPageSetup is not available in this WASM build");
+    }
+    return JSON.parse(
+      this.wasm.SetPageSetup(this.handle, anchorId, JSON.stringify(op))
+    ) as EditResult;
+  }
+
+  // ─── Footnotes / endnotes ────────────────────────────────────────────
+
+  /**
+   * Create a footnote whose body is `markdown` and cite it from the body paragraph `anchorId`, at
+   * `characterOffset` characters into that paragraph's text (0 = before all text, text length =
+   * after all of it). On a document with no footnotes yet this also creates the footnotes part,
+   * Word's two reserved separator notes, the `FootnoteText`/`FootnoteReference` styles and the
+   * `w:footnotePr` settings declaration; otherwise the existing part is reused. The note id is
+   * allocated above every id already used in the package, so non-contiguous ids can't collide.
+   *
+   * Returns the created note anchors in `EditResult.created` — the definition (kind `fn`) and its
+   * paragraphs (kind `p`, scope `fn`) — so the note can immediately be edited with
+   * {@link replaceText} or removed with {@link deleteBlock} (which also drops the body reference).
+   *
+   * Body paragraphs only: Word does not allow a note reference inside a header/footer story or
+   * inside another note, so a non-body anchor fails with `anchorWrongKind`.
+   */
+  insertFootnote(anchorId: string, characterOffset: number, markdown: string): EditResult {
+    return JSON.parse(
+      this.wasm.InsertFootnote(this.handle, anchorId, characterOffset, markdown),
+    ) as EditResult;
+  }
+
+  /**
+   * Insert a Word-faithful internal cross-reference — a `REF` field targeting an existing
+   * bookmark — at a character offset (issue #545). The field carries a cached result run
+   * (the bookmarked text, or the target's auto-number under `referenceNumber`), so
+   * renderers that do not recompute fields show a faithful snapshot and Word updates it
+   * like a hand-authored cross-reference. A missing or incoherent bookmark fails with
+   * `missing_bookmark_target`.
+   */
+  insertCrossReference(
+    anchorId: string,
+    characterOffset: number,
+    bookmarkName: string,
+    options?: CrossReferenceOptions,
+  ): EditResult {
+    return JSON.parse(
+      this.wasm.InsertCrossReference(
+        this.handle, anchorId, characterOffset, bookmarkName,
+        options ? JSON.stringify(options) : "",
+      ),
+    ) as EditResult;
+  }
+
+  /**
+   * The document's footnotes (`endnotes` false) or endnotes (`endnotes` true) in citation order.
+   * Each entry is the note's `w:id`, its definition anchor (kind `fn`/`en`, the anchor
+   * {@link replaceText} and {@link deleteBlock} take) and its 1-based `ordinal`, which is the
+   * number Word displays for it. Notes are found through their body references, so Word's
+   * separator notes and a note nothing cites are not listed.
+   */
+  listNotes(endnotes: boolean): NoteListEntry[] {
+    if (!this.wasm.ListNotes) {
+      throw new Error("ListNotes is not available in this WASM build");
+    }
+    return JSON.parse(this.wasm.ListNotes(this.handle, endnotes)) as NoteListEntry[];
+  }
+
+  /** Create an endnote — see {@link insertFootnote}; writes the endnotes part and a
+   * `w:endnoteReference`, and the created definition anchor has kind `en`. */
+  insertEndnote(anchorId: string, characterOffset: number, markdown: string): EditResult {
+    return JSON.parse(
+      this.wasm.InsertEndnote(this.handle, anchorId, characterOffset, markdown),
+    ) as EditResult;
+  }
+
+  // ─── Comments (issue #300) ───────────────────────────────────────────
+
+  /**
+   * Add a **native Word comment** (real `w:comment` markup, visible in Word/Google
+   * Docs/LibreOffice's Reviewing pane — not the {@link addAnnotation} overlay) on the body
+   * paragraph `anchorId`. `span` selects the commented character range; `null` comments the
+   * whole block. On a document with no comments yet this also creates the comments part and
+   * the `CommentText`/`CommentReference` styles. `opts.date` (ISO-8601) is written only when
+   * provided, keeping output deterministic by default.
+   *
+   * Returns the created definition anchor (kind `cmt`) and its paragraph anchors (kind `p`,
+   * scope `cmt`) in `EditResult.created`, so the comment can immediately be edited with
+   * {@link updateComment} or removed with {@link removeComment}.
+   *
+   * Body paragraphs only (Word has no comments-on-comments); a non-body anchor fails with
+   * `anchor_wrong_kind`, a zero-length span with `empty_comment_span`.
+   */
+  addComment(
+    anchorId: string,
+    span: CharSpan | null,
+    author: string,
+    markdown: string,
+    opts?: { initials?: string; date?: string },
+  ): EditResult {
+    const spanJson = span ? JSON.stringify(span) : "";
+    return JSON.parse(
+      this.wasm.AddComment(
+        this.handle,
+        anchorId,
+        spanJson,
+        author,
+        opts?.initials ?? "",
+        opts?.date ?? "",
+        markdown,
+      ),
+    ) as EditResult;
+  }
+
+  /** Add a native Word comment around the exact live extent of a tracked revision returned by
+   * {@link listRevisions}. Accepting/rejecting the revision keeps the comment and either leaves
+   * its range on surviving text or collapses it to a point. */
+  addCommentToRevision(
+    revisionId: string,
+    author: string,
+    markdown: string,
+    opts?: { initials?: string; date?: string },
+  ): EditResult {
+    return JSON.parse(
+      this.wasm.AddCommentToRevision(
+        this.handle,
+        revisionId,
+        author,
+        opts?.initials ?? "",
+        opts?.date ?? "",
+        markdown,
+      ),
+    ) as EditResult;
+  }
+
+  /**
+   * Add a native Word reply to `parentCommentAnchorId`. It adds an adjacent reference and
+   * inherits the thread root's range through `w15:paraIdParent`; the required
+   * `commentsExtended.xml` and `commentsIds.xml` parts are created when the parent was flat.
+   */
+  addCommentReply(
+    parentCommentAnchorId: string,
+    author: string,
+    markdown: string,
+    opts?: { initials?: string; date?: string },
+  ): EditResult {
+    return JSON.parse(
+      this.wasm.AddCommentReply(
+        this.handle,
+        parentCommentAnchorId,
+        author,
+        opts?.initials ?? "",
+        opts?.date ?? "",
+        markdown,
+      ),
+    ) as EditResult;
+  }
+
+  /** Replace a comment's body text, addressed by its definition anchor (kind `cmt`); the
+   * comment's author/initials/date are preserved, as is the last paragraph's `w14:paraId`
+   * (Word's reply-threading key). */
+  updateComment(commentAnchorId: string, markdown: string): EditResult {
+    return JSON.parse(this.wasm.UpdateComment(this.handle, commentAnchorId, markdown)) as EditResult;
+  }
+
+  /** Resolve or reopen one comment (`false` reopens it). Flat comments are upgraded with the
+   * paraId-keyed metadata Word uses, and the operation is undoable. */
+  setCommentResolved(commentAnchorId: string, resolved: boolean): EditResult {
+    return JSON.parse(
+      this.wasm.SetCommentResolved(this.handle, commentAnchorId, resolved),
+    ) as EditResult;
+  }
+
+  /** Remove a comment: the definition, its body marker triple everywhere in the package, and
+   * any `commentsExtended`/`commentsIds` threading entries keyed by it. */
+  removeComment(commentAnchorId: string): EditResult {
+    return JSON.parse(this.wasm.RemoveComment(this.handle, commentAnchorId)) as EditResult;
+  }
+
+  /** The document's native Word comments in comments-part order. */
+  listComments(): CommentListEntry[] {
+    return JSON.parse(this.wasm.ListComments(this.handle)) as CommentListEntry[];
+  }
+
+  listHyperlinks(scopes: ProjectionScopes = ProjectionScopes.All): HyperlinkInfo[] {
+    return JSON.parse(this.wasm.ListHyperlinks(this.handle, scopes)) as HyperlinkInfo[];
+  }
+
+  addHyperlink(anchorId: string, span: CharSpan, kind: HyperlinkKind, target: string): EditResult {
+    return JSON.parse(this.wasm.AddHyperlink(
+      this.handle, anchorId, span.start, span.length, kind, target,
+    )) as EditResult;
+  }
+
+  updateHyperlink(hyperlinkId: string, kind: HyperlinkKind, target: string): EditResult {
+    return JSON.parse(this.wasm.UpdateHyperlink(this.handle, hyperlinkId, kind, target)) as EditResult;
+  }
+
+  removeHyperlink(hyperlinkId: string): EditResult {
+    return JSON.parse(this.wasm.RemoveHyperlink(this.handle, hyperlinkId)) as EditResult;
+  }
+
+  /** Versioned operational facts for native image inspection/mutation in this runtime. */
+  getImageCapabilities(): ImageCapabilities {
+    return JSON.parse(this.wasm.GetImageCapabilities()) as ImageCapabilities;
+  }
+
+  listImages(scopes: ProjectionScopes = ProjectionScopes.All): ImageOccurrence[] {
+    return JSON.parse(this.wasm.ListImages(this.handle, scopes)) as ImageOccurrence[];
+  }
+
+  insertImage(anchorId: string, characterOffset: number, bytes: Uint8Array,
+    options: ImageInsertOptions = {}): EditResult {
+    return JSON.parse(this.wasm.InsertImage(this.handle, anchorId, characterOffset,
+      imageBytesToBase64(bytes), JSON.stringify(options))) as EditResult;
+  }
+
+  replaceImage(imageId: string, bytes: Uint8Array): EditResult {
+    return JSON.parse(this.wasm.ReplaceImage(
+      this.handle, imageId, imageBytesToBase64(bytes))) as EditResult;
+  }
+
+  /**
+   * Convert an external linked picture into an embedded one using bytes the caller fetched;
+   * the engine never reaches the network itself. Refused for pictures that already embed
+   * their media — see `ImageOccurrence.operations`.
+   */
+  embedLinkedImage(imageId: string, bytes: Uint8Array): EditResult {
+    return JSON.parse(this.wasm.EmbedLinkedImage(
+      this.handle, imageId, imageBytesToBase64(bytes))) as EditResult;
+  }
+
+  setImageDimensions(imageId: string, dimensions: ImageDimensions): EditResult {
+    return JSON.parse(this.wasm.SetImageDimensions(
+      this.handle, imageId, JSON.stringify(dimensions))) as EditResult;
+  }
+
+  setImageMetadata(imageId: string, altText: string | null, title: string | null): EditResult {
+    return JSON.parse(this.wasm.SetImageMetadata(
+      this.handle, imageId, altText, title)) as EditResult;
+  }
+
+  setImageFloatingLayout(imageId: string, layout: FloatingImageLayout): EditResult {
+    return JSON.parse(this.wasm.SetImageFloatingLayout(
+      this.handle, imageId, JSON.stringify(layout))) as EditResult;
+  }
+
+  removeImage(imageId: string): EditResult {
+    return JSON.parse(this.wasm.RemoveImage(this.handle, imageId)) as EditResult;
+  }
+
+  /** Native Word structured-document tags, in outer-before-inner story order. */
+  listContentControls(scopes: ProjectionScopes = ProjectionScopes.All): ContentControlInfo[] {
+    return JSON.parse(this.wasm.ListContentControls(this.handle, scopes)) as ContentControlInfo[];
+  }
+
+  fillContentControlText(anchorId: string, text: string,
+    options: ContentControlFillOptions = {}): EditResult {
+    return JSON.parse(this.wasm.FillContentControlText(
+      this.handle, anchorId, text, JSON.stringify(options))) as EditResult;
+  }
+
+  fillContentControlRichText(anchorId: string, markdown: string,
+    options: ContentControlFillOptions = {}): EditResult {
+    return JSON.parse(this.wasm.FillContentControlRichText(
+      this.handle, anchorId, markdown, JSON.stringify(options))) as EditResult;
+  }
+
+  setContentControlChecked(anchorId: string, isChecked: boolean,
+    options: ContentControlFillOptions = {}): EditResult {
+    return JSON.parse(this.wasm.SetContentControlChecked(
+      this.handle, anchorId, isChecked, JSON.stringify(options))) as EditResult;
+  }
+
+  setContentControlDate(anchorId: string, value: string | Date, displayText?: string,
+    options: ContentControlFillOptions = {}): EditResult {
+    const timestamp = value instanceof Date ? value.toISOString() : value;
+    return JSON.parse(this.wasm.SetContentControlDate(
+      this.handle, anchorId, timestamp, displayText ?? null, JSON.stringify(options))) as EditResult;
+  }
+
+  selectContentControlItem(anchorId: string, value: string,
+    options: ContentControlFillOptions = {}): EditResult {
+    return JSON.parse(this.wasm.SelectContentControlItem(
+      this.handle, anchorId, value, JSON.stringify(options))) as EditResult;
+  }
+
+  fillContentControlPicture(anchorId: string, bytes: Uint8Array,
+    options: ContentControlFillOptions = {}): EditResult {
+    return JSON.parse(this.wasm.FillContentControlPicture(
+      this.handle, anchorId, imageBytesToBase64(bytes), JSON.stringify(options))) as EditResult;
+  }
+
+  addRepeatingSectionItem(sectionAnchorId: string, afterItemAnchorId?: string,
+    options: ContentControlFillOptions = {}): EditResult {
+    return JSON.parse(this.wasm.AddRepeatingSectionItem(
+      this.handle, sectionAnchorId, afterItemAnchorId ?? "", JSON.stringify(options))) as EditResult;
+  }
+
+  removeRepeatingSectionItem(itemAnchorId: string): EditResult {
+    return JSON.parse(this.wasm.RemoveRepeatingSectionItem(
+      this.handle, itemAnchorId)) as EditResult;
+  }
+
+  listBookmarks(scopes: ProjectionScopes = ProjectionScopes.All): BookmarkInfo[] {
+    return JSON.parse(this.wasm.ListBookmarks(this.handle, scopes)) as BookmarkInfo[];
+  }
+
+  addBookmark(name: string, range: DocumentRange): EditResult {
+    return JSON.parse(this.wasm.AddBookmark(this.handle, name,
+      range.startAnchorId, range.startOffset, range.endAnchorId, range.endOffset)) as EditResult;
+  }
+
+  renameBookmark(name: string, newName: string): EditResult {
+    return JSON.parse(this.wasm.RenameBookmark(this.handle, name, newName)) as EditResult;
+  }
+
+  moveBookmark(name: string, range: DocumentRange): EditResult {
+    return JSON.parse(this.wasm.MoveBookmark(this.handle, name,
+      range.startAnchorId, range.startOffset, range.endAnchorId, range.endOffset)) as EditResult;
+  }
+
+  removeBookmark(name: string): EditResult {
+    return JSON.parse(this.wasm.RemoveBookmark(this.handle, name)) as EditResult;
+  }
+
+  // ─── Tracked revisions (issue #318) ──────────────────────────────────
+
+  /** Markup-native tracked-revision listing, in document order across body, headers,
+   * footers, footnotes, and endnotes. Ids are stable while the underlying markup
+   * exists and address {@link acceptRevision}/{@link rejectRevision}; authors/dates
+   * are the markup's own (no accept/reject re-diff). */
+  listRevisions(filter?: RevisionListFilter): RevisionListEntry[] {
+    if (filter && Object.values(filter).some((v) => v != null)) {
+      if (!this.wasm.ListRevisionsFiltered) {
+        throw new Error("This WASM bundle predates filtered revision listing; rebuild docxodus.");
+      }
+      return JSON.parse(
+        this.wasm.ListRevisionsFiltered(this.handle, JSON.stringify(filter)),
+      ) as RevisionListEntry[];
+    }
+    return JSON.parse(this.wasm.ListRevisions(this.handle)) as RevisionListEntry[];
+  }
+
+  /**
+   * The explicit repairs the registry offers for entries it refuses to resolve (issues
+   * #754–#758): which carriers are defective, whether a unique repair exists, and what it
+   * would do. Read-only; listing, accept and reject never repair.
+   */
+  listRevisionRepairs(): RevisionRepairProposal[] {
+    if (!this.wasm.ListRevisionRepairs) {
+      throw new Error("This WASM bundle predates revision repairs; rebuild docxodus.");
+    }
+    return JSON.parse(this.wasm.ListRevisionRepairs(this.handle)) as RevisionRepairProposal[];
+  }
+
+  /**
+   * Perform requested repairs atomically as one undo step. A kind the registry did not offer,
+   * a non-repairable proposal, or a wrap-as-deletion without author and date refuses the whole
+   * call (`revision_repair_rejected`) with nothing mutated. Repaired entries get new ids.
+   */
+  repairRevisions(repairs: readonly RevisionRepairRequest[]): RevisionRepairResult {
+    if (!this.wasm.RepairRevisions) {
+      throw new Error("This WASM bundle predates revision repairs; rebuild docxodus.");
+    }
+    return JSON.parse(this.wasm.RepairRevisions(this.handle, JSON.stringify(repairs))) as RevisionRepairResult;
+  }
+
+  /** Accept ONE revision by the id {@link listRevisions} reported — insertions keep
+   * their content, deletions are carried out, a move materializes at its destination,
+   * a format change keeps the new properties. Undoable. */
+  acceptRevision(revisionId: string): EditResult {
+    return JSON.parse(this.wasm.AcceptRevision(this.handle, revisionId)) as EditResult;
+  }
+
+  /** Reject ONE revision by id — the inverse of {@link acceptRevision}: insertions are
+   * removed, deleted content is restored, a move stays at its source, a format change
+   * restores the stored old properties. Undoable. */
+  rejectRevision(revisionId: string): EditResult {
+    return JSON.parse(this.wasm.RejectRevision(this.handle, revisionId)) as EditResult;
+  }
+
+  /**
+   * Accept every live revision as one undoable session mutation.
+   *
+   * Fails closed: an unsupported, malformed, or ambiguous registry entry aborts the whole
+   * operation (`revisionUnsupported`/`revisionMalformed`/`revisionAmbiguous`) and nothing is
+   * mutated. There is no force mode — call {@link listRevisions} and read each entry's
+   * `diagnostic` to see what blocks it.
+   */
+  acceptAllRevisions(): EditResult {
+    return JSON.parse(this.wasm.AcceptAllRevisions(this.handle)) as EditResult;
+  }
+
+  /** Reject every live revision as one undoable session mutation. Fails closed exactly like
+   * {@link acceptAllRevisions}. */
+  rejectAllRevisions(): EditResult {
+    return JSON.parse(this.wasm.RejectAllRevisions(this.handle)) as EditResult;
+  }
+
+  // ─── Tier C: formatting ──────────────────────────────────────────────
+
+  applyFormat(anchorId: string, span: CharSpan | null, op: FormatOp): EditResult {
+    const spanJson = span ? JSON.stringify(span) : "";
+    return JSON.parse(this.wasm.ApplyFormat(this.handle, anchorId, spanJson, JSON.stringify(op))) as EditResult;
+  }
+
+  /**
+   * Convenience: find `substring` in the anchor's flat text and apply `op` to the
+   * first occurrence. Eliminates the offset-arithmetic trap from #138 — caller passes
+   * the visible text they want formatted, the WASM-side resolves it to a CharSpan.
+   */
+  applyFormatBySubstring(anchorId: string, substring: string, op: FormatOp): EditResult {
+    return JSON.parse(
+      this.wasm.ApplyFormatBySubstring(this.handle, anchorId, substring, JSON.stringify(op))
+    ) as EditResult;
+  }
+
+  /**
+   * Convenience: apply `op` to the exact span of a {@link TextMatch} (typically from
+   * {@link grep}). The match's `enclosingAnchor.id` + `span` address one specific
+   * occurrence even when several identical needles share the same block.
+   */
+  applyFormatToMatch(match: TextMatch, op: FormatOp): EditResult {
+    const span: CharSpan = { start: match.span.start, length: match.span.length };
+    return this.applyFormat(match.enclosingAnchor.id, span, op);
+  }
+
+  setParagraphStyle(anchorId: string, styleId: string): EditResult {
+    return JSON.parse(this.wasm.SetParagraphStyle(this.handle, anchorId, styleId)) as EditResult;
+  }
+
+  /** Set paragraph alignment / indent / page-break-before (omitted fields are left unchanged). */
+  setParagraphFormat(anchorId: string, op: ParagraphFormatOp): EditResult {
+    return JSON.parse(this.wasm.SetParagraphFormat(this.handle, anchorId, JSON.stringify(op))) as EditResult;
+  }
+
+  setListLevel(anchorId: string, levelDelta: number): EditResult {
+    return JSON.parse(this.wasm.SetListLevel(this.handle, anchorId, levelDelta)) as EditResult;
+  }
+
+  removeListMembership(anchorId: string): EditResult {
+    return JSON.parse(this.wasm.RemoveListMembership(this.handle, anchorId)) as EditResult;
+  }
+
+  /** Make the paragraph a bullet/numbered list item, or remove list membership ("none"). */
+  applyListFormat(anchorId: string, kind: ListFormat): EditResult {
+    return JSON.parse(this.wasm.ApplyListFormat(this.handle, anchorId, kind)) as EditResult;
+  }
+
+  /** Apply one list format across the contiguous sibling run from `firstAnchorId` to
+   * `lastAnchorId` inclusive (either document order). Every member shares one `w:num`
+   * instance so the numbering sequence stays intact; the whole range is a single undo step. */
+  applyListFormatRange(firstAnchorId: string, lastAnchorId: string, kind: ListFormat): EditResult {
+    return JSON.parse(
+      this.wasm.ApplyListFormatRange(this.handle, firstAnchorId, lastAnchorId, kind),
+    ) as EditResult;
+  }
+
+  /** Restart the anchored list item's numbering at `value` — Word's *Set Numbering Value…*.
+   * Writes a `w:startOverride` on a dedicated `w:num` instance and repoints the anchored item
+   * plus every following member of its sequence, so a mid-list restart splits the sequence
+   * exactly like Word (earlier items keep their numbers, the tail continues from `value`). */
+  setListStartOverride(anchorId: string, value: number): EditResult {
+    return JSON.parse(this.wasm.SetListStartOverride(this.handle, anchorId, value)) as EditResult;
+  }
+
+  /** Remove the numbering restart from the anchored item's whole sequence (the inverse of
+   * {@link setListStartOverride}); the sequence reverts to the definition's own start. A
+   * sequence with no override at the item's level is a successful no-op. */
+  clearListStartOverride(anchorId: string): EditResult {
+    return JSON.parse(this.wasm.ClearListStartOverride(this.handle, anchorId)) as EditResult;
+  }
+
+  // ─── Tier D: cell content ────────────────────────────────────────────
+
+  replaceCellContent(cellAnchorId: string, markdown: string): EditResult {
+    return JSON.parse(this.wasm.ReplaceCellContent(this.handle, cellAnchorId, markdown)) as EditResult;
+  }
+
+  // ─── Raw escape hatch ────────────────────────────────────────────────
+
+  readonly raw = {
+    getXml: (anchorId: string): string => this.wasm.RawGetXml(this.handle, anchorId),
+    insertXml: (anchorId: string, position: "before" | "after", xml: string): EditResult =>
+      JSON.parse(this.wasm.RawInsertXml(this.handle, anchorId, position, xml)) as EditResult,
+    replaceXml: (anchorId: string, xml: string): EditResult =>
+      JSON.parse(this.wasm.RawReplaceXml(this.handle, anchorId, xml)) as EditResult,
+  };
+
+  // ─── Search ──────────────────────────────────────────────────────────
+
+  /**
+   * Searches the flat text of every paragraph/heading/list-item in scope for
+   * matches of `pattern`, returning them in document order with the run
+   * fragments each match spans. Lets callers rewrite a match in place while
+   * preserving each fragment's formatting (bold/italic/hyperlink/etc.).
+   *
+   * `pattern` is a regular expression — use plain string equivalents wrapped
+   * in `^` / `$` or pass literal text escaped via a helper.
+   *
+   * @see docs/architecture/docx_mutation_api.md#grep
+   */
+  grep(pattern: string, options?: GrepOptions): TextMatch[] {
+    return JSON.parse(this.wasm.Grep(this.handle, pattern, options ? JSON.stringify(options) : "")) as TextMatch[];
+  }
+
+  /**
+   * Like {@link grep}, but lets a single match span adjacent block-level
+   * siblings (paragraphs/headings/list items) under the same parent. Block
+   * boundaries appear in the matched text as `\n`, so `^`/`$` with the
+   * Multiline flag anchor at boundaries and `.` won't cross unless Singleline
+   * is set.
+   *
+   * Matches never cross OOXML package parts, container boundaries (body →
+   * table cell), or non-paragraph siblings (a table between two paragraphs
+   * breaks the run). Returned superset of {@link grep}: single-block matches
+   * still appear with one slice. Filter `slices.length > 1` for cross-block only.
+   *
+   * @see docs/architecture/docx_mutation_api.md#grepcrossblock
+   */
+  grepCrossBlock(pattern: string, options?: GrepOptions): CrossBlockMatch[] {
+    return JSON.parse(
+      this.wasm.GrepCrossBlock(this.handle, pattern, options ? JSON.stringify(options) : "")
+    ) as CrossBlockMatch[];
+  }
+
+  /**
+   * Finds every literal occurrence of `find` in the anchor's flat text and
+   * replaces it with `replace`, preserving the surrounding run formatting that
+   * the match didn't touch. Returns one `EditResult` per attempted match.
+   *
+   * A `find` that matches nothing fails with a single `text_not_found` result
+   * naming the anchor and the needle — never an empty array. Pass
+   * `expectedMatchCount: 0` to assert absence as a successful no-op instead.
+   *
+   * Run-formatting contract: the replacement text inherits the formatting of
+   * the FIRST run the match spanned. Middle/trailing runs keep their `w:rPr`
+   * but lose the slice of text the match consumed.
+   *
+   * @see docs/architecture/docx_mutation_api.md#replacetextrange
+   */
+  replaceTextRange(anchorId: string, find: string, replace: string, options?: ReplaceOptions): EditResult[] {
+    return JSON.parse(
+      this.wasm.ReplaceTextRange(this.handle, anchorId, find, replace, options ? JSON.stringify(options) : "")
+    ) as EditResult[];
+  }
+
+  /**
+   * Replaces a specific Grep match in place — addresses the exact span by
+   * `enclosingAnchor.id` + `span.{start,length}`, so identical needles in the
+   * same paragraph (the template-fill case where five `[___]` placeholders
+   * each get a different value) don't collide.
+   *
+   * Pass `format` to replace text and format exactly the replacement atomically, with one
+   * undo/version unit. This interactive path returns an ordinary EditResult and avoids the
+   * package checkpoint/hash required by executeBatch's receipt. Empty replacements only delete.
+   */
+  replaceMatch(match: TextMatch, replace: string, format?: FormatOp): EditResult {
+    if (format !== undefined) {
+      if (!this.wasm.ReplaceTextAtSpanWithFormat) {
+        throw new Error("This WASM bundle predates atomic text-plus-format edits; rebuild docxodus.");
+      }
+      return JSON.parse(this.wasm.ReplaceTextAtSpanWithFormat(
+        this.handle, match.enclosingAnchor.id, match.span.start, match.span.length, replace,
+        JSON.stringify(format),
+      )) as EditResult;
+    }
+    return JSON.parse(
+      this.wasm.ReplaceTextAtSpan(this.handle, match.enclosingAnchor.id, match.span.start, match.span.length, replace)
+    ) as EditResult;
+  }
+
+  /**
+   * Helper for {@link fillPlaceholders} `coalesceWhitespaceAroundEmptyFill` path —
+   * mirrors the .NET `ReplaceMatchCoalescingNeighbors` rules. Inspects the chars
+   * immediately surrounding the match via `match.contextBefore` / `contextAfter`
+   * (so the option requires `contextChars >= 1`, the default) and expands the
+   * deletion span to absorb whitespace / leading-space-before-punctuation /
+   * matched-brackets where the patterns match. Falls back to literal-delete
+   * when no neighbor pattern applies.
+   *
+   * Note: with `boundary: ContextBoundary.Bracket`, neighbor brackets are not
+   * captured in context, so the bracket-coalesce rule won't fire on the JS side.
+   * The .NET implementation reads flat text directly and handles that case;
+   * callers who care should leave `boundary` at the default `Char`.
+   */
+  private replaceMatchCoalescingNeighbors(match: TextMatch): EditResult {
+    // Fold NBSP / narrow NBSP / thin space to ASCII space so e.g. an NBSP on
+    // either side still gets treated as whitespace by the rules below.
+    const fold = (c: string | undefined): string | undefined => {
+      if (c === " " || c === " " || c === " ") return " ";
+      return c;
+    };
+    const l = fold(match.contextBefore.length > 0 ? match.contextBefore[match.contextBefore.length - 1] : undefined);
+    const r = fold(match.contextAfter.length > 0 ? match.contextAfter[0] : undefined);
+
+    const isSpace = (c: string | undefined): boolean => c === " " || c === "\t";
+    const isClauseTerm = (c: string | undefined): boolean =>
+      c === "." || c === "," || c === ";" || c === ":" || c === "!" || c === "?";
+    const isOpen = (c: string | undefined): boolean => c === "(" || c === "[" || c === "{";
+    const isClose = (c: string | undefined): boolean => c === ")" || c === "]" || c === "}";
+
+    let extendLeft = 0;
+    let extendRight = 0;
+    if (isSpace(l) && isSpace(r)) {
+      extendRight = 1;
+    } else if (isSpace(l) && isClauseTerm(r)) {
+      extendLeft = 1;
+    } else if (isOpen(l) && isClose(r)) {
+      extendLeft = 1;
+      extendRight = 1;
+    }
+
+    if (extendLeft === 0 && extendRight === 0) {
+      return this.replaceMatch(match, "");
+    }
+
+    return JSON.parse(
+      this.wasm.ReplaceTextAtSpan(
+        this.handle,
+        match.enclosingAnchor.id,
+        match.span.start - extendLeft,
+        match.span.length + extendLeft + extendRight,
+        "",
+      ),
+    ) as EditResult;
+  }
+
+  /**
+   * Replace the bracketed portion of a `TextMatch` with `newInner`, preserving any
+   * prefix or suffix outside the brackets. Designed for `findPlaceholders` matches
+   * like `$[___]` where the regex `\$?\[…\]` captures a leading `$`:
+   * `replaceInner(match, "0.20")` yields `$0.20`, not `0.20`.
+   *
+   * Returns `MalformedMarkdown` if the match text does not contain balanced brackets.
+   */
+  replaceInner(match: TextMatch, newInner: string): EditResult {
+    return JSON.parse(this.wasm.ReplaceInner(
+      this.handle,
+      match.text,
+      match.enclosingAnchor.id,
+      match.span.start,
+      match.span.length,
+      newInner,
+    )) as EditResult;
+  }
+
+  /**
+   * Picker-driven template fill. For every placeholder matching `options.kinds`,
+   * calls `picker`; if the picker returns a non-null string, the placeholder is
+   * replaced (with optional `$`-prefix preservation). Iterates until no more
+   * placeholders match (or `maxPasses` is reached, or a pass makes zero changes)
+   * — handles nested brackets that surface only after the inner ones are stripped.
+   *
+   * The TypeScript implementation mirrors the .NET `DocxSession.FillPlaceholders`
+   * exactly.
+   *
+   * The picker is invoked synchronously by this loop on the JS side (it does
+   * NOT run inside the WASM module). Async pickers are not supported: returning
+   * a `Promise` will cause a `TypeError` at runtime inside the `$`-prefix
+   * preservation branch (`Promise.startsWith is not a function`). For async
+   * data, pre-build a lookup map before calling and have the picker read from
+   * it synchronously.
+   */
+  fillPlaceholders(
+    picker: (p: TemplatePlaceholder) => string | null | undefined,
+    options?: FillOptions,
+  ): BulkEditResult {
+    const opts = options ?? {};
+    // Default Kinds = All so the picker is invoked for every kind the doc contains.
+    // Callers that want to ignore AlternativeClause matches should narrow this to
+    // `PlaceholderKinds.BlankFill | PlaceholderKinds.Instruction`.
+    const kinds = opts.kinds ?? PlaceholderKinds.All;
+    const scope = opts.scope ?? 1; // Body
+    const maxPasses = opts.maxPasses ?? 8;
+    const preserveDollarPrefix = opts.preserveDollarPrefix ?? true;
+    const contextChars = opts.contextChars;
+    const boundary = opts.boundary ?? ContextBoundary.Char;
+    const coalesceEmpty = opts.coalesceWhitespaceAroundEmptyFill ?? false;
+
+    if (maxPasses <= 0) {
+      throw new RangeError("FillOptions.maxPasses must be > 0");
+    }
+
+    let filled = 0;
+    let workPasses = 0;
+    const errors: EditError[] = [];
+    const unfilled: TemplatePlaceholder[] = [];
+    const seenSkipKeys = new Set<string>();
+
+    for (let pass = 1; pass <= maxPasses; pass++) {
+      const placeholders = this.findPlaceholders(kinds, scope, contextChars, boundary)
+        .sort((a, b) => {
+          const cmp = b.match.enclosingAnchor.id.localeCompare(a.match.enclosingAnchor.id);
+          if (cmp !== 0) return cmp;
+          return b.match.span.start - a.match.span.start;
+        });
+      if (placeholders.length === 0) break;
+
+      let passChanges = 0;
+      for (const p of placeholders) {
+        const pick = picker(p);
+        if (pick == null) {
+          const key = `${p.match.enclosingAnchor.id}:${p.match.span.start}:${p.match.span.length}`;
+          if (!seenSkipKeys.has(key)) {
+            seenSkipKeys.add(key);
+            unfilled.push(p);
+          }
+          continue;
+        }
+
+        let replacement = pick;
+        if (preserveDollarPrefix && p.match.text.startsWith("$") && !replacement.startsWith("$")) {
+          replacement = "$" + replacement;
+        }
+
+        const r = coalesceEmpty && replacement.length === 0
+          ? this.replaceMatchCoalescingNeighbors(p.match)
+          : this.replaceMatch(p.match, replacement);
+        if (r.success) {
+          filled++;
+          passChanges++;
+        } else if (r.error) {
+          errors.push(r.error);
+        }
+      }
+
+      if (passChanges > 0) workPasses = pass;
+      if (passChanges === 0) break;
+    }
+
+    const stillPresent = this.findPlaceholders(kinds, scope).length;
+
+    return {
+      filled,
+      skipped: unfilled.length,
+      stillPresent,
+      passes: workPasses,
+      unfilled,
+      errors,
+    };
+  }
+
+  /**
+   * Enumerate template placeholders in the document. Thin classifier over
+   * {@link grep}: distinguishes `[___]` value blanks (`blank_fill`),
+   * `[bracketed alternative clauses]` (`alternative_clause`), and
+   * `[insert X]` / `[*italic hint*]` instructions (`instruction`).
+   *
+   * Combine kinds with bitwise OR: `PlaceholderKinds.BlankFill | PlaceholderKinds.Instruction`.
+   * Default is `PlaceholderKinds.All`; default scope is body only (1).
+   *
+   * @see docs/architecture/docx_mutation_api.md#findplaceholders
+   */
+  findPlaceholders(
+    kinds?: number,
+    scope?: number,
+    contextChars?: number,
+    boundary?: number,
+    citation?: PageCitationRequest,
+  ): TemplatePlaceholder[] {
+    // Omitted arguments take the engine's defaults (all kinds, the body, 80 characters, cut at a
+    // character), declared once in DocxSessionOps and DocxSession.
+    const json = citation
+      ? this.wasm.FindPlaceholdersWithCitations(
+          this.handle, kinds ?? null, scope ?? null, contextChars ?? null, boundary ?? null,
+          JSON.stringify(citation),
+        )
+      : this.wasm.FindPlaceholders(
+          this.handle, kinds ?? null, scope ?? null, contextChars ?? null, boundary ?? null);
+    return JSON.parse(json) as TemplatePlaceholder[];
+  }
+
+  /**
+   * Returns a snapshot of edit-state introspection signals — placeholder counts,
+   * underscore-run leftovers, footnote/comment counts. Useful for "am I done?"
+   * verification at the end of an edit pipeline.
+   */
+  getEditSummary(): EditSummary {
+    return JSON.parse(this.wasm.GetEditSummary(this.handle)) as EditSummary;
+  }
+
+  /**
+   * Discoverability alias for {@link findPlaceholders}. Same return shape.
+   */
+  remainingPlaceholders(kinds?: number): TemplatePlaceholder[] {
+    return JSON.parse(this.wasm.RemainingPlaceholders(this.handle, kinds ?? null)) as TemplatePlaceholder[];
+  }
+
+  /**
+   * Diff the document's current projection against the projection captured at
+   * session construction time.
+   *
+   * Requires `captureInitialProjection: true` in {@link DocxSessionSettings}
+   * (the default). Throws if not enabled.
+   *
+   * The return type depends on `format`:
+   * - `DiffFormat.Json` (default) — structured anchor-keyed `DiffEntry[]`.
+   * - `DiffFormat.Unified` — `patch(1)`-compatible unified-diff text;
+   *   empty string when nothing has changed.
+   * - `DiffFormat.SideBySide` — two-column human-review text
+   *   (`diff -y` style).
+   */
+  getDiff(format?: typeof DiffFormat.Json): DiffEntry[];
+  getDiff(format: typeof DiffFormat.Unified | typeof DiffFormat.SideBySide): string;
+  getDiff(format?: number): DiffEntry[] | string {
+    // An omitted format reaches the engine as null and takes its default (JSON, declared once in
+    // DocxSessionOps); the overloads above promise the parsed form for it.
+    const raw = this.wasm.GetDiff(this.handle, format ?? null);
+    if (format == null || format === DiffFormat.Json) {
+      return JSON.parse(raw) as DiffEntry[];
+    }
+    return raw;
+  }
+
+  /**
+   * Return stable semantic changes from the package opened for this session to
+   * its current state. Requires `captureInitialProjection` (enabled by default).
+   */
+  getSemanticChanges(): SemanticChangeSet {
+    return JSON.parse(this.wasm.GetSemanticChanges(this.handle)) as SemanticChangeSet;
+  }
+
+  /**
+   * Run the default deliverable gate on this session's normal clean-save checkpoint.
+   * With initial projection capture enabled (the default), exact opening bytes are the
+   * baseline used for dispositions and semantic/package deltas.
+   */
+  verifyDeliverable(request?: DeliverableVerificationRequest): DeliverableVerificationResult {
+    if (request !== undefined) {
+      // The full request (issue #747): policy/limit options, expected deltas, companions.
+      if (!this.wasm.VerifyDeliverableWithRequest) {
+        throw new Error("This WASM bundle predates full verification requests; rebuild docxodus.");
+      }
+      return JSON.parse(this.wasm.VerifyDeliverableWithRequest(
+        this.handle, serializeVerificationRequest(request))) as DeliverableVerificationResult;
+    }
+    return JSON.parse(
+      this.wasm.VerifyDeliverable(this.handle),
+    ) as DeliverableVerificationResult;
+  }
+
+  // ─── Annotation-based anchor discovery (#132) ────────────────────────
+
+  /**
+   * Resolves an annotation's range to the block-level markdown anchors covering
+   * it, in document order. The bridge between Docxodus' read-side annotation API
+   * and the write-side session: an agent that wants to edit "the indemnification
+   * clause" looks the annotation up by id and gets the anchors it can hand to
+   * {@link replaceText} / {@link deleteBlock} / {@link raw}. Returns an empty
+   * list when the id is unknown or its bookmark is missing.
+   *
+   * v1 returns the enclosing block anchors — every paragraph/heading/list-item/
+   * cell/row/table whose subtree overlaps the bookmark range. Filter by
+   * `kind === "p" | "h" | "li"` when you want only text-bearing blocks.
+   *
+   * @see docs/architecture/docx_mutation_api.md#findbyannotation
+   */
+  findByAnnotation(annotationId: string, citation?: PageCitationRequest): AnchorTargetRef[] {
+    const json = citation
+      ? this.wasm.FindByAnnotationWithCitations(this.handle, annotationId, JSON.stringify(citation))
+      : this.wasm.FindByAnnotation(this.handle, annotationId);
+    return JSON.parse(json) as AnchorTargetRef[];
+  }
+
+  /**
+   * Finds every annotation whose `labelId` matches and resolves each of their
+   * ranges. The result is keyed by annotation id so callers can disambiguate
+   * when the same label is applied to multiple regions (three "WARRANTY"
+   * annotations on different paragraphs become three entries). Annotations
+   * whose bookmark resolves to no anchors are omitted from the result.
+   */
+  findByLabel(labelId: string, citation?: PageCitationRequest): Record<string, AnchorTargetRef[]> {
+    const json = citation
+      ? this.wasm.FindByLabelWithCitations(this.handle, labelId, JSON.stringify(citation))
+      : this.wasm.FindByLabel(this.handle, labelId);
+    return JSON.parse(json) as Record<string, AnchorTargetRef[]>;
+  }
+
+  /**
+   * Resolves any bookmark in the main document part (Docxodus-managed or
+   * user-authored) to the block-level anchors covering its range, in document
+   * order. Empty when the bookmark name is unknown. Use this for raw bookmark
+   * names that didn't come from the annotation system.
+   */
+  findByBookmark(bookmarkName: string, citation?: PageCitationRequest): AnchorTargetRef[] {
+    const json = citation
+      ? this.wasm.FindByBookmarkWithCitations(this.handle, bookmarkName, JSON.stringify(citation))
+      : this.wasm.FindByBookmark(this.handle, bookmarkName);
+    return JSON.parse(json) as AnchorTargetRef[];
+  }
+
+  // ─── Text/kind-based anchor discovery (#171) ─────────────────────────
+
+  /**
+   * True when `anchorId` resolves to a live element in the current session.
+   * Cheap existence probe — use it to guard an anchor obtained from an earlier
+   * projection before handing it to a mutation (anchors can be invalidated by
+   * intervening edits; see the anchor lifecycle table in the mutation docs).
+   */
+  exists(anchorId: string): boolean {
+    return this.wasm.Exists(this.handle, anchorId);
+  }
+
+  /**
+   * Find the first block-level anchor (in document order) whose flat text
+   * contains `needle`, or `null` when nothing matches. `options` tune case /
+   * whitespace handling and narrow the search by kind or scope. For all
+   * matches use {@link findAllByText}.
+   */
+  findByText(needle: string, options?: FindOptions): AnchorTargetRef | null {
+    return JSON.parse(
+      this.wasm.FindByText(this.handle, needle, options ? JSON.stringify(options) : ""),
+    ) as AnchorTargetRef | null;
+  }
+
+  /**
+   * Like {@link findByText} but returns every matching anchor in document
+   * order (empty when nothing matches).
+   */
+  findAllByText(needle: string, options?: FindOptions): AnchorTargetRef[] {
+    return JSON.parse(
+      this.wasm.FindAllByText(this.handle, needle, options ? JSON.stringify(options) : ""),
+    ) as AnchorTargetRef[];
+  }
+
+  /**
+   * Find every block-level anchor whose flat text matches the regular
+   * expression `pattern`, in document order. `regexOptions` uses the numeric
+   * layout of .NET `RegexOptions` (e.g. `1` = IgnoreCase); `options` is the
+   * same shape as {@link findByText} (its `ignoreCase` composes with the regex
+   * flag). Defaults to `regexOptions = 0` (none).
+   */
+  findByRegex(pattern: string, regexOptions?: number, options?: FindOptions): AnchorTargetRef[] {
+    return JSON.parse(
+      this.wasm.FindByRegex(
+        this.handle, pattern, regexOptions ?? null, options ? JSON.stringify(options) : ""),
+    ) as AnchorTargetRef[];
+  }
+
+  /**
+   * Return every anchor of the given `kind` — one of `"p"`, `"h"`, `"li"`,
+   * `"tbl"`, `"tr"`, `"tc"`, `"col"`, `"sdt"`, `"sec"`, `"fn"`, `"en"`,
+   * `"cmt"`, `"unk"` — in document order. Matching is an exact string comparison;
+   * in particular the row and cell tokens are `"tr"` and `"tc"`, never
+   * `"row"`/`"cell"`. Unknown strings are not parsed or rejected: they simply
+   * return an empty array. `"img"` and `"drw"` likewise return empty because the
+   * projection never assigns those reserved kinds; address images through the
+   * image surface instead. Reads the projection's anchor
+   * index directly — no text scan. Pass `scope` (e.g. `"body"`) to restrict to
+   * a single part; omit it to span all scopes.
+   */
+  findByKind(kind: string, scope?: string, citation?: PageCitationRequest): AnchorTargetRef[] {
+    const json = citation
+      ? this.wasm.FindByKindWithCitations(
+          this.handle, kind, scope ?? "", JSON.stringify(citation),
+        )
+      : this.wasm.FindByKind(this.handle, kind, scope ?? "");
+    return JSON.parse(json) as AnchorTargetRef[];
+  }
+
+  /**
+   * Look up a single anchor's preview info — `{ id, kind, scope, textPreview }`.
+   * Returns null when the anchor id is unknown.
+   *
+   * For iterating many anchors at once, prefer reading `textPreview` directly
+   * off the {@link MarkdownProjection.anchorIndex} entries (cheaper — no extra
+   * WASM round trip), or use {@link getAnchorInfos} for batched lookups.
+   */
+  getAnchorInfo(anchorId: string): AnchorInfo | null {
+    const raw = this.wasm.GetAnchorInfo(this.handle, anchorId);
+    return JSON.parse(raw) as AnchorInfo | null;
+  }
+
+  /**
+   * Bulk variant of {@link getAnchorInfo}: takes an array of anchor ids,
+   * returns a record where each unknown id maps to `null`.
+   */
+  getAnchorInfos(anchorIds: readonly string[]): Record<string, AnchorInfo | null> {
+    const raw = this.wasm.GetAnchorInfos(this.handle, JSON.stringify(anchorIds));
+    return JSON.parse(raw) as Record<string, AnchorInfo | null>;
+  }
+
+  /**
+   * Resolve block-level metadata (style id+name, outline level, list membership,
+   * formatting probe) for an anchor. Returns null when the anchor doesn't exist.
+   */
+  getBlockMetadata(anchorId: string): BlockMetadata | null {
+    const raw = this.wasm.GetBlockMetadata(this.handle, anchorId);
+    return JSON.parse(raw) as BlockMetadata | null;
+  }
+
+  /**
+   * Bulk variant of {@link getBlockMetadata}. Unknown ids map to null;
+   * duplicates are deduped.
+   */
+  getBlockMetadatas(anchorIds: readonly string[]): Record<string, BlockMetadata | null> {
+    const raw = this.wasm.GetBlockMetadatas(this.handle, JSON.stringify(anchorIds));
+    return JSON.parse(raw) as Record<string, BlockMetadata | null>;
+  }
+
+  /**
+   * Resolve the numbering facts for a list-item paragraph; returns null when
+   * the anchor has no w:numPr.
+   */
+  getListMembership(anchorId: string): ListMembership | null {
+    const raw = this.wasm.GetListMembership(this.handle, anchorId);
+    return JSON.parse(raw) as ListMembership | null;
+  }
+
+  /**
+   * Resolve page-layout info for the w:sectPr that governs an anchor.
+   * Returns null for anchors outside the body part.
+   */
+  getSectionInfo(anchorId: string): SectionInfo | null {
+    const raw = this.wasm.GetSectionInfo(this.handle, anchorId);
+    return JSON.parse(raw) as SectionInfo | null;
+  }
+
+  /** Enumerate the document's explicit style catalog with resolved high-signal properties. */
+  listStyles(): StyleInfo[] {
+    return JSON.parse(this.wasm.ListStyles(this.handle)) as StyleInfo[];
+  }
+
+  /** Inspect direct and effective paragraph/run formatting for one paragraph anchor. */
+  getFormatting(anchorId: string): FormattingInspection | null {
+    return JSON.parse(this.wasm.GetFormatting(this.handle, anchorId)) as FormattingInspection | null;
+  }
+
+  /** Enumerate text-bearing runs as mutation-compatible anchor/span pairs. */
+  listInlineSpans(anchorId: string): InlineSpan[] {
+    return JSON.parse(this.wasm.ListInlineSpans(this.handle, anchorId)) as InlineSpan[];
+  }
+
+  /**
+   * Enumerates every annotation persisted in the document. Lets an agent prime
+   * itself with "here are the labeled regions you can target" before committing
+   * to a specific id.
+   */
+  listAnnotations(): DocumentAnnotation[] {
+    return JSON.parse(this.wasm.ListAnnotations(this.handle)) as DocumentAnnotation[];
+  }
+
+  // ─── Annotation write surface ────────────────────────────────────────
+
+  /**
+   * Annotate a range inside `anchorId`. When `span` is `null`/`undefined`
+   * the annotation wraps every inline run of the block. When
+   * `annotation.id` is `undefined`, a 16-char hex id is auto-generated and
+   * returned in `EditResult.annotationId`.
+   */
+  addAnnotation(
+    anchorId: string,
+    span: CharSpan | null,
+    annotation: DocumentAnnotation,
+  ): EditResult {
+    const spanJson = span ? JSON.stringify(span) : "";
+    return JSON.parse(
+      this.wasm.AddAnnotation(this.handle, anchorId, spanJson, JSON.stringify(annotation)),
+    ) as EditResult;
+  }
+
+  removeAnnotation(annotationId: string): EditResult {
+    return JSON.parse(this.wasm.SessionRemoveAnnotation(this.handle, annotationId)) as EditResult;
+  }
+
+  updateAnnotation(annotationId: string, update: AnnotationUpdate): EditResult {
+    return JSON.parse(
+      this.wasm.UpdateAnnotation(this.handle, annotationId, JSON.stringify(update)),
+    ) as EditResult;
+  }
+
+  moveAnnotation(
+    annotationId: string,
+    newAnchorId: string,
+    newSpan: CharSpan | null,
+  ): EditResult {
+    const spanJson = newSpan ? JSON.stringify(newSpan) : "";
+    return JSON.parse(
+      this.wasm.MoveAnnotation(this.handle, annotationId, newAnchorId, spanJson),
+    ) as EditResult;
+  }
+
+  // ─── Lifecycle ───────────────────────────────────────────────────────
+
+  /**
+   * Switch how subsequent mutations are recorded (issue #304). Session configuration,
+   * not a document mutation: not undoable, and already-applied markup is never touched.
+   */
+  setTrackedChanges(mode: TrackedChangeMode): void {
+    this.wasm.SetTrackedChanges(this.handle, mode);
+  }
+
+  /** Author stamped on subsequent tracked-change markup; `null` restores the "docxodus" default. */
+  setRevisionAuthor(author: string | null): void {
+    this.wasm.SetRevisionAuthor(this.handle, author ?? "");
+  }
+
+  undo(): boolean {
+    return this.wasm.Undo(this.handle);
+  }
+
+  redo(): boolean {
+    return this.wasm.Redo(this.handle);
+  }
+
+  save(): Uint8Array {
+    return this.wasm.Save(this.handle);
+  }
+
+  close(): void {
+    this.retainedPreviewReceipts.clear();
+    this.wasm.CloseSession(this.handle);
+  }
+
+  // TypeScript 5.2+ disposable protocol
+  [Symbol.dispose]?(): void {
+    this.close();
+  }
+}
+
+function imageBytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return globalThis.btoa(binary);
+}
+
+/**
+ * Opens a new {@link DocxSession} over the supplied DOCX bytes.
+ * The returned session holds its document in WASM memory until you call
+ * {@link DocxSession.close} (or it is disposed).
+ */
+export function openDocxSession(
+  bytes: Uint8Array,
+  wasmExports: DocxodusWasmExports,
+  settings?: DocxSessionSettings,
+): DocxSession {
+  const bridge = wasmExports.DocxSessionBridge;
+  const handle = bridge.OpenSession(bytes, settings ? JSON.stringify(settings) : "");
+  return new DocxSession(handle, bridge);
+}
+
+export type { AnchorInfo, AnchorRef, AnchorTargetRef, BlockSlice, CharSpan, CommentListEntry, CrossBlockMatch, CrossReferenceOptions, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FindOptions, FormatOp, FormattingInspection, GrepOptions, InlineSpan, MarkdownPatch, MarkdownPatchBlock, MutationBatchChangeSet, MutationBatchFailure, MutationBatchMode, MutationBatchPreviewOptions, MutationBatchPreviewStep, MutationBatchResult, MutationBatchStep, MutationBatchStepResult, MutationPreconditions, PageCitation, PageCitationRequest, PageMapRegistrationResult, PageMapStatus, ParagraphFormatting, PlaceholderKind, PreconditionFailure, PreconditionTarget, ReplaceOptions, RunFormatting, RunFormattingInfo, RunFragment, StyleInfo, TableStyleFormatting, TemplatePlaceholder, TextMatch, TextRangePrecondition } from "./types.js";
+export { ContextBoundary, PlaceholderKinds } from "./types.js";

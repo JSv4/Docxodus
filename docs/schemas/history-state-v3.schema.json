@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docxodus.dev/schemas/history/package-state/v3",
+  "title": "Package-history state with explicit publication ancestry and backend decision tip",
+  "$comment": "Register adjacent state-v2 schema to resolve shared definitions. Runtime validation proves exact parent publication ancestry. Operation is an opaque immutable decision reference at this storage layer; its owner validates its record and graph.",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "schemaVersion", "record"],
+  "properties": {
+    "schema": { "const": "https://docxodus.dev/schemas/history/package-state/v3" },
+    "schemaVersion": { "const": 3 },
+    "record": {
+      "type": "object", "additionalProperties": false,
+      "required": ["parentPublication", "operation", "commit", "documentId", "epoch", "initialSnapshot", "sequence", "snapshot", "version"],
+      "properties": {
+        "parentPublication": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/head" },
+        "operation": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/blob" },
+        "requests": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/journal" },
+        "commit": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/optionalBlob" },
+        "documentId": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/id" },
+        "epoch": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/position" },
+        "initialSnapshot": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/snapshot" },
+        "sequence": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/position" },
+        "snapshot": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/snapshot" },
+        "version": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/blob" }
+      }
+    }
+  }
+}

@@ -1,0 +1,102 @@
+{
+  "id": "clause-library",
+  "title": "Clause library",
+  "description": "A heading and four boilerplate clauses joined into one real auto-numbered Word list (a single shared w:num instance, via apply_format_range). The prose deliberately contains no literal digits, so a rendered list label like \"5.\" can only come from live numbering — which is what the clause-insertion scenario asserts renumbers.",
+  "expectedContent": [
+    "CLAUSE LIBRARY",
+    "Assignment requires prior written consent."
+  ],
+  "steps": [
+    {
+      "tool": "docxodus_create",
+      "target": {
+        "mode": "kind",
+        "query": "p",
+        "index": 0
+      },
+      "args": {
+        "action": "insert_heading",
+        "position": "after",
+        "text": "CLAUSE LIBRARY",
+        "level": 1
+      }
+    },
+    {
+      "tool": "docxodus_create",
+      "target": {
+        "mode": "text",
+        "query": "CLAUSE LIBRARY"
+      },
+      "args": {
+        "action": "insert_paragraph",
+        "position": "after",
+        "markdown": "Standard clauses follow."
+      }
+    },
+    {
+      "tool": "docxodus_create",
+      "target": {
+        "mode": "text",
+        "query": "Standard clauses follow."
+      },
+      "args": {
+        "action": "insert_paragraph",
+        "position": "after",
+        "markdown": "Confidentiality obligations survive termination."
+      }
+    },
+    {
+      "tool": "docxodus_create",
+      "target": {
+        "mode": "text",
+        "query": "Confidentiality obligations survive termination."
+      },
+      "args": {
+        "action": "insert_paragraph",
+        "position": "after",
+        "markdown": "Assignment requires prior written consent."
+      }
+    },
+    {
+      "tool": "docxodus_create",
+      "target": {
+        "mode": "text",
+        "query": "Assignment requires prior written consent."
+      },
+      "args": {
+        "action": "insert_paragraph",
+        "position": "after",
+        "markdown": "Notices must be delivered in writing."
+      }
+    },
+    {
+      "tool": "docxodus_create",
+      "target": {
+        "mode": "text",
+        "query": "Notices must be delivered in writing."
+      },
+      "args": {
+        "action": "insert_paragraph",
+        "position": "after",
+        "markdown": "Waiver requires a signed instrument."
+      }
+    },
+    {
+      "tool": "docxodus_list",
+      "targets": {
+        "firstAnchorId": {
+          "mode": "text",
+          "query": "Confidentiality obligations survive termination."
+        },
+        "lastAnchorId": {
+          "mode": "text",
+          "query": "Waiver requires a signed instrument."
+        }
+      },
+      "args": {
+        "action": "apply_format_range",
+        "listFormat": "decimal"
+      }
+    }
+  ]
+}

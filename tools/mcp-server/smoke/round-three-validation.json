@@ -1,0 +1,59 @@
+[
+  {
+    "id": "open",
+    "name": "docxodus_open",
+    "arguments": { "path": "local.docx", "trackedChanges": "accept" },
+    "capture": { "session_id": "sessionId" }
+  },
+  {
+    "id": "heading",
+    "name": "docxodus_search",
+    "arguments": { "sessionId": "$session_id", "mode": "text", "query": "MCP ROUND THREE REVIEW SCHEDULE", "maxResults": 10 },
+    "expect": { "matches.length": 1 }
+  },
+  {
+    "id": "certification",
+    "name": "docxodus_search",
+    "arguments": { "sessionId": "$session_id", "mode": "text", "query": "DOES HEREBY CERTIFY AND ACKNOWLEDGE:", "maxResults": 10 },
+    "expect": { "matches.length": 1 }
+  },
+  {
+    "id": "replacement",
+    "name": "docxodus_search",
+    "arguments": { "sessionId": "$session_id", "mode": "text", "query": "MCP ROUND THREE CORPORATION", "maxResults": 10 },
+    "expect": { "matches.length": 1 }
+  },
+  {
+    "id": "rejected_marker",
+    "name": "docxodus_search",
+    "arguments": { "sessionId": "$session_id", "mode": "text", "query": "BASE TEMPORARY", "maxResults": 10 },
+    "expect": { "matches.length": 0 }
+  },
+  {
+    "id": "tables",
+    "name": "docxodus_search",
+    "arguments": { "sessionId": "$session_id", "mode": "kind", "query": "tbl", "maxResults": 10 },
+    "expect": { "matches.length": 1 }
+  },
+  {
+    "id": "comments",
+    "name": "docxodus_comment",
+    "arguments": { "sessionId": "$session_id", "action": "list" },
+    "expect": {
+      "comments.length": 2,
+      "comments.0.resolved": true,
+      "comments.1.resolved": true
+    }
+  },
+  {
+    "id": "revisions",
+    "name": "docxodus_track_changes",
+    "arguments": { "sessionId": "$session_id", "action": "list" },
+    "expect": { "revisions.length": 0 }
+  },
+  {
+    "id": "close",
+    "name": "docxodus_close",
+    "arguments": { "sessionId": "$session_id" }
+  }
+]

@@ -1,0 +1,18 @@
+// Type-checks the Playwright specs, which `tsconfig.json` does not cover (it compiles `src/**` to
+// `dist/`) and which Playwright itself does not check (it strips types without checking them).
+//
+// Without this, a spec could assert against a type that no longer exists and still pass — the exact
+// gap that let `EditErrorCode` lose a union member while a runtime assertion on the string literal
+// kept passing. Specs that bind a value to a public type are load-bearing documentation of the
+// ripple; this is what enforces them.
+//
+// Run via `npm run typecheck` (wired into `pretest`, so `npm test` enforces it).
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["src/**/*", "tests/**/*", "examples/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

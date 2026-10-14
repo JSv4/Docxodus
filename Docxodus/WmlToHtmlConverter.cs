@@ -1,0 +1,11644 @@
+// Copyright (c) Microsoft. All rights reserved.
+// Licensed under the MIT license. See LICENSE file in the project root for full license information.
+
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
+#if !WASM_BUILD
+using SkiaSharp;
+#endif
+using System.Globalization;
+using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Xml.Linq;
+using DocumentFormat.OpenXml.Packaging;
+
+// 200e lrm - LTR
+// 200f rlm - RTL
+
+// todo need to set the HTTP "Content-Language" header, for instance:
+// Content-Language: en-US
+// Content-Language: fr-FR
+
+namespace Docxodus
+{
+    /// <summary>
+    /// Specifies how comments are rendered in the HTML output.
+    /// </summary>
+    public enum CommentRenderMode
+    {
+        /// <summary>
+        /// Comments are rendered as a section at the end of the document
+        /// with bidirectional links to/from commented text (default).
+        /// </summary>
+        EndnoteStyle,
+
+        /// <summary>
+        /// Comments are rendered inline as data attributes on the highlighted text.
+        /// Uses title attribute for tooltip display.
+        /// </summary>
+        Inline,
+
+        /// <summary>
+        /// Comments are rendered in a margin area using CSS positioning.
+        /// Best for print-style layouts.
+        /// </summary>
+        Margin
+    }
+
+    /// <summary>
+    /// Specifies how pagination is rendered in the HTML output.
+    /// </summary>
+    public enum PaginationMode
+    {
+        /// <summary>
+        /// No pagination - content flows continuously (default, current behavior).
+        /// </summary>
+        None,
+
+        /// <summary>
+        /// Paginated view - outputs page containers with document dimensions
+        /// and content with data attributes for client-side pagination.
+        /// Creates a PDF.js-style page preview experience.
+        /// </summary>
+        Paginated
+    }
+
+    /// <summary>
+    /// How rendered tracked changes look (issue #851). Only consulted when tracked changes are rendered.
+    /// </summary>
+    public enum RevisionPresentation
+    {
+        /// <summary>
+        /// Docxodus's own review style (default): insertions green and deletions red, each with a
+        /// light fill, moves in purple, a pilcrow for a deleted paragraph mark, and a change bar
+        /// beside each paragraph whose mark or properties changed.
+        /// </summary>
+        Docxodus,
+
+        /// <summary>
+        /// Close to what Word prints with All Markup: each author's revisions in that author's
+        /// colour, underlined when inserted and struck through when deleted, with no fills and no
+        /// pilcrows; moves in green with double underline and double strikethrough; and one change
+        /// bar in the left margin beside every paragraph that holds a revision.
+        /// </summary>
+        Word,
+    }
+
+    /// <summary>
+    /// Specifies types of content that cannot be fully converted to HTML.
+    /// </summary>
+    public enum UnsupportedContentType
+    {
+        /// <summary>Windows Metafile image format (legacy vector graphics)</summary>
+        WmfImage,
+        /// <summary>Enhanced Metafile image format (legacy vector graphics)</summary>
+        EmfImage,
+        /// <summary>SVG image format (not yet supported)</summary>
+        SvgImage,
+        /// <summary>Office Math Markup Language equations</summary>
+        MathEquation,
+        /// <summary>Form field elements (checkboxes, text inputs, dropdowns)</summary>
+        FormField,
+        /// <summary>Ruby annotations for East Asian text</summary>
+        RubyAnnotation,
+        /// <summary>Embedded OLE objects</summary>
+        OleObject,
+        /// <summary>Other unsupported content</summary>
+        Other
+    }
+
+    public partial class WmlDocument
+    {
+        [SuppressMessage("ReSharper", "UnusedMember.Global")]
+        public XElement ConvertToHtml(WmlToHtmlConverterSettings htmlConverterSettings)
+        {
+            return WmlToHtmlConverter.ConvertToHtml(this, htmlConverterSettings);
+        }
+
+        [SuppressMessage("ReSharper", "UnusedMember.Global")]
+        public XElement ConvertToHtml(HtmlConverterSettings htmlConverterSettings)
+        {
+            WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings(htmlConverterSettings);
+            return WmlToHtmlConverter.ConvertToHtml(this, settings);
+        }
+    }
+
+    [SuppressMessage("ReSharper", "FieldCanBeMadeReadOnly.Global")]
+    public class WmlToHtmlConverterSettings
+    {
+        public string PageTitle;
+        public string CssClassPrefix;
+        public bool FabricateCssClasses;
+        public string GeneralCss;
+        public string AdditionalCss;
+        public bool RestrictToSupportedLanguages;
+        public bool RestrictToSupportedNumberingFormats;
+        public Dictionary<string, Func<string, int, string?, string?>> ListItemImplementations;
+        public Func<ImageInfo, XElement?>? ImageHandler;
+
+        /// <summary>
+        /// If true, render tracked changes visually in HTML output.
+        /// If false (default), accept all revisions before conversion.
+        /// </summary>
+        public bool RenderTrackedChanges;
+
+        /// <summary>
+        /// CSS class prefix for revision elements (default: "rev-")
+        /// </summary>
+        public string RevisionCssClassPrefix;
+
+        /// <summary>
+        /// If true, include revision metadata (author, date) as data attributes
+        /// </summary>
+        public bool IncludeRevisionMetadata;
+
+        /// <summary>
+        /// If true, show deleted content with strikethrough (default: true)
+        /// If false, hide deleted content entirely
+        /// </summary>
+        public bool ShowDeletedContent;
+
+        /// <summary>
+        /// Custom colors for different authors (author name -> CSS color)
+        /// </summary>
+        public Dictionary<string, string>? AuthorColors;
+
+        /// <summary>
+        /// How rendered tracked changes look (default <see cref="Docxodus.RevisionPresentation.Docxodus"/>).
+        /// With <see cref="Docxodus.RevisionPresentation.Word"/>, <see cref="AuthorColors"/> overrides the
+        /// colour an author would otherwise take from the built-in author palette.
+        /// </summary>
+        public RevisionPresentation RevisionPresentation;
+
+        /// <summary>
+        /// If true, render move operations as separate from/to (default: true)
+        /// If false, render moves as regular delete + insert
+        /// </summary>
+        public bool RenderMoveOperations;
+
+        /// <summary>
+        /// If true, render footnotes and endnotes at the end of the HTML document.
+        /// If false (default), footnotes and endnotes are stripped from the output.
+        /// </summary>
+        public bool RenderFootnotesAndEndnotes;
+
+        /// <summary>
+        /// If true, render headers and footers in the HTML document.
+        /// If false (default), headers and footers are not rendered.
+        /// </summary>
+        public bool RenderHeadersAndFooters;
+
+        /// <summary>
+        /// If true, render comments in HTML output.
+        /// If false (default), comments are stripped from the output.
+        /// </summary>
+        public bool RenderComments;
+
+        /// <summary>
+        /// How to render comments in the HTML output (default: EndnoteStyle).
+        /// </summary>
+        public CommentRenderMode CommentRenderMode;
+
+        /// <summary>
+        /// CSS class prefix for comment elements (default: "comment-")
+        /// </summary>
+        public string CommentCssClassPrefix;
+
+        /// <summary>
+        /// If true, include comment metadata (author, date) as data attributes
+        /// </summary>
+        public bool IncludeCommentMetadata;
+
+        /// <summary>
+        /// If true, wrap every PAGE / NUMPAGES field result in a <c>&lt;span data-field="PAGE"&gt;</c>
+        /// (plus <c>data-field-format</c> for a <c>\*</c> switch) exactly as paginated rendering does,
+        /// regardless of <see cref="RenderPagination"/>. Lets a client that paginates a block render
+        /// itself — the browser editor editing a running story inside the page boxes — substitute
+        /// each page's real number. Default false: only paginated mode stamps the marker.
+        /// </summary>
+        public bool StampPageNumberFields;
+
+        /// <summary>
+        /// If not None, render document with page containers in PDF.js style.
+        /// Default: None (continuous scrolling layout).
+        /// </summary>
+        public PaginationMode RenderPagination;
+
+        /// <summary>
+        /// Scale factor for page rendering in paginated mode (1.0 = 100%).
+        /// Default: 1.0
+        /// </summary>
+        public double PaginationScale;
+
+        /// <summary>
+        /// CSS class prefix for pagination elements.
+        /// Default: "page-"
+        /// </summary>
+        public string PaginationCssClassPrefix;
+
+        /// <summary>
+        /// If true, render custom annotations as highlights in HTML output.
+        /// Default: false
+        /// </summary>
+        public bool RenderAnnotations;
+
+        /// <summary>
+        /// CSS class prefix for annotation elements.
+        /// Default: "annot-"
+        /// </summary>
+        public string AnnotationCssClassPrefix;
+
+        /// <summary>
+        /// How to display annotation labels.
+        /// Default: Above
+        /// </summary>
+        public AnnotationLabelMode AnnotationLabelMode;
+
+        /// <summary>
+        /// If true, include annotation metadata as data attributes.
+        /// Default: true
+        /// </summary>
+        public bool IncludeAnnotationMetadata;
+
+        /// <summary>
+        /// If true, render placeholders for unsupported content (images, math, forms, etc.)
+        /// instead of silently dropping them.
+        /// Default: false (backward compatible - unsupported content is dropped)
+        /// </summary>
+        public bool RenderUnsupportedContentPlaceholders;
+
+        /// <summary>
+        /// CSS class prefix for unsupported content placeholders.
+        /// Default: "unsupported-"
+        /// </summary>
+        public string UnsupportedContentCssClassPrefix;
+
+        /// <summary>
+        /// If true, include metadata about unsupported content as data attributes.
+        /// Default: true
+        /// </summary>
+        public bool IncludeUnsupportedContentMetadata;
+
+        /// <summary>
+        /// Override the document's default language for the HTML lang attribute.
+        /// If null (default), the language is extracted from document settings
+        /// (w:themeFontLang or default paragraph style).
+        /// Examples: "en-US", "fr-FR", "de-DE", "ja-JP"
+        /// </summary>
+        public string? DocumentLanguage;
+
+        /// <summary>
+        /// If true, resolve theme colors from document theme to actual color values.
+        /// Theme colors like "accent1", "dk1" will be converted to their RGB equivalents.
+        /// Tint and shade modifiers are also applied. Default: true
+        /// </summary>
+        public bool ResolveThemeColors;
+
+        /// <summary>
+        /// If true, generate @page CSS rule with document page dimensions and margins.
+        /// Useful for print stylesheets and PDF generation. Default: false
+        /// </summary>
+        public bool GeneratePageCss;
+
+        /// <summary>
+        /// When true, stamp block-level HTML elements (p, h1-h6, li, table) with a
+        /// <c>data-anchor</c> attribute carrying the source element's PtOpenXml:Unid.
+        /// Enables client-side addressing of blocks (editor incremental re-render).
+        /// Source elements must already carry Unids. Default: false.
+        /// </summary>
+        public bool StampAnchors;
+
+        /// <summary>
+        /// When true, emit Word lists as HTML lists (issue #895): adjacent list paragraphs of one
+        /// list become an <c>&lt;ol&gt;</c> (numbered) or <c>&lt;ul&gt;</c> (bulleted) of
+        /// <c>&lt;li&gt;</c>, and a deeper level nests inside the preceding item. CSS draws the
+        /// marker (<c>list-style-type</c>, with <c>start</c>/<c>value</c> for restarts) only where it
+        /// reproduces Word's marker text exactly and the marker hangs in the item's hanging indent;
+        /// any other list keeps its generated marker spans under <c>list-style-type: none</c>.
+        /// Ignored by paginated output, which measures paragraphs. Default: false.
+        /// </summary>
+        public bool SemanticLists;
+
+        /// <summary>
+        /// Optional canonical anchor identity provider used alongside <see cref="StampAnchors"/>.
+        /// The legacy <c>data-anchor</c> value is intentionally the bare Unid for editor
+        /// compatibility; this provider stamps the collision-safe full
+        /// <c>kind:scope:unid</c> value as <c>data-source-anchor-id</c> for pagination/PageMap.
+        /// </summary>
+        internal Func<XElement, string?>? SourceAnchorIdentityProvider;
+
+        /// <summary>Build <see cref="SourceAnchorIdentityProvider"/> from the converter's
+        /// post-simplification trees immediately before the HTML transform. This timing matters:
+        /// MarkupSimplifier and FormattingAssembler replace part roots, invalidating any earlier
+        /// XElement-reference map.</summary>
+        internal bool StampCanonicalSourceAnchors;
+
+        /// <summary>
+        /// Skip MarkupSimplifier's pass over the style-definition parts (styles + stylesWithEffects).
+        /// That pass only strips rendering-irrelevant metadata (rsids; styles carry no body runs /
+        /// bookmarks / proof errors to remove or merge), so it cannot change the resolved formatting
+        /// or the emitted HTML — but on a large style gallery (e.g. python-docx's ~160-style template)
+        /// it is the dominant cost of a single-block render (~70ms of ~73ms). The incremental
+        /// per-block render (<see cref="Internal.HtmlConversionOps.RenderBlockHtml"/>) sets this so a
+        /// keystroke commit doesn't re-walk the whole 400KB+ styles part every time. Internal-only;
+        /// the full-document render leaves it false, so its output is unchanged. Default: false.
+        /// </summary>
+        internal bool SkipFormattingPartsSimplification;
+
+        /// <summary>
+        /// This conversion covers a FRAGMENT of the package rather than the whole document —
+        /// the incremental block render (<see cref="Internal.HtmlConversionOps"/>) builds a shell
+        /// whose body holds only the cloned blocks the caller asked for.
+        ///
+        /// <para>A cross-reference that leaves the fragment is expected there, not broken: a citing
+        /// paragraph rendered on its own legitimately links to a note definition that is simply not
+        /// in this output. Completeness checks over the finished tree — <see
+        /// cref="WmlToHtmlConverter.RemoveUnresolvableNoteLinks"/> — are therefore skipped, because on a fragment they
+        /// would strip navigation the surrounding document does resolve. Internal-only; the
+        /// full-document render leaves it false. Default: false.</para>
+        /// </summary>
+        internal bool RendersDocumentFragment;
+
+        public WmlToHtmlConverterSettings()
+        {
+            PageTitle = "";
+            CssClassPrefix = "pt-";
+            FabricateCssClasses = true;
+            GeneralCss = "";
+            AdditionalCss = "";
+            RestrictToSupportedLanguages = false;
+            RestrictToSupportedNumberingFormats = false;
+            ListItemImplementations = ListItemRetrieverSettings.DefaultListItemTextImplementations;
+            RenderTrackedChanges = false;
+            RevisionCssClassPrefix = "rev-";
+            IncludeRevisionMetadata = true;
+            ShowDeletedContent = true;
+            RenderMoveOperations = true;
+            RenderFootnotesAndEndnotes = false;
+            RenderHeadersAndFooters = false;
+            RenderComments = false;
+            CommentRenderMode = CommentRenderMode.EndnoteStyle;
+            CommentCssClassPrefix = "comment-";
+            IncludeCommentMetadata = true;
+            StampPageNumberFields = false;
+            RenderPagination = PaginationMode.None;
+            PaginationScale = 1.0;
+            PaginationCssClassPrefix = "page-";
+            RenderAnnotations = false;
+            AnnotationCssClassPrefix = "annot-";
+            AnnotationLabelMode = AnnotationLabelMode.Above;
+            IncludeAnnotationMetadata = true;
+            RenderUnsupportedContentPlaceholders = false;
+            UnsupportedContentCssClassPrefix = "unsupported-";
+            IncludeUnsupportedContentMetadata = true;
+            DocumentLanguage = null;
+            ResolveThemeColors = true;
+            GeneratePageCss = false;
+            StampAnchors = false;
+            SemanticLists = false;
+        }
+
+        public WmlToHtmlConverterSettings(HtmlConverterSettings htmlConverterSettings)
+        {
+            PageTitle = htmlConverterSettings.PageTitle;
+            CssClassPrefix = htmlConverterSettings.CssClassPrefix;
+            FabricateCssClasses = htmlConverterSettings.FabricateCssClasses;
+            GeneralCss = htmlConverterSettings.GeneralCss;
+            AdditionalCss = htmlConverterSettings.AdditionalCss;
+            RestrictToSupportedLanguages = htmlConverterSettings.RestrictToSupportedLanguages;
+            RestrictToSupportedNumberingFormats = htmlConverterSettings.RestrictToSupportedNumberingFormats;
+            ListItemImplementations = htmlConverterSettings.ListItemImplementations;
+            ImageHandler = htmlConverterSettings.ImageHandler;
+            RenderTrackedChanges = htmlConverterSettings.RenderTrackedChanges;
+            RevisionCssClassPrefix = htmlConverterSettings.RevisionCssClassPrefix;
+            IncludeRevisionMetadata = htmlConverterSettings.IncludeRevisionMetadata;
+            ShowDeletedContent = htmlConverterSettings.ShowDeletedContent;
+            AuthorColors = htmlConverterSettings.AuthorColors;
+            RevisionPresentation = htmlConverterSettings.RevisionPresentation;
+            RenderMoveOperations = htmlConverterSettings.RenderMoveOperations;
+            RenderFootnotesAndEndnotes = htmlConverterSettings.RenderFootnotesAndEndnotes;
+            RenderHeadersAndFooters = htmlConverterSettings.RenderHeadersAndFooters;
+            RenderComments = htmlConverterSettings.RenderComments;
+            CommentRenderMode = htmlConverterSettings.CommentRenderMode;
+            CommentCssClassPrefix = htmlConverterSettings.CommentCssClassPrefix;
+            IncludeCommentMetadata = htmlConverterSettings.IncludeCommentMetadata;
+            StampPageNumberFields = htmlConverterSettings.StampPageNumberFields;
+            RenderPagination = htmlConverterSettings.RenderPagination;
+            PaginationScale = htmlConverterSettings.PaginationScale;
+            PaginationCssClassPrefix = htmlConverterSettings.PaginationCssClassPrefix;
+            RenderAnnotations = htmlConverterSettings.RenderAnnotations;
+            AnnotationCssClassPrefix = htmlConverterSettings.AnnotationCssClassPrefix;
+            AnnotationLabelMode = htmlConverterSettings.AnnotationLabelMode;
+            IncludeAnnotationMetadata = htmlConverterSettings.IncludeAnnotationMetadata;
+            RenderUnsupportedContentPlaceholders = htmlConverterSettings.RenderUnsupportedContentPlaceholders;
+            UnsupportedContentCssClassPrefix = htmlConverterSettings.UnsupportedContentCssClassPrefix;
+            IncludeUnsupportedContentMetadata = htmlConverterSettings.IncludeUnsupportedContentMetadata;
+            DocumentLanguage = htmlConverterSettings.DocumentLanguage;
+            ResolveThemeColors = htmlConverterSettings.ResolveThemeColors;
+            GeneratePageCss = htmlConverterSettings.GeneratePageCss;
+        }
+    }
+
+    [SuppressMessage("ReSharper", "FieldCanBeMadeReadOnly.Global")]
+    public class HtmlConverterSettings
+    {
+        public string PageTitle;
+        public string CssClassPrefix;
+        public bool FabricateCssClasses;
+        public string GeneralCss;
+        public string AdditionalCss;
+        public bool RestrictToSupportedLanguages;
+        public bool RestrictToSupportedNumberingFormats;
+        public Dictionary<string, Func<string, int, string?, string?>> ListItemImplementations;
+        public Func<ImageInfo, XElement?>? ImageHandler;
+
+        /// <summary>
+        /// If true, render tracked changes visually in HTML output.
+        /// If false (default), accept all revisions before conversion.
+        /// </summary>
+        public bool RenderTrackedChanges;
+
+        /// <summary>
+        /// CSS class prefix for revision elements (default: "rev-")
+        /// </summary>
+        public string RevisionCssClassPrefix;
+
+        /// <summary>
+        /// If true, include revision metadata (author, date) as data attributes
+        /// </summary>
+        public bool IncludeRevisionMetadata;
+
+        /// <summary>
+        /// If true, show deleted content with strikethrough (default: true)
+        /// If false, hide deleted content entirely
+        /// </summary>
+        public bool ShowDeletedContent;
+
+        /// <summary>
+        /// Custom colors for different authors (author name -> CSS color)
+        /// </summary>
+        public Dictionary<string, string>? AuthorColors;
+
+        /// <summary>
+        /// How rendered tracked changes look (default <see cref="Docxodus.RevisionPresentation.Docxodus"/>).
+        /// With <see cref="Docxodus.RevisionPresentation.Word"/>, <see cref="AuthorColors"/> overrides the
+        /// colour an author would otherwise take from the built-in author palette.
+        /// </summary>
+        public RevisionPresentation RevisionPresentation;
+
+        /// <summary>
+        /// If true, render move operations as separate from/to (default: true)
+        /// If false, render moves as regular delete + insert
+        /// </summary>
+        public bool RenderMoveOperations;
+
+        /// <summary>
+        /// If true, render footnotes and endnotes at the end of the HTML document.
+        /// If false (default), footnotes and endnotes are stripped from the output.
+        /// </summary>
+        public bool RenderFootnotesAndEndnotes;
+
+        /// <summary>
+        /// If true, render headers and footers in the HTML document.
+        /// If false (default), headers and footers are not rendered.
+        /// </summary>
+        public bool RenderHeadersAndFooters;
+
+        /// <summary>
+        /// If true, render comments in HTML output.
+        /// If false (default), comments are stripped from the output.
+        /// </summary>
+        public bool RenderComments;
+
+        /// <summary>
+        /// How to render comments in the HTML output (default: EndnoteStyle).
+        /// </summary>
+        public CommentRenderMode CommentRenderMode;
+
+        /// <summary>
+        /// CSS class prefix for comment elements (default: "comment-")
+        /// </summary>
+        public string CommentCssClassPrefix;
+
+        /// <summary>
+        /// If true, include comment metadata (author, date) as data attributes
+        /// </summary>
+        public bool IncludeCommentMetadata;
+
+        /// <summary>
+        /// If true, wrap every PAGE / NUMPAGES field result in a <c>&lt;span data-field="PAGE"&gt;</c>
+        /// (plus <c>data-field-format</c> for a <c>\*</c> switch) exactly as paginated rendering does,
+        /// regardless of <see cref="RenderPagination"/>. Lets a client that paginates a block render
+        /// itself — the browser editor editing a running story inside the page boxes — substitute
+        /// each page's real number. Default false: only paginated mode stamps the marker.
+        /// </summary>
+        public bool StampPageNumberFields;
+
+        /// <summary>
+        /// If not None, render document with page containers in PDF.js style.
+        /// Default: None (continuous scrolling layout).
+        /// </summary>
+        public PaginationMode RenderPagination;
+
+        /// <summary>
+        /// Scale factor for page rendering in paginated mode (1.0 = 100%).
+        /// Default: 1.0
+        /// </summary>
+        public double PaginationScale;
+
+        /// <summary>
+        /// CSS class prefix for pagination elements.
+        /// Default: "page-"
+        /// </summary>
+        public string PaginationCssClassPrefix;
+
+        /// <summary>
+        /// If true, render custom annotations as highlights in HTML output.
+        /// Default: false
+        /// </summary>
+        public bool RenderAnnotations;
+
+        /// <summary>
+        /// CSS class prefix for annotation elements.
+        /// Default: "annot-"
+        /// </summary>
+        public string AnnotationCssClassPrefix;
+
+        /// <summary>
+        /// How to display annotation labels.
+        /// Default: Above
+        /// </summary>
+        public AnnotationLabelMode AnnotationLabelMode;
+
+        /// <summary>
+        /// If true, include annotation metadata as data attributes.
+        /// Default: true
+        /// </summary>
+        public bool IncludeAnnotationMetadata;
+
+        /// <summary>
+        /// If true, render placeholders for unsupported content (images, math, forms, etc.)
+        /// instead of silently dropping them.
+        /// Default: false (backward compatible - unsupported content is dropped)
+        /// </summary>
+        public bool RenderUnsupportedContentPlaceholders;
+
+        /// <summary>
+        /// CSS class prefix for unsupported content placeholders.
+        /// Default: "unsupported-"
+        /// </summary>
+        public string UnsupportedContentCssClassPrefix;
+
+        /// <summary>
+        /// If true, include metadata about unsupported content as data attributes.
+        /// Default: true
+        /// </summary>
+        public bool IncludeUnsupportedContentMetadata;
+
+        /// <summary>
+        /// Override the document's default language for the HTML lang attribute.
+        /// If null (default), the language is extracted from document settings
+        /// (w:themeFontLang or default paragraph style).
+        /// Examples: "en-US", "fr-FR", "de-DE", "ja-JP"
+        /// </summary>
+        public string? DocumentLanguage;
+
+        /// <summary>
+        /// If true, resolve theme colors from document theme to actual color values.
+        /// Theme colors like "accent1", "dk1" will be converted to their RGB equivalents.
+        /// Tint and shade modifiers are also applied. Default: true
+        /// </summary>
+        public bool ResolveThemeColors;
+
+        /// <summary>
+        /// If true, generate @page CSS rule with document page dimensions and margins.
+        /// Useful for print stylesheets and PDF generation. Default: false
+        /// </summary>
+        public bool GeneratePageCss;
+
+        public HtmlConverterSettings()
+        {
+            PageTitle = "";
+            CssClassPrefix = "pt-";
+            FabricateCssClasses = true;
+            GeneralCss = "";
+            AdditionalCss = "";
+            RestrictToSupportedLanguages = false;
+            RestrictToSupportedNumberingFormats = false;
+            ListItemImplementations = ListItemRetrieverSettings.DefaultListItemTextImplementations;
+            RenderTrackedChanges = false;
+            RevisionCssClassPrefix = "rev-";
+            IncludeRevisionMetadata = true;
+            ShowDeletedContent = true;
+            RenderMoveOperations = true;
+            RenderFootnotesAndEndnotes = false;
+            RenderHeadersAndFooters = false;
+            RenderComments = false;
+            CommentRenderMode = CommentRenderMode.EndnoteStyle;
+            CommentCssClassPrefix = "comment-";
+            IncludeCommentMetadata = true;
+            StampPageNumberFields = false;
+            RenderPagination = PaginationMode.None;
+            PaginationScale = 1.0;
+            PaginationCssClassPrefix = "page-";
+            RenderAnnotations = false;
+            AnnotationCssClassPrefix = "annot-";
+            AnnotationLabelMode = AnnotationLabelMode.Above;
+            IncludeAnnotationMetadata = true;
+            RenderUnsupportedContentPlaceholders = false;
+            UnsupportedContentCssClassPrefix = "unsupported-";
+            IncludeUnsupportedContentMetadata = true;
+            DocumentLanguage = null;
+            ResolveThemeColors = true;
+            GeneratePageCss = false;
+        }
+    }
+
+    public static class HtmlConverter
+    {
+        public static XElement ConvertToHtml(WmlDocument wmlDoc, HtmlConverterSettings htmlConverterSettings)
+        {
+            WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings(htmlConverterSettings);
+            return WmlToHtmlConverter.ConvertToHtml(wmlDoc, settings);
+        }
+
+        public static XElement ConvertToHtml(WordprocessingDocument wDoc, HtmlConverterSettings htmlConverterSettings)
+        {
+            WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings(htmlConverterSettings);
+            return WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+        }
+    }
+
+    [SuppressMessage("ReSharper", "NotAccessedField.Global")]
+    [SuppressMessage("ReSharper", "UnusedMember.Global")]
+    public class ImageInfo
+    {
+#if !WASM_BUILD
+        public SKBitmap? Bitmap;
+#endif
+        public byte[]? ImageBytes;
+        public XAttribute? ImgStyleAttribute;
+        public string? ContentType;
+        public XElement? DrawingElement;
+        public string? AltText;
+
+        public const int EmusPerInch = 914400;
+        public const int EmusPerCm = 360000;
+
+#if !WASM_BUILD
+        /// <summary>
+        /// Saves the image to a file using the specified format.
+        /// </summary>
+        public void SaveImage(string filePath, SKEncodedImageFormat format, int quality = 100)
+        {
+            if (ImageBytes != null)
+            {
+                // If we have raw bytes, save them directly for formats that match
+                System.IO.File.WriteAllBytes(filePath, ImageBytes);
+                return;
+            }
+            if (Bitmap != null)
+            {
+                using var image = SKImage.FromBitmap(Bitmap);
+                using var data = image.Encode(format, quality);
+                using var stream = System.IO.File.OpenWrite(filePath);
+                data.SaveTo(stream);
+            }
+        }
+#endif
+    }
+
+    /// <summary>
+    /// Information about a single comment in the document.
+    /// </summary>
+    public class CommentInfo
+    {
+        public int Id { get; set; }
+        public string? Author { get; set; }
+        public string? Date { get; set; }
+        public string? Initials { get; set; }
+        // Always set by the object initializer at the sole construction site (LoadComments);
+        // `required` isn't usable here because it can't be less visible than the public class.
+        internal XElement SourceElement { get; set; } = null!;
+        public List<XElement> ContentParagraphs { get; set; } = new List<XElement>();
+
+        /// <summary>
+        /// True when commentsExtended marks this comment resolved (<c>w15:done</c>). False when
+        /// the part or the entry is absent — an unannotated comment is an open one.
+        /// </summary>
+        public bool Resolved { get; set; }
+
+        /// <summary>
+        /// The id of the comment this one replies to, resolved from <c>w15:paraIdParent</c> in
+        /// commentsExtended; null for a top-level comment (issue #540).
+        /// </summary>
+        public int? ParentId { get; set; }
+    }
+
+    /// <summary>
+    /// Tracks comment state during HTML transformation.
+    /// </summary>
+    internal class CommentTracker
+    {
+        /// <summary>
+        /// All comments loaded from the document, keyed by ID.
+        /// </summary>
+        public Dictionary<int, CommentInfo> Comments { get; } = new Dictionary<int, CommentInfo>();
+
+        /// <summary>
+        /// IDs of comment ranges that are currently open (between start and end markers).
+        /// </summary>
+        public HashSet<int> OpenRanges { get; } = new HashSet<int>();
+
+        /// <summary>
+        /// IDs of comments that have been referenced in the document (for rendering order).
+        /// </summary>
+        public List<int> ReferencedCommentIds { get; } = new List<int>();
+
+        /// <summary>
+        /// Comment ranges for which at least one visible run was emitted. A valid zero-width
+        /// comment has adjacent start/end markers and therefore never reaches ConvertRun while
+        /// open; its reference marker becomes the visible presentation anchor instead.
+        /// </summary>
+        public HashSet<int> RenderedRangeIds { get; } = new HashSet<int>();
+    }
+
+    /// <summary>
+    /// Tracks annotation state during HTML transformation.
+    /// </summary>
+    internal class AnnotationTracker
+    {
+        /// <summary>
+        /// All annotations loaded from the document, keyed by ID.
+        /// </summary>
+        public Dictionary<string, DocumentAnnotation> Annotations { get; } = new Dictionary<string, DocumentAnnotation>();
+
+        /// <summary>
+        /// Maps bookmark names to annotation IDs.
+        /// </summary>
+        public Dictionary<string, string> BookmarkToAnnotationId { get; } = new Dictionary<string, string>();
+
+        /// <summary>
+        /// IDs of annotation ranges that are currently open (between bookmarkStart and bookmarkEnd).
+        /// </summary>
+        public HashSet<string> OpenRanges { get; } = new HashSet<string>();
+
+        /// <summary>
+        /// Tracks whether this is the first segment (paragraph) of an annotation for label positioning.
+        /// Key: annotation ID, Value: true if first segment has been rendered.
+        /// </summary>
+        public HashSet<string> FirstSegmentRendered { get; } = new HashSet<string>();
+    }
+
+    /// <summary>
+    /// Tracks footnote and endnote numbering for correct sequential display.
+    /// XML IDs are reference identifiers, not display numbers. This tracker
+    /// maps XML IDs to sequential display numbers based on document order.
+    /// </summary>
+    internal class FootnoteNumberingTracker
+    {
+        /// <summary>
+        /// Maps footnote XML ID to sequential display number (1, 2, 3...).
+        /// </summary>
+        public Dictionary<string, int> FootnoteIdToDisplayNumber { get; } = new Dictionary<string, int>();
+
+        /// <summary>
+        /// Maps endnote XML ID to sequential display number (1, 2, 3...).
+        /// </summary>
+        public Dictionary<string, int> EndnoteIdToDisplayNumber { get; } = new Dictionary<string, int>();
+
+        /// <summary>
+        /// Footnote XML IDs in document order (for rendering footnotes section).
+        /// </summary>
+        public List<string> FootnoteIdsInOrder { get; } = new List<string>();
+
+        /// <summary>
+        /// Endnote XML IDs in document order (for rendering endnotes section).
+        /// </summary>
+        public List<string> EndnoteIdsInOrder { get; } = new List<string>();
+
+        /// <summary>
+        /// Effective ST_NumberFormat token for footnote markers. Word's default is decimal.
+        /// </summary>
+        public string FootnoteNumberFormat { get; set; } = "decimal";
+
+        /// <summary>
+        /// Effective ST_NumberFormat token for endnote markers. Word's default is lowerRoman
+        /// (i, ii, iii…) — endnotes do NOT share the footnotes' decimal default.
+        /// </summary>
+        public string EndnoteNumberFormat { get; set; } = "lowerRoman";
+    }
+
+    /// <summary>
+    /// Metadata for a single section in the document (for lazy loading).
+    /// All dimension values are in points (1/72 inch).
+    /// </summary>
+    public class SectionMetadata
+    {
+        /// <summary>Section index (0-based)</summary>
+        public int SectionIndex { get; set; }
+
+        /// <summary>Page width in points</summary>
+        public double PageWidthPt { get; set; }
+
+        /// <summary>Page height in points</summary>
+        public double PageHeightPt { get; set; }
+
+        /// <summary>Top margin in points</summary>
+        public double MarginTopPt { get; set; }
+
+        /// <summary>Right margin in points</summary>
+        public double MarginRightPt { get; set; }
+
+        /// <summary>Bottom margin in points</summary>
+        public double MarginBottomPt { get; set; }
+
+        /// <summary>Left margin in points</summary>
+        public double MarginLeftPt { get; set; }
+
+        /// <summary>Content width (page minus margins) in points</summary>
+        public double ContentWidthPt { get; set; }
+
+        /// <summary>Content height (page minus margins) in points</summary>
+        public double ContentHeightPt { get; set; }
+
+        /// <summary>Header distance from top in points</summary>
+        public double HeaderPt { get; set; }
+
+        /// <summary>Footer distance from bottom in points</summary>
+        public double FooterPt { get; set; }
+
+        /// <summary>Number of paragraphs in this section</summary>
+        public int ParagraphCount { get; set; }
+
+        /// <summary>Number of tables in this section</summary>
+        public int TableCount { get; set; }
+
+        /// <summary>Whether this section has a default header</summary>
+        public bool HasHeader { get; set; }
+
+        /// <summary>Whether this section has a default footer</summary>
+        public bool HasFooter { get; set; }
+
+        /// <summary>Whether this section has a first page header (titlePg enabled)</summary>
+        public bool HasFirstPageHeader { get; set; }
+
+        /// <summary>Whether this section has a first page footer (titlePg enabled)</summary>
+        public bool HasFirstPageFooter { get; set; }
+
+        /// <summary>Whether this section has an even page header</summary>
+        public bool HasEvenPageHeader { get; set; }
+
+        /// <summary>Whether this section has an even page footer</summary>
+        public bool HasEvenPageFooter { get; set; }
+
+        /// <summary>Start paragraph index (0-based, global across document)</summary>
+        public int StartParagraphIndex { get; set; }
+
+        /// <summary>End paragraph index (exclusive, global across document)</summary>
+        public int EndParagraphIndex { get; set; }
+
+        /// <summary>Start table index (0-based, global across document)</summary>
+        public int StartTableIndex { get; set; }
+
+        /// <summary>End table index (exclusive, global across document)</summary>
+        public int EndTableIndex { get; set; }
+    }
+
+    /// <summary>
+    /// Document metadata for lazy loading pagination.
+    /// Provides fast access to document structure without full HTML rendering.
+    /// </summary>
+    public class DocumentMetadata
+    {
+        /// <summary>List of sections with their metadata</summary>
+        public List<SectionMetadata> Sections { get; set; } = new List<SectionMetadata>();
+
+        /// <summary>Total number of paragraphs in the document</summary>
+        public int TotalParagraphs { get; set; }
+
+        /// <summary>Total number of tables in the document</summary>
+        public int TotalTables { get; set; }
+
+        /// <summary>Whether the document has any footnotes</summary>
+        public bool HasFootnotes { get; set; }
+
+        /// <summary>Whether the document has any endnotes</summary>
+        public bool HasEndnotes { get; set; }
+
+        /// <summary>Whether the document has tracked changes</summary>
+        public bool HasTrackedChanges { get; set; }
+
+        /// <summary>Whether the document has comments</summary>
+        public bool HasComments { get; set; }
+
+        /// <summary>Estimated total page count (rough estimate based on content)</summary>
+        public int EstimatedPageCount { get; set; }
+
+        /// <summary>Always <c>"heuristic"</c>. Authoritative counts come only from a
+        /// browser-materialized PageMap.</summary>
+        public string EstimatedPageCountSource { get; set; } = "heuristic";
+    }
+
+    public static partial class WmlToHtmlConverter
+    {
+        /// <summary>
+        /// Converts the HTML XElement to a string, removing whitespace between inline elements
+        /// to match LibreOffice's output behavior. This prevents HTML formatting from creating
+        /// visible spaces between adjacent spans/anchors in the rendered output.
+        /// </summary>
+        /// <param name="html">The HTML XElement returned by ConvertToHtml</param>
+        /// <param name="indent">Whether to format the output with indentation (default: true)</param>
+        /// <returns>HTML string with properly handled whitespace</returns>
+        public static string ToHtmlString(XElement html, bool indent = true)
+        {
+            // First serialize with formatting
+            var serialized = html.ToString(indent ? SaveOptions.None : SaveOptions.DisableFormatting);
+
+            if (!indent)
+                return serialized;
+
+            // Remove whitespace between inline elements within block elements
+            // This regex matches: >(whitespace)</tag or >(whitespace)<tag
+            // where the whitespace should not render
+            serialized = System.Text.RegularExpressions.Regex.Replace(
+                serialized,
+                @"(</(span|a|b|i|u|s|sub|sup|ins|del)>)\s+(<(span|a|b|i|u|s|sub|sup|ins|del|/h[1-6]|/p|/li|/td|/div)[\s>])",
+                "$1$3");
+
+            // Also handle: </tag>(whitespace)<tag at start
+            serialized = System.Text.RegularExpressions.Regex.Replace(
+                serialized,
+                @"(<(h[1-6]|p|li|td|div)[^>]*>)\s+(<(span|a|b|i|u|s|sub|sup|ins|del)[\s>])",
+                "$1$3");
+
+            return serialized;
+        }
+
+        public static XElement ConvertToHtml(WmlDocument doc, WmlToHtmlConverterSettings htmlConverterSettings)
+        {
+            using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(doc))
+            {
+                using (WordprocessingDocument document = streamDoc.GetWordprocessingDocument())
+                {
+                    return ConvertToHtml(document, htmlConverterSettings);
+                }
+            }
+        }
+
+        /// <summary>
+        /// The canonical <c>kind:scope:unid</c> identity of every anchorable element of
+        /// <paramref name="wordDoc"/> as it stands now, resolved for an element of any later
+        /// rewrite of the same trees by the part it lives in and the Unid it carries.
+        /// </summary>
+        private static Func<XElement, string?> CanonicalSourceIdentity(WordprocessingDocument wordDoc)
+        {
+            var canonicalIndex = WmlToMarkdownConverter.BuildAnchorIndexOnly(wordDoc,
+                new WmlToMarkdownConverterSettings { Scopes = ProjectionScopes.All });
+            var byLocation = new Dictionary<(string PartUri, string Unid), string>();
+            foreach (var target in canonicalIndex.Values)
+                byLocation[(target.PartUri, target.Unid)] = target.Anchor.Id;
+            return element =>
+            {
+                var unid = (string?)element.Attribute(PtOpenXml.Unid);
+                var partUri = element.Document?.Root?.Annotation<OpenXmlPart>()?.Uri.ToString();
+                return unid != null && partUri != null && byLocation.TryGetValue((partUri, unid), out var id)
+                    ? id
+                    : null;
+            };
+        }
+
+        public static XElement ConvertToHtml(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings htmlConverterSettings)
+        {
+            // Some older Word producers store a DrawingML textbox's body in a related XML part
+            // instead of the inline w:txbxContent normally expected by wps:txbx. Bring that
+            // body into its owning content part before the normal simplification and formatting
+            // pipeline, so it receives the same revision/style processing as inline textboxes.
+            InlineExternalTextBoxBodies(wordDoc);
+
+            // Canonical source identity (data-source-anchor-id) is the SOURCE document's: index it
+            // before revision acceptance, markup simplification and formatting assembly rewrite
+            // the trees. Formatting assembly strips w:numPr, so an index built afterwards called
+            // every list item a plain paragraph ("p:" where the session's own anchor, and the
+            // block renders that stamp it verbatim, say "li:"). The rewrites keep each element's
+            // Unid, so identity is looked up by part and Unid rather than re-derived.
+            if (htmlConverterSettings.StampCanonicalSourceAnchors)
+                htmlConverterSettings.SourceAnchorIdentityProvider = CanonicalSourceIdentity(wordDoc);
+
+            // Only accept revisions if NOT rendering tracked changes AND document has tracked changes
+            // This optimization saves ~9% of conversion time for documents without revisions
+            if (!htmlConverterSettings.RenderTrackedChanges && RevisionAccepter.HasTrackedRevisions(wordDoc))
+            {
+                RevisionAccepter.AcceptRevisions(wordDoc);
+            }
+
+            // Word presentation colours revisions by author. Number the authors once, in document
+            // order, before later passes rewrite the trees (issue #851).
+            if (htmlConverterSettings.RenderTrackedChanges &&
+                htmlConverterSettings.RevisionPresentation == RevisionPresentation.Word)
+                wordDoc.MainDocumentPart!.AddAnnotation(RevisionAuthorIndex.Of(wordDoc));
+
+            SimplifyMarkupSettings simplifyMarkupSettings = new SimplifyMarkupSettings
+            {
+                RemoveComments = !htmlConverterSettings.RenderComments,
+                RemoveContentControls = true,
+                RemoveEndAndFootNotes = !htmlConverterSettings.RenderFootnotesAndEndnotes,
+                RemoveFieldCodes = false,
+                RemoveLastRenderedPageBreak = true,
+                RemovePermissions = true,
+                RemoveProof = true,
+                RemoveRsidInfo = true,
+                RemoveSmartTags = true,
+                RemoveSoftHyphens = true,
+                RemoveGoBackBookmark = true,
+                ReplaceTabsWithSpaces = false,
+                SkipFormattingPartsSimplification = htmlConverterSettings.SkipFormattingPartsSimplification,
+            };
+            MarkupSimplifier.SimplifyMarkup(wordDoc, simplifyMarkupSettings);
+
+            MarkStructuralTableEndParagraphs(wordDoc);
+
+            FormattingAssemblerSettings formattingAssemblerSettings = new FormattingAssemblerSettings
+            {
+                RemoveStyleNamesFromParagraphAndRunProperties = false,
+                ClearStyles = false,
+                RestrictToSupportedLanguages = htmlConverterSettings.RestrictToSupportedLanguages,
+                RestrictToSupportedNumberingFormats = htmlConverterSettings.RestrictToSupportedNumberingFormats,
+                CreateHtmlConverterAnnotationAttributes = true,
+                OrderElementsPerStandard = false,
+                AnnotateListMembership = EmitsSemanticLists(htmlConverterSettings),
+                ListItemRetrieverSettings =
+                    htmlConverterSettings.ListItemImplementations == null ?
+                    new ListItemRetrieverSettings()
+                    {
+                        ListItemTextImplementations = ListItemRetrieverSettings.DefaultListItemTextImplementations,
+                    } :
+                    new ListItemRetrieverSettings()
+                    {
+                        ListItemTextImplementations = htmlConverterSettings.ListItemImplementations,
+                    },
+            };
+
+            FormattingAssembler.AssembleFormatting(wordDoc, formattingAssemblerSettings);
+
+            InsertAppropriateNonbreakingSpaces(wordDoc);
+            CalculateSpanWidthForTabs(wordDoc);
+            ReverseTableBordersForRtlTables(wordDoc);
+            AdjustTableBorders(wordDoc);
+            AnnotateOwningContentParts(wordDoc);
+            XElement rootElement = wordDoc.MainDocumentPart!.GetXDocument().Root!;
+            FieldRetriever.AnnotateWithFieldInfo(wordDoc.MainDocumentPart!);
+            AnnotateForSections(wordDoc);
+
+            // Load comments if rendering is enabled and store as annotation
+            var commentTracker = new CommentTracker();
+            if (htmlConverterSettings.RenderComments)
+            {
+                LoadComments(wordDoc, commentTracker);
+            }
+            // Store tracker as annotation on the root element for access during transform
+            rootElement.AddAnnotation(commentTracker);
+
+            // Load custom annotations if rendering is enabled
+            var annotationTracker = new AnnotationTracker();
+            if (htmlConverterSettings.RenderAnnotations)
+            {
+                LoadAnnotations(wordDoc, annotationTracker);
+            }
+            rootElement.AddAnnotation(annotationTracker);
+
+            // Store document default language for GetLangAttribute to use
+            var docLang = !string.IsNullOrEmpty(htmlConverterSettings.DocumentLanguage)
+                ? htmlConverterSettings.DocumentLanguage
+                : GetDocumentDefaultLanguage(wordDoc);
+            rootElement.AddAnnotation(new DocumentLanguageAnnotation { DefaultLanguage = docLang });
+
+            // Load theme color scheme if resolution is enabled
+            if (htmlConverterSettings.ResolveThemeColors)
+            {
+                var themeColorScheme = LoadThemeColorScheme(wordDoc);
+                rootElement.AddAnnotation(themeColorScheme);
+            }
+
+            // The font table's declared fallbacks. Annotated onto EVERY story root, not just the
+            // main one: a header's content resolves annotations through its own part root, so
+            // annotating the body alone would silently skip the running stories.
+            var fontAltNames = LoadFontAltNames(wordDoc);
+            rootElement.AddAnnotation(fontAltNames);
+            foreach (var storyRoot in EnumerateStoryRoots(wordDoc))
+                storyRoot.AddAnnotation(fontAltNames);
+
+            // Build footnote/endnote numbering tracker for sequential display numbers
+            var footnoteTracker = new FootnoteNumberingTracker();
+            if (htmlConverterSettings.RenderFootnotesAndEndnotes)
+            {
+                BuildFootnoteNumberingTracker(rootElement, footnoteTracker);
+                footnoteTracker.FootnoteNumberFormat = GetNoteNumberFormat(wordDoc, W.footnotePr, "decimal");
+                footnoteTracker.EndnoteNumberFormat = GetNoteNumberFormat(wordDoc, W.endnotePr, "lowerRoman");
+            }
+            rootElement.AddAnnotation(footnoteTracker);
+
+            // The root w:document element always transforms to a real h:html element.
+            XElement xhtml = (XElement)ConvertToHtmlTransform(wordDoc, htmlConverterSettings,
+                rootElement, false, 0m)!;
+
+            // Only a whole-document render can answer "is the target in this output?" — see
+            // RendersDocumentFragment.
+            if (!htmlConverterSettings.RendersDocumentFragment)
+                RemoveUnresolvableNoteLinks(xhtml);
+
+            if (EmitsSemanticLists(htmlConverterSettings))
+                GroupSemanticLists(xhtml);
+
+            ReifyStylesAndClasses(htmlConverterSettings, xhtml, wordDoc);
+
+            // Remove insignificant whitespace between inline elements in paragraphs.
+            // This matches LibreOffice's output behavior and ensures that HTML formatting
+            // (newlines/indentation) doesn't create visible spaces between adjacent elements.
+            NormalizeInlineWhitespace(xhtml);
+
+            CloseEmptyNonVoidElements(xhtml);
+
+            // Note: the xhtml returned by ConvertToHtmlTransform contains objects of type
+            // XEntity.  PtOpenXmlUtil.cs define the XEntity class.  See
+            // http://blogs.msdn.com/ericwhite/archive/2010/01/21/writing-entity-references-using-linq-to-xml.aspx
+            // for detailed explanation.
+            //
+            // If you further transform the XML tree returned by ConvertToHtmlTransform, you
+            // must do it correctly, or entities will not be serialized properly.
+
+            return xhtml;
+        }
+
+        /// <summary>
+        /// The HTML elements that are allowed to stand alone. Everything else needs a closing tag.
+        /// </summary>
+        private static readonly HashSet<string> HtmlVoidElements = new(StringComparer.Ordinal)
+        {
+            "area", "base", "br", "col", "embed", "hr", "img", "input",
+            "link", "meta", "param", "source", "track", "wbr",
+        };
+
+        /// <summary>
+        /// Give every empty non-void element a text node, so serialization writes
+        /// <c>&lt;span&gt;&lt;/span&gt;</c> rather than <c>&lt;span /&gt;</c>.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// The converter builds an XML tree and every consumer serializes it with
+        /// <c>XElement.ToString</c>, which self-closes an element with no content. That is correct
+        /// XML and a trap in HTML: outside foreign content an HTML parser ignores the trailing
+        /// slash, so <c>&lt;span /&gt;</c> opens a span that never closes there, and every following
+        /// sibling becomes its child until some later closing tag is spent on it. The tree the
+        /// browser builds is then a different shape from the one we emitted.
+        /// </para>
+        /// <para>
+        /// It surfaced as a layout bug with no obvious cause (issue #688): a footnote whose text
+        /// begins with a reference mark and a tab emits an empty wrapper span for the mark, and in
+        /// the browser the note's whole text was reparented inside the tab's fixed-width box and
+        /// rendered a couple of characters per line. Fixing it at the tree's edge rather than at
+        /// each site that happens to produce an empty element is what keeps the emitted shape and
+        /// the parsed shape the same; <c>ConvertContentThatCanContainFields</c> had already had to
+        /// special-case an empty <c>&lt;a&gt;</c> for exactly this.
+        /// </para>
+        /// <para>
+        /// The same defect broke complex fields in the paginated editor: a field's begin, separate
+        /// and end runs each emit an empty span, so a footer authored as "Page {PAGE} of {NUMPAGES}"
+        /// parsed with " of " and the second field swallowed inside the first one's chrome, and the
+        /// paginator's per-page substitution then overwrote them — the footer read "Page 1".
+        /// </para>
+        /// </remarks>
+        private static void CloseEmptyNonVoidElements(XElement root)
+        {
+            foreach (var element in root.DescendantsAndSelf())
+            {
+                if (element.IsEmpty && !HtmlVoidElements.Contains(element.Name.LocalName))
+                    element.Add(new XText(string.Empty));
+            }
+        }
+
+        /// <summary>
+        /// Extracts document metadata for lazy loading pagination.
+        /// This is a fast operation that doesn't perform full HTML conversion.
+        /// </summary>
+        /// <param name="doc">The Word document to analyze</param>
+        /// <returns>Document metadata including section dimensions and content counts</returns>
+        public static DocumentMetadata GetDocumentMetadata(WmlDocument doc)
+        {
+            using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(doc))
+            {
+                using (WordprocessingDocument document = streamDoc.GetWordprocessingDocument())
+                {
+                    return GetDocumentMetadata(document);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Extracts document metadata for lazy loading pagination.
+        /// This is a fast operation that doesn't perform full HTML conversion.
+        /// </summary>
+        /// <param name="wordDoc">The Word document to analyze</param>
+        /// <returns>Document metadata including section dimensions and content counts</returns>
+        public static DocumentMetadata GetDocumentMetadata(WordprocessingDocument wordDoc)
+        {
+            var metadata = new DocumentMetadata();
+
+            var mainDocPart = wordDoc.MainDocumentPart!;
+            if (mainDocPart == null)
+                return metadata;
+
+            var xDoc = mainDocPart.GetXDocument();
+            var body = xDoc.Root?.Element(W.body);
+            if (body == null)
+                return metadata;
+
+            // Check for footnotes
+            var footnotesPart = mainDocPart.FootnotesPart;
+            metadata.HasFootnotes = footnotesPart != null &&
+                footnotesPart.GetXDocument().Root?.Elements(W.footnote)
+                    .Any(fn => (string?)fn.Attribute(W.type) != "separator" &&
+                              (string?)fn.Attribute(W.type) != "continuationSeparator") == true;
+
+            // Check for endnotes
+            var endnotesPart = mainDocPart.EndnotesPart;
+            metadata.HasEndnotes = endnotesPart != null &&
+                endnotesPart.GetXDocument().Root?.Elements(W.endnote)
+                    .Any(en => (string?)en.Attribute(W.type) != "separator" &&
+                              (string?)en.Attribute(W.type) != "continuationSeparator") == true;
+
+            // Check for comments
+            var commentsPart = mainDocPart.WordprocessingCommentsPart;
+            metadata.HasComments = commentsPart != null &&
+                commentsPart.GetXDocument().Root?.Elements(W.comment).Any() == true;
+
+            // Check for tracked changes (insertions, deletions, moves)
+            metadata.HasTrackedChanges = body.Descendants()
+                .Any(e => e.Name == W.ins || e.Name == W.del ||
+                         e.Name == W.moveFrom || e.Name == W.moveTo);
+
+            // Collect all section properties and their associated content
+            var sectionData = CollectSectionData(body);
+
+            int globalParagraphIndex = 0;
+            int globalTableIndex = 0;
+            int sectionIndex = 0;
+            var effectiveHeaderFooterReferences = new EffectiveHeaderFooterReferences();
+            var evenAndOddHeaders = mainDocPart.DocumentSettingsPart
+                ?.GetXDocument().Root?.Element(W.evenAndOddHeaders);
+            bool hasEvenAndOddHeaders = IsOnOffPropertyEnabled(evenAndOddHeaders);
+
+            foreach (var (sectPr, paragraphs, tables) in sectionData)
+            {
+                var sectionMeta = new SectionMetadata
+                {
+                    SectionIndex = sectionIndex,
+                    ParagraphCount = paragraphs.Count,
+                    TableCount = tables.Count,
+                    StartParagraphIndex = globalParagraphIndex,
+                    EndParagraphIndex = globalParagraphIndex + paragraphs.Count,
+                    StartTableIndex = globalTableIndex,
+                    EndTableIndex = globalTableIndex + tables.Count
+                };
+
+                // Extract page dimensions
+                var dims = ExtractPageDimensions(sectPr);
+                sectionMeta.PageWidthPt = dims.PageWidthPt;
+                sectionMeta.PageHeightPt = dims.PageHeightPt;
+                sectionMeta.MarginTopPt = dims.MarginTopPt;
+                sectionMeta.MarginRightPt = dims.MarginRightPt;
+                sectionMeta.MarginBottomPt = dims.MarginBottomPt;
+                sectionMeta.MarginLeftPt = dims.MarginLeftPt;
+                sectionMeta.ContentWidthPt = dims.ContentWidthPt;
+                sectionMeta.ContentHeightPt = dims.ContentHeightPt;
+                sectionMeta.HeaderPt = dims.HeaderPt;
+                sectionMeta.FooterPt = dims.FooterPt;
+
+                // Detect headers and footers
+                effectiveHeaderFooterReferences.Update(sectPr);
+                DetectHeadersFooters(
+                    wordDoc,
+                    sectPr,
+                    sectionMeta,
+                    effectiveHeaderFooterReferences,
+                    hasEvenAndOddHeaders);
+
+                metadata.Sections.Add(sectionMeta);
+
+                globalParagraphIndex += paragraphs.Count;
+                globalTableIndex += tables.Count;
+                sectionIndex++;
+            }
+
+            metadata.TotalParagraphs = globalParagraphIndex;
+            metadata.TotalTables = globalTableIndex;
+
+            // Estimate page count based on content
+            metadata.EstimatedPageCount = EstimatePageCount(metadata);
+
+            return metadata;
+        }
+
+        /// <summary>
+        /// Collects section data including section properties and their associated paragraphs/tables.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// The document body is walked in document order as a single "main story", descending into
+        /// tables (which are part of that story), so this method detects <c>w:sectPr</c> in all of
+        /// the following placements:
+        /// <list type="bullet">
+        ///   <item><description>sectPr inside a body-level paragraph's properties (w:body/w:p/w:pPr/w:sectPr) - mid-document section breaks</description></item>
+        ///   <item><description>sectPr inside a paragraph nested in a table cell (w:tbl/w:tr/w:tc/w:p/w:pPr/w:sectPr) - section breaks inside tables (GitHub issue #51)</description></item>
+        ///   <item><description>Document-level sectPr at end of body (w:body/w:sectPr) - final section</description></item>
+        /// </list>
+        /// </para>
+        /// <para>
+        /// Section properties that live inside a <em>separate story</em> - most notably a text box
+        /// (<c>w:txbxContent</c>) - are intentionally NOT treated as main-document section breaks.
+        /// Text-box content is floating content that does not paginate the main document, so counting
+        /// it would create phantom sections and corrupt the pagination metadata. Because a text box is
+        /// always nested inside a run inside a paragraph, and this walk treats each <c>w:p</c> as a leaf
+        /// (only its direct <c>w:pPr/w:sectPr</c> is inspected, never its runs), text-box section
+        /// properties - and text-box paragraphs - are excluded automatically. Headers, footers,
+        /// footnotes, endnotes and comments live in their own parts, so they are out of scope by
+        /// construction. See docs/ooxml_corner_cases.md.
+        /// </para>
+        /// </remarks>
+        private static List<(XElement? sectPr, List<XElement> paragraphs, List<XElement> tables)> CollectSectionData(XElement body)
+        {
+            var result = new List<(XElement? sectPr, List<XElement> paragraphs, List<XElement> tables)>();
+            var currentParagraphs = new List<XElement>();
+            var currentTables = new List<XElement>();
+
+            void CloseSection(XElement sectPr)
+            {
+                result.Add((sectPr, new List<XElement>(currentParagraphs), new List<XElement>(currentTables)));
+                currentParagraphs.Clear();
+                currentTables.Clear();
+            }
+
+            // Walk one container's block-level children in document order. Tables belong to the main
+            // story, so we descend into their rows/cells; a paragraph is treated as a leaf (we never
+            // descend into its runs), which keeps separate stories such as text boxes out of scope.
+            void WalkMainStory(XElement container, bool atBodyLevel)
+            {
+                foreach (var element in container.Elements())
+                {
+                    if (element.Name == W.p)
+                    {
+                        currentParagraphs.Add(element);
+
+                        // A section break may be carried by any main-story paragraph, whether at the
+                        // body level or nested inside a table cell.
+                        var sectPr = element.Element(W.pPr)?.Element(W.sectPr);
+                        if (sectPr != null)
+                            CloseSection(sectPr);
+                    }
+                    else if (element.Name == W.tbl)
+                    {
+                        // Only body-level tables count toward the table total; a nested table is part
+                        // of its containing cell's content (matches the pre-issue-51 behavior).
+                        if (atBodyLevel)
+                            currentTables.Add(element);
+
+                        // Descend into the table's cells so section breaks and paragraphs inside them
+                        // are attributed in document order.
+                        foreach (var row in element.Elements(W.tr))
+                            foreach (var cell in row.Elements(W.tc))
+                                WalkMainStory(cell, atBodyLevel: false);
+                    }
+                    else if (element.Name == W.sectPr && atBodyLevel)
+                    {
+                        // Document-level sectPr (final section) at the end of the body.
+                        CloseSection(element);
+                    }
+                }
+            }
+
+            WalkMainStory(body, atBodyLevel: true);
+
+            // If there's remaining content without a trailing sectPr, use default dimensions.
+            if (currentParagraphs.Count > 0 || currentTables.Count > 0)
+            {
+                // A body-level sectPr would already have closed the section above, so this is null
+                // whenever it is reached; kept for symmetry with the (null => defaults) contract.
+                var trailingSectPr = body.Element(W.sectPr);
+                result.Add((trailingSectPr, new List<XElement>(currentParagraphs), new List<XElement>(currentTables)));
+            }
+
+            // Ensure at least one section exists.
+            if (result.Count == 0)
+            {
+                var defaultSectPr = body.Element(W.sectPr);
+                result.Add((defaultSectPr, new List<XElement>(), new List<XElement>()));
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Extracts page dimensions from a sectPr element.
+        /// Returns default US Letter dimensions if sectPr is null.
+        /// </summary>
+        private static (double PageWidthPt, double PageHeightPt, double MarginTopPt, double MarginRightPt,
+            double MarginBottomPt, double MarginLeftPt, double ContentWidthPt, double ContentHeightPt,
+            double HeaderPt, double FooterPt) ExtractPageDimensions(XElement? sectPr)
+        {
+            // Default to US Letter: 8.5" x 11" (612pt x 792pt) with 1" margins (72pt)
+            double pageWidthPt = 612;
+            double pageHeightPt = 792;
+            double marginTopPt = 72;
+            double marginRightPt = 72;
+            double marginBottomPt = 72;
+            double marginLeftPt = 72;
+            double headerPt = 36; // 0.5 inch
+            double footerPt = 36;
+
+            if (sectPr != null)
+            {
+                // Parse page size (w:pgSz) - values are in twips (1/20 of a point)
+                var pgSz = sectPr.Element(W.pgSz);
+                if (pgSz != null)
+                {
+                    if (int.TryParse((string?)pgSz.Attribute(W._w), out int w))
+                        pageWidthPt = w / 20.0;
+                    if (int.TryParse((string?)pgSz.Attribute(W.h), out int h))
+                        pageHeightPt = h / 20.0;
+                }
+
+                // Page margins accept twips or universal units (ECMA-376 §17.6.11).
+                var pgMar = sectPr.Element(W.pgMar);
+                if (pgMar != null)
+                {
+                    marginTopPt = MarginPoints(pgMar, W.top, marginTopPt);
+                    marginRightPt = MarginPoints(pgMar, W.right, marginRightPt);
+                    marginBottomPt = MarginPoints(pgMar, W.bottom, marginBottomPt);
+                    marginLeftPt = MarginPoints(pgMar, W.left, marginLeftPt);
+                    headerPt = MarginPoints(pgMar, W.header, headerPt);
+                    footerPt = MarginPoints(pgMar, W.footer, footerPt);
+                }
+            }
+
+            double contentWidthPt = pageWidthPt - marginLeftPt - marginRightPt;
+            double contentHeightPt = pageHeightPt - marginTopPt - marginBottomPt;
+
+            return (pageWidthPt, pageHeightPt, marginTopPt, marginRightPt, marginBottomPt, marginLeftPt,
+                contentWidthPt, contentHeightPt, headerPt, footerPt);
+        }
+
+        private static double MarginPoints(XElement margins, XName name, double fallback)
+        {
+            var twips = WordprocessingMLUtil.AttributeToDecimalTwips(margins.Attribute(name));
+            return twips.HasValue ? (double)(twips.Value / 20m) : fallback;
+        }
+
+        /// <summary>
+        /// Tracks the effective reference for each story type as sections are visited in document
+        /// order. An omitted reference inherits the effective reference from the prior section.
+        /// </summary>
+        private sealed class EffectiveHeaderFooterReferences
+        {
+            private readonly Dictionary<string, XElement> headerReferences =
+                new Dictionary<string, XElement>(StringComparer.Ordinal);
+            private readonly Dictionary<string, XElement> footerReferences =
+                new Dictionary<string, XElement>(StringComparer.Ordinal);
+
+            public IEnumerable<XElement> HeaderReferences => headerReferences.Values;
+
+            public IEnumerable<XElement> FooterReferences => footerReferences.Values;
+
+            public void Update(XElement? sectPr)
+            {
+                // A section may carry no properties at all — CollectSectionData's documented
+                // (null => defaults) contract. There is then nothing explicit to record, so the
+                // effective references stay as the preceding section left them.
+                if (sectPr == null)
+                    return;
+
+                UpdateReferences(headerReferences, sectPr.Elements(W.headerReference));
+                UpdateReferences(footerReferences, sectPr.Elements(W.footerReference));
+            }
+
+            public XElement? GetHeader(string type) =>
+                headerReferences.TryGetValue(type, out var reference) ? reference : null;
+
+            public XElement? GetFooter(string type) =>
+                footerReferences.TryGetValue(type, out var reference) ? reference : null;
+
+            private static void UpdateReferences(
+                IDictionary<string, XElement> effectiveReferences,
+                IEnumerable<XElement> explicitReferences)
+            {
+                foreach (var reference in explicitReferences)
+                {
+                    var type = (string?)reference.Attribute(W.type);
+                    if (!string.IsNullOrEmpty(type))
+                        effectiveReferences[type] = reference;
+                }
+            }
+        }
+
+        private static bool IsOnOffPropertyEnabled(XElement? property) =>
+            property != null
+            && (property.Attribute(W.val) == null
+                || property.Attribute(W.val).ToBoolean() == true);
+
+        private static void DetectHeadersFooters(
+            WordprocessingDocument wordDoc,
+            XElement? sectPr,
+            SectionMetadata sectionMeta,
+            EffectiveHeaderFooterReferences effectiveReferences,
+            bool hasEvenAndOddHeaders)
+        {
+            if (sectPr == null)
+                return;
+
+            var mainDocPart = wordDoc.MainDocumentPart!;
+            bool hasTitlePage = IsOnOffPropertyEnabled(sectPr.Element(W.titlePg));
+
+            // Check header references
+            foreach (var headerRef in effectiveReferences.HeaderReferences)
+            {
+                var type = (string?)headerRef.Attribute(W.type);
+                var headerId = (string?)headerRef.Attribute(R.id);
+
+                if (string.IsNullOrEmpty(headerId))
+                    continue;
+
+                try
+                {
+                    var headerPart = mainDocPart.GetPartById(headerId) as HeaderPart;
+                    if (headerPart != null && headerPart.GetXDocument().Root?.HasElements == true)
+                    {
+                        switch (type)
+                        {
+                            case "default":
+                                sectionMeta.HasHeader = true;
+                                break;
+                            case "first":
+                                sectionMeta.HasFirstPageHeader = hasTitlePage;
+                                break;
+                            case "even":
+                                sectionMeta.HasEvenPageHeader = hasEvenAndOddHeaders;
+                                break;
+                        }
+                    }
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    // Invalid relationship ID - header reference points to non-existent part.
+                    // This can happen with corrupted or manually edited documents.
+                    // For metadata extraction, we silently skip invalid references.
+                }
+            }
+
+            // Check footer references
+            foreach (var footerRef in effectiveReferences.FooterReferences)
+            {
+                var type = (string?)footerRef.Attribute(W.type);
+                var footerId = (string?)footerRef.Attribute(R.id);
+
+                if (string.IsNullOrEmpty(footerId))
+                    continue;
+
+                try
+                {
+                    var footerPart = mainDocPart.GetPartById(footerId) as FooterPart;
+                    if (footerPart != null && footerPart.GetXDocument().Root?.HasElements == true)
+                    {
+                        switch (type)
+                        {
+                            case "default":
+                                sectionMeta.HasFooter = true;
+                                break;
+                            case "first":
+                                sectionMeta.HasFirstPageFooter = hasTitlePage;
+                                break;
+                            case "even":
+                                sectionMeta.HasEvenPageFooter = hasEvenAndOddHeaders;
+                                break;
+                        }
+                    }
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    // Invalid relationship ID - footer reference points to non-existent part.
+                    // This can happen with corrupted or manually edited documents.
+                    // For metadata extraction, we silently skip invalid references.
+                }
+            }
+        }
+
+        /// <summary>
+        /// Estimates the total page count based on content volume.
+        /// This is a rough estimate using average content density.
+        /// </summary>
+        private static int EstimatePageCount(DocumentMetadata metadata)
+        {
+            if (metadata.Sections.Count == 0)
+                return 1;
+
+            int totalPages = 0;
+
+            foreach (var section in metadata.Sections)
+            {
+                // Rough estimate: ~25 paragraphs per page for average document
+                // Tables count as ~3 paragraphs each due to their size
+                double contentUnits = section.ParagraphCount + (section.TableCount * 3);
+
+                // Adjust for page size (smaller pages = more pages needed)
+                double pageAreaRatio = (section.ContentWidthPt * section.ContentHeightPt) / (468.0 * 648.0);
+                if (pageAreaRatio > 0)
+                {
+                    contentUnits /= pageAreaRatio;
+                }
+
+                int sectionPages = Math.Max(1, (int)Math.Ceiling(contentUnits / 25.0));
+                totalPages += sectionPages;
+            }
+
+            return Math.Max(1, totalPages);
+        }
+
+
+        private static void ReverseTableBordersForRtlTables(WordprocessingDocument wordDoc)
+        {
+            XDocument xd = wordDoc.MainDocumentPart!.GetXDocument();
+            foreach (var tbl in xd.Descendants(W.tbl))
+            {
+                if (!IsOnOffPropertyEnabled(tbl.Elements(W.tblPr).Elements(W.bidiVisual).FirstOrDefault()))
+                    continue;
+
+                var tblBorders = tbl.Elements(W.tblPr).Elements(W.tblBorders).FirstOrDefault();
+                if (tblBorders != null)
+                {
+                    var left = tblBorders.Element(W.left);
+                    if (left != null)
+                        left = new XElement(W.right, left.Attributes());
+
+                    var right = tblBorders.Element(W.right);
+                    if (right != null)
+                        right = new XElement(W.left, right.Attributes());
+
+                    var newTblBorders = new XElement(W.tblBorders,
+                        tblBorders.Element(W.top),
+                        left,
+                        tblBorders.Element(W.bottom),
+                        right);
+                    tblBorders.ReplaceWith(newTblBorders);
+                }
+
+                foreach (var tc in tbl.Elements(W.tr).Elements(W.tc))
+                {
+                    var tcBorders = tc.Elements(W.tcPr).Elements(W.tcBorders).FirstOrDefault();
+                    if (tcBorders != null)
+                    {
+                        var left = tcBorders.Element(W.left);
+                        if (left != null)
+                            left = new XElement(W.right, left.Attributes());
+
+                        var right = tcBorders.Element(W.right);
+                        if (right != null)
+                            right = new XElement(W.left, right.Attributes());
+
+                        var newTcBorders = new XElement(W.tcBorders,
+                            tcBorders.Element(W.top),
+                            left,
+                            tcBorders.Element(W.bottom),
+                            right);
+                        tcBorders.ReplaceWith(newTcBorders);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Normalizes whitespace in paragraph-like elements to prevent formatting whitespace
+        /// from rendering as visible spaces between inline elements.
+        /// This matches LibreOffice's HTML output behavior.
+        /// </summary>
+        /// <summary>
+        /// Drops the note navigation links whose target this conversion never emitted.
+        ///
+        /// <para>The two halves of a note's navigation are authored by different code paths over
+        /// different sources: the marker (<c>#fn-N</c>) comes from a <c>w:footnoteReference</c> in a
+        /// rendered story, and the return arrow (<c>#fn-ref-N</c>) comes from a <c>w:footnote</c>
+        /// definition in <c>footnotes.xml</c>. Neither part guarantees the other exists. Word keeps
+        /// orphaned definitions — <c>TestFiles/NVCA-Model-COI.docx</c> carries an uncited
+        /// <c>w:endnote</c> — and the converter renders them for package fidelity, which left a
+        /// return arrow pointing at an id nothing had emitted (issue #667). Standalone export then
+        /// reported <c>fragment_target_unavailable</c> for markup this converter authored itself,
+        /// and under a strict unsupported-content policy that fails the export.</para>
+        ///
+        /// <para>Resolving this against the finished tree rather than against the numbering tracker
+        /// is deliberate: it asks the only question that matters — is the target id in the output? —
+        /// and so stays correct for references in stories the tracker does not scan, such as headers
+        /// and footers.</para>
+        ///
+        /// <para>The two directions are not repaired the same way. A return arrow is pure navigation
+        /// chrome, so an unresolvable one is removed outright. A marker carries the note's visible
+        /// number, which is document content, so it only loses its <c>href</c> and stays as an inert
+        /// label.</para>
+        /// </summary>
+        private static void RemoveUnresolvableNoteLinks(XElement xhtml)
+        {
+            var noteLinks = xhtml.Descendants(Xhtml.a)
+                .Select(a => (Anchor: a, Href: (string?)a.Attribute("href")))
+                .Where(l => l.Href != null && (
+                    l.Href.StartsWith("#fn-", StringComparison.Ordinal) ||
+                    l.Href.StartsWith("#en-", StringComparison.Ordinal)))
+                .ToList();
+            if (noteLinks.Count == 0)
+                return;
+
+            var emittedIds = new HashSet<string>(
+                xhtml.Descendants().Select(e => (string?)e.Attribute("id")).OfType<string>(),
+                StringComparer.Ordinal);
+
+            foreach (var (anchor, href) in noteLinks)
+            {
+                if (emittedIds.Contains(href!.Substring(1)))
+                    continue;
+
+                var isReturnArrow = href.StartsWith("#fn-ref-", StringComparison.Ordinal) ||
+                                    href.StartsWith("#en-ref-", StringComparison.Ordinal);
+                if (isReturnArrow)
+                {
+                    // RenderFootnoteItem appends the arrow as a separator space followed by the
+                    // anchor; take the space with it so an orphaned note keeps no trailing gap.
+                    if (anchor.PreviousNode is XText separator && separator.Value == " ")
+                        separator.Remove();
+                    anchor.Remove();
+                }
+                else
+                {
+                    anchor.Attribute("href")!.Remove();
+                }
+            }
+        }
+
+        private static void NormalizeInlineWhitespace(XElement root)
+        {
+            // Elements that contain inline content where whitespace between children matters
+            var paragraphElements = new HashSet<XName>
+            {
+                Xhtml.p, Xhtml.h1, Xhtml.h2, Xhtml.h3, Xhtml.h4, Xhtml.h5, Xhtml.h6,
+                Xhtml.li, Xhtml.td, Xhtml.div
+            };
+
+            // Inline elements where whitespace between siblings should be removed
+            var inlineElements = new HashSet<XName>
+            {
+                Xhtml.span, Xhtml.a, Xhtml.b, Xhtml.i, Xhtml.u, Xhtml.s,
+                Xhtml.sub, Xhtml.sup, Xhtml.ins, Xhtml.del
+            };
+
+            foreach (var para in root.DescendantsAndSelf().Where(e => paragraphElements.Contains(e.Name)))
+            {
+                var nodes = para.Nodes().ToList();
+                var nodesToRemove = new List<XText>();
+
+                for (int i = 0; i < nodes.Count; i++)
+                {
+                    var textNode = nodes[i] as XText;
+                    if (textNode == null) continue;
+
+                    // Check if this text node is only whitespace
+                    if (!string.IsNullOrWhiteSpace(textNode.Value)) continue;
+
+                    // Check if it's between two inline elements
+                    var prevNode = i > 0 ? nodes[i - 1] as XElement : null;
+                    var nextNode = i < nodes.Count - 1 ? nodes[i + 1] as XElement : null;
+
+                    bool prevIsInline = prevNode != null && inlineElements.Contains(prevNode.Name);
+                    bool nextIsInline = nextNode != null && inlineElements.Contains(nextNode.Name);
+
+                    // Remove whitespace-only text nodes between inline elements
+                    // Also remove leading whitespace before first inline element
+                    // And trailing whitespace after last inline element
+                    if ((prevIsInline && nextIsInline) ||
+                        (prevIsInline && nextNode == null) ||
+                        (prevNode == null && nextIsInline))
+                    {
+                        nodesToRemove.Add(textNode);
+                    }
+                }
+
+                foreach (var node in nodesToRemove)
+                {
+                    node.Remove();
+                }
+            }
+        }
+
+        private static void ReifyStylesAndClasses(WmlToHtmlConverterSettings htmlConverterSettings, XElement xhtml, WordprocessingDocument wordDoc)
+        {
+            if (htmlConverterSettings.FabricateCssClasses)
+            {
+                var usedCssClassNames = new HashSet<string>();
+                var elementsThatNeedClasses = xhtml
+                    .DescendantsAndSelf()
+                    .Select(d => new
+                    {
+                        Element = d,
+                        Styles = d.Annotation<Dictionary<string, string>>(),
+                    })
+                    .Where(z => z.Styles != null)
+                    .Select(z => new { z.Element, Styles = z.Styles! });
+                var augmented = elementsThatNeedClasses
+                    .Select(p => new
+                    {
+                        p.Element,
+                        p.Styles,
+                        StylesString = p.Element.Name.LocalName + "|" + p.Styles.OrderBy(k => k.Key).Select(s => string.Format("{0}: {1};", s.Key, s.Value)).StringConcatenate(),
+                    })
+                    .GroupBy(p => p.StylesString)
+                    .ToList();
+                int classCounter = 1000000;
+                var sb = new StringBuilder();
+                sb.Append(Environment.NewLine);
+                foreach (var grp in augmented)
+                {
+                    string classNameToUse;
+                    var firstOne = grp.First();
+                    var styles = firstOne.Styles;
+                    if (styles.ContainsKey("PtStyleName"))
+                    {
+                        classNameToUse = htmlConverterSettings.CssClassPrefix + styles["PtStyleName"];
+                        if (usedCssClassNames.Contains(classNameToUse))
+                        {
+                            classNameToUse = htmlConverterSettings.CssClassPrefix +
+                                styles["PtStyleName"] + "-" +
+                                classCounter.ToString().Substring(1);
+                            classCounter++;
+                        }
+                    }
+                    else
+                    {
+                        classNameToUse = htmlConverterSettings.CssClassPrefix +
+                            classCounter.ToString().Substring(1);
+                        classCounter++;
+                    }
+                    usedCssClassNames.Add(classNameToUse);
+                    sb.Append(firstOne.Element.Name.LocalName + "." + classNameToUse + " {" + Environment.NewLine);
+                    foreach (var st in firstOne.Styles.Where(s => s.Key != "PtStyleName"))
+                    {
+                        var s = "    " + st.Key + ": " + st.Value + ";" + Environment.NewLine;
+                        sb.Append(s);
+                    }
+                    sb.Append("}" + Environment.NewLine);
+                    foreach (var gc in grp)
+                    {
+                        var existingClass = gc.Element.Attribute("class");
+                        if (existingClass != null)
+                            existingClass.Value = existingClass.Value + " " + classNameToUse;
+                        else
+                            gc.Element.Add(new XAttribute("class", classNameToUse));
+                    }
+                }
+                var revisionCss = GenerateRevisionCss(htmlConverterSettings, wordDoc);
+                var footnoteCss = GenerateFootnoteCss(htmlConverterSettings);
+                var headerFooterCss = GenerateHeaderFooterCss(htmlConverterSettings);
+                var commentCss = GenerateCommentCss(htmlConverterSettings);
+                var paginationCss = GeneratePaginationCss(htmlConverterSettings);
+                var pageCss = GeneratePageCss(htmlConverterSettings, wordDoc);
+                var annotationCss = GenerateAnnotationCss(htmlConverterSettings);
+                var unsupportedCss = GenerateUnsupportedContentCss(htmlConverterSettings);
+                var styleValue = GenerateDocumentLayoutCss() + htmlConverterSettings.GeneralCss + sb + revisionCss + footnoteCss + headerFooterCss + commentCss + paginationCss + pageCss + annotationCss + unsupportedCss + htmlConverterSettings.AdditionalCss;
+
+                SetStyleElementValue(xhtml, styleValue);
+            }
+            else
+            {
+                // Previously, the h:style element was not added at this point. However,
+                // at least the General CSS will contain important settings.
+                var revisionCss = GenerateRevisionCss(htmlConverterSettings, wordDoc);
+                var footnoteCss = GenerateFootnoteCss(htmlConverterSettings);
+                var headerFooterCss = GenerateHeaderFooterCss(htmlConverterSettings);
+                var commentCss = GenerateCommentCss(htmlConverterSettings);
+                var paginationCss = GeneratePaginationCss(htmlConverterSettings);
+                var pageCss = GeneratePageCss(htmlConverterSettings, wordDoc);
+                var annotationCss = GenerateAnnotationCss(htmlConverterSettings);
+                var unsupportedCss = GenerateUnsupportedContentCss(htmlConverterSettings);
+                SetStyleElementValue(xhtml, GenerateDocumentLayoutCss() + htmlConverterSettings.GeneralCss + revisionCss + footnoteCss + headerFooterCss + commentCss + paginationCss + pageCss + annotationCss + unsupportedCss + htmlConverterSettings.AdditionalCss);
+
+                foreach (var d in xhtml.DescendantsAndSelf())
+                {
+                    var style = d.Annotation<Dictionary<string, string>>();
+                    if (style == null)
+                        continue;
+                    var styleValue =
+                        style
+                        .Where(p => p.Key != "PtStyleName")
+                        .OrderBy(p => p.Key)
+                        .Select(e => string.Format("{0}: {1};", e.Key, e.Value))
+                        .StringConcatenate();
+                    XAttribute st = new XAttribute("style", styleValue);
+                    var existingStyle = d.Attribute("style");
+                    if (existingStyle != null)
+                        existingStyle.Value += styleValue;
+                    else
+                        d.Add(st);
+                }
+            }
+        }
+
+        private static void SetStyleElementValue(XElement xhtml, string styleValue)
+        {
+            var styleElement = xhtml
+                .Descendants(Xhtml.style)
+                .FirstOrDefault();
+            if (styleElement != null)
+                styleElement.Value = styleValue;
+            else
+            {
+                styleElement = new XElement(Xhtml.style, styleValue);
+                var head = xhtml.Element(Xhtml.head);
+                if (head != null)
+                    head.Add(styleElement);
+            }
+        }
+
+        /// <summary>
+        /// The authors of a document's revisions, numbered in the order each first appears across the
+        /// content parts, so the Word presentation can give each author a stable colour (issue #851).
+        /// </summary>
+        private sealed class RevisionAuthorIndex
+        {
+            private static readonly HashSet<XName> RevisionNames = new()
+            {
+                W.ins, W.del, W.moveFrom, W.moveTo, W.rPrChange, W.pPrChange, W.sectPrChange,
+                W.tblPrChange, W.tblPrExChange, W.trPrChange, W.tcPrChange, W.tblGridChange,
+                W.numberingChange, W.cellIns, W.cellDel, W.cellMerge,
+                W.customXmlInsRangeStart, W.customXmlDelRangeStart,
+                W.customXmlMoveFromRangeStart, W.customXmlMoveToRangeStart,
+            };
+
+            public List<string> Authors { get; } = new();
+            private readonly Dictionary<string, int> _index = new(StringComparer.Ordinal);
+
+            public static RevisionAuthorIndex Of(WordprocessingDocument wordDoc)
+            {
+                var index = new RevisionAuthorIndex();
+                foreach (var part in wordDoc.ContentParts())
+                {
+                    var root = part.GetXDocument().Root;
+                    if (root == null) continue;
+                    foreach (var element in root.Descendants())
+                    {
+                        if (!RevisionNames.Contains(element.Name)) continue;
+                        var author = (string?)element.Attribute(W.author) ?? string.Empty;
+                        if (index._index.TryAdd(author, index.Authors.Count))
+                            index.Authors.Add(author);
+                    }
+                }
+                return index;
+            }
+
+            public int? IndexOf(string? author) =>
+                _index.TryGetValue(author ?? string.Empty, out var i) ? i : null;
+        }
+
+        /// <summary>
+        /// The colours Word-style revisions take, by author number, wrapping after the last.
+        /// These are distinct dark hues in the spirit of Word's "By author" colouring; they were
+        /// not sampled from Word, and <see cref="WmlToHtmlConverterSettings.AuthorColors"/>
+        /// overrides them per author.
+        /// </summary>
+        private static readonly string[] WordAuthorPalette =
+        {
+            "#C00000", "#0070C0", "#7030A0", "#00A0A0", "#C55A11", "#2E7D32", "#BF0080", "#806000",
+        };
+
+        /// <summary>How far left of the text column the Word presentation draws its change bar.</summary>
+        private const string WordChangeBarOffset = "0.25in";
+
+        /// <summary>
+        /// In the Word presentation, give <paramref name="html"/> the class that colours it as its
+        /// author's (<c>rev-author-N</c>). Does nothing in the Docxodus presentation.
+        /// </summary>
+        private static void AddRevisionAuthorClass(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement html, XElement revision)
+        {
+            if (settings.RevisionPresentation != RevisionPresentation.Word)
+                return;
+            if (wordDoc.MainDocumentPart?.Annotation<RevisionAuthorIndex>()
+                    ?.IndexOf((string?)revision.Attribute(W.author)) is { } i)
+                AddClass(html, $"{settings.RevisionCssClassPrefix ?? "rev-"}author-{i}");
+        }
+
+        /// <summary>Add <paramref name="className"/> to <paramref name="element"/>'s class list.</summary>
+        private static void AddClass(XElement element, string className)
+        {
+            var existing = (string?)element.Attribute("class");
+            element.SetAttributeValue("class", existing != null ? existing + " " + className : className);
+        }
+
+        /// <summary>
+        /// Word presentation: CSS for revisions that look the way Word prints All Markup — author colour,
+        /// underline or strikethrough and nothing else for text; Word's default green double lines for
+        /// moves and its default cell shading; and one left-margin change bar per changed paragraph.
+        /// </summary>
+        private static string GenerateWordRevisionCss(WmlToHtmlConverterSettings settings,
+            WordprocessingDocument wordDoc)
+        {
+            var prefix = settings.RevisionCssClassPrefix ?? "rev-";
+            var sb = new StringBuilder();
+            sb.AppendLine();
+            sb.AppendLine("/* Tracked Changes CSS (Word presentation) */");
+            sb.AppendLine($"ins.{prefix}ins {{ text-decoration: underline; }}");
+            sb.AppendLine($"del.{prefix}del {{ text-decoration: line-through; }}");
+            sb.AppendLine($"ins.{prefix}move-to {{ text-decoration: underline double; color: #00B050; }}");
+            sb.AppendLine($"del.{prefix}move-from {{ text-decoration: line-through double; color: #00B050; }}");
+            sb.AppendLine($"span.{prefix}del-marker, span.{prefix}move-from-marker {{");
+            sb.AppendLine("    display: inline-block;");
+            sb.AppendLine("    width: 2px;");
+            sb.AppendLine("    height: 1em;");
+            sb.AppendLine("    background-color: currentColor;");
+            sb.AppendLine("    vertical-align: middle;");
+            sb.AppendLine("}");
+            // Word shows no inline mark for a paragraph-mark, formatting or section change: the
+            // change bar is the only trace (it shows the detail in balloons, which HTML has not).
+            sb.AppendLine($"span.{prefix}cxml-marker {{ font-weight: bold; }}");
+            sb.AppendLine($"span.{prefix}cxml-ins-start::before, span.{prefix}cxml-del-start::before,");
+            sb.AppendLine($"span.{prefix}cxml-move-from-start::before, span.{prefix}cxml-move-to-start::before {{ content: \"\\27E6\"; }}");
+            sb.AppendLine($"span.{prefix}cxml-ins-end::before, span.{prefix}cxml-del-end::before,");
+            sb.AppendLine($"span.{prefix}cxml-move-from-end::before, span.{prefix}cxml-move-to-end::before {{ content: \"\\27E7\"; }}");
+            sb.AppendLine($"tr.{prefix}row-del {{ text-decoration: line-through; }}");
+            // Word's default cell shading for cell insertions, deletions and merges.
+            sb.AppendLine($"td.{prefix}cell-ins {{ background-color: #CCECFF; }}");
+            sb.AppendLine($"td.{prefix}cell-del {{ background-color: #FFCCFF; text-decoration: line-through; }}");
+            sb.AppendLine($"td.{prefix}cell-merge {{ background-color: #FFFFCC; }}");
+            sb.AppendLine($".{prefix}changed-line {{ position: relative; }}");
+            sb.AppendLine($".{prefix}changed-line::before {{");
+            sb.AppendLine("    content: \"\";");
+            sb.AppendLine("    position: absolute;");
+            sb.AppendLine("    top: 0;");
+            sb.AppendLine("    bottom: 0;");
+            sb.AppendLine($"    left: calc(-1 * (var(--{prefix}change-bar-indent, 0px) + {WordChangeBarOffset}));");
+            sb.AppendLine("    border-left: 1px solid #000;");
+            sb.AppendLine("}");
+
+            var authors = wordDoc.MainDocumentPart?.Annotation<RevisionAuthorIndex>()?.Authors ?? new List<string>();
+            for (var i = 0; i < authors.Count; i++)
+            {
+                var color = settings.AuthorColors != null && settings.AuthorColors.TryGetValue(authors[i], out var chosen)
+                    ? chosen
+                    : WordAuthorPalette[i % WordAuthorPalette.Length];
+                sb.AppendLine($".{prefix}author-{i} {{ color: {color}; }}");
+            }
+            return sb.ToString();
+        }
+
+        private static string GenerateRevisionCss(WmlToHtmlConverterSettings settings, WordprocessingDocument wordDoc)
+        {
+            if (!settings.RenderTrackedChanges)
+                return string.Empty;
+            if (settings.RevisionPresentation == RevisionPresentation.Word)
+                return GenerateWordRevisionCss(settings, wordDoc);
+
+            var prefix = settings.RevisionCssClassPrefix ?? "rev-";
+            var sb = new StringBuilder();
+            sb.AppendLine();
+            sb.AppendLine("/* Tracked Changes CSS */");
+
+            // Insertions - underlined green text
+            sb.AppendLine($"ins.{prefix}ins {{");
+            sb.AppendLine("    text-decoration: underline;");
+            sb.AppendLine("    color: #006400;");
+            sb.AppendLine("    background-color: #e6ffe6;");
+            sb.AppendLine("}");
+
+            // Deletions - strikethrough red text
+            sb.AppendLine($"del.{prefix}del {{");
+            sb.AppendLine("    text-decoration: line-through;");
+            sb.AppendLine("    color: #8b0000;");
+            sb.AppendLine("    background-color: #ffe6e6;");
+            sb.AppendLine("}");
+
+            // Deletion marker (when content is hidden)
+            sb.AppendLine($"span.{prefix}del-marker {{");
+            sb.AppendLine("    display: inline-block;");
+            sb.AppendLine("    width: 4px;");
+            sb.AppendLine("    height: 1em;");
+            sb.AppendLine("    background-color: #8b0000;");
+            sb.AppendLine("    vertical-align: middle;");
+            sb.AppendLine("}");
+
+            // Move source - strikethrough purple text (content moved elsewhere)
+            sb.AppendLine($"del.{prefix}move-from {{");
+            sb.AppendLine("    text-decoration: line-through;");
+            sb.AppendLine("    color: #4b0082;");
+            sb.AppendLine("    background-color: #f0e6ff;");
+            sb.AppendLine("}");
+
+            // Move destination - underlined purple text (content moved here)
+            sb.AppendLine($"ins.{prefix}move-to {{");
+            sb.AppendLine("    text-decoration: underline;");
+            sb.AppendLine("    color: #4b0082;");
+            sb.AppendLine("    background-color: #e6f0ff;");
+            sb.AppendLine("}");
+
+            // Move from marker (when content is hidden)
+            sb.AppendLine($"span.{prefix}move-from-marker {{");
+            sb.AppendLine("    display: inline-block;");
+            sb.AppendLine("    width: 4px;");
+            sb.AppendLine("    height: 1em;");
+            sb.AppendLine("    background-color: #4b0082;");
+            sb.AppendLine("    vertical-align: middle;");
+            sb.AppendLine("}");
+
+            // Custom XML revision range boundaries (issue #538) — bracket glyphs in the owning
+            // family's revision color. The glyph is CSS content so copied text stays clean.
+            sb.AppendLine($"span.{prefix}cxml-marker {{");
+            sb.AppendLine("    font-weight: bold;");
+            sb.AppendLine("    cursor: help;");
+            sb.AppendLine("}");
+            sb.AppendLine($"span.{prefix}cxml-ins-start::before,");
+            sb.AppendLine($"span.{prefix}cxml-del-start::before,");
+            sb.AppendLine($"span.{prefix}cxml-move-from-start::before,");
+            sb.AppendLine($"span.{prefix}cxml-move-to-start::before {{");
+            sb.AppendLine("    content: \"\\27E6\";"); // ⟦
+            sb.AppendLine("}");
+            sb.AppendLine($"span.{prefix}cxml-ins-end::before,");
+            sb.AppendLine($"span.{prefix}cxml-del-end::before,");
+            sb.AppendLine($"span.{prefix}cxml-move-from-end::before,");
+            sb.AppendLine($"span.{prefix}cxml-move-to-end::before {{");
+            sb.AppendLine("    content: \"\\27E7\";"); // ⟧
+            sb.AppendLine("}");
+            sb.AppendLine($"span.{prefix}cxml-ins-start, span.{prefix}cxml-ins-end {{");
+            sb.AppendLine("    color: #006400;");
+            sb.AppendLine("}");
+            sb.AppendLine($"span.{prefix}cxml-del-start, span.{prefix}cxml-del-end {{");
+            sb.AppendLine("    color: #8b0000;");
+            sb.AppendLine("}");
+            sb.AppendLine($"span.{prefix}cxml-move-from-start, span.{prefix}cxml-move-from-end,");
+            sb.AppendLine($"span.{prefix}cxml-move-to-start, span.{prefix}cxml-move-to-end {{");
+            sb.AppendLine("    color: #4b0082;");
+            sb.AppendLine("}");
+
+            // Block-level property revisions (issue #539) — a goldenrod change bar / outline
+            // in place of markup the block cannot strike or underline. Titles carry the detail.
+            sb.AppendLine($".{prefix}para-format-change {{");
+            sb.AppendLine("    border-left: 3px dotted #b8860b;");
+            sb.AppendLine("    padding-left: 4px;");
+            sb.AppendLine("}");
+            sb.AppendLine($"table.{prefix}table-format-change {{");
+            sb.AppendLine("    outline: 2px dotted #b8860b;");
+            sb.AppendLine("    outline-offset: 1px;");
+            sb.AppendLine("}");
+            sb.AppendLine($"tr.{prefix}row-format-change {{");
+            sb.AppendLine("    outline: 1px dotted #b8860b;");
+            sb.AppendLine("}");
+            sb.AppendLine($"td.{prefix}cell-format-change {{");
+            sb.AppendLine("    outline: 1px dotted #b8860b;");
+            sb.AppendLine("    outline-offset: -1px;");
+            sb.AppendLine("}");
+            sb.AppendLine($".{prefix}section-format-change {{");
+            sb.AppendLine("    border-left: 3px dotted #b8860b;");
+            sb.AppendLine("    padding-left: 4px;");
+            sb.AppendLine("    color: #b8860b;");
+            sb.AppendLine("    font-size: 0.85em;");
+            sb.AppendLine("}");
+
+            // Table row inserted
+            sb.AppendLine($"tr.{prefix}row-ins {{");
+            sb.AppendLine("    background-color: #e6ffe6;");
+            sb.AppendLine("}");
+
+            // Table row deleted
+            sb.AppendLine($"tr.{prefix}row-del {{");
+            sb.AppendLine("    background-color: #ffe6e6;");
+            sb.AppendLine("    text-decoration: line-through;");
+            sb.AppendLine("}");
+
+            // Paragraph with inserted paragraph mark (paragraph was split)
+            sb.AppendLine($".{prefix}para-ins {{");
+            sb.AppendLine("    border-left: 3px solid #006400;");
+            sb.AppendLine("    padding-left: 4px;");
+            sb.AppendLine("}");
+
+            // Paragraph with deleted paragraph mark (paragraphs were merged)
+            sb.AppendLine($".{prefix}para-del {{");
+            sb.AppendLine("    border-left: 3px solid #8b0000;");
+            sb.AppendLine("    padding-left: 4px;");
+            sb.AppendLine("}");
+
+            // Deleted paragraph mark indicator (pilcrow)
+            sb.AppendLine($"span.{prefix}para-mark-del {{");
+            sb.AppendLine("    color: #8b0000;");
+            sb.AppendLine("    font-size: 0.8em;");
+            sb.AppendLine("    vertical-align: super;");
+            sb.AppendLine("}");
+
+            // Format changes (run property revisions)
+            sb.AppendLine($"span.{prefix}format-change {{");
+            sb.AppendLine("    border-bottom: 2px dotted #ffa500;");
+            sb.AppendLine("    cursor: help;");
+            sb.AppendLine("}");
+
+            // Table cell inserted
+            sb.AppendLine($"td.{prefix}cell-ins {{");
+            sb.AppendLine("    background-color: #e6ffe6;");
+            sb.AppendLine("}");
+
+            // Table cell deleted
+            sb.AppendLine($"td.{prefix}cell-del {{");
+            sb.AppendLine("    background-color: #ffe6e6;");
+            sb.AppendLine("    text-decoration: line-through;");
+            sb.AppendLine("}");
+
+            // Table cell merged
+            sb.AppendLine($"td.{prefix}cell-merge {{");
+            sb.AppendLine("    background-color: #fff0e6;");
+            sb.AppendLine("    border: 2px dashed #ff8c00;");
+            sb.AppendLine("}");
+
+            // Author-specific colors if provided
+            if (settings.AuthorColors != null)
+            {
+                foreach (var kvp in settings.AuthorColors)
+                {
+                    // Escape author name for use in CSS attribute selector
+                    var safeAuthor = kvp.Key.Replace("\"", "\\\"");
+                    sb.AppendLine($"[data-author=\"{safeAuthor}\"] {{");
+                    sb.AppendLine($"    border-left: 3px solid {kvp.Value};");
+                    sb.AppendLine($"    padding-left: 2px;");
+                    sb.AppendLine("}");
+                }
+            }
+
+            return sb.ToString();
+        }
+
+        private static string GenerateFootnoteCss(WmlToHtmlConverterSettings settings)
+        {
+            if (!settings.RenderFootnotesAndEndnotes)
+                return string.Empty;
+
+            var sb = new StringBuilder();
+            sb.AppendLine();
+            sb.AppendLine("/* Footnotes and Endnotes CSS */");
+
+            // Footnote/Endnote reference links
+            sb.AppendLine("a.footnote-ref, a.endnote-ref {");
+            sb.AppendLine("    text-decoration: none;");
+            sb.AppendLine("    color: inherit;");
+            sb.AppendLine("}");
+
+            // Footnotes section
+            sb.AppendLine("section.footnotes, section.endnotes {");
+            sb.AppendLine("    margin-top: 2em;");
+            sb.AppendLine("    font-size: 0.9em;");
+            sb.AppendLine("}");
+
+            if (settings.RenderPagination == PaginationMode.Paginated)
+            {
+                sb.AppendLine("section.endnotes {");
+                sb.AppendLine("    margin-top: 0;");
+                sb.AppendLine("    font-size: inherit;");
+                sb.AppendLine("}");
+                sb.AppendLine("section.endnotes ol {");
+                sb.AppendLine("    list-style-type: none;");
+                sb.AppendLine("    margin: 0;");
+                sb.AppendLine("}");
+                sb.AppendLine("section.endnotes hr {");
+                sb.AppendLine("    border: none;");
+                sb.AppendLine("    height: 1px;");
+                sb.AppendLine("    background-color: currentColor;");
+                sb.AppendLine("    width: 2in;");
+                sb.AppendLine("    max-width: 100%;");
+                sb.AppendLine("    margin: 0 0 4pt 0;");
+                sb.AppendLine("}");
+            }
+
+            // Footnote/Endnote list. Semantic lists nest the note bodies' own lists inside it, so
+            // the rule then reaches only the notes list itself.
+            sb.AppendLine(EmitsSemanticLists(settings)
+                ? "section.footnotes > ol, section.endnotes > ol {"
+                : "section.footnotes ol, section.endnotes ol {");
+            sb.AppendLine("    padding-left: 1.5em;");
+            sb.AppendLine("}");
+
+            if (settings.RenderPagination == PaginationMode.Paginated)
+                sb.AppendLine("section.endnotes ol { padding-left: 0; }");
+
+            // Back reference links
+            sb.AppendLine("a.footnote-backref, a.endnote-backref {");
+            sb.AppendLine("    text-decoration: none;");
+            sb.AppendLine("    color: #0066cc;");
+            sb.AppendLine("    margin-left: 0.5em;");
+            sb.AppendLine("}");
+
+            // Per-page footnotes (for paginated mode)
+            var prefix = settings.PaginationCssClassPrefix ?? "page-";
+            sb.AppendLine();
+            sb.AppendLine("/* Per-page Footnotes (Paginated Mode) */");
+
+            // Page footnotes container. The note area is bottom-anchored at the body band's foot,
+            // so every point of extra leading or trailing space inside it lifts the visible ink
+            // off the bottom margin. Word's FootnoteText style is single-spaced (w:line 240 auto);
+            // `normal` matches that, where a web-style 1.4 floated the notes ~5px high per line.
+            sb.AppendLine($".{prefix}footnotes {{");
+            sb.AppendLine("    font-size: 0.85em;");
+            sb.AppendLine("    line-height: normal;");
+            sb.AppendLine("}");
+
+            // Separator line above footnotes - using background instead of border
+            // to avoid subpixel rendering issues that can cause the line to disappear during scrolling
+            sb.AppendLine($".{prefix}footnotes hr {{");
+            sb.AppendLine("    border: none;");
+            sb.AppendLine("    height: 1px;");
+            sb.AppendLine("    background-color: #999;");
+            // Word's built-in footnote separator is two inches long. A percentage makes the
+            // rule drift with paper size/margins (6.5in Letter text yielded 2.145in) and does
+            // not match either Word or LibreOffice's fixed default separator.
+            sb.AppendLine("    width: 2in;");
+            sb.AppendLine("    max-width: 100%;");
+            // Word draws the separator on the baseline of one empty FootnoteText line, putting the
+            // rule roughly a descent-plus-ascent (~6-8px) above the first note's ink; 6pt doubled it.
+            sb.AppendLine("    margin: 0 0 3pt 0;");
+            sb.AppendLine("    opacity: 0.6;");
+            sb.AppendLine("}");
+            // A continuation separator spans the text column; Word's ordinary
+            // separator remains the calibrated two-inch rule above. Both the
+            // converter-produced story wrapper and the paginator fallback carry
+            // the same kind attribute so measurement and paint select one rule.
+            // Descendant selectors only: this CSS is serialized as XML, so a `>`
+            // child combinator ships as `&gt;` and the browser drops the rule
+            // (GeneratedCssEscapingTests).
+            sb.AppendLine($".{prefix}footnotes [data-footnote-separator=\"continuation\"] hr,");
+            sb.AppendLine($".{prefix}footnotes hr[data-footnote-separator=\"continuation\"] {{");
+            sb.AppendLine("    width: 100%;");
+            sb.AppendLine("}");
+
+            // Individual footnote item (in registry and on page). Word stacks notes with no
+            // spacing of its own — any inter-note gap belongs to the FootnoteText paragraph's
+            // w:spacing, which the paragraph carries inline when nonzero.
+            //
+            // The note's lines are its paragraph's, as in Word, where the number is a run of the
+            // FootnoteText paragraph. The item and its content wrapper are set in the page's default
+            // font, and a strut in that font made the note's line box taller than the paragraph's own,
+            // which lifted the bottom-anchored text about a pixel above Word's (issue #955). So the item
+            // contributes no strut (line-height 0, which the number inherits, so a raised number does not
+            // grow the line either), and the wrapper generates no box and hands `normal` back to the
+            // paragraph, whose own font then sizes its lines.
+            sb.AppendLine(".footnote-item {");
+            sb.AppendLine("    margin-bottom: 0;");
+            sb.AppendLine("    line-height: 0;");
+            sb.AppendLine("}");
+
+            // Footnote number - inline with superscript styling
+            sb.AppendLine(".footnote-number {");
+            sb.AppendLine("    font-weight: normal;");
+            sb.AppendLine("    display: inline;");
+            sb.AppendLine($"    vertical-align: {ScriptRaiseCss(superscript: true)};");
+            sb.AppendLine($"    font-size: {ScriptSizeCss};");
+            sb.AppendLine("    margin-right: 2pt;");
+            sb.AppendLine("}");
+
+            // A number rendered from the note's own reference run carries that run's size and
+            // raise (issue #1003); the generic styling above would shrink and raise it again.
+            sb.AppendLine(".footnote-number[data-note-run] {");
+            sb.AppendLine("    vertical-align: baseline;");
+            sb.AppendLine("    font-size: inherit;");
+            sb.AppendLine("    margin-right: 0;");
+            sb.AppendLine("}");
+
+            // Footnote content (inline with number)
+            sb.AppendLine(".footnote-content {");
+            sb.AppendLine("    display: contents;");
+            sb.AppendLine("    line-height: normal;");
+            sb.AppendLine("}");
+
+            // Make first paragraph in footnote content inline to flow with number
+            // Use :first-of-type instead of :first-child because XML serialization adds
+            // whitespace text nodes that would prevent :first-child from matching.
+            //
+            // NOTE: descendant selectors, NOT the `>` child combinator these rules used to use.
+            // The stylesheet is the VALUE of an h:style element, so serializing the XHTML escapes
+            // `>` to `&gt;` — `.footnote-content &gt; p:first-of-type` is not a valid selector and
+            // every browser silently drops the rule. The symptom was subtle and looked like a
+            // layout bug rather than a broken stylesheet: in paginated mode every footnote rendered
+            // its number alone on one line with the text beginning on the next. Generated CSS must
+            // therefore avoid characters XML escapes; NoGeneratedCssIsXmlEscaped pins that.
+            sb.AppendLine(".footnote-content p:first-of-type {");
+            sb.AppendLine("    display: inline;");
+            sb.AppendLine("}");
+
+            // Subsequent paragraphs in footnote get normal block display with indent
+            sb.AppendLine(".footnote-content p:not(:first-of-type) {");
+            sb.AppendLine("    display: block;");
+            sb.AppendLine("    margin-top: 2pt;");
+            sb.AppendLine("    margin-left: 12pt;");
+            sb.AppendLine("}");
+
+            return sb.ToString();
+        }
+
+        private static string GenerateHeaderFooterCss(WmlToHtmlConverterSettings settings)
+        {
+            if (!settings.RenderHeadersAndFooters)
+                return string.Empty;
+
+            var sb = new StringBuilder();
+            sb.AppendLine();
+            sb.AppendLine("/* Document Headers and Footers CSS */");
+
+            // Document header
+            sb.AppendLine("header.document-header {");
+            sb.AppendLine("    margin-bottom: 1.5em;");
+            sb.AppendLine("    padding-bottom: 0.5em;");
+            sb.AppendLine("    border-bottom: 1px solid #ccc;");
+            sb.AppendLine("}");
+
+            // Document footer
+            sb.AppendLine("footer.document-footer {");
+            sb.AppendLine("    margin-top: 1.5em;");
+            sb.AppendLine("    padding-top: 0.5em;");
+            sb.AppendLine("    border-top: 1px solid #ccc;");
+            sb.AppendLine("    font-size: 0.9em;");
+            sb.AppendLine("}");
+
+            return sb.ToString();
+        }
+
+        private static string GenerateCommentCss(WmlToHtmlConverterSettings settings)
+        {
+            if (!settings.RenderComments)
+                return string.Empty;
+
+            var prefix = settings.CommentCssClassPrefix ?? "comment-";
+            var sb = new StringBuilder();
+            sb.AppendLine();
+            sb.AppendLine("/* Comments CSS */");
+
+            // Comment highlights (the highlighted text in the document)
+            sb.AppendLine($"span.{prefix}highlight {{");
+            sb.AppendLine("    background-color: #fff9c4;");
+            sb.AppendLine("    border-bottom: 2px solid #fbc02d;");
+            sb.AppendLine("}");
+
+            // Comment marker (the [1] reference link)
+            sb.AppendLine($"a.{prefix}marker {{");
+            sb.AppendLine("    color: #1976d2;");
+            sb.AppendLine("    text-decoration: none;");
+            sb.AppendLine("    margin-left: 2px;");
+            sb.AppendLine("}");
+
+            sb.AppendLine($"a.{prefix}marker:hover {{");
+            sb.AppendLine("    text-decoration: underline;");
+            sb.AppendLine("}");
+
+            // Comments section (EndnoteStyle mode)
+            sb.AppendLine($"aside.{prefix.TrimEnd('-')}s-section {{");
+            sb.AppendLine("    margin-top: 2em;");
+            sb.AppendLine("    padding-top: 1em;");
+            sb.AppendLine("    border-top: 2px solid #ccc;");
+            sb.AppendLine("}");
+
+            sb.AppendLine($"aside.{prefix.TrimEnd('-')}s-section h2 {{");
+            sb.AppendLine("    font-size: 1.2em;");
+            sb.AppendLine("    margin-bottom: 0.5em;");
+            sb.AppendLine("}");
+
+            sb.AppendLine($"ol.{prefix.TrimEnd('-')}s-list {{");
+            sb.AppendLine("    list-style: none;");
+            sb.AppendLine("    padding: 0;");
+            sb.AppendLine("}");
+
+            // Individual comment item
+            sb.AppendLine($"li.{prefix.TrimEnd('-')} {{");
+            sb.AppendLine("    margin-bottom: 1em;");
+            sb.AppendLine("    padding: 0.75em;");
+            sb.AppendLine("    background-color: #f5f5f5;");
+            sb.AppendLine("    border-left: 3px solid #1976d2;");
+            sb.AppendLine("    border-radius: 0 4px 4px 0;");
+            sb.AppendLine("}");
+
+            // Comment topology (issue #540): replies nest beneath their parent, resolved
+            // comments read as settled rather than live.
+            sb.AppendLine($"ol.{prefix}replies {{");
+            sb.AppendLine("    list-style: none;");
+            sb.AppendLine("    margin: 0.75em 0 0 0;");
+            sb.AppendLine("    padding-left: 1.5em;");
+            sb.AppendLine("    border-left: 2px solid #bbdefb;");
+            sb.AppendLine("}");
+
+            sb.AppendLine($".{prefix}resolved {{");
+            sb.AppendLine("    opacity: 0.65;");
+            sb.AppendLine("}");
+
+            sb.AppendLine($"span.{prefix}resolved-badge {{");
+            sb.AppendLine("    background-color: #2e7d32;");
+            sb.AppendLine("    color: #fff;");
+            sb.AppendLine("    border-radius: 8px;");
+            sb.AppendLine("    padding: 0 0.5em;");
+            sb.AppendLine("    font-size: 0.85em;");
+            sb.AppendLine("}");
+
+            sb.AppendLine($"div.{prefix}margin-replies {{");
+            sb.AppendLine("    margin-top: 0.5em;");
+            sb.AppendLine("    padding-left: 0.75em;");
+            sb.AppendLine("    border-left: 2px solid #bbdefb;");
+            sb.AppendLine("}");
+
+            // Comment header
+            sb.AppendLine($"div.{prefix}header {{");
+            sb.AppendLine("    display: flex;");
+            sb.AppendLine("    align-items: center;");
+            sb.AppendLine("    gap: 0.5em;");
+            sb.AppendLine("    margin-bottom: 0.5em;");
+            sb.AppendLine("    font-size: 0.85em;");
+            sb.AppendLine("}");
+
+            sb.AppendLine($"span.{prefix}author {{");
+            sb.AppendLine("    font-weight: bold;");
+            sb.AppendLine("    color: #1976d2;");
+            sb.AppendLine("}");
+
+            sb.AppendLine($"span.{prefix}date {{");
+            sb.AppendLine("    color: #666;");
+            sb.AppendLine("}");
+
+            sb.AppendLine($"a.{prefix}backref {{");
+            sb.AppendLine("    margin-left: auto;");
+            sb.AppendLine("    text-decoration: none;");
+            sb.AppendLine("    color: #1976d2;");
+            sb.AppendLine("}");
+
+            // Comment body
+            sb.AppendLine($"div.{prefix}body p {{");
+            sb.AppendLine("    margin: 0;");
+            sb.AppendLine("}");
+
+            // Inline mode - tooltip on hover
+            sb.AppendLine($"span.{prefix}highlight[title] {{");
+            sb.AppendLine("    cursor: help;");
+            sb.AppendLine("}");
+
+            // Margin mode styles
+            if (settings.CommentRenderMode == CommentRenderMode.Margin)
+            {
+                sb.AppendLine();
+                sb.AppendLine("/* Margin Mode Comments */");
+
+                // Container that holds both content and margin
+                sb.AppendLine($"div.{prefix}margin-container {{");
+                sb.AppendLine("    display: flex;");
+                sb.AppendLine("    flex-direction: row;");
+                sb.AppendLine("    gap: 1em;");
+                sb.AppendLine("}");
+
+                // Main content area
+                sb.AppendLine($"div.{prefix}margin-content {{");
+                sb.AppendLine("    flex: 1;");
+                sb.AppendLine("    min-width: 0;");
+                sb.AppendLine("}");
+
+                // Margin column for comments
+                sb.AppendLine($"aside.{prefix}margin-column {{");
+                sb.AppendLine("    width: 250px;");
+                sb.AppendLine("    flex-shrink: 0;");
+                sb.AppendLine("    position: relative;");
+                sb.AppendLine("}");
+
+                // Individual margin comment
+                sb.AppendLine($"div.{prefix}margin-note {{");
+                sb.AppendLine("    position: relative;");
+                sb.AppendLine("    margin-bottom: 0.5em;");
+                sb.AppendLine("    padding: 0.5em;");
+                sb.AppendLine("    background-color: #fff9c4;");
+                sb.AppendLine("    border-left: 3px solid #fbc02d;");
+                sb.AppendLine("    border-radius: 0 4px 4px 0;");
+                sb.AppendLine("    font-size: 0.85em;");
+                sb.AppendLine("    box-shadow: 0 1px 3px rgba(0,0,0,0.1);");
+                sb.AppendLine("}");
+
+                // Margin comment header
+                sb.AppendLine($"div.{prefix}margin-note-header {{");
+                sb.AppendLine("    display: flex;");
+                sb.AppendLine("    justify-content: space-between;");
+                sb.AppendLine("    align-items: center;");
+                sb.AppendLine("    margin-bottom: 0.25em;");
+                sb.AppendLine("    font-size: 0.9em;");
+                sb.AppendLine("}");
+
+                sb.AppendLine($"span.{prefix}margin-author {{");
+                sb.AppendLine("    font-weight: bold;");
+                sb.AppendLine("    color: #f57f17;");
+                sb.AppendLine("}");
+
+                sb.AppendLine($"span.{prefix}margin-date {{");
+                sb.AppendLine("    color: #666;");
+                sb.AppendLine("    font-size: 0.85em;");
+                sb.AppendLine("}");
+
+                // Margin comment body
+                sb.AppendLine($"div.{prefix}margin-note-body {{");
+                sb.AppendLine("    color: #333;");
+                sb.AppendLine("}");
+
+                sb.AppendLine($"div.{prefix}margin-note-body p {{");
+                sb.AppendLine("    margin: 0;");
+                sb.AppendLine("}");
+
+                // Back reference link
+                sb.AppendLine($"a.{prefix}margin-backref {{");
+                sb.AppendLine("    color: #1976d2;");
+                sb.AppendLine("    text-decoration: none;");
+                sb.AppendLine("    font-size: 0.85em;");
+                sb.AppendLine("}");
+
+                sb.AppendLine($"a.{prefix}margin-backref:hover {{");
+                sb.AppendLine("    text-decoration: underline;");
+                sb.AppendLine("}");
+
+                // Highlighted text in margin mode - add anchor styling
+                sb.AppendLine($"span.{prefix}highlight[data-comment-id] {{");
+                sb.AppendLine("    cursor: pointer;");
+                sb.AppendLine("}");
+
+                // Print styles for margin mode
+                sb.AppendLine("@media print {");
+                sb.AppendLine($"    div.{prefix}margin-container {{");
+                sb.AppendLine("        display: block;");
+                sb.AppendLine("    }");
+                sb.AppendLine($"    aside.{prefix}margin-column {{");
+                sb.AppendLine("        width: auto;");
+                sb.AppendLine("        page-break-inside: avoid;");
+                sb.AppendLine("    }");
+                sb.AppendLine("}");
+            }
+
+            return sb.ToString();
+        }
+
+        private static string GeneratePaginationCss(WmlToHtmlConverterSettings settings)
+        {
+            if (settings.RenderPagination != PaginationMode.Paginated)
+                return string.Empty;
+
+            var prefix = settings.PaginationCssClassPrefix ?? "page-";
+            var scale = settings.PaginationScale > 0 ? settings.PaginationScale : 1.0;
+            var sb = new StringBuilder();
+
+            sb.AppendLine();
+            sb.AppendLine("/* Pagination CSS */");
+
+            // CSS variable for scale
+            sb.AppendLine(":root {");
+            sb.AppendLine(string.Format(NumberFormatInfo.InvariantInfo, "    --{0}scale: {1:F2};", prefix, scale));
+            sb.AppendLine("}");
+
+            // Staging area - hidden for measurement by client-side JavaScript
+            sb.AppendLine($".{prefix}staging {{");
+            sb.AppendLine("    position: absolute;");
+            sb.AppendLine("    left: -9999px;");
+            sb.AppendLine("    visibility: hidden;");
+            sb.AppendLine("}");
+
+            // Main container with dark background (PDF.js style)
+            sb.AppendLine($".{prefix}container {{");
+            sb.AppendLine("    display: flex;");
+            sb.AppendLine("    flex-direction: column;");
+            sb.AppendLine("    align-items: center;");
+            sb.AppendLine("    gap: 20px;");
+            sb.AppendLine("    padding: 20px;");
+            sb.AppendLine("    background: #525659;");
+            sb.AppendLine("    min-height: 100vh;");
+            sb.AppendLine("}");
+
+            // Page box with shadow
+            sb.AppendLine($".{prefix}box {{");
+            sb.AppendLine("    background: white;");
+            sb.AppendLine("    box-shadow: 0 2px 8px rgba(0,0,0,0.3);");
+            sb.AppendLine("    position: relative;");
+            sb.AppendLine("    overflow: hidden;");
+            sb.AppendLine("    box-sizing: border-box;");
+            sb.AppendLine("}");
+
+            // Content area within page
+            sb.AppendLine($".{prefix}content {{");
+            sb.AppendLine("    position: absolute;");
+            sb.AppendLine("    overflow-x: visible;");
+            sb.AppendLine("    overflow-y: clip;");
+            sb.AppendLine("    transform-origin: top left;");
+            sb.AppendLine("}");
+
+            // Header band. Word measures w:header from the paper's top edge to the TOP of the
+            // header story, which then grows downward — so the band is top-anchored and
+            // top-aligned. The paginator supplies the page-specific top/height; anchoring it to
+            // the top margin instead would pull the header down onto the body text.
+            sb.AppendLine($".{prefix}header {{");
+            sb.AppendLine("    position: absolute;");
+            sb.AppendLine("    overflow: hidden;");
+            sb.AppendLine("    box-sizing: border-box;");
+            sb.AppendLine("    display: flex;");
+            sb.AppendLine("    flex-direction: column;");
+            sb.AppendLine("    justify-content: flex-start;");
+            sb.AppendLine("}");
+
+            // Footer band — the mirror: w:footer is the distance to the BOTTOM of the footer
+            // story, which grows upward, so the band is bottom-anchored and bottom-aligned.
+            sb.AppendLine($".{prefix}footer {{");
+            sb.AppendLine("    position: absolute;");
+            sb.AppendLine("    overflow: hidden;");
+            sb.AppendLine("    box-sizing: border-box;");
+            sb.AppendLine("    display: flex;");
+            sb.AppendLine("    flex-direction: column;");
+            sb.AppendLine("    justify-content: flex-end;");
+            sb.AppendLine("}");
+
+            // Page number indicator
+            sb.AppendLine($".{prefix}number {{");
+            sb.AppendLine("    position: absolute;");
+            sb.AppendLine("    bottom: 8px;");
+            sb.AppendLine("    width: 100%;");
+            sb.AppendLine("    text-align: center;");
+            sb.AppendLine("    font-size: 11px;");
+            sb.AppendLine("    color: #666;");
+            sb.AppendLine("    pointer-events: none;");
+            sb.AppendLine("}");
+
+            // Hide system page number when page has a document footer
+            sb.AppendLine($".{prefix}box:has(.{prefix}footer) .{prefix}number {{");
+            sb.AppendLine("    display: none;");
+            sb.AppendLine("}");
+
+            // Page break marker (rendered by client-side as separator)
+            sb.AppendLine($".{prefix}break {{");
+            sb.AppendLine("    display: none;"); // Hidden in staging; processed by pagination engine
+            sb.AppendLine("}");
+
+            // Column break marker
+            sb.AppendLine($".{prefix}column-break {{");
+            sb.AppendLine("    display: none;");
+            sb.AppendLine("}");
+
+            // The viewer uses a flex column and scaled boxes on screen. Those layout
+            // affordances can introduce blank physical pages when the paginated view is
+            // captured with a browser's print/PDF path, so restore document-page layout
+            // only for print. The conversion bridge enables GeneratePageCss for paginated
+            // documents so Chromium also receives each document section's physical page size.
+            sb.AppendLine("@media print {");
+            sb.AppendLine($"    .{prefix}container {{");
+            sb.AppendLine("        display: block;");
+            sb.AppendLine("        gap: 0;");
+            sb.AppendLine("        padding: 0;");
+            sb.AppendLine("        background: transparent;");
+            sb.AppendLine("        min-height: 0;");
+            sb.AppendLine("    }");
+            sb.AppendLine($"    .{prefix}box {{");
+            sb.AppendLine("        zoom: 1 !important;");
+            sb.AppendLine("        transform: none !important;");
+            sb.AppendLine("        margin: 0 !important;");
+            sb.AppendLine("        box-shadow: none;");
+            sb.AppendLine("    }");
+            sb.AppendLine($"    .{prefix}box + .{prefix}box {{");
+            sb.AppendLine("        break-before: page;");
+            sb.AppendLine("        page-break-before: always;");
+            sb.AppendLine("    }");
+            sb.AppendLine("}");
+
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Generates @page CSS rule with document page dimensions and margins. Paginated output
+        /// uses zero outer margin because its fixed page boxes already apply section margins.
+        /// </summary>
+        private static string GeneratePageCss(WmlToHtmlConverterSettings settings, WordprocessingDocument wordDoc)
+        {
+            if (!settings.GeneratePageCss)
+                return string.Empty;
+
+            // Get the document body
+            var body = wordDoc.MainDocumentPart?.GetXDocument()?.Root?.Element(W.body);
+            if (body == null)
+                return string.Empty;
+
+            // A paginated document already has one fixed-size page box per logical page. The
+            // browser can switch physical paper only through named @page rules, selected by the
+            // page box's section index. Keep the existing single global rule for the common
+            // uniform-size case, but do not force a portrait page onto a landscape section.
+            if (settings.RenderPagination == PaginationMode.Paginated &&
+                !HasUniformMainStoryPageSize(wordDoc))
+            {
+                return GenerateNamedPaginatedPageCss(body, settings);
+            }
+
+            // Find section properties (body-level sectPr or last paragraph's sectPr)
+            var sectPr = body.Element(W.sectPr) ??
+                         body.Elements(W.p).LastOrDefault()?.Element(W.pPr)?.Element(W.sectPr);
+
+            // Extract page dimensions
+            var dims = ExtractPageDimensions(sectPr);
+
+            var sb = new StringBuilder();
+            sb.AppendLine();
+            sb.AppendLine("/* Page CSS for print */");
+            sb.AppendLine("@page {");
+
+            // Convert points to inches for CSS (72pt = 1in)
+            double widthIn = dims.PageWidthPt / 72.0;
+            double heightIn = dims.PageHeightPt / 72.0;
+            sb.AppendLine(string.Format(NumberFormatInfo.InvariantInfo,
+                "    size: {0:0.00}in {1:0.00}in;", widthIn, heightIn));
+
+            if (settings.RenderPagination == PaginationMode.Paginated)
+            {
+                // The paginator has already positioned content within each page box using the
+                // Word section margins. Reapplying them to the physical print page shrinks the
+                // box and can spill an A4 page onto an extra Letter-sized PDF page.
+                sb.AppendLine("    margin: 0;");
+            }
+            else
+            {
+                // Generate margin (top right bottom left) for continuous HTML, where the
+                // browser's physical page margin is the only representation of section margins.
+                double marginTopIn = dims.MarginTopPt / 72.0;
+                double marginRightIn = dims.MarginRightPt / 72.0;
+                double marginBottomIn = dims.MarginBottomPt / 72.0;
+                double marginLeftIn = dims.MarginLeftPt / 72.0;
+                sb.AppendLine(string.Format(NumberFormatInfo.InvariantInfo,
+                    "    margin: {0:0.00}in {1:0.00}in {2:0.00}in {3:0.00}in;",
+                    marginTopIn, marginRightIn, marginBottomIn, marginLeftIn));
+            }
+
+            sb.AppendLine("}");
+
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Emits one named physical page per main-story section and attaches it to the matching
+        /// page-box class. The TypeScript paginator copies the section index from its staging
+        /// container to every final page box, so a sequence such as portrait → landscape →
+        /// portrait becomes three correctly sized PDF page groups in Chromium.
+        /// </summary>
+        private static string GenerateNamedPaginatedPageCss(XElement body,
+            WmlToHtmlConverterSettings settings)
+        {
+            var sectionDimensions = CollectSectionData(body)
+                .Select(section => ExtractPageDimensions(section.sectPr))
+                .ToList();
+            var prefix = settings.PaginationCssClassPrefix ?? "page-";
+            var sb = new StringBuilder();
+
+            sb.AppendLine();
+            sb.AppendLine("/* Named page CSS for mixed-size paginated sections */");
+            for (int sectionIndex = 0; sectionIndex < sectionDimensions.Count; sectionIndex++)
+            {
+                var dims = sectionDimensions[sectionIndex];
+                sb.AppendLine($"@page docxodus-section-{sectionIndex} {{");
+                sb.AppendLine(string.Format(NumberFormatInfo.InvariantInfo,
+                    "    size: {0:0.00}in {1:0.00}in;",
+                    dims.PageWidthPt / 72.0, dims.PageHeightPt / 72.0));
+                // Section margins are already represented inside each fixed page box.
+                sb.AppendLine("    margin: 0;");
+                sb.AppendLine("}");
+            }
+
+            sb.AppendLine("@media print {");
+            for (int sectionIndex = 0; sectionIndex < sectionDimensions.Count; sectionIndex++)
+            {
+                sb.AppendLine($"    .{prefix}box[data-section-index=\"{sectionIndex}\"] {{");
+                sb.AppendLine($"        page: docxodus-section-{sectionIndex};");
+                sb.AppendLine("    }");
+            }
+            sb.AppendLine("}");
+
+            return sb.ToString();
+        }
+
+        internal static bool HasUniformMainStoryPageSize(WordprocessingDocument wordDoc)
+        {
+            var body = wordDoc.MainDocumentPart?.GetXDocument().Root?.Element(W.body);
+            if (body == null)
+                return false;
+
+            // Match pagination's main-story traversal: it recognizes section breaks inside
+            // tables but intentionally excludes floating text-box stories.
+            var sectionDimensions = CollectSectionData(body)
+                .Select(section => ExtractPageDimensions(section.sectPr))
+                .ToList();
+            var first = sectionDimensions[0];
+            return sectionDimensions.Skip(1).All(section =>
+                section.PageWidthPt == first.PageWidthPt &&
+                section.PageHeightPt == first.PageHeightPt);
+        }
+
+        private static string GenerateAnnotationCss(WmlToHtmlConverterSettings settings)
+        {
+            if (!settings.RenderAnnotations)
+                return string.Empty;
+
+            var prefix = settings.AnnotationCssClassPrefix ?? "annot-";
+            var sb = new StringBuilder();
+
+            sb.AppendLine();
+            sb.AppendLine("/* Custom Annotations CSS */");
+
+            // Annotation highlight base
+            sb.AppendLine($".{prefix}highlight {{");
+            sb.AppendLine("    position: relative;");
+            sb.AppendLine("    display: inline;");
+            sb.AppendLine("    background-color: color-mix(in srgb, var(--annot-color, #FFFF00) 35%, transparent);");
+            sb.AppendLine("    border-bottom: 2px solid var(--annot-color, #FFFF00);");
+            sb.AppendLine("    padding: 1px 2px;");
+            sb.AppendLine("    border-radius: 2px;");
+            sb.AppendLine("    transition: background-color 0.15s ease;");
+            sb.AppendLine("}");
+
+            // Hover state
+            sb.AppendLine($".{prefix}highlight:hover {{");
+            sb.AppendLine("    background-color: color-mix(in srgb, var(--annot-color, #FFFF00) 50%, transparent);");
+            sb.AppendLine("}");
+
+            // Floating label above highlight
+            sb.AppendLine($".{prefix}label {{");
+            sb.AppendLine("    position: absolute;");
+            sb.AppendLine("    top: -1.7em;");
+            sb.AppendLine("    left: 0;");
+            sb.AppendLine("    font-size: 0.7em;");
+            sb.AppendLine("    font-weight: 600;");
+            sb.AppendLine("    background: var(--annot-color, #FFFF00);");
+            sb.AppendLine("    color: #000;");
+            sb.AppendLine("    padding: 2px 6px;");
+            sb.AppendLine("    border-radius: 3px;");
+            sb.AppendLine("    white-space: nowrap;");
+            sb.AppendLine("    box-shadow: 0 1px 3px rgba(0,0,0,0.2);");
+            sb.AppendLine("    z-index: 100;");
+            sb.AppendLine("    pointer-events: none;");
+            sb.AppendLine("    line-height: 1.2;");
+            sb.AppendLine("}");
+
+            // Only show label on first segment of multi-paragraph annotations
+            sb.AppendLine($".{prefix}continuation .{prefix}label,");
+            sb.AppendLine($".{prefix}end .{prefix}label {{");
+            sb.AppendLine("    display: none;");
+            sb.AppendLine("}");
+
+            // Inline label mode
+            sb.AppendLine($".{prefix}highlight[data-label-mode=\"inline\"] .{prefix}label {{");
+            sb.AppendLine("    position: static;");
+            sb.AppendLine("    display: inline;");
+            sb.AppendLine("    margin-right: 4px;");
+            sb.AppendLine("    font-size: 0.8em;");
+            sb.AppendLine("    vertical-align: middle;");
+            sb.AppendLine("}");
+
+            // Tooltip mode - show on hover
+            sb.AppendLine($".{prefix}highlight[data-label-mode=\"tooltip\"] .{prefix}label {{");
+            sb.AppendLine("    display: none;");
+            sb.AppendLine("    top: auto;");
+            sb.AppendLine("    bottom: 100%;");
+            sb.AppendLine("    margin-bottom: 4px;");
+            sb.AppendLine("}");
+
+            sb.AppendLine($".{prefix}highlight[data-label-mode=\"tooltip\"]:hover .{prefix}label {{");
+            sb.AppendLine("    display: block;");
+            sb.AppendLine("}");
+
+            // No label mode
+            sb.AppendLine($".{prefix}highlight[data-label-mode=\"none\"] .{prefix}label {{");
+            sb.AppendLine("    display: none;");
+            sb.AppendLine("}");
+
+            // Handle nested/overlapping annotations
+            sb.AppendLine($".{prefix}highlight .{prefix}highlight {{");
+            sb.AppendLine("    background: none;");
+            sb.AppendLine("    border-bottom-style: dashed;");
+            sb.AppendLine("    padding: 0;");
+            sb.AppendLine("}");
+
+            // Ensure labels don't overlap badly for nested annotations
+            sb.AppendLine($".{prefix}highlight .{prefix}highlight .{prefix}label {{");
+            sb.AppendLine("    top: -3.2em;");
+            sb.AppendLine("}");
+
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// The always-emitted stylesheet that makes the converter's own HTML lay out the way a
+        /// word processor lays out the source document. It carries only rules that encode Word's
+        /// layout model, never presentation choices — a consumer's <c>GeneralCss</c>/<c>AdditionalCss</c>
+        /// both follow it in the style element and therefore win a specificity tie.
+        /// </summary>
+        /// <remarks>
+        /// Two of Word's layout invariants have no CSS default that matches them:
+        ///
+        /// 1. <b>A word wider than its column is broken, not overflowed.</b> Word and LibreOffice
+        ///    break an over-long word at the column edge. CSS's initial <c>overflow-wrap: normal</c>
+        ///    instead lets it run past the margin, which is what a reader sees as text escaping the
+        ///    page — most visibly after enlarging a run's font size.
+        /// 2. <b>A table never exceeds the text column.</b> Word's layout — fixed or AutoFit —
+        ///    keeps the table inside the column, shrinking columns when it must. CSS's
+        ///    <c>table-layout: auto</c> does the opposite: a cell's widest unbreakable word sets a
+        ///    min-content floor the table is grown to satisfy, so an enlarged run pushes the whole
+        ///    table past its container. <c>max-width: 100%</c> plus <c>overflow-wrap: anywhere</c>
+        ///    on cells (which, unlike <c>break-word</c>, lowers min-content) restores Word's rule.
+        ///    Fixed-layout tables additionally get <c>table-layout: fixed</c> in <c>ProcessTable</c>.
+        /// 3. <b>A superscript or subscript does not make its line taller.</b> Word rides them
+        ///    inside the existing line box; a paragraph does not open up because it happens to
+        ///    carry a footnote reference. CSS instead counts the RAISED inline box when it sizes
+        ///    the line box, so the line grows and every glyph on it shifts down. Zeroing the
+        ///    line-height of the raised box removes it from that calculation while leaving its
+        ///    own glyph untouched — the same device the converter already uses to keep the two
+        ///    compacted pieces of a <c>w:br</c> from contributing a line box.
+        /// 4. <b>The device does not resize the document's text.</b> Chrome on Android runs a
+        ///    "text autosizer" (driven by the OS/browser Text-scaling accessibility setting and
+        ///    the minimum-font-size preference) that multiplies the font size of text-heavy
+        ///    blocks — while the section's authored column width stays fixed, so every line
+        ///    re-breaks and the render no longer matches what the document says (garbling
+        ///    fixed-grid content outright). A word processor never inflates document text; the
+        ///    viewer's zoom is the legibility affordance. <c>text-size-adjust: 100%</c> is the
+        ///    standard opt-out. It is a non-inherited property that Blink consults on the
+        ///    autosizing cluster ROOTS it picks itself (observed on Android: a rule on an
+        ///    intermediate ancestor such as the editor chrome's root does NOT protect the
+        ///    document inside it), so it is emitted on every element of the document rather
+        ///    than only on <c>body</c>.
+        /// </remarks>
+        private static string GenerateDocumentLayoutCss()
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("/* Document layout CSS — Word's layout invariants, which CSS defaults do not match. */");
+            sb.AppendLine("body {");
+            sb.AppendLine("    overflow-wrap: break-word;");
+            sb.AppendLine("}");
+            sb.AppendLine("body, body * {");
+            sb.AppendLine("    -webkit-text-size-adjust: 100%;");
+            sb.AppendLine("    text-size-adjust: 100%;");
+            sb.AppendLine("}");
+            sb.AppendLine("table {");
+            sb.AppendLine("    max-width: 100%;");
+            sb.AppendLine("}");
+            sb.AppendLine("td, th {");
+            sb.AppendLine("    overflow-wrap: anywhere;");
+            sb.AppendLine("}");
+            sb.AppendLine("sup, sub {");
+            sb.AppendLine("    line-height: 0;");
+            sb.AppendLine("}");
+            return sb.ToString();
+        }
+
+        private static string GenerateUnsupportedContentCss(WmlToHtmlConverterSettings settings)
+        {
+            if (!settings.RenderUnsupportedContentPlaceholders)
+                return string.Empty;
+
+            var prefix = settings.UnsupportedContentCssClassPrefix ?? "unsupported-";
+            var sb = new StringBuilder();
+
+            sb.AppendLine();
+            sb.AppendLine("/* Unsupported Content Placeholders CSS */");
+
+            // Base placeholder style
+            sb.AppendLine($".{prefix}placeholder {{");
+            sb.AppendLine("    display: inline-block;");
+            sb.AppendLine("    background-color: #fff3cd;");
+            sb.AppendLine("    border: 1px dashed #856404;");
+            sb.AppendLine("    border-radius: 3px;");
+            sb.AppendLine("    padding: 2px 6px;");
+            sb.AppendLine("    font-family: monospace;");
+            sb.AppendLine("    font-size: 0.85em;");
+            sb.AppendLine("    color: #856404;");
+            sb.AppendLine("    cursor: help;");
+            sb.AppendLine("    vertical-align: middle;");
+            sb.AppendLine("}");
+
+            // Image placeholders (green)
+            sb.AppendLine($".{prefix}image {{");
+            sb.AppendLine("    background-color: #d4edda;");
+            sb.AppendLine("    border-color: #28a745;");
+            sb.AppendLine("    color: #155724;");
+            sb.AppendLine("}");
+
+            // Math placeholders (blue)
+            sb.AppendLine($".{prefix}math {{");
+            sb.AppendLine("    background-color: #d1ecf1;");
+            sb.AppendLine("    border-color: #17a2b8;");
+            sb.AppendLine("    color: #0c5460;");
+            sb.AppendLine("}");
+
+            // Form field placeholders (gray)
+            sb.AppendLine($".{prefix}form {{");
+            sb.AppendLine("    background-color: #e2e3e5;");
+            sb.AppendLine("    border-color: #6c757d;");
+            sb.AppendLine("    color: #383d41;");
+            sb.AppendLine("}");
+
+            // Ruby annotation placeholders (light blue)
+            sb.AppendLine($".{prefix}ruby {{");
+            sb.AppendLine("    background-color: #cce5ff;");
+            sb.AppendLine("    border-color: #0d6efd;");
+            sb.AppendLine("    color: #084298;");
+            sb.AppendLine("}");
+
+            // OLE/embedded object placeholders (purple)
+            sb.AppendLine($".{prefix}object {{");
+            sb.AppendLine("    background-color: #e2d9f3;");
+            sb.AppendLine("    border-color: #6f42c1;");
+            sb.AppendLine("    color: #432874;");
+            sb.AppendLine("}");
+
+            return sb.ToString();
+        }
+
+        private static XElement? CreateUnsupportedContentPlaceholder(
+            WmlToHtmlConverterSettings settings,
+            XElement element,
+            UnsupportedContentType contentType,
+            string placeholderText)
+        {
+            if (!settings.RenderUnsupportedContentPlaceholders)
+                return null;
+
+            var prefix = settings.UnsupportedContentCssClassPrefix ?? "unsupported-";
+            var typeClass = contentType switch
+            {
+                UnsupportedContentType.WmfImage => "image",
+                UnsupportedContentType.EmfImage => "image",
+                UnsupportedContentType.SvgImage => "image",
+                UnsupportedContentType.MathEquation => "math",
+                UnsupportedContentType.FormField => "form",
+                UnsupportedContentType.RubyAnnotation => "ruby",
+                UnsupportedContentType.OleObject => "object",
+                _ => "other"
+            };
+
+            var span = new XElement(Xhtml.span,
+                new XAttribute("class", $"{prefix}placeholder {prefix}{typeClass}"),
+                new XText(placeholderText));
+
+            if (settings.IncludeUnsupportedContentMetadata)
+            {
+                span.Add(new XAttribute("data-content-type", contentType.ToString()));
+                span.Add(new XAttribute("data-element-name", element.Name.LocalName));
+                span.Add(new XAttribute("title", GetUnsupportedContentTooltip(contentType)));
+            }
+
+            return span;
+        }
+
+        private static string GetUnsupportedContentTooltip(UnsupportedContentType contentType)
+        {
+            return contentType switch
+            {
+                UnsupportedContentType.WmfImage => "Windows Metafile image - not supported in HTML output",
+                UnsupportedContentType.EmfImage => "Enhanced Metafile image - not supported in HTML output",
+                UnsupportedContentType.SvgImage => "SVG image - not yet supported",
+                UnsupportedContentType.MathEquation => "Math equation (Office Math Markup) - not supported in HTML output",
+                UnsupportedContentType.FormField => "Form field - not supported in HTML output",
+                UnsupportedContentType.RubyAnnotation => "Ruby annotation (East Asian text) - not fully supported",
+                UnsupportedContentType.OleObject => "Embedded OLE object - not supported in HTML output",
+                _ => "Unsupported content - not rendered in HTML output"
+            };
+        }
+
+        private static object? ConvertToHtmlTransform(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XNode node,
+            bool suppressTrailingWhiteSpace,
+            decimal currentMarginLeft,
+            bool suppressLeadingWhiteSpace = false)
+        {
+            var element = node as XElement;
+            if (element == null) return null;
+
+            // Transform the w:document element to the XHTML h:html element.
+            // The h:head element is laid out based on the W3C's recommended layout, i.e.,
+            // the charset (using the HTML5-compliant form), the title (which is always
+            // there but possibly empty), and other meta tags.
+            if (element.Name == W.document)
+            {
+                // Determine document language: setting override or auto-detect from document
+                var documentLang = !string.IsNullOrEmpty(settings.DocumentLanguage)
+                    ? settings.DocumentLanguage
+                    : GetDocumentDefaultLanguage(wordDoc);
+
+                return new XElement(Xhtml.html,
+                    new XAttribute("lang", documentLang),
+                    new XElement(Xhtml.head,
+                        new XElement(Xhtml.meta, new XAttribute("charset", "UTF-8")),
+                        settings.PageTitle != null
+                            ? new XElement(Xhtml.title, new XText(settings.PageTitle))
+                            : new XElement(Xhtml.title, new XText(string.Empty)),
+                        new XElement(Xhtml.meta,
+                            new XAttribute("name", "Generator"),
+                            new XAttribute("content", "PowerTools for Open XML"))),
+                    element.Elements()
+                        .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft)));
+            }
+
+            // Transform the w:body element to the XHTML h:body element.
+            if (element.Name == W.body)
+            {
+                var bodyContent = new List<object>();
+
+                // In pagination mode, headers/footers are rendered into the registry
+                // and cloned per-page by the client-side pagination engine.
+                // Only render document-level headers when NOT using pagination.
+                bool usePaginatedHeadersFooters =
+                    settings.RenderHeadersAndFooters &&
+                    settings.RenderPagination == PaginationMode.Paginated;
+
+                // Add headers at the top if enabled (non-paginated mode only)
+                if (settings.RenderHeadersAndFooters && !usePaginatedHeadersFooters)
+                {
+                    var headersSection = RenderHeadersSection(wordDoc, settings);
+                    if (headersSection != null)
+                        bodyContent.Add(headersSection);
+                }
+
+                // Get main document content
+                var mainContent = CreateSectionDivs(wordDoc, settings, element);
+
+                // For margin mode, wrap content in a flex container with margin column
+                if (settings.RenderComments
+                    && settings.CommentRenderMode == CommentRenderMode.Margin
+                    && settings.RenderPagination != PaginationMode.Paginated)
+                {
+                    var prefix = settings.CommentCssClassPrefix ?? "comment-";
+                    var tracker = GetCommentTracker(element);
+
+                    var marginContainer = new XElement(Xhtml.div,
+                        new XAttribute("class", prefix + "margin-container"),
+                        new XElement(Xhtml.div,
+                            new XAttribute("class", prefix + "margin-content"),
+                            mainContent),
+                        RenderMarginCommentsColumn(wordDoc, settings, tracker, prefix));
+
+                    bodyContent.Add(marginContainer);
+                }
+                else
+                {
+                    bodyContent.Add(mainContent);
+                }
+
+                // Add footnotes and endnotes sections if enabled
+                if (settings.RenderFootnotesAndEndnotes)
+                {
+                    // In paginated mode, use footnote registry for client-side per-page distribution
+                    bool usePaginatedFootnotes = settings.RenderPagination == PaginationMode.Paginated;
+
+                    if (usePaginatedFootnotes)
+                    {
+                        // Footnote registry goes into the staging area for the pagination engine
+                        // The registry is already added to the staging area in CreateSectionDivs
+                        // (we'll handle this there to keep it with the staging container)
+                    }
+                    else
+                    {
+                        // Non-paginated mode: render footnotes section at the end
+                        var footnotesSection = RenderFootnotesSection(wordDoc, settings);
+                        if (footnotesSection != null)
+                            bodyContent.Add(footnotesSection);
+                    }
+
+                    // Endnotes render at document end. In paginated mode CreateSectionDivs has
+                    // already placed them inside the staging area (last section div) so they
+                    // flow onto the final page(s); adding them here too would duplicate them
+                    // outside any page.
+                    if (!usePaginatedFootnotes)
+                    {
+                        var endnotesSection = RenderEndnotesSection(wordDoc, settings);
+                        if (endnotesSection != null)
+                            bodyContent.Add(endnotesSection);
+                    }
+                }
+
+                // Add footers at the bottom if enabled (non-paginated mode only)
+                if (settings.RenderHeadersAndFooters && !usePaginatedHeadersFooters)
+                {
+                    var footersSection = RenderFootersSection(wordDoc, settings);
+                    if (footersSection != null)
+                        bodyContent.Add(footersSection);
+                }
+
+                // Add comments section if enabled (EndnoteStyle mode)
+                if (settings.RenderComments
+                    && settings.CommentRenderMode == CommentRenderMode.EndnoteStyle
+                    && settings.RenderPagination != PaginationMode.Paginated)
+                {
+                    var tracker = GetCommentTracker(element);
+                    if (tracker != null)
+                    {
+                        var commentsSection = RenderCommentsSection(wordDoc, settings, tracker);
+                        if (commentsSection != null)
+                            bodyContent.Add(commentsSection);
+                    }
+                }
+
+                return new XElement(Xhtml.body, bodyContent);
+            }
+
+            // Transform the w:p element to the XHTML h:h1-h6 or h:p element (if the previous paragraph does not
+            // have a style separator).
+            if (element.Name == W.p)
+            {
+                return ProcessParagraph(wordDoc, settings, element, suppressTrailingWhiteSpace, currentMarginLeft, suppressLeadingWhiteSpace);
+            }
+
+            // Transform hyperlinks to the XHTML h:a element.
+            if (element.Name == W.hyperlink && element.Attribute(R.id) != null)
+            {
+                try
+                {
+                    var ownerPart = GetOwningPart(wordDoc, element);
+                    var relationshipId = (string?)element.Attribute(R.id);
+                    var relationship = ownerPart.HyperlinkRelationships
+                        .FirstOrDefault(candidate => candidate.Id == relationshipId);
+                    if (relationship == null)
+                        return element.Elements().Select(e =>
+                            ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft));
+                    var a = new XElement(Xhtml.a,
+                        new XAttribute("href", relationship.Uri),
+                        ConvertHyperlinkRuns(wordDoc, settings, element)
+                        );
+                    if (!a.Nodes().Any())
+                        a.Add(new XText(""));
+                    a.AddAnnotation(new Dictionary<string, string>
+                    {
+                        { "color", "inherit" },
+                        { "text-decoration", "none" },
+                    });
+                    return a;
+                }
+                catch (UriFormatException)
+                {
+                    return element.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft));
+                }
+            }
+
+            // Transform hyperlinks to bookmarks to the XHTML h:a element.
+            if (element.Name == W.hyperlink && element.Attribute(W.anchor) != null)
+            {
+                return ProcessHyperlinkToBookmark(wordDoc, settings, element);
+            }
+
+            // Transform contents of runs.
+            if (element.Name == W.r)
+            {
+                return ConvertRun(wordDoc, settings, element);
+            }
+
+            // Transform w:bookmarkStart into anchor (and track annotation ranges)
+            if (element.Name == W.bookmarkStart)
+            {
+                return ProcessBookmarkStart(settings, element);
+            }
+
+            // Handle bookmarkEnd for closing annotation ranges
+            if (element.Name == W.bookmarkEnd)
+            {
+                return ProcessBookmarkEnd(settings, element);
+            }
+
+            // Transform every w:t element to a text node.
+            if (element.Name == W.t)
+            {
+                // Convert significant whitespace to &nbsp; entities to match LibreOffice behavior.
+                // This allows HTML to be formatted (with newlines/indentation) without affecting
+                // the rendered output, since whitespace between elements will collapse normally.
+                return ConvertTextWithNbsp(element.Value);
+            }
+
+            // The legacy page-number block is visible, non-editable decimal
+            // content, rather than an empty run. Give the
+            // paginator a measurable initial value and an explicit decimal
+            // override so a Roman/letter section format cannot change it.
+            if (element.Name == W.pgNum)
+            {
+                return new XElement(Xhtml.span,
+                    new XAttribute("contenteditable", "false"),
+                    settings.RenderPagination == PaginationMode.Paginated || settings.StampPageNumberFields
+                        ? new object[] {
+                            new XAttribute("data-field", "PAGE"),
+                            new XAttribute("data-field-format", "decimal"),
+                            new XAttribute("data-legacy-page-number", "true") }
+                        : null,
+                    "1");
+            }
+
+            // Transform symbols to spans
+            if (element.Name == W.sym)
+            {
+                var cs = (string?)element.Attribute(W._char);
+                var c = Convert.ToInt32(cs, 16);
+                return new XElement(Xhtml.span, new XEntity(string.Format("#{0}", c)));
+            }
+
+            // Transform tabs that have the pt:TabWidth attribute set
+            if (element.Name == W.tab)
+            {
+                return ProcessTab(element);
+            }
+
+            // Transform w:br to h:br (or page break div in pagination mode).
+            if (element.Name == W.br || element.Name == W.cr)
+            {
+                return ProcessBreak(element, settings);
+            }
+
+            // Transform w:noBreakHyphen to '-'
+            if (element.Name == W.noBreakHyphen)
+            {
+                return new XText("-");
+            }
+
+            // Transform w:tbl to h:tbl.
+            if (element.Name == W.tbl)
+            {
+                return ProcessTable(wordDoc, settings, element, currentMarginLeft);
+            }
+
+            // Transform w:tr to h:tr.
+            if (element.Name == W.tr)
+            {
+                return ProcessTableRow(wordDoc, settings, element, currentMarginLeft);
+            }
+
+            // Transform w:tc to h:td.
+            if (element.Name == W.tc)
+            {
+                return ProcessTableCell(wordDoc, settings, element);
+            }
+
+            // Transform images
+            if (element.Name == W.drawing || element.Name == W.pict || element.Name == W._object)
+            {
+                return ProcessImage(wordDoc, element, settings.ImageHandler, settings);
+            }
+
+            // An AlternateContent run carries two representations of the same object (normally a
+            // modern DrawingML choice and a VML fallback). Rendering both duplicates text boxes
+            // and images. Select the first choice whose required namespaces this converter
+            // understands; do not promote an unsupported branch's VML fallback because the
+            // browser/LibreOffice-compatible projection deliberately leaves that legacy markup
+            // unrendered.
+            if (element.Name == MC.AlternateContent)
+            {
+                return ProcessAlternateContent(wordDoc, settings, element, currentMarginLeft);
+            }
+
+            // Transform content controls.
+            if (element.Name == W.sdt)
+            {
+                return ProcessContentControl(wordDoc, settings, element, currentMarginLeft);
+            }
+
+            // Transform smart tags and simple fields.
+            if (element.Name == W.smartTag || element.Name == W.fldSimple)
+            {
+                return CreateBorderDivs(wordDoc, settings, element.Elements());
+            }
+
+            // Transform tracked changes - insertions
+            if (element.Name == W.ins)
+            {
+                return ProcessInsertion(wordDoc, settings, element, currentMarginLeft);
+            }
+
+            // Transform tracked changes - deletions
+            if (element.Name == W.del)
+            {
+                return ProcessDeletion(wordDoc, settings, element, currentMarginLeft);
+            }
+
+            // Transform deleted text (w:delText) to text node when rendering tracked changes
+            if (element.Name == W.delText)
+            {
+                if (settings.RenderTrackedChanges && settings.ShowDeletedContent)
+                {
+                    return new XText(element.Value);
+                }
+                return null;
+            }
+
+            // Transform tracked changes - move from (source of moved content)
+            if (element.Name == W.moveFrom)
+            {
+                return ProcessMoveFrom(wordDoc, settings, element, currentMarginLeft);
+            }
+
+            // Transform tracked changes - move to (destination of moved content)
+            if (element.Name == W.moveTo)
+            {
+                return ProcessMoveTo(wordDoc, settings, element, currentMarginLeft);
+            }
+
+            // Handle footnote references
+            if (element.Name == W.footnoteReference)
+            {
+                return ProcessFootnoteReference(wordDoc, settings, element);
+            }
+
+            // Handle endnote references
+            if (element.Name == W.endnoteReference)
+            {
+                return ProcessEndnoteReference(wordDoc, settings, element);
+            }
+
+            // A trailing body-level w:sectPr renders no content of its own, but a tracked
+            // section-property change recorded on it (w:sectPrChange) must still leave a mark
+            // (issue #539): emit a titled marker div where the section metadata sits.
+            if (element.Name == W.sectPr)
+            {
+                var sectPrChange = element.Element(W.sectPrChange);
+                // The Word presentation shows no inline trace of a section change (issue #851).
+                if (!settings.RenderTrackedChanges || sectPrChange == null ||
+                    settings.RevisionPresentation == RevisionPresentation.Word)
+                    return null;
+                var sectPrefix = settings.RevisionCssClassPrefix ?? "rev-";
+                var sectionMarker = new XElement(Xhtml.div,
+                    new XAttribute("class", sectPrefix + "section-format-change"),
+                    new XAttribute("title", "Section properties changed"),
+                    new XText("Section properties changed"));
+                if (settings.IncludeRevisionMetadata)
+                {
+                    var changeAuthor = (string?)sectPrChange.Attribute(W.author);
+                    var changeDate = (string?)sectPrChange.Attribute(W.date);
+                    if (changeAuthor != null)
+                        sectionMarker.Add(new XAttribute("data-author", changeAuthor));
+                    if (changeDate != null)
+                        sectionMarker.Add(new XAttribute("data-date", changeDate));
+                }
+
+                return sectionMarker;
+            }
+
+            // Custom XML revision range boundaries (issue #538): a reviewer added, removed, or
+            // moved a custom XML structural wrapper around this range with tracking on. The
+            // wrapper draws no text of its own, so under markup each boundary renders as a
+            // visible bracket marker; outside markup rendering they stay invisible (the
+            // enclosed content renders either way).
+            if (element.Name == W.customXmlInsRangeStart || element.Name == W.customXmlInsRangeEnd
+                || element.Name == W.customXmlDelRangeStart || element.Name == W.customXmlDelRangeEnd
+                || element.Name == W.customXmlMoveFromRangeStart || element.Name == W.customXmlMoveFromRangeEnd
+                || element.Name == W.customXmlMoveToRangeStart || element.Name == W.customXmlMoveToRangeEnd)
+            {
+                return ProcessCustomXmlRevisionRange(settings, element);
+            }
+
+            // Handle comment range start
+            if (element.Name == W.commentRangeStart)
+            {
+                return ProcessCommentRangeStart(settings, element);
+            }
+
+            // Handle comment range end
+            if (element.Name == W.commentRangeEnd)
+            {
+                return ProcessCommentRangeEnd(settings, element);
+            }
+
+            // Handle comment reference (the marker in the text)
+            if (element.Name == W.commentReference)
+            {
+                return ProcessCommentReference(settings, element);
+            }
+
+            // Handle math equations (OMML)
+            if (element.Name == M.oMath || element.Name == M.oMathPara)
+            {
+                return CreateUnsupportedContentPlaceholder(settings, element, UnsupportedContentType.MathEquation, "[MATH]");
+            }
+
+            // Handle form fields
+            if (element.Name == W.ffData)
+            {
+                // Determine form field type from child elements
+                var fieldType = "FORM FIELD";
+                if (element.Element(W.checkBox) != null)
+                    fieldType = "CHECKBOX";
+                else if (element.Element(W.textInput) != null)
+                    fieldType = "TEXT INPUT";
+                else if (element.Element(W.ddList) != null)
+                    fieldType = "DROPDOWN";
+                return CreateUnsupportedContentPlaceholder(settings, element, UnsupportedContentType.FormField, $"[{fieldType}]");
+            }
+
+            // Handle ruby annotations (East Asian text)
+            if (element.Name == W.ruby)
+            {
+                // Extract the base text if available
+                var baseText = element.Descendants(W.rubyBase).FirstOrDefault()?.Value ?? "";
+                var placeholderText = string.IsNullOrEmpty(baseText) ? "[RUBY]" : baseText;
+                return CreateUnsupportedContentPlaceholder(settings, element, UnsupportedContentType.RubyAnnotation, placeholderText);
+            }
+
+            // Ignore element.
+            return null;
+        }
+
+        /// <summary>
+        /// Converts text content to use non-breaking space characters for significant whitespace.
+        /// This matches LibreOffice's approach and allows HTML to be formatted without
+        /// affecting the rendered output.
+        /// </summary>
+        private static object ConvertTextWithNbsp(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return new XText("");
+
+            var result = new List<object>();
+            int i = 0;
+            int len = text.Length;
+
+            while (i < len)
+            {
+                // Find the start of the next space sequence
+                int spaceStart = i;
+                while (spaceStart < len && text[spaceStart] != ' ')
+                    spaceStart++;
+
+                // Add any non-space text before this point
+                if (spaceStart > i)
+                {
+                    result.Add(new XText(text.Substring(i, spaceStart - i)));
+                }
+
+                if (spaceStart >= len)
+                    break;
+
+                // Count consecutive spaces
+                int spaceEnd = spaceStart;
+                while (spaceEnd < len && text[spaceEnd] == ' ')
+                    spaceEnd++;
+
+                int spaceCount = spaceEnd - spaceStart;
+
+                // Convert spaces: use &nbsp; for preservation
+                // For multiple spaces, alternate nbsp and regular space to allow some flexibility
+                // For single spaces at start/end of text, use nbsp to prevent collapse
+                bool atStart = spaceStart == 0;
+                bool atEnd = spaceEnd == len;
+
+                if (spaceCount == 1 && !atStart && !atEnd)
+                {
+                    // Single space in the middle - keep as regular space
+                    result.Add(new XText(" "));
+                }
+                else
+                {
+                    // Multiple spaces, or space at boundary - use non-breaking space
+                    // Use Unicode character \u00A0 instead of &nbsp; entity for XML compatibility
+                    for (int j = 0; j < spaceCount; j++)
+                    {
+                        // Alternate between nbsp and regular space for runs of spaces
+                        // This preserves the spacing while allowing some flexibility
+                        if (j % 2 == 0 || spaceCount == 1)
+                            result.Add(new XText("\u00A0"));
+                        else
+                            result.Add(new XText(" "));
+                    }
+                }
+
+                i = spaceEnd;
+            }
+
+            // If only one item, return it directly; otherwise return the list
+            if (result.Count == 0)
+                return new XText("");
+            if (result.Count == 1)
+                return result[0];
+            return result;
+        }
+
+        private static object ProcessHyperlinkToBookmark(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, XElement element)
+        {
+            var style = new Dictionary<string, string>();
+            var a = new XElement(Xhtml.a,
+                new XAttribute("href", "#" + (string?) element.Attribute(W.anchor)),
+                ConvertHyperlinkRuns(wordDoc, settings, element));
+            if (!a.Nodes().Any())
+                a.Add(new XText(""));
+            style.Add("color", "inherit");
+            style.Add("text-decoration", "none");
+            a.AddAnnotation(style);
+            return a;
+        }
+
+        private static IEnumerable<object?> ConvertHyperlinkRuns(
+            WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings,
+            XElement hyperlink)
+        {
+            var runs = hyperlink.Elements(W.r).ToList();
+            var firstTabRun = runs.FirstOrDefault(run => run.Elements(W.tab).Any());
+            if (firstTabRun == null)
+                return runs.Select(run => ConvertRun(wordDoc, settings, run));
+
+            // A cached TOC keeps its label, leader tab, and page-number field inside one
+            // w:hyperlink. Run the same tab grouping used for direct paragraph children so the
+            // aligned segment retains the OOXML target instead of treating the tab as an
+            // unrelated inline glyph inside the link.
+            var runsPrecedingTab = runs.TakeWhile(run => run != firstTabRun).ToList();
+            var content = TransformElementsPrecedingTab(
+                wordDoc,
+                settings,
+                runsPrecedingTab,
+                firstTabRun);
+            content.AddRange(runs
+                .SkipWhile(run => run != firstTabRun)
+                .Skip(1)
+                .Select(run => ConvertRun(wordDoc, settings, run)));
+            return content;
+        }
+
+        private static object? ProcessBookmarkStart(WmlToHtmlConverterSettings settings, XElement element)
+        {
+            var name = (string?) element.Attribute(W.name);
+            if (name == null) return null;
+
+            // Check if this is an annotation bookmark and track it
+            if (settings.RenderAnnotations && name.StartsWith(AnnotationManager.BookmarkPrefix))
+            {
+                var tracker = GetAnnotationTracker(element);
+                if (tracker != null && tracker.BookmarkToAnnotationId.TryGetValue(name, out var annotationId))
+                {
+                    tracker.OpenRanges.Add(annotationId);
+                }
+            }
+
+            var style = new Dictionary<string, string>();
+            var a = new XElement(Xhtml.a,
+                new XAttribute("id", name),
+                new XText(""));
+            if (!a.Nodes().Any())
+                a.Add(new XText(""));
+            style.Add("text-decoration", "none");
+            a.AddAnnotation(style);
+            return a;
+        }
+
+        private static object? ProcessBookmarkEnd(WmlToHtmlConverterSettings settings, XElement element)
+        {
+            // bookmarkEnd uses w:id to reference the bookmark, not w:name
+            // We need to find the corresponding bookmarkStart to get the name
+            var id = (string?)element.Attribute(W.id);
+            if (id == null)
+                return null;
+
+            if (!settings.RenderAnnotations)
+                return null;
+
+            var tracker = GetAnnotationTracker(element);
+            if (tracker == null)
+                return null;
+
+            // Find the corresponding bookmarkStart in the document to get the name
+            var root = element.AncestorsAndSelf().LastOrDefault();
+            if (root != null)
+            {
+                var bookmarkStart = root.Descendants(W.bookmarkStart)
+                    .FirstOrDefault(bs => (string?)bs.Attribute(W.id) == id);
+
+                if (bookmarkStart != null)
+                {
+                    var name = (string?)bookmarkStart.Attribute(W.name);
+                    if (name != null && name.StartsWith(AnnotationManager.BookmarkPrefix) &&
+                        tracker.BookmarkToAnnotationId.TryGetValue(name, out var annotationId))
+                    {
+                        tracker.OpenRanges.Remove(annotationId);
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private static object ProcessInsertion(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement element, decimal currentMarginLeft)
+        {
+            if (!settings.RenderTrackedChanges)
+            {
+                // When not rendering tracked changes, just process children normally
+                return element.Elements()
+                    .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft));
+            }
+
+            var ins = new XElement(Xhtml.ins);
+
+            // Add CSS class
+            var className = (settings.RevisionCssClassPrefix ?? "rev-") + "ins";
+            ins.Add(new XAttribute("class", className));
+            AddRevisionAuthorClass(wordDoc, settings, ins, element);
+
+            // Add metadata if requested
+            if (settings.IncludeRevisionMetadata)
+            {
+                var author = (string?)element.Attribute(W.author);
+                var date = (string?)element.Attribute(W.date);
+
+                if (author != null)
+                    ins.Add(new XAttribute("data-author", author));
+                if (date != null)
+                    ins.Add(new XAttribute("data-date", date));
+            }
+
+            // Process children
+            var content = element.Elements()
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft))
+                .ToList();
+
+            ins.Add(content);
+
+            // Ensure the element isn't empty (browsers may ignore empty ins/del)
+            if (!ins.Nodes().Any())
+                ins.Add(new XText(""));
+
+            return ins;
+        }
+
+        private static object? ProcessDeletion(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement element, decimal currentMarginLeft)
+        {
+            if (!settings.RenderTrackedChanges)
+            {
+                // When not rendering tracked changes, deletions are removed entirely
+                return null;
+            }
+
+            if (!settings.ShowDeletedContent)
+            {
+                // Show marker but not content
+                var marker = new XElement(Xhtml.span,
+                    new XAttribute("class", (settings.RevisionCssClassPrefix ?? "rev-") + "del-marker"),
+                    new XAttribute("title", "Deleted content"));
+                AddRevisionAuthorClass(wordDoc, settings, marker, element);
+                return marker;
+            }
+
+            var del = new XElement(Xhtml.del);
+
+            // Add CSS class
+            var className = (settings.RevisionCssClassPrefix ?? "rev-") + "del";
+            del.Add(new XAttribute("class", className));
+            AddRevisionAuthorClass(wordDoc, settings, del, element);
+
+            // Add metadata if requested
+            if (settings.IncludeRevisionMetadata)
+            {
+                var author = (string?)element.Attribute(W.author);
+                var date = (string?)element.Attribute(W.date);
+
+                if (author != null)
+                    del.Add(new XAttribute("data-author", author));
+                if (date != null)
+                    del.Add(new XAttribute("data-date", date));
+            }
+
+            // Process children - note: w:del contains w:delText instead of w:t
+            var content = element.Elements()
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft))
+                .ToList();
+
+            del.Add(content);
+
+            // Ensure the element isn't empty
+            if (!del.Nodes().Any())
+                del.Add(new XText(""));
+
+            return del;
+        }
+
+        private static object? ProcessMoveFrom(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement element, decimal currentMarginLeft)
+        {
+            if (!settings.RenderTrackedChanges)
+            {
+                // When not rendering tracked changes, move sources are removed (content moved elsewhere)
+                return null;
+            }
+
+            // If not rendering move operations separately, treat as deletion
+            if (!settings.RenderMoveOperations)
+            {
+                return ProcessDeletion(wordDoc, settings, element, currentMarginLeft);
+            }
+
+            if (!settings.ShowDeletedContent)
+            {
+                // Show marker but not content
+                var marker = new XElement(Xhtml.span,
+                    new XAttribute("class", (settings.RevisionCssClassPrefix ?? "rev-") + "move-from-marker"),
+                    new XAttribute("title", "Moved content (source)"));
+                AddRevisionAuthorClass(wordDoc, settings, marker, element);
+                return marker;
+            }
+
+            var del = new XElement(Xhtml.del);
+
+            // Add CSS class for move source
+            var className = (settings.RevisionCssClassPrefix ?? "rev-") + "move-from";
+            del.Add(new XAttribute("class", className));
+            AddRevisionAuthorClass(wordDoc, settings, del, element);
+
+            // Add metadata if requested
+            if (settings.IncludeRevisionMetadata)
+            {
+                var author = (string?)element.Attribute(W.author);
+                var date = (string?)element.Attribute(W.date);
+                var moveId = (string?)element.Attribute(W.id);
+
+                if (author != null)
+                    del.Add(new XAttribute("data-author", author));
+                if (date != null)
+                    del.Add(new XAttribute("data-date", date));
+                if (moveId != null)
+                    del.Add(new XAttribute("data-move-id", moveId));
+            }
+
+            // Process children - move source contains delText like w:del
+            var content = element.Elements()
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft))
+                .ToList();
+
+            del.Add(content);
+
+            // Ensure the element isn't empty
+            if (!del.Nodes().Any())
+                del.Add(new XText(""));
+
+            return del;
+        }
+
+        private static object ProcessMoveTo(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement element, decimal currentMarginLeft)
+        {
+            if (!settings.RenderTrackedChanges)
+            {
+                // When not rendering tracked changes, just process children normally
+                return element.Elements()
+                    .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft));
+            }
+
+            // If not rendering move operations separately, treat as insertion
+            if (!settings.RenderMoveOperations)
+            {
+                return ProcessInsertion(wordDoc, settings, element, currentMarginLeft);
+            }
+
+            var ins = new XElement(Xhtml.ins);
+
+            // Add CSS class for move destination
+            var className = (settings.RevisionCssClassPrefix ?? "rev-") + "move-to";
+            ins.Add(new XAttribute("class", className));
+            AddRevisionAuthorClass(wordDoc, settings, ins, element);
+
+            // Add metadata if requested
+            if (settings.IncludeRevisionMetadata)
+            {
+                var author = (string?)element.Attribute(W.author);
+                var date = (string?)element.Attribute(W.date);
+                var moveId = (string?)element.Attribute(W.id);
+
+                if (author != null)
+                    ins.Add(new XAttribute("data-author", author));
+                if (date != null)
+                    ins.Add(new XAttribute("data-date", date));
+                if (moveId != null)
+                    ins.Add(new XAttribute("data-move-id", moveId));
+            }
+
+            // Process children
+            var content = element.Elements()
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft))
+                .ToList();
+
+            ins.Add(content);
+
+            // Ensure the element isn't empty
+            if (!ins.Nodes().Any())
+                ins.Add(new XText(""));
+
+            return ins;
+        }
+
+        private static object? ProcessFootnoteReference(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement element)
+        {
+            if (!settings.RenderFootnotesAndEndnotes)
+            {
+                return null;
+            }
+
+            var footnoteId = (string?)element.Attribute(W.id);
+            if (footnoteId == null)
+                return null;
+
+            // Get display number from tracker (sequential, rendered in the effective w:numFmt)
+            var root = element.AncestorsAndSelf().Last();
+            var tracker = root.Annotation<FootnoteNumberingTracker>();
+            var displayNumber = tracker?.FootnoteIdToDisplayNumber.TryGetValue(footnoteId, out var num) == true
+                ? FormatNoteNumber(num, tracker.FootnoteNumberFormat)
+                : footnoteId; // Fallback to XML ID if not found
+
+            // Put <sup> inside anchor like LibreOffice does for clean inline rendering. Page view
+            // never emits a #fn-N target (its registry is keyed by data-footnote-id and the
+            // paginator lays the notes out per page), so the marker carries no href there: a
+            // whole-document render would strip it as unresolvable, and a block render, which
+            // cannot ask that question (RendersDocumentFragment), has to agree with it.
+            var anchor = new XElement(Xhtml.a,
+                settings.RenderPagination == PaginationMode.Paginated
+                    ? null
+                    : new XAttribute("href", $"#fn-{footnoteId}"),
+                new XAttribute("id", $"fn-ref-{footnoteId}"),
+                new XAttribute("class", "footnote-ref"),
+                new XAttribute("data-footnote-id", footnoteId), // For pagination engine to track footnotes per page
+                ScriptElement(Xhtml.sup, displayNumber));
+
+            return anchor;
+        }
+
+        private static object? ProcessEndnoteReference(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement element)
+        {
+            if (!settings.RenderFootnotesAndEndnotes)
+            {
+                return null;
+            }
+
+            var endnoteId = (string?)element.Attribute(W.id);
+            if (endnoteId == null)
+                return null;
+
+            // Get display number from tracker (sequential, rendered in the effective w:numFmt —
+            // Word's default for endnotes is lowerRoman, so an unconfigured document shows i, ii…)
+            var root = element.AncestorsAndSelf().Last();
+            var tracker = root.Annotation<FootnoteNumberingTracker>();
+            var displayNumber = tracker?.EndnoteIdToDisplayNumber.TryGetValue(endnoteId, out var num) == true
+                ? FormatNoteNumber(num, tracker.EndnoteNumberFormat)
+                : endnoteId; // Fallback to XML ID if not found
+
+            // Put <sup> inside anchor like LibreOffice does for clean inline rendering
+            var anchor = new XElement(Xhtml.a,
+                new XAttribute("href", $"#en-{endnoteId}"),
+                new XAttribute("id", $"en-ref-{endnoteId}"),
+                new XAttribute("class", "endnote-ref"),
+                ScriptElement(Xhtml.sup, displayNumber));
+
+            return anchor;
+        }
+
+        private static XElement? RenderFootnotesSection(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings)
+        {
+            var footnotesPart = wordDoc.MainDocumentPart!.FootnotesPart;
+            if (footnotesPart == null)
+                return null;
+
+            var footnotesXDoc = footnotesPart.GetXDocument();
+            var allFootnotes = footnotesXDoc.Root?.Elements(W.footnote)
+                .Where(fn =>
+                {
+                    var typeAttr = (string?)fn.Attribute(W.type);
+                    // Skip separator and continuationSeparator footnotes
+                    return typeAttr != "separator" && typeAttr != "continuationSeparator";
+                })
+                .ToDictionary(fn => (string)fn.Attribute(W.id)!, fn => fn);
+
+            if (allFootnotes == null || !allFootnotes.Any())
+                return null;
+
+            // Get tracker for ordering and display numbers
+            var mainXDoc = wordDoc.MainDocumentPart!.GetXDocument();
+            var tracker = mainXDoc.Root?.Annotation<FootnoteNumberingTracker>();
+
+            // Order footnotes by document order using tracker, with fallback to XML order
+            IEnumerable<XElement> orderedFootnotes;
+            if (tracker != null && tracker.FootnoteIdsInOrder.Any())
+            {
+                orderedFootnotes = tracker.FootnoteIdsInOrder
+                    .Where(id => allFootnotes.ContainsKey(id))
+                    .Select(id => allFootnotes[id]);
+            }
+            else
+            {
+                orderedFootnotes = allFootnotes.Values;
+            }
+
+            var footnotesSection = new XElement(Xhtml.section,
+                new XAttribute("class", "footnotes"),
+                new XElement(Xhtml.hr),
+                new XElement(Xhtml.ol,
+                    new XAttribute("style", $"list-style-type: {NoteListStyleType(tracker?.FootnoteNumberFormat ?? "decimal")};"),
+                    orderedFootnotes.Select(fn => RenderFootnoteItem(wordDoc, settings, fn, "fn", tracker))));
+
+            return footnotesSection;
+        }
+
+        private static XElement? RenderEndnotesSection(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings)
+        {
+            var endnotesPart = wordDoc.MainDocumentPart!.EndnotesPart;
+            if (endnotesPart == null)
+                return null;
+
+            var endnotesXDoc = endnotesPart.GetXDocument();
+            var allEndnotes = endnotesXDoc.Root?.Elements(W.endnote)
+                .Where(en =>
+                {
+                    var typeAttr = (string?)en.Attribute(W.type);
+                    // Skip separator and continuationSeparator endnotes
+                    return typeAttr != "separator" && typeAttr != "continuationSeparator";
+                })
+                .ToDictionary(en => (string)en.Attribute(W.id)!, en => en);
+
+            if (allEndnotes == null || !allEndnotes.Any())
+                return null;
+
+            // Get tracker for ordering and display numbers
+            var mainXDoc = wordDoc.MainDocumentPart!.GetXDocument();
+            var tracker = mainXDoc.Root?.Annotation<FootnoteNumberingTracker>();
+
+            // Order endnotes by document order using tracker, with fallback to XML order
+            IEnumerable<XElement> orderedEndnotes;
+            if (tracker != null && tracker.EndnoteIdsInOrder.Any())
+            {
+                orderedEndnotes = tracker.EndnoteIdsInOrder
+                    .Where(id => allEndnotes.ContainsKey(id))
+                    .Select(id => allEndnotes[id]);
+            }
+            else
+            {
+                orderedEndnotes = allEndnotes.Values;
+            }
+
+            var endnotesSection = new XElement(Xhtml.section,
+                new XAttribute("class", "endnotes"),
+                new XElement(Xhtml.hr),
+                new XElement(Xhtml.ol,
+                    new XAttribute("style", $"list-style-type: {NoteListStyleType(tracker?.EndnoteNumberFormat ?? "lowerRoman")};"),
+                    orderedEndnotes.Select(en => RenderFootnoteItem(wordDoc, settings, en, "en", tracker))));
+
+            return endnotesSection;
+        }
+
+        private static XElement? RenderFootnoteItem(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement noteElement, string noteType,
+            FootnoteNumberingTracker? tracker)
+        {
+            var noteId = (string?)noteElement.Attribute(W.id);
+            if (noteId == null)
+                return null;
+
+            // Get display number from tracker (sequential 1, 2, 3... based on document order)
+            int displayNumber;
+            if (noteType == "fn")
+            {
+                displayNumber = tracker?.FootnoteIdToDisplayNumber.TryGetValue(noteId, out var num) == true
+                    ? num
+                    : int.TryParse(noteId, out var fallback) ? fallback : 1;
+            }
+            else // "en" for endnotes
+            {
+                displayNumber = tracker?.EndnoteIdToDisplayNumber.TryGetValue(noteId, out var num) == true
+                    ? num
+                    : int.TryParse(noteId, out var fallback) ? fallback : 1;
+            }
+
+            // Convert the content of the footnote/endnote
+            var content = noteElement.Elements()
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
+                .ToList();
+
+            // Create the backref anchor
+            var backref = new XElement(Xhtml.a,
+                new XAttribute("href", $"#{noteType}-ref-{noteId}"),
+                new XAttribute("class", $"{noteType}-backref"),
+                new XText("↩"));
+
+            // Find the last paragraph element and append backref inside it
+            // This prevents the backref from appearing on a new line
+            var lastParagraph = content
+                .OfType<XElement>()
+                .LastOrDefault(e => e.Name == Xhtml.p);
+
+            var printNote = settings.RenderPagination == PaginationMode.Paginated;
+            if (lastParagraph != null && !printNote)
+            {
+                // Add space and backref inside the last paragraph
+                lastParagraph.Add(new XText(" "), backref);
+            }
+
+            // The browser flattens safe paginated endnote paragraphs into ordinary page-flow
+            // blocks. Carry the owning endnote identity inside every paragraph so its range
+            // clones retain both the p:en and en:en identities when a long paragraph splits.
+            if (noteType == "en" && settings.RenderPagination == PaginationMode.Paginated)
+            {
+                var firstParagraph = content.OfType<XElement>().SelectMany(e => e.DescendantsAndSelf())
+                    .FirstOrDefault(e => e.Name == Xhtml.p);
+                if (firstParagraph != null)
+                {
+                    var format = tracker?.EndnoteNumberFormat ?? "lowerRoman";
+                    firstParagraph.AddFirst(RenderPaginatedNoteNumber(wordDoc, settings,
+                        noteElement, FormatNoteNumber(displayNumber, format), endnote: true));
+                }
+                foreach (var paragraph in content.OfType<XElement>()
+                    .Where(e => e.Name == Xhtml.p))
+                {
+                    var sourceIdentity = SourceAnchorIdentityAttribute(settings, noteElement);
+                    if (sourceIdentity == null) continue;
+                    var nodes = paragraph.Nodes().ToList();
+                    paragraph.RemoveNodes();
+                    paragraph.Add(new XElement(Xhtml.span, sourceIdentity, nodes));
+                }
+            }
+
+            var li = new XElement(Xhtml.li,
+                new XAttribute("id", $"{noteType}-{noteId}"),
+                new XAttribute("value", displayNumber),
+                SourceAnchorIdentityAttribute(settings, noteElement),
+                content);
+
+            // Browser-generated list markers and the generic note number inherit from their
+            // wrapper, outside the note paragraph's own font scope.
+            var noteStyle = new Dictionary<string, string>();
+            var noteParagraph = noteElement.Elements(W.p).FirstOrDefault();
+            if (noteParagraph != null) DefineStrutFont(noteStyle, noteParagraph);
+            if (printNote) noteStyle["list-style-type"] = "none";
+            li.AddAnnotation(noteStyle);
+
+            // If no paragraph found, append backref directly to li (fallback)
+            if (lastParagraph == null && !printNote)
+            {
+                li.Add(new XText(" "), backref);
+            }
+
+            return li;
+        }
+
+        private static XElement? RenderPaginatedFootnoteSeparator(
+            WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings,
+            XElement? source,
+            string kind)
+        {
+            if (source == null)
+                return null;
+
+            var markerName = kind == "continuation"
+                ? W.continuationSeparator
+                : W.separator;
+            // Whitespace is not authored content. This runs after the pipeline's
+            // empty-paragraph pass, which annotates a marker-only story's
+            // paragraph and gives it a synthetic ` ` run so the empty line keeps
+            // its height. Counting that run as authored drew a blank line under
+            // the rule on every continued-note page and ate the band height the
+            // paginator had just budgeted.
+            var hasAuthoredContent = source.Descendants().Any(e =>
+                !e.AncestorsAndSelf().Any(ancestor =>
+                    ancestor.Name == W.pPr || ancestor.Name == W.rPr) &&
+                e.Name != W.p && e.Name != W.r &&
+                e.Name != W.separator && e.Name != W.continuationSeparator &&
+                e.Name != W.footnoteRef && e.Name != W.endnoteRef &&
+                !(e.Name == W.t && string.IsNullOrWhiteSpace(e.Value)));
+
+            var story = new XElement(Xhtml.div,
+                new XAttribute("class", $"footnote-separator-story footnote-separator-{kind}"),
+                new XAttribute("data-footnote-separator", kind));
+
+            // The ordinary run transform intentionally ignores this Word-only
+            // control. Keep an authored mark explicit, but do not invent one for
+            // an intentionally empty/custom text-only reserved story. Only an
+            // absent definition causes the paginator's typed fallback rule.
+            if (source.Descendants(markerName).Any())
+            {
+                story.Add(new XElement(Xhtml.hr,
+                    new XAttribute("data-footnote-separator-rule", markerName.LocalName)));
+            }
+
+            if (hasAuthoredContent)
+            {
+                story.Add(source.Elements()
+                    .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m)));
+            }
+            SanitizeRepeatedFootnoteSeparator(story);
+            return story;
+        }
+
+        /// <summary>
+        /// A separator story is repeated on multiple physical pages. Source and
+        /// editor identities therefore cannot survive on its presentation clones:
+        /// duplicate ids/local targets would be ambiguous and canonical anchor
+        /// metadata would incorrectly admit the decoration into PageMap.
+        /// </summary>
+        private static void SanitizeRepeatedFootnoteSeparator(XElement story)
+        {
+            var repeatedElements = story.DescendantsAndSelf().ToList();
+            foreach (var element in repeatedElements)
+            {
+                foreach (var attributeName in new[]
+                {
+                    "id", "name", "data-anchor", "data-committed-text",
+                    "data-source-anchor-id", "data-page-fragment-id", "data-fragment-index",
+                    "data-footnote-id", "data-comment-id",
+                })
+                {
+                    element.Attributes()
+                        .Where(attribute => attribute.Name.LocalName == attributeName)
+                        .Remove();
+                }
+                var href = element.Attributes()
+                    .FirstOrDefault(attribute => attribute.Name.LocalName == "href");
+                if (href != null && href.Value.StartsWith("#", StringComparison.Ordinal))
+                    href.Remove();
+                element.SetAttributeValue("contenteditable", "false");
+            }
+        }
+
+        /// <summary>
+        /// Renders a footnote registry for paginated mode.
+        /// In paginated mode, footnotes are stored in a hidden registry and distributed
+        /// to each page by the client-side pagination engine based on which footnote
+        /// references appear on each page.
+        /// </summary>
+        private static XElement? RenderPaginatedFootnoteRegistry(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings)
+        {
+            var footnotesPart = wordDoc.MainDocumentPart!.FootnotesPart;
+            if (footnotesPart == null)
+                return null;
+
+            var footnotesXDoc = footnotesPart.GetXDocument();
+            var allFootnotes = footnotesXDoc.Root?.Elements(W.footnote)
+                // Every typed non-normal definition is page-rendering boilerplate;
+                // continuationNotice can carry a positive id in real documents and
+                // must not leak into the user-note registry.
+                .Where(fn => !WmlToMarkdownConverter.IsBoilerplateNote(fn))
+                .ToDictionary(fn => (string)fn.Attribute(W.id)!, fn => fn);
+
+            if (allFootnotes == null || !allFootnotes.Any())
+                return null;
+
+            // Get tracker for ordering and display numbers
+            var mainXDoc = wordDoc.MainDocumentPart!.GetXDocument();
+            var tracker = mainXDoc.Root?.Annotation<FootnoteNumberingTracker>();
+
+            // Order footnotes by document order using tracker, with fallback to XML order
+            IEnumerable<XElement> orderedFootnotes;
+            if (tracker != null && tracker.FootnoteIdsInOrder.Any())
+            {
+                orderedFootnotes = tracker.FootnoteIdsInOrder
+                    .Where(id => allFootnotes.ContainsKey(id))
+                    .Select(id => allFootnotes[id]);
+            }
+            else
+            {
+                orderedFootnotes = allFootnotes.Values;
+            }
+
+            var registry = new XElement(Xhtml.div,
+                new XAttribute("id", "pagination-footnote-registry"),
+                new XAttribute("style", "display:none"));
+
+            var normalSeparator = footnotesXDoc.Root?.Elements(W.footnote)
+                .FirstOrDefault(fn => (string?)fn.Attribute(W.type) == "separator");
+            var continuationSeparator = footnotesXDoc.Root?.Elements(W.footnote)
+                .FirstOrDefault(fn => (string?)fn.Attribute(W.type) == "continuationSeparator");
+            var renderedNormalSeparator = RenderPaginatedFootnoteSeparator(
+                wordDoc, settings, normalSeparator, "normal");
+            var renderedContinuationSeparator = RenderPaginatedFootnoteSeparator(
+                wordDoc, settings, continuationSeparator, "continuation");
+            if (renderedNormalSeparator != null)
+                registry.Add(renderedNormalSeparator);
+            if (renderedContinuationSeparator != null)
+                registry.Add(renderedContinuationSeparator);
+
+            foreach (var fn in orderedFootnotes)
+            {
+                var footnoteId = (string?)fn.Attribute(W.id);
+                if (footnoteId == null)
+                    continue;
+
+                // Get display number from tracker, rendered in the effective w:numFmt
+                var displayNumber = tracker?.FootnoteIdToDisplayNumber.TryGetValue(footnoteId, out var num) == true
+                    ? FormatNoteNumber(num, tracker.FootnoteNumberFormat)
+                    : footnoteId;
+
+                // Convert the content of the footnote
+                var content = fn.Elements()
+                    .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
+                    .ToList();
+
+                // Create a footnote item div with data attribute for lookup. The paginated note
+                // area is a print surface: Word and LibreOffice render the bare superscript
+                // number (no "N." label) and no back-reference link, so neither belongs here —
+                // the web-view <ol> section keeps both.
+                var footnoteItem = new XElement(Xhtml.div,
+                    new XAttribute("data-footnote-id", footnoteId),
+                    new XAttribute("data-display-number", displayNumber),
+                    new XAttribute("class", "footnote-item"),
+                    SourceAnchorIdentityAttribute(settings, fn),
+                    RenderPaginatedNoteNumber(wordDoc, settings, fn, displayNumber),
+                    new XElement(Xhtml.span,
+                        new XAttribute("class", "footnote-content"),
+                        content));
+
+                registry.Add(footnoteItem);
+            }
+
+            return registry.HasElements ? registry : null;
+        }
+
+        /// <summary>
+        /// The number at the start of a paginated note. In Word it is the note's own
+        /// <c>w:footnoteRef</c> run, formatted like any run of the note paragraph (normally the
+        /// FootnoteReference character style: superscript at the note text's size). Rendering it
+        /// from that run puts it where Word does; the generic number this replaced was set in the
+        /// page's default font and raised by CSS, and sat 4.66 pt above the note text where Word
+        /// puts it 3 pt above (issue #1003). The run is converted from a copy of the note with the
+        /// marker replaced by the display number, so the note's own content conversion, which skips
+        /// marker-only runs, is unchanged. A note with no <c>w:footnoteRef</c> run keeps the
+        /// generic number.
+        /// </summary>
+        private static XElement RenderPaginatedNoteNumber(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement footnote, string displayNumber, bool endnote = false)
+        {
+            var copy = new XElement(footnote);
+            var marker = copy.Descendants(endnote ? W.endnoteRef : W.footnoteRef).FirstOrDefault();
+            var run = marker?.Parent;
+            var number = new XElement(Xhtml.span,
+                new XAttribute("class", endnote ? "endnote-number" : "footnote-number"),
+                endnote ? new XAttribute("data-endnote-number", "true") : null);
+            // The marker is outside the footnote paragraph. Set its family here without
+            // changing the item/content shells' inherited line metrics during pagination.
+            var numberStyle = new Dictionary<string, string>();
+            var paragraph = footnote.Descendants(W.p).FirstOrDefault();
+            if (paragraph != null) DefineStrutFont(numberStyle, paragraph);
+            numberStyle.Remove("font-size");
+            number.SetAttributeValue("style", string.Join("; ", numberStyle.Select(p => p.Key + ": " + p.Value)));
+            if (marker == null || run == null || run.Name != W.r)
+            {
+                number.Add(new XText(displayNumber));
+                return number;
+            }
+
+            marker.ReplaceWith(new XElement(W.t, displayNumber));
+            number.Add(
+                new XAttribute("data-note-run", "true"),
+                ConvertToHtmlTransform(wordDoc, settings, run, false, 0m));
+            return number;
+        }
+
+        private static XElement? RenderHeadersSection(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings)
+        {
+            var headerParts = wordDoc.MainDocumentPart!.HeaderParts.ToList();
+            if (!headerParts.Any())
+                return null;
+
+            // Get the section properties from the document body or last sectPr
+            var mainDoc = wordDoc.MainDocumentPart!.GetXDocument();
+            var body = mainDoc.Root?.Element(W.body);
+            var sectPr = body?.Element(W.sectPr) ?? body?.Elements(W.p).LastOrDefault()?.Element(W.pPr)?.Element(W.sectPr);
+
+            // Find the default header reference
+            var defaultHeaderRef = sectPr?.Elements(W.headerReference)
+                .FirstOrDefault(hr => (string?)hr.Attribute(W.type) == "default");
+
+            if (defaultHeaderRef == null)
+            {
+                // If no default header, try to get the first header
+                defaultHeaderRef = sectPr?.Elements(W.headerReference).FirstOrDefault();
+            }
+
+            if (defaultHeaderRef == null && headerParts.Any())
+            {
+                // Just use the first header part if no reference found
+                var firstHeaderPart = headerParts.First();
+                return RenderHeaderPart(wordDoc, settings, firstHeaderPart);
+            }
+
+            if (defaultHeaderRef != null)
+            {
+                var headerId = (string?)defaultHeaderRef.Attribute(R.id);
+                if (headerId != null)
+                {
+                    var headerPart = wordDoc.MainDocumentPart!.GetPartById(headerId) as HeaderPart;
+                    if (headerPart != null)
+                    {
+                        return RenderHeaderPart(wordDoc, settings, headerPart);
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private static XElement? RenderHeaderPart(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, HeaderPart headerPart)
+        {
+            var headerXDoc = headerPart.GetXDocument();
+            var headerRoot = headerXDoc.Root;
+
+            if (headerRoot == null || !headerRoot.Elements().Any())
+                return null;
+
+            // Convert the content of the header
+            var content = headerRoot.Elements()
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
+                .Where(c => c != null)
+                .ToList();
+
+            if (!content.Any())
+                return null;
+
+            return new XElement(Xhtml.header,
+                new XAttribute("class", "document-header"),
+                content);
+        }
+
+        private static XElement? RenderFootersSection(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings)
+        {
+            var footerParts = wordDoc.MainDocumentPart!.FooterParts.ToList();
+            if (!footerParts.Any())
+                return null;
+
+            // Get the section properties from the document body or last sectPr
+            var mainDoc = wordDoc.MainDocumentPart!.GetXDocument();
+            var body = mainDoc.Root?.Element(W.body);
+            var sectPr = body?.Element(W.sectPr) ?? body?.Elements(W.p).LastOrDefault()?.Element(W.pPr)?.Element(W.sectPr);
+
+            // Find the default footer reference
+            var defaultFooterRef = sectPr?.Elements(W.footerReference)
+                .FirstOrDefault(fr => (string?)fr.Attribute(W.type) == "default");
+
+            if (defaultFooterRef == null)
+            {
+                // If no default footer, try to get the first footer
+                defaultFooterRef = sectPr?.Elements(W.footerReference).FirstOrDefault();
+            }
+
+            if (defaultFooterRef == null && footerParts.Any())
+            {
+                // Just use the first footer part if no reference found
+                var firstFooterPart = footerParts.First();
+                return RenderFooterPart(wordDoc, settings, firstFooterPart);
+            }
+
+            if (defaultFooterRef != null)
+            {
+                var footerId = (string?)defaultFooterRef.Attribute(R.id);
+                if (footerId != null)
+                {
+                    var footerPart = wordDoc.MainDocumentPart!.GetPartById(footerId) as FooterPart;
+                    if (footerPart != null)
+                    {
+                        return RenderFooterPart(wordDoc, settings, footerPart);
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private static XElement? RenderFooterPart(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, FooterPart footerPart)
+        {
+            var footerXDoc = footerPart.GetXDocument();
+            var footerRoot = footerXDoc.Root;
+
+            if (footerRoot == null || !footerRoot.Elements().Any())
+                return null;
+
+            // Convert the content of the footer
+            var content = footerRoot.Elements()
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
+                .Where(c => c != null)
+                .ToList();
+
+            if (!content.Any())
+                return null;
+
+            return new XElement(Xhtml.footer,
+                new XAttribute("class", "document-footer"),
+                content);
+        }
+
+        /// <summary>
+        /// Renders headers and footers into a hidden registry for pagination mode.
+        /// Each header/footer is stored with section index and type metadata for client-side cloning.
+        /// </summary>
+        private static XElement? RenderPaginatedHeaderFooterRegistry(
+            WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings,
+            XElement bodyElement)
+        {
+            var registry = new XElement(Xhtml.div,
+                new XAttribute("id", "pagination-hf-registry"),
+                new XAttribute("style", "display:none"));
+
+            // Collect all section properties from the document
+            var sectionProperties = new List<XElement>();
+
+            // Get section properties from paragraph annotations
+            foreach (var para in bodyElement.Descendants(W.p))
+            {
+                var sectAnnotation = para.Annotation<SectionAnnotation>();
+                if (sectAnnotation?.SectionElement != null)
+                {
+                    var sectPr = sectAnnotation.SectionElement;
+                    if (!sectionProperties.Contains(sectPr))
+                        sectionProperties.Add(sectPr);
+                }
+            }
+
+            // If no sections found from annotations, get from document body
+            if (sectionProperties.Count == 0)
+            {
+                var mainDoc = wordDoc.MainDocumentPart!.GetXDocument();
+                var body = mainDoc.Root?.Element(W.body);
+                var sectPr = body?.Element(W.sectPr) ?? body?.Elements(W.p).LastOrDefault()?.Element(W.pPr)?.Element(W.sectPr);
+                if (sectPr != null)
+                    sectionProperties.Add(sectPr);
+            }
+
+            // A missing reference does not mean an empty story: each story type is linked to the
+            // preceding section until that type is explicitly replaced. The first section starts
+            // with blank stories when it omits them.
+            var effectiveReferences = new EffectiveHeaderFooterReferences();
+
+            // The even/odd switch is document-global. References can remain in the package while
+            // the switch is off, but the Default story renders on those pages in that state.
+            var evenAndOddHeaders = wordDoc.MainDocumentPart?.DocumentSettingsPart
+                ?.GetXDocument().Root?.Element(W.evenAndOddHeaders);
+            bool hasEvenAndOddHeaders = IsOnOffPropertyEnabled(evenAndOddHeaders);
+
+            // Render headers/footers for each section
+            for (int sectionIndex = 0; sectionIndex < sectionProperties.Count; sectionIndex++)
+            {
+                var sectPr = sectionProperties[sectionIndex];
+                effectiveReferences.Update(sectPr);
+
+                // Check if section has different first page headers/footers
+                var titlePage = sectPr.Element(W.titlePg);
+                bool hasTitlePage = IsOnOffPropertyEnabled(titlePage);
+
+                // Render default header
+                var defaultHeaderContent = RenderHeaderReference(
+                    wordDoc, settings, effectiveReferences.GetHeader("default"));
+                if (defaultHeaderContent != null)
+                {
+                    registry.Add(new XElement(Xhtml.div,
+                        new XAttribute("data-section", sectionIndex),
+                        new XAttribute("data-hf-type", "header-default"),
+                        defaultHeaderContent));
+                }
+
+                // Render first page header if different first page is enabled
+                if (hasTitlePage)
+                {
+                    var firstHeaderContent = RenderHeaderReference(
+                        wordDoc, settings, effectiveReferences.GetHeader("first"));
+                    // Presence of titlePg selects the First story even when that story is blank.
+                    // Keep an empty registry entry so the paginator does not fall through to the
+                    // Default story on page one.
+                    registry.Add(new XElement(Xhtml.div,
+                        new XAttribute("data-section", sectionIndex),
+                        new XAttribute("data-hf-type", "header-first"),
+                        // Load-bearing empty text node: a blank story leaves this element
+                        // childless, and a childless XElement serializes as a self-closing
+                        // <div/>, which HTML parsers treat as UNCLOSED. Every later sibling --
+                        // #pagination-container included -- would then nest inside display:none
+                        // staging, and the export would detach the whole page tree with it.
+                        // Same hazard as the page-break marker above (HC008d).
+                        firstHeaderContent ?? (object)new XText(string.Empty)));
+                }
+
+                // Render even header if the document actually uses even/odd stories
+                var evenHeaderContent = hasEvenAndOddHeaders
+                    ? RenderHeaderReference(wordDoc, settings, effectiveReferences.GetHeader("even"))
+                    : null;
+                if (hasEvenAndOddHeaders)
+                {
+                    // With the document-global switch enabled, an omitted effective Even story is
+                    // blank; it never falls back to Default. Preserve that distinction explicitly.
+                    registry.Add(new XElement(Xhtml.div,
+                        new XAttribute("data-section", sectionIndex),
+                        new XAttribute("data-hf-type", "header-even"),
+                        // Load-bearing empty text node: a blank story leaves this element
+                        // childless, and a childless XElement serializes as a self-closing
+                        // <div/>, which HTML parsers treat as UNCLOSED. Every later sibling --
+                        // #pagination-container included -- would then nest inside display:none
+                        // staging, and the export would detach the whole page tree with it.
+                        // Same hazard as the page-break marker above (HC008d).
+                        evenHeaderContent ?? (object)new XText(string.Empty)));
+                }
+
+                // Render default footer
+                var defaultFooterContent = RenderFooterReference(
+                    wordDoc, settings, effectiveReferences.GetFooter("default"));
+                if (defaultFooterContent != null)
+                {
+                    registry.Add(new XElement(Xhtml.div,
+                        new XAttribute("data-section", sectionIndex),
+                        new XAttribute("data-hf-type", "footer-default"),
+                        defaultFooterContent));
+                }
+
+                // Render first page footer if different first page is enabled
+                if (hasTitlePage)
+                {
+                    var firstFooterContent = RenderFooterReference(
+                        wordDoc, settings, effectiveReferences.GetFooter("first"));
+                    registry.Add(new XElement(Xhtml.div,
+                        new XAttribute("data-section", sectionIndex),
+                        new XAttribute("data-hf-type", "footer-first"),
+                        // Load-bearing empty text node: a blank story leaves this element
+                        // childless, and a childless XElement serializes as a self-closing
+                        // <div/>, which HTML parsers treat as UNCLOSED. Every later sibling --
+                        // #pagination-container included -- would then nest inside display:none
+                        // staging, and the export would detach the whole page tree with it.
+                        // Same hazard as the page-break marker above (HC008d).
+                        firstFooterContent ?? (object)new XText(string.Empty)));
+                }
+
+                // Render even footer if the document actually uses even/odd stories
+                var evenFooterContent = hasEvenAndOddHeaders
+                    ? RenderFooterReference(wordDoc, settings, effectiveReferences.GetFooter("even"))
+                    : null;
+                if (hasEvenAndOddHeaders)
+                {
+                    registry.Add(new XElement(Xhtml.div,
+                        new XAttribute("data-section", sectionIndex),
+                        new XAttribute("data-hf-type", "footer-even"),
+                        // Load-bearing empty text node: a blank story leaves this element
+                        // childless, and a childless XElement serializes as a self-closing
+                        // <div/>, which HTML parsers treat as UNCLOSED. Every later sibling --
+                        // #pagination-container included -- would then nest inside display:none
+                        // staging, and the export would detach the whole page tree with it.
+                        // Same hazard as the page-break marker above (HC008d).
+                        evenFooterContent ?? (object)new XText(string.Empty)));
+                }
+            }
+
+            // Only return registry if it has content
+            return registry.HasElements ? registry : null;
+        }
+
+        /// <summary>
+        /// Renders the header selected for a section after reference inheritance is resolved.
+        /// </summary>
+        private static object? RenderHeaderReference(
+            WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings,
+            XElement? headerRef)
+        {
+            if (headerRef == null)
+                return null;
+
+            var headerId = (string?)headerRef.Attribute(R.id);
+            if (headerId == null)
+                return null;
+
+            var headerPart = wordDoc.MainDocumentPart!.GetPartById(headerId) as HeaderPart;
+            if (headerPart == null)
+                return null;
+
+            var headerXDoc = headerPart.GetXDocument();
+            var headerRoot = headerXDoc.Root;
+
+            if (headerRoot == null || !headerRoot.Elements().Any())
+                return null;
+
+            // Complex fields are grouped from these annotations, and only the main part is annotated
+            // up front — without this a PAGE field in a running head is just five unrelated runs, so
+            // it could never be marked for per-page substitution.
+            FieldRetriever.AnnotateWithFieldInfo(headerPart);
+
+            // Convert the content of the header
+            return headerRoot.Elements()
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
+                .Where(c => c != null)
+                .ToList();
+        }
+
+        /// <summary>
+        /// Renders the footer selected for a section after reference inheritance is resolved.
+        /// </summary>
+        private static object? RenderFooterReference(
+            WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings,
+            XElement? footerRef)
+        {
+            if (footerRef == null)
+                return null;
+
+            var footerId = (string?)footerRef.Attribute(R.id);
+            if (footerId == null)
+                return null;
+
+            var footerPart = wordDoc.MainDocumentPart!.GetPartById(footerId) as FooterPart;
+            if (footerPart == null)
+                return null;
+
+            var footerXDoc = footerPart.GetXDocument();
+            var footerRoot = footerXDoc.Root;
+
+            if (footerRoot == null || !footerRoot.Elements().Any())
+                return null;
+
+            // See RenderHeaderReference: fields are grouped from these annotations, and only the
+            // main part is annotated up front.
+            FieldRetriever.AnnotateWithFieldInfo(footerPart);
+
+            // Convert the content of the footer
+            return footerRoot.Elements()
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
+                .Where(c => c != null)
+                .ToList();
+        }
+
+        private static void LoadComments(WordprocessingDocument wordDoc, CommentTracker tracker)
+        {
+            var commentsPart = wordDoc.MainDocumentPart!.WordprocessingCommentsPart;
+            if (commentsPart == null)
+                return;
+
+            var commentsXDoc = commentsPart.GetXDocument();
+            if (commentsXDoc.Root == null)
+                return;
+
+            foreach (var comment in commentsXDoc.Root.Elements(W.comment))
+            {
+                var id = (int?)comment.Attribute(W.id);
+                if (id == null)
+                    continue;
+
+                tracker.Comments[id.Value] = new CommentInfo
+                {
+                    Id = id.Value,
+                    Author = (string?)comment.Attribute(W.author),
+                    Date = (string?)comment.Attribute(W.date),
+                    Initials = (string?)comment.Attribute(W.initials),
+                    SourceElement = comment,
+                    ContentParagraphs = comment.Elements(W.p).ToList()
+                };
+            }
+
+            LoadCommentTopology(wordDoc, tracker);
+        }
+
+        /// <summary>
+        /// Read the comment set's shape from commentsExtended.xml (issue #540): which comment
+        /// replies to which (<c>w15:paraIdParent</c>) and which is resolved (<c>w15:done</c>).
+        /// Word keys each <c>w15:commentEx</c> on the comment's <em>last</em> body paragraph's
+        /// <c>w14:paraId</c>. Absent part, unmatched entry, or a parent outside the loaded set
+        /// all degrade to the flat, open rendering.
+        /// </summary>
+        private static void LoadCommentTopology(WordprocessingDocument wordDoc, CommentTracker tracker)
+        {
+            var extendedPart = wordDoc.MainDocumentPart!.WordprocessingCommentsExPart;
+            if (extendedPart == null || !tracker.Comments.Any())
+                return;
+
+            var extendedRoot = extendedPart.GetXDocument().Root;
+            if (extendedRoot == null)
+                return;
+
+            var w15 = W15.w15;
+            var commentsByParaId = new Dictionary<string, CommentInfo>(StringComparer.Ordinal);
+            foreach (var comment in tracker.Comments.Values)
+            {
+                var paraId = (string?)comment.ContentParagraphs.LastOrDefault()?.Attribute(W14.paraId);
+                if (paraId != null && !commentsByParaId.ContainsKey(paraId))
+                    commentsByParaId[paraId] = comment;
+            }
+
+            foreach (var commentEx in extendedRoot.Elements(w15 + "commentEx"))
+            {
+                var paraId = (string?)commentEx.Attribute(w15 + "paraId");
+                if (paraId == null || !commentsByParaId.TryGetValue(paraId, out var comment))
+                    continue;
+
+                comment.Resolved = Docxodus.Internal.CommentOps.ParseDone(
+                    (string?)commentEx.Attribute(w15 + "done"));
+
+                var parentParaId = (string?)commentEx.Attribute(w15 + "paraIdParent");
+                if (parentParaId != null
+                    && commentsByParaId.TryGetValue(parentParaId, out var parent)
+                    && parent.Id != comment.Id)
+                {
+                    comment.ParentId = parent.Id;
+                }
+            }
+        }
+
+        private static CommentTracker? GetCommentTracker(XElement element)
+        {
+            // Walk up to the document root to find the annotation
+            var root = element.AncestorsAndSelf().LastOrDefault();
+            return root?.Annotation<CommentTracker>();
+        }
+
+        private static FootnoteNumberingTracker? GetFootnoteNumberingTracker(XElement element)
+        {
+            // Walk up to the document root to find the annotation
+            var root = element.AncestorsAndSelf().LastOrDefault();
+            return root?.Annotation<FootnoteNumberingTracker>();
+        }
+
+        private static void LoadAnnotations(WordprocessingDocument wordDoc, AnnotationTracker tracker)
+        {
+            // Look for the custom XML part with our namespace
+            var customXmlParts = wordDoc.MainDocumentPart!.CustomXmlParts;
+            if (customXmlParts == null)
+                return;
+
+            foreach (var customXmlPart in customXmlParts)
+            {
+                try
+                {
+                    var xDoc = XDocument.Load(customXmlPart.GetStream());
+                    if (xDoc.Root?.Name.LocalName == "annotations" &&
+                        xDoc.Root.Name.NamespaceName == AnnotationManager.AnnotationsNamespace)
+                    {
+                        // Found our annotations - parse them
+                        var ns = XNamespace.Get(AnnotationManager.AnnotationsNamespace);
+                        foreach (var annotElement in xDoc.Root.Elements(ns + "annotation"))
+                        {
+                            // Annotation data is stored as attributes, not elements
+                            var annotation = new DocumentAnnotation
+                            {
+                                Id = (string?)annotElement.Attribute("id"),
+                                LabelId = (string?)annotElement.Attribute("labelId"),
+                                Label = (string?)annotElement.Attribute("label"),
+                                Color = (string?)annotElement.Attribute("color"),
+                                Author = (string?)annotElement.Attribute("author")
+                            };
+
+                            // BookmarkName is in a child range element
+                            var rangeElement = annotElement.Element(ns + "range");
+                            if (rangeElement != null)
+                            {
+                                annotation.BookmarkName = (string?)rangeElement.Attribute("bookmarkName");
+                            }
+
+                            var createdStr = (string?)annotElement.Attribute("created");
+                            if (!string.IsNullOrEmpty(createdStr) && DateTime.TryParse(createdStr, out var created))
+                                annotation.Created = created;
+
+                            // Page span is in a child element
+                            var pageSpanElement = annotElement.Element(ns + "pageSpan");
+                            if (pageSpanElement != null)
+                            {
+                                var startPageStr = (string?)pageSpanElement.Attribute("startPage");
+                                if (!string.IsNullOrEmpty(startPageStr) && int.TryParse(startPageStr, out var startPage))
+                                    annotation.StartPage = startPage;
+
+                                var endPageStr = (string?)pageSpanElement.Attribute("endPage");
+                                if (!string.IsNullOrEmpty(endPageStr) && int.TryParse(endPageStr, out var endPage))
+                                    annotation.EndPage = endPage;
+                            }
+
+                            // Load metadata
+                            var metadataElement = annotElement.Element(ns + "metadata");
+                            if (metadataElement != null)
+                            {
+                                foreach (var item in metadataElement.Elements(ns + "item"))
+                                {
+                                    var key = (string?)item.Attribute("key");
+                                    var value = item.Value;
+                                    if (!string.IsNullOrEmpty(key))
+                                        annotation.Metadata[key] = value;
+                                }
+                            }
+
+                            if (!string.IsNullOrEmpty(annotation.Id))
+                            {
+                                tracker.Annotations[annotation.Id] = annotation;
+
+                                // Map bookmark name to annotation ID
+                                if (!string.IsNullOrEmpty(annotation.BookmarkName))
+                                {
+                                    tracker.BookmarkToAnnotationId[annotation.BookmarkName] = annotation.Id;
+                                }
+                            }
+                        }
+                        break; // Found our part, no need to continue
+                    }
+                }
+                catch
+                {
+                    // Skip invalid XML parts
+                }
+            }
+        }
+
+        private static AnnotationTracker? GetAnnotationTracker(XElement element)
+        {
+            // Walk up to the document root to find the tracker
+            var root = element.AncestorsAndSelf().LastOrDefault();
+            return root?.Annotation<AnnotationTracker>();
+        }
+
+        /// <summary>
+        /// Render one custom XML revision range boundary as a visible marker span (issue #538).
+        /// The range brackets content whose custom XML structural wrapper a reviewer added,
+        /// removed, or moved with tracking on — there is no text of the revision's own to strike
+        /// or underline, so the boundary itself becomes the perceivable mark: a kind-classed
+        /// span the stylesheet draws as an opening/closing bracket in the family's revision
+        /// color, titled with what happened and (under <see
+        /// cref="WmlToHtmlConverterSettings.IncludeRevisionMetadata"/>) who did it and when.
+        /// A range may legally span block boundaries, which is why the boundaries render as
+        /// independent markers rather than one wrapping element.
+        /// </summary>
+        private static object? ProcessCustomXmlRevisionRange(
+            WmlToHtmlConverterSettings settings, XElement element)
+        {
+            if (!settings.RenderTrackedChanges)
+                return null;
+
+            var localName = element.Name.LocalName;
+            var isStart = localName.EndsWith("Start", StringComparison.Ordinal);
+            string kind, described;
+            if (localName.StartsWith("customXmlIns", StringComparison.Ordinal))
+            {
+                kind = "ins";
+                described = "inserted";
+            }
+            else if (localName.StartsWith("customXmlDel", StringComparison.Ordinal))
+            {
+                kind = "del";
+                described = "deleted";
+            }
+            else if (localName.StartsWith("customXmlMoveFrom", StringComparison.Ordinal))
+            {
+                kind = "move-from";
+                described = "moved from here";
+            }
+            else
+            {
+                kind = "move-to";
+                described = "moved here";
+            }
+
+            var prefix = settings.RevisionCssClassPrefix ?? "rev-";
+            var span = new XElement(Xhtml.span,
+                new XAttribute("class",
+                    $"{prefix}cxml-marker {prefix}cxml-{kind}-{(isStart ? "start" : "end")}"));
+
+            var title = $"Custom XML {described} ({(isStart ? "start" : "end")} of range)";
+            if (settings.IncludeRevisionMetadata)
+            {
+                // Only the range START carries CT_TrackChange identity; the end is a bare id.
+                var author = (string?)element.Attribute(W.author);
+                var date = (string?)element.Attribute(W.date);
+                if (author != null)
+                {
+                    span.Add(new XAttribute("data-author", author));
+                    title += $" — {author}";
+                }
+                if (date != null)
+                {
+                    span.Add(new XAttribute("data-date", date));
+                    title += $", {date}";
+                }
+            }
+
+            span.Add(new XAttribute("title", title));
+            // Keep the element non-self-closing; the bracket glyph itself is CSS content, so
+            // copied text stays clean.
+            span.Add(new XText(""));
+            return span;
+        }
+
+        private static object? ProcessCommentRangeStart(WmlToHtmlConverterSettings settings, XElement element)
+        {
+            if (!settings.RenderComments)
+                return null;
+
+            var tracker = GetCommentTracker(element);
+            if (tracker == null)
+                return null;
+
+            var id = (int?)element.Attribute(W.id);
+            if (id != null)
+            {
+                tracker.OpenRanges.Add(id.Value);
+            }
+
+            // Don't emit anything - we'll wrap content in ConvertRun
+            return null;
+        }
+
+        private static object? ProcessCommentRangeEnd(WmlToHtmlConverterSettings settings, XElement element)
+        {
+            if (!settings.RenderComments)
+                return null;
+
+            var tracker = GetCommentTracker(element);
+            if (tracker == null)
+                return null;
+
+            var id = (int?)element.Attribute(W.id);
+            if (id != null)
+            {
+                tracker.OpenRanges.Remove(id.Value);
+            }
+
+            return null;
+        }
+
+        private static object? ProcessCommentReference(WmlToHtmlConverterSettings settings, XElement element)
+        {
+            if (!settings.RenderComments)
+                return null;
+
+            var tracker = GetCommentTracker(element);
+            if (tracker == null)
+                return null;
+
+            var id = (int?)element.Attribute(W.id);
+            if (id == null)
+                return null;
+
+            // Track that this comment was referenced (for rendering order)
+            if (!tracker.ReferencedCommentIds.Contains(id.Value))
+            {
+                tracker.ReferencedCommentIds.Add(id.Value);
+            }
+
+            var prefix = settings.CommentCssClassPrefix ?? "comment-";
+            tracker.Comments.TryGetValue(id.Value, out var comment);
+
+            // Only EndnoteStyle renders the `#comment-{id}` targets (RenderCommentsSection);
+            // in Inline and Margin modes the marker stays an anchor-free <a> so it is not a
+            // link to nowhere, while `a[data-comment-id]` selectors keep matching (issue #563).
+            var marker = new XElement(Xhtml.a,
+                settings.CommentRenderMode == CommentRenderMode.EndnoteStyle
+                    ? new XAttribute("href", $"#comment-{id}")
+                    : null,
+                new XAttribute("id", $"comment-ref-{id}"),
+                new XAttribute("class", prefix + "marker"));
+
+            var isCollapsedRange = !tracker.RenderedRangeIds.Contains(id.Value);
+            if (isCollapsedRange)
+            {
+                // A point comment has no highlighted run from which pagination can discover its
+                // owning page. Make the already-visible reference marker that presentation point.
+                // Margin mode uses data-comment-id to select the page-owned note clone; inline mode
+                // additionally carries the comment-story identities used by PageMap/search.
+                marker.Add(new XAttribute("data-comment-id", id.Value.ToString()));
+                if (settings.CommentRenderMode == CommentRenderMode.Inline && comment != null)
+                    marker.Add(SourceAnchorIdentityAttribute(settings, comment.SourceElement));
+            }
+
+            if (comment != null && settings.IncludeCommentMetadata)
+            {
+                // A reply's marker names its parent so the relationship survives into modes with
+                // no comments section (issue #540).
+                if (comment.ParentId.HasValue)
+                    marker.Add(new XAttribute("data-parent-id", comment.ParentId.Value.ToString()));
+                if (comment.Resolved)
+                    marker.Add(new XAttribute("data-resolved", "true"));
+
+                if (settings.CommentRenderMode == CommentRenderMode.Inline && comment.ParentId.HasValue)
+                {
+                    // Inline mode presents a ranged comment through its highlight tooltip, but a
+                    // Word-authored reply has no range of its own — this marker is its entire
+                    // presentation, so it carries the body text the highlight would have carried.
+                    var replyText = comment.ContentParagraphs
+                        .SelectMany(p => p.Descendants(W.t)
+                            .Where(t => !t.Ancestors(W.r).Any(r => r.Elements(W.annotationRef).Any())))
+                        .Select(t => t.Value)
+                        .StringConcatenate();
+                    marker.Add(new XAttribute("data-comment", replyText ?? ""));
+                    marker.Add(new XAttribute("title", comment.Author != null
+                        ? $"Reply by {comment.Author}: {replyText}"
+                        : $"Reply: {replyText}"));
+                }
+                else if (comment.Author != null)
+                {
+                    marker.Add(new XAttribute("title", $"Comment by {comment.Author}"));
+                }
+            }
+
+            marker.Add(new XText($"[{id}]"));
+
+            var style = new Dictionary<string, string>
+            {
+                { "vertical-align", "super" },
+                { "font-size", "smaller" }
+            };
+            marker.AddAnnotation(style);
+
+            XElement presentation = marker;
+            if (isCollapsedRange && settings.CommentRenderMode == CommentRenderMode.Inline
+                && comment != null)
+            {
+                foreach (var paragraph in comment.ContentParagraphs)
+                {
+                    var identity = SourceAnchorIdentityAttribute(settings, paragraph);
+                    if (identity != null)
+                        presentation = new XElement(Xhtml.span, identity, presentation);
+                }
+            }
+
+            return presentation;
+        }
+
+        private static XElement? RenderCommentsSection(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, CommentTracker tracker)
+        {
+            if (!settings.RenderComments || !tracker.Comments.Any())
+                return null;
+
+            var prefix = settings.CommentCssClassPrefix ?? "comment-";
+
+            // Use referenced order if available, otherwise use comment ID order
+            var orderedComments = (tracker.ReferencedCommentIds.Any()
+                ? tracker.ReferencedCommentIds
+                    .Where(id => tracker.Comments.ContainsKey(id))
+                    .Select(id => tracker.Comments[id])
+                : tracker.Comments.Values.OrderBy(c => c.Id)).ToList();
+
+            // Replies nest inside their parent's item (issue #540). A reply whose parent is not
+            // in the set renders top-level rather than disappearing, and the rendered set guards
+            // malformed parent cycles the same way — whatever the first pass could not reach
+            // through a parent renders flat in the second.
+            var repliesByParent = orderedComments
+                .Where(c => c.ParentId.HasValue && tracker.Comments.ContainsKey(c.ParentId.Value))
+                .GroupBy(c => c.ParentId!.Value)
+                .ToDictionary(g => g.Key, g => g.ToList());
+            var renderedIds = new HashSet<int>();
+
+            var commentItems = orderedComments
+                .Where(c => !(c.ParentId.HasValue && tracker.Comments.ContainsKey(c.ParentId.Value)))
+                .Select(c => RenderCommentThread(wordDoc, settings, c, prefix, repliesByParent, renderedIds))
+                .Where(item => item != null)
+                .ToList();
+            commentItems.AddRange(orderedComments
+                .Where(c => !renderedIds.Contains(c.Id))
+                .Select(c => RenderCommentThread(wordDoc, settings, c, prefix, repliesByParent, renderedIds))
+                .Where(item => item != null));
+
+            if (!commentItems.Any())
+                return null;
+
+            return new XElement(Xhtml.aside,
+                new XAttribute("class", prefix.TrimEnd('-') + "s-section"),
+                new XElement(Xhtml.h2, "Comments"),
+                new XElement(Xhtml.ol,
+                    new XAttribute("class", prefix.TrimEnd('-') + "s-list"),
+                    commentItems));
+        }
+
+        /// <summary>
+        /// Render one comment item and, beneath it, the items of every reply that names it as
+        /// parent (issue #540). <paramref name="renderedIds"/> spans the whole section so a
+        /// malformed parent graph can never render a comment twice or loop.
+        /// </summary>
+        private static XElement? RenderCommentThread(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, CommentInfo comment, string prefix,
+            Dictionary<int, List<CommentInfo>> repliesByParent, HashSet<int> renderedIds)
+        {
+            if (!renderedIds.Add(comment.Id))
+                return null;
+
+            var li = RenderCommentItem(wordDoc, settings, comment, prefix);
+            if (li == null)
+                return null;
+
+            if (repliesByParent.TryGetValue(comment.Id, out var replies))
+            {
+                var replyItems = replies
+                    .Select(reply => RenderCommentThread(
+                        wordDoc, settings, reply, prefix, repliesByParent, renderedIds))
+                    .Where(item => item != null)
+                    .ToList();
+                if (replyItems.Any())
+                {
+                    li.Add(new XElement(Xhtml.ol,
+                        new XAttribute("class", prefix + "replies"),
+                        replyItems));
+                }
+            }
+
+            return li;
+        }
+
+        private static XElement RenderCommentItem(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, CommentInfo comment, string prefix)
+        {
+            var itemClass = prefix.TrimEnd('-');
+            if (comment.ParentId.HasValue)
+                itemClass += " " + prefix + "reply";
+            if (comment.Resolved)
+                itemClass += " " + prefix + "resolved";
+
+            var li = new XElement(Xhtml.li,
+                new XAttribute("id", $"comment-{comment.Id}"),
+                new XAttribute("class", itemClass),
+                SourceAnchorIdentityAttribute(settings, comment.SourceElement));
+
+            if (settings.IncludeCommentMetadata)
+            {
+                if (comment.Author != null)
+                    li.Add(new XAttribute("data-author", comment.Author));
+                if (comment.Date != null)
+                    li.Add(new XAttribute("data-date", comment.Date));
+            }
+
+            // Header with author, date, and back link
+            var header = new XElement(Xhtml.div,
+                new XAttribute("class", prefix + "header"));
+
+            if (comment.Author != null)
+            {
+                header.Add(new XElement(Xhtml.span,
+                    new XAttribute("class", prefix + "author"),
+                    comment.Author));
+            }
+
+            if (comment.Date != null)
+            {
+                // Format date nicely
+                if (DateTime.TryParse(comment.Date, out var dt))
+                {
+                    header.Add(new XElement(Xhtml.span,
+                        new XAttribute("class", prefix + "date"),
+                        dt.ToString("MMM d, yyyy")));
+                }
+            }
+
+            if (comment.Resolved)
+            {
+                header.Add(new XElement(Xhtml.span,
+                    new XAttribute("class", prefix + "resolved-badge"),
+                    "Resolved"));
+            }
+
+            header.Add(new XElement(Xhtml.a,
+                new XAttribute("href", $"#comment-ref-{comment.Id}"),
+                new XAttribute("class", prefix + "backref"),
+                "↩"));
+
+            li.Add(header);
+
+            // Comment body - extract text content from paragraphs
+            var body = new XElement(Xhtml.div,
+                new XAttribute("class", prefix + "body"));
+
+            foreach (var para in comment.ContentParagraphs)
+            {
+                // Skip the annotation reference run and get text content
+                var textContent = para.Descendants(W.t)
+                    .Where(t => !t.Ancestors(W.r).Any(r => r.Elements(W.annotationRef).Any()))
+                    .Select(t => t.Value)
+                    .StringConcatenate();
+
+                if (!string.IsNullOrWhiteSpace(textContent))
+                {
+                    body.Add(new XElement(Xhtml.p,
+                        SourceAnchorIdentityAttribute(settings, para), textContent));
+                }
+            }
+
+            // Only add if body has content
+            if (body.HasElements)
+            {
+                li.Add(body);
+            }
+            else
+            {
+                // Add empty paragraph to avoid empty li
+                li.Add(new XElement(Xhtml.div,
+                    new XAttribute("class", prefix + "body"),
+                    new XElement(Xhtml.p, "(empty comment)")));
+            }
+
+            return li;
+        }
+
+        private static XElement RenderMarginCommentsColumn(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, CommentTracker? tracker, string prefix)
+        {
+            var marginColumn = new XElement(Xhtml.aside,
+                new XAttribute("class", prefix + "margin-column"));
+
+            if (tracker == null || !tracker.Comments.Any())
+                return marginColumn;
+
+            // Use referenced order if available, otherwise use comment ID order
+            var orderedComments = (tracker.ReferencedCommentIds.Any()
+                ? tracker.ReferencedCommentIds
+                    .Where(id => tracker.Comments.ContainsKey(id))
+                    .Select(id => tracker.Comments[id])
+                : tracker.Comments.Values.OrderBy(c => c.Id)).ToList();
+
+            // Replies nest inside their parent's note so the thread positions as one unit
+            // (issue #540); the guards mirror RenderCommentsSection.
+            var repliesByParent = orderedComments
+                .Where(c => c.ParentId.HasValue && tracker.Comments.ContainsKey(c.ParentId.Value))
+                .GroupBy(c => c.ParentId!.Value)
+                .ToDictionary(g => g.Key, g => g.ToList());
+            var renderedIds = new HashSet<int>();
+
+            foreach (var comment in orderedComments
+                .Where(c => !(c.ParentId.HasValue && tracker.Comments.ContainsKey(c.ParentId.Value))))
+            {
+                var marginNote = RenderMarginCommentThread(
+                    settings, comment, prefix, repliesByParent, renderedIds);
+                if (marginNote != null)
+                    marginColumn.Add(marginNote);
+            }
+            foreach (var comment in orderedComments.Where(c => !renderedIds.Contains(c.Id)))
+            {
+                var marginNote = RenderMarginCommentThread(
+                    settings, comment, prefix, repliesByParent, renderedIds);
+                if (marginNote != null)
+                    marginColumn.Add(marginNote);
+            }
+
+            return marginColumn;
+        }
+
+        private static XElement? RenderMarginCommentThread(WmlToHtmlConverterSettings settings,
+            CommentInfo comment, string prefix,
+            Dictionary<int, List<CommentInfo>> repliesByParent, HashSet<int> renderedIds)
+        {
+            if (!renderedIds.Add(comment.Id))
+                return null;
+
+            var note = RenderMarginCommentNote(settings, comment, prefix);
+            if (note == null)
+                return null;
+
+            if (repliesByParent.TryGetValue(comment.Id, out var replies))
+            {
+                var replyNotes = replies
+                    .Select(reply => RenderMarginCommentThread(
+                        settings, reply, prefix, repliesByParent, renderedIds))
+                    .Where(item => item != null)
+                    .ToList();
+                if (replyNotes.Any())
+                {
+                    note.Add(new XElement(Xhtml.div,
+                        new XAttribute("class", prefix + "margin-replies"),
+                        replyNotes));
+                }
+            }
+
+            return note;
+        }
+
+        private static XElement RenderMarginCommentNote(WmlToHtmlConverterSettings settings,
+            CommentInfo comment, string prefix)
+        {
+            var noteClass = prefix + "margin-note";
+            if (comment.ParentId.HasValue)
+                noteClass += " " + prefix + "margin-reply";
+            if (comment.Resolved)
+                noteClass += " " + prefix + "resolved";
+
+            var note = new XElement(Xhtml.div,
+                new XAttribute("id", $"comment-{comment.Id}"),
+                new XAttribute("class", noteClass),
+                new XAttribute("data-comment-id", comment.Id.ToString()),
+                SourceAnchorIdentityAttribute(settings, comment.SourceElement));
+
+            if (settings.IncludeCommentMetadata)
+            {
+                if (comment.Author != null)
+                    note.Add(new XAttribute("data-author", comment.Author));
+                if (comment.Date != null)
+                    note.Add(new XAttribute("data-date", comment.Date));
+            }
+
+            // Header with author, date, and back link
+            var header = new XElement(Xhtml.div,
+                new XAttribute("class", prefix + "margin-note-header"));
+
+            if (comment.Author != null)
+            {
+                header.Add(new XElement(Xhtml.span,
+                    new XAttribute("class", prefix + "margin-author"),
+                    comment.Author));
+            }
+
+            if (comment.Date != null)
+            {
+                // Format date nicely
+                if (DateTime.TryParse(comment.Date, out var dt))
+                {
+                    header.Add(new XElement(Xhtml.span,
+                        new XAttribute("class", prefix + "margin-date"),
+                        dt.ToString("MMM d")));
+                }
+            }
+
+            if (comment.Resolved)
+            {
+                header.Add(new XElement(Xhtml.span,
+                    new XAttribute("class", prefix + "resolved-badge"),
+                    "Resolved"));
+            }
+
+            header.Add(new XElement(Xhtml.a,
+                new XAttribute("href", $"#comment-ref-{comment.Id}"),
+                new XAttribute("class", prefix + "margin-backref"),
+                "↩"));
+
+            note.Add(header);
+
+            // Comment body - extract text content from paragraphs
+            var body = new XElement(Xhtml.div,
+                new XAttribute("class", prefix + "margin-note-body"));
+
+            foreach (var para in comment.ContentParagraphs)
+            {
+                // Skip the annotation reference run and get text content
+                var textContent = para.Descendants(W.t)
+                    .Where(t => !t.Ancestors(W.r).Any(r => r.Elements(W.annotationRef).Any()))
+                    .Select(t => t.Value)
+                    .StringConcatenate();
+
+                if (!string.IsNullOrWhiteSpace(textContent))
+                {
+                    body.Add(new XElement(Xhtml.p,
+                        SourceAnchorIdentityAttribute(settings, para), textContent));
+                }
+            }
+
+            // Only add if body has content
+            if (body.HasElements)
+            {
+                note.Add(body);
+            }
+            else
+            {
+                // Add empty paragraph to avoid empty note
+                note.Add(new XElement(Xhtml.div,
+                    new XAttribute("class", prefix + "margin-note-body"),
+                    new XElement(Xhtml.p, "(empty comment)")));
+            }
+
+            return note;
+        }
+
+        /// <summary>
+        /// Whether a span carries nothing at all, and so is safe to drop as invalid HTML5.
+        ///
+        /// `XElement.IsEmpty` is a SERIALIZATION property — true only for an element with no child
+        /// nodes whatever — so a span the converter built around an empty `w:t` carries an empty
+        /// XText child, serializes as `&lt;span&gt;&lt;/span&gt;`, and used to slip through.
+        ///
+        /// Absence of text is NOT sufficient on its own, though: the converter deliberately
+        /// synthesizes text-empty spans that ARE the layout. A tab advance is an inline-block of a
+        /// computed width (see <see cref="ProcessTab"/>), whose empty text node is there on
+        /// purpose; deleting it collapses every tab stop on the line. So keep any span that a
+        /// style annotation has given a box, and any span carrying a `data-` marker for a later
+        /// pass or for the browser.
+        /// </summary>
+        private static bool IsDiscardableEmptySpan(XElement span)
+        {
+            if (span.HasElements || span.Value.Length != 0) return false;
+            if (span.Attributes().Any(a =>
+                a.Name.LocalName.StartsWith("data-", StringComparison.Ordinal)))
+            {
+                return false;
+            }
+            var style = span.Annotation<Dictionary<string, string>>();
+            return style == null || (!style.ContainsKey("width") && !style.ContainsKey("display"));
+        }
+
+        private static object? ProcessTab(XElement element)
+        {
+            var tabWidthAtt = element.Attribute(PtOpenXml.TabWidth);
+            if (tabWidthAtt == null) return null;
+
+            var leader = (string?) element.Attribute(PtOpenXml.Leader);
+            var alignment = (string?) element.Attribute(PtOpenXml.TabAlignment) ?? "left";
+            var tabWidth = (decimal) tabWidthAtt;
+            var style = new Dictionary<string, string>();
+            XElement span;
+            if (leader != null)
+            {
+                // A leader is a rule across the tab advance, not ordinary text. Repeating a
+                // measured glyph made the fill depend on server/WASM font availability and left
+                // most of wide TOC leaders blank. CSS rules fill the exact computed box and retain
+                // the OOXML distinction between dotted, hyphenated, and underscore leaders.
+                span = new XElement(Xhtml.span, new XText(string.Empty));
+                style.Add("display", "inline-block");
+                style.Add("margin", "0 0 0 0");
+                style.Add("padding", "0 0 0 0");
+                style.Add("width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.00}in", tabWidth));
+                style.Add("border-bottom", leader switch
+                {
+                    "hyphen" => "1px dashed currentColor",
+                    "underscore" => "1px solid currentColor",
+                    _ => "1px dotted currentColor",
+                });
+            }
+            else
+            {
+#if false
+                            var bidi = element
+                                .Ancestors(W.p)
+                                .Take(1)
+                                .Elements(W.pPr)
+                                .Elements(W.bidi)
+                                .Where(b => b.Attribute(W.val) == null || b.Attribute(W.val).ToBoolean() == true)
+                                .FirstOrDefault();
+                            var isBidi = bidi != null;
+                            if (isBidi)
+                                span = new XElement(Xhtml.span, new XEntity("#x200f")); // RLM
+                            else
+                                span = new XElement(Xhtml.span, new XEntity("#x200e")); // LRM
+#else
+                // The tab advance is the box itself. A nonbreaking-space child adds an
+                // unmeasured glyph after that advance and shifts every aligned following run.
+                span = new XElement(Xhtml.span, new XText(string.Empty));
+#endif
+                style.Add("display", "inline-block");
+                style.Add("padding", "0 0 0 0");
+                style.Add("width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.00}in", tabWidth));
+            }
+            // Empty inline boxes have browser-dependent synthesized baselines. Keep the tab's
+            // content box heightless so it advances horizontally without changing the line box;
+            // leader borders still paint across the computed width.
+            style.Add("height", "0");
+            span.Add(new XAttribute("data-docx-tab", alignment));
+            span.Add(new XAttribute("data-docx-tab-width",
+                string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}", tabWidth)));
+            if (leader != null)
+                span.Add(new XAttribute("data-docx-tab-leader", leader));
+            span.AddAnnotation(style);
+            return span;
+        }
+
+        private static object ProcessBreak(
+            XElement element,
+            WmlToHtmlConverterSettings settings,
+            bool compactDirectionMark = false)
+        {
+            // Check for page break (w:br with w:type="page")
+            var breakType = (string?)element.Attribute(W.type);
+
+            // In pagination mode, emit a page break marker div for page breaks.
+            // NOTE: the empty XText child is load-bearing. Without a child node an empty
+            // XElement serializes as a self-closing <div .../>, which a browser's HTML parser
+            // treats as an UNCLOSED div (the slash is ignored for non-void elements). Every
+            // following sibling — including the visible #pagination-container — then nests inside
+            // the display:none staging and the paginated view renders blank. The empty text node
+            // forces an explicit </div> so staging and container stay siblings. (HC008d)
+            if (settings.RenderPagination == PaginationMode.Paginated && breakType == "page")
+            {
+                var prefix = settings.PaginationCssClassPrefix ?? "page-";
+                return new XElement(Xhtml.div,
+                    new XAttribute("class", prefix + "break"),
+                    new XAttribute("data-page-break", "true"),
+                    new XText(string.Empty));
+            }
+
+            // Column breaks - also mark for pagination but render as line break normally.
+            // Same self-closing-div hazard as page breaks above — force an explicit close tag.
+            if (settings.RenderPagination == PaginationMode.Paginated && breakType == "column")
+            {
+                var prefix = settings.PaginationCssClassPrefix ?? "page-";
+                return new XElement(Xhtml.span,
+                    new XAttribute("class", prefix + "column-break"),
+                    new XAttribute("data-column-break", "true"),
+                    new XText(string.Empty));
+            }
+
+            XElement? span = null;
+            var tabWidth = (decimal?) element.Attribute(PtOpenXml.TabWidth);
+            if (tabWidth != null)
+            {
+                span = new XElement(Xhtml.span);
+                span.AddAnnotation(new Dictionary<string, string>
+                {
+                    { "margin", string.Format(NumberFormatInfo.InvariantInfo, "0 0 0 {0:0.00}in", tabWidth) },
+                    { "padding", "0 0 0 0" }
+                });
+            }
+
+            var paragraph = element.Ancestors(W.p).FirstOrDefault();
+            var isBidi = paragraph != null &&
+                         paragraph.Elements(W.pPr).Elements(W.bidi).Any(b => b.Attribute(W.val) == null ||
+                                                                             b.Attribute(W.val).ToBoolean() == true);
+            var zeroWidthChar = isBidi ? new XEntity("#x200f") : new XEntity("#x200e");
+            var breakElement = new XElement(Xhtml.br);
+            // In an ordinary LTR exact-line-height paragraph the break already
+            // resumes in the paragraph's declared direction. A synthetic LRM
+            // contributes no bidi information there, but wrapping it in the
+            // zero-metric span below creates one extra DOM span per line. Keep
+            // the mark for bidi paragraphs; omit only the provably redundant
+            // compact LTR case used for split-out break-only runs.
+            object? directionMark = compactDirectionMark && !isBidi ? null : zeroWidthChar;
+            if (compactDirectionMark)
+            {
+                // A bare <br> still inherits the paragraph's default font size. Chromium uses
+                // that font's metrics when constructing the line box, even when the paragraph
+                // itself has an exact line-height. Compact both pieces emitted for the break;
+                // visible run boxes are aligned separately below.
+                breakElement.AddAnnotation(new Dictionary<string, string>
+                {
+                    { "font-size", "0" },
+                    { "line-height", "0" },
+                });
+                if (directionMark != null)
+                {
+                    var markSpan = new XElement(Xhtml.span, zeroWidthChar);
+                    markSpan.AddAnnotation(new Dictionary<string, string>
+                    {
+                        { "font-size", "0" },
+                        { "line-height", "0" },
+                    });
+                    directionMark = markSpan;
+                }
+            }
+
+            return new object?[]
+            {
+                breakElement,
+                directionMark,
+                span,
+            };
+        }
+
+        private static object ProcessContentControl(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
+            XElement element, decimal currentMarginLeft)
+        {
+            var relevantAncestors = element.Ancestors().TakeWhile(a => a.Name != W.txbxContent);
+            var isRunLevelContentControl = relevantAncestors.Any(a => a.Name == W.p);
+            if (isRunLevelContentControl)
+            {
+                return element.Elements(W.sdtContent).Elements()
+                    .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft))
+                    .ToList();
+            }
+            return CreateBorderDivs(wordDoc, settings, element.Elements(W.sdtContent).Elements());
+        }
+
+        // Transform the w:p element, including the following sibling w:p element(s)
+        // in case the w:p element has a style separator. The sibling(s) will be
+        // transformed to h:span elements rather than h:p elements and added to
+        // the element (e.g., h:h2) created from the w:p element having the (first)
+        // style separator (i.e., a w:specVanish element).
+        private static object? ProcessParagraph(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
+            XElement element, bool suppressTrailingWhiteSpace, decimal currentMarginLeft, bool suppressLeadingWhiteSpace = false)
+        {
+            // Ignore this paragraph if the previous paragraph has a style separator.
+            // We have already transformed this one together with the previous one.
+            if (BlockSiblingIndex.Of(element).FollowsStyleSeparator(element)) return null;
+
+            var elementName = GetParagraphElementName(element, wordDoc);
+            var isBidi = IsBidi(element);
+            var paragraph = (XElement) ConvertParagraph(wordDoc, settings, element, elementName,
+                suppressTrailingWhiteSpace, currentMarginLeft, isBidi, suppressLeadingWhiteSpace);
+
+            // The paragraph conversion might have created empty spans.
+            // These can and should be removed because empty spans are
+            // invalid in HTML5.
+            paragraph.Elements(Xhtml.span).Where(IsDiscardableEmptySpan).Remove();
+
+            foreach (var span in paragraph.Elements(Xhtml.span).ToList())
+            {
+                var v = span.Value;
+                if (v.Length > 0 && (char.IsWhiteSpace(v[0]) || char.IsWhiteSpace(v[v.Length - 1])) && span.Attribute(XNamespace.Xml + "space") == null)
+                    span.Add(new XAttribute(XNamespace.Xml + "space", "preserve"));
+            }
+
+            while (HasStyleSeparator(element))
+            {
+                var nextElement = element.ElementsAfterSelf(W.p).FirstOrDefault();
+                if (nextElement == null) break;
+                element = nextElement;
+
+                elementName = Xhtml.span;
+                isBidi = IsBidi(element);
+                var span = (XElement)ConvertParagraph(wordDoc, settings, element, elementName,
+                    suppressTrailingWhiteSpace, currentMarginLeft, isBidi);
+                var v = span.Value;
+                if (v.Length > 0 && (char.IsWhiteSpace(v[0]) || char.IsWhiteSpace(v[v.Length - 1])) && span.Attribute(XNamespace.Xml + "space") == null)
+                    span.Add(new XAttribute(XNamespace.Xml + "space", "preserve"));
+                paragraph.Add(span);
+            }
+
+            // Handle paragraph mark revisions (when paragraph was inserted/deleted)
+            if (settings.RenderTrackedChanges)
+            {
+                var pPr = element.Element(W.pPr);
+                var rPr = pPr?.Element(W.rPr);
+                var paraIns = rPr?.Element(W.ins);
+                var paraDel = rPr?.Element(W.del);
+
+                // Block-level property revisions (issue #539): the paragraph renders in its
+                // CURRENT state, so the recorded previous-properties marker is the only trace
+                // a reviewer's re-format, renumber, or section change leaves. Draw it as a
+                // kind-classed change bar the stylesheet styles, titled with what changed.
+                var pPrChange = pPr?.Element(W.pPrChange);
+                var numberingChange = pPr?.Element(W.numberingChange);
+                var inlineSectPrChange = pPr?.Element(W.sectPr)?.Element(W.sectPrChange);
+                if (pPrChange != null || numberingChange != null || inlineSectPrChange != null)
+                {
+                    var prefix = settings.RevisionCssClassPrefix ?? "rev-";
+                    var classes = new List<string>();
+                    var described = new List<string>();
+                    if (pPrChange != null || numberingChange != null)
+                    {
+                        classes.Add(prefix + "para-format-change");
+                        if (pPrChange != null) described.Add("Paragraph formatting changed");
+                        if (numberingChange != null) described.Add("Numbering changed");
+                    }
+                    if (inlineSectPrChange != null)
+                    {
+                        classes.Add(prefix + "section-format-change");
+                        described.Add("Section properties changed");
+                    }
+
+                    var existingClass = (string?)paragraph.Attribute("class");
+                    var combined = string.Join(" ", classes);
+                    paragraph.SetAttributeValue("class",
+                        existingClass != null ? existingClass + " " + combined : combined);
+                    if (paragraph.Attribute("title") == null)
+                        paragraph.Add(new XAttribute("title", string.Join("; ", described)));
+
+                    // Non-null: this block only runs when at least one of the three is set.
+                    var marker = (pPrChange ?? numberingChange ?? inlineSectPrChange)!;
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var changeAuthor = (string?)marker.Attribute(W.author);
+                        var changeDate = (string?)marker.Attribute(W.date);
+                        if (changeAuthor != null && paragraph.Attribute("data-author") == null)
+                            paragraph.Add(new XAttribute("data-author", changeAuthor));
+                        if (changeDate != null && paragraph.Attribute("data-date") == null)
+                            paragraph.Add(new XAttribute("data-date", changeDate));
+                    }
+                }
+
+                if (paraIns != null)
+                {
+                    // Paragraph mark was inserted (paragraph was split from another)
+                    var existingClass = (string?)paragraph.Attribute("class");
+                    var newClass = (settings.RevisionCssClassPrefix ?? "rev-") + "para-ins";
+                    paragraph.SetAttributeValue("class", existingClass != null ? existingClass + " " + newClass : newClass);
+
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var author = (string?)paraIns.Attribute(W.author);
+                        var date = (string?)paraIns.Attribute(W.date);
+                        if (author != null && paragraph.Attribute("data-author") == null)
+                            paragraph.Add(new XAttribute("data-author", author));
+                        if (date != null && paragraph.Attribute("data-date") == null)
+                            paragraph.Add(new XAttribute("data-date", date));
+                    }
+                }
+                else if (paraDel != null)
+                {
+                    // Paragraph mark was deleted (paragraph was merged with next)
+                    var existingClass = (string?)paragraph.Attribute("class");
+                    var newClass = (settings.RevisionCssClassPrefix ?? "rev-") + "para-del";
+                    paragraph.SetAttributeValue("class", existingClass != null ? existingClass + " " + newClass : newClass);
+
+                    // Add a pilcrow marker at the end to show the deleted paragraph mark. Word
+                    // prints none; its change bar is the only trace (issue #851).
+                    var prefix = settings.RevisionCssClassPrefix ?? "rev-";
+                    if (settings.RevisionPresentation != RevisionPresentation.Word)
+                        paragraph.Add(new XElement(Xhtml.span,
+                            new XAttribute("class", prefix + "para-mark-del"),
+                            new XAttribute("title", "Paragraph mark deleted"),
+                            new XText("¶")));
+
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var author = (string?)paraDel.Attribute(W.author);
+                        var date = (string?)paraDel.Attribute(W.date);
+                        if (author != null && paragraph.Attribute("data-author") == null)
+                            paragraph.Add(new XAttribute("data-author", author));
+                        if (date != null && paragraph.Attribute("data-date") == null)
+                            paragraph.Add(new XAttribute("data-date", date));
+                    }
+                }
+            }
+
+            if (settings.RenderTrackedChanges && settings.RevisionPresentation == RevisionPresentation.Word)
+                MarkChangedLine(settings, paragraph);
+
+            // Add pagination-related data attributes when pagination is enabled
+            if (settings.RenderPagination == PaginationMode.Paginated)
+            {
+                AddPaginationDataAttributes(element, paragraph);
+                if ((string?)paragraph.Attribute("data-keep-lines") == "true")
+                    paragraph.Annotation<Dictionary<string, string>>()!["break-inside"] = "avoid";
+                return SplitColumnBreakParagraph(paragraph);
+            }
+
+            return paragraph;
+        }
+
+        private static object SplitColumnBreakParagraph(XElement paragraph)
+        {
+            if (!paragraph.Descendants().Any(e => (string?)e.Attribute("data-column-break") == "true"))
+                return paragraph;
+
+            // Split inside run wrappers as well as at direct paragraph children. A block div
+            // inside a p makes HTML parsing close the canonical source paragraph before its text.
+            static XElement CopyShell(XElement source)
+            {
+                var copy = new XElement(source.Name, source.Attributes());
+                foreach (var annotation in source.Annotations<object>())
+                    copy.AddAnnotation(annotation is Dictionary<string, string> style
+                        ? new Dictionary<string, string>(style) : annotation);
+                return copy;
+            }
+            static List<XElement> Split(XElement source)
+            {
+                var pieces = new List<XElement> { CopyShell(source) };
+                foreach (var node in source.Nodes().ToList())
+                {
+                    if (node is XElement child)
+                    {
+                        if ((string?)child.Attribute("data-column-break") == "true")
+                        {
+                            pieces.Add(CopyShell(source));
+                            continue;
+                        }
+                        var children = Split(child);
+                        pieces[^1].Add(children[0]);
+                        foreach (var tail in children.Skip(1))
+                        {
+                            var next = CopyShell(source);
+                            next.Add(tail);
+                            pieces.Add(next);
+                        }
+                    }
+                    else pieces[^1].Add(node);
+                }
+                return pieces;
+            }
+            var fragments = Split(paragraph);
+            var result = new List<XElement>();
+            for (var i = 0; i < fragments.Count; i++)
+            {
+                var fragment = fragments[i];
+                if (i == 0 && string.IsNullOrWhiteSpace(fragment.Value)
+                    && !fragment.Descendants().Any(e => e.Name == Xhtml.img || e.Name == Xhtml.br))
+                    continue;
+                var style = fragment.Annotation<Dictionary<string, string>>()!;
+                if (i > 0)
+                {
+                    style["break-before"] = "column";
+                    fragment.SetAttributeValue("data-column-break-before", "true");
+                    fragment.Attribute("id")?.Remove();
+                    fragment.Attribute("data-page-break-before")?.Remove();
+                    if (result.Count > 0) style["margin-top"] = "0";
+                }
+                if (i < fragments.Count - 1) style["margin-bottom"] = "0";
+                result.Add(fragment);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Word presentation (issue #851): a paragraph holding any revision — inserted, deleted or
+        /// moved text, a formatting change, or a change to its own mark or properties — gets one
+        /// change bar in the left margin. The bar is drawn by the stylesheet a fixed distance left of
+        /// the text column; the paragraph's own left indent is passed along so an indented
+        /// paragraph's bar lines up with its neighbours'.
+        /// </summary>
+        private static void MarkChangedLine(WmlToHtmlConverterSettings settings, XElement paragraph)
+        {
+            var prefix = settings.RevisionCssClassPrefix ?? "rev-";
+            var revisionClasses = new[]
+            {
+                "ins", "del", "move-from", "move-to", "del-marker", "move-from-marker", "format-change",
+                "cxml-marker", "para-ins", "para-del", "para-format-change", "section-format-change",
+            }.Select(c => prefix + c).ToHashSet(StringComparer.Ordinal);
+            static IEnumerable<string> Classes(XElement e) =>
+                ((string?)e.Attribute("class") ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (!paragraph.DescendantsAndSelf().Any(e => Classes(e).Any(revisionClasses.Contains)))
+                return;
+
+            AddClass(paragraph, prefix + "changed-line");
+            var style = paragraph.Annotation<Dictionary<string, string>>();
+            if (style != null && style.TryGetValue("margin-left", out var indent))
+                style[$"--{prefix}change-bar-indent"] = indent;
+        }
+
+        /// <summary>
+        /// Adds pagination-related data attributes to the HTML paragraph element.
+        /// These attributes help the client-side pagination engine make better decisions.
+        /// </summary>
+        private static void AddPaginationDataAttributes(XElement wordParagraph, XElement htmlParagraph)
+        {
+            var pPr = wordParagraph.Element(W.pPr);
+            if (pPr == null) return;
+
+            // w:keepNext - keep this paragraph with the next one on the same page
+            var keepNext = pPr.Element(W.keepNext);
+            if (keepNext != null && ((string?)keepNext.Attribute(W.val) == null || keepNext.Attribute(W.val).ToBoolean() == true))
+            {
+                htmlParagraph.Add(new XAttribute("data-keep-with-next", "true"));
+            }
+
+            // w:keepLines - keep all lines of this paragraph together on one page
+            var keepLines = pPr.Element(W.keepLines);
+            if (keepLines != null && ((string?)keepLines.Attribute(W.val) == null || keepLines.Attribute(W.val).ToBoolean() == true))
+            {
+                htmlParagraph.Add(new XAttribute("data-keep-lines", "true"));
+            }
+
+            // w:pageBreakBefore - force a page break before this paragraph
+            var pageBreakBefore = pPr.Element(W.pageBreakBefore);
+            if (pageBreakBefore != null && ((string?)pageBreakBefore.Attribute(W.val) == null || pageBreakBefore.Attribute(W.val).ToBoolean() == true))
+            {
+                htmlParagraph.Add(new XAttribute("data-page-break-before", "true"));
+            }
+
+            // w:widowControl - control widow/orphan lines
+            var widowControl = pPr.Element(W.widowControl);
+            if (widowControl != null)
+            {
+                var val = widowControl.Attribute(W.val);
+                // If val is null or true, widow control is enabled
+                bool isEnabled = val == null || val.ToBoolean() == true;
+                htmlParagraph.Add(new XAttribute("data-widow-control", isEnabled ? "true" : "false"));
+            }
+        }
+
+        // Parses an OOXML table/cell width value (w:w on w:tblW / w:tcW, schema type
+        // ST_TblWidth / ST_MeasurementOrPercent). The value is normally a plain integer,
+        // but the spec (and authoring tools such as the `docx` JS library) also permit a
+        // percent-suffixed form, e.g. "100%" or "50.5%". Returns null when the attribute is
+        // missing or cannot be parsed. `isExplicitPercent` is true when the raw value carried
+        // a trailing '%', meaning it is already a literal percentage (NOT fiftieths-of-a-percent).
+        private static decimal? ParseTblWidthValue(XAttribute? widthAttr, out bool isExplicitPercent)
+        {
+            isExplicitPercent = false;
+            var raw = ((string?)widthAttr)?.Trim();
+            if (string.IsNullOrEmpty(raw))
+                return null;
+            if (raw.EndsWith("%", StringComparison.Ordinal))
+            {
+                isExplicitPercent = true;
+                raw = raw.Substring(0, raw.Length - 1).Trim();
+            }
+            if (decimal.TryParse(raw, NumberStyles.Number, NumberFormatInfo.InvariantInfo, out var value))
+                return value;
+            return null;
+        }
+
+        private static object ProcessTable(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, XElement element, decimal currentMarginLeft)
+        {
+            var style = new Dictionary<string, string>();
+            style.AddIfMissing("border-collapse", "collapse");
+            style.AddIfMissing("border", "none");
+
+            // Check if the table is explicitly borderless (all borders nil/none or missing)
+            var isBorderless = IsTableBorderless(element);
+
+            var bidiVisual = IsOnOffPropertyEnabled(element.Elements(W.tblPr).Elements(W.bidiVisual).FirstOrDefault());
+            var tblW = element.Elements(W.tblPr).Elements(W.tblW).FirstOrDefault();
+            if (tblW != null)
+            {
+                var type = (string?)tblW.Attribute(W.type);
+                if (type == "pct")
+                {
+                    var w = ParseTblWidthValue(tblW.Attribute(W._w), out var isExplicitPercent);
+                    if (w != null)
+                    {
+                        // "pct" integers are fiftieths of a percent; an explicit "100%" is already a percent.
+                        var percent = isExplicitPercent ? w.Value : w.Value / 50m;
+                        style.AddIfMissing("width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.####}%", percent));
+                    }
+                }
+                else if (type == "dxa")
+                {
+                    var w = ParseTblWidthValue(tblW.Attribute(W._w), out var isExplicitPercent);
+                    if (w != null && !isExplicitPercent && w > 0m)
+                    {
+                        style.AddIfMissing("width", string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", w.Value / 20m));
+                    }
+                }
+                // type == "auto" or type == "nil" means no fixed width (browser default)
+            }
+
+            // Word's table layout algorithm, mapped to the CSS one that behaves the same way.
+            // With w:tblLayout fixed ("AutoFit" off in Word's UI) the authored column widths are
+            // binding: content WRAPS inside a column instead of widening it. CSS's default
+            // table-layout:auto does the opposite — it grows a column to fit its widest
+            // unbreakable word — so a fixed-layout table rendered as auto silently becomes wider
+            // than the document's text column as soon as a run's font size is enlarged.
+            // Only meaningful alongside a table width: fixed layout with width:auto degrades to
+            // auto layout, so pairing them is what makes the declaration load-bearing.
+            if (IsFixedLayoutTable(element) && style.ContainsKey("width"))
+                style.AddIfMissing("table-layout", "fixed");
+            var tblInd = element.Elements(W.tblPr).Elements(W.tblInd).FirstOrDefault();
+            if (tblInd != null)
+            {
+                var tblIndType = (string?)tblInd.Attribute(W.type);
+                if (tblIndType != null)
+                {
+                    if (tblIndType == "dxa")
+                    {
+                        var width = WordprocessingMLUtil.AttributeToTwips(tblInd.Attribute(W._w));
+                        if (width != null)
+                        {
+                            // The indent is relative to the table's leading edge. Negative
+                            // values pull it into that page margin, including RTL tables (#827).
+                            style.AddIfMissing(bidiVisual ? "margin-right" : "margin-left",
+                                width != 0m
+                                    ? string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", width / 20m)
+                                    : "0");
+                        }
+                    }
+                }
+            }
+            // Handle table spacing from w:tblpPr (floating table positioning properties)
+            var tblpPr = element.Elements(W.tblPr).Elements(W.tblpPr).FirstOrDefault();
+            if (tblpPr != null)
+            {
+                var topFromText = WordprocessingMLUtil.AttributeToTwips(tblpPr.Attribute(W.topFromText));
+                if (topFromText != null && topFromText > 0)
+                    style.AddIfMissing("margin-top",
+                        string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", topFromText / 20m));
+
+                var bottomFromText = WordprocessingMLUtil.AttributeToTwips(tblpPr.Attribute(W.bottomFromText));
+                if (bottomFromText != null && bottomFromText > 0)
+                    style.AddIfMissing("margin-bottom",
+                        string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", bottomFromText / 20m));
+            }
+
+            // Look for spacing from the preceding paragraph's w:spacing w:after.
+            // If the preceding sibling is a paragraph with no after-spacing (or zero),
+            // the table needs its own top margin for visual separation.
+            // Word applies implicit spacing between paragraphs and tables; replicate
+            // that by examining the preceding element's spacing.
+            if (!style.ContainsKey("margin-top"))
+            {
+                var precedingSibling = BlockSiblingIndex.Of(element).PreviousElement(element);
+                bool needsDefaultTopMargin = false;
+
+                if (precedingSibling != null && precedingSibling.Name == W.p)
+                {
+                    var precedingPPr = precedingSibling.Element(W.pPr);
+                    var precedingSpacing = precedingPPr?.Element(W.spacing);
+                    var afterVal = WordprocessingMLUtil.AttributeToTwips(precedingSpacing?.Attribute(W.after));
+
+                    // If preceding paragraph has no spacing-after or zero, table needs top margin
+                    if (precedingSpacing == null || afterVal == null || afterVal == 0)
+                        needsDefaultTopMargin = true;
+                }
+                else if (precedingSibling != null)
+                {
+                    // Non-paragraph preceding element (e.g., another table) also needs separation
+                    needsDefaultTopMargin = true;
+                }
+
+                if (needsDefaultTopMargin)
+                    style.AddIfMissing("margin-top", "7.5pt");
+            }
+            style.AddIfMissing("margin-top", ".001pt");
+
+            var tableDirection = bidiVisual ? new XAttribute("dir", "rtl") : new XAttribute("dir", "ltr");
+            style.AddIfMissing("margin-bottom", ".001pt");
+            var table = new XElement(Xhtml.table,
+                // TODO: Revisit and make sure the omission is covered by appropriate CSS.
+                // new XAttribute("border", "1"),
+                // new XAttribute("cellspacing", 0),
+                // new XAttribute("cellpadding", 0),
+                tableDirection,
+                isBorderless ? new XAttribute("data-borderless", "true") : null,
+                settings.StampAnchors && (string?)element.Attribute(PtOpenXml.Unid) != null
+                    ? new XAttribute("data-anchor", (string)element.Attribute(PtOpenXml.Unid)!)
+                    : null,
+                SourceAnchorIdentityAttribute(settings, element),
+                CreateColGroup(element),
+                element.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft)));
+            table.AddAnnotation(style);
+
+            // Tracked table-property / grid revisions (issue #539).
+            if (settings.RenderTrackedChanges)
+            {
+                var tblPrChange = element.Elements(W.tblPr).Elements(W.tblPrChange).FirstOrDefault();
+                var tblGridChange = element.Elements(W.tblGrid).Elements(W.tblGridChange).FirstOrDefault();
+                if (tblPrChange != null || tblGridChange != null)
+                {
+                    var revisionPrefix = settings.RevisionCssClassPrefix ?? "rev-";
+                    var existingClass = (string?)table.Attribute("class");
+                    var className = revisionPrefix + "table-format-change";
+                    table.SetAttributeValue("class",
+                        existingClass != null ? existingClass + " " + className : className);
+                    if (table.Attribute("title") == null)
+                        table.Add(new XAttribute("title", tblGridChange != null && tblPrChange == null
+                            ? "Table column widths changed"
+                            : "Table properties changed"));
+                    // Non-null: this block only runs when at least one of the two is set.
+                    var marker = (tblPrChange ?? tblGridChange)!;
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var changeAuthor = (string?)marker.Attribute(W.author);
+                        var changeDate = (string?)marker.Attribute(W.date);
+                        if (changeAuthor != null && table.Attribute("data-author") == null)
+                            table.Add(new XAttribute("data-author", changeAuthor));
+                        if (changeDate != null && table.Attribute("data-date") == null)
+                            table.Add(new XAttribute("data-date", changeDate));
+                    }
+                }
+            }
+            var jc = (string?)element.Elements(W.tblPr).Elements(W.jc).Attributes(W.val).FirstOrDefault() ?? "left";
+            XAttribute? dir = null;
+            XAttribute? jcToUse = null;
+            if (bidiVisual)
+            {
+                dir = new XAttribute("dir", "rtl");
+                if (jc == "left")
+                    jcToUse = new XAttribute("align", "right");
+                else if (jc == "right")
+                    jcToUse = new XAttribute("align", "left");
+                else if (jc == "center")
+                    jcToUse = new XAttribute("align", "center");
+            }
+            else
+            {
+                jcToUse = new XAttribute("align", jc);
+            }
+            var tableDiv = new XElement(Xhtml.div,
+                dir,
+                jcToUse,
+                table);
+            return tableDiv;
+        }
+
+        /// <summary>
+        /// Whether Word lays this table out with binding column widths ("AutoFit" off).
+        /// </summary>
+        /// <remarks>
+        /// <c>w:tblLayout</c> is authoritative when present. When it is absent the spec's default
+        /// is AutoFit — but an absent <c>w:tblLayout</c> alongside an explicit <c>dxa</c> table
+        /// width is Word's own shape for a table sized by its grid, and treating it as AutoFit is
+        /// what lets the browser widen it past the text column. The <c>w:tblGrid</c> requirement
+        /// keeps that inference to tables that actually declare the widths it would honor.
+        /// </remarks>
+        private static bool IsFixedLayoutTable(XElement tableElement)
+        {
+            var layout = (string?)tableElement
+                .Elements(W.tblPr)
+                .Elements(W.tblLayout)
+                .Attributes(W.type)
+                .FirstOrDefault();
+            if (layout == "fixed")
+                return true;
+            if (layout == "autofit")
+                return false;
+
+            var tblW = tableElement.Elements(W.tblPr).Elements(W.tblW).FirstOrDefault();
+            var widthType = (string?)tblW?.Attribute(W.type);
+            if (widthType != "dxa")
+                return false;
+            return tableElement.Elements(W.tblGrid).Elements(W.gridCol).Any();
+        }
+
+        /// <summary>
+        /// Projects <c>w:tblGrid</c> to an HTML <c>colgroup</c>.
+        /// </summary>
+        /// <remarks>
+        /// The grid — not the first row's cells — is where Word records a table's column widths,
+        /// and the two disagree whenever row 1 carries a <c>w:gridSpan</c> or a vertical merge.
+        /// CSS's fixed table layout reads its column widths from a <c>colgroup</c> in preference
+        /// to the first row, so emitting the grid is what makes <c>table-layout: fixed</c> mean
+        /// the same thing here as in Word.
+        /// </remarks>
+        private static XElement? CreateColGroup(XElement tableElement)
+        {
+            var cols = tableElement
+                .Elements(W.tblGrid)
+                .Elements(W.gridCol)
+                .Select(gc => WordprocessingMLUtil.AttributeToTwips(gc.Attribute(W._w)))
+                .ToList();
+            if (cols.Count == 0 || cols.Any(w => w == null || w <= 0m))
+                return null;
+
+            return new XElement(Xhtml.colgroup,
+                cols.Select(w => new XElement(Xhtml.col,
+                    new XAttribute("style", string.Format(
+                        NumberFormatInfo.InvariantInfo, "width: {0}pt;", w!.Value / 20m)))));
+        }
+
+        /// <summary>
+        /// Determines if a table is borderless by checking w:tblBorders.
+        /// A table is considered borderless if tblBorders is missing entirely,
+        /// or if all present border sides have val="nil" or val="none".
+        /// </summary>
+        private static bool IsTableBorderless(XElement tableElement)
+        {
+            var tblBorders = tableElement.Elements(W.tblPr).Elements(W.tblBorders).FirstOrDefault();
+
+            // No tblBorders element means no explicit borders defined
+            if (tblBorders == null)
+                return true;
+
+            // Check each border side - if any has a visible border, the table is not borderless
+            var borderSides = new[] { W.top, W.left, W.bottom, W.right, W.insideH, W.insideV };
+            foreach (var side in borderSides)
+            {
+                var border = tblBorders.Element(side);
+                if (border != null)
+                {
+                    var val = (string?)border.Attribute(W.val);
+                    // If border value is something other than nil/none, table has borders
+                    if (!string.IsNullOrEmpty(val) && val != "nil" && val != "none")
+                        return false;
+                }
+            }
+
+            // All borders are nil/none or missing
+            return true;
+        }
+
+        [SuppressMessage("ReSharper", "PossibleNullReferenceException")]
+        private static object? ProcessTableCell(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, XElement element)
+        {
+            var style = new Dictionary<string, string>();
+            XAttribute? colSpan = null;
+            XAttribute? rowSpan = null;
+
+            var tcPr = element.Element(W.tcPr);
+            if (tcPr != null)
+            {
+                if ((string?) tcPr.Elements(W.vMerge).Attributes(W.val).FirstOrDefault() == "restart")
+                {
+                    // A w:tc is always inside a w:tr inside a w:tbl.
+                    var currentRow = element.Parent!.ElementsBeforeSelf(W.tr).Count();
+                    var currentCell = element.ElementsBeforeSelf(W.tc).Count();
+                    var tbl = element.Parent!.Parent!;
+                    int rowSpanCount = 1;
+                    currentRow += 1;
+                    while (true)
+                    {
+                        var row = tbl.Elements(W.tr).Skip(currentRow).FirstOrDefault();
+                        if (row == null)
+                            break;
+                        var cell2 = row.Elements(W.tc).Skip(currentCell).FirstOrDefault();
+                        if (cell2 == null)
+                            break;
+                        if (cell2.Elements(W.tcPr).Elements(W.vMerge).FirstOrDefault() == null)
+                            break;
+                        if ((string?) cell2.Elements(W.tcPr).Elements(W.vMerge).Attributes(W.val).FirstOrDefault() == "restart")
+                            break;
+                        currentRow += 1;
+                        rowSpanCount += 1;
+                    }
+                    rowSpan = new XAttribute("rowspan", rowSpanCount);
+                }
+
+                if (tcPr.Element(W.vMerge) != null &&
+                    (string?) tcPr.Elements(W.vMerge).Attributes(W.val).FirstOrDefault() != "restart")
+                    return null;
+
+                if (tcPr.Element(W.vAlign) != null)
+                {
+                    var vAlignVal = (string?) tcPr.Elements(W.vAlign).Attributes(W.val).FirstOrDefault();
+                    if (vAlignVal == "top")
+                        style.AddIfMissing("vertical-align", "top");
+                    else if (vAlignVal == "center")
+                        style.AddIfMissing("vertical-align", "middle");
+                    else if (vAlignVal == "bottom")
+                        style.AddIfMissing("vertical-align", "bottom");
+                    else
+                        style.AddIfMissing("vertical-align", "middle");
+                }
+                style.AddIfMissing("vertical-align", "top");
+
+                if ((string?) tcPr.Elements(W.tcW).Attributes(W.type).FirstOrDefault() == "dxa")
+                {
+                    var width = ParseTblWidthValue(tcPr.Elements(W.tcW).Attributes(W._w).FirstOrDefault(), out var isExplicitPercent);
+                    if (width != null && !isExplicitPercent)
+                    {
+                        style.AddIfMissing("width", string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", width.Value/20m));
+                    }
+                }
+                if ((string?) tcPr.Elements(W.tcW).Attributes(W.type).FirstOrDefault() == "pct")
+                {
+                    var width = ParseTblWidthValue(tcPr.Elements(W.tcW).Attributes(W._w).FirstOrDefault(), out var isExplicitPercent);
+                    if (width != null)
+                    {
+                        var percent = isExplicitPercent ? width.Value : width.Value/50m;
+                        style.AddIfMissing("width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}%", percent));
+                    }
+                }
+
+                var tcBorders = tcPr.Element(W.tcBorders);
+                GenerateBorderStyle(tcBorders, W.top, style, BorderType.Cell);
+                GenerateBorderStyle(tcBorders, W.right, style, BorderType.Cell);
+                GenerateBorderStyle(tcBorders, W.bottom, style, BorderType.Cell);
+                GenerateBorderStyle(tcBorders, W.left, style, BorderType.Cell);
+
+                CreateStyleFromShd(style, tcPr.Element(W.shd), element);
+
+                var gridSpan = tcPr.Elements(W.gridSpan).Attributes(W.val).Select(a => (int?) a).FirstOrDefault();
+                if (gridSpan != null)
+                    colSpan = new XAttribute("colspan", (int) gridSpan);
+            }
+            style.AddIfMissing("padding-top", "0");
+            style.AddIfMissing("padding-bottom", "0");
+
+            var table = element.Ancestors(W.tbl).FirstOrDefault();
+            var rtlTable = IsOnOffPropertyEnabled(table?.Element(W.tblPr)?.Element(W.bidiVisual));
+            foreach (var side in new[] { W.top, W.right, W.bottom, W.left })
+            {
+                var logical = side == W.left ? (rtlTable ? W.end : W.start)
+                    : side == W.right ? (rtlTable ? W.start : W.end) : side;
+                var cellMargins = tcPr?.Element(W.tcMar);
+                var tableMargins = table?.Element(W.tblPr)?.Element(W.tblCellMar);
+                var margin = cellMargins?.Element(logical) ?? cellMargins?.Element(side)
+                    ?? tableMargins?.Element(logical) ?? tableMargins?.Element(side);
+                if ((string?)margin?.Attribute(W.type) is "dxa" or "nil")
+                {
+                    decimal? twips = (string?)margin.Attribute(W.type) == "nil" ? 0 : WordprocessingMLUtil.AttributeToTwips(margin.Attribute(W._w));
+                    if (twips != null)
+                        style["padding-" + side.LocalName] = string.Format(NumberFormatInfo.InvariantInfo, "{0:0.####}pt", twips / 20m);
+                }
+            }
+
+            var cell = new XElement(Xhtml.td,
+                rowSpan,
+                colSpan,
+                settings.StampAnchors && (string?)element.Attribute(PtOpenXml.Unid) != null
+                    ? new XAttribute("data-anchor", (string)element.Attribute(PtOpenXml.Unid)!)
+                    : null,
+                SourceAnchorIdentityAttribute(settings, element),
+                CreateBorderDivs(wordDoc, settings, element.Elements()));
+            cell.AddAnnotation(style);
+
+            // Handle table cell revisions
+            if (settings.RenderTrackedChanges && tcPr != null)
+            {
+                var cellIns = tcPr.Element(W.cellIns);
+                var cellDel = tcPr.Element(W.cellDel);
+                var cellMerge = tcPr.Element(W.cellMerge);
+
+                if (cellIns != null)
+                {
+                    var className = (settings.RevisionCssClassPrefix ?? "rev-") + "cell-ins";
+                    cell.Add(new XAttribute("class", className));
+
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var author = (string?)cellIns.Attribute(W.author);
+                        var date = (string?)cellIns.Attribute(W.date);
+                        if (author != null)
+                            cell.Add(new XAttribute("data-author", author));
+                        if (date != null)
+                            cell.Add(new XAttribute("data-date", date));
+                    }
+                }
+                else if (cellDel != null)
+                {
+                    var className = (settings.RevisionCssClassPrefix ?? "rev-") + "cell-del";
+                    cell.Add(new XAttribute("class", className));
+
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var author = (string?)cellDel.Attribute(W.author);
+                        var date = (string?)cellDel.Attribute(W.date);
+                        if (author != null)
+                            cell.Add(new XAttribute("data-author", author));
+                        if (date != null)
+                            cell.Add(new XAttribute("data-date", date));
+                    }
+                }
+                else if (cellMerge != null)
+                {
+                    var className = (settings.RevisionCssClassPrefix ?? "rev-") + "cell-merge";
+                    cell.Add(new XAttribute("class", className));
+
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var author = (string?)cellMerge.Attribute(W.author);
+                        var date = (string?)cellMerge.Attribute(W.date);
+                        if (author != null)
+                            cell.Add(new XAttribute("data-author", author));
+                        if (date != null)
+                            cell.Add(new XAttribute("data-date", date));
+                    }
+                }
+
+                // Tracked cell-property revision (issue #539): w:tcPrChange. Composes with the
+                // structural cell revisions above by appending to whatever class they set.
+                var tcPrChange = tcPr.Element(W.tcPrChange);
+                if (tcPrChange != null)
+                {
+                    var revisionPrefix = settings.RevisionCssClassPrefix ?? "rev-";
+                    var existingClass = (string?)cell.Attribute("class");
+                    var className = revisionPrefix + "cell-format-change";
+                    cell.SetAttributeValue("class",
+                        existingClass != null ? existingClass + " " + className : className);
+                    if (cell.Attribute("title") == null)
+                        cell.Add(new XAttribute("title", "Cell properties changed"));
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var changeAuthor = (string?)tcPrChange.Attribute(W.author);
+                        var changeDate = (string?)tcPrChange.Attribute(W.date);
+                        if (changeAuthor != null && cell.Attribute("data-author") == null)
+                            cell.Add(new XAttribute("data-author", changeAuthor));
+                        if (changeDate != null && cell.Attribute("data-date") == null)
+                            cell.Add(new XAttribute("data-date", changeDate));
+                    }
+                }
+            }
+
+            return cell;
+        }
+
+        private static decimal? TableRowHeightInTwips(XAttribute? attribute)
+        {
+            if (attribute == null) return null;
+            const string diagnostic = "Invalid or unsupported table row height (w:trHeight/@w:val); " +
+                "expected non-negative whole twips or a number with a supported unit (cm, mm, in, pt, pc, pi).";
+            var value = attribute.Value;
+            // ST_TwipsMeasure permits whole unsigned twips or ST_PositiveUniversalMeasure.
+            // Keep the existing Int32 range for bare twips and reject bare fractions.
+            if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var twips) && twips >= 0)
+                return twips;
+            if (Regex.IsMatch(value, @"\A[0-9]+(\.[0-9]+)?(cm|mm|in|pt|pc|pi)\z", RegexOptions.CultureInvariant))
+            {
+                try { return WordprocessingMLUtil.AttributeToDecimalTwips(attribute); }
+                catch (Exception error) when (error is FormatException || error is OverflowException)
+                { throw new FormatException(diagnostic, error); }
+            }
+            throw new FormatException(diagnostic);
+        }
+
+        private static object ProcessTableRow(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, XElement element,
+            decimal currentMarginLeft)
+        {
+            var style = new Dictionary<string, string>();
+            var trHeight = TableRowHeightInTwips(element.Elements(W.trPr).Elements(W.trHeight).Attributes(W.val).FirstOrDefault());
+            if (trHeight != null)
+                style.AddIfMissing("height",
+                    string.Format(NumberFormatInfo.InvariantInfo, "{0:0.00}in", trHeight.Value/1440m));
+            var htmlRow = new XElement(Xhtml.tr,
+                SourceAnchorIdentityAttribute(settings, element),
+                element.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft)));
+            if (style.Any())
+                htmlRow.AddAnnotation(style);
+
+            // Handle table row revision tracking
+            if (settings.RenderTrackedChanges)
+            {
+                var trPr = element.Element(W.trPr);
+                var rowIns = trPr?.Element(W.ins);
+                var rowDel = trPr?.Element(W.del);
+
+                if (rowIns != null)
+                {
+                    var className = (settings.RevisionCssClassPrefix ?? "rev-") + "row-ins";
+                    htmlRow.Add(new XAttribute("class", className));
+
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var author = (string?)rowIns.Attribute(W.author);
+                        var date = (string?)rowIns.Attribute(W.date);
+                        if (author != null)
+                            htmlRow.Add(new XAttribute("data-author", author));
+                        if (date != null)
+                            htmlRow.Add(new XAttribute("data-date", date));
+                    }
+                }
+                else if (rowDel != null)
+                {
+                    var className = (settings.RevisionCssClassPrefix ?? "rev-") + "row-del";
+                    htmlRow.Add(new XAttribute("class", className));
+
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var author = (string?)rowDel.Attribute(W.author);
+                        var date = (string?)rowDel.Attribute(W.date);
+                        if (author != null)
+                            htmlRow.Add(new XAttribute("data-author", author));
+                        if (date != null)
+                            htmlRow.Add(new XAttribute("data-date", date));
+                    }
+                }
+
+                // Tracked row-property revisions (issue #539): w:trPrChange, and the row's
+                // table-property exceptions via w:tblPrExChange. Composes with the structural
+                // row revisions above by appending to whatever class they set, and keeps their
+                // metadata (issue #927), the way cells compose w:tcPrChange.
+                var trPrChange = trPr?.Element(W.trPrChange);
+                var tblPrExChange = element.Elements(W.tblPrEx)
+                    .Elements(W.tblPrExChange).FirstOrDefault();
+                if (trPrChange != null || tblPrExChange != null)
+                {
+                    var revisionPrefix = settings.RevisionCssClassPrefix ?? "rev-";
+                    var existingClass = (string?)htmlRow.Attribute("class");
+                    var className = revisionPrefix + "row-format-change";
+                    htmlRow.SetAttributeValue("class",
+                        existingClass != null ? existingClass + " " + className : className);
+                    if (htmlRow.Attribute("title") == null)
+                        htmlRow.Add(new XAttribute("title", "Row properties changed"));
+                    // Non-null: this block only runs when at least one of the two is set.
+                    var marker = (trPrChange ?? tblPrExChange)!;
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var changeAuthor = (string?)marker.Attribute(W.author);
+                        var changeDate = (string?)marker.Attribute(W.date);
+                        if (changeAuthor != null && htmlRow.Attribute("data-author") == null)
+                            htmlRow.Add(new XAttribute("data-author", changeAuthor));
+                        if (changeDate != null && htmlRow.Attribute("data-date") == null)
+                            htmlRow.Add(new XAttribute("data-date", changeDate));
+                    }
+                }
+            }
+
+            return htmlRow;
+        }
+
+        private static bool HasStyleSeparator(XElement? element)
+        {
+            return element != null && element.Elements(W.pPr).Elements(W.rPr).Any(e => GetBoolProp(e, W.specVanish));
+        }
+
+        /// <summary>
+        /// Backward-sibling facts for one parent's children, computed in a single pass the first time
+        /// any child asks. LINQ to XML siblings are singly linked, so <c>ElementsBeforeSelf()</c> walks
+        /// from the first child every call; asking it once per paragraph made conversion quadratic in
+        /// the number of body blocks. Built lazily during the transform, which no longer adds or removes
+        /// source blocks, and every caller converts a fresh copy, so the index cannot go stale.
+        /// </summary>
+        private sealed class BlockSiblingIndex
+        {
+            private readonly Dictionary<XElement, XElement?> _previousElement = new();
+            private readonly HashSet<XElement> _followsStyleSeparator = new();
+
+            private BlockSiblingIndex(XElement parent)
+            {
+                XElement? previous = null;
+                XElement? previousParagraph = null;
+                foreach (var child in parent.Elements())
+                {
+                    _previousElement[child] = previous;
+                    previous = child;
+                    if (child.Name != W.p)
+                        continue;
+                    if (HasStyleSeparator(previousParagraph))
+                        _followsStyleSeparator.Add(child);
+                    previousParagraph = child;
+                }
+            }
+
+            public static BlockSiblingIndex Of(XElement child)
+            {
+                var parent = child.Parent!;
+                var index = parent.Annotation<BlockSiblingIndex>();
+                if (index is null)
+                {
+                    index = new BlockSiblingIndex(parent);
+                    parent.AddAnnotation(index);
+                }
+                return index;
+            }
+
+            // A child the index has never seen would mean the tree changed after it was built; answer
+            // from the tree directly rather than from a stale index.
+
+            /// <summary>The element sibling immediately before <paramref name="child"/>, or null.</summary>
+            public XElement? PreviousElement(XElement child) =>
+                _previousElement.TryGetValue(child, out var previous) ? previous : child.ElementsBeforeSelf().LastOrDefault();
+
+            /// <summary>True when the nearest preceding <c>w:p</c> sibling ends in a style separator.</summary>
+            public bool FollowsStyleSeparator(XElement paragraph) =>
+                _previousElement.ContainsKey(paragraph)
+                    ? _followsStyleSeparator.Contains(paragraph)
+                    : HasStyleSeparator(paragraph.ElementsBeforeSelf(W.p).LastOrDefault());
+        }
+
+        private static bool IsBidi(XElement element)
+        {
+            return element
+                .Elements(W.pPr)
+                .Elements(W.bidi)
+                .Any(b => b.Attribute(W.val) == null || b.Attribute(W.val).ToBoolean() == true);
+        }
+
+        private static XName GetParagraphElementName(XElement element, WordprocessingDocument wordDoc)
+        {
+            var elementName = Xhtml.p;
+
+            var styleId = (string?) element.Elements(W.pPr).Elements(W.pStyle).Attributes(W.val).FirstOrDefault();
+            if (styleId == null) return elementName;
+
+            var style = GetStyle(styleId, wordDoc);
+            if (style == null) return elementName;
+
+            var outlineLevel =
+                (int?) style.Elements(W.pPr).Elements(W.outlineLvl).Attributes(W.val).FirstOrDefault();
+            if (outlineLevel != null && outlineLevel <= 5)
+            {
+                elementName = Xhtml.xhtml + string.Format("h{0}", outlineLevel + 1);
+            }
+
+            return elementName;
+        }
+
+        private static XElement? GetStyle(string styleId, WordprocessingDocument wordDoc)
+        {
+            var stylesPart = wordDoc.MainDocumentPart!.StyleDefinitionsPart;
+            if (stylesPart == null) return null;
+
+            var styles = stylesPart.GetXDocument().Root;
+            return styles != null
+                ? styles.Elements(W.style).FirstOrDefault(s => (string?) s.Attribute(W.styleId) == styleId)
+                : null;
+        }
+
+        private static object CreateSectionDivs(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, XElement element)
+        {
+            // Group elements by section. In pagination mode, we preserve section boundaries.
+            // Without pagination, adjacent sections with identical formatting are conflated.
+            var groupedIntoDivs = element
+                .Elements()
+                .GroupAdjacent(e => {
+                    var sectAnnotation = e.Annotation<SectionAnnotation>();
+                    return sectAnnotation != null ? sectAnnotation.SectionElement!.ToString() : "";
+                });
+
+            int sectionIndex = 0;
+            var divList = groupedIntoDivs
+                .Select(g =>
+                {
+                    var sectAnnotation = g.First().Annotation<SectionAnnotation>();
+                    XElement? bidi = null;
+                    PageDimensions? dims = null;
+
+                    if (sectAnnotation != null)
+                    {
+                        bidi = sectAnnotation
+                            .SectionElement!
+                            .Elements(W.bidi)
+                            .FirstOrDefault(b => b.Attribute(W.val) == null || b.Attribute(W.val).ToBoolean() == true);
+
+                        dims = PageDimensions.FromSectionProperties(sectAnnotation.SectionElement);
+                    }
+
+                    var div = new XElement(Xhtml.div,
+                        bidi != null ? new XAttribute("dir", "rtl") : null,
+                        CreateBorderDivs(wordDoc, settings, g));
+
+                    // The section's page setup, emitted in EVERY render mode. It is a property of
+                    // the document, not of the view: a continuous renderer needs the same page
+                    // width and margins a paginated one does, because the text column they define
+                    // is what the document's line breaking was authored against. Withholding it
+                    // outside Paginated mode is what left the continuous view sizing its column
+                    // from the device instead of from w:sectPr.
+                    div.Add(new XAttribute("data-section-index", sectionIndex));
+
+                    if (dims != null)
+                    {
+                        div.Add(new XAttribute("data-page-width", dims.PageWidthPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                        div.Add(new XAttribute("data-page-height", dims.PageHeightPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                        div.Add(new XAttribute("data-content-width", dims.ContentWidthPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                        div.Add(new XAttribute("data-content-height", dims.ContentHeightPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                        div.Add(new XAttribute("data-margin-top", dims.MarginTopPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                        div.Add(new XAttribute("data-margin-right", dims.MarginRightPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                        div.Add(new XAttribute("data-margin-bottom", dims.MarginBottomPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                        div.Add(new XAttribute("data-margin-left", dims.MarginLeftPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                        div.Add(new XAttribute("data-header-height", dims.HeaderPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                        div.Add(new XAttribute("data-footer-height", dims.FooterPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                    }
+
+                    // The section's start type (w:type). The paginated view needs it to know a
+                    // "continuous" section keeps filling the page its predecessor started
+                    // instead of opening a fresh one; absent means Word's default, nextPage.
+                    // SectionElement itself is non-null whenever a SectionAnnotation exists: both
+                    // constructors (see InitializeSectionAnnotation below) resolve it to either
+                    // the found w:sectPr or a synthesized default before the annotation is ever
+                    // attached, so only the `sectAnnotation?.` short-circuit is meaningful here.
+                    var sectionType = (string?)sectAnnotation?.SectionElement!.Element(W.type)?.Attribute(W.val);
+                    if (sectionType != null)
+                        div.Add(new XAttribute("data-section-type", sectionType));
+
+                    // The section's column geometry (w:cols). Word lays a multi-column section
+                    // out as N equal columns separated by w:space; CSS multicol reproduces that,
+                    // so the count/gap are stamped for the paginator and the same geometry is
+                    // applied inline for the continuous view. (Unequal explicit w:col widths
+                    // collapse to the equal-column approximation.)
+                    var cols = sectAnnotation?.SectionElement!.Element(W.cols);
+                    var colsNum = (int?)cols?.Attribute(W.num) ?? 1;
+                    if (colsNum > 1)
+                    {
+                        // colsNum > 1 above is only possible when cols is non-null.
+                        var colGapPt = ((int?)cols!.Attribute(W.space) ?? 720) / 20m;
+                        var colGap = colGapPt.ToString("F1", NumberFormatInfo.InvariantInfo);
+                        div.Add(new XAttribute("data-cols", colsNum));
+                        div.Add(new XAttribute("data-col-gap", colGap));
+                        div.Add(new XAttribute("style",
+                            $"column-count: {colsNum}; column-gap: {colGap}pt;"));
+                    }
+
+                    // The section's page numbering (w:pgNumType), which is what an unswitched
+                    // PAGE field renders through. Emitted per attribute: absent means "continue
+                    // the previous section" / "Word's default format", not a value.
+                    var pgNumType = sectAnnotation?.SectionElement!.Element(W.pgNumType);
+                    if ((string?)pgNumType?.Attribute(W.start) is { } pgStart)
+                        div.Add(new XAttribute("data-page-num-start", pgStart));
+                    if ((string?)pgNumType?.Attribute(W.fmt) is { } pgFmt)
+                        div.Add(new XAttribute("data-page-num-fmt", pgFmt));
+
+                    sectionIndex++;
+                    return div;
+                })
+                .ToList();
+
+            // In pagination mode, wrap content in staging structure for client-side processing
+            if (settings.RenderPagination == PaginationMode.Paginated)
+            {
+                var prefix = settings.PaginationCssClassPrefix ?? "page-";
+                var stagingContent = new List<object>();
+
+                // Add header/footer registry if headers/footers are enabled
+                if (settings.RenderHeadersAndFooters)
+                {
+                    var hfRegistry = RenderPaginatedHeaderFooterRegistry(wordDoc, settings, element);
+                    if (hfRegistry != null)
+                        stagingContent.Add(hfRegistry);
+                }
+
+                // Add footnote registry if footnotes are enabled
+                if (settings.RenderFootnotesAndEndnotes)
+                {
+                    var footnoteRegistry = RenderPaginatedFootnoteRegistry(wordDoc, settings);
+                    if (footnoteRegistry != null)
+                        stagingContent.Add(footnoteRegistry);
+
+                    // Endnotes are document content and must FLOW after the last body block —
+                    // Word and LibreOffice both lay them out at the end of the document, on a
+                    // page. The paginator only pages content found inside [data-section-index]
+                    // wrappers within the staging area, so the non-paginated placement (a
+                    // body-level sibling of the staging/container divs) never reaches any page
+                    // and the endnotes silently vanish from the print layout. Appending the
+                    // section to the LAST section div makes it an ordinary measured block that
+                    // lands on the final page(s).
+                    if (divList.Count > 0)
+                    {
+                        var endnotesSection = RenderEndnotesSection(wordDoc, settings);
+                        if (endnotesSection != null)
+                            divList[divList.Count - 1].Add(endnotesSection);
+                    }
+                }
+
+                // Margin comments are selectable presentation stories, like footnotes and
+                // headers/footers: keep one hidden source registry in staging and let the
+                // paginator clone only the comments referenced by each page into that page's
+                // side margin. Putting the column in the last flow section would turn margin
+                // notes into ordinary document-end body content.
+                if (settings.RenderComments
+                    && settings.CommentRenderMode == CommentRenderMode.Margin)
+                {
+                    var tracker = GetCommentTracker(element);
+                    if (tracker != null)
+                    {
+                        var commentPrefix = settings.CommentCssClassPrefix ?? "comment-";
+                        var marginRegistry = RenderMarginCommentsColumn(
+                            wordDoc, settings, tracker, commentPrefix);
+                        if (marginRegistry.HasElements)
+                        {
+                            marginRegistry.Add(new XAttribute(
+                                "id", "pagination-comment-margin-registry"));
+                            marginRegistry.Add(new XAttribute("style", "display: none;"));
+                            stagingContent.Add(marginRegistry);
+                        }
+                    }
+                }
+
+                // Endnote-style comments are document-end content just like endnotes. In a
+                // paginated render they must live inside the final section wrapper; a body-level
+                // sibling of #pagination-staging is invisible to PaginationEngine and cannot
+                // produce PageMap fragments.
+                if (settings.RenderComments
+                    && settings.CommentRenderMode == CommentRenderMode.EndnoteStyle
+                    && divList.Count > 0)
+                {
+                    var tracker = GetCommentTracker(element);
+                    if (tracker != null)
+                    {
+                        var commentsSection = RenderCommentsSection(wordDoc, settings, tracker);
+                        if (commentsSection != null)
+                            divList[divList.Count - 1].Add(commentsSection);
+                    }
+                }
+
+                // Add section content
+                stagingContent.AddRange(divList);
+
+                var footnoteLayoutCompatibility = wordDoc.MainDocumentPart?
+                    .DocumentSettingsPart?.GetXDocument().Root?
+                    .Element(W.compat)?.Element(W.footnoteLayoutLikeWW8);
+                var useWord8FootnoteLayout = IsOnOffPropertyEnabled(footnoteLayoutCompatibility);
+
+                return new object[]
+                {
+                    // Staging area containing the content (hidden by CSS for client-side measurement)
+                    new XElement(Xhtml.div,
+                        new XAttribute("id", "pagination-staging"),
+                        new XAttribute("class", prefix + "staging"),
+                        useWord8FootnoteLayout
+                            ? new XAttribute("data-footnote-layout-like-word8", "true")
+                            : null,
+                        stagingContent),
+                    // Container where paginated content will be rendered by client-side JavaScript
+                    new XElement(Xhtml.div,
+                        new XAttribute("id", "pagination-container"),
+                        new XAttribute("class", prefix + "container"))
+                };
+            }
+
+            return divList;
+        }
+
+        private enum BorderType
+        {
+            Paragraph,
+            Cell,
+        };
+
+        /*
+         * Notes on line spacing
+         *
+         * the w:line and w:lineRule attributes control spacing between lines - including between lines within a paragraph
+         *
+         * If w:spacing w:lineRule="auto" then
+         *   w:spacing w:line is a percentage where 240 == 100%
+         *
+         *   (line value / 240) * 100 = percentage of line
+         *
+         * If w:spacing w:lineRule="exact" or w:lineRule="atLeast" then
+         *   w:spacing w:line is in twips
+         *   1440 = exactly one inch from line to line
+         *
+         * Handle
+         * - ind
+         * - jc
+         * - numPr
+         * - pBdr
+         * - shd
+         * - spacing
+         * - textAlignment
+         *
+         * Don't Handle (yet)
+         * - adjustRightInd?
+         * - autoSpaceDE
+         * - autoSpaceDN
+         * - bidi
+         * - contextualSpacing (handled via GroupAndVerticallySpaceNumberedParagraphs)
+         * - divId
+         * - framePr
+         * - keepLines
+         * - keepNext
+         * - kinsoku
+         * - mirrorIndents
+         * - overflowPunct
+         * - pageBreakBefore
+         * - snapToGrid
+         * - suppressAutoHyphens
+         * - suppressLineNumbers
+         * - suppressOverlap
+         * - tabs
+         * - textBoxTightWrap
+         * - textDirection
+         * - topLinePunct
+         * - widowControl
+         * - wordWrap
+         *
+         */
+
+        private static XAttribute? SourceAnchorIdentityAttribute(
+            WmlToHtmlConverterSettings settings, XElement source)
+        {
+            if (settings.SourceAnchorIdentityProvider == null)
+                return null;
+            var id = settings.SourceAnchorIdentityProvider(source);
+            return string.IsNullOrEmpty(id) ? null : new XAttribute("data-source-anchor-id", id);
+        }
+
+        private static object ConvertParagraph(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
+            XElement paragraph, XName elementName, bool suppressTrailingWhiteSpace, decimal currentMarginLeft, bool isBidi,
+            bool suppressLeadingWhiteSpace = false)
+        {
+            var style = DefineParagraphStyle(paragraph, elementName, suppressTrailingWhiteSpace, currentMarginLeft, isBidi, suppressLeadingWhiteSpace);
+            if ((string?)paragraph.Attribute(StructuralTableEndParagraphAttribute) == "true")
+            {
+                // A nested table's required, unformatted cell-end paragraph is a structural
+                // boundary, not an additional blank text line. Keep a one-twip box so the
+                // source paragraph retains positive PageMap geometry without adding the
+                // inherited line height and space-after to the containing row.
+                style.Remove(AutomaticLineSpacingMultiplierCssProperty);
+                style["line-height"] = "0.05pt";
+                style["margin-top"] = "0";
+                style["margin-bottom"] = "0";
+            }
+            var rtl = isBidi ? new XAttribute("dir", "rtl") : new XAttribute("dir", "ltr");
+            var firstMark = isBidi ? new XEntity("#x200f") : null;
+            var anchorAttr = settings.StampAnchors && (string?)paragraph.Attribute(PtOpenXml.Unid) != null
+                ? new XAttribute("data-anchor", (string)paragraph.Attribute(PtOpenXml.Unid)!)
+                : null;
+            var sourceAnchorAttr = SourceAnchorIdentityAttribute(settings, paragraph);
+
+            // Analyze initial runs to see whether we have a tab, in which case we will render
+            // a span with a defined width and ignore the tab rather than rendering the text
+            // preceding the tab and the tab as a span with a computed width.
+            var paragraphContent = paragraph.Elements().Where(element => element.Name != W.pPr).ToList();
+            var firstTabRun = paragraphContent
+                .Where(element => element.Name == W.r)
+                .FirstOrDefault(run => run.Elements(W.tab).Any());
+            // EVERY paragraph child before the tab, not just width-annotated runs. Filtering on
+            // PtOpenXml:TabWidth dropped content outright — such a run is absent from this list AND
+            // from elementsSucceedingTab (which starts after the tab), so it rendered nowhere. Back
+            // when CalculateSpanWidthForTabs walked the main part alone, that lost a whole running
+            // footer: `Last Updated October 2025 [tab] PAGE` came out as just the page number. The
+            // annotation now reaches every story, but the two questions stay separate —
+            // TransformElementsPrecedingTab still sums widths over the annotated children only, and
+            // an unannotated run contributes zero width while keeping its text.
+            var elementsPrecedingTab = firstTabRun != null
+                ? paragraphContent.TakeWhile(e => e != firstTabRun).ToList()
+                : Enumerable.Empty<XElement>().ToList();
+
+            // TODO: Revisit
+            // For the time being, if a hyperlink field precedes the tab, we'll render it as before.
+            var hyperlinkPrecedesTab = elementsPrecedingTab
+                .Elements(W.r)
+                .Elements(W.instrText)
+                .Select(e => e.Value)
+                .Any(value => value != null && value.TrimStart().ToUpper().StartsWith("HYPERLINK"));
+            if (hyperlinkPrecedesTab)
+            {
+                var paraElement1 = new XElement(elementName,
+                    rtl,
+                    firstMark,
+                    anchorAttr,
+                    sourceAnchorAttr,
+                    ConvertContentThatCanContainFields(wordDoc, settings, paragraph.Elements()));
+                ApplyAutomaticLineSpacingToInlineContent(paraElement1, style);
+                paraElement1.AddAnnotation(style);
+                AnnotateSemanticListItem(paraElement1, paragraph, elementName, isBidi);
+                return paraElement1;
+            }
+
+            var txElementsPrecedingTab = TransformElementsPrecedingTab(wordDoc, settings, elementsPrecedingTab, firstTabRun);
+            var elementsSucceedingTab = firstTabRun != null
+                ? paragraph.Elements().SkipWhile(e => e != firstTabRun).Skip(1)
+                : paragraph.Elements();
+            var paraElement = new XElement(elementName,
+                rtl,
+                firstMark,
+                anchorAttr,
+                sourceAnchorAttr,
+                txElementsPrecedingTab,
+                ConvertContentThatCanContainFields(wordDoc, settings, elementsSucceedingTab));
+            ApplyAutomaticLineSpacingToInlineContent(paraElement, style);
+            paraElement.AddAnnotation(style);
+            AnnotateSemanticListItem(paraElement, paragraph, elementName, isBidi);
+
+            return paraElement;
+        }
+
+        private const string AutomaticLineSpacingMultiplierCssProperty = "--docx-auto-line-spacing";
+        private const string ExactLineSpacingCssProperty = "--docx-exact-line-height";
+        private static readonly XName StructuralTableEndParagraphAttribute =
+            XName.Get("table-end-paragraph", "urn:docxodus:rendering");
+
+        private static void MarkStructuralTableEndParagraphs(WordprocessingDocument wordDoc)
+        {
+            // Inspect source formatting before assembly expands inherited paragraph/run
+            // defaults. An explicitly formatted blank paragraph remains a real blank line.
+            foreach (var part in wordDoc.ContentParts())
+            {
+                foreach (var paragraph in part.GetXDocument().Descendants(W.p))
+                {
+                    if (paragraph.Parent?.Name != W.tc || paragraph.ElementsAfterSelf().Any() ||
+                        paragraph.ElementsBeforeSelf().LastOrDefault()?.Name != W.tbl ||
+                        paragraph.Element(W.pPr)?.HasElements == true)
+                        continue;
+                    var empty = paragraph.Elements().Where(e => e.Name != W.pPr).All(e =>
+                        e.Name == W.r && e.Elements().All(child =>
+                            (child.Name == W.t && child.Value.Length == 0) ||
+                            (child.Name == W.rPr && !child.HasElements)));
+                    if (empty)
+                        paragraph.SetAttributeValue(StructuralTableEndParagraphAttribute, "true");
+                }
+            }
+        }
+
+        /// <summary>
+        /// OOXML auto line spacing is a multiple of the font's native single-line height, not a
+        /// percentage of its em square. CSS percentages and unitless line-height values both use
+        /// font-size as their base, which makes common values such as 259/240 render too tightly.
+        ///
+        /// The paragraph retains <c>line-height: normal</c>, so <c>1lh</c> on each direct inline
+        /// child resolves to the browser's native line box for the paragraph font. Multiplying that
+        /// length preserves the OOXML semantics without hard-coding a font-independent approximation.
+        /// Applying the calculated height to the direct children also avoids a self-reference in the
+        /// paragraph's own line-height property.
+        ///
+        /// Word places the extra height of a multiple above 1 entirely BELOW the text: a line's
+        /// baseline sits where single spacing puts it, whatever the multiple (issue #908, measured
+        /// from Word's own PDF output; see <c>npm/tests/fixtures/line-baselines.word.json</c>). The
+        /// multiplied line-height instead splits the extra half above and half below the glyphs. So
+        /// each direct child is also moved up by half the extra with relative positioning: the line
+        /// boxes, and with them pagination, are exactly what they were, and only the glyphs move to
+        /// the top of their line. In <c>top</c>, <c>1lh</c> is the child's own multiplied height mN,
+        /// so <c>1lh * (1/m - 1) / 2</c> is -(m-1)N/2; a multiple below 1 is not moved. A child that
+        /// already carries a relative <c>top</c> keeps it, and the two offsets are added (a raised or
+        /// lowered run uses <c>vertical-align</c>, which composes on its own). A child positioned
+        /// some other way, or holding an image or drawing (which can be the tallest thing on its
+        /// line, so moving it up would overlap the line above), or holding an absolutely positioned
+        /// descendant such as a floating drawing (a relative child would become its containing
+        /// block), is not moved.
+        /// </summary>
+        private static void ApplyAutomaticLineSpacingToInlineContent(
+            XElement paragraph,
+            Dictionary<string, string> paragraphStyle)
+        {
+            if (!paragraphStyle.ContainsKey(AutomaticLineSpacingMultiplierCssProperty))
+                return;
+
+            foreach (var child in paragraph.Elements())
+            {
+                var childStyle = child.Annotation<Dictionary<string, string>>();
+                if (childStyle == null)
+                {
+                    childStyle = new Dictionary<string, string>();
+                    child.AddAnnotation(childStyle);
+                }
+
+                // Never overwrite a line-height a child set for its own reasons. The compacted
+                // pieces of a <w:br> carry `line-height: 0` precisely so they cannot contribute a
+                // line box; replacing that with the paragraph's multiple would resurrect the
+                // spurious line the compaction removed.
+                if (childStyle.ContainsKey("line-height"))
+                    continue;
+
+                childStyle["line-height"] =
+                    $"calc(1lh * var({AutomaticLineSpacingMultiplierCssProperty}))";
+
+                if ((childStyle.TryGetValue("position", out var position) && position != "relative") ||
+                    child.DescendantsAndSelf().Any(PinsOrPlacesMedia))
+                    continue;
+                var lift = $"min(0px, calc(1lh * (1 / var({AutomaticLineSpacingMultiplierCssProperty}) - 1) / 2))";
+                childStyle["position"] = "relative";
+                childStyle["top"] = childStyle.TryGetValue("top", out var top) ? $"calc({top} + {lift})" : lift;
+            }
+        }
+
+        /// <summary>An image, an inline SVG, or an absolutely positioned element (a floating drawing).</summary>
+        private static bool PinsOrPlacesMedia(XElement element)
+        {
+            if (element.Name == Xhtml.img || element.Name.LocalName == "svg")
+                return true;
+            var style = element.Annotation<Dictionary<string, string>>();
+            return style != null && style.TryGetValue("position", out var position) &&
+                position is "absolute" or "fixed";
+        }
+
+        private static List<object?> TransformElementsPrecedingTab(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
+            List<XElement> elementsPrecedingTab, XElement? firstTabRun)
+        {
+            var tabElement = firstTabRun?.Elements(W.tab).FirstOrDefault();
+            var tabWidth = tabElement != null
+                ? (decimal?) tabElement.Attribute(PtOpenXml.TabWidth) ?? 0m
+                : 0m;
+            // When the tab is the suffix tab of a list-item marker, tag the wrapper span so the
+            // whole marker (number/bullet glyph AND this tab) is excluded from editor offset math.
+            // The number run is tagged in ConvertRun, but the tab span renders via ProcessTab and
+            // would otherwise contribute a stray character to caret offsets (breaks Enter at EOL).
+            var listMarkerAttr = firstTabRun?.Attribute(PtOpenXml.ListItemRun) != null
+                ? new XAttribute("data-list-marker", "true")
+                : null;
+            var precedingElementsWidth = elementsPrecedingTab
+                .Elements()
+                .Where(c => c.Attributes(PtOpenXml.TabWidth).Any())
+                // The Where clause above already verified the attribute exists.
+                .Select(e => (decimal) e.Attribute(PtOpenXml.TabWidth)!)
+                .Sum();
+            var totalWidth = precedingElementsWidth + tabWidth;
+
+            var txElementsPrecedingTab = elementsPrecedingTab
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
+                .ToList();
+
+            // Process the tab element to get leader characters
+            object? tabSpan = null;
+            if (tabElement != null)
+            {
+                tabSpan = ProcessTab(tabElement);
+            }
+
+            // Text longer than its line wraps, so it cannot sit in a box pinned to the tab stop:
+            // that box would be as wide as one unwrapped line and push the paragraph's container
+            // past the page (issue #891). Lay the text out in normal flow and let the tab advance
+            // from wherever its last line ends.
+            if (tabElement?.Attribute(PtOpenXml.TabAfterWrappedText) != null)
+                return txElementsPrecedingTab.Append(tabSpan).ToList();
+
+            if (txElementsPrecedingTab.Count > 1 || (txElementsPrecedingTab.Count > 0 && tabSpan != null))
+            {
+                var precedingSpan = new XElement(Xhtml.span, txElementsPrecedingTab);
+                precedingSpan.AddAnnotation(new Dictionary<string, string>
+                {
+                    { "flex-shrink", "0" },
+                    { "white-space", "nowrap" },
+                });
+
+                if (tabSpan is XElement tabSpanElement)
+                {
+                    var tabStyle = tabSpanElement.Annotation<Dictionary<string, string>>();
+                    if (tabStyle != null)
+                    {
+                        tabStyle["flex-grow"] = "1";
+                        tabStyle["flex-shrink"] = "1";
+                    }
+                }
+
+                var span = new XElement(Xhtml.span, listMarkerAttr, precedingSpan, tabSpan);
+                // The wrapper owns the aligned segment's total advance. Let the browser assign
+                // any font-metric difference to the tab itself, so leaders fill from the actual
+                // rendered label to the target instead of leaving invisible padding after them.
+                var spanStyle = new Dictionary<string, string>
+                {
+                    { "align-items", "baseline" },
+                    { "display", "inline-flex" },
+                    { "text-indent", "0" },
+                    { "width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}in", totalWidth) }
+                };
+                span.AddAnnotation(spanStyle);
+                return new List<object?> { span };
+            }
+            else if (txElementsPrecedingTab.Count == 1)
+            {
+                var element = txElementsPrecedingTab.First() as XElement;
+                if (element != null)
+                {
+                    var spanStyle = element.Annotation<Dictionary<string, string>>();
+                    if (spanStyle != null)
+                    {
+                        spanStyle.AddIfMissing("display", "inline-block");
+                        spanStyle.AddIfMissing("text-indent", "0");
+                        // Use min-width instead of width to allow content to expand naturally
+                        spanStyle.AddIfMissing("min-width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}in", totalWidth));
+                    }
+                }
+                // If we have a tab span with leaders, add it after the element
+                if (tabSpan != null)
+                {
+                    var wrapperSpan = new XElement(Xhtml.span, listMarkerAttr, element, tabSpan);
+                    var wrapperStyle = new Dictionary<string, string>
+                    {
+                        { "display", "inline-block" },
+                        { "text-indent", "0" },
+                        { "min-width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}in", totalWidth) }
+                    };
+                    wrapperSpan.AddAnnotation(wrapperStyle);
+                    return new List<object?> { wrapperSpan };
+                }
+            }
+            else if (tabSpan != null)
+            {
+                // Only the tab, no preceding content
+                var wrapperSpan = new XElement(Xhtml.span, listMarkerAttr, tabSpan);
+                var wrapperStyle = new Dictionary<string, string>
+                {
+                    { "display", "inline-block" },
+                    { "text-indent", "0" },
+                    { "min-width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}in", totalWidth) }
+                };
+                wrapperSpan.AddAnnotation(wrapperStyle);
+                return new List<object?> { wrapperSpan };
+            }
+            return txElementsPrecedingTab;
+        }
+
+        private static Dictionary<string, string> DefineParagraphStyle(XElement paragraph, XName elementName,
+            bool suppressTrailingWhiteSpace, decimal currentMarginLeft, bool isBidi, bool suppressLeadingWhiteSpace = false)
+        {
+            var style = new Dictionary<string, string>();
+
+            var styleName = (string?) paragraph.Attribute(PtOpenXml.StyleName);
+            if (styleName != null)
+                style.Add("PtStyleName", styleName);
+
+            var pPr = paragraph.Element(W.pPr);
+            if (pPr == null) return style;
+
+            CreateStyleFromSpacing(style, pPr.Element(W.spacing), elementName, suppressTrailingWhiteSpace,
+                suppressLeadingWhiteSpace);
+            CreateStyleFromInd(style, pPr.Element(W.ind), elementName, currentMarginLeft, isBidi);
+
+            // todo need to handle
+            // - both
+            // - mediumKashida
+            // - distribute
+            // - numTab
+            // - highKashida
+            // - lowKashida
+            // - thaiDistribute
+
+            CreateStyleFromJc(style, pPr.Element(W.jc), isBidi);
+            CreateStyleFromShd(style, pPr.Element(W.shd), paragraph);
+
+            DefineStrutFont(style, paragraph);
+            DefineLineHeight(style, paragraph);
+
+            // vertical text alignment as of December 2013 does not work in any major browsers.
+            CreateStyleFromTextAlignment(style, pPr.Element(W.textAlignment));
+
+            style.AddIfMissing("margin-top", "0");
+            style.AddIfMissing("margin-left", "0");
+            style.AddIfMissing("margin-right", "0");
+            style.AddIfMissing("margin-bottom", ".001pt");
+
+            return style;
+        }
+
+        private static void CreateStyleFromInd(Dictionary<string, string> style, XElement? ind, XName elementName,
+            decimal currentMarginLeft, bool isBidi)
+        {
+            if (ind == null) return;
+
+            var left = WordprocessingMLUtil.AttributeToDecimalTwips(WordprocessingMLUtil.IndLeadingAttribute(ind));
+            if (left != null && elementName != Xhtml.span)
+            {
+                var leftInInches = (decimal) left/1440 - currentMarginLeft;
+                style.AddIfMissing(isBidi ? "margin-right" : "margin-left",
+                    leftInInches > 0m
+                        ? string.Format(NumberFormatInfo.InvariantInfo, "{0:0.00}in", leftInInches)
+                        : "0");
+            }
+
+            var right = WordprocessingMLUtil.AttributeToDecimalTwips(WordprocessingMLUtil.IndTrailingAttribute(ind));
+            if (right != null)
+            {
+                var rightInInches = (decimal) right/1440;
+                style.AddIfMissing(isBidi ? "margin-left" : "margin-right",
+                    rightInInches > 0m
+                        ? string.Format(NumberFormatInfo.InvariantInfo, "{0:0.00}in", rightInInches)
+                        : "0");
+            }
+
+            var firstLine = WordprocessingMLUtil.AttributeToTwips(ind.Attribute(W.firstLine));
+            if (firstLine != null && elementName != Xhtml.span)
+            {
+                var firstLineInInches = (decimal) firstLine/1440m;
+                style.AddIfMissing("text-indent",
+                    string.Format(NumberFormatInfo.InvariantInfo, "{0:0.00}in", firstLineInInches));
+            }
+
+            var hanging = WordprocessingMLUtil.AttributeToTwips(ind.Attribute(W.hanging));
+            if (hanging != null && elementName != Xhtml.span)
+            {
+                var hangingInInches = (decimal) -hanging/1440m;
+                style.AddIfMissing("text-indent",
+                    string.Format(NumberFormatInfo.InvariantInfo, "{0:0.00}in", hangingInInches));
+            }
+        }
+
+        private static void CreateStyleFromJc(Dictionary<string, string> style, XElement? jc, bool isBidi)
+        {
+            if (jc != null)
+            {
+                var jcVal = (string?)jc.Attributes(W.val).FirstOrDefault() ?? "left";
+                if (jcVal == "left")
+                    style.AddIfMissing("text-align", isBidi ? "right" : "left");
+                else if (jcVal == "right")
+                    style.AddIfMissing("text-align", isBidi ? "left" : "right");
+                else if (jcVal == "center")
+                    style.AddIfMissing("text-align", "center");
+                else if (jcVal == "both")
+                    style.AddIfMissing("text-align", "justify");
+            }
+        }
+
+        private static void CreateStyleFromSpacing(Dictionary<string, string> style, XElement? spacing, XName elementName,
+            bool suppressTrailingWhiteSpace, bool suppressLeadingWhiteSpace = false)
+        {
+            if (spacing == null) return;
+
+            var spacingBefore = suppressLeadingWhiteSpace
+                ? 0
+                : WordprocessingMLUtil.AttributeToTwips(spacing.Attribute(W.before));
+            if (spacingBefore != null && elementName != Xhtml.span)
+                style.AddIfMissing("margin-top",
+                    spacingBefore > 0m
+                        ? string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", spacingBefore/20.0m)
+                        : "0");
+
+            // Per OOXML spec (ISO/IEC 29500), when lineRule is absent the default is "auto"
+            var lineRule = (string?) spacing.Attribute(W.lineRule) ?? (spacing.Attribute(W.line) != null ? "auto" : null);
+            // Word also permits point-suffixed line values (for example, 12.95pt) in
+            // compatibility-produced packages.  Normalize all line measures to twips before
+            // deriving their CSS value, just as before/after spacing already does below.
+            var line = WordprocessingMLUtil.AttributeToTwips(spacing.Attribute(W.line));
+            if (lineRule == "auto" && line is { } autoLine)
+            {
+                // 240ths of a LINE, where a line is the font's own single-line height. `240` needs
+                // no declaration at all: CSS `line-height: normal` already resolves to exactly
+                // that box, which is why the multiplier is emitted only when it is not 1.
+                if (autoLine != 240m)
+                {
+                    var multiple = autoLine / 240m;
+                    style.Add(AutomaticLineSpacingMultiplierCssProperty,
+                        string.Format(NumberFormatInfo.InvariantInfo, "{0:0.###}", multiple));
+                    style.Add("line-height", "normal");
+                }
+            }
+            if (lineRule == "exact" && line is { } exactLine)
+            {
+                var points = exactLine/20m;
+                style.Add("line-height", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0#}pt", points));
+                style.Add(ExactLineSpacingCssProperty, string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0#}pt", points));
+            }
+            if (lineRule == "atLeast" && line is { } atLeastLine)
+            {
+                var points = atLeastLine/20m;
+                if (points >= 14m)
+                    style.Add("line-height", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0#}pt", points));
+            }
+
+            var spacingAfter = suppressTrailingWhiteSpace ? 0 : WordprocessingMLUtil.AttributeToTwips(spacing.Attribute(W.after));
+            if (spacingAfter != null)
+                style.AddIfMissing("margin-bottom",
+                    spacingAfter > 0m
+                        ? string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", spacingAfter/20.0m)
+                        : "0");
+        }
+
+        private static void CreateStyleFromTextAlignment(Dictionary<string, string> style, XElement? textAlignment)
+        {
+            if (textAlignment == null) return;
+
+            var verticalTextAlignment = (string?)textAlignment.Attributes(W.val).FirstOrDefault();
+            if (verticalTextAlignment == null || verticalTextAlignment == "auto") return;
+
+            if (verticalTextAlignment == "top")
+                style.AddIfMissing("vertical-align", "top");
+            else if (verticalTextAlignment == "center")
+                style.AddIfMissing("vertical-align", "middle");
+            else if (verticalTextAlignment == "baseline")
+                style.AddIfMissing("vertical-align", "baseline");
+            else if (verticalTextAlignment == "bottom")
+                style.AddIfMissing("vertical-align", "bottom");
+        }
+
+        /// <summary>
+        /// The paragraph's own font, which sizes its strut: its share of every line box, and the <c>1lh</c> that
+        /// auto line multiples are built on. Family and size come from one real run, the first of the largest
+        /// size, so the strut is never taller than that run's own line (issue #940). Taking the family from the
+        /// paragraph mark and the size from the largest run paired, say, the default Calibri with the 12 pt of
+        /// Arial runs, and the strut outgrew every line. A paragraph with no runs keeps its mark's font.
+        /// </summary>
+        private static void DefineStrutFont(Dictionary<string, string> style, XElement paragraph)
+        {
+            XElement? strutRun = null;
+            decimal? sz = null;
+            foreach (var run in paragraph.DescendantsTrimmed(W.txbxContent).Where(e => e.Name == W.r))
+            {
+                var runSize = GetFontSize(run);
+                if (runSize != null && (sz == null || runSize > sz))
+                {
+                    sz = runSize;
+                    strutRun = run;
+                }
+            }
+
+            var font = (string?)strutRun?.Attribute(PtOpenXml.FontName) ??
+                       (string?)paragraph.Attribute(PtOpenXml.FontName);
+            if (font != null)
+                CreateFontCssProperty(font, null, null, style, paragraph);
+            if (sz != null)
+                style.AddIfMissing("font-size", string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", sz / 2.0m));
+        }
+
+        private static void DefineLineHeight(Dictionary<string, string> style, XElement paragraph)
+        {
+            // Don't set a default line-height. LibreOffice doesn't set explicit line-height,
+            // and browser defaults (~1.2) provide reasonable spacing. The previous 108% default
+            // made text too tight compared to LibreOffice's HTML output.
+            // Line-height is only set explicitly when w:lineRule is specified in the document
+            // (handled by CreateStyleFromSpacing).
+        }
+
+        /*
+         * Handle:
+         * - b
+         * - bdr
+         * - caps
+         * - color
+         * - dstrike
+         * - highlight
+         * - i
+         * - position
+         * - rFonts
+         * - shd
+         * - smallCaps
+         * - spacing
+         * - strike
+         * - sz
+         * - u
+         * - vanish
+         * - vertAlign
+         *
+         * Don't handle:
+         * - em
+         * - emboss
+         * - fitText
+         * - imprint
+         * - kern
+         * - outline
+         * - shadow
+         * - w
+         *
+         */
+
+        private static object? ConvertRun(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, XElement run)
+        {
+            var rPr = run.Element(W.rPr);
+
+            // List-marker runs (the generated number/bullet + its suffix tab, both tagged by
+            // FormattingAssembler with PtOpenXml.ListItemRun) are not part of the paragraph's
+            // editable content. Stamp data-list-marker so an editor can make them
+            // non-editable and exclude them from caret/offset math.
+            var isListMarker = run.Attribute(PtOpenXml.ListItemRun) != null;
+
+            // Skip runs that only contain w:footnoteRef or w:endnoteRef.
+            // These are placeholder elements in footnote/endnote text that Word uses to display
+            // the note number. Since we add the note number separately (via footnote-number span
+            // in paginated mode, or via <ol> value attribute in non-paginated mode), we skip
+            // these runs to avoid creating empty styled spans.
+            var contentElements = run.Elements().Where(e => e.Name != W.rPr).ToList();
+            if (contentElements.Count == 1 &&
+                (contentElements[0].Name == W.footnoteRef || contentElements[0].Name == W.endnoteRef))
+            {
+                return null;
+            }
+
+            // For runs containing only w:footnoteReference or w:endnoteReference,
+            // return just the anchor without span wrapper (like LibreOffice does).
+            // This prevents whitespace issues from nested elements.
+            if (contentElements.Count == 1 &&
+                (contentElements[0].Name == W.footnoteReference || contentElements[0].Name == W.endnoteReference))
+            {
+                return ConvertToHtmlTransform(wordDoc, settings, contentElements[0], false, 0m);
+            }
+
+            // Under exact paragraph spacing, generated break-only runs must not contribute
+            // default-font metrics. FormattingAssembler gives otherwise-unformatted break
+            // runs the document default rPr; wrapping that <br> in (for example) an 11pt span
+            // makes Chromium enlarge every 10pt line even though CSS line-height is exact.
+            // A bare break matches Word/LibreOffice and leaves ordinary (auto-spaced)
+            // paragraphs untouched.
+            var isBreakOnlyRun = contentElements.Count > 0 &&
+                contentElements.All(e => e.Name == W.br || e.Name == W.cr);
+            var paragraphHasExactLineHeight = run.Ancestors(W.p)
+                .Select(p => p.Element(W.pPr)?.Element(W.spacing))
+                .Any(spacing => spacing != null &&
+                    (string?)spacing.Attribute(W.lineRule) == "exact" &&
+                    spacing.Attribute(W.line) != null);
+            if (isBreakOnlyRun && paragraphHasExactLineHeight)
+                return contentElements.Select(e => ProcessBreak(e, settings, compactDirectionMark: true));
+
+            if (rPr == null)
+            {
+                var unstyledContent = run.Elements()
+                    .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m));
+                if (!paragraphHasExactLineHeight)
+                    return unstyledContent;
+
+                var exactRun = new XElement(Xhtml.span, new XAttribute("data-docx-exact-run", "true"), unstyledContent);
+                exactRun.AddAnnotation(new Dictionary<string, string>
+                {
+                    { "vertical-align", "top" },
+                    { "margin", "0" },
+                    { "padding", "0" },
+                });
+                return exactRun;
+            }
+
+            // w:webHidden is view-specific: it suppresses the run in Web layout, but the same
+            // run remains visible in Print layout. Paginated output models the latter (and is
+            // also what Chromium captures/prints), so hiding TOC PAGEREF results here removed
+            // both their page numbers and the leader tabs that precede them.
+            if (rPr.Element(W.webHidden) != null &&
+                settings.RenderPagination != PaginationMode.Paginated)
+                return null;
+
+            var style = DefineRunStyle(run);
+            ApplyFieldResultPresentation(run, style);
+            if (paragraphHasExactLineHeight)
+            {
+                // CSS line boxes are allowed to grow when baseline-aligned runs use font
+                // metrics that differ from the paragraph strut. Word's exact line spacing is
+                // fixed instead. Top-aligning run boxes preserves their declared line-height
+                // without changing glyph size, including when the paragraph default is larger.
+                style["vertical-align"] = "top";
+            }
+
+            // List-marker glyphs in a symbol font (e.g. Word's default bullet U+F0B7 in Symbol, or
+            // U+F0A7 in Wingdings) render as a blank box without the proprietary font installed. Map
+            // them to their Unicode equivalents and drop the symbol font so they render in the page's
+            // normal font. Scoped to markers (FormattingAssembler's ListItemRun) so body-text symbol
+            // runs are untouched; if nothing maps, the original text + font are left as-is.
+            object content;
+            if (isListMarker && style.TryGetValue("font-family", out var markerFont) &&
+                Internal.SymbolFontMapper.IsSymbolFont(markerFont))
+            {
+                var mappedAny = false;
+                content = run.Elements().Select(e =>
+                {
+                    if (e.Name != W.t) return ConvertToHtmlTransform(wordDoc, settings, e, false, 0m);
+                    var mapped = Internal.SymbolFontMapper.MapText(e.Value, markerFont);
+                    if (mapped != e.Value) mappedAny = true;
+                    return (object)new XText(mapped);
+                }).ToList();
+                if (mappedAny) style.Remove("font-family");
+            }
+            else
+            {
+                content = run.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m));
+            }
+
+            // Wrap content in h:sup or h:sub elements as necessary.
+            if (rPr.Element(W.vertAlign) != null)
+            {
+                XElement? newContent = null;
+                var vertAlignVal = (string?)rPr.Elements(W.vertAlign).Attributes(W.val).FirstOrDefault();
+                switch (vertAlignVal)
+                {
+                    case "superscript":
+                        newContent = ScriptElement(Xhtml.sup, content);
+                        break;
+                    case "subscript":
+                        newContent = ScriptElement(Xhtml.sub, content);
+                        break;
+                }
+                if (newContent != null && newContent.Nodes().Any())
+                    content = newContent;
+            }
+
+            var langAttribute = GetLangAttribute(run);
+
+            XEntity? runStartMark;
+            XEntity? runEndMark;
+            DetermineRunMarks(run, rPr, style, out runStartMark, out runEndMark);
+
+            if (style.Any() || langAttribute != null || runStartMark != null || isListMarker)
+            {
+                style.AddIfMissing("margin", "0");
+                style.AddIfMissing("padding", "0");
+                var xe = new XElement(Xhtml.span,
+                    paragraphHasExactLineHeight ? new XAttribute("data-docx-exact-run", "true") : null,
+                    isListMarker ? new XAttribute("data-list-marker", "true") : null,
+                    langAttribute,
+                    runStartMark,
+                    content,
+                    runEndMark);
+
+                xe.AddAnnotation(style);
+                content = xe;
+            }
+
+            // Handle run property changes (formatting revisions)
+            if (settings.RenderTrackedChanges && rPr != null)
+            {
+                var rPrChange = rPr.Element(W.rPrChange);
+                if (rPrChange != null)
+                {
+                    var formatChangeSpan = new XElement(Xhtml.span);
+                    var className = (settings.RevisionCssClassPrefix ?? "rev-") + "format-change";
+                    formatChangeSpan.Add(new XAttribute("class", className));
+
+                    // Generate a title describing the change
+                    var changeDescription = DescribeFormatChange(rPr, rPrChange);
+                    if (!string.IsNullOrEmpty(changeDescription))
+                        formatChangeSpan.Add(new XAttribute("title", changeDescription));
+
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var author = (string?)rPrChange.Attribute(W.author);
+                        var date = (string?)rPrChange.Attribute(W.date);
+                        if (author != null)
+                            formatChangeSpan.Add(new XAttribute("data-author", author));
+                        if (date != null)
+                            formatChangeSpan.Add(new XAttribute("data-date", date));
+                    }
+
+                    formatChangeSpan.Add(content);
+                    content = formatChangeSpan;
+                }
+            }
+
+            // Wrap content in comment highlight spans if inside an open comment range
+            if (settings.RenderComments)
+            {
+                var tracker = GetCommentTracker(run);
+                if (tracker != null && tracker.OpenRanges.Any())
+                {
+                    var prefix = settings.CommentCssClassPrefix ?? "comment-";
+
+                    // For each open comment range, wrap the content
+                    foreach (var commentId in tracker.OpenRanges.OrderBy(id => id))
+                    {
+                        tracker.RenderedRangeIds.Add(commentId);
+                        // A resolved comment's range must not read as a live objection in any
+                        // presentation mode (issue #540).
+                        var highlightClass = prefix + "highlight";
+                        if (tracker.Comments.TryGetValue(commentId, out var rangeComment)
+                            && rangeComment.Resolved)
+                        {
+                            highlightClass += " " + prefix + "resolved";
+                        }
+
+                        var highlightSpan = new XElement(Xhtml.span,
+                            new XAttribute("class", highlightClass),
+                            new XAttribute("data-comment-id", commentId.ToString()));
+
+                        // Add tooltip in inline mode
+                        if (settings.CommentRenderMode == CommentRenderMode.Inline)
+                        {
+                            if (tracker.Comments.TryGetValue(commentId, out var comment))
+                            {
+                                highlightSpan.Add(SourceAnchorIdentityAttribute(
+                                    settings, comment.SourceElement));
+
+                                // Inline mode presents the comment through its highlighted range
+                                // rather than through a separate body. Map each comment paragraph
+                                // to that same visible range so p:cmt scoped searches have an exact
+                                // presentation fragment instead of silently missing from the map.
+                                foreach (var commentParagraph in comment.ContentParagraphs)
+                                {
+                                    var paragraphIdentity = SourceAnchorIdentityAttribute(
+                                        settings, commentParagraph);
+                                    if (paragraphIdentity != null)
+                                        content = new XElement(Xhtml.span, paragraphIdentity, content);
+                                }
+
+                                // Build inline tooltip
+                                var tooltipText = comment.ContentParagraphs
+                                    .SelectMany(p => p.Descendants(W.t)
+                                        .Where(t => !t.Ancestors(W.r).Any(r => r.Elements(W.annotationRef).Any())))
+                                    .Select(t => t.Value)
+                                    .StringConcatenate();
+
+                                if (!string.IsNullOrEmpty(tooltipText))
+                                {
+                                    var tooltip = comment.Author != null
+                                        ? $"{comment.Author}: {tooltipText}"
+                                        : tooltipText;
+                                    highlightSpan.Add(new XAttribute("title", tooltip));
+                                }
+
+                                if (settings.IncludeCommentMetadata)
+                                {
+                                    highlightSpan.Add(new XAttribute("data-comment", tooltipText ?? ""));
+                                    if (comment.Author != null)
+                                        highlightSpan.Add(new XAttribute("data-author", comment.Author));
+                                    if (comment.Date != null)
+                                        highlightSpan.Add(new XAttribute("data-date", comment.Date));
+                                }
+                            }
+                        }
+
+                        highlightSpan.Add(content);
+                        content = highlightSpan;
+                    }
+                }
+            }
+
+            // Wrap content in annotation highlight spans if inside an open annotation range
+            if (settings.RenderAnnotations)
+            {
+                var annotTracker = GetAnnotationTracker(run);
+                if (annotTracker != null && annotTracker.OpenRanges.Any())
+                {
+                    var prefix = settings.AnnotationCssClassPrefix ?? "annot-";
+
+                    // For each open annotation range, wrap the content
+                    foreach (var annotationId in annotTracker.OpenRanges.OrderBy(id => id))
+                    {
+                        if (annotTracker.Annotations.TryGetValue(annotationId, out var annotation))
+                        {
+                            var highlightSpan = new XElement(Xhtml.span,
+                                new XAttribute("class", prefix + "highlight"),
+                                new XAttribute("data-annotation-id", annotationId));
+
+                            // Set the color as a CSS custom property
+                            var inlineStyle = new Dictionary<string, string>();
+                            if (!string.IsNullOrEmpty(annotation.Color))
+                            {
+                                inlineStyle["--annot-color"] = annotation.Color;
+                            }
+
+                            // Add label mode
+                            var labelMode = settings.AnnotationLabelMode.ToString().ToLowerInvariant();
+                            highlightSpan.Add(new XAttribute("data-label-mode", labelMode));
+
+                            // Add metadata if requested
+                            if (settings.IncludeAnnotationMetadata)
+                            {
+                                highlightSpan.Add(new XAttribute("data-label-id", annotation.LabelId ?? ""));
+                                if (annotation.Author != null)
+                                    highlightSpan.Add(new XAttribute("data-author", annotation.Author));
+                                if (annotation.Created.HasValue)
+                                    highlightSpan.Add(new XAttribute("data-created", annotation.Created.Value.ToString("o")));
+                                if (annotation.StartPage.HasValue)
+                                    highlightSpan.Add(new XAttribute("data-start-page", annotation.StartPage.Value.ToString()));
+                                if (annotation.EndPage.HasValue)
+                                    highlightSpan.Add(new XAttribute("data-end-page", annotation.EndPage.Value.ToString()));
+                            }
+
+                            // Add floating label if this is the first segment of the annotation
+                            // and label mode is not None
+                            if (settings.AnnotationLabelMode != AnnotationLabelMode.None &&
+                                !annotTracker.FirstSegmentRendered.Contains(annotationId))
+                            {
+                                annotTracker.FirstSegmentRendered.Add(annotationId);
+                                var labelSpan = new XElement(Xhtml.span,
+                                    new XAttribute("class", prefix + "label"),
+                                    new XText(annotation.Label ?? annotation.LabelId ?? ""));
+                                highlightSpan.AddFirst(labelSpan);
+                            }
+                            else if (annotTracker.FirstSegmentRendered.Contains(annotationId))
+                            {
+                                // Mark as continuation for CSS styling
+                                var existingClass = (string?)highlightSpan.Attribute("class");
+                                highlightSpan.SetAttributeValue("class", existingClass + " " + prefix + "continuation");
+                            }
+
+                            // Apply inline style
+                            if (inlineStyle.Any())
+                            {
+                                highlightSpan.AddAnnotation(inlineStyle);
+                            }
+
+                            highlightSpan.Add(content);
+                            content = highlightSpan;
+                        }
+                    }
+                }
+            }
+
+            return content;
+        }
+
+        /// <summary>
+        /// Applies presentation semantics that belong to a cached field result rather than to an
+        /// individual run. Word suppresses hyperlink color and underline inside cached TOC
+        /// results, even when those runs reference the Hyperlink character style. The same run
+        /// outside the TOC field keeps its declared character style.
+        /// </summary>
+        private static void ApplyFieldResultPresentation(
+            XElement run,
+            Dictionary<string, string> style)
+        {
+            if (!run.Ancestors(W.hyperlink).Any() || !FieldRetriever.IsFieldResult(run, "TOC"))
+                return;
+
+            // Removing these properties exposes the underlying TOC paragraph/run formatting; it
+            // does not force black onto a document whose TOC style intentionally uses another
+            // color. Preserve any non-underline decoration that may coexist on the run.
+            style.Remove("color");
+            if (!style.TryGetValue("text-decoration", out var decoration))
+                return;
+
+            var remaining = decoration
+                .Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                .Where(value => !string.Equals(value, "underline", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (remaining.Length == 0)
+                style.Remove("text-decoration");
+            else
+                style["text-decoration"] = string.Join(" ", remaining);
+        }
+
+        private static string DescribeFormatChange(XElement currentRPr, XElement rPrChange)
+        {
+            var changes = new List<string>();
+            var previousRPr = rPrChange.Element(W.rPr);
+
+            // Check for bold change
+            var currentBold = currentRPr.Element(W.b) != null;
+            var previousBold = previousRPr?.Element(W.b) != null;
+            if (currentBold != previousBold)
+                changes.Add(currentBold ? "Bold added" : "Bold removed");
+
+            // Check for italic change
+            var currentItalic = currentRPr.Element(W.i) != null;
+            var previousItalic = previousRPr?.Element(W.i) != null;
+            if (currentItalic != previousItalic)
+                changes.Add(currentItalic ? "Italic added" : "Italic removed");
+
+            // Check for underline change
+            var currentUnderline = currentRPr.Element(W.u) != null;
+            var previousUnderline = previousRPr?.Element(W.u) != null;
+            if (currentUnderline != previousUnderline)
+                changes.Add(currentUnderline ? "Underline added" : "Underline removed");
+
+            // Check for strikethrough change
+            var currentStrike = currentRPr.Element(W.strike) != null;
+            var previousStrike = previousRPr?.Element(W.strike) != null;
+            if (currentStrike != previousStrike)
+                changes.Add(currentStrike ? "Strikethrough added" : "Strikethrough removed");
+
+            // Check for font size change
+            var currentSz = (string?)currentRPr.Elements(W.sz).Attributes(W.val).FirstOrDefault();
+            var previousSz = (string?)previousRPr?.Elements(W.sz).Attributes(W.val).FirstOrDefault();
+            if (currentSz != previousSz)
+                changes.Add("Font size changed");
+
+            // Check for font change
+            var currentFont = (string?)currentRPr.Elements(W.rFonts).Attributes(W.ascii).FirstOrDefault();
+            var previousFont = (string?)previousRPr?.Elements(W.rFonts).Attributes(W.ascii).FirstOrDefault();
+            if (currentFont != previousFont)
+                changes.Add("Font changed");
+
+            // Check for color change
+            var currentColor = (string?)currentRPr.Elements(W.color).Attributes(W.val).FirstOrDefault();
+            var previousColor = (string?)previousRPr?.Elements(W.color).Attributes(W.val).FirstOrDefault();
+            if (currentColor != previousColor)
+                changes.Add("Color changed");
+
+            if (changes.Count == 0)
+                return "Format changed";
+
+            return string.Join(", ", changes);
+        }
+
+        [SuppressMessage("ReSharper", "FunctionComplexityOverflow")]
+        private static Dictionary<string, string> DefineRunStyle(XElement run)
+        {
+            var style = new Dictionary<string, string>();
+
+            var rPr = run.Elements(W.rPr).FirstOrDefault();
+            if (rPr == null)
+                return style;
+
+            var styleName = (string?) run.Attribute(PtOpenXml.StyleName);
+            if (styleName != null)
+                style.Add("PtStyleName", styleName);
+
+            // W.bdr
+            if (rPr.Element(W.bdr) != null && (string?) rPr.Elements(W.bdr).Attributes(W.val).FirstOrDefault() != "none")
+            {
+                style.AddIfMissing("border", "solid windowtext 1.0pt");
+                style.AddIfMissing("padding", "0");
+            }
+
+            // W.color - with theme color support
+            var colorElement = rPr.Element(W.color);
+            if (colorElement != null)
+            {
+                var themeScheme = GetThemeColorScheme(run);
+                var color = ResolveThemeColor(colorElement, W.val, W.themeColor, W.themeTint, W.themeShade, themeScheme);
+                if (color != null)
+                    CreateColorProperty("color", color, style);
+            }
+
+            // W.highlight
+            var highlight = (string?) rPr.Elements(W.highlight).Attributes(W.val).FirstOrDefault();
+            if (highlight != null)
+                CreateColorProperty("background", highlight, style);
+
+            // W.shd - with theme fill support
+            var shdElement = rPr.Element(W.shd);
+            if (shdElement != null)
+            {
+                var themeScheme = GetThemeColorScheme(run);
+                var shade = ResolveThemeColor(shdElement, W.fill, W.themeFill, W.themeFillTint, W.themeFillShade, themeScheme);
+                if (shade != null)
+                    CreateColorProperty("background", shade, style);
+            }
+
+            // Get language type first (needed for font and font size)
+            var languageType = (string?)run.Attribute(PtOpenXml.LanguageType);
+
+            // Pt.FontName
+            var sym = run.Element(W.sym);
+            var font = sym != null
+                ? (string?) sym.Attributes(W.font).FirstOrDefault()
+                : (string?) run.Attributes(PtOpenXml.FontName).FirstOrDefault();
+            if (font != null)
+            {
+                // For CJK text, get the east Asian language code for font fallback chain
+                string? langCode = null;
+                if (languageType == "eastAsia")
+                {
+                    langCode = (string?)rPr.Elements(W.lang).Attributes(W.eastAsia).FirstOrDefault();
+                }
+                CreateFontCssProperty(font, languageType, langCode, style, run);
+            }
+
+            // W.sz
+            var sz = GetFontSize(languageType, rPr);
+            if (sz != null)
+                style.AddIfMissing("font-size", string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", sz/2.0m));
+
+            // Word kerning is opt-in, with a minimum size in half-points. Preserve
+            // that resolved intent for the precision text renderer; legacy complex
+            // layouts retain their existing shaping until that renderer owns them.
+            var kern = (decimal?)rPr.Element(W.kern)?.Attribute(W.val);
+            if (kern != null)
+                style["--docx-font-kerning"] = sz != null && sz >= kern ? "normal" : "none";
+
+            // W.caps
+            if (GetBoolProp(rPr, W.caps))
+                style.AddIfMissing("text-transform", "uppercase");
+
+            // W.smallCaps
+            if (GetBoolProp(rPr, W.smallCaps))
+                style.AddIfMissing("font-variant", "small-caps");
+
+            // W.spacing
+            var spacingInTwips = (decimal?) rPr.Elements(W.spacing).Attributes(W.val).FirstOrDefault();
+            if (spacingInTwips != null)
+                style.AddIfMissing("letter-spacing",
+                    string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", spacingInTwips/20));
+
+            // W.position. Word grows a line to make room for a shifted run, as recorded from its own PDFs (see
+            // npm/tests/fixtures/line-baselines.word.json). For a raised run (CASE6, issue #941) it keeps the
+            // raised text at the line's usual top and moves the baseline down by the raise. For a lowered run
+            // (CASE7, issue #948) it keeps the baseline and grows the line downward by the drop, so every later
+            // line moves down by it. vertical-align does both, where relative positioning moved the glyphs
+            // without growing the line.
+            var position = (decimal?) rPr.Elements(W.position).Attributes(W.val).FirstOrDefault();
+            if (position is { } halfPoints && halfPoints != 0)
+                style.AddIfMissing("vertical-align", string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", halfPoints / 2));
+
+            // W.vanish
+            if (GetBoolProp(rPr, W.vanish) && !GetBoolProp(rPr, W.specVanish))
+                style.AddIfMissing("display", "none");
+
+            // W.u
+            if (rPr.Element(W.u) != null && (string?) rPr.Elements(W.u).Attributes(W.val).FirstOrDefault() != "none")
+                style.AddIfMissing("text-decoration", "underline");
+
+            // W.i
+            style.AddIfMissing("font-style", GetBoolProp(rPr, W.i) ? "italic" : "normal");
+
+            // W.b
+            style.AddIfMissing("font-weight", GetBoolProp(rPr, W.b) ? "bold" : "normal");
+
+            // W.strike
+            if (GetBoolProp(rPr, W.strike) || GetBoolProp(rPr, W.dstrike))
+                style.AddIfMissing("text-decoration", "line-through");
+
+            return style;
+        }
+
+        private static decimal? GetFontSize(XElement e)
+        {
+            var languageType = (string?)e.Attribute(PtOpenXml.LanguageType);
+            if (e.Name == W.p)
+            {
+                return GetFontSize(languageType, e.Elements(W.pPr).Elements(W.rPr).FirstOrDefault());
+            }
+            if (e.Name == W.r)
+            {
+                return GetFontSize(languageType, e.Element(W.rPr));
+            }
+            return null;
+        }
+
+        private static decimal? GetFontSize(string? languageType, XElement? rPr)
+        {
+            if (rPr == null) return null;
+            return languageType == "bidi"
+                ? (decimal?) rPr.Elements(W.szCs).Attributes(W.val).FirstOrDefault()
+                : (decimal?) rPr.Elements(W.sz).Attributes(W.val).FirstOrDefault();
+        }
+
+        /// <summary>
+        /// Word draws a <c>w:vertAlign</c> superscript or subscript at about 0.65 of the run's size,
+        /// raised about 0.345 of the size (superscript) or lowered about 0.085 (subscript), measured in
+        /// Word reference PDFs (issue #1016). Word's exact raise varies by face, so these are the values
+        /// with the smallest worst-case error across Calibri, Aptos, Times New Roman and Arial. The
+        /// browser's own <c>vertical-align: super</c> raises by about a third of the size plus a pixel
+        /// at 0.83 of the size, well above Word.
+        /// </summary>
+        private const decimal ScriptSizeRatio = 0.65m;
+        private const decimal SuperscriptRaiseRatio = 0.345m;
+        private const decimal SubscriptDropRatio = 0.085m;
+
+        private static string ScriptSizeCss => FormattableString.Invariant($"{ScriptSizeRatio}em");
+
+        /// <summary>The raise as a <c>vertical-align</c> length. An em there is the shrunken element's
+        /// own size, so the ratio to the run's size is divided by the script size.</summary>
+        private static string ScriptRaiseCss(bool superscript) => string.Format(NumberFormatInfo.InvariantInfo,
+            "{0:0.####}em", (superscript ? SuperscriptRaiseRatio : -SubscriptDropRatio) / ScriptSizeRatio);
+
+        /// <summary>A superscript or subscript element sized and raised as Word draws it. The one place
+        /// the converter shapes a <c>sup</c> or <c>sub</c>, so runs and note references agree.</summary>
+        private static XElement ScriptElement(XName name, object? content) =>
+            new XElement(name,
+                new XAttribute("style", $"vertical-align: {ScriptRaiseCss(name == Xhtml.sup)}; font-size: {ScriptSizeCss}"),
+                content);
+
+        private static void DetermineRunMarks(XElement run, XElement? rPr, Dictionary<string, string> style, out XEntity? runStartMark, out XEntity? runEndMark)
+        {
+            runStartMark = null;
+            runEndMark = null;
+
+            // Only do the following for text runs.
+            if (run.Element(W.t) == null) return;
+
+            // Can't add directional marks if the font-family is symbol - they are visible, and display as a ?
+            var addDirectionalMarks = true;
+            if (style.ContainsKey("font-family"))
+            {
+                if (style["font-family"].ToLower() == "symbol")
+                    addDirectionalMarks = false;
+            }
+            if (!addDirectionalMarks) return;
+
+            var isRtl = IsOnOffPropertyEnabled(rPr?.Element(W.rtl));
+            if (isRtl)
+            {
+                runStartMark = new XEntity("#x200f"); // RLM
+                runEndMark = new XEntity("#x200f"); // RLM
+            }
+            else
+            {
+                var paragraph = run.Ancestors(W.p).First();
+                var paraIsBidi = paragraph
+                    .Elements(W.pPr)
+                    .Elements(W.bidi)
+                    .Any(b => b.Attribute(W.val) == null || b.Attribute(W.val).ToBoolean() == true);
+
+                if (paraIsBidi)
+                {
+                    runStartMark = new XEntity("#x200e"); // LRM
+                    runEndMark = new XEntity("#x200e"); // LRM
+                }
+            }
+        }
+
+        private static XAttribute? GetLangAttribute(XElement run)
+        {
+            // Get document default language from annotation (set during preprocessing)
+            var docRoot = run.Document?.Root;
+            var langAnnotation = docRoot?.Annotation<DocumentLanguageAnnotation>();
+            var defaultLanguage = langAnnotation?.DefaultLanguage ?? "en-US";
+
+            var rPr = run.Elements(W.rPr).FirstOrDefault();
+            if (rPr == null)
+                return null;
+            var languageType = (string?)run.Attribute(PtOpenXml.LanguageType);
+
+            string? lang = null;
+            if (languageType == "western")
+                lang = (string?) rPr.Elements(W.lang).Attributes(W.val).FirstOrDefault();
+            else if (languageType == "bidi")
+                lang = (string?) rPr.Elements(W.lang).Attributes(W.bidi).FirstOrDefault();
+            else if (languageType == "eastAsia")
+                lang = (string?) rPr.Elements(W.lang).Attributes(W.eastAsia).FirstOrDefault();
+
+            // Only add lang attribute if run's language differs from document default
+            if (string.IsNullOrEmpty(lang) || lang == defaultLanguage)
+                return null;
+
+            return new XAttribute("lang", lang);
+        }
+
+        /// <summary>
+        /// Annotation class to store document default language for use by GetLangAttribute.
+        /// </summary>
+        private class DocumentLanguageAnnotation
+        {
+            required public string DefaultLanguage { get; set; }
+        }
+
+        /// <summary>
+        /// Cache for resolved theme color scheme from the document's theme.
+        /// Maps theme color names (e.g., "accent1", "dk1") to hex color values.
+        /// </summary>
+        private class ThemeColorScheme
+        {
+            public Dictionary<string, string> Colors { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Loads the theme color scheme from the document's ThemePart.
+        /// </summary>
+        /// <summary>
+        /// The document's own declared fallback for each font family: <c>w:altName</c> from
+        /// <c>word/fontTable.xml</c>, keyed by the family it stands in for.
+        /// </summary>
+        /// <remarks>
+        /// ECMA-376 §17.8.3.1 defines <c>w:altName</c> as the family to use when the primary one is
+        /// not available, and real documents lean on it for names no font vendor ships. The NVCA
+        /// charter declares <c>(normal text)</c> — Word's UI label for the theme font, written into
+        /// numbering as if it were a family — and <c>TimesNewRomanPSMT</c>, a PostScript spelling,
+        /// each with <c>altName="Times New Roman"</c>, plus <c>SimSun</c> → <c>宋体</c>. Emitting only
+        /// the primary name left the renderer asking for families that cannot exist, which
+        /// standalone export reports as <c>font_unavailable</c> (issue #670).
+        /// </remarks>
+        internal sealed class FontAltNames
+        {
+            public Dictionary<string, string> ByFamily { get; } =
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        /// <summary>Root elements of every non-body story the converter renders.</summary>
+        private static IEnumerable<XElement> EnumerateStoryRoots(WordprocessingDocument wordDoc)
+        {
+            var main = wordDoc.MainDocumentPart;
+            if (main is null) yield break;
+            foreach (var header in main.HeaderParts)
+                if (header.GetXDocument().Root is { } root) yield return root;
+            foreach (var footer in main.FooterParts)
+                if (footer.GetXDocument().Root is { } root) yield return root;
+            if (main.FootnotesPart?.GetXDocument().Root is { } footnotes) yield return footnotes;
+            if (main.EndnotesPart?.GetXDocument().Root is { } endnotes) yield return endnotes;
+            if (main.WordprocessingCommentsPart?.GetXDocument().Root is { } comments) yield return comments;
+        }
+
+        private static FontAltNames LoadFontAltNames(WordprocessingDocument wordDoc)
+        {
+            var altNames = new FontAltNames();
+
+            var fontTablePart = wordDoc.MainDocumentPart?.FontTablePart;
+            if (fontTablePart == null)
+                return altNames;
+
+            foreach (var font in fontTablePart.GetXDocument().Root?.Elements(W.font)
+                ?? Enumerable.Empty<XElement>())
+            {
+                var name = (string?)font.Attribute(W.name);
+                var alt = (string?)font.Element(W.altName)?.Attribute(W.val);
+                if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(alt)) continue;
+                // A self-referential entry adds nothing and would duplicate the family in the stack.
+                if (string.Equals(name, alt, StringComparison.OrdinalIgnoreCase)) continue;
+                altNames.ByFamily[name!] = alt!;
+            }
+
+            return altNames;
+        }
+
+        private static ThemeColorScheme LoadThemeColorScheme(WordprocessingDocument wordDoc)
+        {
+            var cache = new ThemeColorScheme();
+
+            var themePart = wordDoc.MainDocumentPart?.ThemePart;
+            if (themePart == null)
+                return cache;
+
+            var themeXDoc = themePart.GetXDocument();
+            var clrScheme = themeXDoc.Root?.Element(A.themeElements)?.Element(A.clrScheme);
+            if (clrScheme == null)
+                return cache;
+
+            // Theme color element names
+            var colorNames = new[] { "dk1", "lt1", "dk2", "lt2",
+                "accent1", "accent2", "accent3", "accent4", "accent5", "accent6",
+                "hlink", "folHlink" };
+
+            foreach (var colorName in colorNames)
+            {
+                var colorElement = clrScheme.Element(A.a + colorName);
+                if (colorElement == null) continue;
+
+                // Try srgbClr first (explicit hex color)
+                var srgbClr = colorElement.Element(A.srgbClr);
+                if (srgbClr != null)
+                {
+                    var val = (string?)srgbClr.Attribute("val");
+                    if (!string.IsNullOrEmpty(val))
+                    {
+                        cache.Colors[colorName] = val;
+                        continue;
+                    }
+                }
+
+                // Try sysClr (system color reference)
+                var sysClr = colorElement.Element(A.sysClr);
+                if (sysClr != null)
+                {
+                    // Use lastClr if available (the saved color value)
+                    var lastClr = (string?)sysClr.Attribute("lastClr");
+                    if (!string.IsNullOrEmpty(lastClr))
+                    {
+                        cache.Colors[colorName] = lastClr;
+                        continue;
+                    }
+
+                    // Fall back to system color name mapping
+                    var sysColorName = (string?)sysClr.Attribute("val");
+                    if (!string.IsNullOrEmpty(sysColorName))
+                    {
+                        cache.Colors[colorName] = MapSystemColor(sysColorName);
+                    }
+                }
+            }
+
+            return cache;
+        }
+
+        /// <summary>
+        /// Builds the footnote and endnote numbering tracker by scanning
+        /// the document for references in document order.
+        /// </summary>
+        private static void BuildFootnoteNumberingTracker(XElement rootElement, FootnoteNumberingTracker tracker)
+        {
+            int footnoteNumber = 0;
+            int endnoteNumber = 0;
+
+            // Scan for footnote and endnote references in document order
+            foreach (var element in rootElement.Descendants())
+            {
+                if (element.Name == W.footnoteReference)
+                {
+                    var id = (string?)element.Attribute(W.id);
+                    if (id != null && !tracker.FootnoteIdToDisplayNumber.ContainsKey(id))
+                    {
+                        footnoteNumber++;
+                        tracker.FootnoteIdToDisplayNumber[id] = footnoteNumber;
+                        tracker.FootnoteIdsInOrder.Add(id);
+                    }
+                }
+                else if (element.Name == W.endnoteReference)
+                {
+                    var id = (string?)element.Attribute(W.id);
+                    if (id != null && !tracker.EndnoteIdToDisplayNumber.ContainsKey(id))
+                    {
+                        endnoteNumber++;
+                        tracker.EndnoteIdToDisplayNumber[id] = endnoteNumber;
+                        tracker.EndnoteIdsInOrder.Add(id);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Resolves the effective ST_NumberFormat token for footnote or endnote markers.
+        /// A w:numFmt inside a section's w:footnotePr/w:endnotePr wins over the document-wide
+        /// declaration in settings.xml; with neither present, Word's spec defaults apply —
+        /// decimal for footnotes but lowerRoman for endnotes (ECMA-376 §17.11.17/§17.11.19).
+        /// </summary>
+        private static string GetNoteNumberFormat(WordprocessingDocument wordDoc, XName notePrName, string specDefault)
+        {
+            var body = wordDoc.MainDocumentPart?.GetXDocument().Root?.Element(W.body);
+            var sectionFormat = body?.Descendants(W.sectPr)
+                .Select(sectPr => (string?)sectPr.Element(notePrName)?.Element(W.numFmt)?.Attribute(W.val))
+                .FirstOrDefault(v => v != null);
+            if (sectionFormat != null)
+                return sectionFormat;
+
+            var settingsFormat = (string?)GetSettingsXDocumentOrDefault(wordDoc)?.Root
+                ?.Element(notePrName)?.Element(W.numFmt)?.Attribute(W.val);
+            return settingsFormat ?? specDefault;
+        }
+
+        /// <summary>
+        /// Renders a note's sequential display number in the given ST_NumberFormat token
+        /// (e.g. 1 → "i" for lowerRoman). Tokens without a numbering algorithm fall back
+        /// to the decimal spelling so a marker never renders as empty text.
+        /// </summary>
+        private static string FormatNoteNumber(int number, string numFmt)
+        {
+            var text = ListItemTextGetter_Default.GetListItemText("en-US", number, numFmt);
+            return string.IsNullOrEmpty(text) ? number.ToString() : text;
+        }
+
+        /// <summary>
+        /// CSS list-style-type equivalent of an ST_NumberFormat token, for the footnotes/endnotes
+        /// section &lt;ol&gt; — the li elements carry numeric value attributes, and the browser
+        /// renders those values in this style. Unmapped tokens fall back to decimal.
+        /// </summary>
+        private static string NoteListStyleType(string numFmt) => numFmt switch
+        {
+            "lowerRoman" => "lower-roman",
+            "upperRoman" => "upper-roman",
+            "lowerLetter" => "lower-alpha",
+            "upperLetter" => "upper-alpha",
+            "decimalZero" => "decimal-leading-zero",
+            _ => "decimal",
+        };
+
+        /// <summary>
+        /// Maps Windows system color names to hex values.
+        /// </summary>
+        private static string MapSystemColor(string sysColorName)
+        {
+            return sysColorName.ToLowerInvariant() switch
+            {
+                "windowtext" => "000000",
+                "window" => "FFFFFF",
+                "highlight" => "0078D7",
+                "highlighttext" => "FFFFFF",
+                "graytext" => "6D6D6D",
+                "btnface" => "F0F0F0",
+                "btntext" => "000000",
+                "captiontext" => "000000",
+                "inactivecaptiontext" => "000000",
+                _ => "000000" // Default to black
+            };
+        }
+
+        /// <summary>
+        /// Applies tint or shade modifier to a color.
+        /// Tint lightens toward white, shade darkens toward black.
+        /// Values are hex strings (00-FF) where FF = no change, 00 = full effect.
+        /// </summary>
+        private static string ApplyTintShade(string hexColor, string? tintHex, string? shadeHex)
+        {
+            if (string.IsNullOrEmpty(hexColor) || hexColor.Length != 6)
+                return hexColor;
+
+            if (!int.TryParse(hexColor.Substring(0, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int r) ||
+                !int.TryParse(hexColor.Substring(2, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int g) ||
+                !int.TryParse(hexColor.Substring(4, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int b))
+                return hexColor;
+
+            // Apply tint (lighten toward white)
+            // OOXML tint formula: newVal = val + (255 - val) * (1 - tint/255)
+            // When tint=FF (255), no change. When tint=00 (0), full white.
+            if (!string.IsNullOrEmpty(tintHex) &&
+                int.TryParse(tintHex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int tint))
+            {
+                double tintFactor = tint / 255.0;
+                r = (int)(r + (255 - r) * (1 - tintFactor));
+                g = (int)(g + (255 - g) * (1 - tintFactor));
+                b = (int)(b + (255 - b) * (1 - tintFactor));
+            }
+
+            // Apply shade (darken toward black)
+            // OOXML shade formula: newVal = val * (shade/255)
+            // When shade=FF (255), no change. When shade=00 (0), full black.
+            if (!string.IsNullOrEmpty(shadeHex) &&
+                int.TryParse(shadeHex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int shade))
+            {
+                double shadeFactor = shade / 255.0;
+                r = (int)(r * shadeFactor);
+                g = (int)(g * shadeFactor);
+                b = (int)(b * shadeFactor);
+            }
+
+            // Clamp values
+            r = Math.Max(0, Math.Min(255, r));
+            g = Math.Max(0, Math.Min(255, g));
+            b = Math.Max(0, Math.Min(255, b));
+
+            return $"{r:X2}{g:X2}{b:X2}";
+        }
+
+        /// <summary>
+        /// Resolves a theme color to its hex value, applying tint/shade modifiers.
+        /// Falls back to explicit color if theme color is not found.
+        /// </summary>
+        private static string? ResolveThemeColor(
+            XElement? element,
+            XName colorAttr,
+            XName themeColorAttr,
+            XName themeTintAttr,
+            XName themeShadeAttr,
+            ThemeColorScheme? scheme)
+        {
+            if (element == null)
+                return null;
+
+            // Get explicit color value as fallback
+            var explicitColor = (string?)element.Attribute(colorAttr);
+
+            // If no theme scheme or no themeColor attribute, return explicit color
+            if (scheme == null || scheme.Colors.Count == 0)
+                return explicitColor;
+
+            var themeColorName = (string?)element.Attribute(themeColorAttr);
+            if (string.IsNullOrEmpty(themeColorName))
+                return explicitColor;
+
+            // Look up theme color
+            if (!scheme.Colors.TryGetValue(themeColorName, out string? themeColor))
+                return explicitColor; // Fall back to explicit if theme color not found
+
+            // Apply tint/shade modifiers
+            var tint = (string?)element.Attribute(themeTintAttr);
+            var shade = (string?)element.Attribute(themeShadeAttr);
+
+            return ApplyTintShade(themeColor, tint, shade);
+        }
+
+        /// <summary>
+        /// Gets the ThemeColorScheme annotation from the root element.
+        /// </summary>
+        private static ThemeColorScheme? GetThemeColorScheme(XElement element)
+        {
+            var root = element.AncestorsAndSelf().Last();
+            return root.Annotation<ThemeColorScheme>();
+        }
+
+        /// <summary>Word's built-in default tab stop (in twips) used when no explicit
+        /// w:defaultTabStop value is available, e.g. settings.xml is absent or lacks the element.</summary>
+        private const int DefaultTabStopTwips = 720;
+
+        /// <summary>Gets the DocumentSettingsPart's XDocument, or null if the part is absent.
+        /// DocumentSettingsPart is optional in OOXML — Word opens packages without
+        /// word/settings.xml fine, so callers must not assume it is present.</summary>
+        private static XDocument? GetSettingsXDocumentOrDefault(WordprocessingDocument wordDoc) =>
+            wordDoc.MainDocumentPart?.DocumentSettingsPart?.GetXDocument();
+
+        /// <summary>
+        /// Extracts the document's default language from settings.
+        /// Priority: 1) themeFontLang, 2) default paragraph style lang, 3) "en-US"
+        /// </summary>
+        private static string GetDocumentDefaultLanguage(WordprocessingDocument wordDoc)
+        {
+            const string fallbackLanguage = "en-US";
+
+            // Try 1: themeFontLang in DocumentSettingsPart
+            var settingsXDoc = GetSettingsXDocumentOrDefault(wordDoc);
+            if (settingsXDoc != null)
+            {
+                var themeFontLang = settingsXDoc.Descendants(W.themeFontLang).FirstOrDefault();
+                if (themeFontLang != null)
+                {
+                    // Prefer w:val (western), then w:eastAsia, then w:bidi
+                    var lang = (string?)themeFontLang.Attribute(W.val);
+                    if (!string.IsNullOrEmpty(lang))
+                        return lang;
+
+                    lang = (string?)themeFontLang.Attribute(W.eastAsia);
+                    if (!string.IsNullOrEmpty(lang))
+                        return lang;
+
+                    lang = (string?)themeFontLang.Attribute(W.bidi);
+                    if (!string.IsNullOrEmpty(lang))
+                        return lang;
+                }
+            }
+
+            // Try 2: Default paragraph style's language
+            var stylesPart = wordDoc.MainDocumentPart?.StyleDefinitionsPart;
+            if (stylesPart != null)
+            {
+                var stylesXDoc = stylesPart.GetXDocument();
+                var defaultParaStyle = stylesXDoc.Root?
+                    .Elements(W.style)
+                    .FirstOrDefault(s =>
+                        (string?)s.Attribute(W.type) == "paragraph" &&
+                        s.Attribute(W._default).ToBoolean() == true);
+
+                if (defaultParaStyle != null)
+                {
+                    var lang = (string?)defaultParaStyle
+                        .Elements(W.rPr)
+                        .Elements(W.lang)
+                        .Attributes(W.val)
+                        .FirstOrDefault();
+
+                    if (!string.IsNullOrEmpty(lang))
+                        return lang;
+                }
+            }
+
+            return fallbackLanguage;
+        }
+
+        private static void AdjustTableBorders(WordprocessingDocument wordDoc)
+        {
+            // Note: when implementing a paging version of the HTML transform, this needs to be done
+            // for all content parts, not just the main document part.
+
+            var xd = wordDoc.MainDocumentPart!.GetXDocument();
+            foreach (var tbl in xd.Descendants(W.tbl))
+                AdjustTableBorders(tbl);
+            wordDoc.MainDocumentPart!.PutXDocument();
+        }
+
+        private static void AdjustTableBorders(XElement tbl)
+        {
+            var ta = tbl
+                .Elements(W.tr)
+                .Select(r => r
+                    .Elements(W.tc)
+                    .SelectMany(c =>
+                        Enumerable.Repeat(c,
+                            (int?) c.Elements(W.tcPr).Elements(W.gridSpan).Attributes(W.val).FirstOrDefault() ?? 1))
+                    .ToArray())
+                .ToArray();
+
+            for (var y = 0; y < ta.Length; y++)
+            {
+                for (var x = 0; x < ta[y].Length; x++)
+                {
+                    var thisCell = ta[y][x];
+                    FixTopBorder(ta, thisCell, x, y);
+                    FixLeftBorder(ta, thisCell, x, y);
+                    FixBottomBorder(ta, thisCell, x, y);
+                    FixRightBorder(ta, thisCell, x, y);
+                }
+            }
+        }
+
+        private static void FixTopBorder(XElement[][] ta, XElement thisCell, int x, int y)
+        {
+            if (y > 0)
+            {
+                var rowAbove = ta[y - 1];
+                if (x < rowAbove.Length - 1)
+                {
+                    XElement cellAbove = ta[y - 1][x];
+                    if (cellAbove != null &&
+                        thisCell.Elements(W.tcPr).Elements(W.tcBorders).FirstOrDefault() != null &&
+                        cellAbove.Elements(W.tcPr).Elements(W.tcBorders).FirstOrDefault() != null)
+                    {
+                        ResolveCellBorder(
+                            thisCell.Elements(W.tcPr).Elements(W.tcBorders).Elements(W.top).FirstOrDefault(),
+                            cellAbove.Elements(W.tcPr).Elements(W.tcBorders).Elements(W.bottom).FirstOrDefault());
+                    }
+                }
+            }
+        }
+
+        private static void FixLeftBorder(XElement[][] ta, XElement thisCell, int x, int y)
+        {
+            if (x > 0)
+            {
+                XElement cellLeft = ta[y][x - 1];
+                if (cellLeft != null &&
+                    thisCell.Elements(W.tcPr).Elements(W.tcBorders).FirstOrDefault() != null &&
+                    cellLeft.Elements(W.tcPr).Elements(W.tcBorders).FirstOrDefault() != null)
+                {
+                    ResolveCellBorder(
+                        thisCell.Elements(W.tcPr).Elements(W.tcBorders).Elements(W.left).FirstOrDefault(),
+                        cellLeft.Elements(W.tcPr).Elements(W.tcBorders).Elements(W.right).FirstOrDefault());
+                }
+            }
+        }
+
+        private static void FixBottomBorder(XElement[][] ta, XElement thisCell, int x, int y)
+        {
+            if (y < ta.Length - 1)
+            {
+                var rowBelow = ta[y + 1];
+                if (x < rowBelow.Length - 1)
+                {
+                    XElement cellBelow = ta[y + 1][x];
+                    if (cellBelow != null &&
+                        thisCell.Elements(W.tcPr).Elements(W.tcBorders).FirstOrDefault() != null &&
+                        cellBelow.Elements(W.tcPr).Elements(W.tcBorders).FirstOrDefault() != null)
+                    {
+                        ResolveCellBorder(
+                            thisCell.Elements(W.tcPr).Elements(W.tcBorders).Elements(W.bottom).FirstOrDefault(),
+                            cellBelow.Elements(W.tcPr).Elements(W.tcBorders).Elements(W.top).FirstOrDefault());
+                    }
+                }
+            }
+        }
+
+        private static void FixRightBorder(XElement[][] ta, XElement thisCell, int x, int y)
+        {
+            if (x < ta[y].Length - 1)
+            {
+                XElement cellRight = ta[y][x + 1];
+                if (cellRight != null &&
+                    thisCell.Elements(W.tcPr).Elements(W.tcBorders).FirstOrDefault() != null &&
+                    cellRight.Elements(W.tcPr).Elements(W.tcBorders).FirstOrDefault() != null)
+                {
+                    ResolveCellBorder(
+                        thisCell.Elements(W.tcPr).Elements(W.tcBorders).Elements(W.right).FirstOrDefault(),
+                        cellRight.Elements(W.tcPr).Elements(W.tcBorders).Elements(W.left).FirstOrDefault());
+                }
+            }
+        }
+
+        private static readonly Dictionary<string, int> BorderTypePriority = new Dictionary<string, int>()
+        {
+            { "single", 1 },
+            { "thick", 2 },
+            { "double", 3 },
+            { "dotted", 4 },
+        };
+
+        private static readonly Dictionary<string, int> BorderNumber = new Dictionary<string, int>()
+        {
+            {"single", 1 },
+            {"thick", 2 },
+            {"double", 3 },
+            {"dotted", 4 },
+            {"dashed", 5 },
+            {"dotDash", 5 },
+            {"dotDotDash", 5 },
+            {"triple", 6 },
+            {"thinThickSmallGap", 6 },
+            {"thickThinSmallGap", 6 },
+            {"thinThickThinSmallGap", 6 },
+            {"thinThickMediumGap", 6 },
+            {"thickThinMediumGap", 6 },
+            {"thinThickThinMediumGap", 6 },
+            {"thinThickLargeGap", 6 },
+            {"thickThinLargeGap", 6 },
+            {"thinThickThinLargeGap", 6 },
+            {"wave", 7 },
+            {"doubleWave", 7 },
+            {"dashSmallGap", 5 },
+            {"dashDotStroked", 5 },
+            {"threeDEmboss", 7 },
+            {"threeDEngrave", 7 },
+            {"outset", 7 },
+            {"inset", 7 },
+        };
+
+        private static void ResolveCellBorder(XElement? border1, XElement? border2)
+        {
+            if (border1 == null || border2 == null)
+                return;
+            if ((string?)border1.Attribute(W.val) == "nil" || (string?)border2.Attribute(W.val) == "nil")
+                return;
+            if ((string?)border1.Attribute(W.sz) == "nil" || (string?)border2.Attribute(W.sz) == "nil")
+                return;
+
+            var border1Val = (string?)border1.Attribute(W.val);
+            var border1Weight = 1;
+            if (BorderNumber.ContainsKey(border1Val!))
+                border1Weight = BorderNumber[border1Val!];
+
+            var border2Val = (string?)border2.Attribute(W.val);
+            var border2Weight = 1;
+            if (BorderNumber.ContainsKey(border2Val!))
+                border2Weight = BorderNumber[border2Val!];
+
+            if (border1Weight != border2Weight)
+            {
+                if (border1Weight < border2Weight)
+                    BorderOverride(border2, border1);
+                else
+                    BorderOverride(border1, border2);
+            }
+
+            // w:sz is OPTIONAL on a border and absent on w:val="none" borders (e.g. a borderless
+            // layout table). Only "nil" is guarded above, so a "none" border reaches here; read sz
+            // null-safe (missing = 0 width) rather than (decimal)Attribute(...), which throws
+            // ArgumentNullException on the missing attribute and aborts the whole conversion.
+            if (((decimal?)border1.Attribute(W.sz) ?? 0) > ((decimal?)border2.Attribute(W.sz) ?? 0))
+            {
+                BorderOverride(border1, border2);
+                return;
+            }
+
+            if (((decimal?)border1.Attribute(W.sz) ?? 0) < ((decimal?)border2.Attribute(W.sz) ?? 0))
+            {
+                BorderOverride(border2, border1);
+                return;
+            }
+
+            var border1Type = (string?)border1.Attribute(W.val);
+            var border2Type = (string?)border2.Attribute(W.val);
+            if (BorderTypePriority.ContainsKey(border1Type!) &&
+                BorderTypePriority.ContainsKey(border2Type!))
+            {
+                var border1Pri = BorderTypePriority[border1Type!];
+                var border2Pri = BorderTypePriority[border2Type!];
+                if (border1Pri < border2Pri)
+                {
+                    BorderOverride(border2, border1);
+                    return;
+                }
+                if (border2Pri < border1Pri)
+                {
+                    BorderOverride(border1, border2);
+                    return;
+                }
+            }
+
+            var color1Str = (string?)border1.Attribute(W.color);
+            if (color1Str == "auto")
+                color1Str = "000000";
+            var color2Str = (string?)border2.Attribute(W.color);
+            if (color2Str == "auto")
+                color2Str = "000000";
+            if (color1Str != null && color2Str != null && color1Str != color2Str)
+            {
+                try
+                {
+                    var color1 = Convert.ToInt32(color1Str, 16);
+                    var color2 = Convert.ToInt32(color2Str, 16);
+                    if (color1 < color2)
+                    {
+                        BorderOverride(border1, border2);
+                        return;
+                    }
+                    if (color2 < color1)
+                    {
+                        BorderOverride(border2, border1);
+                    }
+                }
+                // if the above throws ArgumentException, FormatException, or OverflowException, then abort
+                catch (Exception)
+                {
+                    // Ignore
+                }
+            }
+        }
+
+        private static void BorderOverride(XElement fromBorder, XElement toBorder)
+        {
+            // w:val is required on a border element.
+            toBorder.Attribute(W.val)!.Value = fromBorder.Attribute(W.val)!.Value;
+            if (fromBorder.Attribute(W.color) != null)
+                toBorder.SetAttributeValue(W.color, fromBorder.Attribute(W.color)!.Value);
+            if (fromBorder.Attribute(W.sz) != null)
+                toBorder.SetAttributeValue(W.sz, fromBorder.Attribute(W.sz)!.Value);
+            if (fromBorder.Attribute(W.themeColor) != null)
+                toBorder.SetAttributeValue(W.themeColor, fromBorder.Attribute(W.themeColor)!.Value);
+            if (fromBorder.Attribute(W.themeTint) != null)
+                toBorder.SetAttributeValue(W.themeTint, fromBorder.Attribute(W.themeTint)!.Value);
+        }
+
+        /// <summary>
+        /// Resolve every tab in every story to the advance its stop demands, and annotate the runs
+        /// with it. Runs over all content parts, not just the body: a header or footer paragraph of
+        /// the shape <c>Last Updated October 2025 [tab] PAGE</c> is the standard legal running
+        /// footer, and an unannotated tab collapses to zero width — which does not merely
+        /// mis-position the page number, it paints it on top of the date (issue #688). Paginated
+        /// mode renders those stories, so their tabs have to resolve like the body's.
+        /// </summary>
+        private static void CalculateSpanWidthForTabs(WordprocessingDocument wordDoc)
+        {
+            // w:defaultTabStop in settings. Settings is optional in OOXML — Word opens
+            // packages without word/settings.xml fine. Missing DocumentSettingsPart used
+            // to throw ArgumentNullException("part") via GetXDocument and abort conversion
+            // for the bulk of minimal fixtures (id_paraid_overflow / style demos).
+            // MainDocumentPart is non-null by this point in ConvertToHtml (used directly below).
+            var defaultTabStop = DefaultTabStopTwips;
+            var sxd = GetSettingsXDocumentOrDefault(wordDoc);
+            if (sxd != null)
+            {
+                // w:defaultTabStop is a direct child of w:settings (not nested).
+                var defaultTabStopValue = (string?)sxd.Root?.Element(W.defaultTabStop)?.Attribute(W.val);
+                if (defaultTabStopValue != null)
+                    defaultTabStop = WordprocessingMLUtil.StringToTwips(defaultTabStopValue);
+            }
+
+            // The width a paragraph's lines wrap at. Body paragraphs take their own section's
+            // text width (resolved at w:body); running stories and notes take the final section's.
+            // Other parts (comments) render outside the text column, so their width is unknown.
+            var mainBody = wordDoc.MainDocumentPart!.GetXDocument().Root?.Element(W.body);
+            int? finalSectionWidth = mainBody == null ? null : SectionTextWidthTwips(FinalSectionProperties(mainBody));
+            foreach (var part in wordDoc.ContentParts())
+            {
+                var root = part.GetXDocument().Root;
+                if (root == null) continue;
+
+                int? partLineWidth = part is HeaderPart or FooterPart or FootnotesPart or EndnotesPart
+                    ? finalSectionWidth
+                    : null;
+                var newRoot = (XElement)CalculateSpanWidthTransform(root, defaultTabStop, partLineWidth);
+                root.ReplaceWith(newRoot);
+                part.PutXDocument();
+            }
+        }
+
+        // TODO: Refactor. This method is way too long.
+        [SuppressMessage("ReSharper", "FunctionComplexityOverflow")]
+        private static object CalculateSpanWidthTransform(XNode node, int defaultTabStop, int? lineWidthTwips)
+        {
+            var element = node as XElement;
+            if (element == null) return node;
+
+            if (element.Name == W.body)
+                return CalculateSpanWidthForBody(element, defaultTabStop);
+            if (element.Name == W.tc)
+                lineWidthTwips = CellTextWidthTwips(element) ?? lineWidthTwips;
+            else if (element.Name == W.txbxContent)
+                lineWidthTwips = null;
+
+            // if it is not a paragraph or if there are no tabs in the paragraph,
+            // then no need to continue processing.
+            if (element.Name != W.p ||
+                !element.DescendantsTrimmed(W.txbxContent).Where(d => d.Name == W.r).Elements(W.tab).Any())
+            {
+                // TODO: Revisit. Can we just return the node if it is a paragraph that does not have any tab?
+                return new XElement(element.Name,
+                    element.Attributes(),
+                    element.Nodes().Select(n => CalculateSpanWidthTransform(n, defaultTabStop, lineWidthTwips)));
+            }
+
+            var clonedPara = new XElement(element);
+
+            var leftInTwips = 0;
+            var firstInTwips = 0;
+
+            // Check both accumulated properties (pt:pPr) and original properties (w:pPr)
+            // Accumulated properties take priority as they include merged styles from numbering levels
+            var ind = clonedPara.Elements(PtOpenXml.pPr).Elements(W.ind).FirstOrDefault()
+                ?? clonedPara.Elements(W.pPr).Elements(W.ind).FirstOrDefault();
+            if (ind != null)
+            {
+                var left = WordprocessingMLUtil.AttributeToTwips(WordprocessingMLUtil.IndLeadingAttribute(ind));
+                if (left != null)
+                    leftInTwips = (int)left;
+
+                var firstLine = 0;
+                var firstLineAtt = WordprocessingMLUtil.AttributeToTwips(ind.Attribute(W.firstLine));
+                if (firstLineAtt != null)
+                    firstLine = (int)firstLineAtt;
+
+                var hangingAtt = WordprocessingMLUtil.AttributeToTwips(ind.Attribute(W.hanging));
+                if (hangingAtt != null)
+                    firstLine = -(int)hangingAtt;
+
+                firstInTwips = leftInTwips + firstLine;
+            }
+            var rightInTwips = ind == null
+                ? 0
+                : (int)(WordprocessingMLUtil.AttributeToTwips(WordprocessingMLUtil.IndTrailingAttribute(ind)) ?? 0);
+            int? lineEndTwips = lineWidthTwips - rightInTwips;
+
+            // calculate the tab stops, in twips
+            // Check accumulated properties (pt:pPr) first as they include tabs from numbering levels
+            var tabs = clonedPara
+                .Elements(PtOpenXml.pPr)
+                .Elements(W.tabs)
+                .FirstOrDefault()
+                ?? clonedPara
+                    .Elements(W.pPr)
+                    .Elements(W.tabs)
+                    .FirstOrDefault();
+
+            if (tabs == null)
+            {
+                if (leftInTwips == 0)
+                {
+                    tabs = new XElement(W.tabs,
+                        Enumerable.Range(1, 100)
+                            .Select(r => new XElement(W.tab,
+                                new XAttribute(W.val, "left"),
+                                new XAttribute(W.pos, r * defaultTabStop))));
+                }
+                else
+                {
+                    tabs = new XElement(W.tabs,
+                        new XElement(W.tab,
+                            new XAttribute(W.val, "left"),
+                            new XAttribute(W.pos, leftInTwips)));
+                    tabs = AddDefaultTabsAfterLastTab(tabs, defaultTabStop);
+                }
+            }
+            else
+            {
+                if (leftInTwips != 0)
+                {
+                    tabs.Add(
+                        new XElement(W.tab,
+                            new XAttribute(W.val, "left"),
+                            new XAttribute(W.pos, leftInTwips)));
+                }
+                tabs = AddDefaultTabsAfterLastTab(tabs, defaultTabStop);
+            }
+
+            var twipCounter = firstInTwips;
+            var contentToMeasure = element.DescendantsTrimmed(z => z.Name == W.txbxContent || z.Name == W.pPr || z.Name == W.rPr).ToArray();
+            var currentElementIdx = 0;
+            while (true)
+            {
+                var currentElement = contentToMeasure[currentElementIdx];
+
+                if (currentElement.Name == W.br)
+                {
+                    twipCounter = leftInTwips;
+
+                    currentElement.Add(new XAttribute(PtOpenXml.TabWidth,
+                        string.Format(NumberFormatInfo.InvariantInfo,
+                            "{0:0.000}", (decimal)firstInTwips / 1440m)));
+
+                    currentElementIdx++;
+                    if (currentElementIdx >= contentToMeasure.Length)
+                        break; // we're done
+                }
+
+                if (currentElement.Name == W.tab)
+                {
+                    var runContainingTabToReplace = currentElement.Parent!; // a w:tab always has a w:r parent
+                    var fontNameAtt = runContainingTabToReplace.Attribute(PtOpenXml.pt + "FontName") ??
+                                      runContainingTabToReplace.Ancestors(W.p).FirstOrDefault()?.Attribute(PtOpenXml.pt + "FontName");
+
+                    // Text that ran past the line wrapped: the tab advances from the pen on the last
+                    // line, not from where one unwrapped line would end (issue #891).
+                    if (lineEndTwips is { } lineEnd && twipCounter > lineEnd)
+                    {
+                        twipCounter = PenAfterWrapping(contentToMeasure, currentElementIdx,
+                            firstInTwips, leftInTwips, lineEnd);
+                        currentElement.SetAttributeValue(PtOpenXml.TabAfterWrappedText, true);
+                    }
+
+                    var testAmount = twipCounter;
+
+                    var tabAfterText = tabs
+                        .Elements(W.tab)
+                        .FirstOrDefault(t => WordprocessingMLUtil.StringToTwips((string)t.Attribute(W.pos)!) > testAmount);
+
+                    if (tabAfterText == null)
+                    {
+                        // something has gone wrong, so put 1/2 inch in
+                        if (currentElement.Attribute(PtOpenXml.TabWidth) == null)
+                            currentElement.Add(
+                                new XAttribute(PtOpenXml.TabWidth, 720m));
+                        break;
+                    }
+
+                    var tabVal = (string?)tabAfterText.Attribute(W.val);
+                    if (tabVal == "right" || tabVal == "end")
+                    {
+                        var textAfterElements = contentToMeasure
+                            .Skip(currentElementIdx + 1);
+
+                        // take all the content until another tab, br, or cr
+                        var textElementsToMeasure = textAfterElements
+                            .TakeWhile(z =>
+                                z.Name != W.tab &&
+                                z.Name != W.br &&
+                                z.Name != W.cr)
+                            .ToList();
+
+                        var textAfterTab = textElementsToMeasure
+                            .Where(z => z.Name == W.t)
+                            .Select(t => (string)t)
+                            .StringConcatenate();
+
+                        var dummyRun2 = new XElement(W.r,
+                            fontNameAtt,
+                            runContainingTabToReplace.Elements(W.rPr),
+                            new XElement(W.t, textAfterTab));
+
+                        var widthOfTextAfterTab = CalcWidthOfRunInTwips(dummyRun2);
+                        var delta2 = WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!) - widthOfTextAfterTab - twipCounter;
+                        if (delta2 < 0)
+                            delta2 = 0;
+                        currentElement.Add(
+                            new XAttribute(PtOpenXml.TabWidth,
+                                string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}", (decimal)delta2 / 1440m)),
+                            new XAttribute(PtOpenXml.TabAlignment, "right"),
+                            GetLeader(tabAfterText));
+                        twipCounter = Math.Max(WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!), twipCounter + widthOfTextAfterTab);
+
+                        var lastElement = textElementsToMeasure.LastOrDefault();
+                        if (lastElement == null)
+                            break; // we're done
+
+                        currentElementIdx = Array.IndexOf(contentToMeasure, lastElement) + 1;
+                        if (currentElementIdx >= contentToMeasure.Length)
+                            break; // we're done
+
+                        continue;
+                    }
+                    if (tabVal == "decimal")
+                    {
+                        var textAfterElements = contentToMeasure
+                            .Skip(currentElementIdx + 1);
+
+                        // take all the content until another tab, br, or cr
+                        var textElementsToMeasure = textAfterElements
+                            .TakeWhile(z =>
+                                z.Name != W.tab &&
+                                z.Name != W.br &&
+                                z.Name != W.cr)
+                            .ToList();
+
+                        var textAfterTab = textElementsToMeasure
+                            .Where(z => z.Name == W.t)
+                            .Select(t => (string)t)
+                            .StringConcatenate();
+
+                        if (textAfterTab.Contains("."))
+                        {
+                            var mantissa = textAfterTab.Split('.')[0];
+
+                            var dummyRun4 = new XElement(W.r,
+                                fontNameAtt,
+                                runContainingTabToReplace.Elements(W.rPr),
+                                new XElement(W.t, mantissa));
+
+                            var widthOfMantissa = CalcWidthOfRunInTwips(dummyRun4);
+                            var delta2 = WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!) - widthOfMantissa - twipCounter;
+                            if (delta2 < 0)
+                                delta2 = 0;
+                            currentElement.Add(
+                                new XAttribute(PtOpenXml.TabWidth,
+                                    string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}", (decimal)delta2 / 1440m)),
+                                new XAttribute(PtOpenXml.TabAlignment, "decimal"),
+                                GetLeader(tabAfterText));
+
+                            var decims = textAfterTab.Substring(textAfterTab.IndexOf('.'));
+                            dummyRun4 = new XElement(W.r,
+                                fontNameAtt,
+                                runContainingTabToReplace.Elements(W.rPr),
+                                new XElement(W.t, decims));
+
+                            var widthOfDecims = CalcWidthOfRunInTwips(dummyRun4);
+                            twipCounter = Math.Max(WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!) + widthOfDecims, twipCounter + widthOfMantissa + widthOfDecims);
+
+                            var lastElement = textElementsToMeasure.LastOrDefault();
+                            if (lastElement == null)
+                                break; // we're done
+
+                            currentElementIdx = Array.IndexOf(contentToMeasure, lastElement) + 1;
+                            if (currentElementIdx >= contentToMeasure.Length)
+                                break; // we're done
+
+                            continue;
+                        }
+                        else
+                        {
+                            var dummyRun2 = new XElement(W.r,
+                                fontNameAtt,
+                                runContainingTabToReplace.Elements(W.rPr),
+                                new XElement(W.t, textAfterTab));
+
+                            var widthOfTextAfterTab = CalcWidthOfRunInTwips(dummyRun2);
+                            var delta2 = WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!) - widthOfTextAfterTab - twipCounter;
+                            if (delta2 < 0)
+                                delta2 = 0;
+                            currentElement.Add(
+                                new XAttribute(PtOpenXml.TabWidth,
+                                    string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}", (decimal)delta2 / 1440m)),
+                                new XAttribute(PtOpenXml.TabAlignment, "decimal"),
+                                GetLeader(tabAfterText));
+                            twipCounter = Math.Max(WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!), twipCounter + widthOfTextAfterTab);
+
+                            var lastElement = textElementsToMeasure.LastOrDefault();
+                            if (lastElement == null)
+                                break; // we're done
+
+                            currentElementIdx = Array.IndexOf(contentToMeasure, lastElement) + 1;
+                            if (currentElementIdx >= contentToMeasure.Length)
+                                break; // we're done
+
+                            continue;
+                        }
+                    }
+                    if ((string?)tabAfterText.Attribute(W.val) == "center")
+                    {
+                        var textAfterElements = contentToMeasure
+                            .Skip(currentElementIdx + 1);
+
+                        // take all the content until another tab, br, or cr
+                        var textElementsToMeasure = textAfterElements
+                            .TakeWhile(z =>
+                                z.Name != W.tab &&
+                                z.Name != W.br &&
+                                z.Name != W.cr)
+                            .ToList();
+
+                        var textAfterTab = textElementsToMeasure
+                            .Where(z => z.Name == W.t)
+                            .Select(t => (string)t)
+                            .StringConcatenate();
+
+                        var dummyRun4 = new XElement(W.r,
+                            fontNameAtt,
+                            runContainingTabToReplace.Elements(W.rPr),
+                            new XElement(W.t, textAfterTab));
+
+                        var widthOfText = CalcWidthOfRunInTwips(dummyRun4);
+                        var delta2 = WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!) - (widthOfText / 2) - twipCounter;
+                        if (delta2 < 0)
+                            delta2 = 0;
+                        currentElement.Add(
+                            new XAttribute(PtOpenXml.TabWidth,
+                                string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}", (decimal)delta2 / 1440m)),
+                            new XAttribute(PtOpenXml.TabAlignment, "center"),
+                            GetLeader(tabAfterText));
+                        twipCounter = Math.Max(WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!) + widthOfText / 2, twipCounter + widthOfText);
+
+                        var lastElement = textElementsToMeasure.LastOrDefault();
+                        if (lastElement == null)
+                            break; // we're done
+
+                        currentElementIdx = Array.IndexOf(contentToMeasure, lastElement) + 1;
+                        if (currentElementIdx >= contentToMeasure.Length)
+                            break; // we're done
+
+                        continue;
+                    }
+                    if (tabVal == "left" || tabVal == "start" || tabVal == "num")
+                    {
+                        var delta = WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!) - twipCounter;
+                        currentElement.Add(
+                            new XAttribute(PtOpenXml.TabWidth,
+                                string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}", (decimal)delta / 1440m)),
+                            new XAttribute(PtOpenXml.TabAlignment, "left"),
+                            GetLeader(tabAfterText));
+                        twipCounter = WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)!);
+
+                        currentElementIdx++;
+                        if (currentElementIdx >= contentToMeasure.Length)
+                            break; // we're done
+
+                        continue;
+                    }
+                }
+
+                if (currentElement.Name == W.t)
+                {
+                    // Measure text width to properly position subsequent tabs
+                    // Uses estimation fallback when fonts are unavailable (Azure, WASM)
+                    var runContainingTabToReplace = currentElement.Parent!; // a w:t always has a w:r parent
+                    var paragraphForRun = runContainingTabToReplace.Ancestors(W.p).First();
+                    var fontNameAtt = runContainingTabToReplace.Attribute(PtOpenXml.FontName) ??
+                                      paragraphForRun.Attribute(PtOpenXml.FontName);
+                    var languageTypeAtt = runContainingTabToReplace.Attribute(PtOpenXml.LanguageType) ??
+                                          paragraphForRun.Attribute(PtOpenXml.LanguageType);
+
+                    var dummyRun3 = new XElement(W.r, fontNameAtt, languageTypeAtt,
+                        runContainingTabToReplace.Elements(W.rPr),
+                        currentElement);
+                    // A generated list-number run measures with the narrow-glyph-aware estimate
+                    // so its suffix tab resolves against a realistic pen position (issue #415).
+                    var widthOfText = CalcWidthOfRunInTwips(dummyRun3,
+                        isListMarker: runContainingTabToReplace.Attribute(PtOpenXml.ListItemRun) != null);
+
+                    currentElement.Add(new XAttribute(PtOpenXml.TabWidth,
+                        string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}", (decimal) widthOfText/1440m)));
+                    twipCounter += widthOfText;
+
+                    currentElementIdx++;
+                    if (currentElementIdx >= contentToMeasure.Length)
+                        break; // we're done
+
+                    continue;
+                }
+
+                currentElementIdx++;
+                if (currentElementIdx >= contentToMeasure.Length)
+                    break; // we're done
+            }
+
+            return new XElement(element.Name,
+                element.Attributes(),
+                element.Nodes().Select(n => CalculateSpanWidthTransform(n, defaultTabStop, lineWidthTwips)));
+        }
+
+        /// <summary>
+        /// Run the tab pass over a body, giving each block the text width of the section it belongs
+        /// to: a paragraph carrying <c>w:sectPr</c> closes a section, and the body's own
+        /// <c>w:sectPr</c> governs everything after the last such paragraph.
+        /// </summary>
+        private static XElement CalculateSpanWidthForBody(XElement body, int defaultTabStop)
+        {
+            var children = body.Nodes().ToList();
+            var widths = new int?[children.Count];
+            int? width = SectionTextWidthTwips(body.Element(W.sectPr));
+            for (var i = children.Count - 1; i >= 0; i--)
+            {
+                if (children[i] is XElement { } block && block.Name == W.p &&
+                    (block.Elements(W.pPr).Elements(W.sectPr).FirstOrDefault()
+                     ?? block.Elements(PtOpenXml.pPr).Elements(W.sectPr).FirstOrDefault()) is { } sectPr)
+                    width = SectionTextWidthTwips(sectPr);
+                widths[i] = width;
+            }
+            return new XElement(body.Name, body.Attributes(),
+                children.Select((n, i) => CalculateSpanWidthTransform(n, defaultTabStop, widths[i])));
+        }
+
+        private static XElement? FinalSectionProperties(XElement body) =>
+            body.Element(W.sectPr)
+            ?? body.Elements(W.p).LastOrDefault()?.Elements(W.pPr).Elements(W.sectPr).FirstOrDefault();
+
+        /// <summary>The width of one text column of a section, in twips: page width less the left and
+        /// right margins and the gutter, divided among equal-width columns. A missing
+        /// <c>w:sectPr</c> is US Letter with one-inch margins, as elsewhere in the converter.</summary>
+        private static int SectionTextWidthTwips(XElement? sectPr)
+        {
+            static int Twips(XElement? element, XName attribute, int fallback) =>
+                (int)(WordprocessingMLUtil.AttributeToTwips(element?.Attribute(attribute)) ?? fallback);
+
+            var pgMar = sectPr?.Element(W.pgMar);
+            var width = Twips(sectPr?.Element(W.pgSz), W._w, 12240)
+                        - Twips(pgMar, W.left, 1440) - Twips(pgMar, W.right, 1440) - Twips(pgMar, W.gutter, 0);
+            var cols = sectPr?.Element(W.cols);
+            var count = (int?)cols?.Attribute(W.num) ?? 1;
+            if (count > 1)
+                width = (width - Twips(cols, W.space, 720) * (count - 1)) / count;
+            return Math.Max(width, 0);
+        }
+
+        /// <summary>
+        /// The width a table cell's paragraphs wrap at, in twips: the grid columns the cell spans
+        /// (or its <c>w:tcW</c> when the grid does not cover it), less its left and right margins
+        /// from <c>w:tcMar</c>, else the table's <c>w:tblCellMar</c>, else Word's default 108.
+        /// Null when neither the grid nor an absolute <c>w:tcW</c> gives a width.
+        /// </summary>
+        private static int? CellTextWidthTwips(XElement tc)
+        {
+            var tr = tc.Ancestors(W.tr).FirstOrDefault();
+            var tbl = tc.Ancestors(W.tbl).FirstOrDefault();
+            if (tr == null || tbl == null)
+                return null;
+
+            static int Span(XElement cell) =>
+                (int?)cell.Elements(W.tcPr).Elements(W.gridSpan).Attributes(W.val).FirstOrDefault() ?? 1;
+
+            var gridColumns = tbl.Elements(W.tblGrid).Elements(W.gridCol)
+                .Select(c => (int)(WordprocessingMLUtil.AttributeToTwips(c.Attribute(W._w)) ?? 0))
+                .ToList();
+            var column = ((int?)tr.Elements(W.trPr).Elements(W.gridBefore).Attributes(W.val).FirstOrDefault() ?? 0)
+                         + tr.Descendants(W.tc)
+                             .Where(c => c.Ancestors(W.tr).First() == tr)
+                             .TakeWhile(c => c != tc)
+                             .Sum(Span);
+            var span = Span(tc);
+
+            int width;
+            var tcW = tc.Elements(W.tcPr).Elements(W.tcW).FirstOrDefault();
+            if (column + span <= gridColumns.Count && gridColumns.Skip(column).Take(span).All(w => w > 0))
+                width = gridColumns.Skip(column).Take(span).Sum();
+            else if (tcW != null && ((string?)tcW.Attribute(W.type) ?? "dxa") == "dxa"
+                     && WordprocessingMLUtil.AttributeToTwips(tcW.Attribute(W._w)) is { } absolute)
+                width = (int)absolute;
+            else
+                return null;
+
+            int Margin(XName side, XName logicalSide)
+            {
+                var margin = tc.Elements(W.tcPr).Elements(W.tcMar).Elements().FirstOrDefault(e => e.Name == side || e.Name == logicalSide)
+                             ?? tbl.Elements(W.tblPr).Elements(W.tblCellMar).Elements().FirstOrDefault(e => e.Name == side || e.Name == logicalSide);
+                return margin != null && ((string?)margin.Attribute(W.type) ?? "dxa") == "dxa"
+                    ? (int)(WordprocessingMLUtil.AttributeToTwips(margin.Attribute(W._w)) ?? 108)
+                    : 108;
+            }
+
+            return Math.Max(width - Margin(W.left, W.start) - Margin(W.right, W.end), 0);
+        }
+
+        /// <summary>
+        /// Where the pen stands when it reaches <c>contentToMeasure[tabIndex]</c>, if the text since
+        /// the line began wraps at <paramref name="lineEnd"/>: words are laid greedily, a word that
+        /// does not fit moves to a new line starting at <paramref name="leftIndent"/>, and trailing
+        /// spaces hang past the edge as they do in Word. Earlier tabs keep the advance already
+        /// resolved for them.
+        /// </summary>
+        private static int PenAfterWrapping(XElement[] contentToMeasure, int tabIndex,
+            int firstLineStart, int leftIndent, int lineEnd)
+        {
+            var start = tabIndex;
+            while (start > 0 && contentToMeasure[start - 1].Name != W.br && contentToMeasure[start - 1].Name != W.cr)
+                start--;
+            var pen = start == 0 ? firstLineStart : leftIndent;
+            var lineStart = pen;
+
+            void Place(int visibleWidth, int fullWidth)
+            {
+                if (pen + visibleWidth > lineEnd && pen > lineStart)
+                    pen = lineStart = leftIndent;
+                pen += fullWidth;
+            }
+
+            for (var i = start; i < tabIndex; i++)
+            {
+                var element = contentToMeasure[i];
+                if (element.Name == W.tab)
+                {
+                    var advance = (int)Math.Round(((decimal?)element.Attribute(PtOpenXml.TabWidth) ?? 0m) * 1440m);
+                    Place(advance, advance);
+                }
+                else if (element.Name == W.t)
+                {
+                    var run = element.Parent!;
+                    var paragraph = run.Ancestors(W.p).First();
+                    int Measure(string text) => CalcWidthOfRunInTwips(new XElement(W.r,
+                        run.Attribute(PtOpenXml.FontName) ?? paragraph.Attribute(PtOpenXml.FontName),
+                        run.Attribute(PtOpenXml.LanguageType) ?? paragraph.Attribute(PtOpenXml.LanguageType),
+                        run.Elements(W.rPr),
+                        new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), text)));
+
+                    foreach (System.Text.RegularExpressions.Match word in
+                             System.Text.RegularExpressions.Regex.Matches(element.Value, @"\s*\S+\s*"))
+                    {
+                        var visible = word.Value.TrimEnd();
+                        Place(Measure(visible), Measure(word.Value));
+                    }
+                }
+            }
+            return pen;
+        }
+
+        private static XAttribute? GetLeader(XElement tabAfterText)
+        {
+            var leader = (string?)tabAfterText.Attribute(W.leader);
+            if (leader == null)
+                return null;
+            return new XAttribute(PtOpenXml.Leader, leader);
+        }
+
+        private static XElement AddDefaultTabsAfterLastTab(XElement tabs, int defaultTabStop)
+        {
+            var lastTabElement = tabs
+                .Elements(W.tab)
+                .Where(t => (string?)t.Attribute(W.val) != "clear" && (string?)t.Attribute(W.val) != "bar")
+                .OrderBy(t => WordprocessingMLUtil.StringToTwips((string)t.Attribute(W.pos)!))
+                .LastOrDefault();
+            if (lastTabElement != null)
+            {
+                if (defaultTabStop == 0)
+                    defaultTabStop = DefaultTabStopTwips;
+                var rangeStart = WordprocessingMLUtil.StringToTwips((string)lastTabElement.Attribute(W.pos)!) / defaultTabStop + 1;
+                var tempTabs = new XElement(W.tabs,
+                    tabs.Elements().Where(t => (string?)t.Attribute(W.val) != "clear" && (string?)t.Attribute(W.val) != "bar"),
+                    Enumerable.Range(rangeStart, 100)
+                    .Select(r => new XElement(W.tab,
+                        new XAttribute(W.val, "left"),
+                        new XAttribute(W.pos, r * defaultTabStop))));
+                tempTabs = new XElement(W.tabs,
+                    tempTabs.Elements().OrderBy(t => WordprocessingMLUtil.StringToTwips((string)t.Attribute(W.pos)!)));
+                return tempTabs;
+            }
+            else
+            {
+                tabs = new XElement(W.tabs,
+                    Enumerable.Range(1, 100)
+                    .Select(r => new XElement(W.tab,
+                        new XAttribute(W.val, "left"),
+                        new XAttribute(W.pos, r * defaultTabStop))));
+            }
+            return tabs;
+        }
+
+        private static HashSet<string> KnownFamilies => FontFamilyHelper.KnownFamilies;
+
+        private static int CalcWidthOfRunInTwips(XElement r, bool isListMarker = false)
+        {
+            // A run with no resolvable font (WordprocessingMLUtil.MeasurementFontName returns null) takes
+            // the character-width estimate below, the same fallback as an unknown font family; one
+            // unmeasurable run must never fail the conversion (issue #847).
+            var fontName = WordprocessingMLUtil.MeasurementFontName(r);
+            var rPr = r.Element(W.rPr) ?? new XElement(W.rPr);
+
+            var sz = GetFontSize(r) ?? 22m;
+
+            var bold = GetBoolProp(rPr, W.b) || GetBoolProp(rPr, W.bCs);
+            var italic = GetBoolProp(rPr, W.i) || GetBoolProp(rPr, W.iCs);
+
+            var runText = r.DescendantsTrimmed(W.txbxContent)
+                .Where(e => e.Name == W.t)
+                .Select(t => (string) t)
+                .StringConcatenate();
+
+            // FormattingAssembler has already annotated every w:tab with PtOpenXml.TabWidth
+            // by the time this rendering path runs.
+            var tabLength = r.DescendantsTrimmed(W.txbxContent)
+                .Where(e => e.Name == W.tab)
+                .Select(t => (decimal)t.Attribute(PtOpenXml.TabWidth)!)
+                .Sum();
+
+            if (runText.Length == 0 && tabLength == 0)
+                return 0;
+
+            int multiplier = 1;
+            if (runText.Length <= 2)
+                multiplier = 100;
+            else if (runText.Length <= 4)
+                multiplier = 50;
+            else if (runText.Length <= 8)
+                multiplier = 25;
+            else if (runText.Length <= 16)
+                multiplier = 12;
+            else if (runText.Length <= 32)
+                multiplier = 6;
+            if (multiplier != 1)
+            {
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < multiplier; i++)
+                    sb.Append(runText);
+                runText = sb.ToString();
+            }
+
+            // For unknown fonts, use character-based estimation instead of returning 0.
+            // MetricsGetter.GetTextWidth now has estimation fallback for unavailable fonts.
+            // If font is completely unknown, use estimation directly.
+            int w;
+            if (fontName == null || FontFamilyHelper.IsMarkedUnknown(fontName) || !KnownFamilies.Contains(fontName))
+            {
+                // Character-based estimation starts in point space (w:sz is half-points), while
+                // the rest of this method consumes CSS-pixel widths. Normalize it to the same
+                // 96-DPI coordinate space before converting the result to twips below.
+                //
+                // List-marker runs use the character-class estimate: the flat 0.6 em/char
+                // average roughly doubles narrow-glyph markers like "(a)", which pushed the
+                // suffix tab past the paragraph's text-indent stop (issue #415). General text
+                // must KEEP the flat average — HTML tab layout reserves (stop − this estimate)
+                // ahead of the browser's real glyphs, and browser fallback fonts advance at
+                // ~0.6 em, so a lower general estimate makes column-edge tab lines overflow
+                // and wrap. A marker's wrapper is (chosen stop − marker start) with a flex tab
+                // absorbing the difference, so only its stop CHOICE needs realistic widths.
+                if (isListMarker)
+                {
+                    w = MetricsGetter.EstimateTextWidth(sz, runText) * 96 / 72;
+                }
+                else
+                {
+                    float charWidth = (float)sz * 0.6f / 2f;
+                    w = (int)(runText.Length * charWidth * 96f / 72f);
+                }
+            }
+            else
+            {
+                w = MetricsGetter.GetTextWidth(fontName, bold, italic, sz, runText);
+            }
+
+            return (int)(w / 96m * 1440m / multiplier + tabLength * 1440m);
+        }
+
+        private static void InsertAppropriateNonbreakingSpaces(WordprocessingDocument wordDoc)
+        {
+            foreach (var part in wordDoc.ContentParts())
+            {
+                var pxd = part.GetXDocument();
+                var root = pxd.Root;
+                if (root == null) return;
+
+                var newRoot = (XElement)InsertAppropriateNonbreakingSpacesTransform(root);
+                root.ReplaceWith(newRoot);
+                part.PutXDocument();
+            }
+        }
+
+        // We only need to make sure that visually empty w:p elements are translated into non-empty
+        // h:p elements, because an h:p with no rendered inline content produces no line box.
+        //
+        // Ordinary run whitespace is NOT substituted here: consumers emit "span { white-space:
+        // pre-wrap; }" (see HtmlConversionOps), under which a real space keeps its own width, and
+        // substituting NBSP would change the layout behavior of consecutive spaces. The synthesized
+        // placeholder below is the single exception, and even there the literal is cosmetic —
+        // ConvertTextWithNbsp already maps a lone boundary space to U+00A0 downstream, so writing
+        // the placeholder as NBSP states the intent rather than changing the emitted bytes.
+        private static object InsertAppropriateNonbreakingSpacesTransform(XNode node)
+        {
+            XElement? element = node as XElement;
+            if (element != null)
+            {
+                // child content of run to look for
+                // W.br
+                // W.cr
+                // W.dayLong
+                // W.dayShort
+                // W.drawing
+                // W.monthLong
+                // W.monthShort
+                // W.noBreakHyphen
+                // W.object
+                // W.pgNum
+                // W.pTab
+                // W.separator
+                // W.softHyphen
+                // W.sym
+                // W.t
+                // W.tab
+                // W.yearLong
+                // W.yearShort
+                if (element.Name == W.p)
+                {
+                    // Translate visually empty paragraphs into paragraphs carrying one placeholder
+                    // run, so the paragraph mark keeps a line box.
+                    //
+                    // A `w:t` with no characters is not content. Word commonly serializes a blank
+                    // paragraph that way (signature-table spacer rows, for instance), and counting
+                    // it left the paragraph with nothing but a span the converter had already
+                    // emptied — no line box, a canonical paragraph anchor with zero geometry, and a
+                    // strict PageMap rejecting an otherwise-valid document. The emptied span itself
+                    // is removed in ProcessParagraph, so both spellings of "blank paragraph" reach
+                    // the browser as exactly one placeholder span.
+                    //
+                    // A floating (wp:anchor) drawing is not content either: it leaves the text flow, and
+                    // the paginated view lifts it into the page box, so a paragraph holding nothing else
+                    // lost its line. Word and LibreOffice keep the paragraph mark's line (issue #880).
+                    bool hasContent = element
+                        .Elements()
+                        .Where(e => e.Name != W.pPr)
+                        .SelectMany(InFlowDescendantsAndSelf)
+                        .Any(e =>
+                            e.Name == W.dayLong ||
+                            e.Name == W.dayShort ||
+                            e.Name == W.drawing ||
+                            e.Name == W.monthLong ||
+                            e.Name == W.monthShort ||
+                            e.Name == W.noBreakHyphen ||
+                            e.Name == W._object ||
+                            e.Name == W.pgNum ||
+                            e.Name == W.ptab ||
+                            e.Name == W.separator ||
+                            e.Name == W.softHyphen ||
+                            e.Name == W.sym ||
+                            (e.Name == W.t && e.Value.Length != 0) ||
+                            e.Name == W.tab ||
+                            e.Name == W.yearLong ||
+                            e.Name == W.yearShort
+                        );
+                    if (hasContent == false)
+                        return new XElement(element.Name,
+                            element.Attributes(),
+                            new XAttribute(PtOpenXml.EmptyParagraph, true),
+                            element.Nodes().Select(n => InsertAppropriateNonbreakingSpacesTransform(n)),
+                            new XElement(W.r,
+                                element.Elements(W.pPr).Elements(W.rPr),
+                                new XElement(W.t, "\u00A0")));
+                }
+
+                return new XElement(element.Name,
+                    element.Attributes(),
+                    element.Nodes().Select(n => InsertAppropriateNonbreakingSpacesTransform(n)));
+            }
+            return node;
+        }
+
+        /// <summary><paramref name="element"/> and its descendants, leaving out hidden runs and
+        /// floating (<c>wp:anchor</c>) drawings together with their content.</summary>
+        private static IEnumerable<XElement> InFlowDescendantsAndSelf(XElement element)
+        {
+            if (element.Name == W.drawing && element.Elements(WP.anchor).Any())
+                yield break;
+            // Match run rendering after formatting assembly has resolved inherited properties.
+            // Hidden text cannot supply the paragraph mark's line; keep its ordinary placeholder.
+            if (element.Name == W.r && element.Element(W.rPr) is XElement runProperties &&
+                GetBoolProp(runProperties, W.vanish) && !GetBoolProp(runProperties, W.specVanish))
+                yield break;
+            yield return element;
+            foreach (var child in element.Elements())
+                foreach (var descendant in InFlowDescendantsAndSelf(child))
+                    yield return descendant;
+        }
+
+        private class SectionAnnotation
+        {
+            public XElement? SectionElement;
+        }
+
+        /// <summary>
+        /// Represents page dimensions extracted from w:sectPr.
+        /// All values are in points (1/72 inch) for CSS compatibility.
+        /// </summary>
+        private class PageDimensions
+        {
+            /// <summary>Page width in points (from w:pgSz w:w)</summary>
+            public double PageWidthPt { get; set; }
+
+            /// <summary>Page height in points (from w:pgSz w:h)</summary>
+            public double PageHeightPt { get; set; }
+
+            /// <summary>Top margin in points (from w:pgMar w:top)</summary>
+            public double MarginTopPt { get; set; }
+
+            /// <summary>Right margin in points (from w:pgMar w:right)</summary>
+            public double MarginRightPt { get; set; }
+
+            /// <summary>Bottom margin in points (from w:pgMar w:bottom)</summary>
+            public double MarginBottomPt { get; set; }
+
+            /// <summary>Left margin in points (from w:pgMar w:left)</summary>
+            public double MarginLeftPt { get; set; }
+
+            /// <summary>Header distance in points (from w:pgMar w:header)</summary>
+            public double HeaderPt { get; set; }
+
+            /// <summary>Footer distance in points (from w:pgMar w:footer)</summary>
+            public double FooterPt { get; set; }
+
+            /// <summary>Content width (page width minus left and right margins)</summary>
+            public double ContentWidthPt => PageWidthPt - MarginLeftPt - MarginRightPt;
+
+            /// <summary>Content height (page height minus top and bottom margins)</summary>
+            public double ContentHeightPt => PageHeightPt - MarginTopPt - MarginBottomPt;
+
+            /// <summary>
+            /// Creates PageDimensions from a w:sectPr element.
+            /// Returns US Letter defaults (8.5"x11" with 1" margins) if sectPr is null.
+            /// </summary>
+            public static PageDimensions FromSectionProperties(XElement? sectPr)
+            {
+                // Default to US Letter: 8.5" x 11" (612pt x 792pt) with 1" margins (72pt)
+                var dims = new PageDimensions
+                {
+                    PageWidthPt = 612,   // 8.5 inches
+                    PageHeightPt = 792,  // 11 inches
+                    MarginTopPt = 72,    // 1 inch
+                    MarginRightPt = 72,
+                    MarginBottomPt = 72,
+                    MarginLeftPt = 72,
+                    HeaderPt = 36,       // 0.5 inch
+                    FooterPt = 36
+                };
+
+                if (sectPr == null) return dims;
+
+                // Parse page size (w:pgSz)
+                // w:w and w:h are in twips (1/20 of a point, or 1/1440 of an inch)
+                var pgSz = sectPr.Element(W.pgSz);
+                if (pgSz != null)
+                {
+                    if (int.TryParse((string?)pgSz.Attribute(W._w), out int w))
+                        dims.PageWidthPt = w / 20.0;
+                    if (int.TryParse((string?)pgSz.Attribute(W.h), out int h))
+                        dims.PageHeightPt = h / 20.0;
+                }
+
+                // Parse page margins (w:pgMar)
+                var pgMar = sectPr.Element(W.pgMar);
+                if (pgMar != null)
+                {
+                    dims.MarginTopPt = MarginPoints(pgMar, W.top, dims.MarginTopPt);
+                    dims.MarginRightPt = MarginPoints(pgMar, W.right, dims.MarginRightPt);
+                    dims.MarginBottomPt = MarginPoints(pgMar, W.bottom, dims.MarginBottomPt);
+                    dims.MarginLeftPt = MarginPoints(pgMar, W.left, dims.MarginLeftPt);
+                    dims.HeaderPt = MarginPoints(pgMar, W.header, dims.HeaderPt);
+                    dims.FooterPt = MarginPoints(pgMar, W.footer, dims.FooterPt);
+                }
+
+                return dims;
+            }
+        }
+
+        private static void AnnotateForSections(WordprocessingDocument wordDoc)
+        {
+            var xd = wordDoc.MainDocumentPart!.GetXDocument();
+
+            var document = xd.Root;
+            if (document == null) return;
+
+            var body = document.Element(W.body);
+            if (body == null) return;
+
+            // move last sectPr into last paragraph
+            var lastSectPr = body.Elements(W.sectPr).LastOrDefault();
+            if (lastSectPr != null)
+            {
+                // if the last thing in the document is a table, Word will always insert a paragraph following that.
+                var lastPara = body
+                    .DescendantsTrimmed(W.txbxContent)
+                    .LastOrDefault(p => p.Name == W.p);
+
+                if (lastPara != null)
+                {
+                    var lastParaProps = lastPara.Element(W.pPr);
+                    if (lastParaProps != null)
+                        lastParaProps.Add(lastSectPr);
+                    else
+                        lastPara.Add(new XElement(W.pPr, lastSectPr));
+
+                    lastSectPr.Remove();
+                }
+            }
+
+            var reverseDescendants = xd.Descendants().Reverse().ToList();
+            var currentSection = InitializeSectionAnnotation(reverseDescendants);
+
+            foreach (var d in reverseDescendants)
+            {
+                if (d.Name == W.sectPr)
+                {
+                    if (d.Attribute(XNamespace.Xmlns + "w") == null)
+                        d.Add(new XAttribute(XNamespace.Xmlns + "w", W.w));
+
+                    currentSection = new SectionAnnotation()
+                    {
+                        SectionElement = d
+                    };
+                }
+                else
+                    d.AddAnnotation(currentSection);
+            }
+        }
+
+        private static SectionAnnotation InitializeSectionAnnotation(IEnumerable<XElement> reverseDescendants)
+        {
+            var currentSection = new SectionAnnotation()
+            {
+                SectionElement = reverseDescendants.FirstOrDefault(e => e.Name == W.sectPr)
+            };
+            if (currentSection.SectionElement != null &&
+                currentSection.SectionElement.Attribute(XNamespace.Xmlns + "w") == null)
+                currentSection.SectionElement.Add(new XAttribute(XNamespace.Xmlns + "w", W.w));
+
+            // todo what should the default section props be?
+            if (currentSection.SectionElement == null)
+                currentSection = new SectionAnnotation()
+                {
+                    SectionElement = new XElement(W.sectPr,
+                        new XAttribute(XNamespace.Xmlns + "w", W.w),
+                        new XElement(W.pgSz,
+                            new XAttribute(W._w, 12240),
+                            new XAttribute(W.h, 15840)),
+                        new XElement(W.pgMar,
+                            new XAttribute(W.top, 1440),
+                            new XAttribute(W.right, 1440),
+                            new XAttribute(W.bottom, 1440),
+                            new XAttribute(W.left, 1440),
+                            new XAttribute(W.header, 720),
+                            new XAttribute(W.footer, 720),
+                            new XAttribute(W.gutter, 0)),
+                        new XElement(W.cols,
+                            new XAttribute(W.space, 720)),
+                        new XElement(W.docGrid,
+                            new XAttribute(W.linePitch, 360)))
+                };
+
+            return currentSection;
+        }
+
+        /// <summary>
+        /// True when a <c>w:pBdr</c> declares at least one visible border side. A side is invisible
+        /// when its <c>w:val</c> is absent, <c>"nil"</c>, or <c>"none"</c>. Word renders no border for
+        /// an all-nil pBdr, so for grouping purposes it must be treated as "no border".
+        /// </summary>
+        private static bool HasVisibleBorder(XElement pBdr)
+        {
+            return pBdr.Elements().Any(side =>
+            {
+                var val = (string?)side.Attribute(W.val);
+                return val != null && val != "nil" && val != "none";
+            });
+        }
+
+        /// <summary>
+        /// The key adjacent body blocks are grouped by before they render: blocks with the same
+        /// key share one border <c>&lt;div&gt;</c>. Only an actually-visible border groups
+        /// paragraphs into a border div. A pBdr whose sides are all "nil"/"none" (e.g. the empty
+        /// pBdr Google Docs stamps on every paragraph) is no border at all — wrapping such a
+        /// paragraph in a div would relocate its left indent onto the div and force the
+        /// paragraph's own margin-left to 0, so a single-block re-render (the editor's
+        /// incremental path) silently loses indentation. Tables are never grouped; an unbordered
+        /// paragraph's key is the empty string. The render plan carries this grouping so a
+        /// windowed mount never cuts a window through a border box; it keys on the paragraph's
+        /// style-resolved properties, because by the time this runs the formatting assembler has
+        /// folded the style chain into <c>w:pPr</c> and a border a style contributes groups too.
+        /// </summary>
+        internal static string BorderGroupKey(XElement e) => BorderGroupKey(e, e.Element(W.pPr));
+
+        /// <summary>The key for <paramref name="e"/> read through <paramref name="pPr"/> in place
+        /// of its own properties.</summary>
+        internal static string BorderGroupKey(XElement e, XElement? pPr)
+        {
+            var pBdr = pPr?.Element(W.pBdr);
+            if (pBdr != null && HasVisibleBorder(pBdr))
+            {
+                var indStr = string.Empty;
+                var ind = pPr!.Element(W.ind);
+                if (ind != null)
+                    indStr = WithoutUnids(ind);
+                return WithoutUnids(pBdr) + indStr;
+            }
+            return e.Name == W.tbl ? "table" : string.Empty;
+        }
+
+        /// <summary>The element's markup with the projector's per-element Unid bookkeeping
+        /// removed. Two paragraphs with the same borders must key alike whether or not a session
+        /// has stamped their property elements — otherwise a document rendered from a session
+        /// never groups its boxed paragraphs while the same bytes rendered cold do.</summary>
+        private static string WithoutUnids(XElement element)
+        {
+            var copy = new XElement(element);
+            copy.DescendantsAndSelf().Attributes(PtOpenXml.Unid).Remove();
+            return copy.ToString(SaveOptions.DisableFormatting);
+        }
+
+        private static object CreateBorderDivs(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, IEnumerable<XElement> elements)
+        {
+            return elements.GroupAdjacent(BorderGroupKey)
+                .Select(g =>
+                {
+                    if (g.Key == string.Empty)
+                    {
+                        return (object) GroupAndVerticallySpaceNumberedParagraphs(wordDoc, settings, g, 0m);
+                    }
+                    if (g.Key == "table")
+                    {
+                        return g.Select(gc => ConvertToHtmlTransform(wordDoc, settings, gc, false, 0));
+                    }
+                    var pPr = g.First().Elements(W.pPr).First();
+                    var pBdr = pPr.Element(W.pBdr);
+                    var style = new Dictionary<string, string>();
+                    GenerateBorderStyle(pBdr, W.top, style, BorderType.Paragraph);
+                    GenerateBorderStyle(pBdr, W.right, style, BorderType.Paragraph);
+                    GenerateBorderStyle(pBdr, W.bottom, style, BorderType.Paragraph);
+                    GenerateBorderStyle(pBdr, W.left, style, BorderType.Paragraph);
+
+                    var currentMarginLeft = 0m;
+                    var ind = pPr.Element(W.ind);
+                    if (ind != null)
+                    {
+                        var leftInInches = WordprocessingMLUtil.AttributeToDecimalTwips(WordprocessingMLUtil.IndLeadingAttribute(ind))/1440m ?? 0;
+                        var hangingInInches = -WordprocessingMLUtil.AttributeToDecimalTwips(ind.Attribute(W.hanging))/1440m ?? 0;
+                        currentMarginLeft = leftInInches + hangingInInches;
+
+                        style.AddIfMissing("margin-left",
+                            currentMarginLeft > 0m
+                                ? string.Format(NumberFormatInfo.InvariantInfo, "{0:0.00}in", currentMarginLeft)
+                                : "0");
+                    }
+
+                    var div = new XElement(Xhtml.div,
+                        GroupAndVerticallySpaceNumberedParagraphs(wordDoc, settings, g, currentMarginLeft));
+                    div.AddAnnotation(style);
+                    return div;
+                })
+            .ToList();
+        }
+
+        private static IEnumerable<object> GroupAndVerticallySpaceNumberedParagraphs(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
+            IEnumerable<XElement> elements, decimal currentMarginLeft)
+        {
+            var grouped = elements
+                .GroupAdjacent(e =>
+                {
+                    var abstractNumId = (string?)e.Attribute(PtOpenXml.pt + "AbstractNumId");
+                    if (abstractNumId != null)
+                        return "num:" + abstractNumId;
+                    var contextualSpacing = e.Elements(W.pPr).Elements(W.contextualSpacing).FirstOrDefault();
+                    if (contextualSpacing != null)
+                    {
+                        var styleName = (string?)e.Elements(W.pPr).Elements(W.pStyle).Attributes(W.val).FirstOrDefault();
+                        if (styleName == null)
+                            return "";
+                        return "sty:" + styleName;
+                    }
+                    return "";
+                })
+                .ToList();
+            var newContent = grouped
+                .Select(g =>
+                {
+                    if (g.Key == "")
+                        return g.Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft));
+                    var last = g.Count() - 1;
+                    // For contextualSpacing groups (sty: prefix), suppress both trailing whitespace
+                    // for non-last paragraphs AND leading whitespace for non-first paragraphs.
+                    // Word removes all inter-paragraph spacing for same-style contextualSpacing paragraphs.
+                    var isContextualGroup = g.Key.StartsWith("sty:");
+                    return g.Select((e, i) => ConvertToHtmlTransform(wordDoc, settings, e,
+                        i != last, currentMarginLeft,
+                        suppressLeadingWhiteSpace: isContextualGroup && i != 0));
+                });
+            return (IEnumerable<object>)newContent;
+        }
+
+        private class BorderMappingInfo
+        {
+            required public string CssName;
+            public decimal CssSize;
+        }
+
+        private static readonly Dictionary<string, BorderMappingInfo> BorderStyleMap = new Dictionary<string, BorderMappingInfo>()
+        {
+            { "single", new BorderMappingInfo() { CssName = "solid", CssSize = 1.0m }},
+            { "dotted", new BorderMappingInfo() { CssName = "dotted", CssSize = 1.0m }},
+            { "dashSmallGap", new BorderMappingInfo() { CssName = "dashed", CssSize = 1.0m }},
+            { "dashed", new BorderMappingInfo() { CssName = "dashed", CssSize = 1.0m }},
+            { "dotDash", new BorderMappingInfo() { CssName = "dashed", CssSize = 1.0m }},
+            { "dotDotDash", new BorderMappingInfo() { CssName = "dashed", CssSize = 1.0m }},
+            { "double", new BorderMappingInfo() { CssName = "double", CssSize = 2.5m }},
+            { "triple", new BorderMappingInfo() { CssName = "double", CssSize = 2.5m }},
+            { "thinThickSmallGap", new BorderMappingInfo() { CssName = "double", CssSize = 4.5m }},
+            { "thickThinSmallGap", new BorderMappingInfo() { CssName = "double", CssSize = 4.5m }},
+            { "thinThickThinSmallGap", new BorderMappingInfo() { CssName = "double", CssSize = 6.0m }},
+            { "thickThinMediumGap", new BorderMappingInfo() { CssName = "double", CssSize = 6.0m }},
+            { "thinThickMediumGap", new BorderMappingInfo() { CssName = "double", CssSize = 6.0m }},
+            { "thinThickThinMediumGap", new BorderMappingInfo() { CssName = "double", CssSize = 9.0m }},
+            { "thinThickLargeGap", new BorderMappingInfo() { CssName = "double", CssSize = 5.25m }},
+            { "thickThinLargeGap", new BorderMappingInfo() { CssName = "double", CssSize = 5.25m }},
+            { "thinThickThinLargeGap", new BorderMappingInfo() { CssName = "double", CssSize = 9.0m }},
+            { "wave", new BorderMappingInfo() { CssName = "solid", CssSize = 3.0m }},
+            { "doubleWave", new BorderMappingInfo() { CssName = "double", CssSize = 5.25m }},
+            { "dashDotStroked", new BorderMappingInfo() { CssName = "solid", CssSize = 3.0m }},
+            { "threeDEmboss", new BorderMappingInfo() { CssName = "ridge", CssSize = 6.0m }},
+            { "threeDEngrave", new BorderMappingInfo() { CssName = "groove", CssSize = 6.0m }},
+            { "outset", new BorderMappingInfo() { CssName = "outset", CssSize = 4.5m }},
+            { "inset", new BorderMappingInfo() { CssName = "inset", CssSize = 4.5m }},
+        };
+
+        private static void GenerateBorderStyle(XElement? pBdr, XName sideXName, Dictionary<string, string> style, BorderType borderType)
+        {
+            string whichSide;
+            if (sideXName == W.top)
+                whichSide = "top";
+            else if (sideXName == W.right)
+                whichSide = "right";
+            else if (sideXName == W.bottom)
+                whichSide = "bottom";
+            else
+                whichSide = "left";
+            if (pBdr == null)
+            {
+                style.Add("border-" + whichSide, "none");
+                if (borderType == BorderType.Cell &&
+                    (whichSide == "left" || whichSide == "right"))
+                    style.Add("padding-" + whichSide, "5.4pt");
+                return;
+            }
+
+            var side = pBdr.Element(sideXName);
+            if (side == null)
+            {
+                style.Add("border-" + whichSide, "none");
+                if (borderType == BorderType.Cell &&
+                    (whichSide == "left" || whichSide == "right"))
+                    style.Add("padding-" + whichSide, "5.4pt");
+                return;
+            }
+            var type = (string?)side.Attribute(W.val);
+            if (type == "nil" || type == "none")
+            {
+                style.Add("border-" + whichSide + "-style", "none");
+
+                var space = (decimal?)side.Attribute(W.space) ?? 0;
+                if (borderType == BorderType.Cell &&
+                    (whichSide == "left" || whichSide == "right"))
+                    if (space < 5.4m)
+                        space = 5.4m;
+                style.Add("padding-" + whichSide,
+                    space == 0 ? "0" : string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}pt", space));
+
+            }
+            else
+            {
+                // CT_Border/@sz is optional with an application-defined default
+                // (ECMA-376-1 §17.3.4). Default to zero, consistent with Word's
+                // documented bar default, before the existing width mapping/minimum.
+                var sz = (int?)side.Attribute(W.sz) ?? 0;
+                var space = (decimal?)side.Attribute(W.space) ?? 0;
+                // `w:color` is a CACHE of the last theme resolution, not the authority: when
+                // `w:themeColor` is present the theme entry (plus any tint/shade) is what the
+                // border is. Shading already resolved this way, so a table style whose fill and
+                // border both reference the same theme colour used to resolve them from two
+                // different sources — indistinguishable in a Word-written file, where the cache
+                // agrees, and wrong in one whose theme was changed without rewriting it.
+                var color = ResolveThemeColor(side, W.color, W.themeColor, W.themeTint, W.themeShade,
+                    GetThemeColorScheme(side));
+                if (color == null || color == "auto")
+                    color = "windowtext";
+                else
+                    color = ConvertColor(color);
+
+                decimal borderWidthInPoints = Math.Max(1m, Math.Min(96m, Math.Max(2m, sz)) / 8m);
+
+                var borderStyle = "solid";
+                if (type != null && BorderStyleMap.ContainsKey(type))
+                {
+                    var borderInfo = BorderStyleMap[type];
+                    borderStyle = borderInfo.CssName;
+                    if (type == "double")
+                    {
+                        if (sz <= 8)
+                            borderWidthInPoints = 2.5m;
+                        else if (sz <= 18)
+                            borderWidthInPoints = 6.75m;
+                        else
+                            borderWidthInPoints = sz / 3m;
+                    }
+                    else if (type == "triple")
+                    {
+                        if (sz <= 8)
+                            borderWidthInPoints = 8m;
+                        else if (sz <= 18)
+                            borderWidthInPoints = 11.25m;
+                        else
+                            borderWidthInPoints = 11.25m;
+                    }
+                    else if (type.ToLower().Contains("dash"))
+                    {
+                        if (sz <= 4)
+                            borderWidthInPoints = 1m;
+                        else if (sz <= 12)
+                            borderWidthInPoints = 1.5m;
+                        else
+                            borderWidthInPoints = 2m;
+                    }
+                    else if (type != "single")
+                        borderWidthInPoints = borderInfo.CssSize;
+                }
+                if (type == "outset" || type == "inset")
+                    color = "";
+                var borderWidth = string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}pt", borderWidthInPoints);
+
+                style.Add("border-" + whichSide, borderStyle + " " + color + " " + borderWidth);
+                if (borderType == BorderType.Cell &&
+                    (whichSide == "left" || whichSide == "right"))
+                    if (space < 5.4m)
+                        space = 5.4m;
+
+                style.Add("padding-" + whichSide,
+                    space == 0 ? "0" : string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}pt", space));
+            }
+        }
+
+        private static readonly Dictionary<string, Func<string, string, string>> ShadeMapper = new Dictionary<string,Func<string, string, string>>()
+        {
+            { "auto", (c, f) => c },
+            { "clear", (c, f) => f },
+            { "nil", (c, f) => f },
+            { "solid", (c, f) => c },
+            { "diagCross", (c, f) => ConvertColorFillPct(c, f, .75) },
+            { "diagStripe", (c, f) => ConvertColorFillPct(c, f, .75) },
+            { "horzCross", (c, f) => ConvertColorFillPct(c, f, .5) },
+            { "horzStripe", (c, f) => ConvertColorFillPct(c, f, .5) },
+            { "pct10", (c, f) => ConvertColorFillPct(c, f, .1) },
+            { "pct12", (c, f) => ConvertColorFillPct(c, f, .125) },
+            { "pct15", (c, f) => ConvertColorFillPct(c, f, .15) },
+            { "pct20", (c, f) => ConvertColorFillPct(c, f, .2) },
+            { "pct25", (c, f) => ConvertColorFillPct(c, f, .25) },
+            { "pct30", (c, f) => ConvertColorFillPct(c, f, .3) },
+            { "pct35", (c, f) => ConvertColorFillPct(c, f, .35) },
+            { "pct37", (c, f) => ConvertColorFillPct(c, f, .375) },
+            { "pct40", (c, f) => ConvertColorFillPct(c, f, .4) },
+            { "pct45", (c, f) => ConvertColorFillPct(c, f, .45) },
+            { "pct50", (c, f) => ConvertColorFillPct(c, f, .50) },
+            { "pct55", (c, f) => ConvertColorFillPct(c, f, .55) },
+            { "pct60", (c, f) => ConvertColorFillPct(c, f, .60) },
+            { "pct62", (c, f) => ConvertColorFillPct(c, f, .625) },
+            { "pct65", (c, f) => ConvertColorFillPct(c, f, .65) },
+            { "pct70", (c, f) => ConvertColorFillPct(c, f, .7) },
+            { "pct75", (c, f) => ConvertColorFillPct(c, f, .75) },
+            { "pct80", (c, f) => ConvertColorFillPct(c, f, .8) },
+            { "pct85", (c, f) => ConvertColorFillPct(c, f, .85) },
+            { "pct87", (c, f) => ConvertColorFillPct(c, f, .875) },
+            { "pct90", (c, f) => ConvertColorFillPct(c, f, .9) },
+            { "pct95", (c, f) => ConvertColorFillPct(c, f, .95) },
+            { "reverseDiagStripe", (c, f) => ConvertColorFillPct(c, f, .5) },
+            { "thinDiagCross", (c, f) => ConvertColorFillPct(c, f, .5) },
+            { "thinDiagStripe", (c, f) => ConvertColorFillPct(c, f, .25) },
+            { "thinHorzCross", (c, f) => ConvertColorFillPct(c, f, .3) },
+            { "thinHorzStripe", (c, f) => ConvertColorFillPct(c, f, .25) },
+            { "thinReverseDiagStripe", (c, f) => ConvertColorFillPct(c, f, .25) },
+            { "thinVertStripe", (c, f) => ConvertColorFillPct(c, f, .25) },
+        };
+
+        // Thread-safe cache for shade color calculations
+        private static readonly ConcurrentDictionary<string, string> ShadeCache = new ConcurrentDictionary<string, string>();
+
+        // fill is the background, color is the foreground
+        private static string ConvertColorFillPct(string color, string fill, double pct)
+        {
+            if (color == "auto")
+                color = "000000";
+            if (fill == "auto")
+                fill = "ffffff";
+            var key = color + fill + pct.ToString(CultureInfo.InvariantCulture);
+
+            return ShadeCache.GetOrAdd(key, _ =>
+            {
+                var fillRed = Convert.ToInt32(fill.Substring(0, 2), 16);
+                var fillGreen = Convert.ToInt32(fill.Substring(2, 2), 16);
+                var fillBlue = Convert.ToInt32(fill.Substring(4, 2), 16);
+                var colorRed = Convert.ToInt32(color.Substring(0, 2), 16);
+                var colorGreen = Convert.ToInt32(color.Substring(2, 2), 16);
+                var colorBlue = Convert.ToInt32(color.Substring(4, 2), 16);
+                var finalRed = (int)(fillRed - (fillRed - colorRed) * pct);
+                var finalGreen = (int)(fillGreen - (fillGreen - colorGreen) * pct);
+                var finalBlue = (int)(fillBlue - (fillBlue - colorBlue) * pct);
+                return string.Format("{0:x2}{1:x2}{2:x2}", finalRed, finalGreen, finalBlue);
+            });
+        }
+
+        /// <summary>
+        /// Clears the shade color cache.
+        /// Useful for long-running processes to free memory.
+        /// </summary>
+        public static void ClearShadeCache()
+        {
+            ShadeCache.Clear();
+        }
+
+        private static void CreateStyleFromShd(Dictionary<string, string> style, XElement? shd, XElement? contextElement)
+        {
+            if (shd == null)
+                return;
+            // Word and other producers sometimes omit w:val for a plain cell fill.  OOXML's
+            // effective behavior is a clear shading pattern, so retain the fill rather than
+            // passing a null key to the shade lookup.
+            var shadeType = (string?)shd.Attribute(W.val) ?? "clear";
+
+            // Resolve color and fill with theme support
+            var themeScheme = contextElement != null ? GetThemeColorScheme(contextElement) : null;
+            var color = ResolveThemeColor(shd, W.color, W.themeColor, W.themeTint, W.themeShade, themeScheme);
+            var fill = ResolveThemeColor(shd, W.fill, W.themeFill, W.themeFillTint, W.themeFillShade, themeScheme);
+
+            if (ShadeMapper.TryGetValue(shadeType, out var shadeMapper))
+                color = shadeMapper(color!, fill!);
+            if (color != null)
+            {
+                var cvtColor = ConvertColor(color);
+                if (!string.IsNullOrEmpty(cvtColor))
+                    style.AddIfMissing("background", cvtColor);
+            }
+        }
+
+        private static readonly Dictionary<string, string> NamedColors = new Dictionary<string, string>()
+        {
+            {"black", "black"},
+            {"blue", "blue" },
+            {"cyan", "aqua" },
+            {"green", "green" },
+            {"magenta", "fuchsia" },
+            {"red", "red" },
+            {"yellow", "yellow" },
+            {"white", "white" },
+            {"darkBlue", "#00008B" },
+            {"darkCyan", "#008B8B" },
+            {"darkGreen", "#006400" },
+            {"darkMagenta", "#800080" },
+            {"darkRed", "#8B0000" },
+            {"darkYellow", "#808000" },
+            {"darkGray", "#A9A9A9" },
+            {"lightGray", "#D3D3D3" },
+            {"none", "" },
+        };
+
+        private static void CreateColorProperty(string propertyName, string color, Dictionary<string, string> style)
+        {
+            if (color == null)
+                return;
+
+            // "auto" color is black for "color" and white for "background" property.
+            if (color == "auto")
+                color = propertyName == "color" ? "black" : "white";
+
+            if (NamedColors.ContainsKey(color))
+            {
+                var lc = NamedColors[color];
+                if (lc == "")
+                    return;
+                style.AddIfMissing(propertyName, lc);
+                return;
+            }
+            style.AddIfMissing(propertyName, "#" + color);
+        }
+
+        private static string ConvertColor(string color)
+        {
+            // "auto" color is black for "color" and white for "background" property.
+            // As this method is only called for "background" colors, "auto" is translated
+            // to "white" and never "black".
+            if (color == "auto")
+                color = "white";
+
+            if (NamedColors.ContainsKey(color))
+            {
+                var lc = NamedColors[color];
+                if (lc == "")
+                    return "black";
+                return lc;
+            }
+            return "#" + color;
+        }
+
+        #region Font Fallback
+
+        private enum GenericFontFamily
+        {
+            Serif,
+            SansSerif,
+            Monospace
+        }
+
+        private static readonly string[] MonospacePatterns =
+        {
+            "mono", "courier", "consolas", "code", "terminal", "fixed",
+            "typewriter", "menlo", "inconsolata", "fira code", "source code",
+            "dejavu mono", "ubuntu mono", "roboto mono", "sf mono", "cascadia"
+        };
+
+        private static readonly string[] SansSerifPatterns =
+        {
+            "sans", "arial", "helvetica", "verdana", "tahoma", "calibri",
+            "segoe", "trebuchet", "gill", "gothic", "grotesk", "grotesque",
+            "futura", "avenir", "open sans", "roboto", "lato", "montserrat",
+            "proxima", "nunito", "poppins", "inter", "source sans", "noto sans"
+        };
+
+        private static readonly string[] SerifPatterns =
+        {
+            "times", "georgia", "palatino", "garamond", "baskerville",
+            "bookman", "cambria", "constantia", "minion", "caslon", "bembo",
+            "bodoni", "century", "cochin", "didot", "antiqua", "roman",
+            "noto serif", "source serif", "pt serif", "libre baskerville"
+        };
+
+        private static GenericFontFamily ClassifyFont(string fontName)
+        {
+            if (string.IsNullOrWhiteSpace(fontName))
+                return GenericFontFamily.Serif;
+
+            var lowerName = fontName.ToLowerInvariant();
+
+            // Check monospace first (most specific patterns)
+            foreach (var pattern in MonospacePatterns)
+            {
+                if (lowerName.Contains(pattern))
+                    return GenericFontFamily.Monospace;
+            }
+
+            // Check sans-serif patterns
+            foreach (var pattern in SansSerifPatterns)
+            {
+                if (lowerName.Contains(pattern))
+                    return GenericFontFamily.SansSerif;
+            }
+
+            // Check serif patterns
+            foreach (var pattern in SerifPatterns)
+            {
+                if (lowerName.Contains(pattern))
+                    return GenericFontFamily.Serif;
+            }
+
+            // Default to serif (most common for body text)
+            return GenericFontFamily.Serif;
+        }
+
+        private static string GetGenericFallback(GenericFontFamily family)
+        {
+            return family switch
+            {
+                GenericFontFamily.Monospace => "monospace",
+                GenericFontFamily.SansSerif => "sans-serif",
+                _ => "serif"
+            };
+        }
+
+        // CJK font fallback chains by language
+        private static readonly Dictionary<string, string> CjkFontChains = new Dictionary<string, string>()
+        {
+            // Japanese - prioritize fonts with Japanese glyphs
+            { "ja", "'Noto Serif CJK JP', 'Noto Sans CJK JP', 'Yu Mincho', 'Yu Gothic', 'Hiragino Mincho ProN', 'Hiragino Sans', 'MS Mincho', 'MS Gothic', 'Meiryo'" },
+
+            // Simplified Chinese
+            { "zh-hans", "'Noto Serif CJK SC', 'Noto Sans CJK SC', 'Microsoft YaHei', 'SimSun', 'SimHei', 'PingFang SC', 'Hiragino Sans GB'" },
+
+            // Traditional Chinese
+            { "zh-hant", "'Noto Serif CJK TC', 'Noto Sans CJK TC', 'Microsoft JhengHei', 'PMingLiU', 'PingFang TC', 'Heiti TC'" },
+
+            // Korean
+            { "ko", "'Noto Serif CJK KR', 'Noto Sans CJK KR', 'Malgun Gothic', 'Batang', 'Gulim', 'AppleGothic', 'Apple SD Gothic Neo'" },
+
+            // Generic CJK fallback (when specific language not known)
+            { "cjk", "'Noto Serif CJK SC', 'Noto Sans CJK SC', 'Noto Sans CJK JP', 'Noto Sans CJK KR', 'Microsoft YaHei', 'SimSun', 'MS Gothic', 'Malgun Gothic'" }
+        };
+
+        private static string? NormalizeCjkLanguage(string? langCode)
+        {
+            if (string.IsNullOrEmpty(langCode))
+                return null;
+
+            var lower = langCode.ToLowerInvariant();
+
+            if (lower.StartsWith("ja"))
+                return "ja";
+            if (lower == "zh-hans" || lower.StartsWith("zh-cn") || lower == "zh-sg")
+                return "zh-hans";
+            if (lower == "zh-hant" || lower.StartsWith("zh-tw") || lower.StartsWith("zh-hk") || lower.StartsWith("zh-mo"))
+                return "zh-hant";
+            if (lower.StartsWith("ko"))
+                return "ko";
+
+            return null;
+        }
+
+        private static readonly Dictionary<string, string> FontFallback = new Dictionary<string, string>()
+        {
+            { "Arial", @"'{0}', 'sans-serif'" },
+            { "Arial Narrow", @"'{0}', 'sans-serif'" },
+            { "Arial Rounded MT Bold", @"'{0}', 'sans-serif'" },
+            { "Arial Unicode MS", @"'{0}', 'sans-serif'" },
+            { "Baskerville Old Face", @"'{0}', 'serif'" },
+            { "Berlin Sans FB", @"'{0}', 'sans-serif'" },
+            { "Berlin Sans FB Demi", @"'{0}', 'sans-serif'" },
+            { "Calibri Light", @"'{0}', 'sans-serif'" },
+            { "Gill Sans MT", @"'{0}', 'sans-serif'" },
+            { "Gill Sans MT Condensed", @"'{0}', 'sans-serif'" },
+            { "Lucida Sans", @"'{0}', 'sans-serif'" },
+            { "Lucida Sans Unicode", @"'{0}', 'sans-serif'" },
+            { "Segoe UI", @"'{0}', 'sans-serif'" },
+            { "Segoe UI Light", @"'{0}', 'sans-serif'" },
+            { "Segoe UI Semibold", @"'{0}', 'sans-serif'" },
+            { "Tahoma", @"'{0}', 'sans-serif'" },
+            { "Trebuchet MS", @"'{0}', 'sans-serif'" },
+            { "Verdana", @"'{0}', 'sans-serif'" },
+            { "Book Antiqua", @"'{0}', 'serif'" },
+            { "Bookman Old Style", @"'{0}', 'serif'" },
+            { "Californian FB", @"'{0}', 'serif'" },
+            { "Cambria", @"'{0}', 'serif'" },
+            { "Constantia", @"'{0}', 'serif'" },
+            { "Garamond", @"'{0}', 'serif'" },
+            { "Lucida Bright", @"'{0}', 'serif'" },
+            { "Lucida Fax", @"'{0}', 'serif'" },
+            { "Palatino Linotype", @"'{0}', 'serif'" },
+            { "Times New Roman", @"'{0}', 'serif'" },
+            { "Wide Latin", @"'{0}', 'serif'" },
+            { "Courier New", @"'{0}', 'monospace'" },
+            { "Lucida Console", @"'{0}', 'monospace'" },
+        };
+
+        private static void CreateFontCssProperty(string font, string? languageType, string? langCode,
+            Dictionary<string, string> style, XElement owner)
+        {
+            if (string.IsNullOrEmpty(font))
+                return;
+
+            var fontParts = new List<string> { $"'{font}'" };
+
+            // The document's own declared stand-in comes first among the fallbacks: a family the
+            // package itself says to substitute is a better answer than anything inferred from the
+            // name. See FontAltNames.
+            var altNames = owner.AncestorsAndSelf().Last().Annotation<FontAltNames>();
+            if (altNames != null && altNames.ByFamily.TryGetValue(font, out var altName))
+                fontParts.Add($"'{altName}'");
+
+            // Add CJK fallback chain for East Asian content
+            if (languageType == "eastAsia")
+            {
+                var normalizedLang = NormalizeCjkLanguage(langCode);
+                var cjkKey = normalizedLang ?? "cjk";
+
+                if (CjkFontChains.TryGetValue(cjkKey, out var cjkChain))
+                {
+                    fontParts.Add(cjkChain);
+                }
+            }
+
+            // Add generic fallback based on known fonts or classification
+            string genericFallback;
+            if (FontFallback.TryGetValue(font, out var template))
+            {
+                // Extract fallback from existing template (e.g., "'sans-serif'" from "'{0}', 'sans-serif'")
+                var lastComma = template.LastIndexOf(',');
+                if (lastComma > 0)
+                {
+                    genericFallback = template.Substring(lastComma + 1).Trim().Trim('\'');
+                }
+                else
+                {
+                    genericFallback = "serif";
+                }
+            }
+            else
+            {
+                // Classify unknown font
+                var classification = ClassifyFont(font);
+                genericFallback = GetGenericFallback(classification);
+            }
+
+            fontParts.Add(genericFallback);
+
+            style.AddIfMissing("font-family", string.Join(", ", fontParts));
+        }
+
+        #endregion
+
+        private static bool GetBoolProp(XElement runProps, XName xName)
+        {
+            var p = runProps.Element(xName);
+            if (p == null)
+                return false;
+            var v = p.Attribute(W.val);
+            if (v == null)
+                return true;
+            var s = v.Value.ToLower();
+            if (s == "0" || s == "false")
+                return false;
+            if (s == "1" || s == "true")
+                return true;
+            return false;
+        }
+
+        private static object ConvertContentThatCanContainFields(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
+            IEnumerable<XElement> elements)
+        {
+            var grouped = elements
+                .GroupAdjacent(e =>
+                {
+                    var stack = e.Annotation<Stack<FieldRetriever.FieldElementTypeInfo>>();
+                    return stack == null || !stack.Any() ? (int?)null : stack.Select(st => st.Id).Min();
+                })
+                .ToList();
+
+            var txformed = grouped
+                .Select(g =>
+                {
+                    var key = g.Key;
+                    if (key == null)
+                        return (object)g.Select(n => ConvertToHtmlTransform(wordDoc, settings, n, false, 0m));
+
+                    var instrText = FieldRetriever.InstrText(g.First().Ancestors().Last(), (int)key)
+                        .TrimStart('{').TrimEnd('}');
+
+                    // Mark PAGE/NUMPAGES results so the paginator can substitute each page's real
+                    // number: a header/footer is cloned onto every page, so the field's single
+                    // cached result would otherwise read the same on all of them. Paginated mode,
+                    // or a caller that paginates a block render itself (StampPageNumberFields) —
+                    // every other mode's HTML stays untouched.
+                    if ((settings.RenderPagination == PaginationMode.Paginated || settings.StampPageNumberFields)
+                        && Internal.PageNumberFieldInstr.TryParse(instrText) is { } pageField)
+                    {
+                        return new XElement(Xhtml.span,
+                            new XAttribute("data-field", pageField.Kind),
+                            pageField.FormatSwitch is null
+                                ? null
+                                : new XAttribute("data-field-format", pageField.FormatSwitch),
+                            g.Select(n => ConvertToHtmlTransform(wordDoc, settings, n, false, 0m)));
+                    }
+
+                    var parsed = FieldRetriever.ParseField(instrText);
+                    if (parsed.FieldType != "HYPERLINK")
+                        return g.Select(n => ConvertToHtmlTransform(wordDoc, settings, n, false, 0m));
+
+                    var content = g.DescendantsAndSelf(W.r).Select(run => ConvertRun(wordDoc, settings, run));
+                    var a = parsed.Arguments.Length > 0
+                        ? new XElement(Xhtml.a, new XAttribute("href", parsed.Arguments[0]), content)
+                        : new XElement(Xhtml.a, content);
+                    var a2 = a as XElement;
+                    if (!a2.Nodes().Any())
+                    {
+                        a2.Add(new XText(""));
+                        return a2;
+                    }
+                    return a;
+                })
+                .ToList();
+
+            return txformed;
+        }
+
+        #region Image Processing
+
+        // Don't process wmf files (with contentType == "image/x-wmf") because GDI consumes huge amounts
+        // of memory when dealing with wmf perhaps because it loads a DLL to do the rendering?
+        // It actually works, but is not recommended.
+        private static readonly List<string> ImageContentTypes = new List<string>
+        {
+            "image/png", "image/gif", "image/tiff", "image/jpeg"
+        };
+
+        // Keep this deliberately small: it describes namespaces that are meaningful to this HTML
+        // projection, not every namespace Word itself can consume. In particular, an obsolete
+        // pre-release wps namespace must fall through to its VML fallback (as Word does).
+        private static readonly HashSet<string> HtmlSupportedMarkupNamespaces = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "urn:schemas-microsoft-com:vml",
+            "urn:schemas-microsoft-com:office:office",
+            "urn:schemas-microsoft-com:office:word",
+            WPS.wps.NamespaceName,
+            WPG.wpg.NamespaceName,
+            WPC.wpc.NamespaceName,
+            WP14.wp14.NamespaceName,
+            W14.w14.NamespaceName,
+        };
+
+        private static object? ProcessAlternateContent(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement alternateContent, decimal currentMarginLeft)
+        {
+            // Markup Compatibility requires readers to use the Fallback whenever none of the
+            // available Choice branches advertises only namespaces they understand. This also
+            // gives older draft DrawingML shapes a portable VML representation instead of
+            // silently dropping the entire logical object.
+            var selected = alternateContent.Elements(MC.Choice).FirstOrDefault(IsSupportedMarkupChoice)
+                ?? alternateContent.Element(MC.Fallback);
+
+            return selected == null
+                ? null
+                : selected.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false,
+                    currentMarginLeft));
+        }
+
+        private static bool IsSupportedMarkupChoice(XElement choice)
+        {
+            var requires = (string?)choice.Attribute("Requires");
+            if (string.IsNullOrWhiteSpace(requires))
+                return true;
+
+            return requires.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .Select(prefix => choice.GetNamespaceOfPrefix(prefix)?.NamespaceName ?? string.Empty)
+                .All(HtmlSupportedMarkupNamespaces.Contains);
+        }
+
+
+        public static XElement? ProcessImage(WordprocessingDocument wordDoc,
+            XElement element, Func<ImageInfo, XElement?>? imageHandler, WmlToHtmlConverterSettings? settings = null)
+        {
+            if (element.Name == W.drawing)
+            {
+                var chart = ProcessChart(wordDoc, element);
+                if (chart != null)
+                    return chart;
+
+                // Preserve established image output for the uncommon shape that carries both an
+                // image and textbox body. A textbox-only drawing falls through when no image can
+                // be resolved (including a malformed/missing relationship).
+                if (imageHandler != null)
+                {
+                    var image = ProcessDrawing(wordDoc, element, imageHandler, settings);
+                    if (image != null)
+                        return image;
+                }
+                return ProcessTextBox(wordDoc, element, settings);
+            }
+            if (element.Name == W.pict || element.Name == W._object)
+            {
+                if (imageHandler != null)
+                {
+                    var image = ProcessPictureOrObject(wordDoc, element, imageHandler, settings);
+                    if (image != null)
+                        return image;
+                }
+                return ProcessTextBox(wordDoc, element, settings);
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Projects a DrawingML or VML text box into valid inline HTML. Word commonly stores the
+        /// same logical box in an <c>mc:Choice</c> and a VML fallback; callers select one branch
+        /// before reaching here. This models the portable core (dimensions, simple fill/border and
+        /// its Word paragraphs) rather than passing VML's absolute-positioning directives through
+        /// to a browser, where they otherwise escape the document flow.
+        /// </summary>
+        private static XElement? ProcessTextBox(WordprocessingDocument wordDoc, XElement element,
+            WmlToHtmlConverterSettings? settings)
+        {
+            var textBoxContent = element.Descendants(W.txbxContent).FirstOrDefault();
+            if (textBoxContent == null)
+                return null;
+
+            var wrapper = new XElement(Xhtml.span);
+            var style = new Dictionary<string, string>
+            {
+                { "display", "inline-block" },
+                { "box-sizing", "border-box" },
+                { "vertical-align", "top" },
+                { "overflow", "hidden" },
+            };
+
+            var drawingContainer = element.Elements()
+                .FirstOrDefault(e => e.Name == WP.inline || e.Name == WP.anchor);
+            var vmlShape = element.Descendants(VML.shape).FirstOrDefault();
+            var autoFit = HasAutoFitTextBox(element);
+            // ProcessImage's settings parameter defaults to null for callers with no pagination
+            // config, but AddDrawingTextBoxStyle dereferences settings.RenderPagination once the
+            // drawing has an anchor, and ConvertToHtmlTransform requires non-null settings
+            // throughout. This mirrors pre-existing behavior: a null settings here has always
+            // been able to NRE downstream when a text box is actually present.
+            if (drawingContainer != null)
+                AddDrawingTextBoxStyle(style, wrapper, element, drawingContainer, settings!, autoFit);
+            else if (vmlShape != null)
+                AddVmlTextBoxStyle(style, vmlShape);
+
+            var renderedBlocks = new List<object>();
+            foreach (var child in textBoxContent.Elements())
+            {
+                if (child.Name == W.p)
+                {
+                    var paragraph = ConvertToHtmlTransform(wordDoc, settings!, child, false, 0m) as XElement;
+                    if (paragraph == null)
+                        continue;
+
+                    // A span can safely remain inside the containing run. Preserve paragraph
+                    // styling, but turn the inner block into a block-level span so browser HTML
+                    // parsing never closes the outer paragraph around a text box.
+                    paragraph.Name = Xhtml.span;
+                    var paragraphStyle = paragraph.Annotation<Dictionary<string, string>>();
+                    if (paragraphStyle == null)
+                    {
+                        paragraphStyle = new Dictionary<string, string>();
+                        paragraph.AddAnnotation(paragraphStyle);
+                    }
+                    paragraphStyle.AddIfMissing("display", "block");
+                    if (autoFit)
+                    {
+                        // In an automatically fitted shape, LibreOffice sizes the box to the
+                        // text line and its insets, not the document style's trailing paragraph
+                        // spacing. Keeping Normal's usual 10pt after-spacing makes the box
+                        // visibly too tall.
+                        paragraphStyle["margin-bottom"] = "0";
+                    }
+                    renderedBlocks.Add(paragraph);
+                    continue;
+                }
+
+                if (child.Name == W.tbl)
+                {
+                    // Tables cannot legally live inside a span. Keep their text visible rather
+                    // than emitting invalid nested block markup; full table projection inside a
+                    // floating text box remains a separate layout feature.
+                    var text = child.Descendants(W.t).Select(t => t.Value).StringConcatenate();
+                    if (!string.IsNullOrEmpty(text))
+                    {
+                        var tableText = new XElement(Xhtml.span, new XText(text));
+                        tableText.AddAnnotation(new Dictionary<string, string>
+                        {
+                            { "display", "block" },
+                        });
+                        renderedBlocks.Add(tableText);
+                    }
+                }
+            }
+
+            if (renderedBlocks.Count == 0)
+                return null;
+
+            wrapper.Add(renderedBlocks);
+            wrapper.AddAnnotation(style);
+            return wrapper;
+        }
+
+        // Word 2008's external textbox part uses this namespace rather than the W14 namespace
+        // used elsewhere in the document. Keep it local because the namespace only exists to
+        // normalize this compatibility representation into standard w:txbxContent markup.
+        private static readonly XName LegacyExternalTextBox = XName.Get("txbx",
+            "http://schemas.microsoft.com/office/word/2008/9/12/wordml");
+
+        private static readonly XName ExternalTextBoxRelationshipId = R.r + "txbx";
+
+        private static void InlineExternalTextBoxBodies(WordprocessingDocument wordDoc)
+        {
+            foreach (var ownerPart in wordDoc.ContentParts())
+            {
+                var ownerDocument = ownerPart.GetXDocument();
+                var textBoxes = ownerDocument.Descendants(WPS.txbx)
+                    .Where(textBox => !textBox.Descendants(W.txbxContent).Any())
+                    .ToList();
+                var changed = false;
+
+                foreach (var textBox in textBoxes)
+                {
+                    var relationshipId = (string?)textBox.Attribute(ExternalTextBoxRelationshipId);
+                    if (string.IsNullOrWhiteSpace(relationshipId))
+                        continue;
+
+                    var relatedPart = ownerPart.Parts
+                        .Where(pair => pair.RelationshipId == relationshipId)
+                        .Select(pair => pair.OpenXmlPart)
+                        .FirstOrDefault();
+                    if (relatedPart == null || !IsXmlPart(relatedPart))
+                        continue;
+
+                    try
+                    {
+                        var textBoxContent = GetExternalTextBoxContent(relatedPart);
+                        if (textBoxContent == null)
+                            continue;
+
+                        RemapExternalTextBoxRelationships(relatedPart, ownerPart, textBoxContent);
+                        textBox.Add(textBoxContent);
+                        changed = true;
+                    }
+                    catch (System.Xml.XmlException)
+                    {
+                        // A broken compatibility part must not prevent the rest of the document
+                        // from rendering. Leave the selected Choice empty rather than promoting
+                        // its VML fallback.
+                    }
+                    catch (System.IO.IOException)
+                    {
+                        // Treat unreadable related parts like missing textbox content.
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // Some malformed package relationships cannot provide a readable part.
+                    }
+                }
+
+                if (changed)
+                    ownerPart.PutXDocument();
+            }
+        }
+
+        private static bool IsXmlPart(OpenXmlPart part)
+        {
+            var contentType = part.ContentType;
+            return contentType.EndsWith("+xml", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(contentType, "application/xml", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(contentType, "text/xml", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static XElement? GetExternalTextBoxContent(OpenXmlPart part)
+        {
+            var root = part.GetXDocument().Root;
+            if (root == null)
+                return null;
+
+            // Be tolerant of a producer that writes normal inline textbox markup into the
+            // relationship target.
+            var inlineContent = root.Name == W.txbxContent
+                ? root
+                : root.Descendants(W.txbxContent).FirstOrDefault();
+            if (inlineContent != null)
+                return new XElement(inlineContent);
+
+            // Legacy external textbox parts place paragraphs/tables directly under w14:txbx.
+            // Wrap those cloned blocks in the standard inline container expected downstream.
+            if (root.Name != LegacyExternalTextBox && root.Name != W14.w14 + "txbx")
+                return null;
+
+            var blocks = root.Elements()
+                .Where(element => element.Name == W.p || element.Name == W.tbl)
+                .Select(element => new XElement(element))
+                .ToList();
+            return blocks.Count == 0 ? null : new XElement(W.txbxContent, blocks);
+        }
+
+        /// <summary>
+        /// External text-box XML is cloned into its referring story. Relationship ids in that
+        /// clone must move with it: ids are local to the external part and can legally collide
+        /// with unrelated ids in document.xml/header.xml. Import each referenced relationship
+        /// into the destination story and rewrite the clone before it is serialized there.
+        /// </summary>
+        private static void RemapExternalTextBoxRelationships(
+            OpenXmlPart sourcePart,
+            OpenXmlPart destinationPart,
+            XElement clonedContent)
+        {
+            var attributes = clonedContent.DescendantsAndSelf()
+                .Attributes()
+                .Where(attribute => attribute.Name.Namespace == R.r &&
+                    !string.IsNullOrWhiteSpace(attribute.Value))
+                .ToList();
+            var remappedIds = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var sourceId in attributes.Select(attribute => attribute.Value)
+                .Distinct(StringComparer.Ordinal))
+            {
+                string? destinationId = null;
+                var hyperlink = sourcePart.HyperlinkRelationships
+                    .FirstOrDefault(relationship => relationship.Id == sourceId);
+                if (hyperlink != null)
+                {
+                    var existing = destinationPart.HyperlinkRelationships.FirstOrDefault(relationship =>
+                        relationship.IsExternal == hyperlink.IsExternal &&
+                        string.Equals(relationship.Uri?.OriginalString,
+                            hyperlink.Uri?.OriginalString, StringComparison.Ordinal));
+                    destinationId = (existing ?? destinationPart.AddHyperlinkRelationship(
+                        hyperlink.Uri, hyperlink.IsExternal)).Id;
+                }
+                else
+                {
+                    var external = sourcePart.ExternalRelationships
+                        .FirstOrDefault(relationship => relationship.Id == sourceId);
+                    if (external != null)
+                    {
+                        var existing = destinationPart.ExternalRelationships.FirstOrDefault(relationship =>
+                            relationship.RelationshipType == external.RelationshipType &&
+                            string.Equals(relationship.Uri?.OriginalString,
+                                external.Uri?.OriginalString, StringComparison.Ordinal));
+                        destinationId = (existing ?? destinationPart.AddExternalRelationship(
+                            external.RelationshipType, external.Uri)).Id;
+                    }
+                    else
+                    {
+                        var child = sourcePart.Parts
+                            .FirstOrDefault(pair => pair.RelationshipId == sourceId).OpenXmlPart;
+                        if (child != null)
+                        {
+                            var existing = destinationPart.Parts.FirstOrDefault(pair =>
+                                ReferenceEquals(pair.OpenXmlPart, child));
+                            try
+                            {
+                                destinationId = existing.OpenXmlPart != null
+                                    ? existing.RelationshipId
+                                    : destinationPart.CreateRelationshipToPart(child);
+                            }
+                            catch (Exception exception) when (exception is ArgumentException or
+                                InvalidOperationException or OpenXmlPackageException)
+                            {
+                                // Some producer-specific part types cannot be children of a story
+                                // part. Removing the dangling reference below preserves surrounding
+                                // text without allowing a same-id collision to select wrong content.
+                            }
+                        }
+                    }
+                }
+
+                if (destinationId != null)
+                    remappedIds[sourceId] = destinationId;
+            }
+
+            // Rewrite only after every mapping is known. A destination-generated id can
+            // legitimately equal a different source id; mutating during discovery would then
+            // remap the first relationship a second time to the wrong target.
+            foreach (var attribute in attributes.Where(attribute => attribute.Parent != null))
+            {
+                if (remappedIds.TryGetValue(attribute.Value, out var destinationId))
+                    attribute.Value = destinationId;
+                else
+                    attribute.Remove();
+            }
+        }
+
+        private static void AddDrawingTextBoxStyle(Dictionary<string, string> style, XElement wrapper,
+            XElement drawing, XElement drawingContainer, WmlToHtmlConverterSettings settings, bool autoFit)
+        {
+            var extentCx = (long?)drawingContainer.Elements(WP.extent)
+                .Attributes(NoNamespace.cx).FirstOrDefault();
+            var extentCy = (long?)drawingContainer.Elements(WP.extent)
+                .Attributes(NoNamespace.cy).FirstOrDefault();
+            AddEmuDimensions(style, extentCx, extentCy);
+
+            if (drawingContainer.Name == WP.anchor)
+            {
+                AddDrawingAnchorMetadata(wrapper, drawingContainer, extentCx, extentCy, autoFit);
+
+                // A floating DrawingML object is outside the text flow. Pagination resolves the
+                // stored bases/offsets after the paragraph has landed on a concrete page, then
+                // promotes the object into that page's coordinate space. Keeping it absolute in
+                // staging is equally important: otherwise its extent incorrectly consumes body
+                // height before that page context exists.
+                if (settings.RenderPagination == PaginationMode.Paginated)
+                {
+                    style["position"] = "absolute";
+                }
+                else
+                {
+                    // Standalone conversion has no page box in which to resolve an anchor. Keep
+                    // the established column-alignment fallback there; paginated output must not
+                    // flatten these bases because its runtime can position them exactly.
+                    var horizontalAlign = drawingContainer.Element(WP.positionH)?
+                        .Element(WP.align)?.Value;
+                    if (horizontalAlign == "center")
+                    {
+                        style["display"] = "block";
+                        style.AddIfMissing("margin-left", "auto");
+                        style.AddIfMissing("margin-right", "auto");
+                    }
+                    else if (horizontalAlign == "right")
+                    {
+                        style["display"] = "block";
+                        style.AddIfMissing("margin-left", "auto");
+                    }
+                }
+            }
+
+            var shapeProperties = drawing.Descendants(WPS.spPr).FirstOrDefault();
+            if (shapeProperties != null)
+            {
+                var fill = (string?)shapeProperties.Element(A.solidFill)?.Element(A.srgbClr)?.Attribute("val");
+                if (IsHexColor(fill))
+                    style.AddIfMissing("background-color", "#" + fill);
+
+                var line = shapeProperties.Element(A.ln);
+                var lineColor = (string?)line?.Element(A.solidFill)?.Element(A.srgbClr)?.Attribute("val");
+                if (IsHexColor(lineColor))
+                {
+                    // lineColor is only non-null (per IsHexColor's [NotNullWhen(true)]) when
+                    // line itself was non-null, since lineColor is derived via line?.Element(...).
+                    var widthEmu = (long?)line!.Attribute("w") ?? 12700L;
+                    style.AddIfMissing("border", string.Format(NumberFormatInfo.InvariantInfo,
+                        "{0:0.##}pt solid #{1}", widthEmu / 12700.0, lineColor));
+                }
+            }
+
+            var bodyProperties = drawing.Descendants(WPS.bodyPr).FirstOrDefault();
+            if (bodyProperties != null)
+            {
+                // LibreOffice honors DrawingML's automatic shape fitting: a one-line text box
+                // with a large stored extent shrinks to its content height. Leaving the fixed
+                // extent here creates a visibly oversized rectangle in the visual oracle.
+                if (bodyProperties.Element(A.spAutoFit) != null)
+                    style.Remove("height");
+                AddEmuPadding(style, "padding-left", (long?)bodyProperties.Attribute("lIns"));
+                AddEmuPadding(style, "padding-top", (long?)bodyProperties.Attribute("tIns"));
+                AddEmuPadding(style, "padding-right", (long?)bodyProperties.Attribute("rIns"));
+                AddEmuPadding(style, "padding-bottom", (long?)bodyProperties.Attribute("bIns"));
+            }
+        }
+
+        /// <summary>
+        /// Preserves the geometry of a floating DrawingML object for the browser paginator. Page,
+        /// margin, column, paragraph, line, and character bases cannot be collapsed to one static
+        /// CSS offset during XML conversion: several of them only exist after pagination. Wrap
+        /// distances are emitted separately because they are text-clearance values, not additions
+        /// to the object's position or to the text box's <c>wps:bodyPr</c> insets.
+        /// </summary>
+        private static void AddDrawingAnchorMetadata(XElement wrapper, XElement anchor,
+            long? extentCx, long? extentCy, bool autoFit)
+        {
+            wrapper.Add(new XAttribute("data-docx-drawing-anchor", "true"));
+            AddEmuDataAttribute(wrapper, "data-docx-anchor-extent-width", extentCx);
+            AddEmuDataAttribute(wrapper, "data-docx-anchor-extent-height", extentCy);
+
+            AddAnchorAxisMetadata(wrapper, anchor.Element(WP.positionH), "h");
+            AddAnchorAxisMetadata(wrapper, anchor.Element(WP.positionV), "v");
+
+            AddEmuDataAttribute(wrapper, "data-docx-anchor-wrap-top",
+                (long?)anchor.Attribute(NoNamespace.distT));
+            AddEmuDataAttribute(wrapper, "data-docx-anchor-wrap-right",
+                (long?)anchor.Attribute(NoNamespace.distR));
+            AddEmuDataAttribute(wrapper, "data-docx-anchor-wrap-bottom",
+                (long?)anchor.Attribute(NoNamespace.distB));
+            AddEmuDataAttribute(wrapper, "data-docx-anchor-wrap-left",
+                (long?)anchor.Attribute(NoNamespace.distL));
+
+            AddRelativeSizeMetadata(wrapper, anchor.Element(WP14.sizeRelH), WP14.pctWidth,
+                "width");
+            if (!autoFit)
+            {
+                AddRelativeSizeMetadata(wrapper, anchor.Element(WP14.sizeRelV), WP14.pctHeight,
+                    "height");
+            }
+            else
+            {
+                wrapper.Add(new XAttribute("data-docx-anchor-autofit", "true"));
+            }
+        }
+
+        private static void AddAnchorAxisMetadata(XElement wrapper, XElement? position, string axis)
+        {
+            if (position == null)
+                return;
+
+            var relativeFrom = (string?)position.Attribute(NoNamespace.relativeFrom);
+            if (!string.IsNullOrWhiteSpace(relativeFrom))
+                wrapper.Add(new XAttribute($"data-docx-anchor-{axis}-relative", relativeFrom));
+
+            var align = position.Element(WP.align)?.Value;
+            if (!string.IsNullOrWhiteSpace(align))
+                wrapper.Add(new XAttribute($"data-docx-anchor-{axis}-align", align));
+
+            AddEmuDataAttribute(wrapper, $"data-docx-anchor-{axis}-offset",
+                (long?)position.Element(WP.posOffset));
+        }
+
+        private static void AddRelativeSizeMetadata(XElement wrapper, XElement? relativeSize,
+            XName percentageName, string dimension)
+        {
+            if (relativeSize == null ||
+                !decimal.TryParse(relativeSize.Element(percentageName)?.Value,
+                    NumberStyles.Integer, NumberFormatInfo.InvariantInfo, out var rawPercentage))
+                return;
+
+            var relativeFrom = (string?)relativeSize.Attribute(NoNamespace.relativeFrom);
+            if (string.IsNullOrWhiteSpace(relativeFrom))
+                return;
+
+            wrapper.Add(new XAttribute($"data-docx-anchor-{dimension}-relative", relativeFrom));
+            wrapper.Add(new XAttribute($"data-docx-anchor-{dimension}-percent",
+                (rawPercentage / 1000m).ToString("0.###", NumberFormatInfo.InvariantInfo)));
+        }
+
+        private static void AddEmuDataAttribute(XElement element, string name, long? emu)
+        {
+            if (emu == null)
+                return;
+
+            element.Add(new XAttribute(name,
+                (emu.Value / 12700m).ToString("0.####", NumberFormatInfo.InvariantInfo)));
+        }
+
+        private static void AddVmlTextBoxStyle(Dictionary<string, string> style, XElement shape)
+        {
+            var vmlStyle = (string?)shape.Attribute("style");
+            if (!string.IsNullOrEmpty(vmlStyle))
+            {
+                var tokens = vmlStyle.Split(';');
+                var width = WidthInPoints(tokens);
+                var height = HeightInPoints(tokens);
+                if (width != null)
+                    style.AddIfMissing("width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.##}pt", width));
+                if (height != null)
+                    style.AddIfMissing("height", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.##}pt", height));
+            }
+
+            var fill = NormalizeVmlCssColor((string?)shape.Attribute("fillcolor"));
+            if (fill != null)
+                style.AddIfMissing("background-color", fill);
+            var stroke = NormalizeVmlCssColor((string?)shape.Attribute("strokecolor"));
+            if (stroke != null)
+                style.AddIfMissing("border", "1pt solid " + stroke);
+
+            if (HasVmlTextBoxAutoFit(shape))
+                style.Remove("height");
+        }
+
+        private static bool HasAutoFitTextBox(XElement element) =>
+            element.Descendants(WPS.bodyPr).Elements(A.spAutoFit).Any() ||
+            HasVmlTextBoxAutoFit(element);
+
+        private static bool HasVmlTextBoxAutoFit(XElement element) =>
+            element.Descendants(VML.textbox)
+                .Select(textBox => (string?)textBox.Attribute("style"))
+                .Any(style => style?.IndexOf("mso-fit-shape-to-text:t",
+                    StringComparison.OrdinalIgnoreCase) >= 0);
+
+        private static void AddEmuDimensions(Dictionary<string, string> style, long? widthEmu, long? heightEmu)
+        {
+            if (widthEmu != null)
+                style.AddIfMissing("width", string.Format(NumberFormatInfo.InvariantInfo,
+                    "{0:0.##}pt", widthEmu.Value / 12700.0));
+            if (heightEmu != null)
+                style.AddIfMissing("height", string.Format(NumberFormatInfo.InvariantInfo,
+                    "{0:0.##}pt", heightEmu.Value / 12700.0));
+        }
+
+        private static void AddEmuPadding(Dictionary<string, string> style, string cssName, long? emu)
+        {
+            if (emu != null)
+                style.AddIfMissing(cssName, string.Format(NumberFormatInfo.InvariantInfo,
+                    "{0:0.##}pt", emu.Value / 12700.0));
+        }
+
+        private static bool IsHexColor([NotNullWhen(true)] string? color) =>
+            color != null && color.Length == 6 && color.All(Uri.IsHexDigit);
+
+        private static string? NormalizeVmlCssColor(string? color)
+        {
+            if (string.IsNullOrWhiteSpace(color))
+                return null;
+
+            // VML theme colors can carry a Word-specific palette suffix, e.g.
+            // "#156082 [3204]" or "white [3212]". Retain only the actual colour token;
+            // accepting the complete attribute would both yield invalid CSS and allow a
+            // malformed document to inject additional style declarations.
+            var token = color.Trim().Split(' ')[0];
+            if (token.Length > 1 && token[0] == '#' &&
+                (token.Length == 4 || token.Length == 7 || token.Length == 9) &&
+                token.Skip(1).All(Uri.IsHexDigit))
+                return token;
+
+            return token.All(char.IsLetter) &&
+                   !string.Equals(token, "none", StringComparison.OrdinalIgnoreCase)
+                ? token
+                : null;
+        }
+
+        /// <summary>
+        /// Relationships are scoped to the OOXML part that owns the source element. Header,
+        /// footer, note, and comment parts commonly reuse relationship ids from document.xml;
+        /// resolving through MainDocumentPart can therefore select the wrong resource or silently
+        /// drop a valid one.
+        /// </summary>
+        private static void AnnotateOwningContentParts(WordprocessingDocument wordDoc)
+        {
+            foreach (var owner in Internal.OwnedPartRelationships.StoryParts(wordDoc))
+            {
+                var part = owner.Part;
+                var root = part.GetXDocument().Root;
+                if (root == null || ReferenceEquals(root.Annotation<OpenXmlPart>(), part))
+                    continue;
+                root.RemoveAnnotations<OpenXmlPart>();
+                root.AddAnnotation(part);
+            }
+        }
+
+        private static OpenXmlPart GetOwningPart(WordprocessingDocument wordDoc, XElement element) =>
+            element?.AncestorsAndSelf().Select(candidate => candidate.Annotation<OpenXmlPart>())
+                .FirstOrDefault(part => part != null) ??
+            (element == null ? null : Internal.OwnedPartRelationships.FindOwner(wordDoc, element)?.Part) ??
+            wordDoc.MainDocumentPart!;
+
+        private static XElement? ProcessDrawing(WordprocessingDocument wordDoc,
+            XElement element, Func<ImageInfo, XElement?> imageHandler, WmlToHtmlConverterSettings? settings = null)
+        {
+            var ownerPart = GetOwningPart(wordDoc, element);
+            var containerElement = element.Elements()
+                .FirstOrDefault(e => e.Name == WP.inline || e.Name == WP.anchor);
+            if (containerElement == null) return null;
+
+            string? hyperlinkUri = null;
+            var hyperlinkElement = element
+                .Elements(WP.inline)
+                .Elements(WP.docPr)
+                .Elements(A.hlinkClick)
+                .FirstOrDefault();
+            if (hyperlinkElement != null)
+            {
+                var rId = (string?)hyperlinkElement.Attribute(R.id);
+                if (rId != null)
+                {
+                    var hyperlinkRel = ownerPart.HyperlinkRelationships.FirstOrDefault(hlr => hlr.Id == rId);
+                    if (hyperlinkRel != null)
+                    {
+                        hyperlinkUri = hyperlinkRel.Uri.ToString();
+                    }
+                }
+            }
+
+            var extentCx = (int?)containerElement.Elements(WP.extent)
+                .Attributes(NoNamespace.cx).FirstOrDefault();
+            var extentCy = (int?)containerElement.Elements(WP.extent)
+                .Attributes(NoNamespace.cy).FirstOrDefault();
+            var altText = (string?)containerElement.Elements(WP.docPr).Attributes(NoNamespace.descr).FirstOrDefault() ??
+                          ((string?)containerElement.Elements(WP.docPr).Attributes(NoNamespace.name).FirstOrDefault() ?? "");
+
+            var blipFill = containerElement.Elements(A.graphic)
+                .Elements(A.graphicData)
+                .Elements(Pic._pic).Elements(Pic.blipFill).FirstOrDefault();
+            if (blipFill == null) return null;
+
+            var imageRid = (string?)blipFill.Elements(A.blip).Attributes(R.embed).FirstOrDefault();
+            if (imageRid == null) return null;
+
+            var pp3 = ownerPart.Parts.FirstOrDefault(pp => pp.RelationshipId == imageRid);
+
+            // Broken packages can point drawing image markup at any relationship target (for
+            // example custom XML). Treat a non-image target the same as a missing image instead
+            // of allowing a cast failure to abort the whole HTML conversion.
+            var imagePart = pp3.OpenXmlPart as ImagePart;
+            if (imagePart == null) return null;
+
+            // If the image markup points to a NULL image, then following will throw an ArgumentOutOfRangeException
+            try
+            {
+                imagePart = ownerPart.GetPartById(imageRid) as ImagePart;
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                return null;
+            }
+            if (imagePart == null) return null;
+
+            var contentType = imagePart.ContentType;
+            if (!ImageContentTypes.Contains(contentType))
+            {
+                // Create placeholder for unsupported image types
+                if (settings != null)
+                {
+                    var imageType = contentType switch
+                    {
+                        "image/x-wmf" => UnsupportedContentType.WmfImage,
+                        "image/x-emf" => UnsupportedContentType.EmfImage,
+                        "image/svg+xml" => UnsupportedContentType.SvgImage,
+                        _ => UnsupportedContentType.Other
+                    };
+                    var placeholderText = imageType switch
+                    {
+                        UnsupportedContentType.WmfImage => "[WMF IMAGE]",
+                        UnsupportedContentType.EmfImage => "[EMF IMAGE]",
+                        UnsupportedContentType.SvgImage => "[SVG IMAGE]",
+                        _ => "[UNSUPPORTED IMAGE]"
+                    };
+                    return CreateUnsupportedContentPlaceholder(settings, element, imageType, placeholderText);
+                }
+                return null;
+            }
+
+            using (var partStream = imagePart.GetStream())
+            using (var memoryStream = new System.IO.MemoryStream())
+            {
+                partStream.CopyTo(memoryStream);
+                var imageBytes = memoryStream.ToArray();
+
+#if !WASM_BUILD
+                // Try to decode bitmap for width/height, but allow graceful fallback
+                SKBitmap? bitmap = null;
+                try
+                {
+                    bitmap = SKBitmap.Decode(imageBytes);
+                }
+                catch
+                {
+                    // SkiaSharp decode failed - continue with ImageBytes only
+                }
+#endif
+
+                try
+                {
+                    if (extentCx != null && extentCy != null)
+                    {
+                        var imageInfo = new ImageInfo()
+                        {
+#if !WASM_BUILD
+                            Bitmap = bitmap,
+#endif
+                            ImageBytes = imageBytes,
+                            ImgStyleAttribute = new XAttribute("style",
+                                string.Format(NumberFormatInfo.InvariantInfo,
+                                    "width: {0}in; height: {1}in",
+                                    (float)extentCx / (float)ImageInfo.EmusPerInch,
+                                    (float)extentCy / (float)ImageInfo.EmusPerInch)),
+                            ContentType = contentType,
+                            DrawingElement = element,
+                            AltText = altText,
+                        };
+                        var imgElement2 = imageHandler(imageInfo);
+                        if (hyperlinkUri != null)
+                        {
+                            return ApplyAnchorTextWrap(new XElement(XhtmlNoNamespace.a,
+                                new XAttribute(XhtmlNoNamespace.href, hyperlinkUri),
+                                imgElement2), containerElement);
+                        }
+                        return ApplyAnchorTextWrap(imgElement2, containerElement);
+                    }
+
+                    var imageInfo2 = new ImageInfo()
+                    {
+#if !WASM_BUILD
+                        Bitmap = bitmap,
+#endif
+                        ImageBytes = imageBytes,
+                        ContentType = contentType,
+                        DrawingElement = element,
+                        AltText = altText,
+                    };
+                    var imgElement = imageHandler(imageInfo2);
+                    if (hyperlinkUri != null)
+                    {
+                        return ApplyAnchorTextWrap(new XElement(XhtmlNoNamespace.a,
+                            new XAttribute(XhtmlNoNamespace.href, hyperlinkUri),
+                            imgElement), containerElement);
+                    }
+                    return ApplyAnchorTextWrap(imgElement, containerElement);
+                }
+                finally
+                {
+#if !WASM_BUILD
+                    bitmap?.Dispose();
+#endif
+                }
+            }
+        }
+
+        /// <summary>
+        /// Word flows body text around a floating picture whose anchor requests wrapSquare,
+        /// wrapTight, or wrapThrough; without a flow exclusion the picture behaves as an inline
+        /// object and every following line resumes below it. A CSS float is the closest
+        /// flow-level equivalent: it excludes the anchored rect from the line layout of the
+        /// current and following blocks in both continuous and paginated rendering. Tight and
+        /// through wrapping retain the source contour as a CSS shape rather than excluding the
+        /// entire picture rectangle. wrapTopAndBottom and wrapNone keep the existing placement.
+        /// </summary>
+        private static XElement? ApplyAnchorTextWrap(XElement? imageHtml, XElement drawingContainer)
+        {
+            if (imageHtml == null || drawingContainer == null || drawingContainer.Name != WP.anchor)
+                return imageHtml;
+
+            var wrap = drawingContainer.Elements().FirstOrDefault(e =>
+                e.Name == WP.wrapSquare || e.Name == WP.wrapTight || e.Name == WP.wrapThrough);
+            if (wrap == null)
+                return imageHtml;
+
+            var side = GetAnchorFloatSide(drawingContainer, wrap);
+            if (side == null)
+                return imageHtml;
+
+            // The anchor's dist* attributes are text clearance around the object, which is
+            // exactly what CSS margins are on a float.
+            var style = new Dictionary<string, string> { { "float", side } };
+            AddEmuPadding(style, "margin-top", (long?)drawingContainer.Attribute(NoNamespace.distT));
+            var rightDistance = (long?)wrap.Attribute(NoNamespace.distR)
+                ?? (long?)drawingContainer.Attribute(NoNamespace.distR);
+            var leftDistance = (long?)wrap.Attribute(NoNamespace.distL)
+                ?? (long?)drawingContainer.Attribute(NoNamespace.distL);
+            AddEmuPadding(style, "margin-right", rightDistance);
+            AddEmuPadding(style, "margin-bottom", (long?)drawingContainer.Attribute(NoNamespace.distB));
+            AddEmuPadding(style, "margin-left", leftDistance);
+
+            // A column-edge picture starts at its anchor, not at the text-clearance inset.
+            // There is no text outside that edge for the outer margin to exclude. Retain the
+            // established fallback for offset anchors that cannot be placed by an edge float.
+            var positionH = drawingContainer.Element(WP.positionH);
+            var relativeFrom = (string?)positionH?.Attribute(NoNamespace.relativeFrom);
+            var alignment = positionH?.Element(WP.align)?.Value;
+            var offset = (long?)positionH?.Element(WP.posOffset);
+            if (relativeFrom == "column" && side == "left" &&
+                (alignment == "left" || offset == 0))
+                style["margin-left"] = "0pt";
+            if (relativeFrom == "column" && side == "right" && alignment == "right")
+                style["margin-right"] = "0pt";
+
+            var extent = drawingContainer.Element(WP.extent);
+            var width = (long?)extent?.Attribute(NoNamespace.cx);
+            var height = (long?)extent?.Attribute(NoNamespace.cy);
+            var polygon = wrap.Element(WP.wrapPolygon);
+            if (polygon != null && width is > 0 && height is > 0)
+            {
+                var points = polygon.Elements().Where(e => e.Name == WP.start || e.Name == WP.lineTo)
+                    .Select(e => new { X = (long?)e.Attribute(NoNamespace.x), Y = (long?)e.Attribute(NoNamespace.y) })
+                    .ToList();
+                if (points.Count >= 3 && points.All(p => p.X != null && p.Y != null))
+                {
+                    // DrawingML contour coordinates are relative to a 21600 by 21600 box.
+                    // Explicit float dimensions keep CSS from resolving the contour against
+                    // an inline image's extra baseline/descent space.
+                    AddEmuDimensions(style, width, height);
+                    style["shape-outside"] = "polygon(" + string.Join(", ", points.Select(p =>
+                        string.Format(NumberFormatInfo.InvariantInfo, "{0:0.####}% {1:0.####}%",
+                            p.X!.Value / 216m, p.Y!.Value / 216m))) + ") border-box";
+                    var clearance = Math.Max(leftDistance ?? 0, rightDistance ?? 0);
+                    if (clearance > 0)
+                        style["shape-margin"] = (clearance / 12700m).ToString("0.####", NumberFormatInfo.InvariantInfo) + "pt";
+                }
+            }
+
+            var wrapper = new XElement(Xhtml.span, imageHtml);
+            var positionV = drawingContainer.Element(WP.positionV);
+            if (relativeFrom == "column" &&
+                ((side == "left" && (alignment == "left" || offset == 0)) || (side == "right" && alignment == "right")) &&
+                (string?)positionV?.Attribute(NoNamespace.relativeFrom) == "paragraph" &&
+                (long?)positionV?.Element(WP.posOffset) == 0)
+                wrapper.SetAttributeValue("data-docx-edge-picture", "true");
+            if (style.ContainsKey("shape-outside"))
+            {
+                wrapper.SetAttributeValue("data-docx-wrap-text", (string?)wrap.Attribute(NoNamespace.wrapText) ?? "bothSides");
+                style["--docx-wrap-distance-left"] = ((leftDistance ?? 0) / 12700m).ToString("0.####", NumberFormatInfo.InvariantInfo) + "pt";
+                style["--docx-wrap-distance-right"] = ((rightDistance ?? 0) / 12700m).ToString("0.####", NumberFormatInfo.InvariantInfo) + "pt";
+            }
+            wrapper.AddAnnotation(style);
+            return wrapper;
+        }
+
+        /// <summary>
+        /// Picks the edge the floated object hugs. An explicitly one-sided wrapText names where
+        /// the TEXT goes, so the object floats to the opposite edge; otherwise the anchor's own
+        /// horizontal position decides — an alignment token directly, or an offset-placed
+        /// object's center measured against the governing section's column (or page) center.
+        /// A centered object has no float equivalent and keeps its inline placement.
+        /// </summary>
+        private static string? GetAnchorFloatSide(XElement anchor, XElement wrap)
+        {
+            var wrapText = (string?)wrap.Attribute(NoNamespace.wrapText);
+            if (wrapText == "left")
+                return "right";
+            if (wrapText == "right")
+                return "left";
+
+            var positionH = anchor.Element(WP.positionH);
+            switch (positionH?.Element(WP.align)?.Value)
+            {
+                case "left":
+                case "inside":
+                    return "left";
+                case "right":
+                case "outside":
+                    return "right";
+                case "center":
+                    return null;
+            }
+
+            var offsetEmu = (long?)positionH?.Element(WP.posOffset) ?? 0L;
+            var extentEmu = (long?)anchor.Elements(WP.extent)
+                .Attributes(NoNamespace.cx).FirstOrDefault() ?? 0L;
+
+            var sectPr = anchor.Annotation<SectionAnnotation>()?.SectionElement;
+            var dims = PageDimensions.FromSectionProperties(sectPr);
+            var referencePt = (string?)positionH?.Attribute(NoNamespace.relativeFrom) == "page"
+                ? dims.PageWidthPt
+                : dims.ContentWidthPt;
+
+            var objectCenterEmu = offsetEmu + extentEmu / 2.0;
+            return objectCenterEmu <= referencePt * 12700.0 / 2.0 ? "left" : "right";
+        }
+
+        private static XElement? ProcessPictureOrObject(WordprocessingDocument wordDoc,
+            XElement element, Func<ImageInfo, XElement?> imageHandler, WmlToHtmlConverterSettings? settings = null)
+        {
+            var ownerPart = GetOwningPart(wordDoc, element);
+            var imageRid = (string?)element.Elements(VML.shape).Elements(VML.imagedata).Attributes(R.id).FirstOrDefault();
+            if (imageRid == null) return null;
+
+            try
+            {
+                var pp = ownerPart.Parts.FirstOrDefault(pp2 => pp2.RelationshipId == imageRid);
+
+                // VML <v:imagedata> can be malformed in exactly the same way as DrawingML:
+                // tolerate a relationship to a non-image part and simply omit the unusable image.
+                var imagePart = pp.OpenXmlPart as ImagePart;
+                if (imagePart == null) return null;
+
+                var contentType = imagePart.ContentType;
+                if (!ImageContentTypes.Contains(contentType))
+                {
+                    // Create placeholder for unsupported image types
+                    if (settings != null)
+                    {
+                        var imageType = contentType switch
+                        {
+                            "image/x-wmf" => UnsupportedContentType.WmfImage,
+                            "image/x-emf" => UnsupportedContentType.EmfImage,
+                            "image/svg+xml" => UnsupportedContentType.SvgImage,
+                            _ => UnsupportedContentType.Other
+                        };
+                        var placeholderText = imageType switch
+                        {
+                            UnsupportedContentType.WmfImage => "[WMF IMAGE]",
+                            UnsupportedContentType.EmfImage => "[EMF IMAGE]",
+                            UnsupportedContentType.SvgImage => "[SVG IMAGE]",
+                            _ => "[UNSUPPORTED IMAGE]"
+                        };
+                        return CreateUnsupportedContentPlaceholder(settings, element, imageType, placeholderText);
+                    }
+                    return null;
+                }
+
+                using (var partStream = imagePart.GetStream())
+                using (var memoryStream = new System.IO.MemoryStream())
+                {
+                    try
+                    {
+                        partStream.CopyTo(memoryStream);
+                        var imageBytes = memoryStream.ToArray();
+
+#if !WASM_BUILD
+                        // Try to decode bitmap, but allow graceful fallback
+                        SKBitmap? bitmap = null;
+                        try
+                        {
+                            bitmap = SKBitmap.Decode(imageBytes);
+                        }
+                        catch
+                        {
+                            // SkiaSharp decode failed - continue with ImageBytes only
+                        }
+#endif
+
+                        try
+                        {
+                            var imageInfo = new ImageInfo()
+                            {
+#if !WASM_BUILD
+                                Bitmap = bitmap,
+#endif
+                                ImageBytes = imageBytes,
+                                ContentType = contentType,
+                                DrawingElement = element
+                            };
+
+                            var style = (string?)element.Elements(VML.shape).Attributes("style").FirstOrDefault();
+                            if (style == null) return imageHandler(imageInfo);
+
+                            var tokens = style.Split(';');
+                            var widthInPoints = WidthInPoints(tokens);
+                            var heightInPoints = HeightInPoints(tokens);
+                            if (widthInPoints != null && heightInPoints != null)
+                            {
+                                imageInfo.ImgStyleAttribute = new XAttribute("style",
+                                    string.Format(NumberFormatInfo.InvariantInfo,
+                                        "width: {0}pt; height: {1}pt", widthInPoints, heightInPoints));
+                            }
+                            return imageHandler(imageInfo);
+                        }
+                        finally
+                        {
+#if !WASM_BUILD
+                            bitmap?.Dispose();
+#endif
+                        }
+                    }
+                    catch (OutOfMemoryException)
+                    {
+                        // SKBitmap.Decode can throw OutOfMemoryException for corrupted images
+                        return null;
+                    }
+                    catch (ArgumentException)
+                    {
+                        return null;
+                    }
+                }
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                return null;
+            }
+        }
+
+        private static float? HeightInPoints(IEnumerable<string> tokens)
+        {
+            return SizeInPoints(tokens, "height");
+        }
+
+        private static float? WidthInPoints(IEnumerable<string> tokens)
+        {
+            return SizeInPoints(tokens, "width");
+        }
+
+        private static float? SizeInPoints(IEnumerable<string> tokens, string name)
+        {
+            var sizeString = tokens
+                .Select(t => new
+                {
+                    Name = t.Split(':').First(),
+                    Value = t.Split(':').Skip(1).Take(1).FirstOrDefault()
+                })
+                .Where(p => p.Name == name)
+                .Select(p => p.Value)
+                .FirstOrDefault();
+
+            if (sizeString != null &&
+                sizeString.Length > 2 &&
+                sizeString.Substring(sizeString.Length - 2) == "pt")
+            {
+                float size;
+                if (float.TryParse(sizeString.Substring(0, sizeString.Length - 2), out size))
+                    return size;
+            }
+            return null;
+        }
+
+        #endregion
+    }
+
+    public static class HtmlConverterExtensions
+    {
+        public static void AddIfMissing(this Dictionary<string, string> style, string propName, string value)
+        {
+            if (style.ContainsKey(propName))
+                return;
+            style.Add(propName, value);
+        }
+    }
+}

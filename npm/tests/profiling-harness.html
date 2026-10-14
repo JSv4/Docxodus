@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>Docxodus WASM Performance Profiler</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 { color: #333; }
+        .section {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .results {
+            font-family: 'Monaco', 'Menlo', monospace;
+            background: #1a1a2e;
+            color: #0f0;
+            padding: 20px;
+            border-radius: 8px;
+            white-space: pre-wrap;
+            font-size: 13px;
+            line-height: 1.6;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        .bar-container {
+            background: #e0e0e0;
+            border-radius: 4px;
+            margin: 5px 0;
+            height: 24px;
+            position: relative;
+        }
+        .bar {
+            height: 100%;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            padding-left: 8px;
+            color: white;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .bar-label {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 12px;
+            color: #333;
+        }
+        button {
+            background: #2196F3;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 5px;
+        }
+        button:hover { background: #1976D2; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        input[type="file"] { margin: 10px 0; }
+        .chart-section {
+            margin-top: 20px;
+        }
+        .metric-row {
+            display: flex;
+            align-items: center;
+            margin: 8px 0;
+        }
+        .metric-name {
+            width: 250px;
+            font-size: 13px;
+        }
+        .metric-bar-container {
+            flex: 1;
+            margin: 0 10px;
+        }
+        .metric-value {
+            width: 80px;
+            text-align: right;
+            font-family: monospace;
+            font-size: 13px;
+        }
+        #pagination-test-container {
+            display: none;
+            position: absolute;
+            left: -9999px;
+        }
+        .summary-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 32px;
+            font-weight: bold;
+        }
+        .stat-label {
+            font-size: 12px;
+            opacity: 0.9;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>📊 Docxodus WASM Performance Profiler</h1>
+
+    <div class="section">
+        <h2>Upload Test Document</h2>
+        <p>Select a DOCX file to run performance profiling. Larger documents will give more representative results.</p>
+        <input type="file" id="fileInput" accept=".docx" />
+        <br/><br/>
+        <button id="runProfile" disabled>Run Full Profile</button>
+        <button id="runIterations" disabled>Run 5 Iterations (Average)</button>
+    </div>
+
+    <div class="section" id="summarySection" style="display:none;">
+        <h2>Summary</h2>
+        <div class="summary-stats" id="summaryStats"></div>
+    </div>
+
+    <div class="section" id="chartSection" style="display:none;">
+        <h2>Timing Breakdown</h2>
+        <div id="timingChart"></div>
+    </div>
+
+    <div class="section">
+        <h2>Detailed Results</h2>
+        <div class="results" id="output">Waiting for WASM initialization...</div>
+    </div>
+
+    <!-- Hidden container for pagination testing -->
+    <div id="pagination-test-container"></div>
+
+    <script type="module">
+        // Performance profiling utilities
+        const Profiler = {
+            results: {},
+            log: [],
+
+            mark(name) {
+                performance.mark(name);
+            },
+
+            measure(name, startMark, endMark) {
+                performance.mark(endMark || `${name}-end`);
+                performance.measure(name, startMark || `${name}-start`, endMark || `${name}-end`);
+                const entry = performance.getEntriesByName(name, 'measure')[0];
+                this.results[name] = entry.duration;
+                return entry.duration;
+            },
+
+            time(name) {
+                return performance.now();
+            },
+
+            timeEnd(name, start) {
+                const duration = performance.now() - start;
+                this.results[name] = duration;
+                return duration;
+            },
+
+            reset() {
+                this.results = {};
+                this.log = [];
+                performance.clearMarks();
+                performance.clearMeasures();
+            },
+
+            addLog(msg) {
+                const timestamp = new Date().toISOString().split('T')[1].slice(0, -1);
+                this.log.push(`[${timestamp}] ${msg}`);
+            }
+        };
+
+        const output = document.getElementById('output');
+        const fileInput = document.getElementById('fileInput');
+        const runProfileBtn = document.getElementById('runProfile');
+        const runIterationsBtn = document.getElementById('runIterations');
+
+        function log(msg) {
+            Profiler.addLog(msg);
+            output.textContent = Profiler.log.join('\n');
+            output.scrollTop = output.scrollHeight;
+            console.log(msg);
+        }
+
+        function formatMs(ms) {
+            if (ms < 1) return `${(ms * 1000).toFixed(1)}μs`;
+            if (ms < 1000) return `${ms.toFixed(2)}ms`;
+            return `${(ms / 1000).toFixed(2)}s`;
+        }
+
+        function formatBytes(bytes) {
+            if (bytes < 1024) return `${bytes} B`;
+            if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+            return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+        }
+
+        // Initialize WASM
+        log('Starting WASM initialization...');
+        const wasmInitStart = performance.now();
+
+        import('./_framework/dotnet.js').then(async ({ dotnet }) => {
+            const dotnetCreateStart = performance.now();
+
+            const { getAssemblyExports, getConfig } = await dotnet
+                .withDiagnosticTracing(false)
+                .create();
+
+            const dotnetCreateTime = performance.now() - dotnetCreateStart;
+            log(`  dotnet.create(): ${formatMs(dotnetCreateTime)}`);
+
+            const getExportsStart = performance.now();
+            const config = getConfig();
+            const exports = await getAssemblyExports(config.mainAssemblyName);
+            const getExportsTime = performance.now() - getExportsStart;
+            log(`  getAssemblyExports(): ${formatMs(getExportsTime)}`);
+
+            const wasmInitTime = performance.now() - wasmInitStart;
+            Profiler.results['WASM Initialization'] = wasmInitTime;
+            log(`✅ WASM ready in ${formatMs(wasmInitTime)}`);
+            log('');
+
+            window.Docxodus = {
+                DocumentConverter: exports.DocxodusWasm.DocumentConverter,
+                DocumentComparer: exports.DocxodusWasm.DocumentComparer
+            };
+
+            runProfileBtn.disabled = false;
+            runIterationsBtn.disabled = false;
+        }).catch(err => {
+            log(`❌ WASM initialization failed: ${err.message}`);
+        });
+
+        fileInput.addEventListener('change', () => {
+            const file = fileInput.files[0];
+            if (file) {
+                log(`Selected: ${file.name} (${formatBytes(file.size)})`);
+            }
+        });
+
+        async function runProfile(docxBytes, iteration = null) {
+            const iterLabel = iteration !== null ? ` [Iter ${iteration}]` : '';
+            const results = {};
+
+            log(`\n${'='.repeat(60)}`);
+            log(`PROFILING${iterLabel}: ${formatBytes(docxBytes.length)} document`);
+            log('='.repeat(60));
+
+            // 1. GetDocumentMetadata (fast metadata extraction)
+            log('\n📄 Phase 1: GetDocumentMetadata');
+            const metadataStart = performance.now();
+            const metadataResult = window.Docxodus.DocumentConverter.GetDocumentMetadata(docxBytes);
+            results['GetDocumentMetadata'] = performance.now() - metadataStart;
+
+            const metadata = JSON.parse(metadataResult);
+            log(`   Time: ${formatMs(results['GetDocumentMetadata'])}`);
+            log(`   Paragraphs: ${metadata.TotalParagraphs}, Tables: ${metadata.TotalTables}`);
+            log(`   Sections: ${metadata.Sections?.length || 0}`);
+            log(`   Estimated pages: ${metadata.EstimatedPageCount}`);
+            log(`   Has footnotes: ${metadata.HasFootnotes}, Has endnotes: ${metadata.HasEndnotes}`);
+
+            // 2. Full HTML conversion (no pagination)
+            log('\n📝 Phase 2: ConvertDocxToHtml (no pagination)');
+            const htmlStart = performance.now();
+            const htmlResult = window.Docxodus.DocumentConverter.ConvertDocxToHtml(docxBytes);
+            results['ConvertDocxToHtml (no pagination)'] = performance.now() - htmlStart;
+            const htmlSize = new Blob([htmlResult]).size;
+            log(`   Time: ${formatMs(results['ConvertDocxToHtml (no pagination)'])}`);
+            log(`   Output size: ${formatBytes(htmlSize)}`);
+
+            // 3. Full HTML conversion WITH pagination
+            log('\n📖 Phase 3: ConvertDocxToHtmlWithPagination');
+            const paginatedStart = performance.now();
+            const paginatedResult = window.Docxodus.DocumentConverter.ConvertDocxToHtmlWithPagination(
+                docxBytes,
+                'Document',
+                'docx-',
+                true,
+                '',
+                -1,
+                'comment-',
+                1,  // Paginated mode
+                1.0,
+                'page-'
+            );
+            results['ConvertDocxToHtmlWithPagination'] = performance.now() - paginatedStart;
+            const paginatedSize = new Blob([paginatedResult]).size;
+            log(`   Time: ${formatMs(results['ConvertDocxToHtmlWithPagination'])}`);
+            log(`   Output size: ${formatBytes(paginatedSize)}`);
+
+            // 4. Full HTML conversion with ALL features
+            log('\n🔧 Phase 4: ConvertDocxToHtmlComplete (all features)');
+            const completeStart = performance.now();
+            const completeResult = window.Docxodus.DocumentConverter.ConvertDocxToHtmlComplete(
+                docxBytes,
+                'Document',
+                'docx-',
+                true,
+                '',
+                -1,        // no comments
+                'comment-',
+                1,         // paginated
+                1.0,
+                'page-',
+                false,     // no annotations
+                0,
+                'annot-',
+                true,      // footnotes/endnotes
+                true,      // headers/footers
+                false,     // tracked changes
+                true,
+                true
+            );
+            results['ConvertDocxToHtmlComplete'] = performance.now() - completeStart;
+            log(`   Time: ${formatMs(results['ConvertDocxToHtmlComplete'])}`);
+
+            // 5. Client-side pagination (DOM measurement)
+            log('\n🎨 Phase 5: Client-side Pagination (DOM)');
+            const container = document.getElementById('pagination-test-container');
+            container.style.display = 'block';
+
+            const domInsertStart = performance.now();
+            container.innerHTML = paginatedResult;
+            results['DOM insertion'] = performance.now() - domInsertStart;
+            log(`   DOM insertion: ${formatMs(results['DOM insertion'])}`);
+
+            // Find staging and container elements
+            const staging = container.querySelector('#pagination-staging') ||
+                           container.querySelector('.page-staging');
+            const pageContainer = container.querySelector('#pagination-container') ||
+                                 container.querySelector('.page-container');
+
+            if (staging && pageContainer) {
+                // Dynamic import of pagination module
+                const paginationStart = performance.now();
+
+                // Simulate what PaginationEngine does - measure blocks
+                const sections = staging.querySelectorAll('[data-section-index]');
+                const sectionsToProcess = sections.length > 0 ? Array.from(sections) : [staging];
+
+                let blockCount = 0;
+                let measureTime = 0;
+
+                for (const section of sectionsToProcess) {
+                    // Make staging visible for measurement
+                    staging.style.visibility = 'hidden';
+                    staging.style.position = 'absolute';
+                    staging.style.left = '-9999px';
+                    staging.style.display = 'block';
+
+                    const contentWidth = parseFloat(section.dataset.contentWidth) || 468;
+                    section.style.width = `${contentWidth}pt`;
+
+                    const children = Array.from(section.children);
+                    const measureStart = performance.now();
+
+                    for (const child of children) {
+                        if (child.dataset.sectionIndex !== undefined) continue;
+
+                        // This is what takes time - forcing layout
+                        const rect = child.getBoundingClientRect();
+                        const style = window.getComputedStyle(child);
+                        const marginTop = parseFloat(style.marginTop) || 0;
+                        const marginBottom = parseFloat(style.marginBottom) || 0;
+                        blockCount++;
+                    }
+
+                    measureTime += performance.now() - measureStart;
+                }
+
+                results['Block measurement'] = measureTime;
+                results['Client pagination total'] = performance.now() - paginationStart;
+
+                log(`   Blocks measured: ${blockCount}`);
+                log(`   Measurement time: ${formatMs(results['Block measurement'])}`);
+                log(`   Total pagination time: ${formatMs(results['Client pagination total'])}`);
+
+                // Measure getBoundingClientRect cost per block
+                if (blockCount > 0) {
+                    const avgMeasureTime = measureTime / blockCount;
+                    log(`   Avg time per block: ${formatMs(avgMeasureTime)}`);
+                    results['Avg per block'] = avgMeasureTime;
+                }
+            } else {
+                log('   ⚠️ Could not find pagination staging elements');
+            }
+
+            staging.style.display = 'none';
+            container.innerHTML = '';
+            container.style.display = 'none';
+
+            // Summary
+            log('\n' + '─'.repeat(60));
+            log('SUMMARY');
+            log('─'.repeat(60));
+
+            const sortedResults = Object.entries(results)
+                .sort((a, b) => b[1] - a[1]);
+
+            const total = sortedResults.reduce((sum, [_, v]) => sum + v, 0);
+
+            for (const [name, time] of sortedResults) {
+                const pct = ((time / total) * 100).toFixed(1);
+                const bar = '█'.repeat(Math.round(pct / 2));
+                log(`${name.padEnd(35)} ${formatMs(time).padStart(10)} ${pct.padStart(5)}% ${bar}`);
+            }
+
+            log('─'.repeat(60));
+            log(`${'TOTAL'.padEnd(35)} ${formatMs(total).padStart(10)}`);
+
+            return results;
+        }
+
+        function displayResults(results, allIterations = null) {
+            const chartSection = document.getElementById('chartSection');
+            const summarySection = document.getElementById('summarySection');
+            const timingChart = document.getElementById('timingChart');
+            const summaryStats = document.getElementById('summaryStats');
+
+            chartSection.style.display = 'block';
+            summarySection.style.display = 'block';
+
+            // Calculate max for scaling
+            const maxTime = Math.max(...Object.values(results));
+
+            // Color palette
+            const colors = [
+                '#e74c3c', '#3498db', '#2ecc71', '#f39c12',
+                '#9b59b6', '#1abc9c', '#e67e22', '#34495e'
+            ];
+
+            // Generate chart
+            let chartHtml = '';
+            let i = 0;
+            for (const [name, time] of Object.entries(results).sort((a, b) => b[1] - a[1])) {
+                const width = (time / maxTime) * 100;
+                const color = colors[i % colors.length];
+                chartHtml += `
+                    <div class="metric-row">
+                        <div class="metric-name">${name}</div>
+                        <div class="metric-bar-container">
+                            <div class="bar-container">
+                                <div class="bar" style="width: ${width}%; background: ${color}">
+                                    ${width > 15 ? formatMs(time) : ''}
+                                </div>
+                                ${width <= 15 ? `<span class="bar-label">${formatMs(time)}</span>` : ''}
+                            </div>
+                        </div>
+                        <div class="metric-value">${formatMs(time)}</div>
+                    </div>
+                `;
+                i++;
+            }
+            timingChart.innerHTML = chartHtml;
+
+            // Summary stats
+            const total = Object.values(results).reduce((a, b) => a + b, 0);
+            const wasmOnly = results['ConvertDocxToHtmlWithPagination'] || 0;
+            const clientSide = results['Client pagination total'] || 0;
+            const metadataTime = results['GetDocumentMetadata'] || 0;
+
+            summaryStats.innerHTML = `
+                <div class="stat-card">
+                    <div class="stat-value">${formatMs(total)}</div>
+                    <div class="stat-label">Total Processing Time</div>
+                </div>
+                <div class="stat-card" style="background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);">
+                    <div class="stat-value">${formatMs(metadataTime)}</div>
+                    <div class="stat-label">Metadata Extraction</div>
+                </div>
+                <div class="stat-card" style="background: linear-gradient(135deg, #fc466b 0%, #3f5efb 100%);">
+                    <div class="stat-value">${formatMs(wasmOnly)}</div>
+                    <div class="stat-label">WASM Conversion</div>
+                </div>
+                <div class="stat-card" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
+                    <div class="stat-value">${formatMs(clientSide)}</div>
+                    <div class="stat-label">Client-side Pagination</div>
+                </div>
+            `;
+        }
+
+        runProfileBtn.addEventListener('click', async () => {
+            const file = fileInput.files[0];
+            if (!file) {
+                alert('Please select a DOCX file first');
+                return;
+            }
+
+            runProfileBtn.disabled = true;
+            runIterationsBtn.disabled = true;
+            Profiler.reset();
+
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                const docxBytes = new Uint8Array(arrayBuffer);
+
+                const results = await runProfile(docxBytes);
+                displayResults(results);
+            } catch (err) {
+                log(`\n❌ Error: ${err.message}`);
+                console.error(err);
+            } finally {
+                runProfileBtn.disabled = false;
+                runIterationsBtn.disabled = false;
+            }
+        });
+
+        runIterationsBtn.addEventListener('click', async () => {
+            const file = fileInput.files[0];
+            if (!file) {
+                alert('Please select a DOCX file first');
+                return;
+            }
+
+            runProfileBtn.disabled = true;
+            runIterationsBtn.disabled = true;
+            Profiler.reset();
+
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                const docxBytes = new Uint8Array(arrayBuffer);
+
+                const iterations = 5;
+                const allResults = [];
+
+                for (let i = 1; i <= iterations; i++) {
+                    const results = await runProfile(docxBytes, i);
+                    allResults.push(results);
+                    // Small delay between iterations
+                    await new Promise(r => setTimeout(r, 100));
+                }
+
+                // Calculate averages
+                log('\n' + '═'.repeat(60));
+                log(`AVERAGE RESULTS (${iterations} iterations)`);
+                log('═'.repeat(60));
+
+                const avgResults = {};
+                const keys = Object.keys(allResults[0]);
+
+                for (const key of keys) {
+                    const values = allResults.map(r => r[key]).filter(v => v !== undefined);
+                    const avg = values.reduce((a, b) => a + b, 0) / values.length;
+                    const min = Math.min(...values);
+                    const max = Math.max(...values);
+                    avgResults[key] = avg;
+                    log(`${key.padEnd(35)} avg: ${formatMs(avg).padStart(10)}  (min: ${formatMs(min)}, max: ${formatMs(max)})`);
+                }
+
+                displayResults(avgResults, allResults);
+            } catch (err) {
+                log(`\n❌ Error: ${err.message}`);
+                console.error(err);
+            } finally {
+                runProfileBtn.disabled = false;
+                runIterationsBtn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,132 @@
+{
+  "id": "review-annotations",
+  "title": "Add a comment, a threaded reply, a footnote, and an internal cross-reference",
+  "intent": "Comment on the termination clause and reply to that comment, footnote the fees clause, and link the services mention in the fees clause back to the bookmarked services clause. (A field-based REF cross-reference is not yet authorable on the tool surface — issue #545 tracks it; the internal link is bookmark-anchored w:anchor markup.)",
+  "fixture": "master-services-agreement",
+  "steps": [
+    {
+      "tool": "docxodus_comment",
+      "target": {
+        "mode": "text",
+        "query": "terminate this Agreement for convenience"
+      },
+      "args": {
+        "action": "add",
+        "author": "Associate",
+        "initials": "AS",
+        "markdown": "Please confirm the notice period is market."
+      }
+    },
+    {
+      "tool": "docxodus_comment",
+      "target": {
+        "mode": "kind",
+        "query": "cmt",
+        "index": 1,
+        "as": "commentAnchorId"
+      },
+      "args": {
+        "action": "reply",
+        "author": "Partner",
+        "initials": "PT",
+        "markdown": "Confirmed; sixty days is standard."
+      }
+    },
+    {
+      "tool": "docxodus_create",
+      "target": {
+        "mode": "text",
+        "query": "annual fees set out below"
+      },
+      "args": {
+        "action": "insert_footnote",
+        "characterOffset": 0,
+        "markdown": "Fees are exclusive of taxes."
+      }
+    },
+    {
+      "tool": "docxodus_links",
+      "targets": {
+        "startAnchorId": {
+          "mode": "text",
+          "query": "1. Services"
+        },
+        "endAnchorId": {
+          "mode": "text",
+          "query": "1. Services"
+        }
+      },
+      "args": {
+        "action": "add_bookmark",
+        "name": "clause_services",
+        "startOffset": 0,
+        "endOffset": 11
+      }
+    },
+    {
+      "tool": "docxodus_links",
+      "target": {
+        "mode": "text",
+        "query": "each Statement of Work"
+      },
+      "args": {
+        "action": "add_hyperlink",
+        "kind": "internal",
+        "target": "clause_services",
+        "startOffset": 35,
+        "length": 12
+      }
+    }
+  ],
+  "invariants": {
+    "taskCompletion": {
+      "textPresent": [
+        "Please confirm the notice period is market.",
+        "Confirmed; sixty days is standard.",
+        "Fees are exclusive of taxes."
+      ]
+    },
+    "targetPrecision": {
+      "changedAnchorsAtLeast": 2,
+      "changedAnchorsAtMost": 8
+    },
+    "collateral": {
+      "partsAdded": 3,
+      "partsRemoved": 0,
+      "textPreserved": [
+        "thirty (30) days",
+        "(the \"Service Provider\")",
+        "$132,000"
+      ],
+      "changedPartsMustBeWithin": [
+        "/word/document.xml",
+        "/word/comments.xml",
+        "/word/commentsExtended.xml",
+        "/word/commentsIds.xml",
+        "/word/footnotes.xml",
+        "/word/settings.xml",
+        "/word/styles.xml"
+      ]
+    },
+    "comments": {
+      "countAtLeast": 3,
+      "authorsMustInclude": [
+        "Prior Reviewer",
+        "Associate",
+        "Partner"
+      ],
+      "repliesAtLeast": 1
+    },
+    "validity": {
+      "decisionIn": [
+        "passed",
+        "passedWithPreExistingFindings"
+      ]
+    },
+    "rendering": {
+      "htmlMustContain": [
+        "Fees are exclusive of taxes."
+      ]
+    }
+  }
+}

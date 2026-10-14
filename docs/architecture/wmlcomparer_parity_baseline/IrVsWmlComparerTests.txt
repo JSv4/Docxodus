@@ -1,0 +1,229 @@
+  OLD_ERROR  WC-BodyBookmarks-Before -> WC-BodyBookmarks-After: DocxodusException: Internal error
+  OLD_ERROR  WC-BodyBookmarks-After -> WC-BodyBookmarks-Before: DocxodusException: Internal error
+Differential harness: 92 WC pairs × 2 directions = 184 comparisons
+Wall time: 117.8s
+
+  OLDERROR               old=-1   new=-1   WC-BodyBookmarks-Before -> WC-BodyBookmarks-After
+  OLDERROR               old=-1   new=-1   WC-BodyBookmarks-After -> WC-BodyBookmarks-Before
+  MATCH                  old=1    new=1    WC001-Digits -> WC001-Digits-Deleted-Paragraph
+  MATCH                  old=1    new=1    WC001-Digits-Deleted-Paragraph -> WC001-Digits
+  MATCH                  old=4    new=4    WC001-Digits -> WC001-Digits-Mod
+  MATCH                  old=4    new=4    WC001-Digits-Mod -> WC001-Digits
+  MATCH                  old=1    new=1    WC002-Unmodified -> WC002-DeleteAtBeginning
+  MATCH                  old=1    new=1    WC002-DeleteAtBeginning -> WC002-Unmodified
+  MATCH                  old=1    new=1    WC002-Unmodified -> WC002-DeleteAtEnd
+  MATCH                  old=1    new=1    WC002-DeleteAtEnd -> WC002-Unmodified
+  MATCH                  old=1    new=1    WC002-Unmodified -> WC002-DeleteInMiddle
+  MATCH                  old=1    new=1    WC002-DeleteInMiddle -> WC002-Unmodified
+  MATCH                  old=2    new=2    WC002-Unmodified -> WC002-DiffAtBeginning
+  MATCH                  old=2    new=2    WC002-DiffAtBeginning -> WC002-Unmodified
+  MATCH                  old=2    new=2    WC002-Unmodified -> WC002-DiffInMiddle
+  MATCH                  old=2    new=2    WC002-DiffInMiddle -> WC002-Unmodified
+  MATCH                  old=1    new=1    WC002-Unmodified -> WC002-InsertAtBeginning
+  MATCH                  old=1    new=1    WC002-InsertAtBeginning -> WC002-Unmodified
+  MATCH                  old=1    new=1    WC002-Unmodified -> WC002-InsertAtEnd
+  MATCH                  old=1    new=1    WC002-InsertAtEnd -> WC002-Unmodified
+  MATCH                  old=1    new=1    WC002-Unmodified -> WC002-InsertInMiddle
+  MATCH                  old=1    new=1    WC002-InsertInMiddle -> WC002-Unmodified
+  DIVERGENT/Unclassified old=2    new=8    WC004-Large -> WC004-Large-Mod
+  MATCH                  old=2    new=2    WC004-Large-Mod -> WC004-Large
+  MATCH                  old=2    new=2    WC006-Table -> WC006-Table-Delete-Contests-of-Row
+  MATCH                  old=2    new=2    WC006-Table-Delete-Contests-of-Row -> WC006-Table
+  GRANULARITY            old=1    new=1    WC006-Table -> WC006-Table-Delete-Row
+  GRANULARITY            old=1    new=1    WC006-Table-Delete-Row -> WC006-Table
+  DIVERGENT/PunctuationBoundary old=1    new=2    WC007-Unmodified -> WC007-Deleted-at-Beginning-of-Para
+  DIVERGENT/PunctuationBoundary old=1    new=2    WC007-Deleted-at-Beginning-of-Para -> WC007-Unmodified
+  MATCH                  old=2    new=2    WC007-Unmodified -> WC007-Longest-At-End
+  MATCH                  old=2    new=2    WC007-Longest-At-End -> WC007-Unmodified
+  MATCH                  old=2    new=2    WC007-Unmodified -> WC007-Moved-into-Table
+  MATCH                  old=2    new=2    WC007-Moved-into-Table -> WC007-Unmodified
+  MATCH                  old=1    new=1    WC009-Table-Unmodified -> WC009-Table-Cell-1-1-Mod
+  MATCH                  old=1    new=1    WC009-Table-Cell-1-1-Mod -> WC009-Table-Unmodified
+  MATCH                  old=3    new=3    WC010-Para-Before-Table-Unmodified -> WC010-Para-Before-Table-Mod
+  MATCH                  old=3    new=3    WC010-Para-Before-Table-Mod -> WC010-Para-Before-Table-Unmodified
+  MATCH                  old=2    new=2    WC011-Before -> WC011-After
+  MATCH                  old=2    new=2    WC011-After -> WC011-Before
+  MATCH                  old=0    new=0    WC012-Math-Before -> WC012-Math-After
+  MATCH                  old=0    new=0    WC012-Math-After -> WC012-Math-Before
+  MATCH                  old=0    new=0    WC013-Image-Before -> WC013-Image-After
+  MATCH                  old=0    new=0    WC013-Image-After -> WC013-Image-Before
+  MATCH                  old=2    new=2    WC013-Image-Before2 -> WC013-Image-After2
+  MATCH                  old=2    new=2    WC013-Image-After2 -> WC013-Image-Before2
+  MATCH                  old=2    new=2    WC014-SmartArt-Before -> WC014-SmartArt-After
+  MATCH                  old=2    new=2    WC014-SmartArt-After -> WC014-SmartArt-Before
+  MATCH                  old=2    new=2    WC014-SmartArt-With-Image-Before -> WC014-SmartArt-With-Image-After
+  MATCH                  old=2    new=2    WC014-SmartArt-With-Image-After -> WC014-SmartArt-With-Image-Before
+  DIVERGENT/TokenSpanGranularity old=3    new=3    WC015-Three-Paragraphs -> WC015-Three-Paragraphs-After
+  DIVERGENT/TokenSpanGranularity old=3    new=3    WC015-Three-Paragraphs-After -> WC015-Three-Paragraphs
+  MATCH                  old=0    new=0    WC016-Para-Image-Para -> WC016-Para-Image-Para-w-Deleted-Image
+  MATCH                  old=0    new=0    WC016-Para-Image-Para-w-Deleted-Image -> WC016-Para-Image-Para
+  MATCH                  old=2    new=2    WC017-Image -> WC017-Image-After
+  MATCH                  old=2    new=2    WC017-Image-After -> WC017-Image
+  MATCH                  old=2    new=2    WC018-Field-Simple-Before -> WC018-Field-Simple-After-1
+  MATCH                  old=2    new=2    WC018-Field-Simple-After-1 -> WC018-Field-Simple-Before
+  MATCH                  old=3    new=3    WC018-Field-Simple-Before -> WC018-Field-Simple-After-2
+  MATCH                  old=3    new=3    WC018-Field-Simple-After-2 -> WC018-Field-Simple-Before
+  MATCH                  old=3    new=3    WC019-Hyperlink-Before -> WC019-Hyperlink-After-1
+  MATCH                  old=3    new=3    WC019-Hyperlink-After-1 -> WC019-Hyperlink-Before
+  DIVERGENT/TokenSpanGranularity old=5    new=5    WC019-Hyperlink-Before -> WC019-Hyperlink-After-2
+  DIVERGENT/TokenSpanGranularity old=5    new=5    WC019-Hyperlink-After-2 -> WC019-Hyperlink-Before
+  MATCH                  old=3    new=3    WC020-FootNote-Before -> WC020-FootNote-After-1
+  MATCH                  old=3    new=3    WC020-FootNote-After-1 -> WC020-FootNote-Before
+  MATCH                  old=4    new=4    WC020-FootNote-Before -> WC020-FootNote-After-2
+  MATCH                  old=4    new=4    WC020-FootNote-After-2 -> WC020-FootNote-Before
+  GRANULARITY            old=7    new=8    WC021-Math-Before-1 -> WC021-Math-After-1
+  GRANULARITY            old=7    new=8    WC021-Math-After-1 -> WC021-Math-Before-1
+  GRANULARITY            old=4    new=5    WC021-Math-Before-2 -> WC021-Math-After-2
+  GRANULARITY            old=4    new=5    WC021-Math-After-2 -> WC021-Math-Before-2
+  DIVERGENT/TokenSpanGranularity old=6    new=7    WC022-Image-Math-Para-Before -> WC022-Image-Math-Para-After
+  DIVERGENT/TokenSpanGranularity old=6    new=7    WC022-Image-Math-Para-After -> WC022-Image-Math-Para-Before
+  DIVERGENT/TokenSpanGranularity old=5    new=2    WC023-Table-4-Row-Image-Before -> WC023-Table-4-Row-Image-After-Delete-1-Row
+  DIVERGENT/TokenSpanGranularity old=6    new=2    WC023-Table-4-Row-Image-After-Delete-1-Row -> WC023-Table-4-Row-Image-Before
+  GRANULARITY            old=1    new=1    WC024-Table-Before -> WC024-Table-After
+  GRANULARITY            old=1    new=1    WC024-Table-After -> WC024-Table-Before
+  DIVERGENT/TokenSpanGranularity old=7    new=3    WC024-Table-Before -> WC024-Table-After2
+  DIVERGENT/TokenSpanGranularity old=7    new=3    WC024-Table-After2 -> WC024-Table-Before
+  MATCH                  old=4    new=4    WC025-Simple-Table-Before -> WC025-Simple-Table-After
+  MATCH                  old=4    new=4    WC025-Simple-Table-After -> WC025-Simple-Table-Before
+  MATCH                  old=2    new=2    WC026-Long-Table-Before -> WC026-Long-Table-After-1
+  MATCH                  old=2    new=2    WC026-Long-Table-After-1 -> WC026-Long-Table-Before
+  MATCH                  old=2    new=2    WC027-Twenty-Paras-Before -> WC027-Twenty-Paras-After-1
+  MATCH                  old=2    new=2    WC027-Twenty-Paras-After-1 -> WC027-Twenty-Paras-Before
+  MATCH                  old=4    new=4    WC027-Twenty-Paras-Before -> WC027-Twenty-Paras-After-2
+  MATCH                  old=4    new=4    WC027-Twenty-Paras-After-2 -> WC027-Twenty-Paras-Before
+  MATCH                  old=1    new=1    WC027-Twenty-Paras-Before -> WC027-Twenty-Paras-After-3
+  MATCH                  old=1    new=1    WC027-Twenty-Paras-After-3 -> WC027-Twenty-Paras-Before
+  MATCH                  old=0    new=0    WC030-Image-Math-Before -> WC030-Image-Math-After
+  MATCH                  old=0    new=0    WC030-Image-Math-After -> WC030-Image-Math-Before
+  MATCH                  old=0    new=0    WC031-Two-Maths-Before -> WC031-Two-Maths-After
+  MATCH                  old=0    new=0    WC031-Two-Maths-After -> WC031-Two-Maths-Before
+  MATCH                  old=3    new=3    WC032-Para-with-Para-Props -> WC032-Para-with-Para-Props-After
+  MATCH                  old=3    new=3    WC032-Para-with-Para-Props-After -> WC032-Para-with-Para-Props
+  MATCH                  old=2    new=2    WC033-Merged-Cells-Before -> WC033-Merged-Cells-After1
+  MATCH                  old=2    new=2    WC033-Merged-Cells-After1 -> WC033-Merged-Cells-Before
+  MATCH                  old=4    new=4    WC033-Merged-Cells-Before -> WC033-Merged-Cells-After2
+  MATCH                  old=4    new=4    WC033-Merged-Cells-After2 -> WC033-Merged-Cells-Before
+  MATCH                  old=1    new=1    WC034-Endnotes-Before -> WC034-Endnotes-After1
+  MATCH                  old=1    new=1    WC034-Endnotes-After1 -> WC034-Endnotes-Before
+  GRANULARITY            old=4    new=6    WC034-Endnotes-Before -> WC034-Endnotes-After2
+  GRANULARITY            old=4    new=6    WC034-Endnotes-After2 -> WC034-Endnotes-Before
+  GRANULARITY            old=6    new=6    WC034-Endnotes-Before -> WC034-Endnotes-After3
+  GRANULARITY            old=6    new=6    WC034-Endnotes-After3 -> WC034-Endnotes-Before
+  MATCH                  old=1    new=1    WC034-Footnotes-Before -> WC034-Footnotes-After1
+  MATCH                  old=1    new=1    WC034-Footnotes-After1 -> WC034-Footnotes-Before
+  GRANULARITY            old=4    new=6    WC034-Footnotes-Before -> WC034-Footnotes-After2
+  GRANULARITY            old=4    new=6    WC034-Footnotes-After2 -> WC034-Footnotes-Before
+  MATCH                  old=3    new=3    WC034-Footnotes-Before -> WC034-Footnotes-After3
+  MATCH                  old=3    new=3    WC034-Footnotes-After3 -> WC034-Footnotes-Before
+  MATCH                  old=1    new=1    WC035-Endnote-Before -> WC035-Endnote-After
+  MATCH                  old=1    new=1    WC035-Endnote-After -> WC035-Endnote-Before
+  MATCH                  old=1    new=1    WC035-Footnote-Before -> WC035-Footnote-After
+  MATCH                  old=1    new=1    WC035-Footnote-After -> WC035-Footnote-Before
+  GRANULARITY            old=5    new=5    WC036-Endnote-With-Table-Before -> WC036-Endnote-With-Table-After
+  GRANULARITY            old=5    new=5    WC036-Endnote-With-Table-After -> WC036-Endnote-With-Table-Before
+  GRANULARITY            old=5    new=5    WC036-Footnote-With-Table-Before -> WC036-Footnote-With-Table-After
+  GRANULARITY            old=5    new=5    WC036-Footnote-With-Table-After -> WC036-Footnote-With-Table-Before
+  DIVERGENT/Unclassified old=2    new=2    WC037-Textbox-Before -> WC037-Textbox-After1
+  DIVERGENT/Unclassified old=2    new=2    WC037-Textbox-After1 -> WC037-Textbox-Before
+  MATCH                  old=2    new=2    WC038-Document-With-BR-Before -> WC038-Document-With-BR-After
+  MATCH                  old=2    new=2    WC038-Document-With-BR-After -> WC038-Document-With-BR-Before
+  MATCH                  old=1    new=1    WC039-Break-In-Row -> WC039-Break-In-Row-After1
+  MATCH                  old=1    new=1    WC039-Break-In-Row-After1 -> WC039-Break-In-Row
+  MATCH                  old=4    new=4    WC040-Case-Before -> WC040-Case-After
+  MATCH                  old=4    new=4    WC040-Case-After -> WC040-Case-Before
+  DIVERGENT/TokenSpanGranularity old=2    new=1    WC041-Table-5 -> WC041-Table-5-Mod
+  DIVERGENT/TokenSpanGranularity old=3    new=1    WC041-Table-5-Mod -> WC041-Table-5
+  DIVERGENT/TokenSpanGranularity old=1    new=2    WC042-Table-5 -> WC042-Table-5-Mod
+  DIVERGENT/TokenSpanGranularity old=1    new=2    WC042-Table-5-Mod -> WC042-Table-5
+  DIVERGENT/PunctuationBoundary old=2    new=2    WC043-Nested-Table -> WC043-Nested-Table-Mod
+  DIVERGENT/PunctuationBoundary old=2    new=2    WC043-Nested-Table-Mod -> WC043-Nested-Table
+  DIVERGENT/TokenSpanGranularity old=2    new=4    WC044-Text-Box -> WC044-Text-Box-Mod
+  DIVERGENT/TokenSpanGranularity old=2    new=4    WC044-Text-Box-Mod -> WC044-Text-Box
+  DIVERGENT/TokenSpanGranularity old=2    new=4    WC045-Text-Box -> WC045-Text-Box-Mod
+  DIVERGENT/TokenSpanGranularity old=2    new=4    WC045-Text-Box-Mod -> WC045-Text-Box
+  DIVERGENT/TokenSpanGranularity old=2    new=4    WC046-Two-Text-Box -> WC046-Two-Text-Box-Mod
+  DIVERGENT/TokenSpanGranularity old=2    new=4    WC046-Two-Text-Box-Mod -> WC046-Two-Text-Box
+  DIVERGENT/TokenSpanGranularity old=2    new=4    WC047-Two-Text-Box -> WC047-Two-Text-Box-Mod
+  DIVERGENT/TokenSpanGranularity old=2    new=4    WC047-Two-Text-Box-Mod -> WC047-Two-Text-Box
+  DIVERGENT/TokenSpanGranularity old=6    new=12   WC048-Text-Box-in-Cell -> WC048-Text-Box-in-Cell-Mod
+  DIVERGENT/TokenSpanGranularity old=6    new=12   WC048-Text-Box-in-Cell-Mod -> WC048-Text-Box-in-Cell
+  DIVERGENT/TokenSpanGranularity old=5    new=7    WC049-Text-Box-in-Cell -> WC049-Text-Box-in-Cell-Mod
+  DIVERGENT/TokenSpanGranularity old=5    new=7    WC049-Text-Box-in-Cell-Mod -> WC049-Text-Box-in-Cell
+  DIVERGENT/TokenSpanGranularity old=8    new=14   WC050-Table-in-Text-Box -> WC050-Table-in-Text-Box-Mod
+  DIVERGENT/TokenSpanGranularity old=8    new=14   WC050-Table-in-Text-Box-Mod -> WC050-Table-in-Text-Box
+  DIVERGENT/TokenSpanGranularity old=9    new=15   WC051-Table-in-Text-Box -> WC051-Table-in-Text-Box-Mod
+  DIVERGENT/TokenSpanGranularity old=9    new=15   WC051-Table-in-Text-Box-Mod -> WC051-Table-in-Text-Box
+  MATCH                  old=2    new=2    WC052-SmartArt-Same -> WC052-SmartArt-Same-Mod
+  MATCH                  old=2    new=2    WC052-SmartArt-Same-Mod -> WC052-SmartArt-Same
+  DIVERGENT/TokenSpanGranularity old=2    new=6    WC053-Text-in-Cell -> WC053-Text-in-Cell-Mod
+  DIVERGENT/TokenSpanGranularity old=2    new=6    WC053-Text-in-Cell-Mod -> WC053-Text-in-Cell
+  MATCH                  old=0    new=0    WC054-Text-in-Cell -> WC054-Text-in-Cell-Mod
+  MATCH                  old=0    new=0    WC054-Text-in-Cell-Mod -> WC054-Text-in-Cell
+  MATCH                  old=0    new=0    WC055-French -> WC055-French-Mod
+  MATCH                  old=0    new=0    WC055-French-Mod -> WC055-French
+  MATCH                  old=0    new=0    WC056-French -> WC056-French-Mod
+  MATCH                  old=0    new=0    WC056-French-Mod -> WC056-French
+  MATCH                  old=4    new=4    WC057-Table-Merged-Cell -> WC057-Table-Merged-Cell-Mod
+  MATCH                  old=4    new=4    WC057-Table-Merged-Cell-Mod -> WC057-Table-Merged-Cell
+  MATCH                  old=6    new=6    WC058-Table-Merged-Cell -> WC058-Table-Merged-Cell-Mod
+  MATCH                  old=6    new=6    WC058-Table-Merged-Cell-Mod -> WC058-Table-Merged-Cell
+  MATCH                  old=5    new=5    WC059-Footnote -> WC059-Footnote-Mod
+  MATCH                  old=5    new=5    WC059-Footnote-Mod -> WC059-Footnote
+  MATCH                  old=3    new=3    WC060-Endnote -> WC060-Endnote-Mod
+  MATCH                  old=3    new=3    WC060-Endnote-Mod -> WC060-Endnote
+  MATCH                  old=1    new=1    WC061-Style-Added -> WC061-Style-Added-Mod
+  MATCH                  old=1    new=1    WC061-Style-Added-Mod -> WC061-Style-Added
+  MATCH                  old=2    new=2    WC062-New-Char-Style-Added -> WC062-New-Char-Style-Added-Mod
+  MATCH                  old=2    new=2    WC062-New-Char-Style-Added-Mod -> WC062-New-Char-Style-Added
+  MATCH                  old=1    new=1    WC063-Footnote -> WC063-Footnote-Mod
+  MATCH                  old=1    new=1    WC063-Footnote-Mod -> WC063-Footnote
+  MATCH                  old=0    new=0    WC064-Footnote -> WC064-Footnote-Mod
+  MATCH                  old=0    new=0    WC064-Footnote-Mod -> WC064-Footnote
+  DIVERGENT/TokenSpanGranularity old=1    new=2    WC065-Textbox -> WC065-Textbox-Deleted
+  DIVERGENT/TokenSpanGranularity old=1    new=2    WC065-Textbox-Deleted -> WC065-Textbox
+  DIVERGENT/TokenSpanGranularity old=2    new=4    WC065-Textbox -> WC065-Textbox-Mod
+  DIVERGENT/TokenSpanGranularity old=2    new=4    WC065-Textbox-Mod -> WC065-Textbox
+  DIVERGENT/TokenSpanGranularity old=1    new=2    WC066-Textbox-Before-Ins -> WC066-Textbox-Before-Ins-Mod
+  DIVERGENT/TokenSpanGranularity old=1    new=2    WC066-Textbox-Before-Ins-Mod -> WC066-Textbox-Before-Ins
+  DIVERGENT/TokenSpanGranularity old=2    new=4    WC067-Textbox-Image -> WC067-Textbox-Image-Mod
+  DIVERGENT/TokenSpanGranularity old=2    new=4    WC067-Textbox-Image-Mod -> WC067-Textbox-Image
+
+===== TRIAGE TABLE =====
+  Match        117
+  Granularity  18
+  Divergent    47
+  OldError     2
+
+DIVERGENT sub-buckets:
+  PunctuationBoundary 4
+      e.g. old=1 new=2  WC007-Unmodified -> WC007-Deleted-at-Beginning-of-Para
+      e.g. old=1 new=2  WC007-Deleted-at-Beginning-of-Para -> WC007-Unmodified
+      e.g. old=2 new=2  WC043-Nested-Table -> WC043-Nested-Table-Mod
+      e.g. old=2 new=2  WC043-Nested-Table-Mod -> WC043-Nested-Table
+  TokenSpanGranularity 40
+      e.g. old=3 new=3  WC015-Three-Paragraphs -> WC015-Three-Paragraphs-After
+      e.g. old=3 new=3  WC015-Three-Paragraphs-After -> WC015-Three-Paragraphs
+      e.g. old=5 new=5  WC019-Hyperlink-Before -> WC019-Hyperlink-After-2
+      e.g. old=5 new=5  WC019-Hyperlink-After-2 -> WC019-Hyperlink-Before
+      e.g. old=6 new=7  WC022-Image-Math-Para-Before -> WC022-Image-Math-Para-After
+  Unclassified     3
+      e.g. old=2 new=8  WC004-Large -> WC004-Large-Mod
+      e.g. old=2 new=2  WC037-Textbox-Before -> WC037-Textbox-After1
+      e.g. old=2 new=2  WC037-Textbox-After1 -> WC037-Textbox-Before
+
+Detail files for DIVERGENT pairs written to: /home/user/Docxodus/Docxodus.Tests/Ir/Diff/DifferentialArtifacts
+
+===== TRIAGE TABLE — Fine vs WmlComparerCompatible (both render modes) =====
+  Classification   Fine   Compat
+  Match             117      151
+  Granularity        18        8
+  Divergent          47       23
+  OldError            2        2
+
+DIVERGENT sub-buckets — Fine vs Compat:
+  PunctuationBoundary         4        4
+  TokenSpanGranularity       40       18
+  Unclassified                3        1
+
+
+

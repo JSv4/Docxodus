@@ -1,0 +1,89 @@
+{
+  "scopes": [
+    {
+      "scope": "body",
+      "blocks": [
+        {
+          "anchor": "p:body:3ba3276b836d85b551d908521a074a99",
+          "type": "paragraph",
+          "contentHash": "e61883d8b97f2a8fb807888c12fa20a778af87ddfd838cf337af48ceab67d3a0",
+          "formatFingerprint": "d54358386a95f933cb1f0514daa071fd31510244bff32236bc605b0bdb349fc5",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Test 1.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:a5ea3cab122e06ddb0fe999125397ec9",
+          "type": "paragraph",
+          "contentHash": "fc81706e400e69d512dfbe94ceecefaef168167c7a733376bd6ebec48b5e09b7",
+          "formatFingerprint": "d54358386a95f933cb1f0514daa071fd31510244bff32236bc605b0bdb349fc5",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "textbox",
+              "blocks": [
+                {
+                  "anchor": "p:body:e80e69bde2032c9a7a7754265b680cf9",
+                  "type": "paragraph",
+                  "contentHash": "d1d5c3e84b23c9ef98d3f8196b5656d439d15f4205fed86490eafb0da2a6ca5d",
+                  "formatFingerprint": "73099531cdd3f10acae7e1b0bf392fd00c01e05d91511663330b09876a201717",
+                  "format": {},
+                  "inlines": [
+                    {
+                      "kind": "text",
+                      "text": "Textbox.",
+                      "format": {}
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "textbox",
+              "blocks": [
+                {
+                  "anchor": "p:body:e9b0d8ec55156e2afd343fd3a2b9f0f1",
+                  "type": "paragraph",
+                  "contentHash": "d1d5c3e84b23c9ef98d3f8196b5656d439d15f4205fed86490eafb0da2a6ca5d",
+                  "formatFingerprint": "73099531cdd3f10acae7e1b0bf392fd00c01e05d91511663330b09876a201717",
+                  "format": {},
+                  "inlines": [
+                    {
+                      "kind": "text",
+                      "text": "Textbox.",
+                      "format": {}
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "kind": "text",
+              "text": "Test 2.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "sec:body:05042b17662bdf691f11e7ffac876855",
+          "type": "sectionBreak",
+          "contentHash": "ff37a2c5c7011b9a844f2168306251145f271458a09acb28611f943296e051ac",
+          "formatFingerprint": "bb0976a404efe14c0569335e8feacb1fb31991cbe551de9bb8578a85b654f18f",
+          "format": {
+            "pageWidthTwips": 11906,
+            "pageHeightTwips": 16838,
+            "marginTopTwips": 1440,
+            "marginBottomTwips": 1440,
+            "marginLeftTwips": 1440,
+            "marginRightTwips": 1440
+          }
+        }
+      ]
+    }
+  ]
+}

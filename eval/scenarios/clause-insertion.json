@@ -1,0 +1,74 @@
+{
+  "id": "clause-insertion",
+  "title": "Insert a clause into an auto-numbered list, preserving styles and numbering",
+  "intent": "Add a severability clause after the assignment clause, keeping it in the numbered clause list so the later clauses renumber.",
+  "fixture": "clause-library",
+  "steps": [
+    {
+      "tool": "docxodus_create",
+      "target": {
+        "mode": "text",
+        "query": "Assignment requires prior written consent."
+      },
+      "args": {
+        "action": "insert_paragraph",
+        "position": "after",
+        "markdown": "Severability preserves the remainder of these clauses."
+      }
+    },
+    {
+      "tool": "docxodus_list",
+      "targets": {
+        "firstAnchorId": {
+          "mode": "text",
+          "query": "Confidentiality obligations survive termination."
+        },
+        "lastAnchorId": {
+          "mode": "text",
+          "query": "Waiver requires a signed instrument."
+        }
+      },
+      "args": {
+        "action": "apply_format_range",
+        "listFormat": "decimal"
+      }
+    }
+  ],
+  "invariants": {
+    "taskCompletion": {
+      "textPresent": [
+        "Severability preserves the remainder of these clauses."
+      ]
+    },
+    "targetPrecision": {
+      "changedAnchorsAtLeast": 1,
+      "changedAnchorsAtMost": 7
+    },
+    "collateral": {
+      "partsAdded": 0,
+      "partsRemoved": 0,
+      "textPreserved": [
+        "Confidentiality obligations survive termination.",
+        "Notices must be delivered in writing.",
+        "Waiver requires a signed instrument."
+      ],
+      "changedPartsMustBeWithin": [
+        "/word/document.xml",
+        "/word/numbering.xml"
+      ]
+    },
+    "validity": {
+      "decisionIn": [
+        "passed",
+        "passedWithPreExistingFindings"
+      ]
+    },
+    "rendering": {
+      "htmlMustContain": [
+        "Severability preserves the remainder of these clauses.",
+        "4.",
+        "5."
+      ]
+    }
+  }
+}

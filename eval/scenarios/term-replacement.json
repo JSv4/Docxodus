@@ -1,0 +1,42 @@
+{
+  "id": "term-replacement",
+  "title": "Replace a defined commercial term at the correct occurrence only",
+  "intent": "In clause 1 (Services), rename the Service Provider to the Supplier. Leave the term alone everywhere else.",
+  "fixture": "master-services-agreement",
+  "trackedChanges": "accept",
+  "steps": [
+    {
+      "tool": "docxodus_edit",
+      "target": { "mode": "text", "query": "shall perform the services described" },
+      "args": {
+        "action": "replace_text_range",
+        "find": "The Service Provider shall perform",
+        "replace": "The Supplier shall perform",
+        "caseSensitive": true
+      }
+    }
+  ],
+  "invariants": {
+    "taskCompletion": {
+      "textPresent": ["The Supplier shall perform the services described"],
+      "textAbsent": ["The Service Provider shall perform"]
+    },
+    "targetPrecision": {
+      "changedAnchorsAtLeast": 1,
+      "changedAnchorsAtMost": 1,
+      "changedPartsAtMost": 1
+    },
+    "collateral": {
+      "partsAdded": 0,
+      "partsRemoved": 0,
+      "textPreserved": [
+        "(the \"Service Provider\")",
+        "The Client shall pay the Service Provider the annual fees",
+        "thirty (30) days written notice",
+        "Title: Managing Partner"
+      ]
+    },
+    "validity": { "decisionIn": ["passed", "passedWithPreExistingFindings"] },
+    "rendering": { "htmlMustContain": ["The Supplier shall perform", "Year 3"] }
+  }
+}

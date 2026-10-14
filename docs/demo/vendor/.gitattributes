@@ -1,0 +1,7 @@
+# The engine and the IWAD are NOT in this repository — they are pinned on a CDN
+# (see NOTICE.md). What is left here is license text, which must not be
+# reflowed or line-ending-normalized by the root's `* text=auto`: these files
+# are reproduced verbatim from upstream and a diff against upstream should be
+# empty.
+COPYING       -text linguist-vendored
+COPYING.txt   -text linguist-vendored

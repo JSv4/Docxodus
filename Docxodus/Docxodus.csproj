@@ -1,0 +1,78 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+
+    <!-- Enable packaging for NuGet -->
+    <IsPackable>true</IsPackable>
+
+    <!-- NuGet Package Metadata -->
+    <PackageId>Docxodus</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>OpenXmlPowerTools Authors, JSv4</Authors>
+    <Description>A structure-aware OOXML toolkit for Word documents (and XLSX/PPTX): faithful DOCX-to-HTML rendering, Word-grade comparison producing native tracked-changes redlines, an anchor-addressed editing session for programmatic and LLM-driven edits, a stable markdown projection, plus merging, splitting and template assembly. Fork of OpenXmlPowerTools upgraded to .NET 10.0.</Description>
+    <PackageProjectUrl>https://github.com/JSv4/Docxodus</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/JSv4/Docxodus</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageTags>openxml;ooxml;docx;word;xlsx;excel;pptx;powerpoint;document;compare;diff;redline;tracked-changes;docx-to-html;html;markdown;document-editor;merge;split;llm;agent</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+
+    <!-- ReadyToRun: Pre-compile to native code during publish to eliminate JIT warmup -->
+    <PublishReadyToRun>true</PublishReadyToRun>
+  </PropertyGroup>
+
+  <!-- The library builds warning-free and so inherits TreatWarningsAsErrors in Release. A CLI's
+       `dotnet publish -p:PublishTrimmed=true` / `-p:PublishAot=true` makes that a global property,
+       which also switches the trim/AOT analyzers on for this project. Their findings here are
+       catalogued in docs/architecture/cli_trimming_and_native_aot.md and none is reachable from a
+       CLI; the publish's whole-application ILLink/ILC analysis is the real gate, and it still fails
+       on any warning. So those analyzer warnings stay warnings. A plain Release build still fails
+       on every other warning. -->
+  <PropertyGroup Condition="'$(PublishTrimmed)' == 'true' or '$(PublishAot)' == 'true'">
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <!-- Define WASM_BUILD constant when building for WASM.
+       The output/intermediate paths are redirected so the WASM-mode assembly (no SkiaSharp,
+       no ImageInfo.SaveImage) can never clobber the default-mode assembly: DocxodusWasm
+       references this project with AdditionalProperties="WASM_BUILD=true", so a solution
+       build compiles Docxodus twice — without distinct paths the two builds race for
+       bin/$(Configuration)/net10.0/Docxodus.dll and Docxodus.Tests intermittently links the
+       WASM-mode one (the recurring CS1061 'ImageInfo.SaveImage' failure). -->
+  <PropertyGroup Condition="'$(WASM_BUILD)' == 'true'">
+    <DefineConstants>$(DefineConstants);WASM_BUILD</DefineConstants>
+    <OutputPath>bin\wasm\$(Configuration)\</OutputPath>
+    <IntermediateOutputPath>obj\wasm\$(Configuration)\</IntermediateOutputPath>
+  </PropertyGroup>
+
+  <!-- Core dependencies (always included) -->
+  <ItemGroup>
+    <PackageReference Include="DocumentFormat.OpenXml" Version="3.5.1" />
+  </ItemGroup>
+
+  <!-- SkiaSharp dependencies (only for non-WASM builds) -->
+  <ItemGroup Condition="'$(WASM_BUILD)' != 'true'">
+    <PackageReference Include="SkiaSharp" Version="4.153.1" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.153.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
+
+  <!-- Bridge transports (WASM JSExport, stdio NDJSON host) consume the shared
+       Docxodus.Internal facade for the DocxSession wire protocol. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="DocxodusWasm" />
+    <InternalsVisibleTo Include="docxodus-pyhost" />
+    <InternalsVisibleTo Include="docxodus-mcp" />
+    <InternalsVisibleTo Include="Docxodus.Tests" />
+    <!-- Out-of-solution perf harness (benchmarks/docxdiff-stress); times internal
+         pipeline stages directly. Never referenced by shipped code. -->
+    <InternalsVisibleTo Include="DocxDiffStress" />
+  </ItemGroup>
+
+</Project>

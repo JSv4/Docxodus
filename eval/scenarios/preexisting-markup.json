@@ -1,0 +1,65 @@
+{
+  "id": "preexisting-markup",
+  "title": "Operate on a document carrying pre-existing revisions and comments",
+  "intent": "Make one unrelated wording change; the prior reviewer's live tracked change and open comment must both survive, unaccepted and unresolved.",
+  "fixture": "master-services-agreement",
+  "steps": [
+    {
+      "tool": "docxodus_edit",
+      "target": {
+        "mode": "text",
+        "query": "is entered into by"
+      },
+      "args": {
+        "action": "replace_text_range",
+        "find": "is entered into by",
+        "replace": "is made and entered into by",
+        "caseSensitive": true
+      }
+    }
+  ],
+  "invariants": {
+    "taskCompletion": {
+      "textPresent": [
+        "is made and entered into by"
+      ]
+    },
+    "targetPrecision": {
+      "changedAnchorsAtMost": 1
+    },
+    "collateral": {
+      "partsAdded": 0,
+      "partsRemoved": 0,
+      "textPreserved": [
+        "net forty-five (45) days",
+        "Confirm signatory authority before circulation."
+      ],
+      "changedPartsMustBeWithin": [
+        "/word/document.xml"
+      ]
+    },
+    "trackedRevisions": {
+      "countAtLeast": 2,
+      "authorsMustInclude": [
+        "Prior Reviewer"
+      ]
+    },
+    "comments": {
+      "countAtLeast": 1,
+      "authorsMustInclude": [
+        "Prior Reviewer"
+      ]
+    },
+    "validity": {
+      "decisionIn": [
+        "passed",
+        "passedWithPreExistingFindings"
+      ]
+    },
+    "rendering": {
+      "htmlMustContain": [
+        "is made and entered into by"
+      ]
+    }
+  }
+}

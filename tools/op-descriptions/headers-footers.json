@@ -1,0 +1,152 @@
+{
+  "$comment": "One description of the header/footer and page-layout session ops (issue #982). See docs/architecture/session_op_descriptions.md. Argument names are the canonical wire names (the MCP name where the stdio host and MCP differ); argNames, defaults and requires on a transport are recorded divergences, not the target. Enum values are the tokens DocxSessionJson parses (case-insensitive, underscores ignored), so MCP's current_page and the wasm/npm/python currentPage are the same token.",
+  "family": "headers-footers",
+  "ops": [
+    {
+      "op": "setHeaderText",
+      "facade": "SetHeaderText",
+      "result": "EditResult",
+      "args": [
+        { "name": "bodyAnchorId", "type": "anchor", "required": true },
+        { "name": "kind", "type": "enum", "required": true, "values": ["default", "first", "even"] },
+        { "name": "markdown", "type": "markdown", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "SetHeaderText" },
+        "npm": { "method": "setHeaderText" },
+        "python": { "method": "set_header_text" },
+        "stdio": { "op": "set_header_text" },
+        "mcp": { "tool": "docxodus_create", "action": "set_header_text" }
+      }
+    },
+    {
+      "op": "setFooterText",
+      "facade": "SetFooterText",
+      "result": "EditResult",
+      "args": [
+        { "name": "bodyAnchorId", "type": "anchor", "required": true },
+        { "name": "kind", "type": "enum", "required": true, "values": ["default", "first", "even"] },
+        { "name": "markdown", "type": "markdown", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "SetFooterText" },
+        "npm": { "method": "setFooterText" },
+        "python": { "method": "set_footer_text" },
+        "stdio": { "op": "set_footer_text" },
+        "mcp": { "tool": "docxodus_create", "action": "set_footer_text" }
+      }
+    },
+    {
+      "op": "insertPageNumberField",
+      "facade": "InsertPageNumberField",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "field", "type": "enum", "required": false, "default": "currentPage", "values": ["currentPage", "totalPages", "pageOfTotal"] },
+        { "name": "numberFormat", "type": "enum", "required": false, "values": ["decimal", "upperLetter", "lowerLetter", "upperRoman", "lowerRoman"] }
+      ],
+      "transports": {
+        "wasm": { "method": "InsertPageNumberField" },
+        "npm": { "method": "insertPageNumberField" },
+        "python": { "method": "insert_page_number_field" },
+        "stdio": { "op": "insert_page_number_field" },
+        "mcp": { "tool": "docxodus_create", "action": "insert_page_number_field" }
+      }
+    },
+    {
+      "op": "ensureHeaderFooterVisible",
+      "facade": "EnsureHeaderFooterVisible",
+      "result": "EditResult",
+      "args": [
+        { "name": "bodyAnchorId", "type": "anchor", "required": true },
+        { "name": "kind", "type": "enum", "required": true, "values": ["default", "first", "even"] }
+      ],
+      "transports": {
+        "wasm": { "method": "EnsureHeaderFooterVisible" },
+        "npm": { "method": "ensureHeaderFooterVisible" },
+        "python": { "method": "ensure_header_footer_visible" },
+        "stdio": { "op": "ensure_header_footer_visible" },
+        "mcp": { "tool": "docxodus_create", "action": "ensure_header_footer_visible" }
+      }
+    },
+    {
+      "op": "setPageNumbering",
+      "facade": "SetPageNumbering",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "op", "type": "object", "required": false, "default": {} }
+      ],
+      "transports": {
+        "wasm": { "method": "SetPageNumbering" },
+        "npm": { "method": "setPageNumbering" },
+        "python": { "method": "set_page_numbering" },
+        "stdio": { "op": "set_page_numbering" },
+        "mcp": { "tool": "docxodus_create", "action": "set_page_numbering" }
+      }
+    },
+    {
+      "op": "clearPageNumbering",
+      "facade": "ClearPageNumbering",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "ClearPageNumbering" },
+        "npm": { "method": "clearPageNumbering" },
+        "python": { "method": "clear_page_numbering" },
+        "stdio": { "op": "clear_page_numbering" },
+        "mcp": { "tool": "docxodus_create", "action": "clear_page_numbering" }
+      }
+    },
+    {
+      "op": "setHeaderFooterKindEnabled",
+      "facade": "SetHeaderFooterKindEnabled",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "kind", "type": "enum", "required": true, "values": ["default", "first", "even"] },
+        { "name": "enabled", "type": "boolean", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "SetHeaderFooterKindEnabled" },
+        "npm": { "method": "setHeaderFooterKindEnabled" },
+        "python": { "method": "set_header_footer_kind_enabled" },
+        "stdio": { "op": "set_header_footer_kind_enabled" },
+        "mcp": { "tool": "docxodus_create", "action": "set_header_footer_kind_enabled" }
+      }
+    },
+    {
+      "op": "setPageSetup",
+      "facade": "SetPageSetup",
+      "result": "EditResult",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true },
+        { "name": "op", "type": "object", "required": false, "default": {} }
+      ],
+      "transports": {
+        "wasm": { "method": "SetPageSetup" },
+        "npm": { "method": "setPageSetup" },
+        "python": { "method": "set_page_setup" },
+        "stdio": { "op": "set_page_setup" },
+        "mcp": { "tool": "docxodus_create", "action": "set_page_setup" }
+      }
+    },
+    {
+      "op": "getSectionInfo",
+      "facade": "GetSectionInfo",
+      "result": "SectionInfo?",
+      "args": [
+        { "name": "anchorId", "type": "anchor", "required": true }
+      ],
+      "transports": {
+        "wasm": { "method": "GetSectionInfo" },
+        "npm": { "method": "getSectionInfo" },
+        "python": { "method": "get_section_info" },
+        "stdio": { "op": "get_section_info" },
+        "mcp": { "absent": "reached by format, not action: the sectionInfo field of docxodus_get_content format=info, for anchorId or else the first body paragraph, heading or list item; not one to one, so no route is recorded" }
+      }
+    }
+  ]
+}

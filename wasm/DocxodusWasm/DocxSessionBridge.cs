@@ -1,0 +1,1519 @@
+#nullable enable
+
+using System.Runtime.InteropServices.JavaScript;
+using System.Runtime.Versioning;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using Docxodus;
+using Docxodus.Internal;
+
+namespace DocxodusWasm;
+
+/// <summary>
+/// JSExport bridge for <see cref="DocxSession"/>. Sessions live on the .NET heap
+/// and persist across JSExport calls — keyed by an integer handle returned from
+/// <see cref="OpenSession"/>. JS-side code must call <see cref="CloseSession"/>
+/// when done; sessions are not eligible for GC otherwise.
+///
+/// All wire-format work — JSON serialization, settings/format-op parsing, the
+/// handle pool — lives in <see cref="DocxSessionOps"/> / <see cref="DocxSessionJson"/>
+/// / <see cref="SessionRegistry"/>. This file is a thin JSExport-attributed
+/// shell so the WASM and stdio NDJSON transports stay byte-for-byte identical.
+/// </summary>
+[SupportedOSPlatform("browser")]
+public static partial class DocxSessionBridge
+{
+    private static readonly Dictionary<int, (int SessionHandle, DocxSessionTransaction Transaction)> Transactions = new();
+    private static int _nextTransactionHandle;
+
+    [JSExport]
+    public static int OpenSession(byte[] bytes, string settingsJson) =>
+        DocxSessionOps.OpenSession(bytes, DocxSessionJson.ParseSettings(settingsJson));
+
+    /// <summary>
+    /// Open a complete temporary clone of a live session for callback-based npm preview. The
+    /// returned handle has independent package bytes, caches, configuration scalars, and fresh
+    /// undo/redo history; callers must close it. Abandonment cannot affect the live handle.
+    /// </summary>
+    [JSExport]
+    public static int OpenPreviewSession(int liveHandle) =>
+        SessionRegistry.CloneSessionForPreview(liveHandle);
+
+    [JSExport]
+    public static void CloseSession(int handle)
+    {
+        foreach (var txHandle in Transactions
+            .Where(kv => kv.Value.SessionHandle == handle)
+            .Select(kv => kv.Key)
+            .OrderByDescending(x => x)
+            .ToArray())
+        {
+            var transaction = Transactions[txHandle].Transaction;
+            Transactions.Remove(txHandle);
+            transaction.Rollback();
+        }
+        DocxSessionOps.CloseSession(handle);
+    }
+
+    /// <summary>Mint a complete blank DOCX (a "New document" seed) as bytes.</summary>
+    [JSExport]
+    public static byte[] CreateBlankDocx() => DocxSessionOps.CreateBlankDocx();
+
+    [JSExport]
+    public static string Project(int handle) => DocxSessionOps.Project(handle);
+
+    /// <summary>Current monotonic session document version as <c>{"version":N}</c>.</summary>
+    [JSExport]
+    public static string GetVersion(int handle) => DocxSessionOps.GetVersionJson(handle);
+
+    [JSExport]
+    public static string RegisterPageMap(
+        int handle, string pageMapJson, string expectedRendererFingerprint) =>
+        DocxSessionOps.RegisterPageMap(
+            handle,
+            DocxSessionJson.ParsePageMap(pageMapJson),
+            string.IsNullOrEmpty(expectedRendererFingerprint) ? null : expectedRendererFingerprint);
+
+    [JSExport]
+    public static string GetPageMapStatus(int handle, string requestJson)
+    {
+        PageCitationRequest? request = null;
+        if (!string.IsNullOrEmpty(requestJson))
+        {
+            using var doc = JsonDocument.Parse("{\"citation\":" + requestJson + "}");
+            request = DocxSessionJson.ParsePageCitationRequest(doc.RootElement);
+        }
+        return DocxSessionOps.GetPageMapStatus(handle, request);
+    }
+
+    [JSExport]
+    public static string GetPageCitation(int handle, string anchorId, string requestJson)
+    {
+        return DocxSessionOps.GetPageCitation(handle, anchorId, ParseRequiredCitationRequest(requestJson));
+    }
+
+    /// <summary>Canonical content SHA-256 used by apply/preview equivalence receipts.</summary>
+    [JSExport]
+    public static string GetPackageContentHash(int handle) =>
+        DocxSessionOps.GetPackageContentHash(handle);
+
+    /// <summary>Canonical verification manifest for the current logical session checkpoint.</summary>
+    [JSExport]
+    public static string GetPackageManifest(int handle) =>
+        VerificationOps.GetPackageManifest(handle);
+
+    /// <summary>Read-only optimistic guard evaluation. A successful result applies no mutation.</summary>
+    [JSExport]
+    public static string CheckPreconditions(int handle, string preconditionsJson) =>
+        DocxSessionOps.CheckPreconditions(
+            handle, DocxSessionJson.ParseMutationPreconditions(preconditionsJson));
+
+    /// <summary>Begin a synchronous nested-safe atomic scope for npm's callback batch API.</summary>
+    [JSExport]
+    public static int BeginTransaction(int handle)
+    {
+        var transaction = DocxSessionOps.BeginTransaction(handle);
+        var transactionHandle = checked(++_nextTransactionHandle);
+        Transactions.Add(transactionHandle, (handle, transaction));
+        return transactionHandle;
+    }
+
+    [JSExport]
+    public static void CommitTransaction(int transactionHandle)
+    {
+        if (!Transactions.TryGetValue(transactionHandle, out var entry))
+            throw new ArgumentException($"unknown transaction handle: {transactionHandle}");
+        entry.Transaction.Commit();
+        Transactions.Remove(transactionHandle);
+    }
+
+    [JSExport]
+    public static void RollbackTransaction(int transactionHandle)
+    {
+        if (!Transactions.TryGetValue(transactionHandle, out var entry))
+            throw new ArgumentException($"unknown transaction handle: {transactionHandle}");
+        entry.Transaction.Rollback();
+        Transactions.Remove(transactionHandle);
+    }
+
+    /// <summary>
+    /// Ordered top-level render units per scope container (body / footnotes /
+    /// endnotes), as JSON: <c>{"body":[{"id","kind"},…],"footnotes":[…],"endnotes":[…]}</c>.
+    /// A table is ONE body unit; a note definition is one notes unit. The editor's
+    /// incremental reconciler diffs its DOM against this after a structural op.
+    /// </summary>
+    [JSExport]
+    public static string ListBlocks(int handle) => DocxSessionOps.ListBlocks(handle);
+
+    /// <summary>Render-plan variant whose units match the requested revision view.</summary>
+    [JSExport]
+    public static string ListRenderedBlocks(int handle, bool renderTrackedChanges) =>
+        DocxSessionOps.ListRenderedBlocks(handle, renderTrackedChanges);
+
+    /// <summary>
+    /// Citation-ordered footnotes (or endnotes) as JSON
+    /// <c>[{"id","defAnchorId","ordinal"},…]</c> — the id↔ordinal authority the
+    /// editor's reconciler walks when it renumbers rendered note chrome (marker
+    /// sup text, hrefs, list values) after a note insert/delete.
+    /// </summary>
+    [JSExport]
+    public static string ListNotes(int handle, bool endnotes) => DocxSessionOps.ListNotes(handle, endnotes);
+
+    /// <summary>
+    /// The anchor index alone as <c>{"anchorIndex":{…}}</c> — the editor's per-op
+    /// anchor-map refresh, without marshaling the whole markdown projection.
+    /// </summary>
+    [JSExport]
+    public static string ListAnchors(int handle) => DocxSessionOps.ListAnchors(handle);
+
+    /// <summary>
+    /// Batch block render: <paramref name="anchorIdsJson"/> is a JSON string array of
+    /// anchor ids; returns a JSON object mapping each id to its HTML element (null for
+    /// an id that failed to resolve). One throwaway document and one converter run for
+    /// the whole batch, with real sibling context and true list-marker numbers.
+    /// </summary>
+    [JSExport]
+    public static string RenderBlocksHtml(int handle, string anchorIdsJson, string cssPrefix, bool fabricateClasses)
+    {
+        // NOTE: success output is itself a JSON object, so the "HTML never starts with
+        // '{'" error convention of RenderBlockHtml does not apply here — callers parse
+        // and check for an "error" property (anchor-id keys always contain a colon, so
+        // they can never collide with it).
+        try { return DocxSessionOps.RenderBlocksHtml(handle, anchorIdsJson, cssPrefix, fabricateClasses); }
+        catch (System.Exception ex) { return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}"; }
+    }
+
+    [JSExport]
+    public static string RenderBlocksHtmlForReview(
+        int handle, string anchorIdsJson, string cssPrefix, bool fabricateClasses,
+        bool renderTrackedChanges)
+    {
+        try
+        {
+            return DocxSessionOps.RenderBlocksHtml(
+                handle, anchorIdsJson, cssPrefix, fabricateClasses, renderTrackedChanges);
+        }
+        catch (System.Exception ex)
+        {
+            return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}";
+        }
+    }
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.ProjectAnchor"/>. <paramref name="depth"/>
+    /// uses the numeric layout of <see cref="ProjectionDepth"/> (SelfOnly=0,
+    /// Subtree=1, SubtreeAndFollowingSiblings=2). Returns a JSON object with
+    /// the standard MarkdownProjection shape (markdown + anchorIndex).
+    /// </summary>
+    [JSExport]
+    public static string ProjectAnchor(int h, string anchorId, int? depth) =>
+        DocxSessionOps.ProjectAnchor(h, anchorId, (ProjectionDepth?)depth);
+
+    [JSExport]
+    public static string ProjectAnchorWithCitations(
+        int h, string anchorId, int? depth, string requestJson)
+    {
+        using var doc = JsonDocument.Parse("{\"citation\":" + requestJson + "}");
+        return DocxSessionOps.ProjectAnchor(
+            h, anchorId, (ProjectionDepth?)depth,
+            DocxSessionJson.ParsePageCitationRequest(doc.RootElement));
+    }
+
+    /// <summary>
+    /// Render a single block from the live session to faithful HTML — the editor's
+    /// incremental per-block re-render. Returns the block's HTML element, or a JSON
+    /// <c>{"error": "..."}</c> object on failure (rendered HTML always begins with
+    /// '&lt;', so the leading character disambiguates success from error).
+    /// </summary>
+    [JSExport]
+    public static string RenderBlockHtml(int h, string anchorId, string? cssPrefix, bool? fabricateClasses)
+    {
+        try { return DocxSessionOps.RenderBlockHtml(h, anchorId, cssPrefix, fabricateClasses); }
+        // Reflection-free error JSON: the trimmed WASM build disables reflection-based
+        // JsonSerializer, so serializing an anonymous type here would itself throw
+        // (JsonSerializerIsReflectionDisabled) and mask the real failure as an uncaught crash.
+        catch (System.Exception ex) { return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}"; }
+    }
+
+    [JSExport]
+    public static string RenderBlockHtmlForReview(
+        int h, string anchorId, string cssPrefix, bool fabricateClasses,
+        bool renderTrackedChanges)
+    {
+        try
+        {
+            return DocxSessionOps.RenderBlockHtml(
+                h, anchorId, cssPrefix, fabricateClasses, renderTrackedChanges);
+        }
+        catch (System.Exception ex)
+        {
+            return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}";
+        }
+    }
+
+    /// <summary>
+    /// Render the live session's current state to a complete anchor-stamped HTML document —
+    /// the editor's full re-render (remount) without marshaling the saved bytes out to JS
+    /// and back in. Same error convention as <see cref="RenderBlockHtml"/>: HTML starts
+    /// with '&lt;', an error object starts with '{'.
+    /// </summary>
+    [JSExport]
+    public static string RenderHtml(int h, string cssPrefix, bool fabricateClasses, bool paginated, double scale)
+    {
+        try { return DocxSessionOps.RenderHtml(h, cssPrefix, fabricateClasses, paginated, scale); }
+        catch (System.Exception ex) { return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}"; }
+    }
+
+    [JSExport]
+    public static string RenderHtmlForReview(
+        int h, string cssPrefix, bool fabricateClasses, bool paginated, double scale,
+        bool renderTrackedChanges)
+    {
+        try
+        {
+            return DocxSessionOps.RenderHtml(
+                h, cssPrefix, fabricateClasses, paginated, scale, renderTrackedChanges);
+        }
+        catch (System.Exception ex)
+        {
+            return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}";
+        }
+    }
+
+    // ─── Editor render profile (comments-aware) ─────────────────────────
+    //
+    // The three RenderEditor* exports take the editor's whole render profile as ONE JSON object:
+    // { cssPrefix?: string, fabricateClasses?: bool, paginated?: bool, scale?: number,
+    //   renderTrackedChanges?: bool, comments?: bool }
+    // (defaults "docx-", false, false, 1, false, false). With comments:true the output carries
+    // the converter's Inline comment markup — `comment-highlight` spans with data-comment-id
+    // around commented runs and `comment-marker` anchors at the reference — using the same
+    // "comment-" class prefix the editor's first paint passes to ConvertDocxToHtmlComplete. With
+    // comments:false they are byte-identical to RenderHtml / RenderBlocksHtml / RenderBlockHtml
+    // (the *ForReview variants when renderTrackedChanges is set). Same error conventions as the
+    // methods they extend.
+
+    /// <summary>Full-document editor render — <see cref="RenderHtml"/> plus comment markup.</summary>
+    [JSExport]
+    public static string RenderEditorHtml(int h, string optionsJson)
+    {
+        try { return DocxSessionOps.RenderEditorHtml(h, optionsJson); }
+        catch (System.Exception ex)
+        {
+            return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}";
+        }
+    }
+
+    /// <summary>The document's chrome (stylesheet, section wrappers, header/footer registry,
+    /// footnote/endnote sections) without its body units — the start of a windowed mount.</summary>
+    [JSExport]
+    public static string RenderEditorChromeHtml(int h, string optionsJson)
+    {
+        try { return DocxSessionOps.RenderEditorChromeHtml(h, optionsJson); }
+        catch (Exception ex) { return DocumentConverter.SerializeError(ex.Message, ex.GetType().Name); }
+    }
+
+    /// <summary>A contiguous window of body units as the full render lays them out — the
+    /// windowed mount's fill step.</summary>
+    [JSExport]
+    public static string RenderEditorRangeHtml(int h, string anchorIdsJson, string optionsJson)
+    {
+        try { return DocxSessionOps.RenderEditorRangeHtml(h, anchorIdsJson, optionsJson); }
+        catch (Exception ex) { return DocumentConverter.SerializeError(ex.Message, ex.GetType().Name); }
+    }
+
+    /// <summary>Batch block editor render — <see cref="RenderBlocksHtml"/> plus comment markup;
+    /// returns the same JSON object (anchor id → HTML or null; <c>{"error": …}</c> on failure).</summary>
+    [JSExport]
+    public static string RenderEditorBlocksHtml(int h, string anchorIdsJson, string optionsJson)
+    {
+        try { return DocxSessionOps.RenderEditorBlocksHtml(h, anchorIdsJson, optionsJson); }
+        catch (System.Exception ex)
+        {
+            return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}";
+        }
+    }
+
+    /// <summary>Single-block editor render — <see cref="RenderBlockHtml"/> plus comment markup;
+    /// HTML starts with '&lt;', an error object with '{'.</summary>
+    [JSExport]
+    public static string RenderEditorBlockHtml(int h, string anchorId, string optionsJson)
+    {
+        try { return DocxSessionOps.RenderEditorBlockHtml(h, anchorId, optionsJson); }
+        catch (System.Exception ex)
+        {
+            return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}";
+        }
+    }
+
+    /// <summary>
+    /// Render a preview shadow with the façade's own preview profile, so a browser preview and a
+    /// stdio/MCP preview of the same batch describe the same document. The editor's
+    /// <see cref="RenderHtml"/> profile is deliberately NOT reused here — it hides comments and
+    /// annotations. Same error convention: HTML starts with '&lt;', an error object with '{'.
+    /// </summary>
+    [JSExport]
+    public static string RenderPreviewHtml(int h)
+    {
+        try { return DocxSessionOps.RenderPreviewHtml(h); }
+        catch (System.Exception ex)
+        {
+            return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}";
+        }
+    }
+
+    /// <summary>Scoped counterpart of <see cref="RenderPreviewHtml"/>.</summary>
+    [JSExport]
+    public static string RenderPreviewBlockHtml(int h, string anchorId)
+    {
+        try { return DocxSessionOps.RenderPreviewBlockHtml(h, anchorId); }
+        catch (System.Exception ex)
+        {
+            return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}";
+        }
+    }
+
+    [JSExport]
+    public static string ReplaceText(int h, string anchor, string md) =>
+        DocxSessionOps.ReplaceText(h, anchor, md);
+
+    [JSExport]
+    public static string DeleteBlock(int h, string anchor) =>
+        DocxSessionOps.DeleteBlock(h, anchor);
+
+    [JSExport]
+    public static string MoveBlock(int h, string sourceAnchor, string targetAnchor, string posStr) =>
+        DocxSessionOps.MoveBlock(h, sourceAnchor, targetAnchor, DocxSessionJson.ParseOptionalPos(posStr));
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.ValidMoveTargets"/>. Returns a JSON array of the anchor
+    /// ids <paramref name="sourceAnchor"/> may legally be moved next to, so the editor's drag UI
+    /// can gate its drop indicators and move-menu items on the engine's own rules.
+    /// </summary>
+    [JSExport]
+    public static string ValidMoveTargets(int h, string sourceAnchor) =>
+        DocxSessionOps.ValidMoveTargets(h, sourceAnchor);
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.DeleteRange"/>. Deletes every top-level
+    /// block-level sibling between <paramref name="fromAnchorId"/> (inclusive) and
+    /// <paramref name="toAnchorIdExclusive"/> (exclusive). Both anchors must share a
+    /// direct parent and live in the same package part. Returns a single EditResult.
+    /// </summary>
+    [JSExport]
+    public static string DeleteRange(int h, string fromAnchorId, string toAnchorIdExclusive) =>
+        DocxSessionOps.DeleteRange(h, fromAnchorId, toAnchorIdExclusive);
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.DeleteSection"/>. Deletes a heading and
+    /// every sibling below it up to (but not including) the next heading at the
+    /// same or higher level. <paramref name="headingAnchorId"/> must address a
+    /// heading-kind anchor (<c>h</c>).
+    /// </summary>
+    [JSExport]
+    public static string DeleteSection(int h, string headingAnchorId) =>
+        DocxSessionOps.DeleteSection(h, headingAnchorId);
+
+    [JSExport]
+    public static string InsertParagraph(int h, string anchor, string posStr, string md) =>
+        DocxSessionOps.InsertParagraph(h, anchor, DocxSessionJson.ParseOptionalPos(posStr), md);
+
+    [JSExport]
+    public static string SplitParagraph(int h, string anchor, int offset) =>
+        DocxSessionOps.SplitParagraph(h, anchor, offset);
+
+    [JSExport]
+    public static string MergeParagraphs(int h, string first, string second) =>
+        DocxSessionOps.MergeParagraphs(h, first, second);
+
+    /// <summary>
+    /// Insert an empty paragraph carrying a bottom border (an S-1-style horizontal rule)
+    /// before/after the anchor. <paramref name="ruleJson"/> is an optional border-edge object
+    /// ({ style?, size?, color?, space? }); empty string uses the default rule.
+    /// </summary>
+    [JSExport]
+    public static string InsertHorizontalRule(int h, string anchor, string posStr, string ruleJson) =>
+        DocxSessionOps.InsertHorizontalRule(h, anchor, DocxSessionJson.ParseOptionalPos(posStr), ruleJson);
+
+    /// <summary>
+    /// Insert a rows×cols table before/after the anchor. <paramref name="optionsJson"/> is a
+    /// TableInsertOptions object ({ borderless?, cellContents?: string[], cellAlignment? }).
+    /// Returns an EditResult whose <c>created</c> lists canonical <c>tc</c> anchors (row-major).
+    /// </summary>
+    [JSExport]
+    public static string InsertTable(int h, string anchor, string posStr, int rows, int cols, string optionsJson) =>
+        DocxSessionOps.InsertTable(h, anchor, DocxSessionJson.ParseOptionalPos(posStr), rows, cols, optionsJson);
+
+    [JSExport]
+    public static string GetTableMetadata(int h, string tableAnchor) =>
+        DocxSessionOps.GetTableMetadata(h, tableAnchor);
+
+    [JSExport]
+    public static string ResolveTableCellAnchor(int h, string cellAnchor) =>
+        DocxSessionOps.ResolveTableCellAnchor(h, cellAnchor);
+
+    [JSExport]
+    public static string ResolveTableCellCoordinate(
+        int h, string tableAnchor, int rowIndex, int columnIndex) =>
+        DocxSessionOps.ResolveTableCellCoordinate(h, tableAnchor, rowIndex, columnIndex);
+
+    [JSExport]
+    public static string InsertTableRow(int h, string cellAnchor, string posStr) =>
+        DocxSessionOps.InsertTableRow(h, cellAnchor, DocxSessionJson.ParseOptionalPos(posStr));
+
+    [JSExport]
+    public static string InsertTableColumn(int h, string cellAnchor, string posStr) =>
+        DocxSessionOps.InsertTableColumn(h, cellAnchor, DocxSessionJson.ParseOptionalPos(posStr));
+
+    [JSExport]
+    public static string DeleteTableRow(int h, string cellAnchor) =>
+        DocxSessionOps.DeleteTableRow(h, cellAnchor);
+
+    [JSExport]
+    public static string DeleteTableColumn(int h, string cellAnchor) =>
+        DocxSessionOps.DeleteTableColumn(h, cellAnchor);
+
+    /// <summary>Merge the rectangle of cells anchored at <paramref name="cellAnchor"/> running
+    /// <paramref name="rowSpan"/> rows down × <paramref name="colSpan"/> cells right (w:gridSpan +
+    /// w:vMerge). <paramref name="content"/> is "append" (default) | "discard" | "reject" — what
+    /// happens to the absorbed cells' content.</summary>
+    [JSExport]
+    public static string MergeCells(int h, string cellAnchor, int rowSpan, int colSpan, string content) =>
+        DocxSessionOps.MergeCells(h, cellAnchor, rowSpan, colSpan, content);
+
+    /// <summary>Split the merged cell at <paramref name="cellAnchor"/> back into unit cells;
+    /// addressing a vertical-merge continuation unmerges the whole run.</summary>
+    [JSExport]
+    public static string UnmergeCells(int h, string cellAnchor) =>
+        DocxSessionOps.UnmergeCells(h, cellAnchor);
+
+    /// <summary>Retune the column widths of the table containing <paramref name="cellAnchor"/>.
+    /// <paramref name="widthsJson"/> is a JSON array of per-column twip widths (one positive
+    /// value per column, left→right).</summary>
+    [JSExport]
+    public static string SetColumnWidths(int h, string cellAnchor, string widthsJson) =>
+        DocxSessionOps.SetColumnWidths(h, cellAnchor, widthsJson);
+
+    /// <summary>Set the table-level borders of the table containing <paramref name="cellAnchor"/>.
+    /// <paramref name="specJson"/> is a TableBorderSpec object
+    /// ({ scope?: "all"|"outside"|"inside", style?, size?, color? }); "" = thin single all round.</summary>
+    [JSExport]
+    public static string SetTableBorders(int h, string cellAnchor, string specJson) =>
+        DocxSessionOps.SetTableBorders(h, cellAnchor, specJson);
+
+    /// <summary>Shade the cell containing <paramref name="cellAnchor"/> (scope "cell") or its whole
+    /// row (scope "row"). <paramref name="fill"/> is a hex RRGGBB triplet or "auto"; "" clears.</summary>
+    [JSExport]
+    public static string SetCellShading(int h, string cellAnchor, string? fill, string? scope) =>
+        DocxSessionOps.SetCellShading(h, cellAnchor, fill, scope);
+
+    /// <summary>Mark/unmark the row containing <paramref name="cellAnchor"/> as a repeating
+    /// header row (w:trPr/w:tblHeader).</summary>
+    [JSExport]
+    public static string SetRepeatHeaderRow(int h, string cellAnchor, bool? repeat) =>
+        DocxSessionOps.SetRepeatHeaderRow(h, cellAnchor, repeat);
+
+    [JSExport]
+    public static string SetTableRowOptions(int h, string cellAnchor, bool? repeatHeader,
+        bool? allowBreakAcrossPages, int? heightTwips, string heightRule) =>
+        DocxSessionOps.SetTableRowOptions(h, cellAnchor, repeatHeader, allowBreakAcrossPages,
+            heightTwips, heightRule);
+
+    /// <summary>
+    /// Set the section's running header story (<paramref name="anchor"/> = any body block in the
+    /// section) to <paramref name="markdown"/>. <paramref name="kind"/> is "default" | "first" |
+    /// "even". Creates the header part + reference if absent; returns the created header-paragraph
+    /// anchors (scope <c>hdr{N}</c>) in <c>created</c>.
+    /// </summary>
+    [JSExport]
+    public static string SetHeaderText(int h, string anchor, string kind, string markdown) =>
+        DocxSessionOps.SetHeaderText(h, anchor, DocxSessionJson.ParseHeaderFooterKind(kind), markdown);
+
+    /// <summary>Set the section's running footer story — see <see cref="SetHeaderText"/>; the created
+    /// footer-paragraph anchors (scope <c>ftr{N}</c>) come back in <c>created</c>.</summary>
+    [JSExport]
+    public static string SetFooterText(int h, string anchor, string kind, string markdown) =>
+        DocxSessionOps.SetFooterText(h, anchor, DocxSessionJson.ParseHeaderFooterKind(kind), markdown);
+
+    /// <summary>Append a page-number field to the paragraph <paramref name="anchor"/> (typically a
+    /// header/footer paragraph). <paramref name="field"/> is "currentPage" (PAGE) | "totalPages"
+    /// (NUMPAGES). <paramref name="format"/> is an ST_NumberFormat token ("lowerRoman", …) writing
+    /// the field's own <c>\*</c> switch, or "" for a plain field that follows the section's format
+    /// (see <see cref="SetPageNumbering"/>) — which is the normal choice. Returns the affected
+    /// paragraph anchor in <c>modified</c>.</summary>
+    [JSExport]
+    public static string InsertPageNumberField(int h, string anchor, string field, string format) =>
+        DocxSessionOps.InsertPageNumberField(h, anchor,
+            DocxSessionJson.ParseOptionalPageNumberField(field),
+            DocxSessionJson.ParseNumberFormatOrNull(format));
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.SetPageNumbering"/> — the section (<c>w:pgNumType</c>) half
+    /// of page numbering, addressed by any body block in the section. <paramref name="opJson"/> is
+    /// { start?: int, format?: ST_NumberFormat token }; omitted fields are left unchanged.
+    /// </summary>
+    [JSExport]
+    public static string SetPageNumbering(int h, string anchor, string opJson) =>
+        DocxSessionOps.SetPageNumbering(h, anchor, DocxSessionJson.ParsePageNumberingOp(opJson));
+
+    /// <summary>
+    /// Insert a table of contents before/after <paramref name="anchor"/> (issue #607).
+    /// <paramref name="optionsJson"/> is
+    /// <c>{levels?, hyperlinks?, hideTabAndPageNumbersInWeb?, useOutlineLevels?, title?, rightTabPos?}</c>;
+    /// "" takes Word's own defaults. The field is written dirty and the document asks for a field
+    /// update on open, so Word fills the table itself.
+    /// </summary>
+    [JSExport]
+    public static string InsertTableOfContents(int h, string anchor, string posStr, string optionsJson) =>
+        DocxSessionOps.InsertTableOfContents(h, anchor, DocxSessionJson.ParseOptionalPos(posStr),
+            ParseJsonOptions(optionsJson, DocxSessionJson.ParseTableOfContentsOptions));
+
+    /// <summary>Insert a table of figures — <c>{captionLabel?, hyperlinks?, rightTabPos?}</c>.</summary>
+    [JSExport]
+    public static string InsertTableOfFigures(int h, string anchor, string posStr, string optionsJson) =>
+        DocxSessionOps.InsertTableOfFigures(h, anchor, DocxSessionJson.ParseOptionalPos(posStr),
+            ParseJsonOptions(optionsJson, DocxSessionJson.ParseTableOfFiguresOptions));
+
+    /// <summary>Insert a table of authorities —
+    /// <c>{category?, hyperlinks?, entryPageSeparator?, rightTabPos?}</c>, where category is a wire
+    /// name ("cases", "statutes", …) rather than Word's number.</summary>
+    [JSExport]
+    public static string InsertTableOfAuthorities(int h, string anchor, string posStr, string optionsJson) =>
+        DocxSessionOps.InsertTableOfAuthorities(h, anchor, DocxSessionJson.ParseOptionalPos(posStr),
+            ParseJsonOptions(optionsJson, DocxSessionJson.ParseTableOfAuthoritiesOptions));
+
+    /// <summary>Parse an optional options object; an empty string means "all defaults".</summary>
+    private static T? ParseJsonOptions<T>(string json, System.Func<System.Text.Json.JsonElement, T> parse)
+        where T : class
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        return parse(doc.RootElement);
+    }
+
+    /// <summary>Remove the section's page-numbering start/format — see
+    /// <see cref="DocxSession.ClearPageNumbering"/>.</summary>
+    [JSExport]
+    public static string ClearPageNumbering(int h, string anchor) =>
+        DocxSessionOps.ClearPageNumbering(h, anchor);
+
+    /// <summary>Make the <paramref name="kind"/> ("first" | "even") header/footer stories of the
+    /// section owning <paramref name="anchor"/> actually render — sets <c>w:titlePg</c> /
+    /// <c>w:evenAndOddHeaders</c>. "default" is a no-op. Needed when a document already carries a
+    /// first/even reference with the flag absent, which content writes alone don't fix.</summary>
+    [JSExport]
+    public static string EnsureHeaderFooterVisible(int h, string anchor, string kind) =>
+        DocxSessionOps.EnsureHeaderFooterVisible(h, anchor, DocxSessionJson.ParseHeaderFooterKind(kind));
+
+    /// <summary>Word's "Different first page" / "Different odd &amp; even pages" checkboxes:
+    /// switch the <paramref name="kind"/> ("first" | "even") story of the section owning
+    /// <paramref name="anchor"/> on (<see cref="EnsureHeaderFooterVisible"/>) or off (removes
+    /// <c>w:titlePg</c> / <c>w:evenAndOddHeaders</c>; the story parts survive). Disabling "default"
+    /// fails with <c>invalid_page_setup</c>. A flag already in the requested state is a no-op that
+    /// records no undo step. Read the flags from <c>GetSectionInfo</c>'s <c>titlePage</c> /
+    /// <c>evenAndOddHeaders</c>.</summary>
+    [JSExport]
+    public static string SetHeaderFooterKindEnabled(int h, string anchor, string kind, bool enabled) =>
+        DocxSessionOps.SetHeaderFooterKindEnabled(h, anchor, kind, enabled);
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.SetPageSetup"/> — page size, orientation, margins and
+    /// header/footer distance (<c>w:pgSz</c> / <c>w:pgMar</c>) of the section owning
+    /// <paramref name="anchor"/>. <paramref name="opJson"/> is
+    /// <c>{ pageWidthTwips?, pageHeightTwips?, landscape?, marginTopTwips?, marginBottomTwips?,
+    /// marginLeftTwips?, marginRightTwips?, headerDistanceTwips?, footerDistanceTwips? }</c>; omitted
+    /// fields are left unchanged. Invalid geometry fails with <c>invalid_page_setup</c> and touches
+    /// nothing; values already in place are a no-op without an undo step.
+    /// </summary>
+    [JSExport]
+    public static string SetPageSetup(int h, string anchor, string opJson) =>
+        DocxSessionOps.SetPageSetup(h, anchor, opJson);
+
+    /// <summary>
+    /// Create a footnote with body <paramref name="markdown"/> and cite it from the body paragraph
+    /// <paramref name="anchor"/> at <paramref name="characterOffset"/> characters into its text.
+    /// Creates the footnotes part + Word's reserved separator notes on first use. Returns the created
+    /// note anchors (kind <c>fn</c> plus its <c>p</c>/scope <c>fn</c> paragraphs) in <c>created</c>.
+    /// </summary>
+    [JSExport]
+    public static string InsertFootnote(int h, string anchor, int characterOffset, string markdown) =>
+        DocxSessionOps.InsertFootnote(h, anchor, characterOffset, markdown);
+
+    /// <summary>Create an endnote — see <see cref="InsertFootnote"/>; writes the endnotes part and a
+    /// <c>w:endnoteReference</c>, and the created definition anchor has kind <c>en</c>.</summary>
+    [JSExport]
+    public static string InsertEndnote(int h, string anchor, int characterOffset, string markdown) =>
+        DocxSessionOps.InsertEndnote(h, anchor, characterOffset, markdown);
+
+    /// <summary>Insert a REF-field internal cross-reference at a character offset (issue #545).
+    /// <paramref name="optionsJson"/> is <c>""</c> for defaults or
+    /// <c>{"referenceNumber":bool,"hyperlink":bool,"includePosition":bool}</c> — the field's
+    /// <c>\r</c>/<c>\h</c>/<c>\p</c> switches.</summary>
+    [JSExport]
+    public static string InsertCrossReference(
+        int h, string anchor, int characterOffset, string bookmarkName, string optionsJson)
+    {
+        CrossReferenceOptions? options = null;
+        if (!string.IsNullOrEmpty(optionsJson))
+        {
+            using var doc = JsonDocument.Parse(optionsJson);
+            var root = doc.RootElement;
+            options = new CrossReferenceOptions
+            {
+                ReferenceNumber = DocxSessionJson.TryGetBool(root, "referenceNumber", false),
+                Hyperlink = DocxSessionJson.TryGetBool(root, "hyperlink", false),
+                IncludePosition = DocxSessionJson.TryGetBool(root, "includePosition", false),
+            };
+        }
+
+        return DocxSessionOps.InsertCrossReference(h, anchor, characterOffset, bookmarkName, options);
+    }
+
+    // BEGIN GENERATED comments
+    // Generated by tools/op-codegen from tools/op-descriptions/comments.json.
+    // Do not edit by hand: change the description and run
+    // `dotnet run --project tools/op-codegen` (docs/architecture/session_op_descriptions.md).
+
+    /// <summary>
+    /// Add a native Word comment on body paragraph <paramref name="anchorId"/> (issue #300).
+    /// <paramref name="spanJson"/> is <c>""</c> for the whole block or
+    /// <c>{"start":int,"length":int}</c>; <paramref name="initials"/>/<paramref name="date"/> are
+    /// <c>""</c> when absent (date is ISO-8601 and written only when provided). Returns the created
+    /// definition anchor (kind <c>cmt</c>) plus its <c>p</c>/scope-<c>cmt</c> paragraph anchors in
+    /// <c>created</c>.
+    /// </summary>
+    [JSExport]
+    public static string AddComment(
+        int h,
+        string anchorId,
+        string spanJson,
+        string author,
+        string initials,
+        string date,
+        string markdown) =>
+        DocxSessionOps.AddComment(
+            h,
+            anchorId,
+            ParseSpan(spanJson),
+            author,
+            string.IsNullOrEmpty(initials) ? null : initials,
+            string.IsNullOrEmpty(date) ? null : date,
+            markdown);
+
+    /// <summary>
+    /// Add a native Word comment around the exact live extent of a tracked revision. Unknown or
+    /// already-resolved ids return <c>revision_not_found</c>.
+    /// </summary>
+    [JSExport]
+    public static string AddCommentToRevision(
+        int h,
+        string revisionId,
+        string author,
+        string initials,
+        string date,
+        string markdown) =>
+        DocxSessionOps.AddCommentToRevision(
+            h,
+            revisionId,
+            author,
+            string.IsNullOrEmpty(initials) ? null : initials,
+            string.IsNullOrEmpty(date) ? null : date,
+            markdown);
+
+    /// <summary>
+    /// Add a native reply with an adjacent reference; <c>w15:paraIdParent</c> links it to the
+    /// immediate parent so it inherits the thread root's range.
+    /// </summary>
+    [JSExport]
+    public static string AddCommentReply(
+        int h,
+        string commentAnchorId,
+        string author,
+        string initials,
+        string date,
+        string markdown) =>
+        DocxSessionOps.AddCommentReply(
+            h,
+            commentAnchorId,
+            author,
+            string.IsNullOrEmpty(initials) ? null : initials,
+            string.IsNullOrEmpty(date) ? null : date,
+            markdown);
+
+    /// <summary>
+    /// Set <c>w15:done</c> for one comment (<c>false</c> reopens it), creating the paraId-keyed
+    /// metadata parts when the comment was previously flat.
+    /// </summary>
+    [JSExport]
+    public static string SetCommentResolved(int h, string commentAnchorId, bool resolved) =>
+        DocxSessionOps.SetCommentResolved(
+            h,
+            commentAnchorId,
+            resolved);
+
+    /// <summary>
+    /// Replace a comment's body text, addressed by its definition anchor (kind <c>cmt</c>);
+    /// identity attributes (author/initials/date) are preserved.
+    /// </summary>
+    [JSExport]
+    public static string UpdateComment(int h, string commentAnchorId, string markdown) =>
+        DocxSessionOps.UpdateComment(
+            h,
+            commentAnchorId,
+            markdown);
+
+    /// <summary>
+    /// Remove a comment: definition + body marker triple + threading entries.
+    /// </summary>
+    [JSExport]
+    public static string RemoveComment(int h, string commentAnchorId) =>
+        DocxSessionOps.RemoveComment(
+            h,
+            commentAnchorId);
+
+    /// <summary>
+    /// The document's comments in part order:
+    /// <c>[{"anchorId","author","initials"?,"date"?,"text","parentAnchorId"?,"resolved"?}]</c>.
+    /// </summary>
+    [JSExport]
+    public static string ListComments(int h) =>
+        DocxSessionOps.ListComments(h);
+
+    // END GENERATED comments
+
+    [JSExport]
+    public static string ListHyperlinks(int h, int scopes) =>
+        DocxSessionOps.ListHyperlinks(h, (ProjectionScopes)scopes);
+
+    [JSExport]
+    public static string AddHyperlink(int h, string anchor, int start, int length,
+        string kind, string target) =>
+        DocxSessionOps.AddHyperlink(h, anchor, start, length, kind, target);
+
+    [JSExport]
+    public static string UpdateHyperlink(int h, string hyperlinkId, string kind, string target) =>
+        DocxSessionOps.UpdateHyperlink(h, hyperlinkId, kind, target);
+
+    [JSExport]
+    public static string RemoveHyperlink(int h, string hyperlinkId) =>
+        DocxSessionOps.RemoveHyperlink(h, hyperlinkId);
+
+    [JSExport]
+    public static string GetImageCapabilities() => DocxSessionOps.GetImageCapabilities();
+
+    [JSExport]
+    public static string ListImages(int h, int scopes) =>
+        DocxSessionOps.ListImages(h, (ProjectionScopes)scopes);
+
+    [JSExport]
+    public static string InsertImage(int h, string anchor, int characterOffset,
+        string imageBase64, string optionsJson) =>
+        DocxSessionOps.InsertImage(h, anchor, characterOffset, imageBase64, optionsJson);
+
+    [JSExport]
+    public static string ReplaceImage(int h, string imageId, string imageBase64) =>
+        DocxSessionOps.ReplaceImage(h, imageId, imageBase64);
+
+    [JSExport]
+    public static string EmbedLinkedImage(int h, string imageId, string imageBase64) =>
+        DocxSessionOps.EmbedLinkedImage(h, imageId, imageBase64);
+
+    [JSExport]
+    public static string SetImageDimensions(int h, string imageId, string dimensionsJson) =>
+        DocxSessionOps.SetImageDimensions(h, imageId, dimensionsJson);
+
+    [JSExport]
+    public static string SetImageMetadata(int h, string imageId, string? altText, string? title) =>
+        DocxSessionOps.SetImageMetadata(h, imageId, altText, title);
+
+    [JSExport]
+    public static string SetImageFloatingLayout(int h, string imageId, string layoutJson) =>
+        DocxSessionOps.SetImageFloatingLayout(h, imageId, layoutJson);
+
+    [JSExport]
+    public static string RemoveImage(int h, string imageId) =>
+        DocxSessionOps.RemoveImage(h, imageId);
+
+    [JSExport]
+    public static string ListContentControls(int h, int scopes) =>
+        DocxSessionOps.ListContentControls(h, (ProjectionScopes)scopes);
+
+    [JSExport]
+    public static string FillContentControlText(int h, string anchorId, string text,
+        string optionsJson) =>
+        DocxSessionOps.FillContentControlText(h, anchorId, text, optionsJson);
+
+    [JSExport]
+    public static string FillContentControlRichText(int h, string anchorId, string markdown,
+        string optionsJson) =>
+        DocxSessionOps.FillContentControlRichText(h, anchorId, markdown, optionsJson);
+
+    [JSExport]
+    public static string SetContentControlChecked(int h, string anchorId, bool isChecked,
+        string optionsJson) =>
+        DocxSessionOps.SetContentControlChecked(h, anchorId, isChecked, optionsJson);
+
+    [JSExport]
+    public static string SetContentControlDate(int h, string anchorId, string value,
+        string? displayText, string optionsJson) =>
+        DocxSessionOps.SetContentControlDate(h, anchorId, value, displayText, optionsJson);
+
+    [JSExport]
+    public static string SelectContentControlItem(int h, string anchorId, string value,
+        string optionsJson) =>
+        DocxSessionOps.SelectContentControlItem(h, anchorId, value, optionsJson);
+
+    [JSExport]
+    public static string FillContentControlPicture(int h, string anchorId,
+        string imageBase64, string optionsJson) =>
+        DocxSessionOps.FillContentControlPicture(h, anchorId, imageBase64, optionsJson);
+
+    [JSExport]
+    public static string AddRepeatingSectionItem(int h, string sectionAnchorId,
+        string afterItemAnchorId, string optionsJson) =>
+        DocxSessionOps.AddRepeatingSectionItem(h, sectionAnchorId,
+            string.IsNullOrEmpty(afterItemAnchorId) ? null : afterItemAnchorId, optionsJson);
+
+    [JSExport]
+    public static string RemoveRepeatingSectionItem(int h, string itemAnchorId) =>
+        DocxSessionOps.RemoveRepeatingSectionItem(h, itemAnchorId);
+
+    [JSExport]
+    public static string ListBookmarks(int h, int scopes) =>
+        DocxSessionOps.ListBookmarks(h, (ProjectionScopes)scopes);
+
+    [JSExport]
+    public static string AddBookmark(int h, string name, string startAnchor, int startOffset,
+        string endAnchor, int endOffset) =>
+        DocxSessionOps.AddBookmark(h, name, startAnchor, startOffset, endAnchor, endOffset);
+
+    [JSExport]
+    public static string RenameBookmark(int h, string name, string newName) =>
+        DocxSessionOps.RenameBookmark(h, name, newName);
+
+    [JSExport]
+    public static string MoveBookmark(int h, string name, string startAnchor, int startOffset,
+        string endAnchor, int endOffset) =>
+        DocxSessionOps.MoveBookmark(h, name, startAnchor, startOffset, endAnchor, endOffset);
+
+    [JSExport]
+    public static string RemoveBookmark(int h, string name) =>
+        DocxSessionOps.RemoveBookmark(h, name);
+
+    /// <summary>Markup-native tracked-revision listing (issue #318), document order:
+    /// <c>[{"id","type","author","date"?,"text","anchorId"?}]</c>. Ids are stable while
+    /// the markup exists and address AcceptRevision/RejectRevision; type is
+    /// <c>insert</c>/<c>delete</c>/<c>move</c>/<c>format</c>.</summary>
+    [JSExport]
+    public static string ListRevisions(int h) => DocxSessionOps.ListRevisions(h);
+
+    /// <summary>
+    /// <see cref="ListRevisions(int)"/> narrowed by <paramref name="filterJson"/>:
+    /// <c>{author?, changeType?, family?, resolutionStatus?, partUri?}</c> ("" lists everything).
+    /// </summary>
+    [JSExport]
+    public static string ListRevisionsFiltered(int h, string filterJson) =>
+        DocxSessionOps.ListRevisions(h, DocxSessionJson.ParseRevisionListFilter(filterJson));
+
+    /// <summary>The explicit repairs the registry offers for entries it refuses to resolve
+    /// (issues #754–#758): JSON array of proposals with carriers, repairability and reason.</summary>
+    [JSExport]
+    public static string ListRevisionRepairs(int h) => DocxSessionOps.ListRevisionRepairs(h);
+
+    /// <summary>Perform requested repairs atomically as one undo step; returns the repair
+    /// result envelope with the old-to-new carrier identity mapping.</summary>
+    [JSExport]
+    public static string RepairRevisions(int h, string repairsJson) =>
+        DocxSessionOps.RepairRevisions(h, repairsJson);
+
+    /// <summary>Accept ONE revision by id (an undoable session mutation); returns an
+    /// EditResult envelope.</summary>
+    [JSExport]
+    public static string AcceptRevision(int h, string revisionId) =>
+        DocxSessionOps.AcceptRevision(h, revisionId);
+
+    /// <summary>Mutation-transaction journal (issue #761): resolve a caller-chosen transaction id
+    /// against the session's retained results before the client runs its batch. Returns
+    /// <c>{"kind","transaction","response"}</c>; see <c>DocxSessionOps.BeginMutationTransaction</c>.</summary>
+    [JSExport]
+    public static string BeginMutationTransaction(int h, string transactionId, string requestJson) =>
+        DocxSessionOps.BeginMutationTransaction(h, transactionId, requestJson);
+
+    /// <summary>Retain the client's serialized terminal batch result for a reserved transaction.</summary>
+    [JSExport]
+    public static void CompleteMutationTransaction(int h, string transactionId, string serializedResponse) =>
+        DocxSessionOps.CompleteMutationTransaction(h, transactionId, serializedResponse);
+
+    /// <summary>Retire a reserved transaction that will never record a terminal result.</summary>
+    [JSExport]
+    public static void AbandonMutationTransaction(int h, string transactionId) =>
+        DocxSessionOps.AbandonMutationTransaction(h, transactionId);
+
+    /// <summary>Retain a preview shadow's final package for a guarded commit on its live session
+    /// (issue #760). Returns <c>{"retention":{…}|null,"warnings":[…]}</c>.</summary>
+    [JSExport]
+    public static string RetainPreview(int shadowHandle) =>
+        DocxSessionOps.RetainPreview(shadowHandle);
+
+    /// <summary>Guarded commit of a retained preview: the previewed package becomes the live
+    /// document, or a <c>preview_not_found</c>/<c>preview_stale</c> failure changes nothing.</summary>
+    [JSExport]
+    public static string CommitPreview(int h, string previewId) =>
+        DocxSessionOps.CommitPreview(h, previewId);
+
+    /// <summary>What the session's host-owned delivery evidence recorder holds (issue #748).</summary>
+    [JSExport]
+    public static string GetDeliveryEvidenceStatus(int h) =>
+        DocxSessionOps.GetDeliveryEvidenceStatus(h);
+
+    /// <summary>The receipt-bearing delivery of a session, as the shared bundle wire shape.</summary>
+    [JSExport]
+    public static string BuildDeliveryReceipt(int h, string optionsJson) =>
+        DocxSessionOps.BuildDeliveryReceipt(h, optionsJson);
+
+    /// <summary>Describe a client-composed batch before running it so its version steps are
+    /// recorded under that description; false means nothing will be recorded.</summary>
+    [JSExport]
+    public static bool BeginDeliveryEvidence(int h, string operationsJson, string mode, string identityJson) =>
+        DocxSessionOps.BeginDeliveryEvidence(
+            h,
+            operationsJson,
+            mode switch
+            {
+                "atomic" => MutationBatchMode.Atomic,
+                "best_effort" => MutationBatchMode.BestEffort,
+                _ => throw new System.ArgumentException($"unknown mutation batch mode: {mode}"),
+            },
+            identityJson);
+
+    /// <summary>Complete a described batch with its serialized step results.</summary>
+    [JSExport]
+    public static void CompleteDeliveryEvidence(int h, string stepsJson) =>
+        DocxSessionOps.CompleteDeliveryEvidence(h, stepsJson);
+
+    /// <summary>Retire a described batch that produced no result.</summary>
+    [JSExport]
+    public static void AbandonDeliveryEvidence(int h) =>
+        DocxSessionOps.AbandonDeliveryEvidence(h);
+
+    /// <summary>Reject ONE revision by id — the inverse of AcceptRevision.</summary>
+    [JSExport]
+    public static string RejectRevision(int h, string revisionId) =>
+        DocxSessionOps.RejectRevision(h, revisionId);
+
+    /// <summary>Accept all supported live revisions as one undoable session mutation.</summary>
+    [JSExport]
+    public static string AcceptAllRevisions(int h) => DocxSessionOps.AcceptAllRevisions(h);
+
+    /// <summary>Reject all supported live revisions as one undoable session mutation.</summary>
+    [JSExport]
+    public static string RejectAllRevisions(int h) => DocxSessionOps.RejectAllRevisions(h);
+
+    [JSExport]
+    public static string ApplyFormat(int h, string anchor, string spanJson, string opJson) =>
+        DocxSessionOps.ApplyFormat(h, anchor, ParseSpan(spanJson), DocxSessionJson.ParseFormatOp(opJson));
+
+    /// <summary>
+    /// Bridge for the substring-targeted <see cref="DocxSession.ApplyFormat(string, string, FormatOp)"/>
+    /// overload. Lets JS callers say "bold the substring 'foo' in this paragraph" without
+    /// computing offsets — the overload finds the first occurrence and converts to a CharSpan.
+    /// </summary>
+    [JSExport]
+    public static string ApplyFormatBySubstring(int h, string anchor, string substring, string opJson) =>
+        DocxSessionOps.ApplyFormatBySubstring(h, anchor, substring, DocxSessionJson.ParseFormatOp(opJson));
+
+    [JSExport]
+    public static string SetParagraphStyle(int h, string anchor, string styleId) =>
+        DocxSessionOps.SetParagraphStyle(h, anchor, styleId);
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.SetParagraphFormat"/>. <paramref name="opJson"/> is
+    /// { alignment?: "left"|"center"|"right"|"justify", indentDelta?: int (twips),
+    /// firstLineIndent?/hangingIndent?: int (twips, mutually exclusive),
+    /// spacingBefore?/spacingAfter?: int (twips), lineSpacing?: int,
+    /// lineSpacingRule?: "auto"|"exact"|"atLeast", pageBreakBefore?: bool };
+    /// omitted fields are left unchanged.
+    /// </summary>
+    [JSExport]
+    public static string SetParagraphFormat(int h, string anchor, string opJson) =>
+        DocxSessionOps.SetParagraphFormat(h, anchor, DocxSessionJson.ParseParagraphFormatOp(opJson));
+
+    [JSExport]
+    public static string SetListLevel(int h, string anchor, int delta) =>
+        DocxSessionOps.SetListLevel(h, anchor, delta);
+
+    [JSExport]
+    public static string RemoveListMembership(int h, string anchor) =>
+        DocxSessionOps.RemoveListMembership(h, anchor);
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.ApplyListFormat"/>. Promotes a plain paragraph to a
+    /// bullet/numbered list item (synthesizing a numbering definition if needed) or removes
+    /// list membership. <paramref name="kind"/> is "bullet" | "decimal" | "lowerLetter" |
+    /// "upperLetter" | "lowerRoman" | "upperRoman" | a "*Parenthesis" variant of the numbered
+    /// formats (e.g. "decimalParenthesis" → "(1)") | "none".
+    /// </summary>
+    [JSExport]
+    public static string ApplyListFormat(int h, string anchor, string kind) =>
+        DocxSessionOps.ApplyListFormat(h, anchor, DocxSessionJson.ParseOptionalListFormat(kind));
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.ApplyListFormatRange"/>. Applies one list format across
+    /// the contiguous sibling run from <paramref name="firstAnchor"/> to
+    /// <paramref name="lastAnchor"/> inclusive — every member shares ONE <c>w:num</c> instance so
+    /// the numbering sequence stays intact. Same <paramref name="kind"/> tokens as
+    /// <see cref="ApplyListFormat"/>.
+    /// </summary>
+    [JSExport]
+    public static string ApplyListFormatRange(int h, string firstAnchor, string lastAnchor, string kind) =>
+        DocxSessionOps.ApplyListFormatRange(h, firstAnchor, lastAnchor, DocxSessionJson.ParseOptionalListFormat(kind));
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.SetListStartOverride"/>. Restarts the anchored list
+    /// item's numbering at <paramref name="value"/> (Word's <em>Set Numbering Value…</em>) by
+    /// writing a <c>w:startOverride</c> on a dedicated <c>w:num</c> and repointing the anchored
+    /// item plus the following members of its sequence.
+    /// </summary>
+    [JSExport]
+    public static string SetListStartOverride(int h, string anchor, int value) =>
+        DocxSessionOps.SetListStartOverride(h, anchor, value);
+
+    /// <summary>Bridge for <see cref="DocxSession.ClearListStartOverride"/> — removes the
+    /// numbering restart from the anchored item's whole sequence.</summary>
+    [JSExport]
+    public static string ClearListStartOverride(int h, string anchor) =>
+        DocxSessionOps.ClearListStartOverride(h, anchor);
+
+    [JSExport]
+    public static string ReplaceCellContent(int h, string anchor, string md) =>
+        DocxSessionOps.ReplaceCellContent(h, anchor, md);
+
+    [JSExport]
+    public static string RawGetXml(int h, string anchor) => DocxSessionOps.RawGetXml(h, anchor);
+
+    [JSExport]
+    public static string RawInsertXml(int h, string anchor, string posStr, string xml) =>
+        DocxSessionOps.RawInsertXml(h, anchor, DocxSessionJson.ParsePos(posStr), xml);
+
+    [JSExport]
+    public static string RawReplaceXml(int h, string anchor, string xml) =>
+        DocxSessionOps.RawReplaceXml(h, anchor, xml);
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.Grep"/>. <paramref name="optionsJson"/>
+    /// accepts <c>{regexOptions?, scope?, contextChars?, whitespace?, boundary?, maxResults?,
+    /// citation?}</c> — see <see cref="DocxSessionJson.ParseGrepRequest(System.Text.Json.JsonElement)"/>
+    /// for the layouts and the defaults a missing field takes.
+    /// </summary>
+    [JSExport]
+    public static string Grep(int h, string pattern, string optionsJson) =>
+        DocxSessionOps.Grep(h, pattern, DocxSessionJson.ParseGrepRequest(optionsJson));
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.GrepCrossBlock"/>. Same <paramref name="optionsJson"/>
+    /// shape as <see cref="Grep"/>; returns a JSON array of CrossBlockMatch records (each
+    /// carries <c>enclosingAnchors[]</c> + <c>slices[]</c>).
+    /// </summary>
+    [JSExport]
+    public static string GrepCrossBlock(int h, string pattern, string optionsJson) =>
+        DocxSessionOps.GrepCrossBlock(h, pattern, DocxSessionJson.ParseGrepRequest(optionsJson));
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.ReplaceTextRange"/>. <paramref name="optionsJson"/>
+    /// accepts <c>{ignoreCase?: boolean, maxReplacements?: number}</c>. Returns a
+    /// JSON array of EditResult — one per attempted match.
+    /// </summary>
+    [JSExport]
+    public static string ReplaceTextRange(int h, string anchor, string find, string replace, string optionsJson)
+    {
+        ReplaceOptions? opts = null;
+        if (!string.IsNullOrEmpty(optionsJson))
+        {
+            using var doc = JsonDocument.Parse(optionsJson);
+            var root = doc.RootElement;
+            opts = new ReplaceOptions
+            {
+                IgnoreCase = DocxSessionJson.TryGetBool(root, "ignoreCase", false),
+                MaxReplacements = root.TryGetProperty("maxReplacements", out var mr) && mr.ValueKind == JsonValueKind.Number
+                    ? mr.GetInt32() : (int?)null,
+                ExpectedMatchCount = DocxSessionJson.TryGetIntNullable(root, "expectedMatchCount"),
+                Preconditions = root.TryGetProperty("preconditions", out var p)
+                    ? DocxSessionJson.ParseMutationPreconditions(p) : null,
+            };
+        }
+        return DocxSessionOps.ReplaceTextRange(h, anchor, find, replace, opts);
+    }
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.ReplaceTextAtSpan"/> — the span-addressable
+    /// variant that lets JS callers replace a specific Grep match (by its EnclosingAnchor
+    /// id + Span coordinates) instead of every occurrence of its text.
+    /// </summary>
+    [JSExport]
+    public static string ReplaceTextAtSpan(int h, string anchor, int spanStart, int spanLength, string replace) =>
+        DocxSessionOps.ReplaceTextAtSpan(h, anchor, spanStart, spanLength, replace);
+
+    [JSExport]
+    public static string ReplaceTextAtSpanWithFormat(
+        int h, string anchor, int spanStart, int spanLength, string replace, string formatJson) =>
+        DocxSessionOps.ReplaceTextAtSpanWithFormat(
+            h, anchor, spanStart, spanLength, replace, DocxSessionJson.ParseFormatOp(formatJson));
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.ReplaceInner(TextMatch, string)"/>. Takes the
+    /// match's text (so the shared core can locate the brackets) plus anchor+span (so
+    /// it can dispatch to <see cref="DocxSession.ReplaceTextAtSpan"/>). Bracket
+    /// parsing happens transport-side rather than serializing a full <see cref="TextMatch"/>
+    /// — the existing wire shape already carries text + anchor + span via Grep results,
+    /// so callers don't need anything they don't already have.
+    /// </summary>
+    [JSExport]
+    public static string ReplaceInner(int h, string matchText, string anchor, int spanStart, int spanLength, string newInner) =>
+        DocxSessionOps.ReplaceInner(h, matchText, anchor, spanStart, spanLength, newInner);
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.FindPlaceholders"/>. <paramref name="kinds"/>
+    /// uses the numeric layout of <see cref="PlaceholderKinds"/> (BlankFill=1,
+    /// AlternativeClause=2, Instruction=4, All=7); 0 returns nothing. <paramref name="scope"/>
+    /// uses the <see cref="ProjectionScopes"/> flag layout. Returns a JSON array of placeholders.
+    /// </summary>
+    [JSExport]
+    public static string FindPlaceholders(int h, int? kinds, int? scope, int? contextChars, int? boundary) =>
+        DocxSessionOps.FindPlaceholders(h, (PlaceholderKinds?)kinds, (ProjectionScopes?)scope, contextChars, (ContextBoundary?)boundary);
+
+    [JSExport]
+    public static string FindPlaceholdersWithCitations(
+        int h, int? kinds, int? scope, int? contextChars, int? boundary, string requestJson) =>
+        DocxSessionOps.FindPlaceholders(
+            h, (PlaceholderKinds?)kinds, (ProjectionScopes?)scope, contextChars,
+            (ContextBoundary?)boundary, ParseRequiredCitationRequest(requestJson));
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.GetEditSummary"/>. Returns a JSON object
+    /// with placeholder, underscore-run, footnote, and comment counts useful for
+    /// "am I done?" verification at the end of an edit pipeline.
+    /// </summary>
+    [JSExport]
+    public static string GetEditSummary(int h) => DocxSessionOps.GetEditSummary(h);
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.RemainingPlaceholders"/>. Discoverability
+    /// alias for <see cref="FindPlaceholders"/> — same return shape.
+    /// </summary>
+    [JSExport]
+    public static string RemainingPlaceholders(int h, int? kinds) =>
+        DocxSessionOps.RemainingPlaceholders(h, (PlaceholderKinds?)kinds);
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.GetDiff"/>. <paramref name="format"/> uses
+    /// the numeric layout of <see cref="DiffFormat"/>: <c>Json=0</c> (anchor-keyed JSON
+    /// array), <c>Unified=1</c> (patch(1)-compatible text), <c>SideBySide=2</c> (two-column
+    /// text). Unknown numeric values throw <c>NotSupportedException</c> on the .NET side,
+    /// surfaced to JS as a thrown error.
+    /// </summary>
+    [JSExport]
+    public static string GetDiff(int h, int? format) =>
+        DocxSessionOps.GetDiff(h, (DiffFormat?)format);
+
+    /// <summary>
+    /// Return canonical semantic-change JSON between the package opened for this session and
+    /// its current state. Baseline capture must have been enabled when the session was opened.
+    /// </summary>
+    [JSExport]
+    public static string GetSemanticChanges(int h) =>
+        DocxSessionOps.GetSemanticChanges(h);
+
+    /// <summary>
+    /// Run the default deliverable-verification policy on the session's normal clean-save
+    /// checkpoint. When initial projection capture is enabled, the exact opening bytes are used
+    /// as the baseline. Returns the same canonical schema-v1 JSON as the stateless bridge.
+    /// </summary>
+    [JSExport]
+    public static string VerifyDeliverable(int h) =>
+        DocxSessionOps.VerifyDeliverable(h);
+
+    /// <summary>Session verification under the full wire request (issue #747): policy/limit
+    /// options, expected semantic and package changes, companion artifacts.</summary>
+    [JSExport]
+    public static string VerifyDeliverableWithRequest(int h, string requestJson) =>
+        DocxSessionOps.VerifyDeliverable(h, requestJson);
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.FindByAnnotation"/>. Returns a JSON array of
+    /// <see cref="AnchorTarget"/> records (each <c>{id, kind, scope, unid, partUri}</c>);
+    /// empty array when the id is unknown.
+    /// </summary>
+    [JSExport]
+    public static string FindByAnnotation(int h, string annotationId) =>
+        DocxSessionOps.FindByAnnotation(h, annotationId);
+
+    [JSExport]
+    public static string FindByAnnotationWithCitations(
+        int h, string annotationId, string requestJson) =>
+        DocxSessionOps.FindByAnnotation(h, annotationId, ParseRequiredCitationRequest(requestJson));
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.FindByLabel"/>. Returns a JSON object keyed by
+    /// annotation id; each value is the same AnchorTarget array shape as
+    /// <see cref="FindByAnnotation"/>.
+    /// </summary>
+    [JSExport]
+    public static string FindByLabel(int h, string labelId) =>
+        DocxSessionOps.FindByLabel(h, labelId);
+
+    [JSExport]
+    public static string FindByLabelWithCitations(
+        int h, string labelId, string requestJson) =>
+        DocxSessionOps.FindByLabel(h, labelId, ParseRequiredCitationRequest(requestJson));
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.FindByBookmark"/>. Same return shape as
+    /// <see cref="FindByAnnotation"/>; accepts any bookmark name (Docxodus-managed or
+    /// user-authored).
+    /// </summary>
+    [JSExport]
+    public static string FindByBookmark(int h, string bookmarkName) =>
+        DocxSessionOps.FindByBookmark(h, bookmarkName);
+
+    [JSExport]
+    public static string FindByBookmarkWithCitations(
+        int h, string bookmarkName, string requestJson) =>
+        DocxSessionOps.FindByBookmark(h, bookmarkName, ParseRequiredCitationRequest(requestJson));
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.ListAnnotations"/>. Returns a JSON array of
+    /// annotation records — id/labelId/label/color/author/created/bookmarkName/
+    /// annotatedText, plus the metadata bag when non-empty. Page-info cache fields
+    /// are omitted to keep the wire format compact; callers needing them can use the
+    /// .NET API.
+    /// </summary>
+    [JSExport]
+    public static string ListAnnotations(int h) => DocxSessionOps.ListAnnotations(h);
+
+    // ─── Tier E: annotations (write surface) ──────────────────────────────
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.AddAnnotation"/>. The span is encoded as
+    /// a JSON string (empty/null = no span = annotate whole block, otherwise
+    /// <c>{"start": int, "length": int}</c>) matching the existing
+    /// <see cref="ApplyFormat"/> convention. The annotation JSON is a camelCase
+    /// mirror of <see cref="DocumentAnnotation"/>; <see cref="DocxSessionJson.DeserializeAnnotation"/>
+    /// parses it with <see cref="JsonDocument"/>, so this bridge is trim-safe under the
+    /// WASM Release build.
+    /// </summary>
+    [JSExport]
+    public static string AddAnnotation(int h, string anchorId, string spanJson, string annotationJson) =>
+        DocxSessionOps.AddAnnotation(h, anchorId, ParseSpan(spanJson), annotationJson);
+
+    /// <summary>
+    /// Session-style RemoveAnnotation (distinct from the existing WmlDocument-style
+    /// <see cref="RemoveAnnotation"/> which takes byte arrays). Removes the bookmark
+    /// pair and custom-XML entry from the live session document.
+    /// </summary>
+    [JSExport]
+    public static string SessionRemoveAnnotation(int h, string annotationId) =>
+        DocxSessionOps.RemoveAnnotation(h, annotationId);
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.UpdateAnnotation"/>. Parsing is delegated to
+    /// <see cref="DocxSessionJson.DeserializeAnnotationUpdate"/> (JsonDocument-based,
+    /// trim-safe). <c>metadataPatch</c> honours explicit nulls — a null value removes
+    /// the key, a missing key leaves it unchanged.
+    /// </summary>
+    [JSExport]
+    public static string UpdateAnnotation(int h, string annotationId, string updateJson) =>
+        DocxSessionOps.UpdateAnnotation(h, annotationId, updateJson);
+
+    [JSExport]
+    public static string MoveAnnotation(int h, string annotationId, string newAnchorId, string newSpanJson) =>
+        DocxSessionOps.MoveAnnotation(h, annotationId, newAnchorId, ParseSpan(newSpanJson));
+
+    /// <summary>Bridge for <see cref="DocxSession.Exists"/>. Returns true/false.</summary>
+    [JSExport]
+    public static bool Exists(int h, string anchorId) => DocxSessionOps.Exists(h, anchorId);
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.GetAnchorInfo"/>. Returns a JSON object
+    /// <c>{id, kind, scope, textPreview}</c> or the literal <c>null</c> if the
+    /// anchor is not found.
+    /// </summary>
+    [JSExport]
+    public static string GetAnchorInfo(int h, string anchorId) => DocxSessionOps.GetAnchorInfo(h, anchorId);
+
+    /// <summary>
+    /// Bulk variant of <see cref="GetAnchorInfo"/>. Takes a JSON array of anchor
+    /// ids and returns a JSON object keyed by id; each value is the AnchorInfo
+    /// shape or <c>null</c> for unknown ids.
+    /// </summary>
+    [JSExport]
+    public static string GetAnchorInfos(int h, string anchorIdsJson)
+    {
+        string[] ids;
+        try
+        {
+            ids = JsonSerializer.Deserialize<string[]>(
+                anchorIdsJson, DocxodusJsonContext.Default.StringArray) ?? System.Array.Empty<string>();
+        }
+        catch (JsonException)
+        {
+            return "{\"error\":\"malformed anchor id array\"}";
+        }
+        return DocxSessionOps.GetAnchorInfos(h, ids);
+    }
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.GetBlockMetadata"/>. Returns a JSON
+    /// object with style id/name, outline level, list membership (when present),
+    /// and a hasInlineFormatting flag — or <c>"null"</c> if the anchor doesn't exist.
+    /// </summary>
+    [JSExport]
+    public static string GetBlockMetadata(int h, string anchorId) =>
+        DocxSessionOps.GetBlockMetadata(h, anchorId);
+
+    /// <summary>
+    /// Bulk variant of <see cref="GetBlockMetadata"/>. Takes a JSON array of anchor
+    /// ids, returns a JSON object mapping each id to its metadata (or null).
+    /// </summary>
+    [JSExport]
+    public static string GetBlockMetadatas(int h, string anchorIdsJson)
+    {
+        string[] ids;
+        try
+        {
+            ids = JsonSerializer.Deserialize<string[]>(
+                anchorIdsJson, DocxodusJsonContext.Default.StringArray) ?? System.Array.Empty<string>();
+        }
+        catch (JsonException)
+        {
+            return "{\"error\":\"malformed anchor id array\"}";
+        }
+        return DocxSessionOps.GetBlockMetadatas(h, ids);
+    }
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.GetListMembership"/>. Returns a JSON
+    /// object with numId/abstractNumId/level/format/etc., or <c>"null"</c>.
+    /// </summary>
+    [JSExport]
+    public static string GetListMembership(int h, string anchorId) =>
+        DocxSessionOps.GetListMembership(h, anchorId);
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.GetSectionInfo"/>. Returns a JSON object
+    /// describing the governing <c>w:sectPr</c>, or <c>"null"</c> for non-body anchors.
+    /// </summary>
+    [JSExport]
+    public static string GetSectionInfo(int h, string anchorId) =>
+        DocxSessionOps.GetSectionInfo(h, anchorId);
+
+    /// <summary>All explicit document styles with resolved high-signal properties.</summary>
+    [JSExport]
+    public static string ListStyles(int h) => DocxSessionOps.ListStyles(h);
+
+    /// <summary>Direct and effective paragraph/run formatting for one paragraph anchor.</summary>
+    [JSExport]
+    public static string GetFormatting(int h, string anchorId) =>
+        DocxSessionOps.GetFormatting(h, anchorId);
+
+    /// <summary>Enumerable run spans, directly reusable by ApplyFormat.</summary>
+    [JSExport]
+    public static string ListInlineSpans(int h, string anchorId) =>
+        DocxSessionOps.ListInlineSpans(h, anchorId);
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.FindByText"/>. Returns a single AnchorTarget
+    /// JSON object (first match in document order) or the literal <c>null</c> if no
+    /// anchor contains the needle. <paramref name="optionsJson"/> accepts
+    /// <c>{ignoreCase?, ignoreWhitespace?, kindFilter?, scopeFilter?}</c>.
+    /// </summary>
+    [JSExport]
+    public static string FindByText(int h, string needle, string optionsJson) =>
+        DocxSessionOps.FindByText(h, needle, ParseFindOptions(optionsJson));
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.FindAllByText"/>. Same options shape as
+    /// <see cref="FindByText"/>; returns the full AnchorTarget array in document order.
+    /// </summary>
+    [JSExport]
+    public static string FindAllByText(int h, string needle, string optionsJson) =>
+        DocxSessionOps.FindAllByText(h, needle, ParseFindOptions(optionsJson));
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.FindByRegex"/>. <paramref name="regexOptions"/>
+    /// uses the numeric layout of <see cref="System.Text.RegularExpressions.RegexOptions"/>;
+    /// <paramref name="optionsJson"/> matches the <see cref="FindByText"/> shape.
+    /// </summary>
+    [JSExport]
+    public static string FindByRegex(int h, string pattern, int? regexOptions, string optionsJson) =>
+        DocxSessionOps.FindByRegex(h, pattern, (RegexOptions?)regexOptions, ParseFindOptions(optionsJson));
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.FindByKind"/>. <paramref name="scope"/> may be
+    /// empty/null to match all scopes. No text scan — reads the AnchorIndex directly.
+    /// </summary>
+    [JSExport]
+    public static string FindByKind(int h, string kind, string scope) =>
+        DocxSessionOps.FindByKind(h, kind, string.IsNullOrEmpty(scope) ? null : scope);
+
+    [JSExport]
+    public static string FindByKindWithCitations(
+        int h, string kind, string scope, string requestJson) =>
+        DocxSessionOps.FindByKind(
+            h,
+            kind,
+            string.IsNullOrEmpty(scope) ? null : scope,
+            ParseRequiredCitationRequest(requestJson));
+
+    [JSExport]
+    public static bool Undo(int h) => DocxSessionOps.Undo(h);
+
+    [JSExport]
+    public static bool Redo(int h) => DocxSessionOps.Redo(h);
+
+    /// <summary>Switch how subsequent mutations are recorded (issue #304). mode is the
+    /// numeric TrackedChangeMode (0=Accept, 1=RenderInline, 2=StripDeletions).</summary>
+    [JSExport]
+    public static void SetTrackedChanges(int h, int mode) =>
+        DocxSessionOps.SetTrackedChanges(h, (TrackedChangeMode)mode);
+
+    /// <summary>Change the author stamped on subsequent tracked-change markup.
+    /// Empty string resets to the "docxodus" default (the AddComment null convention).</summary>
+    [JSExport]
+    public static void SetRevisionAuthor(int h, string author) =>
+        DocxSessionOps.SetRevisionAuthor(h, string.IsNullOrEmpty(author) ? null : author);
+
+    [JSExport]
+    public static byte[] Save(int h) => DocxSessionOps.Save(h);
+
+    /// <summary>Save KEEPING the projector's Unid bookkeeping — for the editor's remount, which
+    /// re-renders these bytes and needs the anchors to survive the hop. ~6x larger than the
+    /// document; never hand this to a user (see <see cref="Save"/>).</summary>
+    [JSExport]
+    public static byte[] SaveWithAnchorIds(int h) => DocxSessionOps.SaveWithAnchorIds(h);
+
+    // ─── Helpers ────────────────────────────────────────────────────────
+
+    private static CharSpan? ParseSpan(string json)
+    {
+        if (string.IsNullOrEmpty(json)) return null;
+        using var doc = JsonDocument.Parse(json);
+        return new CharSpan(
+            doc.RootElement.GetProperty("start").GetInt32(),
+            doc.RootElement.GetProperty("length").GetInt32());
+    }
+
+    private static FindOptions? ParseFindOptions(string optionsJson)
+    {
+        if (string.IsNullOrEmpty(optionsJson)) return null;
+        using var doc = JsonDocument.Parse(optionsJson);
+        return DocxSessionJson.ParseFindOptions(doc.RootElement);
+    }
+
+    private static PageCitationRequest ParseRequiredCitationRequest(string requestJson)
+    {
+        using var doc = JsonDocument.Parse("{\"citation\":" + requestJson + "}");
+        return DocxSessionJson.ParsePageCitationRequest(doc.RootElement)
+            ?? throw new FormatException("citation request is required");
+    }
+
+}

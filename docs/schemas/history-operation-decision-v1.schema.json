@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docxodus.dev/schemas/history/operation-decision/v1",
+  "title": "Durable backend acceptance or preserved conflict",
+  "$comment": "Register adjacent state-v2 and operation-input-v1 schemas. Runtime validates outcome relationships, exact publication/receipt ancestry, and actual accepted package effects before using text maps.",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "schemaVersion", "record"],
+  "properties": {
+    "schema": { "const": "https://docxodus.dev/schemas/history/operation-decision/v1" },
+    "schemaVersion": { "const": 1 },
+    "record": {
+      "type": "object", "additionalProperties": false,
+      "required": ["documentId", "input", "parent", "revision", "before", "proposedSnapshot", "afterSnapshot", "version", "contentCommit", "status", "conflict", "appliedText"],
+      "properties": {
+        "documentId": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/id" },
+        "input": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/blob" },
+        "parent": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/optionalBlob" },
+        "revision": { "type": "integer", "minimum": 2, "maximum": 9223372036854775807 },
+        "before": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/head" },
+        "proposedSnapshot": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/snapshot" },
+        "afterSnapshot": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/snapshot" },
+        "version": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/blob" },
+        "contentCommit": { "$ref": "https://docxodus.dev/schemas/history/package-state/v2#/$defs/optionalBlob" },
+        "status": { "enum": ["accepted", "conflict"] },
+        "conflict": { "enum": [null, "OverlappingText", "ChangedPart", "ReadDependencyChanged", "EpochChanged", "AlreadyResolved", "UnknownTextChange"] },
+        "appliedText": { "anyOf": [{ "$ref": "https://docxodus.dev/schemas/history/operation-input/v1#/$defs/text" }, { "type": "null" }] }
+      }
+    }
+  }
+}

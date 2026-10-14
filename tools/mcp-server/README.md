@@ -1,0 +1,236 @@
+# docxodus-mcp
+
+A Model Context Protocol (MCP) server that lets AI agents open, read, and edit `.docx`
+files through Docxodus's `DocxSession` editing engine. Runs entirely locally over stdio —
+no network calls, no telemetry, nothing leaves the machine it runs on.
+
+See `docs/architecture/docx_agent_server.md` for the full tool contract (every tool's
+arguments and result shape), the mapping of each action onto the underlying Docxodus API,
+and a list of documented capability gaps.
+
+## Installation
+
+```bash
+dotnet tool install -g Docxodus.McpServer
+```
+
+## Usage
+
+Add it to your MCP client's server configuration. For example, in a client that reads a
+`mcpServers` map:
+
+```json
+{
+  "mcpServers": {
+    "docxodus": {
+      "command": "docxodus-mcp"
+    }
+  }
+}
+```
+
+Or run it directly from source during development:
+
+```bash
+dotnet run --project tools/mcp-server
+```
+
+The server speaks newline-delimited JSON-RPC 2.0 on stdin/stdout (the MCP stdio transport).
+All diagnostic logging goes to stderr, never stdout.
+
+## Document storage and scoping
+
+Every document the server reads or writes goes through a scoped store. A session cannot name a
+document outside its scope — that's a property of how locations are resolved, not a check the
+tool layer performs, so it holds for every operation.
+
+| Variable | Meaning |
+|---|---|
+| `DOCXODUS_STORAGE_BACKEND` | Backend id. Only `file` is implemented; defaults to `file`. |
+| `DOCXODUS_STORAGE_ROOT` | Directory every location must resolve inside. Defaults to your home directory, so an agent can open `~/Downloads/contract.docx` naturally while the rest of the machine stays out of reach. Narrow it to confine the server; set it to `/` to opt out. |
+| `DOCXODUS_STORAGE_SCOPE` | Optional single path segment appended to the root (`{root}/{scope}`). Two servers launched with different scopes cannot see each other's documents. |
+
+Relative locations resolve under the root; an absolute path is accepted only if the root contains
+it. Symlinks are followed before the containment check, so a link inside the root pointing outside
+it is rejected rather than followed.
+
+Scope is chosen by whoever launches the server, never by the agent — it has no argument through
+which to name one. Because the scope is just a stable path segment, passing the same value next
+time reaches the same documents; persistence is the filesystem's, with no registry or token to
+manage. One server process serves exactly one scope.
+
+To confine a server to a project directory:
+
+```json
+{
+  "mcpServers": {
+    "docxodus": {
+      "command": "docxodus-mcp",
+      "env": { "DOCXODUS_STORAGE_ROOT": "/srv/documents", "DOCXODUS_STORAGE_SCOPE": "acme-corp" }
+    }
+  }
+}
+```
+
+Adding a different backend (object storage, a content repository) means implementing
+`IDocumentStore` and adding a case to `DocumentStores` — the tool surface and every session code
+path stay as they are.
+
+## Tool surface
+
+**23 tools.** Three session-lifecycle tools, four read/preview tools, thirteen grouped-intent
+tools, and three sessionless operations — the same arithmetic as the tool reference in
+`docs/architecture/docx_agent_server.md`. Everything except the three sessionless tools takes the
+`sessionId` that `docxodus_open` returns, and addresses content by the anchor ids the markdown
+projection and search tools hand back. Each grouped tool takes an `action` discriminator plus
+action-specific arguments. Actions whose engine op takes an options object take it nested, as
+`options` (or `rule` for `insert_horizontal_rule`, `spec` for `set_borders`), exactly as the other
+transports do. The older flat spellings of those fields (`caseSensitive`, `ruleStyle`,
+`borderScope`, `bindingPolicy`, …) still work but are deprecated. See "Object arguments" in
+`docs/architecture/docx_agent_server.md`.
+
+| Tool | Kind | Purpose |
+|---|---|---|
+| `docxodus_open` | lifecycle | Open a `.docx` from the configured document scope into an in-memory session and return its `sessionId`. |
+| `docxodus_save` | lifecycle | Write the session's current bytes back into the scope, optionally to a different location. |
+| `docxodus_close` | lifecycle | Dispose the session and release its undo history and retry journal. |
+| `docxodus_get_content` | read | Read markdown/HTML/text, block or section facts, styles, direct/effective formatting, mutation-ready inline spans, a deterministic package manifest, the opening-to-current semantic change set, or a deliverable-verification report. |
+| `docxodus_preview` | read | Render the same HTML as `format: "html"` but shaped for an MCP Apps widget: the markup rides in `_meta` so a large render costs the model's context nothing. |
+| `docxodus_pagination` | read | Register, inspect, or query an externally materialized PageMap; the server never paginates or bundles a browser itself. |
+| `docxodus_search` | read | Find text (literal or regex), or find blocks by kind, annotation, or bookmark, returning reusable anchor ids. |
+| `docxodus_history` | grouped-intent | Publish/read exact versions, consume ordered timestamped log tails, reconstruct/render history, or append a guarded restore. Opt-in host storage; never overwrites the open session on restore. |
+| `docxodus_edit` | grouped-intent | Insert, replace, and delete text and blocks; split and merge paragraphs; undo and redo. |
+| `docxodus_format` | grouped-intent | Character and paragraph formatting, and list level. |
+| `docxodus_create` | grouped-intent | New paragraphs, headings, tables, horizontal rules, footnotes/endnotes, running headers/footers, and page-number fields; a section's page setup, page numbering and first-page/odd-even switches; and a read-only footnote/endnote listing. |
+| `docxodus_list` | grouped-intent | Promote, demote, and renumber list membership; restart numbering (Word's *Set Numbering Value…*). |
+| `docxodus_comment` | grouped-intent | Native Word review comments (real `w:comment` markup): add on an anchor/span or tracked revision id, reply in-thread, resolve/reopen, update, remove, list. |
+| `docxodus_annotate` | grouped-intent | Anchor-addressed highlight/label annotations — a custom-XML overlay for external tools, distinct from comments. |
+| `docxodus_links` | grouped-intent | Native hyperlinks and bookmarks — list, add, update, move, remove — plus REF-field cross-references that track their bookmark target when Word refreshes fields. |
+| `docxodus_images` | grouped-intent | Native Word images: list (with a per-picture operation matrix), insert, replace, embed a linked picture, resize, set metadata or floating layout, remove — natively tracked under `render_inline`. Payloads cross the JSON boundary as base64 only — the server never fetches a URL or reads an image path. |
+| `docxodus_content_controls` | grouped-intent | List and fill native Word content controls (`w:sdt`) — text, rich text, checkbox, date, list item, picture, repeating items — preserving each control's wrapper and metadata. |
+| `docxodus_track_changes` | grouped-intent | List tracked changes; accept or reject one by id or all; switch the session's recording mode; prove redline reversibility. |
+| `docxodus_mutations` | grouped-intent | Apply or safely preview a batch atomically by default, with opt-in best-effort, transaction-id retry deduplication (shared with every transport), and guarded commit of a retained preview exactly as previewed. |
+| `docxodus_table` | grouped-intent | Create and read tables; resolve canonical cell anchors ↔ grid coordinates; edit rows, columns, cell content, and style. |
+| `docxodus_compare` | sessionless | Diff or N-way consolidate stored document versions into one author-attributed native redline, written back into the document scope. |
+| `docxodus_deliver` | sessionless | Build a verified delivery bundle from a named baseline and the current session; return its manifest and available artifact bytes, including a change receipt minted from the evidence a session opened with `captureDeliveryEvidence` recorded as its edits executed. |
+| `docxodus_verify_receipt` | sessionless | Verify a portable delivery change receipt against the document it claims to describe. |
+
+`McpToolInventoryDocumentationTests` asserts this table and `ToolCatalog.Tools` name exactly the
+same set of tools, and that the count above is the live one, so a tool cannot be added or removed
+without this section moving with it.
+
+History is disabled unless the launching host sets `DOCXODUS_HISTORY_ROOT` to an absolute,
+protected directory (with `blobs` and `heads` subdirectories). The host owns permissions,
+retention, and author authentication. Tool arguments cannot choose a root or document identity:
+`docxodus_history` derives identity from the session's canonical scoped opening location.
+Saving a copy elsewhere does not retarget it; open that copy to use its separate history. `create`
+captures clean current session bytes; it does not save the source file. `restore` appends a new
+history checkpoint without replacing either the open session or the source file. `render`
+accepts exactly one `sequence` (decimal string) or `cutoff` (timestamp), returning HTML and
+its sequence. Use `updates` with the exact last head to consume a validated log tail; the host
+decides when to call again. No transport, timer, or subscription has been added.
+See [history clients](../../docs/history-clients.md#mcp) for the shared fields and workflow.
+
+`restore` optionally accepts a durable `requestId`: retrying the exact original head/target/metadata
+returns its original result even after later publications. `create` rejects `requestId` because it
+recaptures the live session rather than retaining original bytes; use the captured-byte npm/Python/
+.NET API for idempotent creation. Neither action adds an outbox or changes the open session.
+
+`docxodus_deliver` uses the same `DeliveryBundleService` as the .NET API and
+`docxodus-deliver` CLI. The MCP response returns canonical manifest bytes plus available artifacts
+as base64, with a 64 MiB pre-base64 byte limit. Production HTML/PDF/PageMap/report rendering uses
+the process-owned epic #434 host when `DOCXODUS_NODE_PATH` and `DOCXODUS_EXPORT_HOST_PATH` are set;
+`DOCXODUS_CHROMIUM_PATH` is optional. The server never searches PATH or accepts executable paths
+from tool arguments. Authoritative change receipts remain unavailable here because issuance
+requires exact transaction snapshots/contributions rather than the MCP retry journal's response
+cache. Mark an unavailable artifact optional to retain a complete bundle, or use
+`returnIncompleteBundle` for diagnostic required outputs.
+
+Applying `docxodus_mutations` batches can include a caller-chosen, non-blank root `transactionId` of
+at most 256 Unicode scalar values. During the open session, retrying the same canonical request
+returns the exact original serialized batch result without applying again or rechecking guards; a
+different request with that id fails with
+`transaction_conflict`. Results expose
+`transaction: { schemaVersion: 1, transactionId, requestFingerprint }`. Preview/dry-run batches and
+direct or nested step calls reject transaction ids — a client that blanket-attaches an idempotency
+key to *every* tool call gets a hard error on the other tools, so attach it only to applying
+`docxodus_mutations` batches. Save preserves this journal; close clears it, and reopen starts a new
+identity namespace. Replay after undo/redo returns the historical response without changing the
+document or either history cursor; use ordinary redo to restore an undone mutation.
+
+### Retention bound and its memory cost
+
+Retention is bounded per session by **both** a count and a byte budget: at most 128 complete
+responses, at most 32 MiB of retained response text, whichever binds first, followed by 1,024
+response-less FIFO tombstones that keep an id bound without holding its payload. A single response
+larger than the whole budget evicts itself rather than raising the ceiling.
+
+The byte budget exists because a count is not a memory bound. A retained entry is the complete
+serialized `MutationBatchResult`, which carries every step's `results` **twice** (once under
+`steps[].results` and once in the duplicate top-level `results`) plus each step's block-scoped
+`patch` (the changed blocks' markdown, or the whole document after a list renumber or a style change) and the
+revision/comment/annotation delta sets. Measured: a single-step `insert_paragraph` batch against a
+blank document already retains **~3.2 KB**, so 128 of those is ~400 KB — and a large scoped batch
+over a real document is orders of magnitude bigger, which is what the 32 MiB cap is there for. The
+worst case is therefore **~32 MiB per open session**; the number of open sessions is *not* bounded,
+and there is no TTL or idle-session eviction, so a long-lived server that is never sent
+`docxodus_close` still grows with the number of sessions.
+
+### Lifecycle hazards
+
+- **A validation failure burns the id.** A structured rejection (say `mode: "sideways"`) is itself
+  a terminal response and is cached. Fixing the typo and resending under the same `transactionId`
+  gets `transaction_conflict`, not a retry. Always use a **fresh** id after any failure you intend
+  to correct; reuse an id only for a byte-identical resend of the same request.
+- **Tombstone expiry lets a stale retry re-apply.** After roughly 128 further transactions plus
+  1,024 more tombstones, an id is genuinely forgotten and a retry that arrives after that becomes a
+  **fresh mutation that applies again**. Idempotency is a bounded-window guarantee, not a permanent
+  one; a client holding a request for a long time must not assume the window is still open.
+- **`transaction_incomplete`** means the id is bound to this exact request but no terminal response
+  was ever recorded, so whether the mutation applied is *unknown*. Inspect the document and retry
+  under a new id.
+- **The same journal serves every transport.** `execute_batch` through the stdio host /
+  `docx-scalpel` and `executeBatch` through WASM/npm accept a transaction id with the identical
+  contract (`docs/architecture/docx_mutation_api.md`, "Transaction ids"); an id is scoped to
+  the transport that minted it, since each transport's request language differs.
+
+## Known gaps
+
+A few capabilities a full-featured document-editing agent surface might want are not yet
+exposed, because the underlying Docxodus engine doesn't have them (rather than fake them,
+these are called out so agents/tooling built against this server know to route around
+them):
+
+- **Unsafe revision topology fails closed.** `docxodus_track_changes` lists cell,
+  content-control, numbering, text, move, row, and property revisions with stable ids.
+  Unsupported, malformed, or ambiguous native markup remains visible with a diagnostic;
+  individual and bulk resolution return a typed error without changing the session. This
+  applies to `accept_all`/`reject_all` too, which used to be an always-succeeding
+  whole-document transform — there is no `force` mode. See "Known gaps" in
+  `docs/architecture/docx_agent_server.md` for the list of refusing shapes.
+- **New lists inserted via markdown don't get real numbering** unless promoted afterward
+  with `docxodus_list`'s `apply_format` action (which does write real `w:numPr`).
+- **Generated-id previews are semantic rather than necessarily byte-identical — unless retained.** Preview runs
+  the same batch path on a complete isolated package clone and never touches live bytes,
+  version, caches, configuration, or undo/redo history. Create/comment/note/image operations
+  may allocate different anchors or OOXML ids when later applied, and tracked changes may stamp
+  a different execution time, so receipts warn when exact anchor or package-hash equality is
+  unsafe. Deterministic mutation-only batches retain exact result/hash equivalence, and a
+  preview retained with `retainPreview: true` then applied with `commitPreviewId` is exact for
+  any batch: the previewed bytes are restored, not re-executed, so its anchor ids, timestamps
+  and `packageHash` are what the document gets. The commit refuses (`preview_stale`) once the
+  session moved on, and `preview_not_found` once the preview expired, was evicted (8 previews /
+  64 MiB / 15 minutes per session) or was already committed.
+- **Optimistic guards are common to every mutation tool.** Pass `preconditions` with
+  `expectedVersion` and/or an anchor hash/exact text/range/kind/scope; replacement may
+  also require `expectedMatchCount`. `docxodus_get_content` formats `version` and
+  `check_preconditions` expose the read side. Batch-level and per-step guards use the same shape.
+- **The inline MCP preview is continuous, not physically paginated.** It reports
+  `pageNavigation: "unavailable_continuous_preview"`; a registered PageMap can still supply an
+  exact page label, but navigation to a page box awaits the server-side paginated HTML substrate
+  tracked by #434. The server does not estimate or bundle a browser. See the
+  [PageMap contract](../../docs/architecture/page_map.md).
+
+## License
+
+MIT License

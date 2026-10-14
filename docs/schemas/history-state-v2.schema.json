@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docxodus.dev/schemas/history/package-state/v2",
+  "title": "Package-history state with atomic durable request receipts",
+  "$comment": "Runtime validation also binds document ID/publication revision to the journal and validates the content/version/commit graph. Counters here are durable Int64 numbers, not client-wire decimal strings.",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "schemaVersion", "record"],
+  "properties": {
+    "schema": { "const": "https://docxodus.dev/schemas/history/package-state/v2" },
+    "schemaVersion": { "const": 2 },
+    "record": {
+      "type": "object", "additionalProperties": false,
+      "required": ["requests", "commit", "documentId", "epoch", "initialSnapshot", "sequence", "snapshot", "version"],
+      "properties": {
+        "requests": { "$ref": "#/$defs/journal" },
+        "commit": { "$ref": "#/$defs/optionalBlob" },
+        "documentId": { "$ref": "#/$defs/id" },
+        "epoch": { "$ref": "#/$defs/position" },
+        "initialSnapshot": { "$ref": "#/$defs/snapshot" },
+        "sequence": { "$ref": "#/$defs/position" },
+        "snapshot": { "$ref": "#/$defs/snapshot" },
+        "version": { "$ref": "#/$defs/blob" }
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 1024, "pattern": "\\S" },
+    "position": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 },
+    "digest": {
+      "type": "object", "additionalProperties": false, "required": ["algorithm", "value"],
+      "properties": { "algorithm": { "const": "SHA-256" }, "value": { "type": "string", "pattern": "^[0-9a-f]{64}$" } }
+    },
+    "blob": {
+      "type": "object", "additionalProperties": false, "required": ["digest", "length"],
+      "properties": { "digest": { "$ref": "#/$defs/digest" }, "length": { "type": "integer", "minimum": 0, "maximum": 2147483647 } }
+    },
+    "optionalBlob": { "anyOf": [{ "$ref": "#/$defs/blob" }, { "type": "null" }] },
+    "snapshot": {
+      "type": "object", "additionalProperties": false, "required": ["blob", "contentDigest"],
+      "properties": { "blob": { "$ref": "#/$defs/blob" }, "contentDigest": { "$ref": "#/$defs/digest" } }
+    },
+    "request": {
+      "type": "object", "additionalProperties": false, "required": ["id", "fingerprint"],
+      "properties": { "id": { "$ref": "#/$defs/id" }, "fingerprint": { "$ref": "#/$defs/digest" } }
+    },
+    "head": {
+      "type": "object", "additionalProperties": false, "required": ["revision", "state"],
+      "properties": { "revision": { "allOf": [{ "$ref": "#/$defs/position" }, { "minimum": 1 }] }, "state": { "$ref": "#/$defs/blob" } }
+    },
+    "journal": {
+      "type": "object", "additionalProperties": false, "required": ["documentId", "revision", "index", "current"],
+      "properties": {
+        "documentId": { "$ref": "#/$defs/id" },
+        "revision": { "allOf": [{ "$ref": "#/$defs/position" }, { "minimum": 1 }] },
+        "index": { "anyOf": [{ "allOf": [{ "$ref": "#/$defs/blob" }, { "properties": { "length": { "maximum": 16384 } } }] }, { "type": "null" }] },
+        "current": { "anyOf": [{ "$ref": "#/$defs/request" }, { "type": "null" }] }
+      },
+      "not": { "properties": { "index": { "type": "null" }, "current": { "type": "null" } } }
+    }
+  }
+}
