@@ -11,6 +11,10 @@ All notable changes to this project will be documented in this file.
   `data-field` / `data-field-format` marker as the equivalent complex field, so the paginator
   substitutes each page's number. As for complex fields, the substituted result takes the field's
   formatting rather than the cached result run's (see `docs/ooxml_corner_cases.md`).
+- Table row heights keep twip precision (issue #1121). The converter wrote `w:trHeight` as CSS inches
+  rounded to 0.01in, so a 55pt row became 54.72pt and the error accumulated down the table, and
+  25.075pt and 25.1pt rows both became 25.2pt. Heights are now written in points from the exact twip
+  value.
 
 ## [13.0.0] - 2026-10-12
 
