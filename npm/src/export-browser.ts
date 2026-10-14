@@ -10,6 +10,7 @@ import limitsContractJson from "./export-resource-limits-v1.json";
 import { assertWellFormedUnicode, canonicalJson } from "./canonical.js";
 import { alignBaselinesToWord, applyUnroundedNormalLineHeights, isPreservedExactLineInk } from "./line-metrics.js";
 import { prepareWordText, paintWordText } from "./word-text.js";
+import { prepareParagraphBorders, paintParagraphBorders } from "./paragraph-borders.js";
 import { measureRenderedSource, PaginationEngine, type PageMap } from "./pagination.js";
 export { renderedSourceMeasurerExpression } from "./pagination.js";
 import {
@@ -3651,6 +3652,7 @@ export async function convertDocxToPaginatedHtml(
         // attempts start from pristine HTML, so both apply it identically.
         applyUnroundedNormalLineHeights(renderDocument.body);
         prepareWordText(renderDocument.body, () => checkpointWordText(state));
+        prepareParagraphBorders(renderDocument.body);
         const engine = new PaginationEngine(staging, container, {
           scale: 1,
           cssPrefix: "page-",
@@ -3776,6 +3778,8 @@ export async function convertDocxToPaginatedHtml(
     await runPhase(state, "output_verification", ["Word text baselines"], () =>
       paintWordText(renderDocument.getElementById("pagination-container") as HTMLElement,
         () => checkpointWordText(state)));
+    await runPhase(state, "output_verification", ["paragraph borders"], () =>
+      paintParagraphBorders(renderDocument.getElementById("pagination-container") as HTMLElement));
     const renderer = await runPhase(state, "output_verification", ["renderer identity"], () =>
       rendererIdentity(
         renderDocument,

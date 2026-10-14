@@ -492,6 +492,14 @@ stderr; stdout is reserved exclusively for protocol frames. Export error code, p
 part/anchor/resource, remediation, and safe detail cross this frame unchanged. The #465 delivery PR extends the #499-draft renderer diagnostic model to
 retain those fields through .NET, CLI, MCP, validation evidence, and failure reports.
 
+Paragraph borders with an explicit size are laid out and painted at their declared physical width
+(`npm/src/paragraph-borders.ts`, issue #1116). The converter records the width of each explicitly
+sized single or dashed side as `--docx-border-{side}-width` on the border wrapper
+(`data-docx-exact-border`), because CSS floors border widths to whole CSS pixels. Before pagination
+the export swaps those CSS borders for padding of the declared width, keeping the text edge in
+place; after the page tree is final it draws the sides as SVG rectangles or dashed lines (keeping the
+dash rhythm of the one-pixel CSS border) from each page box's origin, which the printer does not snap.
+
 Chromium printing uses `printBackground: true`, `preferCSSPageSize: true`, `tagged: true`,
 `outline: false`, `displayHeaderFooter: false`, scale 1, and zero browser margins. Tags receive
 structural smoke coverage but are not presented as PDF/UA conformance until reading order and
