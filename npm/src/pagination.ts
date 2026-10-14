@@ -4859,6 +4859,9 @@ export class PaginationEngine {
     // Paint offsets must follow range fragmentation: positioned runs are deliberately excluded
     // from that structural algorithm, even though these offsets leave every line box unchanged.
     alignExactLineBaselines(contentArea);
+    // Note paragraphs keep their own exact spacing too (issue #1120); the band is bottom-anchored,
+    // so only glyphs move within their unchanged line boxes.
+    if (notesEl) alignExactLineBaselines(notesEl);
     const paper = pageBox.getBoundingClientRect();
     const header = pageBox.querySelector<HTMLElement>(`.${this.cssPrefix}header`);
     const footer = pageBox.querySelector<HTMLElement>(`.${this.cssPrefix}footer`);
