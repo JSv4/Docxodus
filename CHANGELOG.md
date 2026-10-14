@@ -34,6 +34,12 @@ All notable changes to this project will be documented in this file.
   those sides out as padding of that width and paints them as vector shapes on the final page tree,
   keeping the dash rhythm of the one-pixel CSS border. Omitted and zero sizes keep their
   application-defined CSS default.
+- Paginated footnote paragraphs keep their authored layout (issue #1120). The generic note CSS no
+  longer gives every later note paragraph a 12pt inset and 2pt gap, which outranked the paragraph's
+  own resolved indentation and spacing. Exact-spaced note lines now take Word's exact baseline like
+  body text (they had kept their top-aligned glyphs, 1.65pt high on 18pt lines), and a note number
+  whose paragraph has exact line spacing takes that line height and moves with its first line,
+  instead of painting half a line above it.
 
 ## [13.0.0] - 2026-10-12
 
