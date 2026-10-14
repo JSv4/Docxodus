@@ -1,0 +1,445 @@
+{
+  "candidate": "a56b4484384770a1b30a8680179667afec4523d5",
+  "run": 38495254031,
+  "referenceTrack": "libreoffice-equivalent-controls",
+  "screenshots": [
+    {
+      "name": "page-fields-desired.png",
+      "case": "paragraphs-page-number-ordinary-simple-field",
+      "kind": "reference",
+      "page": 2,
+      "dpi": 144,
+      "cropPt": [
+        67,
+        30,
+        485,
+        75
+      ],
+      "pdfSha256": "47ee77eda379ed3f71edf9aec75c6fdae98160ad616f2c89d4f93fae1f51a157",
+      "pngSha256": "87f612153917237dc55251dc9ae56603405f2da4307645610b6884e120988316",
+      "diagnosticControl": false
+    },
+    {
+      "name": "page-fields-measured.png",
+      "case": "paragraphs-page-number-ordinary-simple-field",
+      "kind": "candidate",
+      "page": 2,
+      "dpi": 144,
+      "cropPt": [
+        67,
+        30,
+        485,
+        75
+      ],
+      "pdfSha256": "038169e3da6e5cfe2464e86fcf7d85b90483d9cacdb2d6bcbaab1dbe7fe86921",
+      "pngSha256": "cdfdceb114b6ef9e1700cf280657f93b16bee20a385677f2888b858a55a59265",
+      "diagnosticControl": false
+    },
+    {
+      "name": "thin-borders-desired.png",
+      "case": "paragraphs-border-size-single-thin",
+      "kind": "reference",
+      "page": 1,
+      "dpi": 144,
+      "cropPt": [
+        67,
+        60,
+        480,
+        75
+      ],
+      "pdfSha256": "015f325d52fe62bac1d1f2e60e85485d9ff43a860e1313a26d764aa8dffa2e3a",
+      "pngSha256": "f7e9bd197900171bb1d305dc23b478e8d74f024f69a988869674226b852d8c75",
+      "diagnosticControl": false
+    },
+    {
+      "name": "thin-borders-measured.png",
+      "case": "paragraphs-border-size-single-thin",
+      "kind": "candidate",
+      "page": 1,
+      "dpi": 144,
+      "cropPt": [
+        67,
+        60,
+        480,
+        75
+      ],
+      "pdfSha256": "5602a42c74da20c1baa305e507e1a885c4b5435703c6a092607f768b9b8dd723",
+      "pngSha256": "1a3a0db39bb3459c7ebd30fb7881099d591bcdc5d56ba86bf5d3481bc8ee0da9",
+      "diagnosticControl": false
+    },
+    {
+      "name": "row-precision-desired.png",
+      "case": "tables-vmerge-early-control",
+      "kind": "reference",
+      "page": 1,
+      "dpi": 144,
+      "cropPt": [
+        67,
+        545,
+        480,
+        140
+      ],
+      "pdfSha256": "1b94dd71c5d71bc12c4de32aba68d3ea6a6d043d3d83371633ffb789e96e99af",
+      "pngSha256": "a6c224358123a3c1ddedf6af7e304a2c3acc05897d8f8e8b5f826484c2f16e9e",
+      "diagnosticControl": false
+    },
+    {
+      "name": "row-precision-measured.png",
+      "case": "tables-vmerge-early-control",
+      "kind": "candidate",
+      "page": 1,
+      "dpi": 144,
+      "cropPt": [
+        67,
+        545,
+        480,
+        140
+      ],
+      "pdfSha256": "486b512d0771f8f87723545ceab32981d96eeec81342a17fe7777107ac52ca30",
+      "pngSha256": "abb6a5dbaa49a67d89e7e35d7b7779aa28f179bbbce9ee7845bd02f6265c02e4",
+      "diagnosticControl": false
+    },
+    {
+      "name": "minimum-row-height-desired.png",
+      "case": "tables-row-height-twips",
+      "kind": "reference",
+      "page": 1,
+      "dpi": 144,
+      "cropPt": [
+        67,
+        65,
+        375,
+        145
+      ],
+      "pdfSha256": "e94dbd7f03fac8f59d1f443a6eafc11c6b7ce05be098fa6220930fa1228f70f7",
+      "pngSha256": "dfd4b5a8d579188eedb590d7beaba44b4129053616e4549f5747486115342772",
+      "diagnosticControl": false
+    },
+    {
+      "name": "minimum-row-height-measured.png",
+      "case": "tables-row-height-twips",
+      "kind": "candidate",
+      "page": 1,
+      "dpi": 144,
+      "cropPt": [
+        67,
+        65,
+        375,
+        145
+      ],
+      "pdfSha256": "9544907d37db2405c6b56eac0e99da6f116697a921fd9e88f89ca1ad37f13403",
+      "pngSha256": "e1027c45ab011177bf76a4388d0529df1c84b870a8d02ef236d61d00dcff09de",
+      "diagnosticControl": false
+    },
+    {
+      "name": "single-spacing-desired.png",
+      "case": "paragraphs-page-margins-multipage-twips",
+      "kind": "reference",
+      "page": 2,
+      "dpi": 144,
+      "cropPt": [
+        49,
+        167,
+        510,
+        126
+      ],
+      "pdfSha256": "6fc4359122719b74008e0cd9ec6662f1acb636b9280c2df0fb5a92abfa917820",
+      "pngSha256": "f00b42d9bd6ca84c193f5da97820eef27d2a508f0c2c0f76f01889fa3614e11c",
+      "diagnosticControl": false
+    },
+    {
+      "name": "single-spacing-measured.png",
+      "case": "paragraphs-page-margins-multipage-twips",
+      "kind": "candidate",
+      "page": 2,
+      "dpi": 144,
+      "cropPt": [
+        49,
+        167,
+        510,
+        126
+      ],
+      "pdfSha256": "306e40e5f5e5fd525b2af2bdf35555db9725b3c8b8bc8100b6559604d953e513",
+      "pngSha256": "3a8eba743aec66138b85c4ae4a80dcd9398017a37ed348ff259c10d929c14c1b",
+      "diagnosticControl": false
+    },
+    {
+      "name": "justification-desired.png",
+      "case": "paragraph-contract",
+      "kind": "reference",
+      "page": 1,
+      "dpi": 144,
+      "cropPt": [
+        67,
+        100,
+        480,
+        102
+      ],
+      "pdfSha256": "9480b2e49f3f07230cd3b6cb39a0c7c7da90115b42f67a0d4fe622a053ba4ca4",
+      "pngSha256": "b59208bfcd852a47bc2e2da1067b81a8990d156e3d49c8efd9a2e61818a0d873",
+      "diagnosticControl": false
+    },
+    {
+      "name": "justification-measured.png",
+      "case": "paragraph-contract",
+      "kind": "candidate",
+      "page": 1,
+      "dpi": 144,
+      "cropPt": [
+        67,
+        100,
+        480,
+        102
+      ],
+      "pdfSha256": "5b00d5b3177c2b2ba028a514d67444ae9589c21e70d823b621c93ec658b132f7",
+      "pngSha256": "7dc9806af2fe04a54012dc82c606301398734ca210d8562ab9c8aa1394523093",
+      "diagnosticControl": false
+    },
+    {
+      "name": "footnote-cap-desired.png",
+      "case": "notes-explicit-breaks-paragraph-control",
+      "kind": "reference",
+      "page": 1,
+      "dpi": 96,
+      "cropPt": null,
+      "pdfSha256": "fe30fdfb6f2eb7ec402ed3a6fbc3955e421cdb69c18e71222fff36b2f77ee6cb",
+      "pngSha256": "50358cb86669b2e927ec27923756c5f267aff4dc257106323f9c11220a09e294",
+      "diagnosticControl": false
+    },
+    {
+      "name": "footnote-cap-measured.png",
+      "case": "notes-explicit-breaks-paragraph-control",
+      "kind": "candidate",
+      "page": 1,
+      "dpi": 96,
+      "cropPt": null,
+      "pdfSha256": "3608aa6b357268ab93342789ec53c3137ed2da04401924749b2788eef69daa61",
+      "pngSha256": "67780be8406d0d2c85ed681056de356af9f9c9e180fedeee655fdd8e8ad0af43",
+      "diagnosticControl": false
+    },
+    {
+      "name": "fractional-paper-desired.png",
+      "case": "paragraphs-page-size-height-fractional",
+      "kind": "reference",
+      "page": 1,
+      "dpi": 96,
+      "cropPt": null,
+      "pdfSha256": "41e2650e97fa03fd0ae0b8662d56b2b1c81c4e615c4750b2bfb5c8f22e8d619d",
+      "pngSha256": "bafd90b23c6e399ca78b2a7fc795921773eeeb4afaf66df56ee0862592595315",
+      "diagnosticControl": false
+    },
+    {
+      "name": "fractional-paper-measured.png",
+      "case": "paragraphs-page-size-height-fractional",
+      "kind": "candidate",
+      "page": 1,
+      "dpi": 96,
+      "cropPt": null,
+      "pdfSha256": "0710bb624521d9fc1dcb0a7d58dc4a5a142f3e2bf450b7ce48834488cbb95d88",
+      "pngSha256": "f447fd16a4e4a8aaa02166d3a5932e134243719ea585f40dbd0e62f5cef0c59b",
+      "diagnosticControl": false
+    },
+    {
+      "name": "raster-canvas-desired.png",
+      "case": "paragraphs-page-size-width-control",
+      "kind": "reference",
+      "page": 1,
+      "dpi": 96,
+      "cropPt": null,
+      "pdfSha256": "81c9c0d933c19d3f7e5b6231e36f3f86fc34b5eda36e86945483ee2feb672015",
+      "pngSha256": "eb1e476c56fd6560a0c2bbf568584e0dfdecb24a33643b8868b12c9e70c3d5ae",
+      "diagnosticControl": false
+    },
+    {
+      "name": "raster-canvas-measured.png",
+      "case": "paragraphs-page-size-width-control",
+      "kind": "candidate",
+      "page": 1,
+      "dpi": 96,
+      "cropPt": null,
+      "pdfSha256": "a8a654c7168565cab23d1004f6171c5178c116bdf7337776775d08fe3fe0b385",
+      "pngSha256": "bbf227e468e59ca4cc1568fa5daa6d966d8b05929cfc6f3a6ea483fc8130ac4d",
+      "diagnosticControl": false
+    },
+    {
+      "name": "row-reference-desired.png",
+      "case": "tables-row-height-twips",
+      "kind": "reference",
+      "page": 1,
+      "dpi": 144,
+      "cropPt": [
+        67,
+        65,
+        375,
+        145
+      ],
+      "pdfSha256": "e94dbd7f03fac8f59d1f443a6eafc11c6b7ce05be098fa6220930fa1228f70f7",
+      "pngSha256": "dfd4b5a8d579188eedb590d7beaba44b4129053616e4549f5747486115342772",
+      "diagnosticControl": false
+    },
+    {
+      "name": "row-reference-measured.png",
+      "case": "tables-row-height-pt",
+      "kind": "reference",
+      "page": 1,
+      "dpi": 144,
+      "cropPt": [
+        67,
+        65,
+        375,
+        145
+      ],
+      "pdfSha256": "03aab37e8f896b78f45da1bf7778f3855eecc68d0784c20fe1eb4414c664a8ce",
+      "pngSha256": "3bf99f1a254570fb1d2daed2aedd37b6e35a386f37d8acb66d34b9e48fd9c74a",
+      "diagnosticControl": false
+    },
+    {
+      "name": "merge-reference-desired.png",
+      "case": "tables-vmerge-boundary-merged",
+      "kind": "candidate",
+      "page": 2,
+      "dpi": 144,
+      "cropPt": [
+        67,
+        60,
+        480,
+        150
+      ],
+      "pdfSha256": "2a094b7f4adf00b30af66ee941584325578530d3bc61e33b08588b0cd88eeb92",
+      "pngSha256": "904a05d6143abccc86b57b838b4687cbb0234162300b820e08454bc4adf04ec0",
+      "diagnosticControl": false
+    },
+    {
+      "name": "merge-reference-measured-p1.png",
+      "case": "tables-vmerge-boundary-merged",
+      "kind": "reference",
+      "page": 1,
+      "dpi": 144,
+      "cropPt": [
+        67,
+        590,
+        480,
+        100
+      ],
+      "pdfSha256": "f6bf0ceb63dbb41a6b4219a51f2e84da46e70877a51d54553a2783031d1b2681",
+      "pngSha256": "29b0a72f81d4af4d9197f916ec25b348f010013785f4eaa53aa4612f1d80042b",
+      "diagnosticControl": false
+    },
+    {
+      "name": "merge-reference-measured-p2.png",
+      "case": "tables-vmerge-boundary-merged",
+      "kind": "reference",
+      "page": 2,
+      "dpi": 144,
+      "cropPt": [
+        67,
+        60,
+        480,
+        150
+      ],
+      "pdfSha256": "f6bf0ceb63dbb41a6b4219a51f2e84da46e70877a51d54553a2783031d1b2681",
+      "pngSha256": "30574be2bb0294aa7be3061d6b95c91994be52624397e03fca4cde1604fe5fa8",
+      "diagnosticControl": false
+    },
+    {
+      "name": "footnote-styles-desired.png",
+      "case": "notes-explicit-breaks-paragraph-control",
+      "kind": "reference",
+      "page": 1,
+      "dpi": 144,
+      "cropPt": [
+        67,
+        143,
+        480,
+        110
+      ],
+      "pdfSha256": "fe30fdfb6f2eb7ec402ed3a6fbc3955e421cdb69c18e71222fff36b2f77ee6cb",
+      "pngSha256": "c6e20eeb3518843c039b6523e6797adc47bd95c53ab1b1c5c20bad97d2c80275",
+      "diagnosticControl": false
+    },
+    {
+      "name": "footnote-styles-measured.png",
+      "case": "notes-explicit-breaks-paragraph-control",
+      "kind": "candidate",
+      "page": 1,
+      "dpi": 144,
+      "cropPt": [
+        67,
+        358,
+        480,
+        125
+      ],
+      "pdfSha256": "3608aa6b357268ab93342789ec53c3137ed2da04401924749b2788eef69daa61",
+      "pngSha256": "0c092759c813780707816b2cd57653fe9f7faebcfca0798a7983636923d797d7",
+      "diagnosticControl": false
+    },
+    {
+      "name": "bidi-tokens-desired.png",
+      "case": "matching-fallback-diagnostic",
+      "kind": "reference",
+      "page": 1,
+      "dpi": 144,
+      "cropPt": [
+        100,
+        108,
+        420,
+        39
+      ],
+      "pdfSha256": "5a506e8b5d30dfb76e5c23bcd640efdcfb3672e6ef381221194b05a385745628",
+      "pngSha256": "2bd1d051235c4e9f116b9edd033f018c654074dbcd9f26cf5aaed7bcc95f71d5",
+      "diagnosticControl": true,
+      "provider": "Local LibreOffice 25.8.7.3 580(Build:3); same four Liberation Serif font hashes as the pinned CI bundle; screenshot-only control, not registered for scoring."
+    },
+    {
+      "name": "bidi-tokens-measured.png",
+      "case": "paragraphs-indentation-twips",
+      "kind": "candidate",
+      "page": 1,
+      "dpi": 144,
+      "cropPt": [
+        100,
+        108,
+        420,
+        39
+      ],
+      "pdfSha256": "a29dbe45766b0dcc7c0c805e48eadc26b04f03980409cc430c42c3ea444588ef",
+      "pngSha256": "131d4243585c0ff8600f81230569f73bfcd6ae99d2f09a924211cfef9c1dd0e2",
+      "diagnosticControl": false
+    },
+    {
+      "name": "indent-reference-desired.png",
+      "case": "matching-fallback-diagnostic",
+      "kind": "reference",
+      "page": 1,
+      "dpi": 144,
+      "cropPt": [
+        67,
+        108,
+        480,
+        155
+      ],
+      "pdfSha256": "5a506e8b5d30dfb76e5c23bcd640efdcfb3672e6ef381221194b05a385745628",
+      "pngSha256": "1d69f793585171722a077e68951259ddb8eeb7712517748753a59ac301134ea4",
+      "diagnosticControl": true,
+      "provider": "Local LibreOffice 25.8.7.3 580(Build:3); same four Liberation Serif font hashes as the pinned CI bundle; screenshot-only control, not registered for scoring."
+    },
+    {
+      "name": "indent-reference-measured.png",
+      "case": "paragraphs-indentation-twips",
+      "kind": "reference",
+      "page": 1,
+      "dpi": 144,
+      "cropPt": [
+        67,
+        108,
+        480,
+        155
+      ],
+      "pdfSha256": "38d3e0fcf3f51f55af9562853675581174d98bc926b832ceda9f4c50ffbd64b2",
+      "pngSha256": "08ef5aa9390b5e65b3fe8d68b4a5b5b4e4cf58eafb18d68ed128fa2c6556c1e3",
+      "diagnosticControl": false
+    }
+  ],
+  "screenshotRenderer": "pdftoppm version 25.03.0",
+  "rights": "Original MIT benchmark text and packages; Liberation Serif; no font binaries included."
+}
