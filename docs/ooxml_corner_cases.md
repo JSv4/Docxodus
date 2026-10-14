@@ -2969,6 +2969,36 @@ the whole marked result (`substitutePageNumberFields`), so the cached run's form
 intentionally not reproduced. A `\* MERGEFORMAT` result that should keep prior formatting, and Word's
 own output, still need a Word capture before Docxodus models them. Evidence: docx-fidelity-bench
 `paragraphs-page-number-*` cases (bench issue #26).
+## Footnotes: how much of a page a long note may take (issue #1119)
+
+**Status:** Docxodus matches LibreOffice; Word not yet captured (October 2026)
+
+A note longer than a page continues on following pages. How much of each page it may use decides
+where every later note line lands. Measured with LibreOffice 25.8.7.3 on one citing paragraph whose
+footnote is a long run of exact-spaced lines (docx-fidelity-bench `notes-explicit-breaks-*`):
+
+| Body height | Line height | Lines on a note-only page | Lines on the citing page |
+|---|---|---|---|
+| 468 pt | 4 pt | 107 | 107 |
+| 648 pt | 4 pt | 150 | 150 |
+| 864 pt | 4 pt | 202 | 202 |
+| 1008 pt | 4 pt | 236 | 236 |
+| 648 pt | 18 pt | 33 | 33 |
+| 864 pt | 18 pt | 44 | 44 |
+
+Every row fits one rule: the note container, including about 12.8 pt of separator and spacing,
+may take at most 95% of the body area. The body keeps a twentieth even on a page with no body text.
+
+| | Word | LibreOffice 25.8.7.3 | Docxodus before | Docxodus after |
+|---|---|---|---|---|
+| Citing page of the last body block | Not yet captured | ≤ 95% of body, less the body used | ≤ 60% | ≤ 95%, less the body used |
+| Note-only continuation page | Not yet captured | ≤ 95% of body | ≤ 60% (five pages for a 90-line note) | ≤ 95% (three pages) |
+| Body text still to place | Not yet captured | Not measured | ≤ 60% | ≤ 60% (unchanged) |
+
+Docxodus applies the 95% limit through `noteBandLimit` and `MAX_EXHAUSTED_BODY_FOOTNOTE_AREA_RATIO`
+in `npm/src/pagination.ts`, only once every body block is placed. The 60% cap that protects body
+text still waiting for the page is unchanged. Word's own limit needs a Word capture before either
+renderer's value is treated as Word behaviour.
 
 ---
 
