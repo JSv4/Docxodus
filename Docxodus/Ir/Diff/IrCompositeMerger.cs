@@ -425,6 +425,19 @@ internal static class IrCompositeMerger
             }
         }
 
+        // Moves INSIDE a block wrapper's children (issue #1143) render natively with the wrapper op that
+        // carries them. Their local ids are unique only within one reviewer's script, so give them global ids
+        // too, or two reviewers' wrapper moves would share one w:name.
+        for (int reviewer = 0; reviewer < rawScripts.Count; reviewer++)
+        {
+            var nestedLocalGids = new SortedSet<int>();
+            foreach (var op in rawScripts[reviewer].Operations)
+                if (op.WrapperOps is { } wrapperOps)
+                    CollectWrapperMoveGids(wrapperOps, nestedLocalGids);
+            foreach (var localGid in nestedLocalGids)
+                globalGid[(reviewer, localGid)] = nextGlobal++;
+        }
+
         return new MovePlan(globalGid);
     }
 
@@ -441,7 +454,11 @@ internal static class IrCompositeMerger
         var result = new List<IrEditOp>(script.Operations.Count);
         foreach (var op in script.Operations)
         {
-            if (op.Kind is IrEditOpKind.MoveBlock or IrEditOpKind.MoveModifyBlock
+            if (op.WrapperOps is { } wrapperOps)
+            {
+                result.Add(op with { WrapperOps = GlobalizeWrapperMoves(wrapperOps, reviewer, plan) });
+            }
+            else if (op.Kind is IrEditOpKind.MoveBlock or IrEditOpKind.MoveModifyBlock
                 && op.MoveGroupId is { } localGid
                 && plan.GlobalGidByGroup.TryGetValue((reviewer, localGid), out var global))
             {
@@ -468,6 +485,30 @@ internal static class IrCompositeMerger
 
         return new IrEditScript(IrNodeList.From(result), script.NoteOps);
     }
+
+    /// <summary>Every move group id in a block wrapper's child ops, through nested wrappers.</summary>
+    private static void CollectWrapperMoveGids(IrNodeList<IrEditOp> ops, SortedSet<int> sink)
+    {
+        foreach (var op in ops)
+        {
+            if (op.MoveGroupId is { } gid)
+                sink.Add(gid);
+            if (op.WrapperOps is { } nested)
+                CollectWrapperMoveGids(nested, sink);
+        }
+    }
+
+    /// <summary>Rewrite the move group ids inside a block wrapper's child ops to the plan's global ids.</summary>
+    private static IrNodeList<IrEditOp> GlobalizeWrapperMoves(IrNodeList<IrEditOp> ops, int reviewer, MovePlan plan) =>
+        IrNodeList.From(ops.Select(op =>
+        {
+            var rewritten = op.MoveGroupId is { } gid && plan.GlobalGidByGroup.TryGetValue((reviewer, gid), out var global)
+                ? op with { MoveGroupId = global }
+                : op;
+            return op.WrapperOps is { } nested
+                ? rewritten with { WrapperOps = GlobalizeWrapperMoves(nested, reviewer, plan) }
+                : rewritten;
+        }).ToList());
 
     /// <summary>
     /// Decide each of reviewer <paramref name="reviewer"/>'s Split/Merge ops NATIVE vs LOWER, mirroring the

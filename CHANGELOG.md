@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- A comparison now diffs inside a block wrapper whose own markup is unchanged, instead of deleting and
+  re-inserting the whole wrapper (issue #1143). This covers a block content control (`w:sdt`) and a
+  block-level `w:customXml` element. When the wrapper's own markup matches on both sides, its child
+  blocks are aligned the way a table cell's are, and their changes are drawn inside one copy of the
+  wrapper: a one-word edit marks only that word, and inserted, deleted, moved and edited paragraphs and
+  tables inside it get their usual marks. The wrapper's own markup is a control's `w:sdtPr` and
+  `w:sdtEndPr`, or a custom-XML element's attributes and `w:customXmlPr`. When it changes, the whole
+  wrapper is still replaced. This applies to `DocxCompare`/`DocxDiff.Compare`, `GetRevisions`,
+  consolidate when one reviewer edits the wrapper, and `SemanticDiff`. When two reviewers edit inside
+  the same wrapper, consolidate still records a block conflict. The edit script gains an optional
+  `wrapperOps` array on such a `ModifyBlock`, holding the child ops in the usual op shape. Two edited
+  wrappers with the same own markup now pair in the alignment even when they are not the only change
+  in their region.
+
 ### Fixed
 
 - Right-to-left bordered paragraphs (`w:bidi`) now draw their left and right borders outside the
@@ -28,10 +44,11 @@ All notable changes to this project will be documented in this file.
   comparison tracks edits inside one (issue #1114). The IR read the wrapper as an opaque block, so an
   edit inside it came out of `DocxCompare`/`DocxDiff` (and consolidate) as the old and new wrappers side
   by side with no revision marks: both accept and reject showed the clause twice. The wrapper is now
-  modeled like a block content control, so a change anywhere inside it deletes and re-inserts the whole
-  wrapper, with Word's paired `w:customXmlDelRange*`/`w:customXmlInsRange*` markers, and accept and
-  reject restore each side exactly. Diffing inside an unchanged wrapper, for content controls and
-  custom XML alike, is not yet supported. The projection renders the wrapper's blocks in its place in
+  modeled like a block content control. A change to the wrapper's own markup deletes and re-inserts the
+  whole wrapper, with Word's paired `w:customXmlDelRange*`/`w:customXmlInsRange*` markers, and accept and
+  reject restore each side exactly. An edit inside an otherwise unchanged wrapper is diffed in place (see
+  the `### Changed` entry above).
+  The projection renders the wrapper's blocks in its place in
   the body, headers, footers, notes and comments (block content controls stay omitted, as before), the
   incremental markdown patch sends the whole document when such a wrapper changes, and `SemanticDiff`
   reports the text edits inside it, with a `custom_xml.envelope` change only when the wrapper's own

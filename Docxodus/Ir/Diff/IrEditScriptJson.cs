@@ -23,7 +23,9 @@ namespace Docxodus.Ir.Diff;
 /// the four half-open span bounds. The compact array keeps a large corpus script terse while staying
 /// fully self-describing for the reader. For <c>SplitBlock</c>/<c>MergeBlock</c> ops, an optional
 /// <c>splitMergeAnchors</c> string array and <c>segmentDiffs</c> array (one tokenDiff object per anchor)
-/// are additionally present; both are omitted on every other kind.</para>
+/// are additionally present; both are omitted on every other kind. A <c>ModifyBlock</c> over two block
+/// wrappers with unchanged own markup carries a <c>wrapperOps</c> array of the wrappers' child ops, each in
+/// this same op shape.</para>
 /// <para><b>Determinism.</b> Field order is fixed in code; numbers are written via
 /// <see cref="Utf8JsonWriter"/> (invariant). Two <see cref="Write"/> calls on equal scripts produce
 /// byte-identical JSON.</para>
@@ -116,6 +118,13 @@ internal static class IrEditScriptJson
             writer.WriteStartArray("segmentDiffs");
             foreach (var d in segDiffs)
                 WriteTokenDiff(writer, d);
+            writer.WriteEndArray();
+        }
+        if (op.WrapperOps is { } wrapperOps)
+        {
+            writer.WriteStartArray("wrapperOps");
+            foreach (var child in wrapperOps)
+                WriteOp(writer, child);
             writer.WriteEndArray();
         }
         writer.WriteEndObject();
@@ -375,9 +384,17 @@ internal static class IrEditScriptJson
                 list.Add(ReadTokenDiff(d));
             segmentDiffs = IrNodeList.From(list);
         }
+        IrNodeList<IrEditOp>? wrapperOps = null;
+        if (element.TryGetProperty("wrapperOps", out var wo))
+        {
+            var list = new List<IrEditOp>();
+            foreach (var child in wo.EnumerateArray())
+                list.Add(ReadOp(child));
+            wrapperOps = IrNodeList.From(list);
+        }
         return new IrEditOp(kind, leftAnchor, rightAnchor, tokenDiff, moveGroupId, isMoveSource,
             tableDiff, textboxDiffs, splitMergeAnchors, segmentDiffs, bodyFullRewriteGroupId,
-            requiresWholeParagraphReplace, RelocationGroupId: relocationGroupId);
+            requiresWholeParagraphReplace, RelocationGroupId: relocationGroupId, WrapperOps: wrapperOps);
     }
 
     private static IrTableDiff ReadTableDiff(JsonElement element)

@@ -124,16 +124,23 @@ internal static class IrEditScriptBuilder
                 op.MoveGroupId is { } id ? op with { MoveGroupId = Fresh(scope, id) } : op)));
         }
 
-        /// <summary>The scopes nested inside one op: its table's rows and cells, and its textboxes.</summary>
+        /// <summary>The scopes nested inside one op: its table's rows and cells, its textboxes, and a block
+        /// wrapper's children.</summary>
         private IrEditOp Nested(IrEditOp op)
         {
             var tableDiff = op.TableDiff is { } table ? Table(table) : null;
             var textboxes = op.TextboxDiffs is { } boxes
                 ? IrNodeList.From(boxes.Select(b => b with { Ops = Scope(b.Ops) }))
                 : null;
-            return tableDiff is null && textboxes is null
+            var wrapperOps = op.WrapperOps is { } children ? Scope(children) : null;
+            return tableDiff is null && textboxes is null && wrapperOps is null
                 ? op
-                : op with { TableDiff = tableDiff ?? op.TableDiff, TextboxDiffs = textboxes ?? op.TextboxDiffs };
+                : op with
+                {
+                    TableDiff = tableDiff ?? op.TableDiff,
+                    TextboxDiffs = textboxes ?? op.TextboxDiffs,
+                    WrapperOps = wrapperOps ?? op.WrapperOps,
+                };
         }
 
         private IrTableDiff Table(IrTableDiff table)
@@ -412,7 +419,7 @@ internal static class IrEditScriptBuilder
 
     /// <summary>
     /// The note references the body diff keeps — an EqualBlock's, and the ones inside the Equal token runs of a
-    /// paragraph the diff modifies, down through modified tables' cells — as <c>(kind, left note id, right note
+    /// paragraph the diff modifies, down through modified tables' cells and block wrappers — as <c>(kind, left note id, right note
     /// id)</c>. The renderer writes such a reference once, so after reject it names the original's note and
     /// after accept the revised document's: the note diff must pair exactly those two notes (issue #865). A
     /// paragraph whose reference tokens and reference inlines cannot be lined up is skipped.
@@ -465,6 +472,10 @@ internal static class IrEditScriptBuilder
                     foreach (var cell in row.CellOps ?? IrNodeList.Empty<IrCellOp>())
                         if (cell.BlockOps is { } cellOps)
                             CollectKeptNoteReferences(left, right, cellOps, settings, kept);
+            }
+            else if (op.WrapperOps is { } wrapperOps)
+            {
+                CollectKeptNoteReferences(left, right, wrapperOps, settings, kept);
             }
         }
     }
@@ -1780,6 +1791,17 @@ internal static class IrEditScriptBuilder
 
         if (leftBlock is IrParagraph lp && rightBlock is IrParagraph rp)
             return MakeParagraphModifyOp(lp, rp, settings, storyFinalPair);
+
+        // Two block wrappers whose own markup is unchanged: align their children like a table cell's blocks,
+        // so the renderers draw the edits inside one copy of the wrapper (issue #1143). A changed wrapper keeps
+        // no nested ops and is replaced whole.
+        if (leftBlock is IrSdtBlock ls && rightBlock is IrSdtBlock rs && IrSdtBlock.SameShell(ls, rs))
+        {
+            var alignment = IrBlockAligner.AlignBlocks(ls.Blocks, rs.Blocks, settings);
+            return new IrEditOp(IrEditOpKind.ModifyBlock,
+                leftBlock.Anchor.ToString(), rightBlock.Anchor.ToString(), null, null, null,
+                WrapperOps: IrNodeList.From(ProjectAlignment(ls.Blocks, alignment, settings)));
+        }
 
         return new IrEditOp(IrEditOpKind.ModifyBlock,
             leftBlock.Anchor.ToString(), rightBlock.Anchor.ToString(),

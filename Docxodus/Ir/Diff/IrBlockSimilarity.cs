@@ -44,6 +44,9 @@ internal sealed class IrBlockSimilarity
     private readonly Dictionary<IrTable, MatchKeyBag> _tableBagCache =
         new(ReferenceEqualityComparer.Instance);
 
+    // Per-Align-call block-wrapper bag cache, created on first use so wrapper-free alignments allocate nothing.
+    private Dictionary<IrSdtBlock, MatchKeyBag>? _wrapperBagCache;
+
     public IrBlockSimilarity(IrDiffSettings settings) => _settings = settings;
 
     /// <summary>
@@ -66,6 +69,12 @@ internal sealed class IrBlockSimilarity
         // Fine and compatible modes; the produced table-row/cell ops are the engine's truth either way.
         if (left is IrTable lt && right is IrTable rt)
             return Jaccard(TableBag(lt), TableBag(rt));
+
+        // Two block wrappers with the same own markup (issue #1143): score their carried content like a table's,
+        // so an edited wrapper pairs as Modified and the diff aligns its children inside one copy of it. A
+        // wrapper whose own markup changed keeps the exact-content rule and is replaced whole.
+        if (left is IrSdtBlock ls && right is IrSdtBlock rs && IrSdtBlock.SameShell(ls, rs))
+            return Jaccard(WrapperBag(ls), WrapperBag(rs));
 
         // Other non-paragraph or mixed-kind pairs: only exact content counts.
         return left.ContentHash.Equals(right.ContentHash) ? 1.0 : 0.0;
@@ -390,6 +399,14 @@ internal sealed class IrBlockSimilarity
         return bag;
     }
 
+    private MatchKeyBag WrapperBag(IrSdtBlock wrapper)
+    {
+        _wrapperBagCache ??= new Dictionary<IrSdtBlock, MatchKeyBag>(ReferenceEqualityComparer.Instance);
+        if (!_wrapperBagCache.TryGetValue(wrapper, out var bag))
+            _wrapperBagCache[wrapper] = bag = MatchKeyBag.BuildBlocks(wrapper.Blocks, _settings);
+        return bag;
+    }
+
     /// <summary>
     /// Jaccard index over two token-MatchKey multisets: sum of per-key min counts (intersection) over
     /// sum of per-key max counts (union). Two empty bags score 1.0 (identical empty content).
@@ -557,11 +574,23 @@ internal sealed class IrBlockSimilarity
                 EmptyWords, total, wordCount, 0, 0, EmptyCounts);
         }
 
+        /// <summary>Flatten a block wrapper's content to one MatchKey multiset over its paragraphs' tokens, those
+        /// in nested wrappers and those in its tables' cells.</summary>
+        public static MatchKeyBag BuildBlocks(IReadOnlyList<IrBlock> blocks, IrDiffSettings settings)
+        {
+            var counts = new Dictionary<string, int>();
+            int total = 0, wordCount = 0;
+            AddTableBlockTokens(blocks, settings, counts, ref total, ref wordCount, includeTables: true);
+            return new MatchKeyBag(
+                counts, EmptyCounts, EmptyCounts, EmptyCounts, System.Array.Empty<IrDiffToken>(), EmptyWords,
+                EmptyWords, total, wordCount, 0, 0, EmptyCounts);
+        }
+
         /// <summary>Add token keys from direct paragraphs and those reachable through block SDTs in a table cell.
         /// Block SDTs stay atomic to the aligner; this only supplies the table's content-summary heuristic.</summary>
         private static void AddTableBlockTokens(
             IReadOnlyList<IrBlock> blocks, IrDiffSettings settings, Dictionary<string, int> counts,
-            ref int total, ref int wordCount)
+            ref int total, ref int wordCount, bool includeTables = false)
         {
             foreach (var block in blocks)
             {
@@ -577,7 +606,12 @@ internal sealed class IrBlockSimilarity
                         }
                         break;
                     case IrSdtBlock sdt:
-                        AddTableBlockTokens(sdt.Blocks, settings, counts, ref total, ref wordCount);
+                        AddTableBlockTokens(sdt.Blocks, settings, counts, ref total, ref wordCount, includeTables);
+                        break;
+                    case IrTable table when includeTables:
+                        foreach (var row in table.Rows)
+                            foreach (var cell in row.Cells)
+                                AddTableBlockTokens(cell.Blocks, settings, counts, ref total, ref wordCount, includeTables);
                         break;
                 }
             }

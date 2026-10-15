@@ -817,17 +817,22 @@ internal static class IrRelocationPairer
         return (sb.ToString(), words);
     }
 
-    /// <summary>The block lists of the cells inside one op's table diff that both surfaces draw cell by cell:
-    /// an in-place Modified table that does not take the whole-table fallback. A moved table is drawn whole;
-    /// rows that are themselves inserted, deleted or moved are whole-row changes with no cell lists.</summary>
-    private static IEnumerable<IrNodeList<IrEditOp>> CellOpLists(IrEditOp op, IrDiffSettings settings) =>
-        op.Kind == IrEditOpKind.ModifyBlock && op.TableDiff is { } table &&
-        !IrTableDiffer.NeedsWholeTableFallback(table, settings)
-            ? table.RowOps
-                .SelectMany(row => row.CellOps ?? Enumerable.Empty<IrCellOp>())
-                .Where(cell => cell.BlockOps is not null)
-                .Select(cell => cell.BlockOps!)
-            : Enumerable.Empty<IrNodeList<IrEditOp>>();
+    /// <summary>The nested block lists inside one op that both surfaces draw block by block: the cells of an
+    /// in-place Modified table that does not take the whole-table fallback, and the children of a block wrapper
+    /// diffed inside one copy of itself (issue #1143). A moved table is drawn whole; rows that are themselves
+    /// inserted, deleted or moved are whole-row changes with no cell lists.</summary>
+    private static IEnumerable<IrNodeList<IrEditOp>> CellOpLists(IrEditOp op, IrDiffSettings settings)
+    {
+        if (op.Kind == IrEditOpKind.ModifyBlock && op.WrapperOps is { } wrapperOps)
+            return new[] { wrapperOps };
+        return op.Kind == IrEditOpKind.ModifyBlock && op.TableDiff is { } table &&
+            !IrTableDiffer.NeedsWholeTableFallback(table, settings)
+                ? table.RowOps
+                    .SelectMany(row => row.CellOps ?? Enumerable.Empty<IrCellOp>())
+                    .Where(cell => cell.BlockOps is not null)
+                    .Select(cell => cell.BlockOps!)
+                : Enumerable.Empty<IrNodeList<IrEditOp>>();
+    }
 
     /// <summary>The largest move group id anywhere in the script. Ids are unique across scopes (issue #924),
     /// so relocation ids continue above it.</summary>
@@ -847,6 +852,7 @@ internal static class IrRelocationPairer
                 }
                 foreach (var box in op.TextboxDiffs ?? Enumerable.Empty<IrTextboxDiff>())
                     Visit(box.Ops);
+                Visit(op.WrapperOps ?? Enumerable.Empty<IrEditOp>());
             }
         }
         Visit(script.Operations);
@@ -861,6 +867,8 @@ internal static class IrRelocationPairer
         IrNodeList.From(ops.Select(op =>
         {
             var rewritten = replaced.TryGetValue(op, out var r) ? r : op;
+            if (op.WrapperOps is { } wrapperOps)
+                return rewritten with { WrapperOps = Rewrite(wrapperOps, replaced) };
             if (op.TableDiff is not { } table)
                 return rewritten;
             return rewritten with

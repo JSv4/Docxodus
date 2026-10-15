@@ -777,10 +777,11 @@ internal static class IrReader
             Blocks = IrNodeList.From(children),
             EnvelopeDigest = envelopeDigest,
             IsCustomXml = isCustomXml,
-            ShellDigest = isCustomXml
-                ? IrHasher.CanonicalHash(new XElement(sdt.Name, sdt.Attributes(), sdt.Elements(W + "customXmlPr")),
-                    ctx.RelResolver)
-                : default,
+            ShellDigest = IrHasher.CanonicalHash(
+                new XElement(sdt.Name, sdt.Attributes(), isCustomXml
+                    ? sdt.Elements(W + "customXmlPr")
+                    : sdt.Elements().Where(e => e.Name == W + "sdtPr" || e.Name == W + "sdtEndPr")),
+                ctx.RelResolver),
             ContentHash = contentBuilder.Build(),
             // Phase 1 deliberately treats every envelope change as structural content, never a
             // format-only update: there is no safe pPr-like native marker for arbitrary sdt metadata.

@@ -183,10 +183,16 @@ internal sealed record IrSdtBlock : IrBlock
     /// markdown projection renders a custom-XML wrapper's content but not a content control's.</summary>
     public bool IsCustomXml { get; init; }
 
-    /// <summary>For a <c>w:customXml</c> wrapper, the canonical digest of the wrapper alone — its attributes
-    /// and <c>w:customXmlPr</c>, without the blocks it carries — so a change to the wrapper can be told from a
-    /// change to its content. Default for a content control.</summary>
+    /// <summary>The canonical digest of the wrapper alone, without the blocks it carries: a
+    /// <c>w:customXml</c> element's attributes and <c>w:customXmlPr</c>, or a content control's
+    /// <c>w:sdtPr</c> and <c>w:sdtEndPr</c>. It tells a change to the wrapper from a change to its content:
+    /// the diff aligns the children of two wrappers with equal shells inside one copy of the wrapper.</summary>
     public IrHash ShellDigest { get; init; }
+
+    /// <summary>Whether two wrappers are the same kind with the same own markup (<see cref="ShellDigest"/>), so
+    /// only the blocks they carry can differ.</summary>
+    public static bool SameShell(IrSdtBlock left, IrSdtBlock right) =>
+        left.IsCustomXml == right.IsCustomXml && left.ShellDigest == right.ShellDigest;
 }
 
 /// <summary>A table row. <paramref name="Source"/> is equality-neutral provenance.</summary>

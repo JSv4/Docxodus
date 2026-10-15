@@ -229,10 +229,17 @@ internal static class IrCompositeScriptJson
                 WriteTokenDiff(writer, d);
             writer.WriteEndArray();
         }
+        if (op.WrapperOps is { } wrapperOps)
+        {
+            writer.WriteStartArray("wrapperOps");
+            foreach (var child in wrapperOps)
+                WriteEmbeddedOp(writer, child);
+            writer.WriteEndArray();
+        }
     }
 
     /// <summary>Write a plain (non-composite) embedded <see cref="IrEditOp"/> as its own object — used for the
-    /// nested ops inside table cell/textbox diffs, which carry no composite attribution.</summary>
+    /// nested ops inside table cell/textbox diffs and block wrappers, which carry no composite attribution.</summary>
     private static void WriteEmbeddedOp(Utf8JsonWriter writer, IrEditOp op)
     {
         writer.WriteStartObject();

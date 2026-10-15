@@ -612,6 +612,14 @@ internal static class IrBlockAligner
             leftoverRight.Remove(rj);
         }
 
+        // Block wrappers get the same unambiguous residue rule (issue #1143): a leftover wrapper pairs with the
+        // next leftover wrapper on the other side, in document order, when both have the same own markup, so
+        // a heavily edited wrapper is still diffed inside one copy of itself. A wrapper whose own markup
+        // changed has no such partner and is replaced whole.
+        if (AnyWrapper(leftoverLeft, leftBlocks) && AnyWrapper(leftoverRight, rightBlocks))
+            PairLeftoverWrappers(leftBlocks, rightBlocks, leftKind, rightKind, leftMatch, rightMatch,
+                leftoverLeft, leftoverRight);
+
         // M2.6 1:N split / N:1 merge containment scan (gated by IrDiffSettings.DetectSplitMerge — ON by default).
         //
         // PLACEMENT RATIONALE. The scan runs AFTER SimilarityPair (and the table residue) so that a
@@ -842,6 +850,42 @@ internal static class IrBlockAligner
         int contentPairs = GreedyRounds(requireContentWord: true);
         if (contentPairs == 0 && !gapHasContentEvidencedPair)
             GreedyRounds(requireContentWord: false);
+    }
+
+    private static bool AnyWrapper(List<int> indexes, IReadOnlyList<IrBlock> blocks)
+    {
+        foreach (int i in indexes)
+            if (blocks[i] is IrSdtBlock)
+                return true;
+        return false;
+    }
+
+    /// <summary>Pair leftover block wrappers with equal shells in document order (see the call site).</summary>
+    private static void PairLeftoverWrappers(
+        IReadOnlyList<IrBlock> leftBlocks, IReadOnlyList<IrBlock> rightBlocks,
+        IrAlignmentKind?[] leftKind, IrAlignmentKind?[] rightKind, int[] leftMatch, int[] rightMatch,
+        List<int> leftoverLeft, List<int> leftoverRight)
+    {
+        int nextRight = 0;
+        foreach (int li in leftoverLeft.ToList())
+        {
+            if (leftBlocks[li] is not IrSdtBlock left)
+                continue;
+            for (int k = nextRight; k < leftoverRight.Count; k++)
+            {
+                int rj = leftoverRight[k];
+                if (rightBlocks[rj] is not IrSdtBlock right || !IrSdtBlock.SameShell(left, right))
+                    continue;
+                leftKind[li] = IrAlignmentKind.Modified;
+                rightKind[rj] = IrAlignmentKind.Modified;
+                leftMatch[li] = rj;
+                rightMatch[rj] = li;
+                leftoverLeft.Remove(li);
+                leftoverRight.RemoveAt(k);
+                nextRight = k;
+                break;
+            }
+        }
     }
 
     /// <summary>λ of the similarity-pair locality prior — see the comment in

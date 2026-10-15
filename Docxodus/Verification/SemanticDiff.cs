@@ -686,9 +686,11 @@ internal static class SemanticDiffEngine
                             Digest(lsdt.EnvelopeDigest, "docxodus-ir-sdt-envelope-v1"),
                             Digest(rsdt.EnvelopeDigest, "docxodus-ir-sdt-envelope-v1"));
                     }
-                    var sdtAlignment = IrBlockAligner.AlignBlocks(lsdt.Blocks, rsdt.Blocks, _settings);
+                    // The edit script already aligned an unchanged wrapper's children (issue #1143); a changed
+                    // wrapper is replaced whole there, so align its children here to report what changed inside.
                     ProjectOps(
-                        IrEditScriptBuilder.ProjectAlignment(lsdt.Blocks, sdtAlignment, _settings),
+                        (IReadOnlyList<IrEditOp>?)op.WrapperOps ?? IrEditScriptBuilder.ProjectAlignment(
+                            lsdt.Blocks, IrBlockAligner.AlignBlocks(lsdt.Blocks, rsdt.Blocks, _settings), _settings),
                         part,
                         lsdt.Anchor.Scope,
                         rsdt.Anchor.Scope);
