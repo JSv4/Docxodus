@@ -150,6 +150,117 @@ public class BlockWrapperNestedDiffTests
         AssertRoundTrip(left, right, redline);
     }
 
+    // ---- markers between the wrapper's blocks ----------------------------------------------------
+
+    public enum MarkerPlace
+    {
+        InTheWrapper,
+        InANestedWrapper,
+        InATableCell,
+    }
+
+    public static IEnumerable<object[]> WrapperKindsAndMarkerPlaces() =>
+        from kind in new[] { Wrapper.CustomXml, Wrapper.ContentControl }
+        from place in Enum.GetValues<MarkerPlace>()
+        select new object[] { kind, place };
+
+    // A bookmark or comment range between a wrapper's blocks is not modeled by the IR, so a wrapper holding one
+    // is replaced whole (each copy keeps its markers) rather than diffed in place, which would drop them. The
+    // tests read the redline itself and go through DocxDiff.Compare, because accepting revisions already loses
+    // block-level markers, and so does the DocxCompare front door, which accepts its inputs first (issue #1149).
+
+    /// <summary>A wrapper whose content brackets Alpha, Bravo and Charlie between <paramref name="start"/> and
+    /// <paramref name="end"/>, block-level markers placed per <paramref name="place"/>.</summary>
+    private static string Bracketed(Wrapper kind, MarkerPlace place, string bravo, string start, string end)
+    {
+        var inner = start + P(Alpha) + P(bravo) + P(Charlie) + end;
+        return place switch
+        {
+            MarkerPlace.InTheWrapper => Wrap(kind, inner),
+            MarkerPlace.InANestedWrapper => Wrap(kind, P(Tail) + Wrap(kind, inner, id: "inner"), id: "outer"),
+            _ => Wrap(kind, TwoCellTable(P("Left cell stays."), inner)),
+        };
+    }
+
+    [Theory]
+    [MemberData(nameof(WrapperKindsAndMarkerPlaces))]
+    public void Compare_BookmarkBetweenTheWrappersBlocks_StaysInTheRedline(Wrapper kind, MarkerPlace place)
+    {
+        const string Start = "<w:bookmarkStart w:id=\"7\" w:name=\"Article\"/>";
+        const string End = "<w:bookmarkEnd w:id=\"7\"/>";
+        var left = Doc(Bracketed(kind, place, Bravo, Start, End) + P(Tail));
+        var right = Doc(Bracketed(kind, place, BravoEdited, Start, End) + P(Tail));
+
+        var redline = DocxDiff.Compare(left, right);
+
+        AssertEveryRangeBracketsTheClauses(Body(redline), W.bookmarkStart, W.bookmarkEnd);
+        AssertRoundTrip(left, right, redline);
+    }
+
+    [Theory]
+    [MemberData(nameof(WrapperKindsAndMarkerPlaces))]
+    public void Compare_CommentRangeBetweenTheWrappersBlocks_StaysInTheRedline(Wrapper kind, MarkerPlace place)
+    {
+        const string Start = "<w:commentRangeStart w:id=\"0\"/>";
+        const string End = "<w:commentRangeEnd w:id=\"0\"/><w:p><w:r><w:commentReference w:id=\"0\"/></w:r></w:p>";
+        WmlDocument Commented(string bravo) =>
+            IrTestDocuments.WithComment("Ann", "A", "2026-01-01T00:00:00Z", "Check this clause.",
+                Bracketed(kind, place, bravo, Start, End) + P(Tail));
+        var left = Commented(Bravo);
+        var right = Commented(BravoEdited);
+
+        var redline = DocxDiff.Compare(left, right);
+
+        AssertEveryRangeBracketsTheClauses(Body(redline), W.commentRangeStart, W.commentRangeEnd);
+    }
+
+    [Theory]
+    [InlineData(Wrapper.CustomXml)]
+    [InlineData(Wrapper.ContentControl)]
+    public void Compare_BookmarkInsideAParagraphOfAnUnchangedWrapper_StillDiffsInPlace(Wrapper kind)
+    {
+        // Only markers between blocks force a whole replacement; one inside a paragraph is carried by it.
+        string Marked(string bravo) => Wrap(kind, P(Alpha)
+            + $"<w:p><w:bookmarkStart w:id=\"7\" w:name=\"Article\"/><w:r><w:t xml:space=\"preserve\">{bravo}</w:t></w:r>"
+            + "<w:bookmarkEnd w:id=\"7\"/></w:p>" + P(Charlie));
+        var left = Doc(Marked(Bravo) + P(Tail));
+        var right = Doc(Marked(BravoEdited) + P(Tail));
+
+        var redline = DocxCompare.Compare(left, right);
+
+        var body = Body(redline);
+        AssertSingleWrapperWithoutRangeMarkers(body, kind);
+        Assert.Equal("monthly", string.Concat(body.Descendants(W.delText).Select(t => t.Value)));
+        AssertRoundTrip(left, right, redline);
+    }
+
+    /// <summary>The redline holds at least one <paramref name="startName"/> range, and each one closes after
+    /// all three clauses of its copy of the wrapper.</summary>
+    private static void AssertEveryRangeBracketsTheClauses(XElement body, XName startName, XName endName)
+    {
+        var starts = body.Descendants(startName).ToList();
+        Assert.NotEmpty(starts);
+        foreach (var start in starts)
+        {
+            var text = MarkedText(body, e => e == start, endName);
+            Assert.StartsWith(Alpha, text, StringComparison.Ordinal);
+            Assert.EndsWith(Charlie, text, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>The text, deleted or not, between the single start marker matching <paramref name="isStart"/>
+    /// and the <paramref name="endName"/> marker with the same id.</summary>
+    private static string MarkedText(XElement body, Func<XElement, bool> isStart, XName endName)
+    {
+        var all = body.Descendants().ToList();
+        var start = Assert.Single(all, e => isStart(e));
+        var id = (string?)start.Attribute(W.id);
+        int from = all.IndexOf(start);
+        int to = all.FindIndex(from, e => e.Name == endName && (string?)e.Attribute(W.id) == id);
+        Assert.True(to > from, "the range has no end after its start");
+        return string.Concat(all.Skip(from).Take(to - from).Where(e => e.Name == W.t || e.Name == W.delText).Select(e => e.Value));
+    }
+
     // ---- the wrapper itself changed ------------------------------------------------------------
 
     [Theory]
@@ -637,7 +748,8 @@ public class BlockWrapperNestedDiffTests
     /// <summary>accept(redline) equals <paramref name="revised"/> and reject(redline) equals
     /// <paramref name="original"/>, block for block: every wrapper with its exact properties, every table, and
     /// every paragraph's properties and formatted text (adjacent runs with the same properties merged, since
-    /// the redline may split a run around a change).</summary>
+    /// the redline may split a run around a change). Bookmarks and comment ranges between blocks are left out:
+    /// accepting or rejecting revisions drops them (issue #1149).</summary>
     private static void AssertRoundTrip(WmlDocument original, WmlDocument revised, WmlDocument redline, string? because = null)
     {
         var accepted = DocxDiffOps.AcceptRevisions(redline.DocumentByteArray);
@@ -701,7 +813,9 @@ public class BlockWrapperNestedDiffTests
                     .Append(Canonical(child.Element(W.sdtEndPr))).Append('\n');
                 AppendBlocks(child.Element(W.sdtContent)!, sb, depth + 1);
             }
-            else if (child.Name != W.sectPr && child.Name != W.customXmlPr && child.Name != W.pPr)
+            else if (child.Name != W.sectPr && child.Name != W.customXmlPr && child.Name != W.pPr
+                && child.Name != W.bookmarkStart && child.Name != W.bookmarkEnd
+                && child.Name != W.commentRangeStart && child.Name != W.commentRangeEnd)
             {
                 sb.Append(indent).Append("OTHER ").Append(child.Name.LocalName).Append('\n');
             }

@@ -189,10 +189,22 @@ internal sealed record IrSdtBlock : IrBlock
     /// the diff aligns the children of two wrappers with equal shells inside one copy of the wrapper.</summary>
     public IrHash ShellDigest { get; init; }
 
+    /// <summary>Whether a bookmark or comment-range marker sits between blocks anywhere in the wrapper's content
+    /// (outside every paragraph: directly in the wrapper, in a nested wrapper, in a table row or cell). The
+    /// reader drops such markers (rule N3), so the wrapper's blocks alone do not describe its content.</summary>
+    public bool HasBlockLevelMarkers { get; init; }
+
     /// <summary>Whether two wrappers are the same kind with the same own markup (<see cref="ShellDigest"/>), so
     /// only the blocks they carry can differ.</summary>
     public static bool SameShell(IrSdtBlock left, IrSdtBlock right) =>
         left.IsCustomXml == right.IsCustomXml && left.ShellDigest == right.ShellDigest;
+
+    /// <summary>Whether the diff may align two wrappers' children inside one copy of the wrapper: the same
+    /// shell, and no block-level marker on either side, which rendering the children alone would lose (a
+    /// bookmark or comment range around several paragraphs). Otherwise the wrapper is replaced whole, which
+    /// copies each side's markers with it.</summary>
+    public static bool CanDiffInPlace(IrSdtBlock left, IrSdtBlock right) =>
+        SameShell(left, right) && !left.HasBlockLevelMarkers && !right.HasBlockLevelMarkers;
 }
 
 /// <summary>A table row. <paramref name="Source"/> is equality-neutral provenance.</summary>

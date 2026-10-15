@@ -782,12 +782,38 @@ internal static class IrReader
                     ? sdt.Elements(W + "customXmlPr")
                     : sdt.Elements().Where(e => e.Name == W + "sdtPr" || e.Name == W + "sdtEndPr")),
                 ctx.RelResolver),
+            HasBlockLevelMarkers = HasBlockLevelMarkers(sdt),
             ContentHash = contentBuilder.Build(),
             // Phase 1 deliberately treats every envelope change as structural content, never a
             // format-only update: there is no safe pPr-like native marker for arbitrary sdt metadata.
             FormatFingerprint = EmptyUnmodeledDigest,
             Source = ctx.Provenance(sdt),
         };
+    }
+
+    /// <summary>Whether <paramref name="wrapper"/> holds a marker <see cref="IsDroppedParagraphChild"/> drops
+    /// at block level: one with no paragraph between it and the wrapper (see
+    /// <see cref="IrSdtBlock.HasBlockLevelMarkers"/>).</summary>
+    private static bool HasBlockLevelMarkers(XElement wrapper)
+    {
+        var p = W + "p";
+        foreach (var marker in wrapper.Descendants())
+        {
+            if (!IsDroppedParagraphChild(marker.Name))
+                continue;
+            var inParagraph = false;
+            for (var parent = marker.Parent; parent != null && parent != wrapper; parent = parent.Parent)
+            {
+                if (parent.Name == p)
+                {
+                    inParagraph = true;
+                    break;
+                }
+            }
+            if (!inParagraph)
+                return true;
+        }
+        return false;
     }
 
     private static string Unid(XElement el) => (string?)el.Attribute(PtOpenXml.Unid) ?? "";

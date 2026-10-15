@@ -1793,9 +1793,9 @@ internal static class IrEditScriptBuilder
             return MakeParagraphModifyOp(lp, rp, settings, storyFinalPair);
 
         // Two block wrappers whose own markup is unchanged: align their children like a table cell's blocks,
-        // so the renderers draw the edits inside one copy of the wrapper (issue #1143). A changed wrapper keeps
-        // no nested ops and is replaced whole.
-        if (leftBlock is IrSdtBlock ls && rightBlock is IrSdtBlock rs && IrSdtBlock.SameShell(ls, rs))
+        // so the renderers draw the edits inside one copy of the wrapper (issue #1143). A changed wrapper, or
+        // one holding a bookmark or comment range between its blocks, keeps no nested ops and is replaced whole.
+        if (leftBlock is IrSdtBlock ls && rightBlock is IrSdtBlock rs && IrSdtBlock.CanDiffInPlace(ls, rs))
         {
             var alignment = IrBlockAligner.AlignBlocks(ls.Blocks, rs.Blocks, settings);
             return new IrEditOp(IrEditOpKind.ModifyBlock,

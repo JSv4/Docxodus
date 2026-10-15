@@ -13,13 +13,15 @@ All notable changes to this project will be documented in this file.
   wrapper: a one-word edit marks only that word, and inserted, deleted, moved and edited paragraphs and
   tables inside it get their usual marks. The wrapper's own markup is a control's `w:sdtPr` and
   `w:sdtEndPr`, or a custom-XML element's attributes and `w:customXmlPr`. When it changes, the whole
-  wrapper is still replaced. This applies to `DocxCompare`/`DocxDiff.Compare`, `GetRevisions`,
+  wrapper is still replaced. It is also replaced whole when a bookmark or comment range sits between
+  blocks anywhere inside it (directly, in a nested wrapper, or in a table row or cell), because the
+  in-place diff carries only blocks and would drop those markers; the whole copy keeps them. This applies to `DocxCompare`/`DocxDiff.Compare`, `GetRevisions`,
   consolidate when one reviewer edits the wrapper, and `SemanticDiff`. `SemanticDiff` now reports a
   `content_control.envelope` change only when the control's `w:sdtPr`/`w:sdtEndPr` change (its digests
   are labelled `docxodus-ir-sdt-shell-v1`), not for every edit inside the control, matching
   `custom_xml.envelope`. When two reviewers edit inside the same wrapper, consolidate still records a
-  block conflict. The edit script gains an optional
-  `wrapperOps` array on such a `ModifyBlock`, holding the child ops in the usual op shape. Two edited
+  block conflict. The edit script gains an optional `wrapperOps` array on such a `ModifyBlock`, holding
+  the child ops in the usual op shape. Two edited
   wrappers with the same own markup now pair in the alignment even when they are not the only change
   in their region.
 
