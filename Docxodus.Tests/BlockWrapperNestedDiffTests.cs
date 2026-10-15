@@ -749,7 +749,7 @@ public class BlockWrapperNestedDiffTests
     /// <paramref name="original"/>, block for block: every wrapper with its exact properties, every table, and
     /// every paragraph's properties and formatted text (adjacent runs with the same properties merged, since
     /// the redline may split a run around a change). Bookmarks and comment ranges between blocks are left out:
-    /// accepting or rejecting revisions drops them (issue #1149).</summary>
+    /// accepting revisions drops them (issue #1149).</summary>
     private static void AssertRoundTrip(WmlDocument original, WmlDocument revised, WmlDocument redline, string? because = null)
     {
         var accepted = DocxDiffOps.AcceptRevisions(redline.DocumentByteArray);
