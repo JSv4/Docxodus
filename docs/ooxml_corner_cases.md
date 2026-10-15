@@ -3000,6 +3000,40 @@ in `npm/src/pagination.ts`, only once every body block is placed. The 60% cap th
 text still waiting for the page is unchanged. Word's own limit needs a Word capture before either
 renderer's value is treated as Word behaviour.
 
+## Footnotes: the note number is a run of the first paragraph, and spacing after stops at the margin (issue #1130)
+
+**Status:** Docxodus matches LibreOffice; Word not yet captured (October 2026)
+
+In OOXML a note's number is the `w:footnoteRef` run at the start of its first paragraph, so that
+paragraph's indentation and spacing govern the number's line too:
+
+```xml
+<w:footnote w:id="1">
+  <w:p>
+    <w:pPr><w:ind w:left="360" w:hanging="360"/><w:spacing w:after="120"/></w:pPr>
+    <w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteRef/></w:r>
+    <w:r><w:t xml:space="preserve"> A note long enough to wrap onto a second line…</w:t></w:r>
+  </w:p>
+</w:footnote>
+```
+
+Measured with LibreOffice 25.8.7.3 on `TestFiles/NVCA-Model-COI.docx` (FootnoteText: 10 pt Times New
+Roman, 6 pt after) and on two single-paragraph notes with `w:spacing w:after="120"`:
+
+| | Word | LibreOffice 25.8.7.3 | Docxodus before | Docxodus after |
+|---|---|---|---|---|
+| Hanging-indented note, wrapped lines | Not yet captured | Start at the indent | Start at the band edge | Start at the indent (18 pt) |
+| Number of a note split across pages | Not yet captured | Once, on the citing page | Once | Once |
+| Gap between consecutive single-paragraph notes | Not yet captured | 6 pt (top-to-top 17.5 pt at an 11.55 pt pitch) | 0 | 6 pt |
+| Spacing after the note area's last paragraph | Not yet captured | Not reserved: the last line ends on the bottom margin (720 pt) | Reserved only when the last note had several paragraphs | Not reserved (last line ends at 719.3 pt) |
+
+Docxodus used to render the number beside the note text and force the first paragraph
+`display: inline` to share its line; an inline paragraph ignores its own margins and text-indent.
+`AddNoteNumberToFirstParagraph` in `WmlToHtmlConverter.cs` now puts the number inside the first
+paragraph, and the generated rule
+`.page-footnotes .footnote-item:last-child .footnote-content p:last-of-type` drops only the last
+paragraph's spacing after. Word's treatment of that trailing spacing needs a Word capture.
+
 ---
 
 ## Contributing
