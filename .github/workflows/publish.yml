@@ -152,6 +152,14 @@ jobs:
       - name: Publish self-contained
         run: dotnet publish tools/redline/redline.csproj -c Release -r ${{ matrix.rid }} --self-contained true -p:PublishSingleFile=true -p:PublishReadyToRun=true -p:PublishTrimmed=true -p:Version=${{ steps.version.outputs.VERSION }} -o ./publish
 
+      # Run the exact binary that is about to be attached to the release (issue #834). The osx-x64
+      # build is skipped: it is cross-compiled for Intel on the arm64 macos-latest runner. Output
+      # goes to RUNNER_TEMP so the upload glob below never picks it up.
+      - name: Smoke the release binary
+        if: matrix.rid != 'osx-x64'
+        shell: bash
+        run: ./publish/redline TestFiles/WC/WC001-Digits.docx TestFiles/WC/WC001-Digits-Mod.docx "$RUNNER_TEMP/smoke-redline.docx"
+
       - name: Upload binary
         uses: actions/upload-artifact@v7
         with:
@@ -202,6 +210,14 @@ jobs:
       - name: Publish self-contained
         run: dotnet publish tools/docx2html/docx2html.csproj -c Release -r ${{ matrix.rid }} --self-contained true -p:PublishSingleFile=true -p:PublishReadyToRun=true -p:PublishTrimmed=true -p:Version=${{ steps.version.outputs.VERSION }} -o ./publish
 
+      # Run the exact binary that is about to be attached to the release (issue #834). The osx-x64
+      # build is skipped: it is cross-compiled for Intel on the arm64 macos-latest runner. Output
+      # goes to RUNNER_TEMP so the upload glob below never picks it up.
+      - name: Smoke the release binary
+        if: matrix.rid != 'osx-x64'
+        shell: bash
+        run: ./publish/docx2html TestFiles/HC042-Image-Png.docx "$RUNNER_TEMP/smoke.html" --extract-images
+
       - name: Upload binary
         uses: actions/upload-artifact@v7
         with:
@@ -251,6 +267,14 @@ jobs:
 
       - name: Publish self-contained
         run: dotnet publish tools/docx2oc/docx2oc.csproj -c Release -r ${{ matrix.rid }} --self-contained true -p:PublishSingleFile=true -p:PublishReadyToRun=true -p:PublishTrimmed=true -p:Version=${{ steps.version.outputs.VERSION }} -o ./publish
+
+      # Run the exact binary that is about to be attached to the release (issue #834). The osx-x64
+      # build is skipped: it is cross-compiled for Intel on the arm64 macos-latest runner. Output
+      # goes to RUNNER_TEMP so the upload glob below never picks it up.
+      - name: Smoke the release binary
+        if: matrix.rid != 'osx-x64'
+        shell: bash
+        run: ./publish/docx2oc TestFiles/HC006-Test-01.docx "$RUNNER_TEMP/smoke.json"
 
       - name: Upload binary
         uses: actions/upload-artifact@v7
