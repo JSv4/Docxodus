@@ -7482,41 +7482,31 @@ namespace Docxodus
         {
             if (ind == null) return;
 
+            // Points at twip precision: a 0.01in quantum turned w:left="1417" (70.85pt) into
+            // 70.56pt (issue #1128). currentMarginLeft is the enclosing border wrapper's indent in inches.
             var left = WordprocessingMLUtil.AttributeToDecimalTwips(WordprocessingMLUtil.IndLeadingAttribute(ind));
             if (left != null && elementName != Xhtml.span)
             {
-                var leftInInches = (decimal) left/1440 - currentMarginLeft;
+                var leftInPoints = (decimal) left/20m - currentMarginLeft*72m;
                 style.AddIfMissing(isBidi ? "margin-right" : "margin-left",
-                    leftInInches > 0m
-                        ? string.Format(NumberFormatInfo.InvariantInfo, "{0:0.00}in", leftInInches)
-                        : "0");
+                    leftInPoints > 0m ? PointsCss(leftInPoints) : "0");
             }
 
             var right = WordprocessingMLUtil.AttributeToDecimalTwips(WordprocessingMLUtil.IndTrailingAttribute(ind));
             if (right != null)
             {
-                var rightInInches = (decimal) right/1440;
+                var rightInPoints = (decimal) right/20m;
                 style.AddIfMissing(isBidi ? "margin-left" : "margin-right",
-                    rightInInches > 0m
-                        ? string.Format(NumberFormatInfo.InvariantInfo, "{0:0.00}in", rightInInches)
-                        : "0");
+                    rightInPoints > 0m ? PointsCss(rightInPoints) : "0");
             }
 
             var firstLine = WordprocessingMLUtil.AttributeToTwips(ind.Attribute(W.firstLine));
             if (firstLine != null && elementName != Xhtml.span)
-            {
-                var firstLineInInches = (decimal) firstLine/1440m;
-                style.AddIfMissing("text-indent",
-                    string.Format(NumberFormatInfo.InvariantInfo, "{0:0.00}in", firstLineInInches));
-            }
+                style.AddIfMissing("text-indent", PointsCss((decimal) firstLine/20m));
 
             var hanging = WordprocessingMLUtil.AttributeToTwips(ind.Attribute(W.hanging));
             if (hanging != null && elementName != Xhtml.span)
-            {
-                var hangingInInches = (decimal) -hanging/1440m;
-                style.AddIfMissing("text-indent",
-                    string.Format(NumberFormatInfo.InvariantInfo, "{0:0.00}in", hangingInInches));
-            }
+                style.AddIfMissing("text-indent", PointsCss((decimal) -hanging/20m));
         }
 
         private static void CreateStyleFromJc(Dictionary<string, string> style, XElement? jc, bool isBidi)
@@ -10202,8 +10192,13 @@ namespace Docxodus
             return recorded;
         }
 
-        private static string PointsCss(decimal points) =>
-            points == 0m ? "0" : string.Format(NumberFormatInfo.InvariantInfo, "{0:0.####}pt", points);
+        /// <summary>Points as CSS at the four decimals the format keeps; a value that rounds to
+        /// zero (such as the residue of an inch round trip) is <c>0</c>, never <c>0pt</c>.</summary>
+        private static string PointsCss(decimal points)
+        {
+            var rounded = Math.Round(points, 4);
+            return rounded == 0m ? "0" : string.Format(NumberFormatInfo.InvariantInfo, "{0:0.####}pt", rounded);
+        }
 
         /// <summary>
         /// How far a paragraph's visible border on <paramref name="sideXName"/> extends beyond its

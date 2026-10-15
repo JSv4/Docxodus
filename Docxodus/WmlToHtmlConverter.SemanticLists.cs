@@ -150,7 +150,7 @@ namespace Docxodus
                 listStyle["line-height"] = "normal";
             }
 
-            var container = open.ParentItem is { } parent ? IndentsInches(parent) : (Leading: 0m, Trailing: 0m);
+            var container = open.ParentItem is { } parent ? IndentsPoints(parent) : (Leading: 0m, Trailing: 0m);
             var types = open.Items.Select(i => CssMarkerType(i.Item, i.Info)).Distinct().ToList();
             var cssType = types.Count == 1 ? types[0] : null;
             listStyle["list-style-type"] = cssType ?? "none";
@@ -161,9 +161,9 @@ namespace Docxodus
                 var (item, info) = open.Items[index];
                 var style = Style(item);
                 var (leadingSide, trailingSide) = info.IsBidi ? ("margin-right", "margin-left") : ("margin-left", "margin-right");
-                var indents = IndentsInches(item);
-                style[leadingSide] = FormatInches(indents.Leading - container.Leading);
-                style[trailingSide] = FormatInches(indents.Trailing - container.Trailing);
+                var indents = IndentsPoints(item);
+                style[leadingSide] = PointsCss(indents.Leading - container.Leading);
+                style[trailingSide] = PointsCss(indents.Trailing - container.Trailing);
                 // Remember the item's absolute indents for any list nested inside it.
                 item.AddAnnotation(new AbsoluteIndents(indents.Leading, indents.Trailing));
 
@@ -205,24 +205,21 @@ namespace Docxodus
             return style;
         }
 
-        /// <summary>The item's leading and trailing indents in inches from its container, as the
-        /// paragraph conversion wrote them (<c>0</c> or <c>N.NNin</c>).</summary>
-        private static (decimal Leading, decimal Trailing) IndentsInches(XElement item)
+        /// <summary>The item's leading and trailing indents in points from its container, as the
+        /// paragraph conversion wrote them (<c>0</c> or <c>Npt</c>).</summary>
+        private static (decimal Leading, decimal Trailing) IndentsPoints(XElement item)
         {
             if (item.Annotation<AbsoluteIndents>() is { } known)
                 return (known.Leading, known.Trailing);
             var bidi = item.Annotation<SemanticListItem>()?.IsBidi == true;
             var style = item.Annotation<Dictionary<string, string>>();
-            decimal Inches(string property) =>
-                style != null && style.TryGetValue(property, out var value) && value.EndsWith("in", StringComparison.Ordinal) &&
-                decimal.TryParse(value[..^2], NumberStyles.Number, CultureInfo.InvariantCulture, out var inches)
-                    ? inches
+            decimal Points(string property) =>
+                style != null && style.TryGetValue(property, out var value) && value.EndsWith("pt", StringComparison.Ordinal) &&
+                decimal.TryParse(value[..^2], NumberStyles.Number, CultureInfo.InvariantCulture, out var points)
+                    ? points
                     : 0m;
-            return bidi ? (Inches("margin-right"), Inches("margin-left")) : (Inches("margin-left"), Inches("margin-right"));
+            return bidi ? (Points("margin-right"), Points("margin-left")) : (Points("margin-left"), Points("margin-right"));
         }
-
-        private static string FormatInches(decimal inches) =>
-            inches == 0m ? "0" : string.Format(NumberFormatInfo.InvariantInfo, "{0:0.00}in", inches);
 
         /// <summary>The generated marker: a span tagged as a list marker that holds the marker text
         /// and the tab that follows it.</summary>

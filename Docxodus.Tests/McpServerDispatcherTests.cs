@@ -586,7 +586,7 @@ public class McpServerDispatcherTests : IDisposable
         var html = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
             $$"""{"sessionId":{{sessionArg}},"format":"html"}""")))
             .GetProperty("html").GetString()!;
-        Assert.Contains("text-indent: 0.50in", html);
+        Assert.Contains("text-indent: 36pt", html);
 
         // Both firstLine and hanging in one op is unrepresentable in w:ind — typed error.
         var both = Parse(Dispatcher.Call(_store, "docxodus_format", J(

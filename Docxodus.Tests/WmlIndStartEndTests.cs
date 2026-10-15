@@ -74,7 +74,7 @@ namespace Docxodus.Tests
         public void Paragraph_leading_indent_becomes_margin_left(string spelling)
         {
             var html = ToHtml(BuildDocx(Para($"<w:ind w:{spelling}=\"1440\"/>", "Indented")));
-            Assert.Contains("margin-left: 1.00in", StyleOf(html, "Indented"));
+            Assert.Contains("margin-left: 72pt", StyleOf(html, "Indented"));
         }
 
         [Theory]
@@ -83,7 +83,7 @@ namespace Docxodus.Tests
         public void Paragraph_trailing_indent_becomes_margin_right(string spelling)
         {
             var html = ToHtml(BuildDocx(Para($"<w:ind w:{spelling}=\"720\"/>", "Indented")));
-            Assert.Contains("margin-right: 0.50in", StyleOf(html, "Indented"));
+            Assert.Contains("margin-right: 36pt", StyleOf(html, "Indented"));
         }
 
         [Theory]
@@ -95,8 +95,8 @@ namespace Docxodus.Tests
                 Para("", "First item", ListPPr),
                 numberingXml: ListNumbering($"<w:ind w:{spelling}=\"720\" w:hanging=\"360\"/>")));
             var style = StyleOf(html, "First item");
-            Assert.Contains("margin-left: 0.50in", style);
-            Assert.Contains("text-indent: -0.25in", style);
+            Assert.Contains("margin-left: 36pt", style);
+            Assert.Contains("text-indent: -18pt", style);
         }
 
         [Theory]
@@ -108,7 +108,7 @@ namespace Docxodus.Tests
                 $"<w:pPr><w:ind w:{styleSpelling}=\"2880\"/></w:pPr></w:style>";
             var html = ToHtml(BuildDocx(
                 Para($"<w:ind w:{paraSpelling}=\"720\"/>", "Override", "<w:pStyle w:val=\"Deep\"/>"), styles));
-            Assert.Contains("margin-left: 0.50in", StyleOf(html, "Override"));
+            Assert.Contains("margin-left: 36pt", StyleOf(html, "Override"));
         }
 
         [Fact]
@@ -116,8 +116,8 @@ namespace Docxodus.Tests
         {
             var html = ToHtml(BuildDocx(Para("<w:ind w:left=\"2880\" w:start=\"720\" w:right=\"2880\" w:end=\"360\"/>", "Both")));
             var style = StyleOf(html, "Both");
-            Assert.Contains("margin-left: 0.50in", style);
-            Assert.Contains("margin-right: 0.25in", style);
+            Assert.Contains("margin-left: 36pt", style);
+            Assert.Contains("margin-right: 18pt", style);
         }
 
         /// <summary>
@@ -192,7 +192,7 @@ namespace Docxodus.Tests
             var html = ToHtml(BuildDocx(
                 Para($"<w:ind w:{paraSpelling}=\"1440\" w:hanging=\"360\"/>", "Moved item", ListPPr),
                 numberingXml: ListNumbering($"<w:ind w:{levelSpelling}=\"720\" w:hanging=\"360\"/>")));
-            Assert.Contains("margin-left: 1.00in", StyleOf(html, "Moved item"));
+            Assert.Contains("margin-left: 72pt", StyleOf(html, "Moved item"));
         }
 
         [Fact]
@@ -226,7 +226,7 @@ namespace Docxodus.Tests
             var ind = XElement.Parse(s.Raw.GetXml(anchor)).Descendants(W + "ind").Single();
             Assert.Equal("1440", (string?)ind.Attribute(W + spelling));
             Assert.Single(ind.Attributes(), a => a.Name == W + "left" || a.Name == W + "start");
-            Assert.Contains("margin-left: 1.00in", StyleOf(ToHtml(s.Save()), "Shift"));
+            Assert.Contains("margin-left: 72pt", StyleOf(ToHtml(s.Save()), "Shift"));
         }
     }
 }

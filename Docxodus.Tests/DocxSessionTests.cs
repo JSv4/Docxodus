@@ -1683,7 +1683,7 @@ public class DocxSessionTests
         var html = Docxodus.Internal.HtmlConversionOps.RenderBlockHtml(s, anchor,
             new Docxodus.Internal.HtmlConversionOptions { FabricateCssClasses = false });
         // The <p> itself carries the 1-inch indent; it is not eaten by a wrapping border div.
-        Assert.Contains("margin-left: 1.00in", html);
+        Assert.Contains("margin-left: 72pt", html);
     }
 
     [Fact]
