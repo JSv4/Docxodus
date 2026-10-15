@@ -86,6 +86,24 @@ public class BlockWrapperNestedDiffTests
             r => { Assert.Equal(DocxDiffRevisionType.Deleted, r.Type); Assert.Equal("monthly", r.Text); });
     }
 
+    [Theory]
+    [InlineData(Wrapper.CustomXml)]
+    [InlineData(Wrapper.ContentControl)]
+    public void SemanticDiff_OneWordEditedInsideAnUnchangedWrapper_ReportsTheTextOnly(Wrapper kind)
+    {
+        var left = Doc(Three(kind) + P(Tail));
+        var right = Doc(Three(kind, BravoEdited) + P(Tail));
+
+        var changes = Docxodus.Verification.SemanticDiff.Compare(left, right).Changes;
+
+        Assert.Contains(changes, c => c.Family == Docxodus.Verification.SemanticChangeFamily.Text);
+        Assert.DoesNotContain(changes, c => c.Family is Docxodus.Verification.SemanticChangeFamily.ContentControl
+            or Docxodus.Verification.SemanticChangeFamily.BlockStructure);
+
+        var retagged = Docxodus.Verification.SemanticDiff.Compare(left, Doc(Three(kind, id: "a2") + P(Tail))).Changes;
+        Assert.Contains(retagged, c => c.Path.EndsWith(".envelope", StringComparison.Ordinal));
+    }
+
     // ---- the wrapper itself changed ------------------------------------------------------------
 
     [Theory]
@@ -362,6 +380,38 @@ public class BlockWrapperNestedDiffTests
         Assert.Equal(from.Count, from.Distinct().Count());
         Assert.Equal(to.Count, to.Distinct().Count());
         Assert.Equal(from.OrderBy(n => n), to.OrderBy(n => n));
+    }
+
+    public static IEnumerable<object[]> WrapperKindsAndPolicies() =>
+        from kind in new[] { Wrapper.CustomXml, Wrapper.ContentControl }
+        from policy in Enum.GetValues<ConflictResolution>()
+        select new object[] { kind, policy };
+
+    [Theory]
+    [MemberData(nameof(WrapperKindsAndPolicies))]
+    public void Consolidate_TwoReviewersEditingInsideTheSameWrapper_IsAConflictThatStaysReversible(
+        Wrapper kind, ConflictResolution policy)
+    {
+        var baseline = Doc(Three(kind) + P(Tail));
+        var first = Doc(Wrap(kind, P(Alpha.Replace("terms", "rules")) + P(Bravo) + P(Charlie)) + P(Tail));
+        var second = Doc(Wrap(kind, P(Alpha) + P(Bravo) + P(Charlie.Replace("once", "twice"))) + P(Tail));
+        var reviewers = new[]
+        {
+            new DocxDiffReviewer { Document = first, Author = "One" },
+            new DocxDiffReviewer { Document = second, Author = "Two" },
+        };
+        var settings = new DocxDiffConsolidateSettings { ConflictResolution = policy };
+
+        var redline = DocxCompare.Consolidate(baseline, reviewers, settings);
+
+        Assert.NotEmpty(DocxDiff.GetConflicts(baseline, reviewers, settings));
+        var rejected = DocxDiffOps.RejectRevisions(redline.DocumentByteArray);
+        Assert.Equal(Signature(Body(baseline.DocumentByteArray)), Signature(Body(rejected)));
+        var accepted = Signature(Body(DocxDiffOps.AcceptRevisions(redline.DocumentByteArray)));
+        if (policy == ConflictResolution.BaseWins)
+            Assert.Equal(Signature(Body(baseline.DocumentByteArray)), accepted);
+        else if (policy == ConflictResolution.FirstReviewerWins)
+            Assert.Equal(Signature(Body(first.DocumentByteArray)), accepted);
     }
 
     // ---- edit script ---------------------------------------------------------------------------

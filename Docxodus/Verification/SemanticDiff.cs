@@ -678,6 +678,16 @@ internal static class SemanticDiffEngine
                                 Digest(lsdt.ShellDigest, "docxodus-ir-custom-xml-shell-v1"),
                                 Digest(rsdt.ShellDigest, "docxodus-ir-custom-xml-shell-v1"));
                     }
+                    else if (!lsdt.IsCustomXml && !rsdt.IsCustomXml)
+                    {
+                        // Likewise for a content control: its sdtPr/sdtEndPr, not the content it carries.
+                        if (lsdt.ShellDigest != rsdt.ShellDigest)
+                            Add(SemanticChangeOperation.Modify, SemanticChangeFamily.ContentControl, part,
+                                "content_control.envelope", lsdt.Anchor.ToString(), rsdt.Anchor.ToString(),
+                                lsdt.Anchor.Scope, rsdt.Anchor.Scope, null,
+                                Digest(lsdt.ShellDigest, "docxodus-ir-sdt-shell-v1"),
+                                Digest(rsdt.ShellDigest, "docxodus-ir-sdt-shell-v1"));
+                    }
                     else if (lsdt.EnvelopeDigest != rsdt.EnvelopeDigest)
                     {
                         Add(SemanticChangeOperation.Modify, WrapperFamily(lsdt), part,
