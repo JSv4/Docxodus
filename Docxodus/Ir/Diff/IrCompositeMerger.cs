@@ -541,7 +541,8 @@ internal static class IrCompositeMerger
 
     /// <summary><paramref name="items"/> mapped through <paramref name="map"/>; the same list when every item
     /// maps to itself.</summary>
-    private static IrNodeList<T> RewriteEach<T>(IrNodeList<T> items, Func<T, T> map) where T : class
+    private static IrNodeList<T> RewriteEach<T>(IrNodeList<T> items, Func<T, T> map)
+        where T : class
     {
         List<T>? copy = null;
         for (int i = 0; i < items.Count; i++)
