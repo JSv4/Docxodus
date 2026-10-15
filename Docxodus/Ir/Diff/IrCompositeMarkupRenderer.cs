@@ -400,7 +400,7 @@ internal static class IrCompositeMarkupRenderer
                     continue;
                 var shell = ReviewerNoteShell(reviewerIrs, diff.SourceReviewer, kind, revId);
                 noteEl = new XElement(noteName, shell?.Attributes());
-                foreach (var pre in shell?.Elements().Where(e => e.Name != W.p && e.Name != W.tbl) ?? Enumerable.Empty<XElement>())
+                foreach (var pre in shell?.Elements().Where(e => !IrMarkupRenderer.IsBlockContent(e)) ?? Enumerable.Empty<XElement>())
                     noteEl.Add(IrMarkupRenderer.StripUnids(new XElement(pre)));
                 noteEl.SetAttributeValue(W.id, freshId);
                 root.Add(noteEl);
@@ -416,7 +416,7 @@ internal static class IrCompositeMarkupRenderer
             foreach (var b in noteBlocks)
                 IrMarkupRenderer.StripUnids(b);
 
-            noteEl.Elements().Where(e => e.Name == W.p || e.Name == W.tbl).Remove();
+            noteEl.Elements().Where(IrMarkupRenderer.IsBlockContent).Remove();
             noteEl.Add(noteBlocks);
 
             // A reviewer-INSERTED note is entirely reviewer-sourced (all-ins content, no base/del side), so every

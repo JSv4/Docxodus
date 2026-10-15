@@ -6,6 +6,18 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Paragraphs inside a block-level `w:customXml` wrapper now appear in `Project()` markdown, and a
+  comparison tracks edits inside one (issue #1114). The IR read the wrapper as an opaque block, so an
+  edit inside it came out of `DocxCompare`/`DocxDiff` (and consolidate) as the old and new wrappers side
+  by side with no revision marks: both accept and reject showed the clause twice. The wrapper is now
+  modeled like a block content control, so a change anywhere inside it deletes and re-inserts the whole
+  wrapper, with Word's paired `w:customXmlDelRange*`/`w:customXmlInsRange*` markers, and accept and
+  reject restore each side exactly. Diffing inside an unchanged wrapper, for content controls and
+  custom XML alike, is not yet supported. The projection renders the wrapper's blocks in its place in
+  the body, headers, footers, notes and comments (block content controls stay omitted, as before), the
+  incremental markdown patch sends the whole document when such a wrapper changes, and `SemanticDiff`
+  reports the text edits inside it, with a `custom_xml.envelope` change only when the wrapper's own
+  attributes or properties change.
 - Simple `PAGE` and `NUMPAGES` fields (`w:fldSimple`) now follow each page in paginated output
   instead of repeating their cached result (issue #1115). The converter gives them the same
   `data-field` / `data-field-format` marker as the equivalent complex field, so the paginator

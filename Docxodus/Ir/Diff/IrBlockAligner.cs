@@ -688,10 +688,12 @@ internal static class IrBlockAligner
         {
             int li = leftoverLeft[0];
             int rj = leftoverRight[0];
-            // An SDT envelope may pair atomically only with another SDT envelope. Pairing it with a
-            // paragraph/table merely because it is the lone residue would hand the renderer two incompatible
-            // ownership topologies and lose the content-control wrapper on one accept/reject path.
-            bool sdtTopologyMismatch = (leftBlocks[li] is IrSdtBlock) != (rightBlocks[rj] is IrSdtBlock);
+            // An SDT envelope may pair atomically only with another envelope of the same wrapper kind (content
+            // control or custom XML). Pairing it with a paragraph/table merely because it is the lone residue
+            // would hand the renderer two incompatible ownership topologies and lose the wrapper on one
+            // accept/reject path.
+            bool sdtTopologyMismatch =
+                (leftBlocks[li] as IrSdtBlock)?.IsCustomXml != (rightBlocks[rj] as IrSdtBlock)?.IsCustomXml;
             bool forcePair = !sdtTopologyMismatch &&
                 (leftBlocks[li] is not IrParagraph lp || rightBlocks[rj] is not IrParagraph rp ||
                  similarity.ResidueForcePair(lp, rp));

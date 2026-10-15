@@ -667,10 +667,21 @@ internal static class SemanticDiffEngine
                         ls.Anchor.ToString(), rs.Anchor.ToString(), ls.Anchor.Scope, rs.Anchor.Scope);
                     break;
                 case (IrSdtBlock lsdt, IrSdtBlock rsdt):
-                    if (lsdt.EnvelopeDigest != rsdt.EnvelopeDigest)
+                    if (lsdt.IsCustomXml && rsdt.IsCustomXml)
                     {
-                        Add(SemanticChangeOperation.Modify, SemanticChangeFamily.ContentControl, part,
-                            "content_control.envelope", lsdt.Anchor.ToString(), rsdt.Anchor.ToString(),
+                        // The envelope digest covers the wrapper's content too; only the shell says whether
+                        // the custom-XML element itself changed.
+                        if (lsdt.ShellDigest != rsdt.ShellDigest)
+                            Add(SemanticChangeOperation.Modify, SemanticChangeFamily.BlockStructure, part,
+                                "custom_xml.envelope", lsdt.Anchor.ToString(), rsdt.Anchor.ToString(),
+                                lsdt.Anchor.Scope, rsdt.Anchor.Scope, null,
+                                Digest(lsdt.ShellDigest, "docxodus-ir-custom-xml-shell-v1"),
+                                Digest(rsdt.ShellDigest, "docxodus-ir-custom-xml-shell-v1"));
+                    }
+                    else if (lsdt.EnvelopeDigest != rsdt.EnvelopeDigest)
+                    {
+                        Add(SemanticChangeOperation.Modify, WrapperFamily(lsdt), part,
+                            BlockKind(lsdt) + ".envelope", lsdt.Anchor.ToString(), rsdt.Anchor.ToString(),
                             lsdt.Anchor.Scope, rsdt.Anchor.Scope, null,
                             Digest(lsdt.EnvelopeDigest, "docxodus-ir-sdt-envelope-v1"),
                             Digest(rsdt.EnvelopeDigest, "docxodus-ir-sdt-envelope-v1"));
@@ -1551,8 +1562,9 @@ internal static class SemanticDiffEngine
             {
                 var lSdt = left as IrSdtBlock;
                 var rSdt = right as IrSdtBlock;
-                Add(Operation(lSdt, rSdt), SemanticChangeFamily.ContentControl, part,
-                    "content_control", lSdt?.Anchor.ToString(), rSdt?.Anchor.ToString(),
+                var wrapper = (lSdt ?? rSdt)!;
+                Add(Operation(lSdt, rSdt), WrapperFamily(wrapper), part,
+                    BlockKind(wrapper), lSdt?.Anchor.ToString(), rSdt?.Anchor.ToString(),
                     lSdt?.Anchor.Scope, rSdt?.Anchor.Scope, null,
                     lSdt is null ? SemanticValue.Absent : BlockValue(lSdt),
                     rSdt is null ? SemanticValue.Absent : BlockValue(rSdt));
@@ -1773,10 +1785,15 @@ internal static class SemanticDiffEngine
             ("formatDigest", Digest(block.FormatFingerprint, "docxodus-ir-format-v1")));
     }
 
+    /// <summary>A custom-XML element is block structure, not a content control.</summary>
+    private static SemanticChangeFamily WrapperFamily(IrSdtBlock wrapper) =>
+        wrapper.IsCustomXml ? SemanticChangeFamily.BlockStructure : SemanticChangeFamily.ContentControl;
+
     private static string BlockKind(IrBlock block) => block switch
     {
         IrParagraph => "paragraph",
         IrTable => "table",
+        IrSdtBlock { IsCustomXml: true } => "custom_xml",
         IrSdtBlock => "content_control",
         IrSectionBreak => "section",
         IrOpaqueBlock opaque => "opaque:" + opaque.ElementName,

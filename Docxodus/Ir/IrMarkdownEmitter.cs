@@ -317,7 +317,9 @@ internal static class IrMarkdownEmitter
             switch (b)
             {
                 case IrSdtBlock sdt:
-                    yield return (sdt.Anchor, ComputeTextPreview(sdt));
+                    // The oracle indexes a content control but not a custom-XML wrapper.
+                    if (!sdt.IsCustomXml)
+                        yield return (sdt.Anchor, ComputeTextPreview(sdt));
                     foreach (var inner in WalkAnchorsForIndex(sdt.Blocks, settings))
                         yield return inner;
                     break;
@@ -694,7 +696,7 @@ internal static class IrMarkdownEmitter
             var label = $"{kindPrefix}-{NoteLabelSuffix(unid, ctx)}";
             sb.Append("[^").Append(label).Append("]: ");
             var first = true;
-            foreach (var p in noteScope.Blocks.OfType<IrParagraph>())
+            foreach (var p in ExpandCustomXml(noteScope.Blocks).OfType<IrParagraph>())
             {
                 if (!first) sb.Append(' ');
                 first = false;
@@ -728,7 +730,7 @@ internal static class IrMarkdownEmitter
             sb.Append($"- {{#cmt:cmt:{renderedUnid}}} **{author}**");
             if (!string.IsNullOrEmpty(c.Date)) sb.Append(" (").Append(c.Date).Append(')');
             sb.Append(": ");
-            foreach (var p in c.Blocks.OfType<IrParagraph>())
+            foreach (var p in ExpandCustomXml(c.Blocks).OfType<IrParagraph>())
             {
                 EmitInlineRuns(p, sb, ctx);
                 sb.Append(' ');
@@ -761,10 +763,11 @@ internal static class IrMarkdownEmitter
 
     private static void EmitBlocks(IrNodeList<IrBlock> blocks, StringBuilder sb, EmitCtx ctx)
     {
-        // The oracle's EmitBlocks dispatches only direct w:p/w:tbl/w:sectPr children and silently
-        // skips a block-level w:sdt wrapper. Keep that wrapper atomic in the IR, but omit its entire
-        // subtree here; WalkAnchorsForIndex separately descends into the children for index parity.
-        var list = blocks.Where(b => b is not IrSdtBlock).ToList();
+        // The oracle's EmitBlocks dispatches only w:p/w:tbl/w:sectPr and silently skips a block-level
+        // w:sdt wrapper. Keep that wrapper atomic in the IR, but omit its entire subtree here;
+        // WalkAnchorsForIndex separately descends into the children for index parity. A w:customXml
+        // wrapper is the exception: the oracle renders the blocks it carries in its place.
+        var list = ExpandCustomXml(blocks).Where(b => b is not IrSdtBlock).ToList();
         for (var i = 0; i < list.Count; i++)
         {
             var b = list[i];
@@ -790,6 +793,24 @@ internal static class IrMarkdownEmitter
             // top-level w:sectPr as a no-op (it is last-section metadata, not a transition). Match it.
             // IrOpaqueBlock: the oracle's EmitBlocks only dispatches w:p/w:tbl/w:sectPr — any other
             // top-level element is silently skipped. Match that too (no markdown, no index entry).
+        }
+    }
+
+    /// <summary>Replace each custom-XML envelope with the blocks it carries, recursively — the IR form of
+    /// <see cref="WmlToMarkdownConverter.ExpandCustomXml"/>.</summary>
+    private static IEnumerable<IrBlock> ExpandCustomXml(IEnumerable<IrBlock> blocks)
+    {
+        foreach (var block in blocks)
+        {
+            if (block is IrSdtBlock { IsCustomXml: true } wrapper)
+            {
+                foreach (var inner in ExpandCustomXml(wrapper.Blocks))
+                    yield return inner;
+            }
+            else
+            {
+                yield return block;
+            }
         }
     }
 

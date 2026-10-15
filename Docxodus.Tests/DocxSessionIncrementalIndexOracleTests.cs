@@ -391,7 +391,8 @@ public class DocxSessionIncrementalIndexOracleTests
     // ── Block-scoped patches ─────────────────────────────────────────────
 
     /// <summary>What a client keeping one entry per block holds: per scope, each top-level block's
-    /// anchor id and markdown, in order — built here from scratch.</summary>
+    /// anchor id and markdown, in order — built here from scratch. A block-level <c>w:customXml</c>
+    /// wrapper contributes the blocks it carries.</summary>
     private static Dictionary<string, List<(string Id, string Markdown)>> BlockModel(DocxSession session)
     {
         // Deliberately no AnchorIndex() call: building the model must not refresh the session's
@@ -411,7 +412,8 @@ public class DocxSessionIncrementalIndexOracleTests
                 || root.Descendants(W.t).Any(t => !string.IsNullOrWhiteSpace(t.Value));
             if (shown)
             {
-                foreach (var block in PartChangeTracker.ContainerOf(part.GetXDocument())!.Elements())
+                foreach (var block in WmlToMarkdownConverter.ExpandCustomXml(
+                             PartChangeTracker.ContainerOf(part.GetXDocument())!.Elements()))
                 {
                     if (WmlToMarkdownConverter.BlockAnchorId(block, name) is not { } id) continue;
                     var markdown = WmlToMarkdownConverter.EmitBlockMarkdown(session.LiveDocument, settings, name, block);
@@ -597,6 +599,50 @@ public class DocxSessionIncrementalIndexOracleTests
         Assert.Empty(deleted.Patch!.Blocks);
         Assert.Equal(anchors[20], Assert.Single(deleted.Patch.RemovedAnchorIds));
     }
+
+    /// <summary>Issue #1114: the projection shows the blocks inside a block-level <c>w:customXml</c>
+    /// wrapper, so a client applying patches keeps them current — whatever ops run on or around
+    /// them.</summary>
+    [Fact]
+    public void Block_scoped_patches_keep_custom_xml_content_in_sync()
+    {
+        var bytes = Ir.IrTestDocuments.FromBodyXml(CustomXmlBody).DocumentByteArray;
+        for (int seed = 0; seed < 6; seed++)
+            RunPatchSequence(bytes, new DocxSessionSettings(), seed: 1114 + seed, steps: 20, $"custom-xml seed {seed}");
+    }
+
+    /// <summary>An edit inside a <c>w:customXml</c> wrapper cannot be patched as one block, so its
+    /// patch is the whole document; a block after the wrapper follows the wrapper's last block.</summary>
+    [Fact]
+    public void Custom_xml_edits_patch_the_whole_document_and_later_blocks_follow_the_wrapper()
+    {
+        using var session = new DocxSession(Ir.IrTestDocuments.FromBodyXml(CustomXmlBody).DocumentByteArray);
+        var projection = session.Project();
+        string Id(string text) => projection.AnchorIndex.Keys.Single(k => session.GetAnchorInfo(k)?.TextPreview == text);
+        var inside = Id("Second wrapped.");
+        var after = Id("After the wrapper.");
+
+        var edited = session.ReplaceText(inside, "Edited inside.").Patch!;
+        Assert.True(edited.IsFullDocument);
+        Assert.Contains("Edited inside.", edited.Markdown);
+
+        var next = session.ReplaceText(after, "Edited after.").Patch!;
+        Assert.False(next.IsFullDocument);
+        Assert.Equal(inside, Assert.Single(next.Blocks).AfterAnchorId);
+    }
+
+    private const string CustomXmlBody = """
+        <w:p><w:r><w:t>Before the wrapper.</w:t></w:r></w:p>
+        <w:customXml w:uri="urn:example" w:element="clause">
+          <w:customXmlPr><w:attr w:name="id" w:val="c1"/></w:customXmlPr>
+          <w:p><w:r><w:t>First wrapped.</w:t></w:r></w:p>
+          <w:customXml w:uri="urn:example" w:element="inner">
+            <w:p><w:r><w:t>Second wrapped.</w:t></w:r></w:p>
+          </w:customXml>
+        </w:customXml>
+        <w:p><w:r><w:t>After the wrapper.</w:t></w:r></w:p>
+        <w:p><w:r><w:t>Last paragraph.</w:t></w:r></w:p>
+        """;
 
     /// <summary>A patch depends on the op and the state it ran on, not on history: after an undo,
     /// the next op's patch is that op's own blocks, the same patch a fresh session over the

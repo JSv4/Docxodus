@@ -221,6 +221,10 @@ internal sealed class IncrementalAnchorIndex : IReadOnlyDictionary<string, Ancho
             foreach (var block in changed)
             {
                 bool isAttached = ReferenceEquals(block.Parent, scope.Container);
+                // A block-level w:customXml renders as the several blocks it carries and has no anchor
+                // of its own, so its change cannot be patched as one block (issue #1114).
+                if (block.Name == W.customXml)
+                    _patchNeedsFullDocument = true;
                 if (scope.SegmentOf.TryGetValue(block, out var old))
                 {
                     if (old.HasContentControl) return false;
