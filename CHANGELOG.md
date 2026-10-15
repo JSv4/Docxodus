@@ -14,6 +14,16 @@ All notable changes to this project will be documented in this file.
   takes the start indent on the right and the end indent on the left, for both the `w:start`/`w:end`
   and `w:left`/`w:right` spellings. In a group mixing directions, each paragraph moves its trailing
   indent from its own side.
+- Two snapshot-sharing tests in `DocxSessionIncrementalIndexOracleTests` no longer fail at random
+  (issue #1141); test-only, no library change. Snapshot chunk boundaries follow each frozen block's
+  identity hash, and an edit gives the edited block a new frozen copy with a new hash, so the edit
+  can split its chunk in two, merge it with the next, or (when a merge passes the 256-block chunk
+  cap) move the following boundaries until the next hash boundary. Identity hashes vary with the
+  thread a test runs on, so the number of rebuilt chunks did too. The tests asserted exactly one;
+  they now assert the shape the design guarantees (no unchanged chunk is rebuilt, and the rebuilt
+  chunks are one contiguous run covering the edited block), and new tests force a split, a merge
+  and an exact merge past the cap.
+
 - Paragraphs inside a block-level `w:customXml` wrapper now appear in `Project()` markdown, and a
   comparison tracks edits inside one (issue #1114). The IR read the wrapper as an opaque block, so an
   edit inside it came out of `DocxCompare`/`DocxDiff` (and consolidate) as the old and new wrappers side

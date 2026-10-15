@@ -1,6 +1,7 @@
 // Copyright (c) John Scrudato IV. All rights reserved.
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
@@ -890,9 +891,75 @@ public class DocxSessionIncrementalIndexOracleTests
         var after = main.Item2.Chunks.SelectMany(c => c.Blocks).ToList();
         Assert.Equal(before.Count, after.Count);
         Assert.Equal(1, before.Zip(after).Count(pair => !ReferenceEquals(pair.First, pair.Second)));
-        // Only the chunk holding the edited block is new.
-        Assert.Equal(1, main.Item2.Chunks.Count(c => !main.Item1.Chunks.Contains(c)));
+        AssertOnlyTheEditedChunkWasRebuilt(main.Item1, main.Item2, editedBlock: 200);
         Assert.Same(main.Item1.Shell, main.Item2.Shell);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_text_edit_that_moves_a_chunk_boundary_rebuilds_only_the_chunks_it_moved(bool split)
+    {
+        // Chunk boundaries follow each frozen block's identity hash, and an edit gives the block a
+        // new frozen copy with a new hash. Re-edit one block until a chunk boundary appears right
+        // after it where there was none (its chunk splits) or disappears from there (its chunk
+        // merges with the next): either way more than one chunk changes, and every other is shared.
+        using var session = new DocxSession(Paragraphs(400), new DocxSessionSettings { EmitMarkdownPatch = false });
+        var anchor = Anchors(session, "p")[200];
+        var previous = session.TakeSnapshot().Parts[0];
+        for (int attempt = 0; attempt < 500; attempt++)
+        {
+            Assert.True(session.ReplaceText(anchor, $"Changed {attempt}.").Success);
+            var next = session.TakeSnapshot().Parts[0];
+            bool wasCut = EndsAChunk(previous, 200), isCut = EndsAChunk(next, 200);
+            if (wasCut != isCut && isCut == split)
+            {
+                // A split rebuilds both halves; a merge drops both chunks it joined.
+                if (split) Assert.True(next.Chunks.Count(c => !previous.Chunks.Contains(c)) >= 2);
+                else Assert.True(previous.Chunks.Count(c => !next.Chunks.Contains(c)) >= 2);
+                AssertOnlyTheEditedChunkWasRebuilt(previous, next, editedBlock: 200);
+                return;
+            }
+            previous = next;
+        }
+        Assert.Fail($"no edit in 500 {(split ? "split" : "merged")} the edited block's chunk");
+    }
+
+    [Fact]
+    public void A_merge_past_the_chunk_cap_rebuilds_the_chunks_up_to_the_next_hash_boundary()
+    {
+        // Blocks are frozen by hand, each re-drawn until its identity hash ends a chunk or not as
+        // the layout needs, so this layout is exact: 150 blocks ending on a hash boundary, 256 cut
+        // only by the chunk cap, 45 ending on a hash boundary, and 49 to the end of the body.
+        const int count = 500;
+        var hashBoundaries = new HashSet<int> { 149, 450 };
+        var body = new XElement(W.body, Enumerable.Range(0, count).Select(i => new XElement(W.p, new XElement(W.r, new XElement(W.t, $"p{i}")))));
+        var document = new XDocument(new XElement(W.document, body));
+        var live = body.Nodes().ToList();
+        var state = new PartSnapshotCache.State();
+        for (int i = 0; i < count; i++) state.FrozenByLive[live[i]] = Frozen(live[i], hashBoundaries.Contains(i));
+        var previous = PartSnapshot.Capture("/word/document.xml", document, state, shellChanged: true);
+        Assert.Equal(new[] { 150, 256, 45, 49 }, previous.Chunks.Select(c => c.Blocks.Length));
+
+        // Edit block 149 so that it no longer ends a chunk: the first two chunks merge, the merge is
+        // cut at the cap, and the cut moves the next boundary along to block 450.
+        state.Evict(live[149]);
+        state.FrozenByLive[live[149]] = Frozen(live[149], boundary: false);
+        var next = PartSnapshot.Capture("/word/document.xml", document, state, shellChanged: false);
+
+        Assert.Equal(new[] { 256, 195, 49 }, next.Chunks.Select(c => c.Blocks.Length));
+        Assert.Same(previous.Chunks[3], next.Chunks[2]);
+        AssertOnlyTheEditedChunkWasRebuilt(previous, next, editedBlock: 149);
+
+        static FrozenBlock Frozen(XNode node, bool boundary)
+        {
+            while (true)
+            {
+                var frozen = new FrozenBlock(PartSnapshotCache.CloneNode(node));
+                if (((RuntimeHelpers.GetHashCode(frozen) & PartSnapshotCache.BoundaryMask) == 0) == boundary)
+                    return frozen;
+            }
+        }
     }
 
     [Fact]
@@ -905,9 +972,79 @@ public class DocxSessionIncrementalIndexOracleTests
         var restored = session.TakeSnapshot().Parts[0];
         Assert.True(session.ReplaceText(anchors[300], "Changed too.").Success);
         var next = session.TakeSnapshot().Parts[0];
-        // The restored tree is new live nodes, seeded with the snapshot's frozen blocks: one chunk
-        // (the edited block's) is new, and the rest are the very chunks undo restored from.
-        Assert.Equal(1, next.Chunks.Count(c => !restored.Chunks.Contains(c)));
+        // The restored tree is new live nodes, seeded with the snapshot's frozen blocks: only the
+        // edited block's chunk is new, and the rest are the very chunks undo restored from.
+        AssertOnlyTheEditedChunkWasRebuilt(restored, next, editedBlock: 300);
+    }
+
+    /// <summary>Whether block <paramref name="block"/> is the last block of one of the snapshot's chunks.</summary>
+    private static bool EndsAChunk(PartSnapshot snapshot, int block)
+    {
+        int end = 0;
+        foreach (var chunk in snapshot.Chunks)
+        {
+            end += chunk.Blocks.Length;
+            if (end > block) return end == block + 1;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Assert that <paramref name="next"/>, taken after an edit to block <paramref name="editedBlock"/>
+    /// of <paramref name="previous"/>, rebuilt only the chunks the edit reached and reused every other.
+    /// The edit gives the block a new frozen copy whose identity hash decides afresh whether a chunk
+    /// ends there, so the edited chunk may be rebuilt whole, split in two or merged with the next; a
+    /// merge past <see cref="PartSnapshotCache.MaxChunk"/> blocks moves the following boundaries too,
+    /// until a hash boundary brings them back in line. How many chunks that rebuilds depends on the
+    /// hashes, so this asserts the shape instead of a count:
+    /// <list type="bullet">
+    /// <item>every chunk of <paramref name="next"/> holding exactly the blocks of a chunk of
+    /// <paramref name="previous"/> is that very chunk (no unchanged chunk is copied);</item>
+    /// <item>the rebuilt chunks are one contiguous run, the chunks they replace are one contiguous
+    /// run, both runs cover the same blocks, and those blocks include the edited one.</item>
+    /// </list>
+    /// </summary>
+    private static void AssertOnlyTheEditedChunkWasRebuilt(PartSnapshot previous, PartSnapshot next, int editedBlock)
+    {
+        string before = Describe(previous, next, "gone"), after = Describe(next, previous, "new");
+        string context = $"chunk lengths before: {before}; after: {after}; edited block {editedBlock}";
+        foreach (var chunk in next.Chunks)
+        {
+            bool copiesAnUnchangedChunk = !previous.Chunks.Contains(chunk)
+                && previous.Chunks.Any(old => old.Blocks.SequenceEqual(chunk.Blocks, ReferenceEqualityComparer.Instance));
+            Assert.False(copiesAnUnchangedChunk, $"an unchanged chunk was rebuilt; {context}");
+        }
+        var built = Span(next, previous);
+        var replaced = Span(previous, next);
+        Assert.True(built.Chunks >= 1 && replaced.Chunks >= 1, context);
+        Assert.True(built.Contiguous && replaced.Contiguous, context);
+        Assert.True(built.Start == replaced.Start && built.End == replaced.End, context);
+        Assert.True(built.Start <= editedBlock && editedBlock < built.End, context);
+
+        // The chunks of `snapshot` that `other` does not hold: how many, whether they are adjacent,
+        // and the block positions they cover.
+        static (int Chunks, bool Contiguous, int Start, int End) Span(PartSnapshot snapshot, PartSnapshot other)
+        {
+            int count = 0, start = -1, end = -1, lastIndex = -1, position = 0;
+            bool contiguous = true;
+            for (int i = 0; i < snapshot.Chunks.Length; i++)
+            {
+                var chunk = snapshot.Chunks[i];
+                if (!other.Chunks.Contains(chunk))
+                {
+                    if (lastIndex >= 0 && lastIndex != i - 1) contiguous = false;
+                    if (start < 0) start = position;
+                    end = position + chunk.Blocks.Length;
+                    lastIndex = i;
+                    count++;
+                }
+                position += chunk.Blocks.Length;
+            }
+            return (count, contiguous, start, end);
+        }
+
+        static string Describe(PartSnapshot snapshot, PartSnapshot other, string unshared) =>
+            string.Join(" ", snapshot.Chunks.Select(c => other.Chunks.Contains(c) ? $"{c.Blocks.Length}" : $"[{c.Blocks.Length} {unshared}]"));
     }
 
     [Fact]
