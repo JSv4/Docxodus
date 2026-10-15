@@ -6,6 +6,14 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- Right-to-left bordered paragraphs (`w:bidi`) now draw their left and right borders outside the
+  indented text, mirroring left-to-right paragraphs (issue #1129). The border wrapper put the
+  paragraph's leading (start) indent on its left side, although a right-to-left paragraph's start is
+  on the right, and left the trailing indent on the paragraph, so a `w:start="720" w:end="720"`
+  paragraph rendered its text 72pt in from the left and flush with the right border. The wrapper now
+  takes the start indent on the right and the end indent on the left, for both the `w:start`/`w:end`
+  and `w:left`/`w:right` spellings. In a group mixing directions, each paragraph moves its trailing
+  indent from its own side.
 - Paragraphs inside a block-level `w:customXml` wrapper now appear in `Project()` markdown, and a
   comparison tracks edits inside one (issue #1114). The IR read the wrapper as an opaque block, so an
   edit inside it came out of `DocxCompare`/`DocxDiff` (and consolidate) as the old and new wrappers side
