@@ -135,8 +135,8 @@ namespace OxPt
             Assert.Equal(new[] { "One a", "One b" }, inner.Elements().Select(OwnText));
 
             // Level 0 sits at 0.5 in, level 1 at 1.0 in: the nested item is 0.5 in inside its parent.
-            Assert.Contains("margin-left: 0.50in", Style(items[0]));
-            Assert.All(inner.Elements(), li => Assert.Contains("margin-left: 0.50in", Style(li)));
+            Assert.Contains("margin-left: 36pt", Style(items[0]));
+            Assert.All(inner.Elements(), li => Assert.Contains("margin-left: 36pt", Style(li)));
             Assert.All(inner.Elements(), li => Assert.Contains("text-indent: 0", Style(li)));
         }
 
@@ -150,7 +150,7 @@ namespace OxPt
             Assert.Contains("list-style-type: none", Style(list));
             Assert.All(list.Elements(), li => Assert.True(HasMarkerSpan(li)));
             Assert.All(list.Elements(), li => Assert.Contains("display: block", Style(li)));
-            Assert.All(list.Elements(), li => Assert.Contains("text-indent: -0.25in", Style(li)));
+            Assert.All(list.Elements(), li => Assert.Contains("text-indent: -18pt", Style(li)));
         }
 
         [Fact]
@@ -297,7 +297,7 @@ namespace OxPt
                 Item("One", extraPPr: "<w:bidi/>") + Item("One a", level: 1, extraPPr: "<w:bidi/>"), Decimal + Num(1, 0))));
 
             var nested = body.Descendants().Where(e => e.Name.LocalName == "li").Last();
-            Assert.Contains("margin-right: 0.50in", Style(nested));
+            Assert.Contains("margin-right: 36pt", Style(nested));
         }
 
         [Fact]

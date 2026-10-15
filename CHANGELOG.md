@@ -27,6 +27,11 @@ All notable changes to this project will be documented in this file.
   rounded to 0.01in, so a 55pt row became 54.72pt and the error accumulated down the table, and
   25.075pt and 25.1pt rows both became 25.2pt. Heights are now written in points from the exact twip
   value.
+- Paragraph indents keep twip precision in the HTML (issue #1128). The converter wrote `w:ind`
+  left, right, first-line and hanging values as CSS inches rounded to 0.01in, so `w:left="1417"`
+  (70.85pt) became `0.98in` (70.56pt). They are now written in points from the exact twip value, on
+  plain paragraphs, inside bordered groups, and on semantic-list items (`SemanticLists`), whose
+  nested indents were measured from the rounded values as well.
 - Table row heights honour `w:hRule` (issue #1122). A minimum (`atLeast`, or omitted) height now
   bounds the row's content and the collapsed horizontal borders are added to it, as in the reference
   layout (a 36pt row with 0.75pt borders advances 36.75pt); an `exact` height is the whole row and
