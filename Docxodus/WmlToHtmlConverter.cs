@@ -10044,18 +10044,20 @@ namespace Docxodus
                         trailingIndentInPoints = Math.Max(0m,
                             WordprocessingMLUtil.AttributeToDecimalTwips(WordprocessingMLUtil.IndTrailingAttribute(ind))/20m ?? 0m);
                     }
-                    // A right-to-left paragraph maps its trailing indent to its left margin
-                    // (CreateStyleFromInd), so only left-to-right groups move it to the wrapper.
-                    if (pPr.Element(W.bidi) is { } bidi && (string?)bidi.Attribute(W.val) is not ("0" or "false" or "off"))
-                        trailingIndentInPoints = 0m;
+                    // A right-to-left paragraph's leading indent is its right margin and its
+                    // trailing indent its left margin (CreateStyleFromInd), so its box mirrors
+                    // the left-to-right one (issue #1129).
+                    var isBidi = IsBidi(g.First());
+                    var leadingSide = isBidi ? W.right : W.left;
+                    var trailingSide = isBidi ? W.left : W.right;
 
                     // The wrapper's content box is the paragraphs' text box: its margins are the
                     // group's indentation less each side's border outset, and its padding is
                     // w:space, so the borders sit outside the text and the text keeps its
                     // indentation (issue #1126). The group shares one w:ind (BorderGroupKey), so
                     // the trailing indent moves from its paragraphs onto the wrapper.
-                    style["margin-left"] = PointsCss(Math.Max(0m, currentMarginLeft) * 72m - ParagraphBorderOutsetInPoints(pBdr, W.left));
-                    style["margin-right"] = PointsCss(trailingIndentInPoints - ParagraphBorderOutsetInPoints(pBdr, W.right));
+                    style["margin-" + leadingSide.LocalName] = PointsCss(Math.Max(0m, currentMarginLeft) * 72m - ParagraphBorderOutsetInPoints(pBdr, leadingSide));
+                    style["margin-" + trailingSide.LocalName] = PointsCss(trailingIndentInPoints - ParagraphBorderOutsetInPoints(pBdr, trailingSide));
 
                     // Materialize the (lazy) paragraph projections once, so the adjusted elements
                     // are the ones the wrapper holds.
@@ -10063,11 +10065,13 @@ namespace Docxodus
                         .SelectMany(item => item is IEnumerable<object> nested ? nested : new[] { item }).ToList();
                     if (trailingIndentInPoints > 0m)
                     {
+                        // Each paragraph wrote its trailing indent on its own direction's side.
                         foreach (var paragraph in content.OfType<XElement>())
                         {
+                            var paragraphTrailingMargin = (string?)paragraph.Attribute("dir") == "rtl" ? "margin-left" : "margin-right";
                             if (paragraph.Annotation<Dictionary<string, string>>() is { } paragraphStyle &&
-                                paragraphStyle.TryGetValue("margin-right", out var trailing) && trailing != "0")
-                                paragraphStyle["margin-right"] = "0";
+                                paragraphStyle.TryGetValue(paragraphTrailingMargin, out var trailing) && trailing != "0")
+                                paragraphStyle[paragraphTrailingMargin] = "0";
                         }
                     }
 

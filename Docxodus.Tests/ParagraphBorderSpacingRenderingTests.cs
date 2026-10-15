@@ -103,13 +103,109 @@ public class ParagraphBorderSpacingRenderingTests
         Assert.Equal("29.25pt", Style(wrapper)["margin-left"]);
     }
 
+    // Issue #1129: a right-to-left paragraph's leading (start) indent is on the right and its
+    // trailing (end) indent on the left, so its border box mirrors the left-to-right one. Word
+    // reads w:left/w:right on a w:bidi paragraph as start/end, as CreateStyleFromInd already does.
+    [Theory]
+    [InlineData("<w:ind w:start=\"1440\" w:end=\"360\"/>")]
+    [InlineData("<w:ind w:left=\"1440\" w:right=\"360\"/>")]
+    public void RightToLeftBordersMirrorTheLeftToRightBox(string ind)
+    {
+        var ltr = Wrapper(Convert(AuthoredDocument(Card("Forward", "4", ind))), "Forward");
+        var rtl = Wrapper(Convert(AuthoredDocument(Card("Logical", "4", ind, "<w:bidi/>"))), "Logical");
+
+        // Leading edge 72pt in, trailing edge 18pt in; each border 4pt + 0.75pt beyond them.
+        Assert.Equal("67.25pt", Style(ltr)["margin-left"]);
+        Assert.Equal("13.25pt", Style(ltr)["margin-right"]);
+        Assert.Equal("67.25pt", Style(rtl)["margin-right"]);
+        Assert.Equal("13.25pt", Style(rtl)["margin-left"]);
+        foreach (var (wrapper, text) in new[] { (ltr, "Forward"), (rtl, "Logical") })
+        {
+            var paragraph = Style(Paragraph(wrapper, text));
+            Assert.Equal("0", paragraph["margin-left"]);
+            Assert.Equal("0", paragraph["margin-right"]);
+        }
+    }
+
     [Fact]
-    public void RightToLeftGroupsKeepTheirTrailingIndentOnTheParagraph()
+    public void RightToLeftParagraphWithEqualIndentsIsBoxedOutsideBothEdges()
     {
         var wrapper = Wrapper(Convert(AuthoredDocument(
             Card("Logical", "4", "<w:ind w:start=\"720\" w:end=\"720\"/>", "<w:bidi/>"))), "Logical");
 
-        Assert.Equal("-4.75pt", Style(wrapper)["margin-right"]);
+        Assert.Equal("31.25pt", Style(wrapper)["margin-left"]);
+        Assert.Equal("31.25pt", Style(wrapper)["margin-right"]);
+        Assert.Equal("0", Style(Paragraph(wrapper, "Logical"))["margin-left"]);
+    }
+
+    [Theory]
+    [InlineData("<w:ind w:start=\"720\"/>", "-4.75pt", "31.25pt")]
+    [InlineData("<w:ind w:end=\"720\"/>", "31.25pt", "-4.75pt")]
+    public void RightToLeftOneSidedIndentStaysOnItsLogicalSide(string ind, string marginLeft, string marginRight)
+    {
+        var wrapper = Wrapper(Convert(AuthoredDocument(Card("Logical", "4", ind, "<w:bidi/>"))), "Logical");
+
+        Assert.Equal(marginLeft, Style(wrapper)["margin-left"]);
+        Assert.Equal(marginRight, Style(wrapper)["margin-right"]);
+        var paragraph = Style(Paragraph(wrapper, "Logical"));
+        Assert.Equal("0", paragraph["margin-left"]);
+        Assert.Equal("0", paragraph["margin-right"]);
+    }
+
+    [Fact]
+    public void RightToLeftHangingIndentBorderStartsOutsideTheFirstLine()
+    {
+        var wrapper = Wrapper(Convert(AuthoredDocument(
+            Card("Hanging", "6", "<w:ind w:left=\"1440\" w:hanging=\"720\"/>", "<w:bidi/>"))), "Hanging");
+
+        // The first line starts 36pt from the right, so the box starts 6pt + 0.75pt before it.
+        Assert.Equal("29.25pt", Style(wrapper)["margin-right"]);
+        Assert.Equal("-6.75pt", Style(wrapper)["margin-left"]);
+    }
+
+    [Fact]
+    public void RightToLeftGroupsShareOneMirroredBoxAndSplitOnDifferentIndents()
+    {
+        var wide = "<w:ind w:start=\"1440\" w:end=\"360\"/>";
+        var html = Convert(AuthoredDocument(
+            Card("GroupOne", "4", wide, "<w:bidi/>"), Card("GroupTwo", "4", wide, "<w:bidi/>"),
+            Card("GroupThree", "4", "<w:ind w:start=\"720\" w:end=\"720\"/>", "<w:bidi/>")));
+        var shared = Wrapper(html, "GroupOne");
+
+        Assert.Same(shared, Wrapper(html, "GroupTwo"));
+        Assert.Equal("67.25pt", Style(shared)["margin-right"]);
+        Assert.Equal("13.25pt", Style(shared)["margin-left"]);
+        foreach (var text in new[] { "GroupOne", "GroupTwo" })
+            Assert.Equal("0", Style(Paragraph(shared, text))["margin-left"]);
+
+        var other = Wrapper(html, "GroupThree");
+        Assert.NotSame(shared, other);
+        Assert.Equal("31.25pt", Style(other)["margin-left"]);
+        Assert.Equal("31.25pt", Style(other)["margin-right"]);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void MixedDirectionGroupMovesEachParagraphsOwnTrailingIndent(bool rightToLeftFirst)
+    {
+        // Equal start/end indents keep one box correct for both directions; each paragraph's
+        // trailing indent is on its own direction's side and must leave it for the wrapper.
+        var ind = "<w:ind w:start=\"720\" w:end=\"720\"/>";
+        var forward = Card("Forward", "4", ind);
+        var logical = Card("Logical", "4", ind, "<w:bidi/>");
+        var html = Convert(rightToLeftFirst ? AuthoredDocument(logical, forward) : AuthoredDocument(forward, logical));
+        var wrapper = Wrapper(html, "Forward");
+
+        Assert.Same(wrapper, Wrapper(html, "Logical"));
+        Assert.Equal("31.25pt", Style(wrapper)["margin-left"]);
+        Assert.Equal("31.25pt", Style(wrapper)["margin-right"]);
+        foreach (var text in new[] { "Forward", "Logical" })
+        {
+            var paragraph = Style(Paragraph(wrapper, text));
+            Assert.Equal("0", paragraph["margin-left"]);
+            Assert.Equal("0", paragraph["margin-right"]);
+        }
     }
 
     [Fact]
