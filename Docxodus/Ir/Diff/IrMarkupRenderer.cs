@@ -8272,13 +8272,15 @@ internal static partial class IrMarkupRenderer
             }
         }
         // Inserted content nests: a wholly inserted block, an inserted ROW of a paired table, or an
-        // inserted block inside a paired CELL all bring their paragraphs' styles into the output.
+        // inserted block inside a paired CELL or block wrapper all bring their paragraphs' styles into the output.
         void Walk(IEnumerable<IrEditOp> ops)
         {
             foreach (var op in ops)
             {
                 if (op.Kind == IrEditOpKind.InsertBlock)
                     AddFrom(SourceElement(op.RightAnchor, state.RightSource));
+                if (op.WrapperOps is { } wrapperOps)
+                    Walk(wrapperOps);
                 if (op.TableDiff is not { } tableDiff)
                     continue;
                 foreach (var row in tableDiff.RowOps)
@@ -8516,6 +8518,8 @@ internal static partial class IrMarkupRenderer
                         if (op.TextboxDiffs is { } textboxDiffs)
                             foreach (var textboxDiff in textboxDiffs)
                                 WalkOps(textboxDiff.Ops);
+                        if (op.WrapperOps is { } wrapperOps)
+                            WalkOps(wrapperOps);
                         break;
                     case IrEditOpKind.MoveBlock:
                     case IrEditOpKind.MoveModifyBlock:

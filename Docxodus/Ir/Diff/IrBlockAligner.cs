@@ -612,10 +612,10 @@ internal static class IrBlockAligner
             leftoverRight.Remove(rj);
         }
 
-        // Block wrappers get the same unambiguous residue rule (issue #1143): a leftover wrapper pairs with the
-        // next leftover wrapper on the other side, in document order, when both have the same own markup, so
-        // a heavily edited wrapper is still diffed inside one copy of itself. A wrapper whose own markup
-        // changed has no such partner and is replaced whole.
+        // Block wrappers get a residue rule like the tables' document-order zip (issue #1143): a leftover
+        // wrapper pairs with the next leftover wrapper on the other side, in document order, when both have the
+        // same own markup, so a heavily edited wrapper is still diffed inside one copy of itself. A wrapper
+        // whose own markup changed has no such partner and is replaced whole.
         if (AnyWrapper(leftoverLeft, leftBlocks) && AnyWrapper(leftoverRight, rightBlocks))
             PairLeftoverWrappers(leftBlocks, rightBlocks, leftKind, rightKind, leftMatch, rightMatch,
                 leftoverLeft, leftoverRight);

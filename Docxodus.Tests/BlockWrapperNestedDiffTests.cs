@@ -104,6 +104,52 @@ public class BlockWrapperNestedDiffTests
         Assert.Contains(retagged, c => c.Path.EndsWith(".envelope", StringComparison.Ordinal));
     }
 
+    private static string Item(string text, int numId) =>
+        $"<w:p><w:pPr><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"{numId}\"/></w:numPr></w:pPr>"
+        + $"<w:r><w:t xml:space=\"preserve\">{text}</w:t></w:r></w:p>";
+
+    [Theory]
+    [InlineData(Wrapper.CustomXml)]
+    [InlineData(Wrapper.ContentControl)]
+    public void Compare_ListItemsKeptInsideAnUnchangedWrapper_StayInTheirList(Wrapper kind)
+    {
+        // The revised document gives the same list another numId. Items the diff keeps must map back to the
+        // original's list, or they start a list of their own.
+        const string Definition = "<w:abstractNum w:abstractNumId=\"0\"><w:lvl w:ilvl=\"0\"><w:start w:val=\"1\"/>"
+            + "<w:numFmt w:val=\"decimal\"/><w:lvlText w:val=\"%1.\"/></w:lvl></w:abstractNum>";
+        WmlDocument List(int numId, string bravo) => IrTestDocuments.FromParts(
+            Wrap(kind, Item(Alpha, numId) + Item(bravo, numId)) + P(Tail),
+            numberingInnerXml: Definition + $"<w:num w:numId=\"{numId}\"><w:abstractNumId w:val=\"0\"/></w:num>");
+        var left = List(1, Bravo);
+        var right = List(5, BravoEdited);
+
+        var redline = DocxCompare.Compare(left, right);
+
+        var numIds = Body(redline).Descendants(W.numId).Select(n => (string?)n.Attribute(W.val)).Distinct().ToList();
+        Assert.Equal(["1"], numIds);
+        AssertSingleWrapperWithoutRangeMarkers(Body(redline), kind);
+    }
+
+    [Theory]
+    [InlineData(Wrapper.CustomXml)]
+    [InlineData(Wrapper.ContentControl)]
+    public void Compare_ParagraphInsertedInsideAnUnchangedWrapper_KeepsItsNewStyle(Wrapper kind)
+    {
+        // Only the revised document defines the style, and only the inserted paragraph and an edited one use it.
+        const string Style = "<w:style w:type=\"paragraph\" w:styleId=\"Fancy\"><w:name w:val=\"Fancy\"/>"
+            + "<w:pPr><w:jc w:val=\"center\"/></w:pPr></w:style>";
+        string Styled(string text) => $"<w:p><w:pPr><w:pStyle w:val=\"Fancy\"/></w:pPr><w:r><w:t xml:space=\"preserve\">{text}</w:t></w:r></w:p>";
+        var left = Doc(Three(kind) + P(Tail));
+        var right = IrTestDocuments.FromParts(
+            Wrap(kind, P(Alpha) + Styled("A brand new styled paragraph appears here.") + Styled(Bravo) + P(Charlie)) + P(Tail),
+            stylesInnerXml: Style);
+
+        var redline = DocxCompare.Compare(left, right);
+
+        AssertSingleWrapperWithoutRangeMarkers(Body(redline), kind);
+        AssertRoundTrip(left, right, redline);
+    }
+
     // ---- the wrapper itself changed ------------------------------------------------------------
 
     [Theory]
@@ -662,10 +708,11 @@ public class BlockWrapperNestedDiffTests
         }
     }
 
-    /// <summary>Canonical XML of a property element: rsid and PowerTools attributes dropped, attributes sorted.</summary>
+    /// <summary>Canonical XML of a property element: rsid and PowerTools attributes dropped, attributes sorted, and
+    /// an empty element read as an absent one.</summary>
     private static string Canonical(XElement? element)
     {
-        if (element is null)
+        if (element is null || (!element.HasElements && !element.HasAttributes && element.Value.Length == 0))
             return "-";
         static XElement Clean(XElement e) => new(e.Name,
             e.Attributes()
