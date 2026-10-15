@@ -706,7 +706,8 @@ function ensureListMarkerSeparator(block: HTMLElement): void {
 /**
  * Inline chrome the CONVERTER generates that is not part of a paragraph's run text: list
  * number/bullet markers, footnote/endnote citation markers
- * (`<a class="footnote-ref"><sup>1</sup></a>`), and the note backrefs (`↩`).
+ * (`<a class="footnote-ref"><sup>1</sup></a>`), the paginated notes' own numbers, and the note
+ * backrefs (`↩`).
  *
  * The session's run text contains none of it. A citation is a zero-width
  * `w:footnoteReference` — the displayed number is computed by the renderer from document order —
@@ -715,8 +716,15 @@ function ensureListMarkerSeparator(block: HTMLElement): void {
  * serialization and the display number gets COMMITTED as literal text (destroying the citation
  * run); left editable and the user can delete a marker outright, orphaning the note.
  */
+/**
+ * The paginated view's note numbers open their note's first paragraph, as Word's reference mark
+ * run does (issue #1130); the session holds that mark as a zero-width w:footnoteRef/w:endnoteRef.
+ */
+const NOTE_NUMBER_SELECTOR = ".footnote-number, .endnote-number";
+
 const GENERATED_CHROME_SELECTOR =
-  '[data-list-marker], a.footnote-ref, a.endnote-ref, a[class$="-backref"], a.comment-marker';
+  '[data-list-marker], a.footnote-ref, a.endnote-ref, a[class$="-backref"], a.comment-marker, '
+  + NOTE_NUMBER_SELECTOR;
 
 function isGeneratedChrome(node: Node | null | undefined): boolean {
   return node?.nodeType === 1 && !!(node as Element).matches?.(GENERATED_CHROME_SELECTOR);
@@ -2762,6 +2770,14 @@ export class DocxEditor {
     this.replacing = true;
     try {
       if (!oldEl.parentNode) return false;
+      // A paginated note's number is chrome inside its first paragraph, drawn from the whole
+      // note's context; a single-block render of that paragraph has none. A text edit never
+      // changes it, so the paragraph that replaces the numbered one keeps it.
+      const number = oldEl.querySelector(NOTE_NUMBER_SELECTOR);
+      const first = newNodes.find((node): node is HTMLElement => node.nodeType === 1);
+      if (number && first && !first.querySelector(NOTE_NUMBER_SELECTOR)) {
+        first.prepend(number.cloneNode(true));
+      }
       oldEl.replaceWith(...newNodes);
       return true;
     } catch {

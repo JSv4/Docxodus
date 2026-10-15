@@ -41,8 +41,11 @@ const FOOTER_TAB_STOP_PX = 312;
  *
  * 51 since #955: a footnote's lines are its note paragraph's own height again, so each page's note
  * area reserves less and the body fits more (it was 53 while the notes carried the page font's strut).
+ * 54 since #1130: a note's first paragraph is an ordinary block, so it keeps the FootnoteText
+ * style's 6pt spacing after, as Word does. Forced inline, it had dropped that spacing on the 92
+ * single-paragraph notes here.
  */
-const PAGES = 51;
+const PAGES = 54;
 const FOOTNOTE_CITATIONS = 94;
 const SECTIONS = 4;
 /** Body-scope blocks the editor makes addressable. Header, footer and note blocks are not these. */

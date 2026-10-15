@@ -96,14 +96,15 @@ public class GeneratedCssEscapingTests
     }
 
     [Fact]
-    public void FootnoteFirstParagraphRuleSurvivesSerialization()
+    public void FootnoteRulesSurviveSerialization()
     {
         var raw = Regex.Match(RenderWithAllCssOn(), "<style[^>]*>(.*?)</style>", RegexOptions.Singleline)
             .Groups[1].Value;
 
-        // The rule that keeps a note's number and its first line on one line must be intact and
-        // usable — this is the one that was silently dead in paginated mode.
-        Assert.Contains(".footnote-content p:first-of-type", raw, StringComparison.Ordinal);
+        // The note rules must reach the browser intact. The first-paragraph rule that was silently
+        // dead is gone: the number now opens the first paragraph instead (issue #1130).
+        Assert.Contains(".footnote-number[data-note-run]", raw, StringComparison.Ordinal);
         Assert.DoesNotContain(".footnote-content &gt; p", raw, StringComparison.Ordinal);
+        Assert.DoesNotContain(".footnote-content p:first-of-type", raw, StringComparison.Ordinal);
     }
 }

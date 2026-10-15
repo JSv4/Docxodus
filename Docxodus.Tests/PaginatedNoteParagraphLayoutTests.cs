@@ -10,6 +10,8 @@ namespace Docxodus.Tests;
 
 // Issue #1120: paginated note paragraphs keep their authored layout. Generic web-note CSS must not
 // inset or space later paragraphs, and the number shares its first paragraph's exact line.
+// Issue #1130: the number is a run of the first paragraph, as in Word, so no paragraph is forced
+// inline (an inline paragraph ignores its own margins and text-indent).
 public class PaginatedNoteParagraphLayoutTests
 {
     private const string W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
@@ -44,14 +46,58 @@ public class PaginatedNoteParagraphLayoutTests
             RenderPagination = PaginationMode.Paginated,
         });
 
-    [Fact]
-    public void LaterNoteParagraphsGetNoGenericInsetOrGap()
-    {
-        var css = Regex.Match(Convert().ToString(), "<style[^>]*>(.*?)</style>", RegexOptions.Singleline).Groups[1].Value;
-        var rule = Regex.Match(css, @"\.footnote-content p:not\(:first-of-type\)\s*\{([^}]*)\}").Groups[1].Value;
+    private static string Css(XElement html) =>
+        Regex.Match(html.ToString(), "<style[^>]*>(.*?)</style>", RegexOptions.Singleline).Groups[1].Value;
 
-        Assert.Contains("display: block", rule);
-        Assert.DoesNotContain("margin", rule);
+    [Fact]
+    public void NoteParagraphsGetNoGenericDisplayInsetOrGap()
+    {
+        // Every rule that targets a note paragraph: none may override the paragraph's own
+        // display, margins or indent, which its resolved classes carry.
+        var rules = Regex.Matches(Css(Convert()), @"\.footnote-content p[^{,]*\{([^}]*)\}")
+            .Select(m => m.Groups[1].Value)
+            .ToList();
+
+        Assert.All(rules, rule =>
+        {
+            Assert.DoesNotContain("display: inline", rule);
+            Assert.DoesNotContain("margin", rule);
+            Assert.DoesNotContain("text-indent", rule);
+        });
+    }
+
+    [Fact]
+    public void NumberOpensTheFirstNoteParagraphOnly()
+    {
+        var item = Convert().Descendants().First(e => (string?)e.Attribute("class") == "footnote-item");
+        var paragraphs = item.Descendants().Where(e => e.Name.LocalName == "p").ToList();
+
+        Assert.Equal(2, paragraphs.Count);
+        var number = Assert.Single(item.Descendants(), e => (string?)e.Attribute("class") == "footnote-number");
+        Assert.Same(paragraphs[0], number.Parent);
+        Assert.Same(number, paragraphs[0].Elements().First());
+        Assert.Matches(@"^1\s+Ledger001$", paragraphs[0].Value);
+        Assert.Equal("Ledger002", paragraphs[1].Value);
+    }
+
+    [Fact]
+    public void GenericNumberOpensTheFirstNoteParagraph()
+    {
+        // A note with no w:footnoteRef run still gets its number on the first paragraph's line.
+        var item = Convert("").Descendants().First(e => (string?)e.Attribute("class") == "footnote-item");
+        var number = Assert.Single(item.Descendants(), e => (string?)e.Attribute("class") == "footnote-number");
+
+        Assert.Equal("p", number.Parent!.Name.LocalName);
+        Assert.Null(number.Attribute("data-note-run"));
+    }
+
+    [Fact]
+    public void GenericNumberCssDoesNotGrowItsLine()
+    {
+        // Inside the paragraph the number no longer inherits the item's zero line height, so the
+        // generic rule declares it (issue #955): a raised number must not grow the line.
+        var rule = Regex.Match(Css(Convert()), @"\.footnote-number\s*\{([^}]*)\}").Groups[1].Value;
+        Assert.Contains("line-height: 0", rule);
     }
 
     [Fact]
