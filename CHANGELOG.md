@@ -43,6 +43,12 @@ All notable changes to this project will be documented in this file.
   chunks are one contiguous run covering the edited block), and new tests force a split, a merge
   and an exact merge past the cap.
 
+- A consolidated redline no longer gives two reviewers' moves the same move name when the moves are
+  inside table cells (issue #1143). Each reviewer's comparison numbers its moves from 1, and consolidate
+  renumbered only moves of whole body blocks, so a move inside one reviewer's table cell and a move
+  inside another reviewer's cell could both be named `move1`, which reads as one move with two sources.
+  Every move a reviewer's comparison reports, at any depth (table rows and cells, text boxes, block
+  wrappers, notes), now gets a number unique across all reviewers.
 - Paragraphs inside a block-level `w:customXml` wrapper now appear in `Project()` markdown, and a
   comparison tracks edits inside one (issue #1114). The IR read the wrapper as an opaque block, so an
   edit inside it came out of `DocxCompare`/`DocxDiff` (and consolidate) as the old and new wrappers side

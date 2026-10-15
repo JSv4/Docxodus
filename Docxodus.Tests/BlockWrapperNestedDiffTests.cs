@@ -372,6 +372,132 @@ public class BlockWrapperNestedDiffTests
         Assert.Equal(2, DocxDiff.GetRevisions(left, right).Count(r => r.Type == DocxDiffRevisionType.Moved));
     }
 
+    private static string TwoCellTable(string first, string second) =>
+        "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"4000\"/><w:gridCol w:w=\"4000\"/></w:tblGrid>"
+        + "<w:tr><w:tc><w:tcPr><w:tcW w:w=\"4000\" w:type=\"dxa\"/></w:tcPr>" + first + "</w:tc>"
+        + "<w:tc><w:tcPr><w:tcW w:w=\"4000\" w:type=\"dxa\"/></w:tcPr>" + second + "</w:tc></w:tr></w:tbl>";
+
+    private static readonly string Abc = P(Alpha) + P(Bravo) + P(Charlie);
+    private static readonly string MovedAbc = P(Bravo) + P(Charlie) + P(Alpha);
+
+    [Theory]
+    [InlineData(Wrapper.CustomXml)]
+    [InlineData(Wrapper.ContentControl)]
+    public void Consolidate_TwoReviewersMovingInsideWrappersInDifferentTableCells_KeepsEachMovePaired(Wrapper kind)
+    {
+        string Table(string first, string second) => TwoCellTable(Wrap(kind, first, id: "w1"), Wrap(kind, second, id: "w2"));
+        var baseline = Doc(Table(Abc, Abc) + P(Tail));
+        var first = Doc(Table(MovedAbc, Abc) + P(Tail));
+        var second = Doc(Table(Abc, MovedAbc) + P(Tail));
+        var merged = Doc(Table(MovedAbc, MovedAbc) + P(Tail));
+
+        var redline = DocxCompare.Consolidate(baseline,
+            [new DocxDiffReviewer { Document = first, Author = "One" }, new DocxDiffReviewer { Document = second, Author = "Two" }]);
+
+        Assert.Empty(DocxDiff.GetConflicts(baseline,
+            [new DocxDiffReviewer { Document = first, Author = "One" }, new DocxDiffReviewer { Document = second, Author = "Two" }]));
+        var body = Body(redline);
+        Assert.Equal(2, body.Descendants(WrapperName(kind)).Count());
+        Assert.Equal(2, body.Descendants(W.moveFromRangeStart).Count());
+        AssertMoveMarkersUnique(redline.DocumentByteArray);
+        AssertRoundTrip(baseline, merged, redline);
+    }
+
+    /// <summary>The same move ids are shared by moves directly inside table cells, with no wrapper.</summary>
+    [Fact]
+    public void Consolidate_TwoReviewersMovingInsideDifferentTableCells_KeepsEachMovePaired()
+    {
+        var baseline = Doc(TwoCellTable(Abc, Abc) + P(Tail));
+        var first = Doc(TwoCellTable(MovedAbc, Abc) + P(Tail));
+        var second = Doc(TwoCellTable(Abc, MovedAbc) + P(Tail));
+        var merged = Doc(TwoCellTable(MovedAbc, MovedAbc) + P(Tail));
+
+        var redline = DocxCompare.Consolidate(baseline,
+            [new DocxDiffReviewer { Document = first, Author = "One" }, new DocxDiffReviewer { Document = second, Author = "Two" }]);
+
+        Assert.Equal(2, Body(redline).Descendants(W.moveFromRangeStart).Count());
+        AssertMoveMarkersUnique(redline.DocumentByteArray);
+        AssertRoundTrip(baseline, merged, redline);
+    }
+
+    [Theory]
+    [InlineData(Wrapper.CustomXml)]
+    [InlineData(Wrapper.ContentControl)]
+    public void Compare_MovesInTheBodyAndInsideAWrapperInACell_HaveDistinctNames(Wrapper kind)
+    {
+        string Body(string cell, string body) => TwoCellTable(P("Left cell stays."), Wrap(kind, cell)) + body;
+        string BodyAbc = P("Delta body line one here.") + P("Echo body line two here.") + P("Foxtrot body line three here.");
+        string BodyMoved = P("Echo body line two here.") + P("Foxtrot body line three here.") + P("Delta body line one here.");
+        var left = Doc(Body(Abc, BodyAbc) + P(Tail));
+        var right = Doc(Body(MovedAbc, BodyMoved) + P(Tail));
+
+        var redline = DocxCompare.Compare(left, right);
+
+        Assert.Equal(2, BodyOf(redline).Descendants(W.moveFromRangeStart).Count());
+        AssertMoveMarkersUnique(redline.DocumentByteArray);
+        AssertRoundTrip(left, right, redline);
+    }
+
+    private static XElement BodyOf(WmlDocument document) => Body(document);
+
+    [Theory]
+    [InlineData(Wrapper.CustomXml)]
+    [InlineData(Wrapper.ContentControl)]
+    public void Consolidate_TwoReviewersMovingInsideWrappersInDifferentFootnotes_KeepsEachMovePaired(Wrapper kind)
+    {
+        WmlDocument WithNotes(string first, string second) => IrTestDocuments.FromParts(
+            P(Tail) + "<w:p><w:r><w:t>One</w:t></w:r><w:r><w:footnoteReference w:id=\"1\"/></w:r>"
+                + "<w:r><w:t>Two</w:t></w:r><w:r><w:footnoteReference w:id=\"2\"/></w:r></w:p>",
+            footnotesInnerXml:
+                "<w:footnote w:type=\"separator\" w:id=\"-1\"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>"
+                + "<w:footnote w:type=\"continuationSeparator\" w:id=\"0\"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>"
+                + $"<w:footnote w:id=\"1\">{Wrap(kind, first, id: "n1")}</w:footnote>"
+                + $"<w:footnote w:id=\"2\">{Wrap(kind, second, id: "n2")}</w:footnote>");
+        var baseline = WithNotes(Abc, Abc);
+        var first = WithNotes(MovedAbc, Abc);
+        var second = WithNotes(Abc, MovedAbc);
+        var merged = WithNotes(MovedAbc, MovedAbc);
+
+        var redline = DocxCompare.Consolidate(baseline,
+            [new DocxDiffReviewer { Document = first, Author = "One" }, new DocxDiffReviewer { Document = second, Author = "Two" }]);
+
+        AssertMoveMarkersUnique(redline.DocumentByteArray);
+        Assert.Equal(NoteSignature(merged.DocumentByteArray), NoteSignature(DocxDiffOps.AcceptRevisions(redline.DocumentByteArray)));
+        Assert.Equal(NoteSignature(baseline.DocumentByteArray), NoteSignature(DocxDiffOps.RejectRevisions(redline.DocumentByteArray)));
+    }
+
+    private static string NoteSignature(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var document = WordprocessingDocument.Open(stream, false);
+        return string.Join("\n", document.MainDocumentPart!.FootnotesPart!.GetXDocument().Root!.Elements(W.footnote)
+            .Where(f => f.Attribute(W.type) is null)
+            .Select(f => (string?)f.Attribute(W.id) + ":\n" + Signature(f)));
+    }
+
+    /// <summary>Across the main document and its notes, every move name labels exactly one source range and one
+    /// destination range, and every move range id is used by one start/end pair only.</summary>
+    private static void AssertMoveMarkersUnique(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes);
+        using var document = WordprocessingDocument.Open(stream, false);
+        var main = document.MainDocumentPart!;
+        var roots = new[] { main.GetXDocument().Root!, main.FootnotesPart?.GetXDocument().Root, main.EndnotesPart?.GetXDocument().Root }
+            .Where(r => r is not null).Select(r => r!).ToList();
+        var markers = roots.SelectMany(r => r.Descendants()).ToList();
+        var from = markers.Where(e => e.Name == W.moveFromRangeStart).Select(e => (string?)e.Attribute(W.name)).ToList();
+        var to = markers.Where(e => e.Name == W.moveToRangeStart).Select(e => (string?)e.Attribute(W.name)).ToList();
+        Assert.NotEmpty(from);
+        Assert.Equal(from.Count, from.Distinct().Count());
+        Assert.Equal(to.Count, to.Distinct().Count());
+        Assert.Equal(from.OrderBy(n => n), to.OrderBy(n => n));
+        foreach (var start in new[] { W.moveFromRangeStart, W.moveToRangeStart })
+        {
+            var ids = markers.Where(e => e.Name == start).Select(e => (string?)e.Attribute(W.id)).ToList();
+            Assert.Equal(ids.Count, ids.Distinct().Count());
+        }
+    }
+
     /// <summary>Every move name labels exactly one source range and one destination range.</summary>
     private static void AssertMoveNamesPaired(XElement body)
     {

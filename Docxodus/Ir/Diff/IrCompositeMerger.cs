@@ -86,7 +86,7 @@ internal static class IrCompositeMerger
         //    per-block dispatch runs over each note; reviewer-inserted notes pass through authored. Also
         //    collect every reviewer's note-id correspondence for the renderer's reference rewrite.
         var (noteOps, noteIdMaps) = MergeNoteScopes(
-            baseIr, reviewers, rawScripts, policy, settings, conflicts, ref nextConflictId);
+            baseIr, reviewers, scripts, policy, settings, conflicts, ref nextConflictId);
 
         // 5. TRAILING SECTION (B2): the document-final w:sectPr is not a body block op (Word compares it at the
         //    document level), so compose it directly — base vs each reviewer's trailing IrSectionBreak.Format
@@ -425,15 +425,22 @@ internal static class IrCompositeMerger
             }
         }
 
-        // Moves INSIDE a block wrapper's children (issue #1143) render natively with the wrapper op that
-        // carries them. Their local ids are unique only within one reviewer's script, so give them global ids
-        // too, or two reviewers' wrapper moves would share one w:name.
+        // Moves in NESTED scopes (table rows and cells, textboxes, block wrapper children, notes) render with
+        // the op that carries them. Their ids are unique only within one reviewer's script (the builder's
+        // UniqueMoveGroupIds), so give them global ids too, or two reviewers' nested moves would share one
+        // w:name (issue #1143).
         for (int reviewer = 0; reviewer < rawScripts.Count; reviewer++)
         {
             var nestedLocalGids = new SortedSet<int>();
+            int Collect(int gid)
+            {
+                nestedLocalGids.Add(gid);
+                return gid;
+            }
             foreach (var op in rawScripts[reviewer].Operations)
-                if (op.WrapperOps is { } wrapperOps)
-                    CollectWrapperMoveGids(wrapperOps, nestedLocalGids);
+                RewriteNestedMoveIds(op, Collect);
+            foreach (var note in rawScripts[reviewer].NoteOps ?? Enumerable.Empty<IrNoteDiff>())
+                RewriteMoveIds(note.Ops, Collect);
             foreach (var localGid in nestedLocalGids)
                 globalGid[(reviewer, localGid)] = nextGlobal++;
         }
@@ -451,14 +458,12 @@ internal static class IrCompositeMerger
     /// </summary>
     internal static IrEditScript ApplyMovePlan(IrEditScript script, int reviewer, MovePlan plan)
     {
+        int Global(int gid) => plan.GlobalGidByGroup.TryGetValue((reviewer, gid), out var global) ? global : gid;
         var result = new List<IrEditOp>(script.Operations.Count);
-        foreach (var op in script.Operations)
+        foreach (var raw in script.Operations)
         {
-            if (op.WrapperOps is { } wrapperOps)
-            {
-                result.Add(op with { WrapperOps = GlobalizeWrapperMoves(wrapperOps, reviewer, plan) });
-            }
-            else if (op.Kind is IrEditOpKind.MoveBlock or IrEditOpKind.MoveModifyBlock
+            var op = RewriteNestedMoveIds(raw, Global);
+            if (op.Kind is IrEditOpKind.MoveBlock or IrEditOpKind.MoveModifyBlock
                 && op.MoveGroupId is { } localGid
                 && plan.GlobalGidByGroup.TryGetValue((reviewer, localGid), out var global))
             {
@@ -483,32 +488,76 @@ internal static class IrCompositeMerger
                 || (o.MoveGroupId is { } g && plan.GlobalGidByGroup.Values.Contains(g))),
             "ApplyMovePlan must leave no LOWERED-candidate move op; surviving moves must be native (global gid).");
 
-        return new IrEditScript(IrNodeList.From(result), script.NoteOps);
+        var noteOps = script.NoteOps is { } notes
+            ? IrNodeList.From(notes.Select(n => n with { Ops = RewriteMoveIds(n.Ops, Global) }).ToList())
+            : null;
+        return new IrEditScript(IrNodeList.From(result), noteOps);
     }
 
-    /// <summary>Every move group id in a block wrapper's child ops, through nested wrappers.</summary>
-    private static void CollectWrapperMoveGids(IrNodeList<IrEditOp> ops, SortedSet<int> sink)
+    /// <summary>
+    /// <paramref name="op"/> with <paramref name="rewrite"/> applied to every move group id in the scopes nested
+    /// inside it — its table's rows and cells, its textboxes and a block wrapper's children, at any depth — but
+    /// not to the op's own id. Nothing is copied unless an id actually changes, so a rewrite that returns its
+    /// argument doubles as an allocation-free walk that only collects ids.
+    /// </summary>
+    internal static IrEditOp RewriteNestedMoveIds(IrEditOp op, Func<int, int> rewrite)
     {
-        foreach (var op in ops)
-        {
-            if (op.MoveGroupId is { } gid)
-                sink.Add(gid);
-            if (op.WrapperOps is { } nested)
-                CollectWrapperMoveGids(nested, sink);
-        }
+        var table = op.TableDiff is { } diff ? RewriteTable(diff, rewrite) : null;
+        var textboxes = op.TextboxDiffs is { } boxes
+            ? RewriteEach(boxes, b => RewriteMoveIds(b.Ops, rewrite) is var ops && !ReferenceEquals(ops, b.Ops) ? b with { Ops = ops } : b)
+            : null;
+        var wrapperOps = op.WrapperOps is { } children ? RewriteMoveIds(children, rewrite) : null;
+        return ReferenceEquals(table, op.TableDiff) && ReferenceEquals(textboxes, op.TextboxDiffs)
+            && ReferenceEquals(wrapperOps, op.WrapperOps)
+            ? op
+            : op with { TableDiff = table, TextboxDiffs = textboxes, WrapperOps = wrapperOps };
     }
 
-    /// <summary>Rewrite the move group ids inside a block wrapper's child ops to the plan's global ids.</summary>
-    private static IrNodeList<IrEditOp> GlobalizeWrapperMoves(IrNodeList<IrEditOp> ops, int reviewer, MovePlan plan) =>
-        IrNodeList.From(ops.Select(op =>
+    /// <summary><see cref="RewriteNestedMoveIds"/> over a whole op list, including each op's own id.</summary>
+    private static IrNodeList<IrEditOp> RewriteMoveIds(IrNodeList<IrEditOp> ops, Func<int, int> rewrite) =>
+        RewriteEach(ops, op =>
         {
-            var rewritten = op.MoveGroupId is { } gid && plan.GlobalGidByGroup.TryGetValue((reviewer, gid), out var global)
-                ? op with { MoveGroupId = global }
-                : op;
-            return op.WrapperOps is { } nested
-                ? rewritten with { WrapperOps = GlobalizeWrapperMoves(nested, reviewer, plan) }
-                : rewritten;
-        }).ToList());
+            var nested = RewriteNestedMoveIds(op, rewrite);
+            return op.MoveGroupId is { } gid && rewrite(gid) is var fresh && fresh != gid
+                ? nested with { MoveGroupId = fresh }
+                : nested;
+        });
+
+    private static IrTableDiff RewriteTable(IrTableDiff table, Func<int, int> rewrite)
+    {
+        var rows = RewriteEach(table.RowOps, row =>
+        {
+            var cells = row.CellOps is { } cellOps
+                ? RewriteEach(cellOps, c => c.BlockOps is { } ops && RewriteMoveIds(ops, rewrite) is var fresh
+                    && !ReferenceEquals(fresh, ops) ? c with { BlockOps = fresh } : c)
+                : null;
+            int? gid = row.MoveGroupId is { } id ? rewrite(id) : null;
+            return gid == row.MoveGroupId && ReferenceEquals(cells, row.CellOps)
+                ? row
+                : row with { MoveGroupId = gid, CellOps = cells };
+        });
+        return ReferenceEquals(rows, table.RowOps) ? table : new IrTableDiff(rows);
+    }
+
+    /// <summary><paramref name="items"/> mapped through <paramref name="map"/>; the same list when every item
+    /// maps to itself.</summary>
+    private static IrNodeList<T> RewriteEach<T>(IrNodeList<T> items, Func<T, T> map) where T : class
+    {
+        List<T>? copy = null;
+        for (int i = 0; i < items.Count; i++)
+        {
+            var item = items[i];
+            var mapped = map(item);
+            if (copy is null && !ReferenceEquals(mapped, item))
+            {
+                copy = new List<T>(items.Count);
+                for (int k = 0; k < i; k++)
+                    copy.Add(items[k]);
+            }
+            copy?.Add(mapped);
+        }
+        return copy is null ? items : IrNodeList.From(copy);
+    }
 
     /// <summary>
     /// Decide each of reviewer <paramref name="reviewer"/>'s Split/Merge ops NATIVE vs LOWER, mirroring the
@@ -598,7 +647,7 @@ internal static class IrCompositeMerger
 
         // Note scopes (footnotes/endnotes) are not part of body grouping, so they pass through this body-op
         // lowering unchanged; cross-reviewer note composition happens later in MergeNoteScopes, which reads
-        // these passed-through NoteOps off each reviewer's raw script.
+        // these passed-through NoteOps off each reviewer's script.
         return new IrEditScript(IrNodeList.From(lowered), script.NoteOps);
     }
 
