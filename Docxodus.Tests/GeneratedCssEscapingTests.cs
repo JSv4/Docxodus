@@ -104,6 +104,9 @@ public class GeneratedCssEscapingTests
         // The note rules must reach the browser intact. The first-paragraph rule that was silently
         // dead is gone: the number now opens the first paragraph instead (issue #1130).
         Assert.Contains(".footnote-number[data-note-run]", raw, StringComparison.Ordinal);
+        // The note area's last paragraph reserves no spacing after at the bottom margin.
+        Assert.Contains(".page-footnotes .footnote-item:last-child .footnote-content p:last-of-type",
+            raw, StringComparison.Ordinal);
         Assert.DoesNotContain(".footnote-content &gt; p", raw, StringComparison.Ordinal);
         Assert.DoesNotContain(".footnote-content p:first-of-type", raw, StringComparison.Ordinal);
     }

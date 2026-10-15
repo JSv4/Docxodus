@@ -2429,6 +2429,15 @@ namespace Docxodus
             // h:style element, so a `>` child combinator reaches the browser as `&gt;` and the
             // rule is silently dropped. NoGeneratedCssIsXmlEscaped pins that.
 
+            // The one exception: the spacing after the note area's last paragraph. The area is
+            // bottom-anchored, and the reference renderers set that paragraph's last line on the
+            // bottom margin; counting its spacing after lifted every page's notes by it (6pt for
+            // the common FootnoteText style) and reserved that much body space (issue #1130).
+            // The engine measures and paints the same tree, so both see this.
+            sb.AppendLine($".{prefix}footnotes .footnote-item:last-child .footnote-content p:last-of-type {{");
+            sb.AppendLine("    margin-bottom: 0 !important;");
+            sb.AppendLine("}");
+
             return sb.ToString();
         }
 

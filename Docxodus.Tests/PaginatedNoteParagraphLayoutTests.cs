@@ -53,16 +53,19 @@ public class PaginatedNoteParagraphLayoutTests
     public void NoteParagraphsGetNoGenericDisplayInsetOrGap()
     {
         // Every rule that targets a note paragraph: none may override the paragraph's own
-        // display, margins or indent, which its resolved classes carry.
-        var rules = Regex.Matches(Css(Convert()), @"\.footnote-content p[^{,]*\{([^}]*)\}")
-            .Select(m => m.Groups[1].Value)
+        // display, margins or indent, which its resolved classes carry. The one exception drops
+        // only the spacing after the note area's last paragraph, at the bottom margin.
+        var rules = Regex.Matches(Css(Convert()), @"([^{}]*\.footnote-content p[^{,]*)\{([^}]*)\}")
+            .Select(m => (selector: m.Groups[1].Value.Trim(), body: m.Groups[2].Value))
             .ToList();
 
-        Assert.All(rules, rule =>
+        var bandLast = Assert.Single(rules, r => r.selector.Contains(".footnote-item:last-child"));
+        Assert.Equal("margin-bottom: 0 !important;", bandLast.body.Trim());
+        Assert.All(rules.Where(r => r != bandLast), rule =>
         {
-            Assert.DoesNotContain("display: inline", rule);
-            Assert.DoesNotContain("margin", rule);
-            Assert.DoesNotContain("text-indent", rule);
+            Assert.DoesNotContain("display: inline", rule.body);
+            Assert.DoesNotContain("margin", rule.body);
+            Assert.DoesNotContain("text-indent", rule.body);
         });
     }
 

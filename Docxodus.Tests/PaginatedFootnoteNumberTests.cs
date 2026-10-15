@@ -56,7 +56,7 @@ public class PaginatedFootnoteNumberTests
         var item = NoteItem("CA/CA008-Footnote-Reference.docx");
         var content = item.Elements().Single(e => (string?)e.Attribute("class") == "footnote-content");
 
-        Assert.Single(content.Descendants().Where(e => e.Name.LocalName == "sup"));
+        Assert.Single(content.Descendants(), e => e.Name.LocalName == "sup");
         var text = content.DescendantNodes().OfType<XText>()
             .Where(t => !t.Ancestors().Any(a => (string?)a.Attribute("class") == "footnote-number"));
         Assert.Equal("This is a test.", string.Concat(text.Select(t => t.Value)).Trim());

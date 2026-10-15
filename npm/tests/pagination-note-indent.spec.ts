@@ -232,6 +232,47 @@ test.describe('paginated note paragraph indentation (issue #1130)', () => {
   });
 });
 
+test.describe('paginated note spacing (issue #1130)', () => {
+  test.beforeEach(async ({ page }) => readyPage(page));
+
+  test('spacing after separates notes but is not reserved below the last one', async ({ page }) => {
+    // FootnoteText's common 6pt after. LibreOffice sets the gap between notes and puts the last
+    // note line on the bottom margin; a trailing 6pt lifted every page's notes off it.
+    const docx = generateFootnoteDocx(2, 3, 1, 0, {}, '<w:spacing w:after="120"/>');
+    const band = await page.evaluate((bytes: number[]) => {
+      const D = (window as any).Docxodus;
+      const html: string = D.DocumentConverter.ConvertDocxToHtmlComplete(
+        new Uint8Array(bytes), 'Document', 'docx-', false, '', -1, 'comment-',
+        1, 1, 'page-', false, 0, 'annot-', true, false, false, false, false, false, null, false,
+      );
+      const host = document.createElement('div');
+      host.innerHTML = html;
+      document.body.appendChild(host);
+      const container = host.querySelector<HTMLElement>('#pagination-container')!;
+      new (window as any).DocxodusPagination.PaginationEngine(
+        host.querySelector<HTMLElement>('#pagination-staging')!, container, { showPageNumbers: false },
+      ).paginate();
+      const footnotes = container.querySelector<HTMLElement>('.page-footnotes')!;
+      const textBox = (element: Element) => {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        const rects = Array.from(range.getClientRects()).filter((rect) => rect.height > 0);
+        return { top: Math.min(...rects.map((r) => r.top)), bottom: Math.max(...rects.map((r) => r.bottom)) };
+      };
+      const notes = Array.from(footnotes.querySelectorAll('.footnote-item p')).map(textBox);
+      const px = 4 / 3;
+      return {
+        count: notes.length,
+        gapPt: (notes[1].top - notes[0].bottom) / px,
+        slackPt: (footnotes.getBoundingClientRect().bottom - notes[notes.length - 1].bottom) / px,
+      };
+    }, Array.from(docx));
+    expect(band.count).toBe(2);
+    expect(band.gapPt).toBeGreaterThan(5);
+    expect(band.slackPt).toBeLessThan(2);
+  });
+});
+
 test.describe('paginated editor note number (issue #1130)', () => {
   test('the number inside a note paragraph is chrome, never committed as text', async ({ page }) => {
     await page.goto('/test-harness.html');
@@ -271,6 +312,23 @@ test.describe('paginated editor note number (issue #1130)', () => {
       const numberOpensNote = noteAfterEdit?.querySelector('.footnote-number')
         === noteAfterEdit?.firstElementChild;
       const projection = JSON.parse(D.DocxSessionBridge.Project(editor.sessionHandle));
+      // Undo and redo re-render the note through the editor's other repaint paths.
+      const numbersAt = () => {
+        const block = container.querySelector<HTMLElement>(
+          '.page-footnotes [data-anchor][contenteditable="true"]');
+        return {
+          numbers: Array.from(container.querySelectorAll<HTMLElement>('.page-footnotes .footnote-number'))
+            .map((n) => n.textContent),
+          opens: !!block && block.querySelector('.footnote-number') === block.firstElementChild,
+          text: block?.textContent ?? '',
+        };
+      };
+      editor.undo();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const afterUndo = numbersAt();
+      editor.redo();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const afterRedo = numbersAt();
       const notes = Object.entries(projection.anchorIndex as Record<string, any>)
         .filter(([id]) => id.startsWith('p:fn:'))
         .map(([, target]) => target.textPreview as string);
@@ -283,6 +341,8 @@ test.describe('paginated editor note number (issue #1130)', () => {
         notes,
         numbersAfterEdit,
         numberOpensNote,
+        afterUndo,
+        afterRedo,
       };
     }, Array.from(generateFootnoteDocx(1, 3, 1)));
     expect(out.err, out.err).toBeUndefined();
@@ -292,5 +352,9 @@ test.describe('paginated editor note number (issue #1130)', () => {
     expect(out.notes).toEqual(['Edited note.']);
     expect(out.numbersAfterEdit).toEqual(['1']);
     expect(out.numberOpensNote).toBe(true);
+    expect(out.afterUndo).toMatchObject({ numbers: ['1'], opens: true });
+    expect(out.afterUndo!.text).toContain('Footnote 1 paragraph 1 text.');
+    expect(out.afterRedo).toMatchObject({ numbers: ['1'], opens: true });
+    expect(out.afterRedo!.text).toContain('Edited note.');
   });
 });
