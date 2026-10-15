@@ -124,7 +124,7 @@ public class BlockWrapperNestedDiffTests
         var redline = DocxCompare.Compare(left, right);
 
         var body = Body(redline);
-        Assert.Empty(body.Descendants().Where(IsRangeMarker));
+        Assert.DoesNotContain(body.Descendants(), IsRangeMarker);
         Assert.Equal(outer == inner ? 2 : 1, body.Descendants(WrapperName(outer)).Count());
         Assert.Equal(outer == inner ? 2 : 1, body.Descendants(WrapperName(inner)).Count());
         Assert.Equal("monthly", string.Concat(body.Descendants(W.delText).Select(t => t.Value)));
@@ -240,7 +240,7 @@ public class BlockWrapperNestedDiffTests
 
         var body = Body(redline);
         Assert.Equal(2, body.Descendants(WrapperName(kind)).Count());
-        Assert.Empty(body.Descendants().Where(IsRangeMarker));
+        Assert.DoesNotContain(body.Descendants(), IsRangeMarker);
         Assert.Equal("monthlystaff", string.Concat(body.Descendants(W.delText).Select(t => t.Value)));
         AssertUnmarked(body, Alpha, Charlie, Tail);
         AssertRoundTrip(left, right, redline);
@@ -289,7 +289,7 @@ public class BlockWrapperNestedDiffTests
 
         var body = Body(redline);
         Assert.Equal(2, body.Descendants(WrapperName(kind)).Count());
-        Assert.Empty(body.Descendants().Where(IsRangeMarker));
+        Assert.DoesNotContain(body.Descendants(), IsRangeMarker);
         AssertUnmarked(body, Alpha, Charlie, Tail);
         AssertRoundTrip(baseline, merged, redline);
     }
@@ -334,6 +334,26 @@ public class BlockWrapperNestedDiffTests
         AssertRoundTrip(baseline, merged, redline);
     }
 
+    [Theory]
+    [InlineData(Wrapper.CustomXml)]
+    [InlineData(Wrapper.ContentControl)]
+    public void Compare_ParagraphMovedFromTheBodyIntoAnUnchangedWrapper_IsANativeMove(Wrapper kind)
+    {
+        var left = Doc(P(Bravo) + Wrap(kind, P(Alpha) + P(Charlie)) + P(Tail));
+        var right = Doc(Wrap(kind, P(Alpha) + P(Bravo) + P(Charlie)) + P(Tail));
+
+        var redline = DocxCompare.Compare(left, right);
+
+        var body = Body(redline);
+        AssertSingleWrapperWithoutRangeMarkers(body, kind);
+        Assert.NotEmpty(body.Descendants(W.moveFrom));
+        Assert.NotEmpty(body.Elements(WrapperName(kind)).Descendants(W.moveTo));
+        AssertMoveNamesPaired(body);
+        AssertUnmarked(body, Alpha, Charlie, Tail);
+        AssertRoundTrip(left, right, redline);
+        Assert.Equal(2, DocxDiff.GetRevisions(left, right).Count(r => r.Type == DocxDiffRevisionType.Moved));
+    }
+
     /// <summary>Every move name labels exactly one source range and one destination range.</summary>
     private static void AssertMoveNamesPaired(XElement body)
     {
@@ -376,7 +396,7 @@ public class BlockWrapperNestedDiffTests
     private static void AssertSingleWrapperWithoutRangeMarkers(XElement body, Wrapper kind)
     {
         Assert.Single(body.Descendants(WrapperName(kind)));
-        Assert.Empty(body.Descendants().Where(IsRangeMarker));
+        Assert.DoesNotContain(body.Descendants(), IsRangeMarker);
     }
 
     /// <summary>Each paragraph whose text is one of <paramref name="texts"/> carries no revision markup at all:
