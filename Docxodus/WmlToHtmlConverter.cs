@@ -7118,7 +7118,7 @@ namespace Docxodus
          * - autoSpaceDE
          * - autoSpaceDN
          * - bidi
-         * - contextualSpacing (handled via GroupAndVerticallySpaceNumberedParagraphs)
+         * - contextualSpacing (handled via ApplyContextualSpacing)
          * - divId
          * - framePr
          * - keepLines
@@ -10049,7 +10049,7 @@ namespace Docxodus
                 {
                     if (g.Key == string.Empty)
                     {
-                        return (object) GroupAndVerticallySpaceNumberedParagraphs(wordDoc, settings, g, 0m);
+                        return (object) ApplyContextualSpacing(wordDoc, settings, g, 0m);
                     }
                     if (g.Key == "table")
                     {
@@ -10094,7 +10094,7 @@ namespace Docxodus
 
                     // Materialize the (lazy) paragraph projections once, so the adjusted elements
                     // are the ones the wrapper holds.
-                    var content = GroupAndVerticallySpaceNumberedParagraphs(wordDoc, settings, g, currentMarginLeft)
+                    var content = ApplyContextualSpacing(wordDoc, settings, g, currentMarginLeft)
                         .SelectMany(item => item is IEnumerable<object> nested ? nested : new[] { item }).ToList();
                     if (trailingIndentInPoints > 0m)
                     {
@@ -10117,17 +10117,17 @@ namespace Docxodus
             .ToList();
         }
 
-        private static IEnumerable<object> GroupAndVerticallySpaceNumberedParagraphs(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
+        private static IEnumerable<object> ApplyContextualSpacing(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
             IEnumerable<XElement> elements, decimal currentMarginLeft)
         {
+            // Word removes the spacing between two paragraphs only through w:contextualSpacing, and
+            // only between paragraphs of the same style. Membership of one numbered list is not a
+            // reason: consecutive numbered paragraphs keep their spacing after (issue #1151).
             var grouped = elements
                 .GroupAdjacent(e =>
                 {
-                    var abstractNumId = (string?)e.Attribute(PtOpenXml.pt + "AbstractNumId");
-                    if (abstractNumId != null)
-                        return "num:" + abstractNumId;
                     var contextualSpacing = e.Elements(W.pPr).Elements(W.contextualSpacing).FirstOrDefault();
-                    if (contextualSpacing != null)
+                    if (IsOnOffPropertyEnabled(contextualSpacing))
                     {
                         var styleName = (string?)e.Elements(W.pPr).Elements(W.pStyle).Attributes(W.val).FirstOrDefault();
                         if (styleName == null)
