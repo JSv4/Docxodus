@@ -70,7 +70,9 @@ All notable changes to this project will be documented in this file.
   line sits on the bottom margin, as in LibreOffice; before, a multi-paragraph last note lifted the
   notes by it. A note split across pages still shows its number once, on the citing page. The
   paginated editor treats the number as generated chrome, so it is never editable or committed as
-  note text, and keeps it when a note edit re-renders the paragraph.
+  note text, and keeps it when a note edit re-renders the paragraph. A note whose first paragraph
+  is written as a heading element (its style carries an outline level) gets its number in that
+  paragraph, not the next one.
 - Paragraphs inside a block-level `w:customXml` wrapper now appear in `Project()` markdown, and a
   comparison tracks edits inside one (issue #1114). The IR read the wrapper as an opaque block, so an
   edit inside it came out of `DocxCompare`/`DocxDiff` (and consolidate) as the old and new wrappers side

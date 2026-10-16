@@ -17,16 +17,19 @@ public class PaginatedNoteParagraphLayoutTests
     private const string W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
     // Literal original note; no external document or template is read.
-    private static byte[] AuthoredDocument(string marker = "<w:r><w:footnoteRef/></w:r>")
+    private static byte[] AuthoredDocument(string marker = "<w:r><w:footnoteRef/></w:r>", string? firstParagraphStyle = null)
     {
         const string props = "<w:pPr><w:spacing w:before=\"0\" w:after=\"0\" w:line=\"360\" w:lineRule=\"exact\"/></w:pPr>";
+        var firstProps = firstParagraphStyle == null
+            ? props
+            : props.Replace("<w:pPr>", $"<w:pPr><w:pStyle w:val=\"{firstParagraphStyle}\"/>");
         var document = $"<w:document xmlns:w=\"{W}\"><w:body><w:p><w:r><w:t xml:space=\"preserve\">Willow note </w:t></w:r>"
             + "<w:r><w:footnoteReference w:id=\"1\"/></w:r></w:p>"
             + "<w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"720\" w:footer=\"720\"/></w:sectPr></w:body></w:document>";
         var notes = $"<w:footnotes xmlns:w=\"{W}\">"
             + "<w:footnote w:type=\"separator\" w:id=\"-1\"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>"
             + "<w:footnote w:type=\"continuationSeparator\" w:id=\"0\"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>"
-            + $"<w:footnote w:id=\"1\"><w:p>{props}{marker}<w:r><w:t xml:space=\"preserve\"> Ledger001</w:t></w:r></w:p>"
+            + $"<w:footnote w:id=\"1\"><w:p>{firstProps}{marker}<w:r><w:t xml:space=\"preserve\"> Ledger001</w:t></w:r></w:p>"
             + $"<w:p>{props}<w:r><w:t>Ledger002</w:t></w:r></w:p></w:footnote></w:footnotes>";
         using var stream = new MemoryStream();
         using (var package = WordprocessingDocument.Create(stream, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
@@ -35,12 +38,21 @@ public class PaginatedNoteParagraphLayoutTests
             using (var xml = new MemoryStream(Encoding.UTF8.GetBytes(document))) main.FeedData(xml);
             var part = main.AddNewPart<FootnotesPart>();
             using (var xml = new MemoryStream(Encoding.UTF8.GetBytes(notes))) part.FeedData(xml);
+            if (firstParagraphStyle != null)
+            {
+                // An outline level makes the converter write the paragraph as a heading element.
+                var styles = $"<w:styles xmlns:w=\"{W}\"><w:style w:type=\"paragraph\" w:styleId=\"{firstParagraphStyle}\">"
+                    + $"<w:name w:val=\"{firstParagraphStyle}\"/><w:pPr><w:outlineLvl w:val=\"0\"/></w:pPr></w:style></w:styles>";
+                var stylesPart = main.AddNewPart<StyleDefinitionsPart>();
+                using var xml = new MemoryStream(Encoding.UTF8.GetBytes(styles));
+                stylesPart.FeedData(xml);
+            }
         }
         return stream.ToArray();
     }
 
-    private static XElement Convert(string marker = "<w:r><w:footnoteRef/></w:r>") => WmlToHtmlConverter.ConvertToHtml(
-        new WmlDocument("Willow.docx", AuthoredDocument(marker)), new WmlToHtmlConverterSettings
+    private static XElement Convert(string marker = "<w:r><w:footnoteRef/></w:r>", string? firstParagraphStyle = null) => WmlToHtmlConverter.ConvertToHtml(
+        new WmlDocument("Willow.docx", AuthoredDocument(marker, firstParagraphStyle)), new WmlToHtmlConverterSettings
         {
             RenderFootnotesAndEndnotes = true,
             RenderPagination = PaginationMode.Paginated,
@@ -81,6 +93,22 @@ public class PaginatedNoteParagraphLayoutTests
         Assert.Same(number, paragraphs[0].Elements().First());
         Assert.Matches(@"^1\s+Ledger001$", paragraphs[0].Value);
         Assert.Equal("Ledger002", paragraphs[1].Value);
+    }
+
+    [Fact]
+    public void NumberOpensAHeadingStyledFirstNoteParagraph()
+    {
+        // A paragraph whose style carries an outline level is written as a heading element. The
+        // number still opens the note's first paragraph, not the first <p> after it.
+        var item = Convert(firstParagraphStyle: "NoteHeading").Descendants()
+            .First(e => (string?)e.Attribute("class") == "footnote-item");
+        var blocks = item.Descendants().Where(e => e.Name.LocalName is "h1" or "p").ToList();
+
+        Assert.Equal(new[] { "h1", "p" }, blocks.Select(b => b.Name.LocalName));
+        var number = Assert.Single(item.Descendants(), e => (string?)e.Attribute("class") == "footnote-number");
+        Assert.Same(blocks[0], number.Parent);
+        Assert.Same(number, blocks[0].Elements().First());
+        Assert.Matches(@"^1\s+Ledger001$", blocks[0].Value);
     }
 
     [Fact]

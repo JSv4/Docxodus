@@ -2384,9 +2384,9 @@ namespace Docxodus
             // FootnoteText paragraph. The item and its content wrapper are set in the page's default
             // font, and a strut in that font made the note's line box taller than the paragraph's own,
             // which lifted the bottom-anchored text about a pixel above Word's (issue #955). So the item
-            // contributes no strut (line-height 0, which the number inherits, so a raised number does not
-            // grow the line either), and the wrapper generates no box and hands `normal` back to the
-            // paragraph, whose own font then sizes its lines.
+            // contributes no strut (line-height 0), and the wrapper generates no box and hands `normal`
+            // back to the paragraph, whose own font then sizes its lines. The number, inside the
+            // paragraph, declares its own zero line height below.
             sb.AppendLine(".footnote-item {");
             sb.AppendLine("    margin-bottom: 0;");
             sb.AppendLine("    line-height: 0;");
@@ -4465,6 +4465,15 @@ namespace Docxodus
         }
 
         /// <summary>
+        /// The elements a Word paragraph is written as: a heading element when its style carries
+        /// an outline level, otherwise a paragraph.
+        /// </summary>
+        private static readonly HashSet<XName> ParagraphElementNames = new()
+        {
+            Xhtml.p, Xhtml.h1, Xhtml.h2, Xhtml.h3, Xhtml.h4, Xhtml.h5, Xhtml.h6,
+        };
+
+        /// <summary>
         /// Make a paginated note's number the first content of the note's first paragraph, where
         /// Word's reference-mark run sits. Returns false, leaving the number unplaced, when the
         /// note has no paragraph.
@@ -4472,7 +4481,7 @@ namespace Docxodus
         private static bool AddNoteNumberToFirstParagraph(IEnumerable<object?> content, XElement number)
         {
             var firstParagraph = content.OfType<XElement>().SelectMany(e => e.DescendantsAndSelf())
-                .FirstOrDefault(e => e.Name == Xhtml.p);
+                .FirstOrDefault(e => ParagraphElementNames.Contains(e.Name));
             firstParagraph?.AddFirst(number);
             return firstParagraph != null;
         }
