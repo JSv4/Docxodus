@@ -73,6 +73,10 @@ function naturalLineHeightRatios(document: Document): (style: CSSStyleDeclaratio
  * needs). Elements are collected before any is
  * changed, because an explicit value on a parent would otherwise be inherited by children that
  * should keep sizing their lines from their own font. Returns how many elements changed.
+ *
+ * The paginator runs this on its staging tree, so every paginated surface lays lines out alike. A
+ * caller that needs the heights earlier (the export measures text before it paginates) may run it
+ * first: a resolved height is no longer `normal`, so the paginator's pass leaves it alone.
  */
 export function applyUnroundedNormalLineHeights(root: Element): number {
   const document = root.ownerDocument;

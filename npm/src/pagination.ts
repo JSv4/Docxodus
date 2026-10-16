@@ -6,7 +6,7 @@
  */
 
 import { formatPageNumber } from "./page-number-format.js";
-import { alignExactLineBaselines, insetClipBounds, preserveExactLineInk } from "./line-metrics.js";
+import { alignExactLineBaselines, applyUnroundedNormalLineHeights, insetClipBounds, preserveExactLineInk } from "./line-metrics.js";
 import {
   DEFAULT_MARGIN,
   DEFAULT_PAGE_HEIGHT,
@@ -754,6 +754,12 @@ export class PaginationEngine {
     try {
       const pages: PageInfo[] = [];
       let pageNumber = 1;
+
+    // Chromium rounds a `line-height: normal` line to a whole pixel, so single-spaced text
+    // advanced 12.75pt where Word advances 12.65pt for 11pt Times New Roman, and the error
+    // accumulated down every page (issues #850, #1151). Resolve each line height before
+    // anything here is measured.
+    applyUnroundedNormalLineHeights(this.stagingElement);
 
     // Parse the header/footer registry if present
     this.hfRegistry = this.parseHeaderFooterRegistry();
