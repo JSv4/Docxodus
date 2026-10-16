@@ -5959,9 +5959,11 @@ internal static partial class IrMarkupRenderer
                     string rawLeft = RawSpanText(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd);
                     if (!string.Equals(rawLeft, rawRight, StringComparison.Ordinal))
                     {
-                        foreach (var r in leftRuns.Slice(ls, le, lzs, lze))
+                        foreach (var r in leftRuns.Slice(ls, le, lzs, lze,
+                                     NextOwnsEndZeroWidth(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd)))
                             content.AddRange(WrapFieldAware(r, RevKind.Del, state));
-                        foreach (var r in rightRuns.Slice(rs, re, rzs, rze))
+                        foreach (var r in rightRuns.Slice(rs, re, rzs, rze,
+                                     NextOwnsEndZeroWidth(rightTokens, tokenOp.RightStart, tokenOp.RightEnd)))
                             content.AddRange(WrapFieldAware(r, RevKind.Ins, state));   // registers media on its clone
                     }
                     else if (tokenOp.Kind == IrTokenOpKind.FormatChanged)
@@ -5993,9 +5995,12 @@ internal static partial class IrMarkupRenderer
                             // the single-slice ownership exactly (claim-dedup guarantees each is emitted once).
                             bool subStartZw = bi == 0 ? rzs : true;
                             bool subEndZw = bi == boundaries.Count ? rze : false;
+                            // An interior cut always has a next sub-span starting at it.
+                            bool subNextOwns = bi < boundaries.Count ||
+                                NextOwnsEndZeroWidth(rightTokens, tokenOp.RightStart, tokenOp.RightEnd);
                             // Left format is uniform across the sub-span, so one RPrAtChar at its start suffices.
                             var oldRPr = leftRuns.RPrAtChar(ls + (subStart - rs));
-                            foreach (var r in rightRuns.Slice(subStart, subEnd, subStartZw, subEndZw))
+                            foreach (var r in rightRuns.Slice(subStart, subEnd, subStartZw, subEndZw, subNextOwns))
                             {
                                 // Only a w:r carries run formatting — bookmarks/zero-width markers pass through
                                 // untouched (stamping an rPr onto them is schema-invalid). A w:hyperlink wrapper
@@ -6009,7 +6014,8 @@ internal static partial class IrMarkupRenderer
                     }
                     else
                     {
-                        foreach (var r in rightRuns.Slice(rs, re, rzs, rze))
+                        foreach (var r in rightRuns.Slice(rs, re, rzs, rze,
+                                     NextOwnsEndZeroWidth(rightTokens, tokenOp.RightStart, tokenOp.RightEnd)))
                             AddStableSpan(r);
                     }
                     break;
@@ -6022,7 +6028,8 @@ internal static partial class IrMarkupRenderer
                     var range = arrival is null ? default : CreateMoveRange(isFrom: false, arrival, state);
                     if (arrival is not null)
                         content.Add(range.Start);
-                    foreach (var r in rightRuns.Slice(s, e, zs, ze))
+                    foreach (var r in rightRuns.Slice(s, e, zs, ze,
+                                 NextOwnsEndZeroWidth(rightTokens, tokenOp.RightStart, tokenOp.RightEnd)))
                         content.AddRange(WrapFieldAware(r, arrival is null ? RevKind.Ins : RevKind.MoveTo, state));   // registers media on its clone
                     if (arrival is not null)
                         content.Add(range.End);
@@ -6036,7 +6043,8 @@ internal static partial class IrMarkupRenderer
                     var range = departure is null ? default : CreateMoveRange(isFrom: true, departure, state);
                     if (departure is not null)
                         content.Add(range.Start);
-                    foreach (var r in leftRuns.Slice(s, e, zs, ze))
+                    foreach (var r in leftRuns.Slice(s, e, zs, ze,
+                                 NextOwnsEndZeroWidth(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd)))
                         content.AddRange(WrapFieldAware(r, departure is null ? RevKind.Del : RevKind.MoveFrom, state));
                     if (departure is not null)
                         content.Add(range.End);
@@ -6219,6 +6227,14 @@ internal static partial class IrMarkupRenderer
             ? (false, false)
             : (tokens[start].StartChar == tokens[start].EndChar,
                tokens[end - 1].StartChar == tokens[end - 1].EndChar);
+
+    /// <summary>Whether the token right after the non-empty token span [<paramref name="start"/>,
+    /// <paramref name="end"/>) is zero-width and sits at the span's end character, so the next op of the same side
+    /// owns a zero-width token at that position (see <see cref="SourceRunModel.Slice"/>).</summary>
+    private static bool NextOwnsEndZeroWidth(IReadOnlyList<IrDiffToken> tokens, int start, int end) =>
+        end > start && end < tokens.Count &&
+        tokens[end].StartChar == tokens[end].EndChar &&
+        tokens[end].StartChar == tokens[end - 1].EndChar;
 
     /// <summary>Concatenate the RAW token text over a half-open token-index span (empty span ⇒ "").</summary>
     private static string RawSpanText(IReadOnlyList<IrDiffToken> tokens, int start, int end)
@@ -10227,10 +10243,23 @@ internal static partial class IrMarkupRenderer
         /// zero-width (it sits at <c>end</c>, which no op's interior and no later op covers — the footnote-ref
         /// corruption) and DOUBLE-COUNTS a boundary one (an equal tab claimed both as equal by the op that owns it
         /// AND as deleted by the next op's start). Defaults <c>(true,false)</c> reproduce the original
-        /// always-start-inclusive / end-exclusive rule for callers that don't pass token boundaries.</para></summary>
-        public List<XElement> Slice(int start, int end, bool includeStartZeroWidth = true, bool includeEndZeroWidth = false)
+        /// always-start-inclusive / end-exclusive rule for callers that don't pass token boundaries.</para>
+        /// <para><b>Trailing markers keep their place behind a zero-width token.</b> An always-kept marker (field
+        /// plumbing, a bookmark or comment range endpoint) is not a diff token, so it is taken at either boundary of
+        /// the span. When <paramref name="nextOwnsEndZeroWidth"/> says the zero-width token at <c>end</c> belongs to
+        /// the next op of this same source model, a marker that FOLLOWS that token in document order is left to the
+        /// next op too (its start-inclusive rule takes it). Otherwise this op would emit the marker ahead of the
+        /// token the next op emits, inverting their order — an edited table-of-contents entry's tab landed after its
+        /// PAGEREF field's begin, instruction and separate characters (issue #1156). A marker before the token stays
+        /// with this op, and with no next op to defer to (the flag false) every marker at <c>end</c> is still taken,
+        /// so none is dropped.</para></summary>
+        public List<XElement> Slice(int start, int end, bool includeStartZeroWidth = true, bool includeEndZeroWidth = false,
+            bool nextOwnsEndZeroWidth = false)
         {
             var result = new List<XElement>();
+            // Set once the scan passes a zero-width segment at `end` that the next op owns: always-kept markers at
+            // `end` after it are left to that op.
+            bool deferTrailingMarkers = false;
 
             // Two-level grouping. INNER: consecutive RunText/RunOther segments sharing the SAME source run are
             // rebuilt into one w:r (so a split w:t and its siblings keep one run + its rPr). OUTER: consecutive
@@ -10310,12 +10339,18 @@ internal static partial class IrMarkupRenderer
                 else if (seg.IsZeroWidth && seg.AlwaysKeep)
                     // A bookmark marker is taken anywhere in [start,end] (BOTH boundaries inclusive), regardless of
                     // the token-driven ownership flags — it is not a diff token, so those flags can't see it and a
-                    // boundary bookmark would otherwise be dropped. _claimedZeroWidth keeps it once per model.
-                    overlaps = seg.Start >= start && seg.Start <= end;
+                    // boundary bookmark would otherwise be dropped. _claimedZeroWidth keeps it once per model. The
+                    // one exception keeps document order: a marker behind a trailing zero-width token the next op
+                    // owns goes with that op.
+                    overlaps = seg.Start >= start && seg.Start <= end && !(seg.Start == end && deferTrailingMarkers);
                 else if (seg.IsZeroWidth)
+                {
                     overlaps = (seg.Start > start && seg.Start < end)     // strictly interior: always taken
                             || (seg.Start == start && includeStartZeroWidth)  // leading: only if this op owns it
                             || (seg.Start == end && includeEndZeroWidth);     // trailing: only if this op owns it
+                    if (!overlaps && seg.Start == end && nextOwnsEndZeroWidth)
+                        deferTrailingMarkers = true;
+                }
                 else
                     overlaps = seg.Start < end && seg.End > start;        // text overlap
 

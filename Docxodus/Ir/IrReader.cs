@@ -898,7 +898,7 @@ internal static class IrReader
         // A non-hyperlink field's code and begin-state are deliberately transparent to content/token alignment:
         // the cached result is what is visible. Keep their independent structural carrier digest so a same-result
         // PAGE→NUMPAGES/REF retarget (or dirty/locked state change) is still reversible on Accept and Reject.
-        var fieldEnvelopeDigest = FieldEnvelopeDigestFor(processed, ctx);
+        var fieldEnvelopeDigest = FieldEnvelopeDigestFor(p, processed, ctx);
 
         // Resolve the auto-number marker against the LIVE package while we have it (see
         // IrParagraph.ResolvedListMarker for the rationale). RetrieveListItem returns null for
@@ -1074,13 +1074,62 @@ internal static class IrReader
     /// <see cref="IrFieldRun.ScaffoldDigest"/> because <c>w:fldSimple</c> cannot be safely sliced into revisions;
     /// any direct simple-field mutation therefore uses the whole-carrier path.
     /// </summary>
-    private static IrHash FieldEnvelopeDigestFor(IReadOnlyList<IrInline> inlines, ReadContext ctx)
+    private static IrHash FieldEnvelopeDigestFor(XElement paragraph, IReadOnlyList<IrInline> inlines, ReadContext ctx)
     {
         var fields = new List<XElement>();
         AppendFieldEnvelopeEntries(inlines, "", fields);
+        var unmatched = UnmatchedFieldCharacters(paragraph);
+        if (unmatched.Count > 0)
+            fields.Add(new XElement("spanningField", new XAttribute("unmatched", string.Join(" ", unmatched))));
         return fields.Count == 0
             ? default
             : IrHasher.CanonicalHash(new XElement("fieldEnvelopes", fields), ctx.RelResolver);
+    }
+
+    /// <summary>
+    /// The field characters of <paramref name="paragraph"/> that belong to a complex field spanning into or out
+    /// of it (issue #1156), in document order: each <c>end</c> or <c>separate</c> met while no field the paragraph
+    /// opened is still open, then one <c>begin</c> per field the paragraph leaves open. A Word table of contents is
+    /// one such field: it opens in its first entry paragraph and closes in its last entry or a paragraph of its own.
+    /// <para>The inline walker models the open side (the field it captures up to paragraph end becomes an
+    /// <see cref="IrFieldRun"/>), but it can only drop a closing character with no begin in the paragraph, and
+    /// field characters are zero-width to the token stream. Without this record, a revision that moves the
+    /// closing character into or out of a kept paragraph (its entry inserted or deleted) leaves the paragraph
+    /// pair Equal, so the redline carries one side's copy bare and Accept or Reject ends up with an unbalanced
+    /// field. Recording it in the field envelope sends such a pair down the reversible whole-paragraph path
+    /// every other field-structure change takes.</para>
+    /// <para>Only the characters' order is recorded, not their place among the paragraph's text: the same
+    /// spanning field on both sides must not turn every text edit in that paragraph into a whole-paragraph
+    /// replacement. Field characters in a textbox belong to the textbox's own paragraphs.</para>
+    /// </summary>
+    private static List<string> UnmatchedFieldCharacters(XElement paragraph)
+    {
+        var unmatched = new List<string>();
+        var depth = 0;
+        foreach (var fldChar in paragraph.Descendants(W + "fldChar"))
+        {
+            if (fldChar.Ancestors(W + "p").FirstOrDefault() != paragraph)
+                continue;
+            switch ((string?)fldChar.Attribute(W + "fldCharType"))
+            {
+                case "begin":
+                    depth++;
+                    break;
+                case "separate":
+                    if (depth == 0)
+                        unmatched.Add("separate");
+                    break;
+                case "end":
+                    if (depth == 0)
+                        unmatched.Add("end");
+                    else
+                        depth--;
+                    break;
+            }
+        }
+        for (var i = 0; i < depth; i++)
+            unmatched.Add("begin");
+        return unmatched;
     }
 
     /// <summary>

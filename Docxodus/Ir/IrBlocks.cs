@@ -118,7 +118,12 @@ internal sealed record IrParagraph : IrBlock
     /// field result still aligns like its visible text, while a code/state-only change (or any direct simple-field
     /// mutation) is lowered to a reversible whole paragraph replacement instead of leaking the right field into
     /// Reject.
-    /// <para><c>default(IrHash)</c> means no non-hyperlink field occurs in the modeled inline tree.</para>
+    /// <para>It also records, in order, the field characters of a complex field that spans into or out of the
+    /// paragraph (an <c>end</c> or <c>separate</c> with no <c>begin</c> in the paragraph, a <c>begin</c> left open
+    /// at its end — a Word table of contents), so moving one of them between paragraphs is a change (issue
+    /// #1156).</para>
+    /// <para><c>default(IrHash)</c> means no non-hyperlink field occurs in the modeled inline tree and no field spans
+    /// into or out of the paragraph.</para>
     /// </summary>
     public IrHash FieldEnvelopeDigest { get; init; }
 
@@ -197,10 +202,10 @@ internal sealed record IrSdtBlock : IrBlock
 
     /// <summary>Whether a complex field opens in one of the wrapper's paragraphs and closes in another, as the
     /// TOC field of a table of contents does (it begins in the first entry paragraph and ends paragraphs later).
-    /// The paragraph diff carries field characters as zero-width scaffold, so an entry inserted or deleted at the
-    /// edge of such a span would move a begin or end character between paragraphs without a mark, and accepting
-    /// or rejecting the redline would leave the field unbalanced. Like <see cref="HasBlockLevelMarkers"/>, it
-    /// stops at a nested wrapper.</summary>
+    /// Such a wrapper is still replaced whole. The flag was added when the paragraph diff moved a begin or end
+    /// character between paragraphs without a mark; the paragraph diff now records those characters itself
+    /// (<see cref="IrParagraph.FieldEnvelopeDigest"/>, issue #1156), and relaxing this fallback is a separate
+    /// change. Like <see cref="HasBlockLevelMarkers"/>, it stops at a nested wrapper.</summary>
     public bool HasParagraphSpanningField { get; init; }
 
     /// <summary>Whether two wrappers are the same kind with the same own markup (<see cref="ShellDigest"/>), so
